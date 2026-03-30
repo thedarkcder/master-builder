@@ -15,6 +15,7 @@ import {
   getProjectAutomations,
   getProject,
   listDiscordAllowlistRequests,
+  runProjectAutomationNow,
   type ProjectAutomationExecutionRecord,
   updateProjectAutomations,
   updateProject,
@@ -45,6 +46,21 @@ function getBrowserTimezone(): string {
   return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 }
 
+function listTimezoneOptions(): string[] {
+  const intlWithSupportedValues = Intl as unknown as {
+    supportedValuesOf?: (key: string) => string[];
+  };
+  const values = typeof intlWithSupportedValues.supportedValuesOf === "function"
+    ? intlWithSupportedValues.supportedValuesOf("timeZone")
+    : [];
+  if (Array.isArray(values) && values.length > 0) {
+    return values;
+  }
+  return ["UTC", "America/New_York", "America/Los_Angeles", "Europe/London", "Europe/Berlin", "Asia/Tokyo"];
+}
+
+const TIMEZONE_OPTIONS = listTimezoneOptions();
+
 function getAutomationLabel(kind: string): string {
   if (kind === PROJECT_AUTOMATION_KIND_STANDUP) {
     return "Standup voice brief";
@@ -67,8 +83,6 @@ function createAutomationDraft(kind: string, overrides: Partial<ProjectAutomatio
     timezone,
     days_of_week: kind === PROJECT_AUTOMATION_KIND_STANDUP ? [1, 2, 3, 4, 5] : [5],
     local_time: kind === PROJECT_AUTOMATION_KIND_STANDUP ? "09:30" : "16:00",
-    delivery_text_channel_id: null,
-    voice_id: null,
     fallback_lookback_hours: kind === PROJECT_AUTOMATION_KIND_STANDUP ? 24 : 168,
     last_successful_window_end_at: null,
     next_run_at: timestamp,
@@ -130,6 +144,8 @@ export function ProjectAutomationsContent({
   projectId,
   credentials,
 }: ProjectAutomationsContentProps) {
+  const { principal } = useAuth();
+  const isPlatformSuperAdmin = principal?.principal_type === "platform_super_admin";
   const [automationDefinitions, setAutomationDefinitions] = useState<ProjectAutomationRecord[]>([]);
   const [automationBusy, setAutomationBusy] = useState(false);
   const [automationStatusLine, setAutomationStatusLine] = useState("");
@@ -180,8 +196,6 @@ export function ProjectAutomationsContent({
           timezone: automation.timezone,
           days_of_week: automation.days_of_week,
           local_time: automation.local_time,
-          delivery_text_channel_id: automation.delivery_text_channel_id?.trim() || null,
-          voice_id: automation.voice_id,
           fallback_lookback_hours: automation.fallback_lookback_hours,
         })),
       });
@@ -190,6 +204,21 @@ export function ProjectAutomationsContent({
       setAutomationStatusLine(`Saved ${updated.automations?.length ?? 0} automation configuration${(updated.automations?.length ?? 0) === 1 ? "" : "s"}.`);
     } catch (error) {
       setAutomationStatusLine(`Save failed: ${(error as Error).message}`);
+    } finally {
+      setAutomationBusy(false);
+    }
+  }
+
+  async function runAutomationNow(kind: string) {
+    if (!credentials || !isPlatformSuperAdmin) return;
+    setAutomationBusy(true);
+    try {
+      const updated = await runProjectAutomationNow(credentials, tenantId, projectId, kind);
+      const savedAutomations = updated.automations ?? [];
+      setAutomationDefinitions(savedAutomations.length > 0 ? savedAutomations : defaultAutomationDrafts());
+      setAutomationStatusLine(`Queued ${getAutomationLabel(kind)} for immediate execution.`);
+    } catch (error) {
+      setAutomationStatusLine(`Run now failed: ${(error as Error).message}`);
     } finally {
       setAutomationBusy(false);
     }
@@ -225,26 +254,46 @@ export function ProjectAutomationsContent({
                       <p className="text-sm font-medium">{getAutomationLabel(automation.kind)}</p>
                       <p className="text-xs text-muted-foreground">{isDraft ? "Draft automation" : automation.automation_id}</p>
                     </div>
-                    <label className="flex items-center gap-2 text-xs">
-                      <input
-                        type="checkbox"
-                        className="h-4 w-4 rounded border-input"
-                        checked={automation.enabled}
-                        onChange={(event) => updateAutomationField(index, { enabled: event.target.checked })}
-                      />
-                      Enabled
-                    </label>
+                    <div className="flex items-center gap-3">
+                      {isPlatformSuperAdmin ? (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="secondary"
+                          onClick={() => void runAutomationNow(automation.kind)}
+                          disabled={automationBusy || isDraft || !automation.enabled}
+                        >
+                          Run now
+                        </Button>
+                      ) : null}
+                      <label className="flex items-center gap-2 text-xs">
+                        <input
+                          type="checkbox"
+                          className="h-4 w-4 rounded border-input"
+                          checked={automation.enabled}
+                          onChange={(event) => updateAutomationField(index, { enabled: event.target.checked })}
+                        />
+                        Enabled
+                      </label>
+                    </div>
                   </div>
                   <div className="grid gap-4 md:grid-cols-2">
                     <div className="space-y-1.5">
                       <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground" htmlFor={`${automationId}-timezone`}>
                         Timezone
                       </label>
-                      <Input
+                      <select
                         id={`${automationId}-timezone`}
                         value={automation.timezone}
                         onChange={(event) => updateAutomationField(index, { timezone: event.target.value })}
-                      />
+                        className="h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                      >
+                        {TIMEZONE_OPTIONS.map((tz) => (
+                          <option key={tz} value={tz}>
+                            {tz}
+                          </option>
+                        ))}
+                      </select>
                     </div>
                     <div className="space-y-1.5">
                       <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground" htmlFor={`${automationId}-local-time`}>
@@ -252,37 +301,9 @@ export function ProjectAutomationsContent({
                       </label>
                       <Input
                         id={`${automationId}-local-time`}
+                        type="time"
                         value={automation.local_time}
                         onChange={(event) => updateAutomationField(index, { local_time: event.target.value })}
-                      />
-                    </div>
-                    <div className="space-y-1.5">
-                      <label
-                        className="text-xs font-medium uppercase tracking-wide text-muted-foreground"
-                        htmlFor={`${automationId}-channel`}
-                      >
-                        Delivery text channel ID (optional)
-                      </label>
-                      <Input
-                        id={`${automationId}-channel`}
-                        value={automation.delivery_text_channel_id ?? ""}
-                        onChange={(event) =>
-                          updateAutomationField(index, {
-                            delivery_text_channel_id: event.target.value.trim() || null,
-                          })
-                        }
-                        placeholder="Leave blank until ready; required when a run delivers to Discord"
-                      />
-                    </div>
-                    <div className="space-y-1.5">
-                      <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground" htmlFor={`${automationId}-voice`}>
-                        Voice ID
-                      </label>
-                      <Input
-                        id={`${automationId}-voice`}
-                        value={automation.voice_id ?? ""}
-                        onChange={(event) => updateAutomationField(index, { voice_id: event.target.value || null })}
-                        placeholder="alloy"
                       />
                     </div>
                     <div className="space-y-1.5">

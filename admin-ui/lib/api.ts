@@ -198,8 +198,6 @@ export type ProjectAutomationRecord = {
   timezone: string;
   days_of_week: number[];
   local_time: string;
-  delivery_text_channel_id: string | null;
-  voice_id: string | null;
   fallback_lookback_hours: number;
   last_successful_window_end_at: string | null;
   next_run_at: string;
@@ -214,8 +212,6 @@ export type ProjectAutomationWritePayload = {
   timezone: string;
   days_of_week: Array<number | string>;
   local_time: string;
-  delivery_text_channel_id?: string | null;
-  voice_id?: string | null;
   fallback_lookback_hours: number;
 };
 
@@ -1731,6 +1727,21 @@ export function updateProjectAutomations(
     {
       method: "PUT",
       body: JSON.stringify(payload)
+    }
+  );
+}
+
+export function runProjectAutomationNow(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  kind: string
+): Promise<ProjectAutomationsRecord> {
+  return request<ProjectAutomationsRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/automations/${encodeURIComponent(kind)}/run-now`,
+    {
+      method: "POST"
     }
   );
 }

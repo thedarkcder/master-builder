@@ -45,6 +45,14 @@ from orchestrator.core.security import require_admin
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 
+def _canonicalize_selector_routing(selector_routing: dict[str, str]) -> dict[str, str]:
+    normalized: dict[str, str] = {}
+    for selector, profile_name in selector_routing.items():
+        canonical_selector = "discord.voice_entry_router" if selector == "discord.voice_room_router" else selector
+        normalized[canonical_selector] = profile_name
+    return normalized
+
+
 def _default_profiles() -> dict[str, dict]:
     settings = get_settings()
     return default_execution_profiles(
@@ -86,10 +94,11 @@ def _merged_profiles(*, session: Session) -> tuple[dict[str, dict], dict[str, di
 
 def _current_routing(*, session: Session) -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
     payload = platform_settings_service.get_json(session=session, setting_key=SETTING_KEY_AGENT_RUNTIME_ROUTING)
+    selector_routing = _canonicalize_selector_routing(normalize_execution_profile_routing(payload.get("selector_routing")))
     return (
         normalize_agent_routing(payload.get("role_routing")),
         normalize_agent_routing(payload.get("name_routing")),
-        normalize_execution_profile_routing(payload.get("selector_routing")),
+        selector_routing,
     )
 
 
@@ -186,23 +195,29 @@ def _available_profiles(*, session: Session) -> dict[str, AgentExecutionProfileR
     return available
 
 
-def _validate_routing_payload(payload: AgentRuntimeRoutingUpdate, *, available_profiles: dict[str, AgentExecutionProfileRead]) -> None:
+def _validate_routing_payload(
+    *,
+    role_routing: dict[str, str],
+    name_routing: dict[str, str],
+    selector_routing: dict[str, str],
+    available_profiles: dict[str, AgentExecutionProfileRead],
+) -> None:
     known_roles = set(list_known_agent_roles())
     known_names = set(list_known_agent_names())
     known_selectors = set(list_known_execution_selectors())
     known_profiles = set(available_profiles.keys())
 
-    for role, profile_name in payload.role_routing.items():
+    for role, profile_name in role_routing.items():
         if role not in known_roles:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Unknown agent role: {role}")
         if profile_name not in known_profiles:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Unknown execution profile: {profile_name}")
-    for agent_name, profile_name in payload.name_routing.items():
+    for agent_name, profile_name in name_routing.items():
         if agent_name not in known_names:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Unknown named agent: {agent_name}")
         if profile_name not in known_profiles:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Unknown execution profile: {profile_name}")
-    for selector, profile_name in payload.selector_routing.items():
+    for selector, profile_name in selector_routing.items():
         if selector not in known_selectors:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Unknown selector: {selector}")
         if profile_name not in known_profiles:
@@ -308,14 +323,22 @@ def put_agent_runtimes(
     session: Session = Depends(get_session),
 ) -> AgentRuntimeRoutingRead:
     available_profiles = _available_profiles(session=session)
-    _validate_routing_payload(payload, available_profiles=available_profiles)
+    role_routing = normalize_agent_routing(payload.role_routing)
+    name_routing = normalize_agent_routing(payload.name_routing)
+    selector_routing = _canonicalize_selector_routing(normalize_execution_profile_routing(payload.selector_routing))
+    _validate_routing_payload(
+        role_routing=role_routing,
+        name_routing=name_routing,
+        selector_routing=selector_routing,
+        available_profiles=available_profiles,
+    )
     platform_settings_service.upsert_json(
         session=session,
         setting_key=SETTING_KEY_AGENT_RUNTIME_ROUTING,
         value_json={
-            "role_routing": normalize_agent_routing(payload.role_routing),
-            "name_routing": normalize_agent_routing(payload.name_routing),
-            "selector_routing": normalize_execution_profile_routing(payload.selector_routing),
+            "role_routing": role_routing,
+            "name_routing": name_routing,
+            "selector_routing": selector_routing,
         },
     )
     return _build_routing_response(session=session)

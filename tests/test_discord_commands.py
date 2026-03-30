@@ -1510,7 +1510,7 @@ class DiscordCommandApiTests(unittest.TestCase):
                 return_value={"mode": "answer", "summary": "answer"},
             ),
             patch(
-                "orchestrator.api.discord.commands.ask.answer_board_question_with_codex",
+                "orchestrator.api.discord.commands.ask.answer_board_question_with_runtime",
                 return_value="Board snapshot",
             ),
         ):
@@ -1538,7 +1538,7 @@ class DiscordCommandApiTests(unittest.TestCase):
                 return_value={"mode": "answer", "summary": "answer"},
             ),
             patch(
-                "orchestrator.api.discord.commands.ask.answer_board_question_with_codex",
+                "orchestrator.api.discord.commands.ask.answer_board_question_with_runtime",
                 return_value="Issue snapshot",
             ) as answer_mock,
         ):
@@ -1719,7 +1719,7 @@ class DiscordCommandApiTests(unittest.TestCase):
                     ),
                 ),
                 patch("orchestrator.api.discord.ingress.ask_runtime.build_codex_runtime"),
-                patch("orchestrator.api.discord.ingress.ask_runtime.answer_board_question_with_codex", return_value="Board answer") as answer_mock,
+                patch("orchestrator.api.discord.ingress.ask_runtime.answer_board_question_with_runtime", return_value="Board answer") as answer_mock,
             ):
                 message, _ = ask_board_message(
                     session=session,
@@ -1860,7 +1860,7 @@ class DiscordCommandApiTests(unittest.TestCase):
                 return_value={"mode": "answer", "summary": "Board answer"},
             ) as plan_mock,
             patch(
-                "orchestrator.api.discord.commands.ask.answer_board_question_with_codex",
+                "orchestrator.api.discord.commands.ask.answer_board_question_with_runtime",
                 return_value="Scoped board answer",
             ),
         ):
@@ -1903,7 +1903,7 @@ class DiscordCommandApiTests(unittest.TestCase):
                 return_value={"mode": "answer", "summary": "Board answer"},
             ) as plan_mock,
             patch(
-                "orchestrator.api.discord.commands.ask.answer_board_question_with_codex",
+                "orchestrator.api.discord.commands.ask.answer_board_question_with_runtime",
                 return_value="Board answer",
             ),
         ):
@@ -1942,7 +1942,7 @@ class DiscordCommandApiTests(unittest.TestCase):
                 "orchestrator.api.discord.commands.ask.plan_discord_ask_intent_with_codex",
                 return_value={"mode": "answer", "summary": "answer"},
             ),
-            patch("orchestrator.api.discord.commands.ask.answer_board_question_with_codex", return_value="Board answer"),
+            patch("orchestrator.api.discord.commands.ask.answer_board_question_with_runtime", return_value="Board answer"),
         ):
             first = execute_discord_command(
                 tenant_id=self.tenant_id,
@@ -1991,7 +1991,7 @@ class DiscordCommandApiTests(unittest.TestCase):
                 "orchestrator.api.discord.commands.ask.plan_discord_ask_intent_with_codex",
                 return_value={"mode": "answer", "summary": "answer"},
             ),
-            patch("orchestrator.api.discord.commands.ask.answer_board_question_with_codex", return_value="Board answer") as answer_mock,
+            patch("orchestrator.api.discord.commands.ask.answer_board_question_with_runtime", return_value="Board answer") as answer_mock,
         ):
             response = execute_discord_command(
                 tenant_id=self.tenant_id,
@@ -2208,7 +2208,7 @@ class DiscordCommandApiTests(unittest.TestCase):
                 "orchestrator.api.discord.commands.ask.plan_discord_ask_intent_with_codex",
                 return_value={"mode": "answer", "summary": "answer"},
             ),
-            patch("orchestrator.api.discord.commands.ask.answer_board_question_with_codex", return_value="Board answer"),
+            patch("orchestrator.api.discord.commands.ask.answer_board_question_with_runtime", return_value="Board answer"),
         ):
             first = execute_discord_command(
                 tenant_id=self.tenant_id,
@@ -2332,7 +2332,7 @@ class DiscordCommandApiTests(unittest.TestCase):
                 return_value={"mode": "answer", "summary": "answer"},
             ),
             patch("orchestrator.api.discord.commands.ask.build_codex_runtime"),
-            patch("orchestrator.api.discord.commands.ask.answer_board_question_with_codex", return_value="DM scoped answer"),
+            patch("orchestrator.api.discord.commands.ask.answer_board_question_with_runtime", return_value="DM scoped answer"),
         ):
             response = self.client.post(
                 f"/discord/command/{self.tenant_id}",
@@ -2365,7 +2365,7 @@ class DiscordCommandApiTests(unittest.TestCase):
                 return_value={"mode": "answer", "summary": "answer"},
             ),
             patch("orchestrator.api.discord.commands.ask.build_codex_runtime"),
-            patch("orchestrator.api.discord.commands.ask.answer_board_question_with_codex", return_value="Scoped answer"),
+            patch("orchestrator.api.discord.commands.ask.answer_board_question_with_runtime", return_value="Scoped answer"),
         ):
             mapped = self.client.post(
                 f"/discord/command/{self.tenant_id}",
@@ -2447,7 +2447,7 @@ class DiscordCommandApiTests(unittest.TestCase):
                 "orchestrator.api.discord.commands.ask.plan_discord_ask_intent_with_codex",
                 return_value={"mode": "answer", "summary": "answer"},
             ),
-            patch("orchestrator.api.discord.commands.ask.answer_board_question_with_codex", return_value="Board answer"),
+            patch("orchestrator.api.discord.commands.ask.answer_board_question_with_runtime", return_value="Board answer"),
         ):
             response = execute_discord_command(
                 tenant_id=self.tenant_id,
@@ -2487,7 +2487,7 @@ class DiscordCommandApiTests(unittest.TestCase):
                 return_value={"mode": "answer", "summary": "answer"},
             ),
             patch(
-                "orchestrator.api.discord.commands.ask.answer_board_question_with_codex",
+                "orchestrator.api.discord.commands.ask.answer_board_question_with_runtime",
                 return_value="Implicit ask answer",
             ),
         ):

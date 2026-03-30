@@ -12,10 +12,10 @@ from sqlalchemy.orm import Session
 from orchestrator.api.schemas import DiscordCommandRequest, DiscordCommandResponse
 from orchestrator.api.discord.shared.room_history import DiscordRoomHistoryService
 from orchestrator.core.codex_agents import (
-    answer_board_question_with_codex,
+    answer_board_question_with_runtime,
     plan_discord_ask_intent_with_codex,
 )
-from orchestrator.core.codex_invocation import CodexInvocationContext
+from orchestrator.core.codex_invocation import AgentInvocationContext
 from orchestrator.core.codex_runtime import CodexRuntimeError, build_codex_runtime as _legacy_build_codex_runtime
 from orchestrator.core.agent_runtime_resolver import build_runtime_for_selector
 from orchestrator.core.config import get_settings
@@ -151,7 +151,7 @@ def _normalized_voice_ask_persona_id(raw: str | None) -> str:
     pid = str(raw or "").strip().lower()
     if pid in set(VOICE_ROOM_PERSONA_IDS):
         return pid
-    return "engineer"
+    return "pm"
 
 
 def _ask_room_voice_overlay(*, tenant: Tenant, persona_id: str) -> dict[str, Any]:
@@ -383,7 +383,7 @@ def dispatch_ask_command(
                 project_keys=normalized_project_keys,
                 issues=issues,
                 status_counts=status_counts,
-                invocation_context=CodexInvocationContext(
+                invocation_context=AgentInvocationContext(
                     channel="discord",
                     tenant_id=tenant.tenant_id,
                     project_id=scoped_project_id,
@@ -737,7 +737,7 @@ def dispatch_ask_command(
             project_id=scoped_project_id,
             selector="discord.ask_intent",
         )
-        invocation_context = CodexInvocationContext(
+        invocation_context = AgentInvocationContext(
             channel="discord",
             tenant_id=tenant.tenant_id,
             project_id=scoped_project_id,
@@ -795,7 +795,7 @@ def dispatch_ask_command(
             )
 
         ask_voice_persona = _normalized_voice_ask_persona_id(str(ask_command_params.get("persona_id") or ""))
-        message = answer_board_question_with_codex(
+        message = answer_board_question_with_runtime(
             runtime=build_runtime_for_selector(
                 session=session,
                 settings=settings,
@@ -807,7 +807,7 @@ def dispatch_ask_command(
             project_keys=normalized_project_keys,
             issues=issues,
             status_counts=status_counts,
-            invocation_context=CodexInvocationContext(
+            invocation_context=AgentInvocationContext(
                 channel="discord",
                 tenant_id=tenant.tenant_id,
                 project_id=scoped_project_id,

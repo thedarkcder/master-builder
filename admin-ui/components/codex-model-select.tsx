@@ -32,11 +32,26 @@ export function CodexModelSelect({
   onChange,
 }: Props) {
   const normalizedValue = String(value || "").trim();
+  const optionById = useMemo(
+    () =>
+      new Map(
+        models
+          .map((option) => [String(option.id || "").trim(), option] as const)
+          .filter(([id]) => id.length > 0),
+      ),
+    [models],
+  );
   const optionIds = useMemo(
     () => new Set(models.map((option) => String(option.id || "").trim()).filter(Boolean)),
     [models],
   );
-  const valueIsPreset = normalizedValue.length > 0 && optionIds.has(normalizedValue);
+  const selectedOption = optionById.get(normalizedValue);
+  const selectedOptionLooksCustom =
+    normalizedValue.length > 0 &&
+    selectedOption !== undefined &&
+    !String(selectedOption.description || "").trim() &&
+    String(selectedOption.label || "").trim() === normalizedValue;
+  const valueIsPreset = normalizedValue.length > 0 && optionIds.has(normalizedValue) && !selectedOptionLooksCustom;
   /** User chose "Custom model…"; stay in custom UI even if the id matches a catalog preset. */
   const customExplicitRef = useRef(false);
   const [customMode, setCustomMode] = useState<boolean>(normalizedValue.length > 0 && !valueIsPreset);
@@ -48,7 +63,13 @@ export function CodexModelSelect({
 
   useEffect(() => {
     const nextNormalized = String(value ?? "").trim();
-    const nextPreset = nextNormalized.length > 0 && optionIds.has(nextNormalized);
+    const nextOption = optionById.get(nextNormalized);
+    const nextOptionLooksCustom =
+      nextNormalized.length > 0 &&
+      nextOption !== undefined &&
+      !String(nextOption.description || "").trim() &&
+      String(nextOption.label || "").trim() === nextNormalized;
+    const nextPreset = nextNormalized.length > 0 && optionIds.has(nextNormalized) && !nextOptionLooksCustom;
 
     if (customExplicitRef.current) {
       setCustomMode(true);
@@ -68,7 +89,7 @@ export function CodexModelSelect({
     }
     setCustomMode(false);
     setCustomValue("");
-  }, [optionIds, value, editorSurfaceKey]);
+  }, [optionById, optionIds, value, editorSurfaceKey]);
 
   const selectValue = customMode ? CUSTOM_MODEL_VALUE : normalizedValue;
 

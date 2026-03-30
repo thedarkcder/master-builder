@@ -205,7 +205,7 @@ class DiscordFollowupFormatTests(unittest.TestCase):
         )
         self.assertTrue(merged.get("room_mode"))
         self.assertEqual(merged.get("room_source"), "voice_note")
-        self.assertEqual(merged.get("persona_id"), "engineer")
+        self.assertEqual(merged.get("persona_id"), "pm")
 
     def test_ask_voice_room_merge_flags_trigger_persona_prefix(self) -> None:
         """Voice ask merge sets room_mode/room_source so followup matches TTS persona overlay."""

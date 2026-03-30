@@ -280,11 +280,11 @@ test("shows a dedicated Agent runtimes page without duplicating platform status 
           },
           selector_routing: {
             "discord.voice_room_pm": "pm_conversation_fast",
-            "discord.voice_room_router": "general_planning",
+            "discord.voice_entry_router": "general_planning",
           },
           available_roles: ["pm", "engineering", "test", "review", "marketing"],
           available_named_agents: ["workflow_review_default", "pm_primary"],
-          available_selectors: ["discord.voice_room_pm", "discord.voice_room_router", "discord.pm_answer"],
+          available_selectors: ["discord.voice_room_pm", "discord.voice_entry_router", "discord.pm_answer"],
           available_profiles: {
             engineering_execution_default: {
               profile_name: "engineering_execution_default",
@@ -328,7 +328,7 @@ test("shows a dedicated Agent runtimes page without duplicating platform status 
             },
             selector_routing: {
               "discord.voice_room_pm": "pm_conversation",
-              "discord.voice_room_router": "general_planning",
+              "discord.voice_entry_router": "general_planning",
             },
           },
         }),
@@ -434,8 +434,8 @@ test("shows a dedicated Agent runtimes page without duplicating platform status 
   await expect(
     page
       .getByRole("row")
-      .filter({ has: page.getByRole("cell", { name: "discord.voice_room_router" }) })
-      .getByRole("cell", { name: "discord.voice_room_router" }),
+      .filter({ has: page.getByRole("cell", { name: "discord.voice_entry_router" }) })
+      .getByRole("cell", { name: "discord.voice_entry_router" }),
   ).toBeVisible();
   await expect(page.getByRole("heading", { name: "Platform status" })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Workers" })).toHaveCount(0);

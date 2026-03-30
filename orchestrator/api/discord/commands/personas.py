@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from orchestrator.api.schemas import DiscordCommandRequest, DiscordCommandResponse
 from orchestrator.core.agent_runtime_resolver import build_runtime_for_selector
 from orchestrator.core.codex_agents import answer_voice_room_persona_with_codex
-from orchestrator.core.codex_invocation import CodexInvocationContext
+from orchestrator.core.codex_invocation import AgentInvocationContext
 from orchestrator.core.codex_runtime import CodexRuntimeError
 from orchestrator.core.config import get_settings
 from orchestrator.core.discord.personas import resolve_voice_room_persona_profile
@@ -119,7 +119,7 @@ def dispatch_persona_command(
             project_keys=normalized_project_keys,
             issues=issues,
             status_counts=status_counts,
-            invocation_context=CodexInvocationContext(
+            invocation_context=AgentInvocationContext(
                 channel="discord",
                 tenant_id=tenant.tenant_id,
                 project_id=scoped_project_id,

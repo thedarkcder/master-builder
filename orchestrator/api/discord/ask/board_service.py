@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import HTTPException, status
 
-from orchestrator.core.codex_invocation import CodexInvocationContext
+from orchestrator.core.codex_invocation import AgentInvocationContext
 from orchestrator.storage.models import Tenant
 
 
@@ -25,7 +25,7 @@ def ask_board_message(
     resolve_codex_working_dir_fn,
     normalize_scope_channel_id_fn,
     channel_scope_repository,
-    answer_board_question_with_codex_fn,
+    answer_board_question_with_runtime_fn,
     collect_github_ask_context_fn,
     codex_runtime_error_type,
     store_ask_history_entry_fn,
@@ -83,13 +83,13 @@ def ask_board_message(
         project_keys=scoped_project_keys,
     )
     try:
-        message = answer_board_question_with_codex_fn(
+        message = answer_board_question_with_runtime_fn(
             runtime=runtime,
             question=question,
             project_keys=[str(key).strip().upper() for key in scoped_project_keys if str(key).strip()],
             issues=issues,
             status_counts=status_counts,
-            invocation_context=CodexInvocationContext(
+            invocation_context=AgentInvocationContext(
                 channel="discord",
                 tenant_id=tenant.tenant_id,
                 project_id=scoped_project_id,

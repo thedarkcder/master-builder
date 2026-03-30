@@ -244,8 +244,6 @@ class ProjectAutomation(Base):
     timezone: Mapped[str] = mapped_column(String(128), nullable=False)
     days_of_week: Mapped[list[int]] = mapped_column(JSON, nullable=False, default=list)
     local_time: Mapped[str] = mapped_column(String(8), nullable=False)
-    delivery_text_channel_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    voice_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     fallback_lookback_hours: Mapped[int] = mapped_column(Integer, nullable=False, default=24)
     last_successful_window_end_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     next_run_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)

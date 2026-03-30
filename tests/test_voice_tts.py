@@ -71,13 +71,13 @@ class VoiceTtsTests(unittest.TestCase):
         _FakeTTSModel.model = _FakeModel()
 
     def test_synthesize_reply_rejects_disabled_provider(self) -> None:
-        settings = Settings(voice_reply_provider="disabled")
+        settings = Settings(voice_provider="disabled")
         with self.assertRaisesRegex(VoiceReplyError, "disabled"):
             synthesize_reply_audio(settings=settings, text="hello")
 
     def test_resolve_persona_metadata_prefers_room_config_over_defaults(self) -> None:
         settings = Settings(
-            voice_reply_provider="pocket_tts",
+            voice_provider="pocket_tts",
             pocket_tts_voice="fantine",
         )
 
@@ -95,7 +95,7 @@ class VoiceTtsTests(unittest.TestCase):
         self.assertEqual(metadata.voice, "eponine")
 
     def test_resolve_persona_metadata_uses_code_defaults_when_no_config_present(self) -> None:
-        settings = Settings(voice_reply_provider="pocket_tts")
+        settings = Settings(voice_provider="pocket_tts")
 
         metadata = resolve_voice_reply_persona_metadata(
             settings=settings,
@@ -107,7 +107,7 @@ class VoiceTtsTests(unittest.TestCase):
         self.assertEqual(metadata.voice, "javert")
 
     def test_synthesize_reply_uses_library_voice_and_keeps_native_speed(self) -> None:
-        settings = Settings(voice_reply_provider="pocket_tts")
+        settings = Settings(voice_provider="pocket_tts")
         runtime = {
             "TTSModel": _FakeTTSModel,
             "numpy": np,
@@ -140,7 +140,7 @@ class VoiceTtsTests(unittest.TestCase):
         self.assertEqual(frame_count, 28800)
 
     def test_synthesize_reply_caches_model_and_voice_state(self) -> None:
-        settings = Settings(voice_reply_provider="pocket_tts")
+        settings = Settings(voice_provider="pocket_tts")
         runtime = {
             "TTSModel": _FakeTTSModel,
             "numpy": np,
@@ -164,7 +164,7 @@ class VoiceTtsTests(unittest.TestCase):
 
     def test_ensure_voice_reply_provider_ready_prewarms_predefined_voices(self) -> None:
         settings = Settings(
-            voice_reply_provider="pocket_tts",
+            voice_provider="pocket_tts",
             pocket_tts_voice="jean",
         )
         runtime = {
@@ -211,7 +211,7 @@ class VoiceTtsTests(unittest.TestCase):
             patch("orchestrator.core.voice.tts.import_module", return_value=huggingface_hub),
         ):
             synthesize_reply_audio(
-                settings=Settings(voice_reply_provider="pocket_tts"),
+                settings=Settings(voice_provider="pocket_tts"),
                 text="hello",
                 persona_id="pm",
             )
@@ -221,7 +221,7 @@ class VoiceTtsTests(unittest.TestCase):
         self.assertEqual(_FakeTTSModel.model.loaded_voices, [Path("/tmp/alba.safetensors")])
 
     def test_synthesize_reply_surfaces_missing_package(self) -> None:
-        settings = Settings(voice_reply_provider="pocket_tts")
+        settings = Settings(voice_provider="pocket_tts")
         with patch(
             "orchestrator.core.voice.tts._load_pocket_tts_runtime",
             side_effect=VoiceReplyError("Pocket TTS Python package is not installed."),
@@ -230,7 +230,7 @@ class VoiceTtsTests(unittest.TestCase):
                 synthesize_reply_audio(settings=settings, text="hello", persona_id="pm")
 
     def test_synthesize_reply_surfaces_model_load_failure(self) -> None:
-        settings = Settings(voice_reply_provider="pocket_tts")
+        settings = Settings(voice_provider="pocket_tts")
         runtime = {
             "TTSModel": _FailingTTSModel,
             "numpy": np,
@@ -241,7 +241,7 @@ class VoiceTtsTests(unittest.TestCase):
                 synthesize_reply_audio(settings=settings, text="hello", persona_id="pm")
 
     def test_synthesize_reply_rejects_empty_text(self) -> None:
-        settings = Settings(voice_reply_provider="pocket_tts")
+        settings = Settings(voice_provider="pocket_tts")
         with self.assertRaisesRegex(VoiceReplyError, "cannot be empty"):
             synthesize_reply_audio(settings=settings, text="   ", persona_id="pm")
 

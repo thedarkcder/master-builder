@@ -378,7 +378,7 @@ def test_normalize_project_discord_config_preserves_persona_maps() -> None:
                 " voice-room-2 ": " thread-room-2 ",
             },
             "persona_names": {"pm": " Ava ", "security": " June "},
-            "persona_voices": {"pm": " alloy ", "security": " sonic "},
+            "persona_voices": {"pm": " marius ", "security": " fantine "},
             "voice_room_channel_ids": [" voice-room-1 ", ""],
             "pm_room_channel_ids": [" room-1 ", ""],
         }
@@ -391,7 +391,7 @@ def test_normalize_project_discord_config_preserves_persona_maps() -> None:
         "voice-room-2": "thread-room-2",
     }
     assert normalized["persona_names"] == {"pm": "Ava", "security": "June"}
-    assert normalized["persona_voices"] == {"pm": "alloy", "security": "sonic"}
+    assert normalized["persona_voices"] == {"pm": "marius", "security": "fantine"}
     assert normalized["voice_room_channel_ids"] == ["voice-room-1"]
     assert normalized["pm_room_channel_ids"] == ["room-1"]
 
@@ -402,7 +402,7 @@ def test_with_preserved_discord_system_fields_keeps_only_system_fields_when_user
             "ask_history": [],
             "persona_room_history": [{"room_id": "room-1", "text": "hello"}],
             "persona_names": {"pm": "Ava"},
-            "persona_voices": {"pm": "alloy"},
+            "persona_voices": {"pm": "marius"},
             "live_voice_enabled": True,
             "live_voice_room_links": {"voice-room-1": "text-room-1"},
             "voice_room_channel_ids": ["voice-room-1"],

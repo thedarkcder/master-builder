@@ -72,8 +72,6 @@ test("project automations render default drafts, save edits, and show execution 
                 timezone: "Europe/London",
                 days_of_week: [1, 2, 3, 4, 5],
                 local_time: "09:30",
-                delivery_text_channel_id: "111111111111111111",
-                voice_id: "alloy",
                 fallback_lookback_hours: 36,
                 last_successful_window_end_at: "2026-03-28T09:00:00Z",
                 next_run_at: "2026-03-29T09:30:00Z",
@@ -100,8 +98,6 @@ test("project automations render default drafts, save edits, and show execution 
                 timezone: "Europe/London",
                 days_of_week: [1, 4],
                 local_time: "16:00",
-                delivery_text_channel_id: "222222222222222222",
-                voice_id: "echo",
                 fallback_lookback_hours: 72,
                 last_successful_window_end_at: "2026-03-28T10:00:00Z",
                 next_run_at: "2026-03-29T16:00:00Z",
@@ -139,14 +135,12 @@ test("project automations render default drafts, save edits, and show execution 
   await expect(retroCard.getByLabel("Fallback lookback hours")).toHaveValue("168");
 
   await standupCard.getByLabel("Enabled").check();
-  await standupCard.getByLabel("Timezone").fill("Europe/London");
-  await standupCard.getByLabel("Delivery text channel ID").fill("111111111111111111");
-  await standupCard.getByLabel("Voice ID").fill("alloy");
+  await standupCard.getByLabel("Timezone").selectOption("Europe/London");
+  await standupCard.getByLabel("Local time").fill("09:30");
   await standupCard.getByLabel("Fallback lookback hours").fill("36");
 
-  await retroCard.getByLabel("Timezone").fill("Europe/London");
-  await retroCard.getByLabel("Delivery text channel ID").fill("222222222222222222");
-  await retroCard.getByLabel("Voice ID").fill("echo");
+  await retroCard.getByLabel("Timezone").selectOption("Europe/London");
+  await retroCard.getByLabel("Local time").fill("16:00");
   await retroCard.getByLabel("Fallback lookback hours").fill("72");
   await retroCard.getByLabel("Fri").uncheck();
   await retroCard.getByLabel("Mon").check();
@@ -163,8 +157,6 @@ test("project automations render default drafts, save edits, and show execution 
         timezone: "Europe/London",
         days_of_week: [1, 2, 3, 4, 5],
         local_time: "09:30",
-        delivery_text_channel_id: "111111111111111111",
-        voice_id: "alloy",
         fallback_lookback_hours: 36,
       },
       {
@@ -173,8 +165,6 @@ test("project automations render default drafts, save edits, and show execution 
         timezone: "Europe/London",
         days_of_week: [1, 4],
         local_time: "16:00",
-        delivery_text_channel_id: "222222222222222222",
-        voice_id: "echo",
         fallback_lookback_hours: 72,
       },
     ],

@@ -446,7 +446,7 @@ export default function AgentRuntimesPage() {
                       <span className="font-mono">pm_conversation_fast</span>).
                     </p>
                     <p className="mt-1 text-xs text-muted-foreground">
-                      Selector rows are separate (for values like <code>discord.voice_room_router</code>) and are the correct place to change
+                      Selector rows are separate (for values like <code>discord.voice_entry_router</code>) and are the correct place to change
                       selector-driven routing.
                     </p>
                   </div>

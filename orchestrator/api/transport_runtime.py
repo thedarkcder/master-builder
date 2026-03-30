@@ -19,6 +19,10 @@ from orchestrator.core.communications import (
 from orchestrator.core.communications.integration_contracts import TransportActionExecutor
 from orchestrator.core.discord.transport_executor import DiscordTransportExecutor
 from orchestrator.core.observability import current_log_context
+from orchestrator.core.platform_secret_service import (
+    PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF,
+    resolve_platform_secret_ref,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -219,10 +223,23 @@ def build_http_transport_action_executors(
     session,
     settings,  # noqa: ANN001
     extra_transport_action_executors: Iterable[TransportActionExecutor] = (),
+    resolve_platform_secret_ref_fn=None,  # noqa: ANN401
 ) -> tuple[TransportActionExecutor, ...]:
+    token_resolver = resolve_platform_secret_ref_fn or resolve_platform_secret_ref
+    token_ref = str(PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF or "").strip()
+    bot_token = (
+        token_resolver(
+            session,
+            secret_ref=token_ref,
+            encryption_key=settings.secrets_encryption_key,
+        )
+        if token_ref
+        else None
+    )
     return build_transport_action_executors(
         extra_transport_action_executors=extra_transport_action_executors,
         discord_transport_executor=build_discord_transport_executor(
+            bot_token=bot_token,
             session_factory=lambda: nullcontext(session),
             settings_factory=lambda: settings,
         ),

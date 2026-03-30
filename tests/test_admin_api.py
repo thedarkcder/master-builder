@@ -326,8 +326,7 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(body["selector_routing"], {})
         self.assertIn("pm", body["available_roles"])
         self.assertIn("voice_room_pm", body["available_named_agents"])
-        self.assertNotIn("discord.voice_room_router", body["available_named_agents"])
-        self.assertIn("discord.voice_room_router", body["available_selectors"])
+        self.assertNotIn("discord.voice_entry_router", body["available_named_agents"])
         self.assertIn("discord.voice_entry_router", body["available_selectors"])
         self.assertIn("pm_conversation_fast", body["available_profiles"])
         self.assertEqual(body["effective_defaults"]["role_routing"]["pm"], "pm_conversation_default")
@@ -502,6 +501,21 @@ class AdminApiTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 400)
         self.assertIn("Unknown selector", response.text)
+
+    def test_agent_runtime_routes_normalize_legacy_voice_router_selector(self) -> None:
+        response = self.client.put(
+            "/api/admin/agent-runtimes",
+            json={
+                "selector_routing": {"discord.voice_room_router": "general_planning_default"},
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json()["selector_routing"]["discord.voice_entry_router"],
+            "general_planning_default",
+        )
+        self.assertNotIn("discord.voice_room_router", response.json()["selector_routing"])
 
     def test_platform_secret_list_excludes_tenant_and_project_scoped_refs(self) -> None:
         create_response = self.client.post(
@@ -1081,8 +1095,6 @@ class AdminApiTests(unittest.TestCase):
                         "timezone": "Europe/London",
                         "days_of_week": [0, 1, 2, 3, 4],
                         "local_time": "09:30",
-                        "delivery_text_channel_id": "12345",
-                        "voice_id": "alloy",
                         "fallback_lookback_hours": 24,
                     }
                 ],
@@ -1115,9 +1127,8 @@ class AdminApiTests(unittest.TestCase):
             assert automation is not None
             self.assertTrue(automation.enabled)
             self.assertEqual(automation.kind, "standup_voice_brief")
-            self.assertEqual(automation.delivery_text_channel_id, "12345")
 
-    def test_project_automations_allow_null_delivery_text_channel_id(self) -> None:
+    def test_project_automations_round_trip_without_delivery_channel_field(self) -> None:
         payload = self._tenant_payload()
         self._insert_jira_connection(connection_id="conn-1")
         create_tenant = self.client.post(
@@ -1141,8 +1152,6 @@ class AdminApiTests(unittest.TestCase):
                         "timezone": "Europe/London",
                         "days_of_week": [0, 1, 2, 3, 4],
                         "local_time": "09:30",
-                        "delivery_text_channel_id": None,
-                        "voice_id": "alloy",
                         "fallback_lookback_hours": 24,
                     }
                 ],
@@ -1151,7 +1160,7 @@ class AdminApiTests(unittest.TestCase):
         )
         self.assertEqual(update_response.status_code, 200)
         body = update_response.json()["automations"][0]
-        self.assertIsNone(body.get("delivery_text_channel_id"))
+        self.assertNotIn("delivery_text_channel_id", body)
 
         session_factory = create_session_factory(self.database_url)
         with session_factory() as session:
@@ -1162,7 +1171,6 @@ class AdminApiTests(unittest.TestCase):
             )
             self.assertIsNotNone(automation)
             assert automation is not None
-            self.assertIsNone(automation.delivery_text_channel_id)
 
     def test_project_automations_validate_scoping_and_values(self) -> None:
         payload = self._tenant_payload()
@@ -1198,7 +1206,6 @@ class AdminApiTests(unittest.TestCase):
                         "timezone": "Europe/London",
                         "days_of_week": [0],
                         "local_time": "09:30",
-                        "delivery_text_channel_id": "12345",
                         "fallback_lookback_hours": 24,
                     }
                 ],
@@ -1212,6 +1219,48 @@ class AdminApiTests(unittest.TestCase):
             auth=("admin", "secret"),
         )
         self.assertEqual(scoping_response.status_code, 404)
+
+    def test_project_automations_run_now_queues_execution(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_tenant.status_code, 201)
+
+        projects_response = self.client.get("/api/admin/tenants/tenant-a/projects", auth=("admin", "secret"))
+        self.assertEqual(projects_response.status_code, 200)
+        project_id = projects_response.json()[0]["project_id"]
+
+        update_response = self.client.put(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/automations",
+            json={
+                "automations": [
+                    {
+                        "kind": "standup_voice_brief",
+                        "enabled": True,
+                        "timezone": "Europe/London",
+                        "days_of_week": [0, 1, 2, 3, 4],
+                        "local_time": "09:30",
+                        "fallback_lookback_hours": 24,
+                    }
+                ],
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(update_response.status_code, 200)
+
+        run_now_response = self.client.post(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/automations/standup_voice_brief/run-now",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(run_now_response.status_code, 200)
+        body = run_now_response.json()
+        self.assertEqual(len(body["automations"]), 1)
+        self.assertEqual(body["automations"][0]["kind"], "standup_voice_brief")
+        self.assertGreaterEqual(len(body["automations"][0]["executions"]), 1)
 
     def test_project_discord_enable_provisions_channel_when_missing(self) -> None:
         payload = self._tenant_payload()

@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from orchestrator.core.agent_tools import allowed_tools_for_stage, execute_agent_tool
 from orchestrator.core.codex_invocation import (
-    CodexInvocationContext,
+    AgentInvocationContext,
     invoke_codex_json,
     invoke_codex_json_with_tools,
 )
@@ -40,7 +40,7 @@ def _codex_discord_execute_tool(
     *,
     session: Session,
     settings: Any,
-    invocation_context: CodexInvocationContext,
+    invocation_context: AgentInvocationContext,
     tool_stage: str,
 ) -> Callable[[str, dict[str, object]], dict[str, object]]:
     tenant_id = str(invocation_context.tenant_id or "").strip()
@@ -67,7 +67,7 @@ def _codex_discord_execute_tool(
 def _invoke_discord_json_maybe_tools(
     *,
     runtime: CodexRuntime,
-    context: CodexInvocationContext,
+    context: AgentInvocationContext,
     system_prompt: str,
     user_prompt: str,
     tool_stage: str,
@@ -112,7 +112,7 @@ class CodexWorkflowAgents:
         runtime: CodexRuntime,
         runtime_resolver: Callable[[str, WorkflowRequest], CodexRuntime] | None = None,
         log_sink: Callable[[dict], None] | None = None,
-        execute_tool: Callable[[CodexInvocationContext, str, dict[str, object]], dict[str, object]] | None = None,
+        execute_tool: Callable[[AgentInvocationContext, str, dict[str, object]], dict[str, object]] | None = None,
     ):
         self._runtime = runtime
         self._runtime_resolver = runtime_resolver
@@ -178,7 +178,7 @@ class CodexWorkflowAgents:
         user_prompt: str,
         reasoning_effort: str = "medium",
     ) -> dict[str, Any]:
-        context = CodexInvocationContext(
+        context = AgentInvocationContext(
             channel="worker",
             tenant_id=request.tenant_id,
             project_id=request.project_id,
@@ -211,7 +211,7 @@ class CodexWorkflowAgents:
     def _execute_stage_tool(
         self,
         *,
-        context: CodexInvocationContext,
+        context: AgentInvocationContext,
         tool_name: str,
         tool_args: dict[str, object],
     ) -> dict[str, object]:
@@ -715,14 +715,14 @@ def _coerce_bool(
 
 
 
-def answer_board_question_with_codex(
+def answer_board_question_with_runtime(
     *,
     runtime: CodexRuntime,
     question: str,
     project_keys: list[str],
     issues: list[dict],
     status_counts: dict[str, int],
-    invocation_context: CodexInvocationContext,
+    invocation_context: AgentInvocationContext,
     history: list[dict] | None = None,
     github_context: dict | None = None,
     sqlalchemy_session: Session | None = None,
@@ -732,7 +732,7 @@ def answer_board_question_with_codex(
     normalized_history = history if isinstance(history, list) else []
     normalized_github_context = github_context or {}
     history_slice = normalized_history[-25:] if normalized_history else []
-    persona = str(answer_persona_id or "").strip().lower() or "engineer"
+    persona = str(answer_persona_id or "").strip().lower() or "pm"
     user_prompt = render_prompt(
         "discord/ask_answer_user.j2",
         question=question,
@@ -767,7 +767,7 @@ def answer_pm_question_with_codex(
     project_keys: list[str],
     issues: list[dict],
     status_counts: dict[str, int],
-    invocation_context: CodexInvocationContext,
+    invocation_context: AgentInvocationContext,
     history: list[dict] | None = None,
     github_context: dict | None = None,
 ) -> dict:
@@ -817,7 +817,7 @@ def classify_engineering_clarification_with_codex(
     child_summary: str,
     child_description: str,
     question: str,
-    invocation_context: CodexInvocationContext,
+    invocation_context: AgentInvocationContext,
 ) -> dict:
     payload = invoke_codex_json(
         runtime=runtime,
@@ -843,7 +843,7 @@ def route_voice_entry_with_runtime(
     *,
     runtime: CodexRuntime,
     transcript: str,
-    invocation_context: CodexInvocationContext,
+    invocation_context: AgentInvocationContext,
     entry_source: str,
     history: list[dict] | None = None,
     room_context: dict | None = None,
@@ -881,7 +881,7 @@ def route_voice_entry_with_runtime(
     persona_id = str(payload.get("persona") or "").strip().lower()
     valid_personas = {"pm", "architect", "engineer", "qa", "security"}
     if persona_id not in valid_personas:
-        persona_id = "engineer" if lane == "ask" else "pm"
+        persona_id = "pm"
     try:
         confidence = float(payload.get("confidence"))
     except (TypeError, ValueError):
@@ -898,46 +898,6 @@ def route_voice_entry_with_runtime(
     }
 
 
-def route_voice_room_persona_with_codex(
-    *,
-    runtime: CodexRuntime,
-    transcript: str,
-    available_personas: list[dict[str, str]],
-    invocation_context: CodexInvocationContext,
-    history: list[dict] | None = None,
-    room_context: dict | None = None,
-) -> dict:
-    normalized_history = history if isinstance(history, list) else []
-    payload = invoke_codex_json(
-        runtime=runtime,
-        context=invocation_context,
-        system_prompt=render_prompt("discord/voice_room_router_system.j2"),
-        user_prompt=render_prompt(
-            "discord/voice_room_router_user.j2",
-            transcript=transcript,
-            history_json=json.dumps(normalized_history[-25:]),
-            room_context_json=json.dumps(room_context or {}),
-            available_personas_json=json.dumps(available_personas),
-        ),
-    )
-    if not isinstance(payload, dict):
-        raise CodexRuntimeError("Codex did not return a voice-room router JSON object")
-    persona_id = str(payload.get("persona") or "").strip().lower()
-    if persona_id not in {"pm", "architect", "engineer", "qa", "security"}:
-        persona_id = "pm"
-    try:
-        confidence = float(payload.get("confidence"))
-    except (TypeError, ValueError):
-        confidence = 0.0
-    confidence = max(0.0, min(1.0, confidence))
-    reason = str(payload.get("reason") or "").strip()
-    return {
-        "persona": persona_id,
-        "confidence": confidence,
-        "reason": reason,
-    }
-
-
 def answer_voice_room_persona_with_codex(
     *,
     runtime: CodexRuntime,
@@ -946,7 +906,7 @@ def answer_voice_room_persona_with_codex(
     project_keys: list[str],
     issues: list[dict],
     status_counts: dict[str, int],
-    invocation_context: CodexInvocationContext,
+    invocation_context: AgentInvocationContext,
     history: list[dict] | None = None,
     github_context: dict | None = None,
     room_context: dict | None = None,
@@ -1008,7 +968,7 @@ def plan_discord_ask_intent_with_codex(
     project_keys: list[str],
     issues: list[dict],
     status_counts: dict[str, int],
-    invocation_context: CodexInvocationContext,
+    invocation_context: AgentInvocationContext,
     history: list[dict] | None = None,
     github_context: dict | None = None,
 ) -> dict:
@@ -1038,7 +998,7 @@ def plan_seed_issues_with_codex(
     runtime: CodexRuntime,
     prompt_markdown: str,
     allowed_project_keys: list[str],
-    invocation_context: CodexInvocationContext,
+    invocation_context: AgentInvocationContext,
 ) -> dict:
     last_error: CodexRuntimeError | None = None
     for attempt in range(2):
@@ -1076,7 +1036,7 @@ def plan_pm_parent_issues_with_codex(
     runtime: CodexRuntime,
     prompt_markdown: str,
     allowed_project_keys: list[str],
-    invocation_context: CodexInvocationContext,
+    invocation_context: AgentInvocationContext,
 ) -> dict:
     last_error: CodexRuntimeError | None = None
     for attempt in range(2):

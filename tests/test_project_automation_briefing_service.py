@@ -5,7 +5,11 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from orchestrator.core.project_automation_briefing_service import _collect_github_facts
+from orchestrator.core.project_automation_briefing_service import (
+    _build_transcript_from_segments,
+    _collect_github_facts,
+    _normalize_persona_segments,
+)
 from orchestrator.tools.github_app import (
     PullRequestIssueComment,
     PullRequestReview,
@@ -15,6 +19,36 @@ from orchestrator.tools.github_app import (
 
 
 class ProjectAutomationBriefingServiceTests(unittest.TestCase):
+    def test_normalize_persona_segments_orders_pm_dev_test_review(self) -> None:
+        segments = _normalize_persona_segments(
+            {
+                "persona_segments": [
+                    {"persona_id": "reviewer", "text": "review"},
+                    {"persona_id": "qa", "text": "test"},
+                    {"persona_id": "engineer", "text": "dev"},
+                    {"persona_id": "pm", "text": "pm"},
+                ]
+            }
+        )
+        self.assertEqual([segment.persona_id for segment in segments], ["pm", "engineer", "qa", "reviewer"])
+        transcript = _build_transcript_from_segments(segments)
+        self.assertIn("PM: pm", transcript)
+        self.assertIn("Dev: dev", transcript)
+        self.assertIn("Test: test", transcript)
+        self.assertIn("Review: review", transcript)
+
+    def test_normalize_persona_segments_drops_unknown_and_empty_text(self) -> None:
+        segments = _normalize_persona_segments(
+            {
+                "persona_segments": [
+                    {"persona_id": "unknown", "text": "ignored"},
+                    {"persona_id": "pm", "text": " "},
+                    {"persona_id": "qa", "text": "validated"},
+                ]
+            }
+        )
+        self.assertEqual([segment.persona_id for segment in segments], ["qa"])
+
     def test_collect_github_facts_includes_merged_pr_and_review_activity_in_window(self) -> None:
         client = SimpleNamespace(
             list_pull_requests=lambda **_: [

@@ -80,7 +80,7 @@ def _resolve_agent_execution_profiles(
         or settings.codex_reasoning_effort
     )
     engineering_profile_explicit = any(
-        "engineering_execution" in source for source in (tenant_profiles, project_profiles)
+        "engineering_execution" in source for source in (platform_profiles, tenant_profiles, project_profiles)
     )
     engineering_profile = dict(profiles.get("engineering_execution") or {})
     if engineering_profile and not engineering_profile_explicit:
@@ -88,7 +88,7 @@ def _resolve_agent_execution_profiles(
         engineering_profile["reasoning_effort"] = effective_effort
         profiles["engineering_execution"] = engineering_profile
     general_profile_explicit = any(
-        "general_planning" in source for source in (tenant_profiles, project_profiles)
+        "general_planning" in source for source in (platform_profiles, tenant_profiles, project_profiles)
     )
     general_profile = dict(profiles.get("general_planning") or {})
     if general_profile and not general_profile_explicit:

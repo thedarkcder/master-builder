@@ -472,15 +472,7 @@ class ProjectAutomationWrite(BaseModel):
     timezone: str = Field(min_length=1)
     days_of_week: list[int | str] = Field(default_factory=list)
     local_time: str = Field(min_length=1)
-    delivery_text_channel_id: str | None = Field(default=None, max_length=64)
-    voice_id: str | None = None
     fallback_lookback_hours: int = Field(default=24, ge=1)
-
-    @field_validator("delivery_text_channel_id", mode="before")
-    @classmethod
-    def normalize_delivery_text_channel_id(cls, value: object) -> str | None:
-        normalized = str(value or "").strip()
-        return normalized or None
 
     @field_validator("timezone")
     @classmethod
@@ -565,8 +557,6 @@ class ProjectAutomationRead(BaseModel):
     timezone: str
     days_of_week: list[int] = Field(default_factory=list)
     local_time: str
-    delivery_text_channel_id: str | None = None
-    voice_id: str | None = None
     fallback_lookback_hours: int
     last_successful_window_end_at: datetime | None = None
     next_run_at: datetime

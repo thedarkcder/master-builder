@@ -10,7 +10,7 @@ from uuid import uuid4
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from orchestrator.core.codex_invocation import CodexInvocationContext, invoke_codex_json
+from orchestrator.core.codex_invocation import AgentInvocationContext, invoke_codex_json
 from orchestrator.core.codex_runtime import CodexRuntimeError, build_codex_runtime
 from orchestrator.core.prompt_templates import render_prompt
 from orchestrator.core.decision_state_repository import existing_case_for_issue
@@ -253,7 +253,7 @@ def _extract_reply_matches(
             working_dir = "."
     payload = invoke_codex_json(
         runtime=runtime,
-        context=CodexInvocationContext(
+        context=AgentInvocationContext(
             channel="system",
             tenant_id=tenant.tenant_id,
             project_id=project.project_id if project is not None else None,

@@ -80,6 +80,7 @@ from orchestrator.core.platform_secret_service import (
     resolve_platform_secret_ref,
 )
 from orchestrator.core.project_automation_service import (
+    enqueue_project_automation_run_now,
     ProjectAutomationWrite as ServiceProjectAutomationWrite,
     list_execution_history,
     list_project_automation_definitions,
@@ -852,8 +853,6 @@ def _automation_to_schema(*, automation, executions) -> ProjectAutomationRead:  
         timezone=automation.timezone,
         days_of_week=list(automation.days_of_week or []),
         local_time=automation.local_time,
-        delivery_text_channel_id=automation.delivery_text_channel_id,
-        voice_id=automation.voice_id,
         fallback_lookback_hours=automation.fallback_lookback_hours,
         last_successful_window_end_at=automation.last_successful_window_end_at,
         next_run_at=automation.next_run_at,
@@ -913,8 +912,6 @@ def put_project_automations(
             timezone=item.timezone,
             days_of_week=tuple(int(day) for day in item.days_of_week),
             local_time=item.local_time,
-            delivery_text_channel_id=item.delivery_text_channel_id,
-            voice_id=item.voice_id,
             fallback_lookback_hours=item.fallback_lookback_hours,
         )
         try:
@@ -926,6 +923,47 @@ def put_project_automations(
             )
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    automations = list_project_automation_definitions(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project.project_id,
+    )
+    return ProjectAutomationsRead(
+        automations=[
+            _automation_to_schema(
+                automation=automation,
+                executions=list_execution_history(
+                    session=session,
+                    automation_id=automation.automation_id,
+                    limit=20,
+                ),
+            )
+            for automation in automations
+        ]
+    )
+
+
+@router.post(
+    "/tenants/{tenant_id}/projects/{project_id}/automations/{kind}/run-now",
+    response_model=ProjectAutomationsRead,
+)
+def post_project_automation_run_now(
+    tenant_id: str,
+    project_id: str,
+    kind: str,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> ProjectAutomationsRead:
+    project = _get_project_for_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
+    try:
+        enqueue_project_automation_run_now(
+            session=session,
+            tenant_id=tenant_id,
+            project_id=project.project_id,
+            kind=kind,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     automations = list_project_automation_definitions(
         session=session,
         tenant_id=tenant_id,

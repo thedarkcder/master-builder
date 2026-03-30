@@ -9,7 +9,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from orchestrator.core.codex_invocation import CodexInvocationContext
+from orchestrator.core.codex_invocation import AgentInvocationContext
 from orchestrator.core.codex_runtime import CodexRuntimeError
 from orchestrator.core.followup_context_service import (
     FOLLOWUP_CONTEXT_ENGINEERING_CLARIFICATION,
@@ -552,7 +552,7 @@ def handle_engineering_clarification_command(
             child_summary=child_detail.summary,
             child_description=child_detail.description,
             question=question,
-            invocation_context=CodexInvocationContext(
+            invocation_context=AgentInvocationContext(
                 channel="jira",
                 tenant_id=context.tenant_id,
                 project_id=context.project_id,

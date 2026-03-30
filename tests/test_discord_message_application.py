@@ -5,7 +5,11 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from orchestrator.api.discord.messages.application import DiscordMessageIngressDeps, build_discord_message_ingress_result
-from orchestrator.core.communications import DiscordAskWithThreadAction, DiscordThreadReplyAction
+from orchestrator.core.communications import (
+    DiscordAskWithThreadAction,
+    DiscordChannelMessageWithAttachmentAction,
+    DiscordThreadReplyAction,
+)
 
 
 class DiscordMessageApplicationTests(unittest.TestCase):
@@ -276,4 +280,63 @@ class DiscordMessageApplicationTests(unittest.TestCase):
             execute.call_args.kwargs["payload"].command_params,
             {"room_mode": "true", "room_source": "voice_note"},
         )
+
+    def test_ask_voice_note_room_voice_reply_single_attachment_message(self) -> None:
+        """Ask + voice note + room TTS: one channel action (text + wav), not text then attachment duplicate."""
+        attachment_action = DiscordChannelMessageWithAttachmentAction(
+            channel_id="root-1",
+            content="<@user-1> spoken reply",
+            filename="voice_reply.wav",
+            file_bytes=b"RIFF",
+            content_type="audio/wav",
+        )
+        build_voice = MagicMock(return_value=(attachment_action, None))
+        execute = MagicMock(
+            return_value=SimpleNamespace(
+                ok=True,
+                command="ask",
+                message="Spoken reply body",
+                data={
+                    "persona_id": "pm",
+                    "persona_name": "Andy",
+                    "persona_role": "PM",
+                    "room_mode": True,
+                    "room_source": "voice_note",
+                },
+            )
+        )
+        route = MagicMock(return_value={"lane": "ask", "persona": "pm", "confidence": 0.9, "reason": "ask"})
+        deps = self._deps(
+            execute_tenant_discord_command=execute,
+            resolve_followup_context_match=MagicMock(return_value=SimpleNamespace(status="no_match", context=None, matches=())),
+            transcribe_audio_attachment=MagicMock(return_value=("hello with TTS", None)),
+            room_voice_reply_enabled=True,
+            build_room_voice_reply_action=build_voice,
+            route_voice_entry=route,
+        )
+
+        result = build_discord_message_ingress_result(
+            payload={
+                "id": "msg-tts",
+                "channel_id": "root-1",
+                "author": {"id": "user-1", "bot": False},
+                "content": "",
+                "attachments": [
+                    {
+                        "id": "att-tts",
+                        "url": "https://example.com/note.ogg",
+                        "filename": "note.ogg",
+                        "content_type": "audio/ogg",
+                        "size": "100",
+                    }
+                ],
+            },
+            session=MagicMock(),
+            deps=deps,
+        )
+
+        self.assertEqual(len(result.actions), 1)
+        self.assertIsInstance(result.actions[0], DiscordChannelMessageWithAttachmentAction)
+        build_voice.assert_called_once()
+        self.assertEqual(build_voice.call_args.kwargs.get("content_override"), "PM guidance")
 

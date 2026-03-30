@@ -63,7 +63,7 @@ def route_discord_voice_entry(
         )
         return {
             "lane": "ask",
-            "persona": "engineer",
+            "persona": "pm",
             "confidence": 0.0,
             "reason": "router_unavailable",
         }
