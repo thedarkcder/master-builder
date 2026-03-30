@@ -35,6 +35,24 @@ class CodexRuntimeError(RuntimeError):
         super().__init__(message)
         self.payload_preview = payload_preview
 
+    def __str__(self) -> str:
+        base = str(self.args[0]) if self.args else ""
+        preview = str(self.payload_preview or "").strip()
+        if preview:
+            return f"{base}: {preview}"
+        return base or super().__str__()
+
+
+def _openai_compatible_base_url_for_local_server(*, base_url: str, runtime_kind: str) -> str:
+    """Ensure LM Studio / llama.cpp bases include /v1 before /chat/completions."""
+    u = str(base_url or "").strip().rstrip("/")
+    if not u:
+        return u
+    rk = str(runtime_kind or "").strip().lower()
+    if rk in {"lm_studio", "llama_cpp"} and not re.search(r"/v\d+$", u):
+        return f"{u}/v1"
+    return u
+
 
 def _shorten_preview(value: str, *, max_len: int = 2048) -> str:
     normalized = value if isinstance(value, str) else ""
@@ -720,6 +738,10 @@ def build_http_runtime(
         normalized_base_url = normalized_base_url or "https://api.anthropic.com"
     if not normalized_base_url:
         raise CodexRuntimeError(f"Base URL is required for runtime kind '{normalized_runtime_kind}'")
+    chat_completions_base = _openai_compatible_base_url_for_local_server(
+        base_url=normalized_base_url,
+        runtime_kind=normalized_runtime_kind,
+    )
 
     def _request(
         system_prompt: str,
@@ -754,7 +776,7 @@ def build_http_runtime(
                 headers["Authorization"] = f"Bearer {api_key}"
             payload = _http_json_request(
                 method="POST",
-                url=f"{normalized_base_url.rstrip('/')}/chat/completions",
+                url=f"{chat_completions_base.rstrip('/')}/chat/completions",
                 headers=headers,
                 payload={
                     "model": resolved_model,

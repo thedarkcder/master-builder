@@ -13,10 +13,32 @@ from orchestrator.core.codex_runtime import (
     _extract_json_payload,
     _extract_session_id_from_json_line,
     _extract_usage_from_json_stdout,
+    _openai_compatible_base_url_for_local_server,
     build_codex_runtime,
     build_http_runtime,
     build_runtime_with_fallback,
 )
+
+
+class CodexRuntimeErrorTests(unittest.TestCase):
+    def test_str_includes_payload_preview(self) -> None:
+        err = CodexRuntimeError("Runtime HTTP request failed with status 400", payload_preview='{"error":"Unknown model"}')
+        self.assertIn("400", str(err))
+        self.assertIn("Unknown model", str(err))
+
+
+class OpenAiCompatibleBaseUrlTests(unittest.TestCase):
+    def test_lm_studio_appends_v1_when_missing(self) -> None:
+        self.assertEqual(
+            _openai_compatible_base_url_for_local_server(base_url="http://127.0.0.1:1234", runtime_kind="lm_studio"),
+            "http://127.0.0.1:1234/v1",
+        )
+
+    def test_lm_studio_preserves_existing_v1(self) -> None:
+        self.assertEqual(
+            _openai_compatible_base_url_for_local_server(base_url="http://host.docker.internal:1234/v1", runtime_kind="lm_studio"),
+            "http://host.docker.internal:1234/v1",
+        )
 
 
 class ExtractJsonPayloadTests(unittest.TestCase):

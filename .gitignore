@@ -23,3 +23,6 @@ coverage/
 *.egg-info/
 admin-ui/tsconfig.tsbuildinfo
 mcp.json
+.admin-ui/.playwright-report/
+.admin-ui/.next-playwright/
+admin-ui/.next-playwright

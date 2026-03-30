@@ -18,11 +18,15 @@ class DiscordMessageApplicationTests(unittest.TestCase):
         transcribe_audio_attachment=None,
         room_voice_reply_enabled=False,
         build_room_voice_reply_action=None,
+        route_voice_entry=None,
+        execute_voice_room_persona_voice_note=None,
     ) -> DiscordMessageIngressDeps:
         logger = MagicMock()
         return DiscordMessageIngressDeps(
             find_tenant_for_channel=MagicMock(return_value=SimpleNamespace(tenant_id="tenant-1", discord_config={})),
-            resolve_project_for_discord_channel=MagicMock(return_value=SimpleNamespace(project_id="project-1", discord_config={})),
+            resolve_project_for_discord_channel=MagicMock(
+                return_value=SimpleNamespace(project_id="project-1", jira_project_key="TP", discord_config={})
+            ),
             project_room_channel_ids=MagicMock(return_value=set()),
             room_channel_ids_from_discord_config=MagicMock(return_value=set()),
             is_audio_attachment=MagicMock(side_effect=lambda attachment: str(attachment.get("content_type") or "").startswith("audio/")),
@@ -43,6 +47,9 @@ class DiscordMessageApplicationTests(unittest.TestCase):
             emit_hard_error=MagicMock(),
             logger=logger,
             settings=SimpleNamespace(),
+            route_voice_entry=route_voice_entry
+            or MagicMock(return_value={"lane": "pm", "persona": "pm", "confidence": 1.0, "reason": "default"}),
+            execute_voice_room_persona_voice_note=execute_voice_room_persona_voice_note or MagicMock(),
         )
 
     def test_pm_command_opens_interview_thread(self) -> None:
@@ -172,4 +179,53 @@ class DiscordMessageApplicationTests(unittest.TestCase):
         self.assertIsInstance(result.actions[0], DiscordAskWithThreadAction)
         self.assertEqual(result.actions[0].followup_context_type, "pm_interview")
         self.assertEqual(execute.call_args.kwargs["payload"].command, "!pm create a share feature")
+
+    def test_voice_note_router_maps_persona_pm_to_voice_room_persona_executor(self) -> None:
+        execute = MagicMock()
+        persona_execute = MagicMock(
+            return_value=SimpleNamespace(
+                ok=True,
+                command="voice_room_persona",
+                message="Persona reply",
+                data={
+                    "persona_id": "pm",
+                    "persona_name": "Andy",
+                    "persona_role": "PM",
+                },
+            )
+        )
+        route = MagicMock(return_value={"lane": "persona", "persona": "pm", "confidence": 0.8, "reason": "routing"})
+        deps = self._deps(
+            execute_tenant_discord_command=execute,
+            resolve_followup_context_match=MagicMock(return_value=SimpleNamespace(status="no_match", context=None, matches=())),
+            transcribe_audio_attachment=MagicMock(return_value=("hello from voice", None)),
+            route_voice_entry=route,
+            execute_voice_room_persona_voice_note=persona_execute,
+        )
+
+        result = build_discord_message_ingress_result(
+            payload={
+                "id": "msg-5",
+                "channel_id": "root-1",
+                "author": {"id": "user-1", "bot": False},
+                "content": "",
+                "attachments": [
+                    {
+                        "id": "att-2",
+                        "url": "https://example.com/note2.ogg",
+                        "filename": "note2.ogg",
+                        "content_type": "audio/ogg",
+                        "size": "100",
+                    }
+                ],
+            },
+            session=MagicMock(),
+            deps=deps,
+        )
+
+        execute.assert_not_called()
+        persona_execute.assert_called_once()
+        self.assertEqual(persona_execute.call_args.kwargs["transcript"], "hello from voice")
+        self.assertEqual(persona_execute.call_args.kwargs["persona_id"], "pm")
+        self.assertEqual(len(result.actions), 1)
 

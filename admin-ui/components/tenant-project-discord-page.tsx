@@ -67,7 +67,7 @@ function createAutomationDraft(kind: string, overrides: Partial<ProjectAutomatio
     timezone,
     days_of_week: kind === PROJECT_AUTOMATION_KIND_STANDUP ? [1, 2, 3, 4, 5] : [5],
     local_time: kind === PROJECT_AUTOMATION_KIND_STANDUP ? "09:30" : "16:00",
-    delivery_text_channel_id: "",
+    delivery_text_channel_id: null,
     voice_id: null,
     fallback_lookback_hours: kind === PROJECT_AUTOMATION_KIND_STANDUP ? 24 : 168,
     last_successful_window_end_at: null,
@@ -180,7 +180,7 @@ export function ProjectAutomationsContent({
           timezone: automation.timezone,
           days_of_week: automation.days_of_week,
           local_time: automation.local_time,
-          delivery_text_channel_id: automation.delivery_text_channel_id,
+          delivery_text_channel_id: automation.delivery_text_channel_id?.trim() || null,
           voice_id: automation.voice_id,
           fallback_lookback_hours: automation.fallback_lookback_hours,
         })),
@@ -261,13 +261,17 @@ export function ProjectAutomationsContent({
                         className="text-xs font-medium uppercase tracking-wide text-muted-foreground"
                         htmlFor={`${automationId}-channel`}
                       >
-                        Delivery text channel ID
+                        Delivery text channel ID (optional)
                       </label>
                       <Input
                         id={`${automationId}-channel`}
-                        value={automation.delivery_text_channel_id}
-                        onChange={(event) => updateAutomationField(index, { delivery_text_channel_id: event.target.value })}
-                        placeholder="123456789012345678"
+                        value={automation.delivery_text_channel_id ?? ""}
+                        onChange={(event) =>
+                          updateAutomationField(index, {
+                            delivery_text_channel_id: event.target.value.trim() || null,
+                          })
+                        }
+                        placeholder="Leave blank until ready; required when a run delivers to Discord"
                       />
                     </div>
                     <div className="space-y-1.5">

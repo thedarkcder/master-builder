@@ -11,6 +11,7 @@ import pytest
 
 from orchestrator.core.discord.live_voice_service import DiscordLiveVoiceService
 from orchestrator.core.discord.live_voice_session import LiveVoiceTurn
+from orchestrator.core.discord.persona_room import VoiceRoomTurnResult
 from tests.production_path_support import (
     FakeDiscordApiClient,
     clear_runtime_environment,
@@ -130,14 +131,16 @@ class LiveVoiceProductionPathTests(unittest.TestCase):
             channels=2,
             finalization_reason="test",
         )
-        result = SimpleNamespace(
+        result = VoiceRoomTurnResult(
             persona_id="pm",
             persona_name="Andy",
             persona_role="product",
+            persona_voice_id=None,
             message="Reject relink and keep the device bound to the original user.",
-            room_config={},
+            brief={},
             router_confidence=0.91,
             router_reason="policy",
+            room_config={},
         )
 
         with (
@@ -147,7 +150,14 @@ class LiveVoiceProductionPathTests(unittest.TestCase):
                 side_effect=lambda **kwargs: object(),
             ),
             patch("orchestrator.core.discord.live_voice_service.transcribe_audio_bytes", return_value="What is the relink policy?"),
-            patch("orchestrator.core.discord.live_voice_service.answer_voice_room_turn", return_value=result),
+            patch(
+                "orchestrator.core.discord.live_voice_service.route_discord_voice_entry",
+                return_value={"lane": "persona", "persona": "pm", "confidence": 0.91, "reason": "policy"},
+            ),
+            patch(
+                "orchestrator.core.discord.live_voice_service.answer_voice_room_persona_after_entry_route",
+                return_value=result,
+            ),
             patch(
                 "orchestrator.core.discord.live_voice_service.synthesize_reply_audio",
                 return_value=SimpleNamespace(
@@ -160,9 +170,11 @@ class LiveVoiceProductionPathTests(unittest.TestCase):
             self.service._process_turn(turn=turn, turn_version=1)
             self.assertTrue(self.sidecar.playback_event.wait(timeout=5.0))
 
-        self.assertEqual(len(self.discord_client.posted_messages), 2)
-        self.assertIn("What is the relink policy?", str(self.discord_client.posted_messages[0]["content"]))
-        self.assertIn("Reject relink", str(self.discord_client.posted_messages[1]["content"]))
+        self.assertEqual(
+            len(self.discord_client.posted_messages),
+            0,
+            "Voice room success path posts no transcript/answer text; reply is audio in VC only.",
+        )
         self.assertEqual(len(self.sidecar.play_audio_calls), 1)
         self.assertEqual(self.sidecar.play_audio_calls[0]["content_type"], "audio/wav")
         self.assertEqual(self.sidecar.play_audio_calls[0]["metadata"]["persona_id"], "pm")

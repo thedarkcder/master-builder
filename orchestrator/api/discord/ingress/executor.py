@@ -244,6 +244,49 @@ def execute_discord_command(
     )
 
 
+def execute_voice_room_persona_for_voice_note(
+    *,
+    session: Session,
+    tenant: Tenant,
+    user_id: str,
+    channel_id: str,
+    scoped_project_keys: list[str],
+    scoped_project_id: str | None,
+    transcript: str,
+    persona_id: str,
+) -> DiscordCommandResponse:
+    """Voice-note path when router lane is persona (e.g. pm) and !pm would start the wrong flow."""
+    from orchestrator.api.discord.commands.personas import execute_voice_room_persona_voice_entry
+
+    return execute_voice_room_persona_voice_entry(
+        session=session,
+        tenant=tenant,
+        normalized_user_id=user_id,
+        normalized_channel_id=channel_id,
+        transcript=transcript,
+        persona_id=persona_id,
+        issue_key_pattern=ISSUE_KEY_PATTERN,
+        collect_ask_context_with_history_context=ask_runtime.collect_ask_context_with_history_context,
+        collect_github_ask_context=lambda **kwargs: ask_runtime.collect_github_ask_context(
+            **kwargs,
+            get_settings_fn=get_settings,
+            resolve_scoped_secret_ref_fn=resolve_scoped_secret_ref,
+            resolve_platform_secret_ref_fn=resolve_platform_secret_ref,
+            github_client_from_tenant_config_fn=github_client_from_tenant_config,
+            collect_local_repo_context_fn=collect_local_repo_context,
+        ),
+        store_ask_history_entry=ask_history_runtime.store_ask_history_entry,
+        scoped_project_keys=scoped_project_keys,
+        scoped_project_id=scoped_project_id,
+        codex_working_dir=_resolve_codex_working_dir(
+            session=session,
+            tenant=tenant,
+            settings=get_settings(),
+            project_id=scoped_project_id,
+            project_keys=scoped_project_keys,
+        ),
+    )
+
 
 def register_discord_command_executor() -> None:
     register_tenant_command_executor(execute_tenant_command_ingress)

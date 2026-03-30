@@ -64,7 +64,7 @@ class ProjectAutomationWrite:
     timezone: str
     days_of_week: tuple[int, ...]
     local_time: str
-    delivery_text_channel_id: str
+    delivery_text_channel_id: str | None
     voice_id: str | None
     fallback_lookback_hours: int
 
@@ -145,9 +145,7 @@ def _normalize_write(payload: ProjectAutomationWrite) -> ProjectAutomationWrite:
     timezone_name = _normalize_timezone(payload.timezone)
     days = _normalize_days(list(payload.days_of_week))
     local_time = _normalize_local_time(payload.local_time)
-    channel_id = str(payload.delivery_text_channel_id or "").strip()
-    if not channel_id:
-        raise ValueError("delivery_text_channel_id is required")
+    channel_id = str(payload.delivery_text_channel_id or "").strip() or None
     voice_id = str(payload.voice_id or "").strip() or None
     fallback = int(payload.fallback_lookback_hours)
     if fallback <= 0:

@@ -73,6 +73,35 @@ class ProjectAutomationServiceTests(unittest.TestCase):
         self.assertEqual(rows[0].kind, PROJECT_AUTOMATION_KIND_STANDUP)
         self.assertEqual(rows[0].delivery_text_channel_id, "123")
 
+    def test_upsert_allows_null_delivery_text_channel_id(self) -> None:
+        now = datetime(2026, 3, 28, 9, 0, tzinfo=UTC)
+        with self.session_factory() as session:
+            project = session.get(Project, "route25-default")
+            assert project is not None
+            upsert_project_automation(
+                session=session,
+                tenant_id=project.tenant_id,
+                project_id=project.project_id,
+                payload=ProjectAutomationWrite(
+                    kind=PROJECT_AUTOMATION_KIND_STANDUP,
+                    enabled=True,
+                    timezone="Europe/London",
+                    days_of_week=(0, 1, 2, 3, 4),
+                    local_time="09:30",
+                    delivery_text_channel_id=None,
+                    voice_id=None,
+                    fallback_lookback_hours=24,
+                ),
+                now=now,
+            )
+            rows = list_project_automation_definitions(
+                session=session,
+                tenant_id=project.tenant_id,
+                project_id=project.project_id,
+            )
+        self.assertEqual(len(rows), 1)
+        self.assertIsNone(rows[0].delivery_text_channel_id)
+
     def test_enqueue_due_slots_creates_execution_and_job_once(self) -> None:
         now = datetime(2026, 3, 28, 9, 0, tzinfo=UTC)
         with self.session_factory() as session:

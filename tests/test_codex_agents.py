@@ -6,6 +6,7 @@ from orchestrator.core.codex_agents import (
     CodexWorkflowAgents,
     answer_board_question_with_codex,
     answer_voice_room_persona_with_codex,
+    route_voice_entry_with_codex,
     route_voice_room_persona_with_codex,
 )
 from orchestrator.core.codex_invocation import CodexInvocationContext
@@ -610,6 +611,65 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         self.assertEqual(payload["persona"], "pm")
         self.assertEqual(payload["confidence"], 1.0)
         self.assertEqual(payload["reason"], "ambiguous ask")
+
+    def test_voice_entry_router_normalizes_invalid_lane_and_persona(self) -> None:
+        runtime = CodexRuntime(
+            model="gpt-5-codex",
+            max_output_tokens=1200,
+            command="override",
+            _request=_RuntimeQueue(
+                [
+                    '{"lane":"unknown","persona":"bogus","confidence":-1,"reason":"x"}',
+                ]
+            ),
+        )
+        ctx = CodexInvocationContext(
+            channel="discord",
+            tenant_id="tenant-1",
+            project_id="project-1",
+            command="router",
+            stage="voice-entry-router",
+            working_dir="/tmp",
+        )
+        with patch("orchestrator.core.codex_agents.render_prompt", side_effect=lambda template_name, **_: template_name):
+            payload = route_voice_entry_with_codex(
+                runtime=runtime,
+                transcript="What is the status?",
+                entry_source="unit-test",
+                invocation_context=ctx,
+            )
+        self.assertEqual(payload["lane"], "ask")
+        self.assertEqual(payload["persona"], "engineer")
+        self.assertEqual(payload["confidence"], 0.0)
+
+    def test_voice_entry_router_persona_lane_defaults_invalid_persona_to_pm(self) -> None:
+        runtime = CodexRuntime(
+            model="gpt-5-codex",
+            max_output_tokens=1200,
+            command="override",
+            _request=_RuntimeQueue(
+                [
+                    '{"lane":"persona","persona":"alien","confidence":0.5,"reason":"y"}',
+                ]
+            ),
+        )
+        ctx = CodexInvocationContext(
+            channel="discord",
+            tenant_id="tenant-1",
+            project_id="project-1",
+            command="router",
+            stage="voice-entry-router",
+            working_dir="/tmp",
+        )
+        with patch("orchestrator.core.codex_agents.render_prompt", side_effect=lambda template_name, **_: template_name):
+            payload = route_voice_entry_with_codex(
+                runtime=runtime,
+                transcript="Help me scope this",
+                entry_source="unit-test",
+                invocation_context=ctx,
+            )
+        self.assertEqual(payload["lane"], "persona")
+        self.assertEqual(payload["persona"], "pm")
 
     def test_voice_room_persona_answer_accepts_message_only_schema(self) -> None:
         runtime = CodexRuntime(

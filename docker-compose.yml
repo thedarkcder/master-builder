@@ -1,3 +1,9 @@
+# Lets containers reach services bound on the Docker host (e.g. LM Studio on :1234).
+# Use base_url like http://host.docker.internal:1234 in agent runtime profiles, not the LAN IP.
+x-extra_hosts_host_gateway: &extra_hosts_host_gateway
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+
 services:
   postgres:
     image: pgvector/pgvector:pg16
@@ -40,6 +46,7 @@ services:
       retries: 20
 
   api:
+    <<: *extra_hosts_host_gateway
     build:
       context: .
       dockerfile: orchestrator/Dockerfile
@@ -111,6 +118,7 @@ services:
       - ./.workdirs:/tmp/master-builder-project-repos
         
   run-worker:
+    <<: *extra_hosts_host_gateway
     build:
       context: .
       dockerfile: orchestrator/Dockerfile
@@ -158,6 +166,7 @@ services:
       - ./.workdirs:/tmp/master-builder-project-repos
 
   webhook-worker:
+    <<: *extra_hosts_host_gateway
     build:
       context: .
       dockerfile: orchestrator/Dockerfile
@@ -214,6 +223,7 @@ services:
       - ./.workdirs:/tmp/master-builder-project-repos
 
   discord-gateway:
+    <<: *extra_hosts_host_gateway
     build:
       context: .
       dockerfile: orchestrator/Dockerfile
@@ -259,6 +269,7 @@ services:
       - pocket-tts-cache:/root/.cache/pocket_tts
 
   discord-live-voice:
+    <<: *extra_hosts_host_gateway
     build:
       context: .
       dockerfile: orchestrator/Dockerfile
@@ -307,6 +318,7 @@ services:
       - pocket-tts-cache:/root/.cache/pocket_tts
 
   knowledge-sync:
+    <<: *extra_hosts_host_gateway
     build:
       context: .
       dockerfile: orchestrator/Dockerfile

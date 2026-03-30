@@ -198,7 +198,7 @@ export type ProjectAutomationRecord = {
   timezone: string;
   days_of_week: number[];
   local_time: string;
-  delivery_text_channel_id: string;
+  delivery_text_channel_id: string | null;
   voice_id: string | null;
   fallback_lookback_hours: number;
   last_successful_window_end_at: string | null;
@@ -214,7 +214,7 @@ export type ProjectAutomationWritePayload = {
   timezone: string;
   days_of_week: Array<number | string>;
   local_time: string;
-  delivery_text_channel_id: string;
+  delivery_text_channel_id?: string | null;
   voice_id?: string | null;
   fallback_lookback_hours: number;
 };

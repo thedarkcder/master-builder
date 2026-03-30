@@ -30,6 +30,7 @@ from orchestrator.core.pm_interview_service import (
     resolve_pm_interview_case,
     upsert_pm_interview_case,
 )
+from orchestrator.core.discord.personas import resolve_voice_room_persona_profile
 from orchestrator.core.specialist_planning import SpecialistPlanningRequest, run_specialist_planning_fanout
 from orchestrator.storage.models import Project, Tenant
 
@@ -144,6 +145,35 @@ def _voice_turn_history_answer(*, answer: str, persona_id: str) -> str:
         compact = f"{compact[:377]}..."
     prefix = str(persona_id or "pm").strip().lower() or "pm"
     return f"{prefix}: {compact}".strip()
+
+
+def _ask_room_voice_overlay(*, tenant: Tenant) -> dict[str, Any]:
+    profile = resolve_voice_room_persona_profile(
+        persona_id="engineer",
+        tenant_discord_config=getattr(tenant, "discord_config", None) or {},
+        project_discord_config=None,
+    )
+    return {
+        "persona_id": profile.persona_id,
+        "persona_name": profile.display_name,
+        "persona_role": profile.role_label,
+        "persona_voice_id": profile.voice_id,
+    }
+
+
+def _merge_ask_voice_reply_fields(
+    data: dict[str, Any],
+    *,
+    tenant: Tenant,
+    command_params: dict[str, Any],
+) -> dict[str, Any]:
+    room_src = str(command_params.get("room_source") or "").strip().lower()
+    room_on = str(command_params.get("room_mode") or "").strip().lower() in {"1", "true", "yes"}
+    if room_on and room_src in {"voice_note", "live_voice"}:
+        merged = dict(data)
+        merged.update(_ask_room_voice_overlay(tenant=tenant))
+        return merged
+    return data
 
 
 def _pm_request_id(*, command_params: dict[str, str]) -> str:
@@ -629,6 +659,7 @@ def dispatch_ask_command(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Usage: !ask <question> or !ask @ISSUE-123 <question>",
         )
+    ask_command_params = payload.command_params if isinstance(payload.command_params, dict) else {}
     scoped_issue_key: str | None = None
     question_tokens = arguments
     first_token = arguments[0].strip()
@@ -781,17 +812,19 @@ def dispatch_ask_command(
             issue_key=normalized_issue_key,
             status_name=requested_status,
         )
+        ask_data = {
+            "issue_key": normalized_issue_key,
+            "status": requested_status,
+            "status_counts": status_counts,
+            "issues": issues,
+            "question": question,
+        }
+        ask_data = _merge_ask_voice_reply_fields(ask_data, tenant=tenant, command_params=ask_command_params)
         return DiscordCommandResponse(
             ok=True,
             command=command_name,
             message=message,
-            data={
-                "issue_key": normalized_issue_key,
-                "status": requested_status,
-                "status_counts": status_counts,
-                "issues": issues,
-                "question": question,
-            },
+            data=ask_data,
         )
 
     message, data = ask_board_message(
@@ -803,9 +836,13 @@ def dispatch_ask_command(
         scoped_issue_key=scoped_issue_key,
         scoped_project_id=scoped_project_id,
     )
+    if isinstance(data, dict):
+        merged_data = _merge_ask_voice_reply_fields(dict(data), tenant=tenant, command_params=ask_command_params)
+    else:
+        merged_data = data
     return DiscordCommandResponse(
         ok=True,
         command=command_name,
         message=message,
-        data=data,
+        data=merged_data,
     )
