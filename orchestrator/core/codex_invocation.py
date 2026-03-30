@@ -54,6 +54,10 @@ class CodexInvocationContext:
     codex_session_id: str | None = None
 
 
+# Canonical public name: invocations are tied to agent runtime, not a single LLM vendor.
+AgentInvocationContext = CodexInvocationContext
+
+
 @dataclass(frozen=True)
 class _QueuedLogLine:
     context: CodexInvocationContext

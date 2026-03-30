@@ -119,6 +119,7 @@ def ask_board_message(
     question: str,
     scoped_issue_key: str | None = None,
     scoped_project_id: str | None = None,
+    answer_persona_id: str | None = None,
     get_settings_fn=None,
     resolve_codex_working_dir_fn=None,
     resolve_scoped_secret_ref_fn=None,
@@ -142,6 +143,7 @@ def ask_board_message(
         question=question,
         scoped_issue_key=scoped_issue_key,
         scoped_project_id=scoped_project_id,
+        answer_persona_id=answer_persona_id,
         prune_missing_issue_keys_from_ask_history_fn=ask_history_runtime.prune_missing_issue_keys_from_ask_history,
         recent_ask_history_fn=ask_history_runtime.recent_ask_history,
         collect_ask_context_with_history_context_fn=lambda **kwargs: collect_ask_context_with_history_context(

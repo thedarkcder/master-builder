@@ -1422,7 +1422,7 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertTrue(command_response.ok)
         self.assertEqual(command_response.command, "pm")
         self.assertTrue(command_response.data["room_mode"])
-        self.assertTrue(command_response.data["voice_mode"])
+        self.assertEqual(command_response.data.get("room_source"), "text")
         self.assertEqual(command_response.data["persona_id"], "pm")
         self.assertEqual(command_response.data["persona_name"], "PM")
         self.assertEqual(command_response.data["followup_context_type"], "pm_interview")
@@ -1438,7 +1438,7 @@ class DiscordCommandApiTests(unittest.TestCase):
             self.assertTrue(str(latest_entry.get("question") or "").startswith("room "))
             self.assertTrue(str(latest_entry.get("answer") or "").startswith("pm: "))
 
-    def test_pm_voice_mode_routes_to_persona_runtime_with_channel_local_history(self) -> None:
+    def test_pm_live_voice_source_routes_to_persona_runtime_with_channel_local_history(self) -> None:
         with (
             self.session_factory() as session,
             patch(
@@ -1474,15 +1474,15 @@ class DiscordCommandApiTests(unittest.TestCase):
                     user_id="u-viewer",
                     channel_id="discord-channel-1",
                     command="!pm what should we do about session security",
-                    command_params={"voice_mode": "true"},
+                    command_params={"room_source": "live_voice"},
                 ),
                 session=session,
             )
 
         self.assertTrue(command_response.ok)
         self.assertEqual(command_response.command, "pm")
-        self.assertFalse(command_response.data["room_mode"])
-        self.assertTrue(command_response.data["voice_mode"])
+        self.assertTrue(command_response.data["room_mode"])
+        self.assertEqual(command_response.data.get("room_source"), "live_voice")
         self.assertEqual(command_response.data["persona_id"], "pm")
         self.assertEqual(command_response.data["persona_name"], "PM")
         self.assertEqual(command_response.data["followup_context_type"], "pm_interview")

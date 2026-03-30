@@ -9,9 +9,9 @@ from unittest.mock import patch
 
 import pytest
 
+from orchestrator.api.schemas import DiscordCommandResponse
 from orchestrator.core.discord.live_voice_service import DiscordLiveVoiceService
 from orchestrator.core.discord.live_voice_session import LiveVoiceTurn
-from orchestrator.core.discord.persona_room import VoiceRoomTurnResult
 from tests.production_path_support import (
     FakeDiscordApiClient,
     clear_runtime_environment,
@@ -131,32 +131,24 @@ class LiveVoiceProductionPathTests(unittest.TestCase):
             channels=2,
             finalization_reason="test",
         )
-        result = VoiceRoomTurnResult(
-            persona_id="pm",
-            persona_name="Andy",
-            persona_role="product",
-            persona_voice_id=None,
-            message="Reject relink and keep the device bound to the original user.",
-            brief={},
-            router_confidence=0.91,
-            router_reason="policy",
-            room_config={},
-        )
+        def _fake_execute(**_kwargs):  # noqa: ANN003
+            return DiscordCommandResponse(
+                ok=True,
+                command="ask",
+                message="Reject relink and keep the device bound to the original user.",
+                data={"persona_id": "pm", "brief": {}},
+            )
 
         with (
             patch("orchestrator.core.discord.live_voice_service.resolve_codex_working_dir", return_value=self.temp_dir.name),
-            patch(
-                "orchestrator.core.discord.live_voice_service.build_runtime_for_selector",
-                side_effect=lambda **kwargs: object(),
-            ),
             patch("orchestrator.core.discord.live_voice_service.transcribe_audio_bytes", return_value="What is the relink policy?"),
             patch(
                 "orchestrator.core.discord.live_voice_service.route_discord_voice_entry",
-                return_value={"lane": "persona", "persona": "pm", "confidence": 0.91, "reason": "policy"},
+                return_value={"lane": "ask", "persona": "pm", "confidence": 0.91, "reason": "policy"},
             ),
             patch(
-                "orchestrator.core.discord.live_voice_service.answer_voice_room_persona_after_entry_route",
-                return_value=result,
+                "orchestrator.core.discord.live_voice_service.execute_tenant_command_ingress",
+                side_effect=_fake_execute,
             ),
             patch(
                 "orchestrator.core.discord.live_voice_service.synthesize_reply_audio",

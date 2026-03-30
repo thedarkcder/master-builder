@@ -16,13 +16,6 @@ from orchestrator.core.communications import (
 from orchestrator.api.discord.ask.context import tenant_project_keys
 from orchestrator.core.followup_context_service import FollowupReaction
 
-_VOICE_ENTRY_PERSONA_TO_COMMAND = {
-    "architect": "architect",
-    "engineer": "engineer",
-    "qa": "tester",
-    "security": "security",
-}
-
 _ROOM_VOICE_REPLY_COMMANDS = frozenset(
     {
         "pm",
@@ -63,7 +56,6 @@ class DiscordMessageIngressDeps:
     logger: object
     settings: object
     route_voice_entry: object
-    execute_voice_room_persona_voice_note: object
 
 
 def discord_channel_message_action(
@@ -238,16 +230,8 @@ def build_discord_message_ingress_result(
     )
     followup_context = getattr(followup_resolution, "context", None)
     followup_context_type = str(getattr(followup_context, "context_type", "") or "").strip().lower()
-    voice_note_command_params = (
-        {
-            "room_mode": "true",
-            "room_source": room_source_mode,
-        }
-        if voice_note_reply_requested
-        else None
-    )
+    voice_note_command_params: dict[str, str] | None = None
     voice_note_routed_command_text: str | None = None
-    voice_note_entry_persona_id: str | None = None
     voice_note_scoped_project_keys: list[str] | None = None
     if voice_note_reply_requested and not content.startswith("!"):
         voice_note_scoped_project_keys = (
@@ -274,17 +258,15 @@ def build_discord_message_ingress_result(
             routed.get("confidence"),
             routed.get("reason"),
         )
-        if lane == "pm":
+        voice_note_command_params = {
+            "room_mode": "true",
+            "room_source": room_source_mode,
+        }
+        if lane == "interview":
             voice_note_routed_command_text = f"!pm {content}"
-        elif lane == "ask":
-            voice_note_routed_command_text = f"!ask {content}"
-        elif lane == "persona" and persona_rid == "pm":
-            voice_note_entry_persona_id = "pm"
-        elif lane == "persona":
-            bang = _VOICE_ENTRY_PERSONA_TO_COMMAND.get(persona_rid)
-            voice_note_routed_command_text = f"!{bang} {content}" if bang else f"!ask {content}"
         else:
             voice_note_routed_command_text = f"!ask {content}"
+            voice_note_command_params["persona_id"] = persona_rid
     if followup_context_type == "pm_interview" and not content.startswith("!"):
         reaction = FollowupReaction(
             kind="command",
@@ -296,8 +278,6 @@ def build_discord_message_ingress_result(
             command_text=voice_note_routed_command_text,
             command_params=voice_note_command_params,
         )
-    elif voice_note_entry_persona_id is not None:
-        reaction = None
     else:
         reaction = deps.resolve_followup_reaction(
             raw_text=content,
@@ -367,35 +347,17 @@ def build_discord_message_ingress_result(
     room_voice_reply_persona_role: str | None = None
     room_voice_reply_config: dict | None = None
     try:
-        if voice_note_entry_persona_id is not None:
-            if voice_note_scoped_project_keys is None:
-                voice_note_scoped_project_keys = (
-                    [str(project.jira_project_key)]
-                    if project is not None and getattr(project, "jira_project_key", None)
-                    else tenant_project_keys(session=session, tenant=tenant)
-                )
-            command_response = deps.execute_voice_room_persona_voice_note(
-                session=session,
-                tenant=tenant,
+        command_response = deps.execute_tenant_discord_command(
+            tenant_id=tenant.tenant_id,
+            payload=DiscordCommandRequest(
                 user_id=user_id,
                 channel_id=channel_id,
-                project_id=project_id,
-                project_keys=voice_note_scoped_project_keys,
-                transcript=content,
-                persona_id=voice_note_entry_persona_id,
-            )
-        else:
-            command_response = deps.execute_tenant_discord_command(
-                tenant_id=tenant.tenant_id,
-                payload=DiscordCommandRequest(
-                    user_id=user_id,
-                    channel_id=channel_id,
-                    command=command_text,
-                    command_params=command_params,
-                    attachments=attachments,
-                ),
-                session=session,
-            )
+                command=command_text,
+                command_params=command_params,
+                attachments=attachments,
+            ),
+            session=session,
+        )
         message_content = deps.build_command_followup_message(
             user_id=user_id,
             command_response=command_response,

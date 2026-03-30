@@ -5,6 +5,9 @@ import re
 from collections.abc import Callable
 from typing import Any
 
+from sqlalchemy.orm import Session
+
+from orchestrator.core.agent_tools import allowed_tools_for_stage, execute_agent_tool
 from orchestrator.core.codex_invocation import (
     CodexInvocationContext,
     invoke_codex_json,
@@ -13,7 +16,6 @@ from orchestrator.core.codex_invocation import (
 from orchestrator.core.codex_runtime import CodexRuntime, CodexRuntimeError
 from orchestrator.core.discord.personas import get_voice_room_persona_definition
 from orchestrator.core.prompt_templates import render_prompt
-from orchestrator.core.agent_tools import allowed_tools_for_stage
 from orchestrator.core.worker_capabilities import normalize_worker_capability
 from orchestrator.core.workflow.runner import (
     DevResult,
@@ -22,6 +24,85 @@ from orchestrator.core.workflow.runner import (
     TestResult,
     WorkflowRequest,
 )
+
+
+def _discord_tool_bridge_suffix(*, tool_stage: str) -> str:
+    allowed = allowed_tools_for_stage(tool_stage)
+    if not allowed:
+        return ""
+    return "\n\n" + render_prompt(
+        "discord/codex_tool_bridge_suffix.j2",
+        allowed_tools_json=json.dumps(sorted(allowed)),
+    )
+
+
+def _codex_discord_execute_tool(
+    *,
+    session: Session,
+    settings: Any,
+    invocation_context: CodexInvocationContext,
+    tool_stage: str,
+) -> Callable[[str, dict[str, object]], dict[str, object]]:
+    tenant_id = str(invocation_context.tenant_id or "").strip()
+    if not tenant_id:
+        raise RuntimeError("tenant_id is required for Discord tool execution")
+
+    def _run(tool_name: str, tool_args: dict[str, object]) -> dict[str, object]:
+        raw = execute_agent_tool(
+            session=session,
+            settings=settings,
+            tenant_id=tenant_id,
+            project_id=str(invocation_context.project_id or "").strip() or None,
+            run_id=None,
+            issue_key=str(invocation_context.issue_key or "").strip(),
+            stage=tool_stage,
+            tool_name=tool_name,
+            tool_args=dict(tool_args),
+        )
+        return dict(raw)
+
+    return _run
+
+
+def _invoke_discord_json_maybe_tools(
+    *,
+    runtime: CodexRuntime,
+    context: CodexInvocationContext,
+    system_prompt: str,
+    user_prompt: str,
+    tool_stage: str,
+    sqlalchemy_session: Session | None,
+    settings: Any | None,
+    max_tool_hops: int = 8,
+) -> dict:
+    allowed = allowed_tools_for_stage(tool_stage)
+    if (
+        sqlalchemy_session is None
+        or settings is None
+        or not allowed
+        or not str(context.tenant_id or "").strip()
+    ):
+        return invoke_codex_json(
+            runtime=runtime,
+            context=context,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+        )
+    bridged_user = user_prompt + _discord_tool_bridge_suffix(tool_stage=tool_stage)
+    return invoke_codex_json_with_tools(
+        runtime=runtime,
+        context=context,
+        system_prompt=system_prompt,
+        user_prompt=bridged_user,
+        allowed_tools=allowed,
+        execute_tool=_codex_discord_execute_tool(
+            session=sqlalchemy_session,
+            settings=settings,
+            invocation_context=context,
+            tool_stage=tool_stage,
+        ),
+        max_tool_hops=max_tool_hops,
+    )
 
 
 class CodexWorkflowAgents:
@@ -644,22 +725,33 @@ def answer_board_question_with_codex(
     invocation_context: CodexInvocationContext,
     history: list[dict] | None = None,
     github_context: dict | None = None,
+    sqlalchemy_session: Session | None = None,
+    settings: Any | None = None,
+    answer_persona_id: str | None = None,
 ) -> str:
-    normalized_history: list[dict] = []
+    normalized_history = history if isinstance(history, list) else []
     normalized_github_context = github_context or {}
-    payload = invoke_codex_json(
+    history_slice = normalized_history[-25:] if normalized_history else []
+    persona = str(answer_persona_id or "").strip().lower() or "engineer"
+    user_prompt = render_prompt(
+        "discord/ask_answer_user.j2",
+        question=question,
+        persona_id=persona,
+        project_keys_json=json.dumps(project_keys),
+        status_counts_json=json.dumps(status_counts),
+        github_context_json=json.dumps(normalized_github_context),
+        history_json=json.dumps(history_slice),
+        issues_json=json.dumps(issues[:40]),
+    )
+    payload = _invoke_discord_json_maybe_tools(
         runtime=runtime,
         context=invocation_context,
-        system_prompt=render_prompt("discord/ask_answer_system.j2"),
-        user_prompt=render_prompt(
-            "discord/ask_answer_user.j2",
-            question=question,
-            project_keys_json=json.dumps(project_keys),
-            status_counts_json=json.dumps(status_counts),
-            github_context_json=json.dumps(normalized_github_context),
-            history_json=json.dumps(normalized_history),
-            issues_json=json.dumps(issues[:40]),
-        ),
+        system_prompt=render_prompt("discord/ask_answer_system.j2", persona_id=persona),
+        user_prompt=user_prompt,
+        tool_stage="discord_ask_answer",
+        sqlalchemy_session=sqlalchemy_session,
+        settings=settings,
+        max_tool_hops=8,
     )
     message = str(payload.get("message") or "").strip()
     if not message:
@@ -747,7 +839,7 @@ def classify_engineering_clarification_with_codex(
     return payload
 
 
-def route_voice_entry_with_codex(
+def route_voice_entry_with_runtime(
     *,
     runtime: CodexRuntime,
     transcript: str,
@@ -755,41 +847,49 @@ def route_voice_entry_with_codex(
     entry_source: str,
     history: list[dict] | None = None,
     room_context: dict | None = None,
+    sqlalchemy_session: Session | None = None,
+    settings: Any | None = None,
 ) -> dict:
-    """Route voice transcript to ask vs pm vs persona lane (strict JSON from Codex)."""
+    """Route voice transcript to ask vs interview (strict JSON from agent runtime)."""
     normalized_history = history if isinstance(history, list) else []
-    payload = invoke_codex_json(
+    user_prompt = render_prompt(
+        "discord/voice_entry_router_user.j2",
+        transcript=transcript,
+        entry_source=entry_source,
+        history_json=json.dumps(normalized_history[-25:]),
+        room_context_json=json.dumps(room_context or {}),
+    )
+    payload = _invoke_discord_json_maybe_tools(
         runtime=runtime,
         context=invocation_context,
         system_prompt=render_prompt("discord/voice_entry_router_system.j2"),
-        user_prompt=render_prompt(
-            "discord/voice_entry_router_user.j2",
-            transcript=transcript,
-            entry_source=entry_source,
-            history_json=json.dumps(normalized_history[-25:]),
-            room_context_json=json.dumps(room_context or {}),
-        ),
+        user_prompt=user_prompt,
+        tool_stage="voice_entry_router",
+        sqlalchemy_session=sqlalchemy_session,
+        settings=settings,
+        max_tool_hops=6,
     )
     if not isinstance(payload, dict):
         raise CodexRuntimeError("Codex did not return a voice-entry router JSON object")
     lane = str(payload.get("lane") or "").strip().lower()
-    if lane not in {"ask", "pm", "persona"}:
+    if lane == "pm":
+        lane = "interview"
+    if lane == "persona":
+        lane = "ask"
+    if lane not in {"ask", "interview"}:
         lane = "ask"
     persona_id = str(payload.get("persona") or "").strip().lower()
     valid_personas = {"pm", "architect", "engineer", "qa", "security"}
     if persona_id not in valid_personas:
-        if lane == "persona":
-            persona_id = "pm"
-        elif lane == "pm":
-            persona_id = "pm"
-        else:
-            persona_id = "engineer"
+        persona_id = "engineer" if lane == "ask" else "pm"
     try:
         confidence = float(payload.get("confidence"))
     except (TypeError, ValueError):
         confidence = 0.0
     confidence = max(0.0, min(1.0, confidence))
     reason = str(payload.get("reason") or "").strip()
+    if lane == "interview":
+        persona_id = "pm"
     return {
         "lane": lane,
         "persona": persona_id,
@@ -850,27 +950,40 @@ def answer_voice_room_persona_with_codex(
     history: list[dict] | None = None,
     github_context: dict | None = None,
     room_context: dict | None = None,
+    sqlalchemy_session: Session | None = None,
+    settings: Any | None = None,
 ) -> dict:
     persona = get_voice_room_persona_definition(persona_id)
     normalized_history = history if isinstance(history, list) else []
-    payload = invoke_codex_json(
+    system_prompt = render_prompt(persona.system_prompt_template)
+    if sqlalchemy_session is not None and settings is not None and allowed_tools_for_stage("discord_voice_room_persona"):
+        system_prompt += (
+            "\n\nWhen the user message includes an Allowed tools section, use tool_request then final_response. "
+            "final_response.result must match the same JSON shape required above (same keys as without tools)."
+        )
+    user_prompt = render_prompt(
+        persona.user_prompt_template,
+        transcript=transcript,
+        history_json=json.dumps(normalized_history[-25:]),
+        room_context_json=json.dumps(
+            room_context
+            or {
+                "project_keys": project_keys,
+                "status_counts": status_counts,
+                "github_context": github_context or {},
+                "issues": issues[:40],
+            }
+        ),
+    )
+    payload = _invoke_discord_json_maybe_tools(
         runtime=runtime,
         context=invocation_context,
-        system_prompt=render_prompt(persona.system_prompt_template),
-        user_prompt=render_prompt(
-            persona.user_prompt_template,
-            transcript=transcript,
-            history_json=json.dumps(normalized_history[-25:]),
-            room_context_json=json.dumps(
-                room_context
-                or {
-                    "project_keys": project_keys,
-                    "status_counts": status_counts,
-                    "github_context": github_context or {},
-                    "issues": issues[:40],
-                }
-            ),
-        ),
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        tool_stage="discord_voice_room_persona",
+        sqlalchemy_session=sqlalchemy_session,
+        settings=settings,
+        max_tool_hops=6,
     )
     if not isinstance(payload, dict):
         raise CodexRuntimeError("Codex did not return a voice-room persona JSON object")

@@ -7,12 +7,12 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from orchestrator.api.schemas import DiscordCommandResponse
 from orchestrator.core.discord.live_voice_service import (
     ConfiguredLiveVoiceRoom,
     DiscordLiveVoiceService,
     _encode_pcm_wav,
 )
-from orchestrator.core.discord.persona_room import VoiceRoomTurnResult
 from orchestrator.core.discord.live_voice_session import LiveVoiceTurn
 from orchestrator.core.observability import current_log_context
 
@@ -297,6 +297,9 @@ class LiveVoiceServiceTests(unittest.TestCase):
             def rollback(self) -> None:
                 pass
 
+            def refresh(self, _obj) -> None:  # noqa: ANN001
+                return None
+
         fake_session = _FakeSession()
         service = DiscordLiveVoiceService(
             settings=SimpleNamespace(),
@@ -323,10 +326,8 @@ class LiveVoiceServiceTests(unittest.TestCase):
             finalization_reason="test",
         )
         room_history = [{"index": index} for index in range(12)]
-        scheduled_results: list[tuple[ConfiguredLiveVoiceRoom, object]] = []
+        scheduled_results: list[tuple[ConfiguredLiveVoiceRoom, object, int]] = []
         notices: list[tuple[str, str]] = []
-        runtime_resolution_calls: list[dict[str, str | None]] = []
-        selector_runtimes: dict[str, object] = {}
         service._schedule_persona_reply = (  # type: ignore[method-assign]
             lambda *, room, result, turn_version: scheduled_results.append((room, result, turn_version))
         )
@@ -340,26 +341,19 @@ class LiveVoiceServiceTests(unittest.TestCase):
             lambda **kwargs: list(room_history)
         )
 
-        answer_calls: list[dict] = []
+        ingress_calls: list[dict] = []
         transcription_contexts: list[dict[str, str | None]] = []
-        answer_contexts: list[dict[str, str | None]] = []
+        ingress_contexts: list[dict[str, str | None]] = []
 
-        def _answer_persona_after_route(**kwargs):  # noqa: ANN003
-            answer_contexts.append(dict(current_log_context()))
-            runtime_for_selector = kwargs.get("runtime_for_selector")
-            if callable(runtime_for_selector):
-                selector_runtimes["pm"] = runtime_for_selector("discord.voice_room_pm")
-            answer_calls.append(kwargs)
-            return VoiceRoomTurnResult(
-                persona_id="pm",
-                persona_name="Andy",
-                persona_role="PM",
-                persona_voice_id="alba",
+        def _execute_tenant_command_ingress(**kwargs):  # noqa: ANN003
+            ingress_contexts.append(dict(current_log_context()))
+            ingress_calls.append(kwargs)
+            payload = kwargs["payload"]
+            return DiscordCommandResponse(
+                ok=True,
+                command="!ask",
                 message="Short answer.",
-                brief={},
-                router_confidence=0.9,
-                router_reason="product",
-                room_config={},
+                data={"persona_id": "pm", "brief": {}},
             )
 
         def _transcribe_audio_bytes(**_kwargs):  # noqa: ANN003
@@ -373,64 +367,37 @@ class LiveVoiceServiceTests(unittest.TestCase):
                 side_effect=_transcribe_audio_bytes,
             ),
             patch(
-                "orchestrator.core.discord.live_voice_service.build_runtime_for_selector",
-                side_effect=lambda **kwargs: (
-                    runtime_resolution_calls.append(
-                        {
-                            "tenant_id": kwargs.get("tenant_id"),
-                            "project_id": kwargs.get("project_id"),
-                            "selector": kwargs.get("selector"),
-                            "agent_role": kwargs.get("agent_role"),
-                            "agent_name": kwargs.get("agent_name"),
-                        }
-                    )
-                    or f"runtime:{kwargs.get('selector')}:{kwargs.get('agent_name') or ''}"
-                ),
-            ),
-            patch(
                 "orchestrator.core.discord.live_voice_service.DiscordLiveVoiceService._collect_live_voice_context",
                 return_value=("MAB-174", None, ["MAB"], "/tmp/test-repo"),
             ),
             patch(
                 "orchestrator.core.discord.live_voice_service.route_discord_voice_entry",
-                return_value={"lane": "persona", "persona": "pm", "confidence": 0.9, "reason": "product"},
+                return_value={"lane": "ask", "persona": "pm", "confidence": 0.9, "reason": "product"},
             ),
             patch(
-                "orchestrator.core.discord.live_voice_service.answer_voice_room_persona_after_entry_route",
-                side_effect=_answer_persona_after_route,
+                "orchestrator.core.discord.live_voice_service.execute_tenant_command_ingress",
+                side_effect=_execute_tenant_command_ingress,
             ),
         ):
             service._turn_versions[room.room_key] = 1
             service._process_turn_locked(room=room, turn=turn, turn_version=1)
 
         self.assertTrue(fake_session.committed)
-        self.assertEqual(len(answer_calls), 1)
-        answer_call = answer_calls[0]
-        self.assertEqual(answer_call["issues"], [])
-        self.assertEqual(answer_call["project_keys"], ["MAB"])
-        self.assertEqual(answer_call["history"], room_history[-8:])
-        self.assertEqual(answer_call["github_context"], {})
-        self.assertEqual(answer_call["invocation_context"].reasoning_effort, "low")
-        self.assertEqual(answer_call["runtime"], "runtime:discord.voice_entry_router:")
-        self.assertEqual(selector_runtimes["pm"], "runtime:discord.voice_room_pm:voice_room_pm")
+        self.assertEqual(len(ingress_calls), 1)
+        ingress_call = ingress_calls[0]
+        self.assertEqual(ingress_call["tenant_id"], "tenant-a")
+        self.assertEqual(ingress_call["ingress_source"], "discord")
+        payload = ingress_call["payload"]
+        self.assertEqual(payload.command, "!ask What should we do next?")
         self.assertEqual(
-            runtime_resolution_calls,
-            [
-                {
-                    "tenant_id": "tenant-a",
-                    "project_id": "project-a",
-                    "selector": "discord.voice_entry_router",
-                    "agent_role": None,
-                    "agent_name": None,
-                },
-                {
-                    "tenant_id": "tenant-a",
-                    "project_id": "project-a",
-                    "selector": "discord.voice_room_pm",
-                    "agent_role": "pm",
-                    "agent_name": "voice_room_pm",
-                },
-            ],
+            payload.command_params,
+            {
+                "room_mode": "true",
+                "room_source": "live_voice",
+                "linked_text_channel_id": "789",
+                "voice_channel_id": "456",
+                "persona_id": "pm",
+            },
         )
         self.assertEqual(
             transcription_contexts,
@@ -444,7 +411,7 @@ class LiveVoiceServiceTests(unittest.TestCase):
             ],
         )
         self.assertEqual(
-            answer_contexts,
+            ingress_contexts,
             [
                 {
                     "correlation_id": "live-voice:123:456:user-1:1:1",
@@ -456,6 +423,8 @@ class LiveVoiceServiceTests(unittest.TestCase):
         )
         self.assertEqual(len(scheduled_results), 1)
         self.assertEqual(scheduled_results[0][2], 1)
+        self.assertEqual(scheduled_results[0][1].persona_id, "pm")
+        self.assertEqual(scheduled_results[0][1].message, "Short answer.")
         self.assertEqual(notices, [])
 
     def test_opus_frame_interrupts_active_playback_before_ingesting_user_audio(self) -> None:
