@@ -739,7 +739,7 @@ class DiscordGatewayListener:
         project_id: str | None = None,
     ) -> tuple[str | None, str | None]:
         if self._transcribe_audio_attachment is None:
-            provider = str(getattr(self._settings, "voice_transcription_provider", "disabled") or "").strip().lower()
+            provider = str(getattr(self._settings, "voice_provider", "disabled") or "").strip().lower()
             if provider in {"", "disabled"}:
                 return (
                     None,
@@ -785,10 +785,10 @@ class DiscordGatewayListener:
         return transcript, None
 
     def _room_voice_reply_enabled(self) -> bool:
-        provider = str(getattr(self._settings, "voice_reply_provider", "disabled") or "").strip().lower()
+        provider = str(getattr(self._settings, "voice_provider", "disabled") or "").strip().lower()
         if provider in {"", "disabled"}:
             return False
-        return bool(getattr(self._settings, "voice_reply_enabled_default", False))
+        return True
 
     def _build_room_voice_reply_action(
         self,

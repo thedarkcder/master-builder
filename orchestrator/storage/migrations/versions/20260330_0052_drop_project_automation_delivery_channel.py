@@ -1,8 +1,8 @@
-"""project automation optional delivery_text_channel_id
+"""drop project_automations.delivery_text_channel_id
 
-Revision ID: 20260330_0050
-Revises: 20260328_0049
-Create Date: 2026-03-30 12:00:00.000000
+Revision ID: 20260330_0052
+Revises: 20260330_0051
+Create Date: 2026-03-30 18:05:00.000000
 """
 
 from __future__ import annotations
@@ -11,8 +11,8 @@ import sqlalchemy as sa
 from alembic import op
 
 
-revision = "20260330_0050"
-down_revision = "20260328_0049"
+revision = "20260330_0052"
+down_revision = "20260330_0051"
 branch_labels = None
 depends_on = None
 
@@ -33,24 +33,13 @@ def upgrade() -> None:
     bind = op.get_bind()
     is_sqlite = bind.dialect.name == "sqlite"
     with op.batch_alter_table("project_automations", recreate="auto" if is_sqlite else "never") as batch_op:
-        batch_op.alter_column(
-            "delivery_text_channel_id",
-            existing_type=sa.String(length=64),
-            nullable=True,
-            existing_nullable=False,
-        )
+        batch_op.drop_column("delivery_text_channel_id")
 
 
 def downgrade() -> None:
-    if not _table_exists("project_automations") or not _column_exists("project_automations", "delivery_text_channel_id"):
+    if not _table_exists("project_automations") or _column_exists("project_automations", "delivery_text_channel_id"):
         return
     bind = op.get_bind()
     is_sqlite = bind.dialect.name == "sqlite"
-    # SQLite cannot easily enforce NOT NULL if nulls exist; best-effort for Postgres.
     with op.batch_alter_table("project_automations", recreate="auto" if is_sqlite else "never") as batch_op:
-        batch_op.alter_column(
-            "delivery_text_channel_id",
-            existing_type=sa.String(length=64),
-            nullable=False,
-            existing_nullable=True,
-        )
+        batch_op.add_column(sa.Column("delivery_text_channel_id", sa.String(length=64), nullable=True))

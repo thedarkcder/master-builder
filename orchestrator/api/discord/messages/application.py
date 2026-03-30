@@ -250,7 +250,7 @@ def build_discord_message_ingress_result(
             room_channel_ids=frozenset(room_channel_ids),
         )
         lane = str(routed.get("lane") or "ask").strip().lower()
-        persona_rid = str(routed.get("persona") or "engineer").strip().lower()
+        persona_rid = str(routed.get("persona") or "pm").strip().lower()
         deps.logger.info(
             "discord_voice_note_entry_routed lane=%s persona=%s confidence=%s reason=%s",
             lane,
@@ -413,7 +413,7 @@ def build_discord_message_ingress_result(
             if room_voice_reply_persona_id is None and command_response.command == "pm":
                 room_voice_reply_persona_id = "pm"
             if room_voice_reply_persona_id is None and command_response.command == "ask":
-                room_voice_reply_persona_id = "engineer"
+                room_voice_reply_persona_id = "pm"
             if room_voice_reply_persona_name is None and room_voice_reply_persona_id == "pm":
                 room_voice_reply_persona_name = "PM"
             room_voice_reply_config = data.get("room_config") if isinstance(data.get("room_config"), dict) else None
@@ -430,7 +430,7 @@ def build_discord_message_ingress_result(
             if room_voice_reply_persona_id is None and command_response.command == "pm":
                 room_voice_reply_persona_id = "pm"
             if room_voice_reply_persona_id is None and command_response.command == "ask":
-                room_voice_reply_persona_id = "engineer"
+                room_voice_reply_persona_id = "pm"
             if room_voice_reply_persona_name is None and room_voice_reply_persona_id == "pm":
                 room_voice_reply_persona_name = "PM"
             room_voice_reply_config = data.get("room_config") if isinstance(data.get("room_config"), dict) else None
@@ -467,36 +467,26 @@ def build_discord_message_ingress_result(
         message_content = f"<@{user_id}> Command failed due to an internal error. Ref: `{error_ref}`"
 
     actions: list[TransportAction] = []
-    if pm_thread_action is not None:
-        actions.append(pm_thread_action)
-    else:
-        actions.append(
-            discord_channel_message_action(
-                channel_id=channel_id,
-                content=message_content,
-                components=components,
-            )
-        )
     if voice_note_reply_requested and should_send_room_voice_reply and room_voice_reply_text:
-        voice_action, voice_error = deps.build_room_voice_reply_action(
-            user_id=user_id,
-            channel_id=channel_id,
-            text=room_voice_reply_text,
-            persona_id=room_voice_reply_persona_id,
-            persona_name=room_voice_reply_persona_name,
-            persona_role=room_voice_reply_persona_role,
-            room_config=room_voice_reply_config,
-            content_override=message_content,
-            components=components,
-            correlation_id=message_correlation_id,
-            tenant_id=tenant.tenant_id,
-            project_id=project_id,
-            fallback_content_on_failure=message_content,
-            fallback_components_on_failure=components,
-        )
-        if voice_action is not None:
-            actions.append(voice_action)
-        else:
+        if pm_thread_action is None:
+            voice_action, voice_error = deps.build_room_voice_reply_action(
+                user_id=user_id,
+                channel_id=channel_id,
+                text=room_voice_reply_text,
+                persona_id=room_voice_reply_persona_id,
+                persona_name=room_voice_reply_persona_name,
+                persona_role=room_voice_reply_persona_role,
+                room_config=room_voice_reply_config,
+                content_override=message_content,
+                components=components,
+                correlation_id=message_correlation_id,
+                tenant_id=tenant.tenant_id,
+                project_id=project_id,
+                fallback_content_on_failure=message_content,
+                fallback_components_on_failure=components,
+            )
+            if voice_action is not None:
+                return IngressResult(actions=(voice_action,))
             actions.append(
                 discord_channel_message_action(
                     channel_id=channel_id,
@@ -511,7 +501,42 @@ def build_discord_message_ingress_result(
                         content=f"<@{user_id}> {voice_error}",
                     )
                 )
+            return IngressResult(actions=tuple(actions))
+        actions.append(pm_thread_action)
+        voice_action, voice_error = deps.build_room_voice_reply_action(
+            user_id=user_id,
+            channel_id=channel_id,
+            text=room_voice_reply_text,
+            persona_id=room_voice_reply_persona_id,
+            persona_name=room_voice_reply_persona_name,
+            persona_role=room_voice_reply_persona_role,
+            room_config=room_voice_reply_config,
+            correlation_id=message_correlation_id,
+            tenant_id=tenant.tenant_id,
+            project_id=project_id,
+            fallback_content_on_failure=message_content,
+            fallback_components_on_failure=components,
+        )
+        if voice_action is not None:
+            actions.append(voice_action)
+        elif voice_error:
+            actions.append(
+                discord_channel_message_action(
+                    channel_id=channel_id,
+                    content=f"<@{user_id}> {voice_error}",
+                )
+            )
         return IngressResult(actions=tuple(actions))
+    if pm_thread_action is not None:
+        actions.append(pm_thread_action)
+    else:
+        actions.append(
+            discord_channel_message_action(
+                channel_id=channel_id,
+                content=message_content,
+                components=components,
+            )
+        )
     if should_send_room_voice_reply and room_voice_reply_text:
         voice_action, voice_error = deps.build_room_voice_reply_action(
             user_id=user_id,

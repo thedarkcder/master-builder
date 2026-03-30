@@ -9,8 +9,8 @@ from urllib.parse import urlparse
 from sqlalchemy.orm import Session
 
 from orchestrator.api.jira_oauth.connection_service import tenant_jira_oauth_context
-from orchestrator.core.codex_invocation import CodexInvocationContext, invoke_codex_json
-from orchestrator.core.codex_runtime import build_codex_runtime
+from orchestrator.core.agent_runtime_resolver import build_runtime_for_selector
+from orchestrator.core.codex_invocation import AgentInvocationContext, invoke_codex_json
 from orchestrator.core.platform_secret_service import resolve_platform_secret_ref
 from orchestrator.core.prompt_templates import render_prompt
 from orchestrator.core.tenant_secret_service import resolve_scoped_secret_ref
@@ -19,10 +19,63 @@ from orchestrator.tools.github_app import GitHubApiError, github_client_from_ten
 
 
 @dataclass(frozen=True)
+class PersonaBriefingSegment:
+    persona_id: str
+    text: str
+
+
+@dataclass(frozen=True)
 class ProjectAutomationBriefing:
     transcript: str
     summary: str
     facts: dict[str, Any]
+    persona_segments: tuple[PersonaBriefingSegment, ...]
+
+
+_DEFAULT_PERSONA_ORDER: tuple[str, ...] = ("pm", "engineer", "qa", "reviewer")
+
+
+def _normalize_persona_id(value: object) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"pm", "engineer", "qa", "reviewer"}:
+        return normalized
+    return ""
+
+
+def _normalize_persona_segments(payload: dict[str, Any]) -> tuple[PersonaBriefingSegment, ...]:
+    raw_segments = payload.get("persona_segments")
+    if not isinstance(raw_segments, list):
+        return ()
+    by_persona: dict[str, str] = {}
+    for raw in raw_segments:
+        if not isinstance(raw, dict):
+            continue
+        persona_id = _normalize_persona_id(raw.get("persona_id"))
+        text = " ".join(str(raw.get("text") or "").split())
+        if not persona_id or not text:
+            continue
+        by_persona[persona_id] = text
+    ordered: list[PersonaBriefingSegment] = []
+    for persona_id in _DEFAULT_PERSONA_ORDER:
+        text = by_persona.get(persona_id)
+        if text:
+            ordered.append(PersonaBriefingSegment(persona_id=persona_id, text=text))
+    return tuple(ordered)
+
+
+def _persona_label(persona_id: str) -> str:
+    labels = {
+        "pm": "PM",
+        "engineer": "Dev",
+        "qa": "Test",
+        "reviewer": "Review",
+    }
+    return labels.get(persona_id, persona_id.title())
+
+
+def _build_transcript_from_segments(segments: tuple[PersonaBriefingSegment, ...]) -> str:
+    lines = [f"{_persona_label(segment.persona_id)}: {segment.text}" for segment in segments]
+    return "\n".join(lines)
 
 
 def _to_utc(value: datetime) -> datetime:
@@ -235,10 +288,16 @@ def build_project_automation_briefing(
         "jira": jira_facts,
         "github": github_facts,
     }
-    runtime = build_codex_runtime(session=session, settings=settings)
+    runtime = build_runtime_for_selector(
+        session=session,
+        settings=settings,
+        tenant_id=tenant.tenant_id,
+        project_id=project.project_id,
+        selector=f"workflow.{automation.kind}",
+    )
     payload = invoke_codex_json(
         runtime=runtime,
-        context=CodexInvocationContext(
+        context=AgentInvocationContext(
             channel="system",
             tenant_id=tenant.tenant_id,
             project_id=project.project_id,
@@ -259,13 +318,23 @@ def build_project_automation_briefing(
             facts_json=json.dumps(facts, sort_keys=True),
         ),
     )
+    persona_segments = _normalize_persona_segments(payload)
     transcript = " ".join(str(payload.get("transcript") or "").split())
+    if not transcript and persona_segments:
+        transcript = _build_transcript_from_segments(persona_segments)
     summary = " ".join(str(payload.get("summary") or "").split())
     if not transcript:
         raise ValueError("Project automation briefing returned empty transcript")
     if not summary:
         summary = transcript
-    return ProjectAutomationBriefing(transcript=transcript, summary=summary, facts=facts)
+    if not persona_segments:
+        persona_segments = (PersonaBriefingSegment(persona_id="pm", text=transcript),)
+    return ProjectAutomationBriefing(
+        transcript=transcript,
+        summary=summary,
+        facts=facts,
+        persona_segments=persona_segments,
+    )
 
 
 def safe_build_project_automation_briefing(
@@ -303,4 +372,5 @@ def safe_build_project_automation_briefing(
                 "window_start_at": _to_utc(window_start_at).isoformat(),
                 "window_end_at": _to_utc(window_end_at).isoformat(),
             },
+            persona_segments=(PersonaBriefingSegment(persona_id="pm", text=fallback_transcript),),
         )

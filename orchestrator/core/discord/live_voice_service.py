@@ -161,9 +161,9 @@ class DiscordLiveVoiceService:
         except LiveVoiceAudioError as exc:
             raise DiscordLiveVoiceDependencyFailure(str(exc)) from exc
 
-        if str(self._settings.voice_reply_provider or "").strip().lower() in {"", "disabled"}:
+        if str(self._settings.voice_provider or "").strip().lower() in {"", "disabled"}:
             raise DiscordLiveVoiceDependencyFailure(
-                "Live voice requires ORCHESTRATOR_VOICE_REPLY_PROVIDER to be configured."
+                "Live voice requires ORCHESTRATOR_VOICE_PROVIDER to be configured."
             )
         if shutil.which("ffmpeg") is None:
             raise DiscordLiveVoiceDependencyFailure(
@@ -631,7 +631,7 @@ class DiscordLiveVoiceService:
         project_discord_config: dict | None,
     ) -> VoiceRoomTurnResult:
         data = resp.data if isinstance(resp.data, dict) else {}
-        persona_id = str(data.get("persona_id") or "engineer").strip().lower() or "engineer"
+        persona_id = str(data.get("persona_id") or "pm").strip().lower() or "pm"
         profile = resolve_voice_room_persona_profile(
             persona_id=persona_id,
             tenant_discord_config=tenant_discord_config,
@@ -801,7 +801,7 @@ class DiscordLiveVoiceService:
                 },
             )
             lane = str(routed.get("lane") or "ask").strip().lower()
-            entry_persona = str(routed.get("persona") or "engineer").strip().lower()
+            entry_persona = str(routed.get("persona") or "pm").strip().lower()
             conf = float(routed.get("confidence") or 0.0)
             reason = str(routed.get("reason") or "").strip()
             logger.info(

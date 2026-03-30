@@ -251,9 +251,7 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
     ) -> tuple[DiscordGatewayListener, MagicMock]:
         settings = SimpleNamespace(
             secrets_encryption_key="enc",
-            voice_transcription_provider="disabled",
-            voice_reply_provider="disabled",
-            voice_reply_enabled_default=False,
+            voice_provider="disabled",
             pocket_tts_base_url="",
             pocket_tts_voice="",
         )
@@ -483,7 +481,7 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
 
     def test_handle_message_create_root_channel_plain_text_without_context_is_ignored(self) -> None:
         listener, _session = self._listener()
-        tenant = SimpleNamespace(tenant_id="route25", discord_config={})
+        tenant = SimpleNamespace(tenant_id="route25", discord_config={}, jira_config={"project_keys": ["TP"]})
         listener._find_tenant_for_channel = MagicMock(return_value=tenant)
 
         with (
@@ -713,7 +711,7 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
 
     def test_handle_message_create_room_routes_plain_text_to_pm_command(self) -> None:
         listener, _session = self._listener()
-        tenant = SimpleNamespace(tenant_id="route25", discord_config={})
+        tenant = SimpleNamespace(tenant_id="route25", discord_config={}, jira_config={"project_keys": ["TP"]})
         listener._find_tenant_for_channel = MagicMock(return_value=tenant)
         command_response = SimpleNamespace(command="pm", message="ok", data={})
 
@@ -742,7 +740,7 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
 
     def test_handle_message_create_live_voice_linked_text_channel_routes_plain_text_to_room_mode(self) -> None:
         listener, session = self._listener()
-        tenant = SimpleNamespace(tenant_id="route25", discord_config={})
+        tenant = SimpleNamespace(tenant_id="route25", discord_config={}, jira_config={"project_keys": ["TP"]})
         project = SimpleNamespace(
             discord_config={
                 "live_voice_room_links": {
@@ -781,7 +779,7 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
         listener, _session = self._listener(
             transcribe_audio_attachment=lambda _attachment: "Transcribed PM note from voice memo",
         )
-        tenant = SimpleNamespace(tenant_id="route25", discord_config={})
+        tenant = SimpleNamespace(tenant_id="route25", discord_config={}, jira_config={"project_keys": ["TP"]})
         listener._find_tenant_for_channel = MagicMock(return_value=tenant)
         command_response = SimpleNamespace(command="pm", message="ok", data={})
 
@@ -813,15 +811,16 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
             )
 
         payload = command_mock.call_args.kwargs["payload"]
-        self.assertEqual(payload.command, "!pm Transcribed PM note from voice memo")
+        self.assertEqual(payload.command, "!ask Transcribed PM note from voice memo")
         self.assertEqual(payload.command_params["room_mode"], "true")
 
     def test_handle_message_create_live_voice_linked_text_channel_audio_only_routes_to_room_mode(self) -> None:
         listener, session = self._listener(
             transcribe_audio_attachment=lambda _attachment: "Transcribed PM note from voice memo",
         )
-        tenant = SimpleNamespace(tenant_id="route25", discord_config={})
+        tenant = SimpleNamespace(tenant_id="route25", discord_config={}, jira_config={"project_keys": ["TP"]})
         project = SimpleNamespace(
+            jira_project_key="TP",
             discord_config={
                 "live_voice_room_links": {
                     "voice-room-1": "text-room-1",
@@ -860,13 +859,13 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
             )
 
         payload = command_mock.call_args.kwargs["payload"]
-        self.assertEqual(payload.command, "!pm Transcribed PM note from voice memo")
+        self.assertEqual(payload.command, "!ask Transcribed PM note from voice memo")
         self.assertEqual(payload.command_params["room_mode"], "true")
         self.assertEqual(payload.command_params["room_source"], "voice_note")
 
     def test_handle_message_create_room_audio_only_without_transcription_posts_guidance(self) -> None:
         listener, _session = self._listener()
-        tenant = SimpleNamespace(tenant_id="route25", discord_config={})
+        tenant = SimpleNamespace(tenant_id="route25", discord_config={}, jira_config={"project_keys": ["TP"]})
         listener._find_tenant_for_channel = MagicMock(return_value=tenant)
 
         with (
@@ -900,9 +899,8 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
         listener, _session = self._listener(
             transcribe_audio_attachment=lambda _attachment: "Summarize the deployment blockers",
         )
-        listener._settings.voice_reply_provider = "pocket_tts"
-        listener._settings.voice_reply_enabled_default = True
-        tenant = SimpleNamespace(tenant_id="route25", discord_config={})
+        listener._settings.voice_provider = "pocket_tts"
+        tenant = SimpleNamespace(tenant_id="route25", discord_config={}, jira_config={"project_keys": ["TP"]})
         listener._find_tenant_for_channel = MagicMock(return_value=tenant)
         command_response = SimpleNamespace(
             command="pm",
@@ -951,11 +949,14 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
             )
 
         payload = command_mock.call_args.kwargs["payload"]
-        self.assertEqual(payload.command, "!pm Summarize the deployment blockers")
-        self.assertEqual(payload.command_params, {"room_mode": "true", "room_source": "voice_note"})
-        client_cls.return_value.post_message.assert_called_once_with(
+        self.assertEqual(payload.command, "!ask Summarize the deployment blockers")
+        self.assertEqual(payload.command_params, {"room_mode": "true", "room_source": "voice_note", "persona_id": "pm"})
+        client_cls.return_value.post_message_with_attachment.assert_called_once_with(
             channel_id="tenant-chat-1",
             content="ok",
+            filename="reply.mp3",
+            file_bytes=b"ID3",
+            content_type="audio/mpeg",
             components=None,
         )
         build_voice_reply.assert_called_once()
@@ -1053,8 +1054,7 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
 
     def test_handle_message_create_room_voice_reply_uses_persona_metadata(self) -> None:
         listener, _session = self._listener()
-        listener._settings.voice_reply_provider = "pocket_tts"
-        listener._settings.voice_reply_enabled_default = True
+        listener._settings.voice_provider = "pocket_tts"
         tenant = SimpleNamespace(tenant_id="route25", discord_config={})
         listener._find_tenant_for_channel = MagicMock(return_value=tenant)
         command_response = SimpleNamespace(
@@ -1066,7 +1066,7 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
                 "persona_name": "Soren",
                 "room_config": {
                     "persona_names": {"architect": "Soren"},
-                    "persona_voices": {"architect": "echo"},
+                    "persona_voices": {"architect": "javert"},
                 },
             },
         )
@@ -1098,7 +1098,7 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
 
         synth_kwargs = synth_mock.call_args.kwargs
         self.assertEqual(synth_kwargs["persona_id"], "architect")
-        self.assertEqual(synth_kwargs["room_config"]["persona_voices"]["architect"], "echo")
+        self.assertEqual(synth_kwargs["room_config"]["persona_voices"]["architect"], "javert")
         self.assertEqual(synth_kwargs["text"], "Soren from Architecture. Architect answer")
         self.assertEqual(
             client_cls.return_value.post_message_with_attachment.call_args.kwargs["content"],
@@ -1107,8 +1107,7 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
 
     def test_post_room_voice_reply_uses_content_override_and_components(self) -> None:
         listener, _session = self._listener()
-        listener._settings.voice_reply_provider = "pocket_tts"
-        listener._settings.voice_reply_enabled_default = True
+        listener._settings.voice_provider = "pocket_tts"
         captured_contexts: list[dict[str, str | None]] = []
 
         with (

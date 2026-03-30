@@ -10,7 +10,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from orchestrator.core.codex_agents import _invoke_discord_json_maybe_tools
-from orchestrator.core.codex_invocation import CodexInvocationContext
+from orchestrator.core.codex_invocation import AgentInvocationContext
 from orchestrator.core.codex_runtime import CodexRuntime, CodexRuntimeError
 from orchestrator.core.prompt_templates import render_prompt
 from orchestrator.storage.models import PMInterviewCase
@@ -848,7 +848,7 @@ def plan_pm_interview_with_codex(
     project_keys: list[str],
     issues: list[dict],
     status_counts: dict[str, int],
-    invocation_context: CodexInvocationContext,
+    invocation_context: AgentInvocationContext,
     history: Sequence[Mapping[str, Any]] | None = None,
     github_context: Mapping[str, Any] | None = None,
     sqlalchemy_session: Session | None = None,

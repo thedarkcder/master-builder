@@ -273,8 +273,6 @@ export function makeProjectAutomation(overrides: Partial<ProjectAutomationRecord
     timezone: "UTC",
     days_of_week: [1, 2, 3, 4, 5],
     local_time: "09:30",
-    delivery_text_channel_id: "123456789012345678",
-    voice_id: "alloy",
     fallback_lookback_hours: 24,
     last_successful_window_end_at: "2026-03-28T09:00:00Z",
     next_run_at: "2026-03-29T09:30:00Z",

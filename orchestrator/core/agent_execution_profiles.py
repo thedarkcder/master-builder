@@ -84,7 +84,6 @@ _DEFAULT_ROUTING = {
     "discord.ask_intent": PROFILE_GENERAL_PLANNING,
     "discord.issue_seed": PROFILE_GENERAL_PLANNING,
     "discord.voice_entry_router": PROFILE_GENERAL_PLANNING,
-    "discord.voice_room_router": PROFILE_GENERAL_PLANNING,
     "discord.voice_room_architect": PROFILE_GENERAL_PLANNING,
     "discord.voice_room_engineer": PROFILE_GENERAL_PLANNING,
     "discord.voice_room_qa": PROFILE_GENERAL_PLANNING,
@@ -93,6 +92,8 @@ _DEFAULT_ROUTING = {
     "workflow.dev": PROFILE_ENGINEERING_EXECUTION,
     "workflow.test": PROFILE_ENGINEERING_EXECUTION,
     "workflow.review": PROFILE_ENGINEERING_EXECUTION,
+    "workflow.standup_voice_brief": PROFILE_GENERAL_PLANNING,
+    "workflow.retro_voice_brief": PROFILE_GENERAL_PLANNING,
 }
 _KNOWN_AGENT_ROLES = (
     AGENT_ROLE_PM,

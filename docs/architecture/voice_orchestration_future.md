@@ -23,8 +23,20 @@ This document captures the **intended** end-state for Discord voice (STT → rou
 
 A single **voice orchestration** module could:
 
-- Own STT handoff, router invocation, and dispatch to PM vs ask vs persona handlers.
+- Own STT handoff, router invocation, and dispatch to `!ask` vs `!pm` only (persona remains ask-answer framing, not a separate command path).
 - Emit a stable contract, e.g. `{ channel_message_markdown, spoken_text, persona_id, tts_metadata, history_updates }`.
 - Centralize telemetry and hop limits across stages.
 
 That refactor is **optional**; current command-based wiring remains valid.
+
+## Voice note vs live voice (transport and delivery)
+
+Routing is the same for both: transcript → `route_discord_voice_entry` → `!ask` / `!pm` with shared parameters. Only ingestion and playback differ.
+
+| Aspect | Voice note (gateway) | Live voice |
+| --- | --- | --- |
+| Ingress | `build_discord_message_ingress_result` → `execute_tenant_command_ingress` | `DiscordLiveVoiceService` → same executor after STT |
+| Success UX | Channel message; when room voice reply is enabled, **one** post with text + optional `.wav` attachment | TTS → voice-channel playback; linked text channel usually gets notices on failure only (no duplicate full-text mirror unless product adds an optional flag later) |
+| Default persona | `pm` when router/payload does not specify | Same |
+
+Voice notes avoid posting a separate full-text message when the attachment message already carries the same body (`content_override`).

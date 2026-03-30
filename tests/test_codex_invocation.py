@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from orchestrator.core.codex_invocation import (
-    CodexInvocationContext,
+    AgentInvocationContext,
     invoke_codex_json,
     invoke_codex_json_with_tools,
 )
@@ -44,7 +44,7 @@ class CodexInvocationTests(unittest.TestCase):
             command="override",
             _request=_request,
         )
-        context = CodexInvocationContext(
+        context = AgentInvocationContext(
             channel="worker",
             tenant_id="tenant-1",
             project_id="proj-1",
@@ -112,7 +112,7 @@ class CodexInvocationTests(unittest.TestCase):
             command="override",
             _request=_request,
         )
-        context = CodexInvocationContext(
+        context = AgentInvocationContext(
             channel="worker",
             tenant_id="tenant-1",
             project_id="proj-1",
@@ -157,7 +157,7 @@ class CodexInvocationTests(unittest.TestCase):
             command="override",
             _request=lambda _s, _u, _w, _l=None: '{"ok": true}',
         )
-        context = CodexInvocationContext(
+        context = AgentInvocationContext(
             channel="worker",
             tenant_id="tenant-1",
             project_id="proj-1",
@@ -211,7 +211,7 @@ class CodexInvocationTests(unittest.TestCase):
             command="override",
             _request=_request,
         )
-        context = CodexInvocationContext(
+        context = AgentInvocationContext(
             channel="worker",
             tenant_id="tenant-1",
             project_id="proj-1",
@@ -268,7 +268,7 @@ class CodexInvocationTests(unittest.TestCase):
             command="override",
             _request=_request,
         )
-        context = CodexInvocationContext(
+        context = AgentInvocationContext(
             channel="worker",
             tenant_id="tenant-1",
             project_id="proj-1",
@@ -322,7 +322,7 @@ class CodexInvocationTests(unittest.TestCase):
             command="override",
             _request=_request,
         )
-        context = CodexInvocationContext(
+        context = AgentInvocationContext(
             channel="worker",
             tenant_id="tenant-1",
             project_id="proj-1",
@@ -383,7 +383,7 @@ class CodexInvocationTests(unittest.TestCase):
             command="override",
             _request=_request,
         )
-        context = CodexInvocationContext(
+        context = AgentInvocationContext(
             channel="worker",
             tenant_id="tenant-1",
             project_id="proj-1",
@@ -429,7 +429,7 @@ class CodexInvocationTests(unittest.TestCase):
                 captured.update(kwargs)
                 return {"ok": True}
 
-        context = CodexInvocationContext(
+        context = AgentInvocationContext(
             channel="worker",
             tenant_id="tenant-1",
             project_id="proj-1",
@@ -467,7 +467,7 @@ class CodexInvocationTests(unittest.TestCase):
                 captured.update(kwargs)
                 return {"ok": True}
 
-        context = CodexInvocationContext(
+        context = AgentInvocationContext(
             channel="worker",
             tenant_id="tenant-1",
             project_id="proj-1",
@@ -508,7 +508,7 @@ class CodexInvocationTests(unittest.TestCase):
                 captured.update(kwargs)
                 return {"ok": True}
 
-        context = CodexInvocationContext(
+        context = AgentInvocationContext(
             channel="worker",
             tenant_id="tenant-1",
             project_id="proj-1",
@@ -557,7 +557,7 @@ class CodexInvocationTests(unittest.TestCase):
                     payload_preview="not-json",
                 )
 
-        context = CodexInvocationContext(
+        context = AgentInvocationContext(
             channel="worker",
             tenant_id="tenant-1",
             project_id="proj-1",
@@ -584,7 +584,7 @@ class CodexInvocationTests(unittest.TestCase):
             def run_json(self, **_kwargs):  # noqa: ANN003
                 raise CodexRuntimeError("Codex CLI command failed with exit code 2: unknown option --json")
 
-        context = CodexInvocationContext(
+        context = AgentInvocationContext(
             channel="worker",
             tenant_id="tenant-1",
             project_id="proj-1",
@@ -627,7 +627,7 @@ class CodexInvocationTests(unittest.TestCase):
                     "result": {"gate_status": "clear", "reason": "", "questions": []},
                 }
 
-        context = CodexInvocationContext(
+        context = AgentInvocationContext(
             channel="system",
             tenant_id="tenant-1",
             project_id=None,
@@ -662,7 +662,7 @@ class CodexInvocationTests(unittest.TestCase):
                     "tool_args": {},
                 }
 
-        context = CodexInvocationContext(
+        context = AgentInvocationContext(
             channel="system",
             tenant_id="tenant-1",
             project_id=None,
@@ -693,7 +693,7 @@ class CodexInvocationTests(unittest.TestCase):
                     "tool_args": {},
                 }
 
-        context = CodexInvocationContext(
+        context = AgentInvocationContext(
             channel="system",
             tenant_id="tenant-1",
             project_id=None,

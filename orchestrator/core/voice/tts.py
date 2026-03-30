@@ -61,7 +61,7 @@ def synthesize_reply_audio(
     persona_id: str | None = None,
     room_config: dict | None = None,
 ) -> VoiceReplyAudio:
-    provider = str(settings.voice_reply_provider or "").strip().lower()
+    provider = str(settings.voice_provider or "").strip().lower()
     if provider in {"", "disabled"}:
         raise VoiceReplyError("Voice reply is disabled")
     if provider == "pocket_tts":
@@ -82,7 +82,7 @@ def ensure_voice_reply_provider_ready(
     settings: Settings,
     voices: Sequence[str] | None = None,
 ) -> list[str]:
-    provider = str(settings.voice_reply_provider or "").strip().lower()
+    provider = str(settings.voice_provider or "").strip().lower()
     if provider in {"", "disabled"}:
         raise VoiceReplyError("Voice reply is disabled")
     if provider != "pocket_tts":

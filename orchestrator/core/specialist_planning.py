@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 import json
 from typing import Any
 
-from orchestrator.core.codex_invocation import CodexInvocationContext, invoke_codex_json
+from orchestrator.core.codex_invocation import AgentInvocationContext, invoke_codex_json
 from orchestrator.core.codex_runtime import CodexRuntimeError
 from orchestrator.core.prompt_templates import render_prompt
 
@@ -186,7 +186,7 @@ def _run_stage(
 
     payload = invoke_codex_json(
         runtime=selected_runtime,
-        context=CodexInvocationContext(
+        context=AgentInvocationContext(
             channel="system",
             tenant_id=request.tenant_id,
             project_id=request.project_id,

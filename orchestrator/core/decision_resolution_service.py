@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 from typing import Callable
 
-from orchestrator.core.codex_invocation import CodexInvocationContext
+from orchestrator.core.codex_invocation import AgentInvocationContext
 from orchestrator.core.knowledge_base import SlotResolution, parse_source_timestamp
 from orchestrator.core.project_policy import resolve_effective_policy
 
@@ -106,7 +106,7 @@ def resolve_slots_with_codex(
     try:
         payload = invoke_codex_json_fn(
             runtime=runtime,
-            context=CodexInvocationContext(
+            context=AgentInvocationContext(
                 channel="system",
                 tenant_id=tenant.tenant_id,
                 project_id=project.project_id,

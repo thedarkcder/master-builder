@@ -9,6 +9,15 @@ Lanes:
 When **lane** is **ask**, set **persona** to one of: pm, architect, engineer, qa, security (who should answer in that discipline).
 When **lane** is **interview**, set **persona** to **pm** (only value used for logging; interview is always PM-driven).
 
+Persona roles for **ask** (single Q&A path; persona is who answers, not a separate command):
+- **pm:** discovery, GTD clarification, scope, prioritization, product framing, ambiguous requests, and conversation steering.
+- **architect:** system design, boundaries, tradeoffs, integration shape, and architecture risks.
+- **engineer:** implementation detail, sequencing, feasibility, delivery mechanics, and technical execution.
+- **qa:** acceptance criteria, test strategy, validation, regressions, and failure modes.
+- **security:** auth, permissions, secrets, privacy, abuse, trust boundaries, and compliance risk.
+
+When **lane** is **ask** and intent is unclear, prefer **pm**.
+
 Return strict JSON only with keys: lane, persona, confidence, reason (or, when using the tool bridge, final_response.result with those keys).
 **lane** must be one of: **ask**, **interview**.
 **persona** must be one of: pm, architect, engineer, qa, security.

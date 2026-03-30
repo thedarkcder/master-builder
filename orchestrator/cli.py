@@ -218,9 +218,8 @@ def _handle_voice_prewarm() -> int:
         json.dumps(
             {
                 "ok": True,
-                "transcription_provider": result.transcription_provider,
+                "voice_provider": result.voice_provider,
                 "transcription_ready": result.transcription_ready,
-                "voice_reply_provider": result.voice_reply_provider,
                 "prewarmed_voice_ids": list(result.prewarmed_voice_ids),
             }
         )

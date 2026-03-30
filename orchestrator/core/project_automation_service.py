@@ -64,8 +64,6 @@ class ProjectAutomationWrite:
     timezone: str
     days_of_week: tuple[int, ...]
     local_time: str
-    delivery_text_channel_id: str | None
-    voice_id: str | None
     fallback_lookback_hours: int
 
 
@@ -145,8 +143,6 @@ def _normalize_write(payload: ProjectAutomationWrite) -> ProjectAutomationWrite:
     timezone_name = _normalize_timezone(payload.timezone)
     days = _normalize_days(list(payload.days_of_week))
     local_time = _normalize_local_time(payload.local_time)
-    channel_id = str(payload.delivery_text_channel_id or "").strip() or None
-    voice_id = str(payload.voice_id or "").strip() or None
     fallback = int(payload.fallback_lookback_hours)
     if fallback <= 0:
         raise ValueError("fallback_lookback_hours must be > 0")
@@ -156,8 +152,6 @@ def _normalize_write(payload: ProjectAutomationWrite) -> ProjectAutomationWrite:
         timezone=timezone_name,
         days_of_week=days,
         local_time=local_time,
-        delivery_text_channel_id=channel_id,
-        voice_id=voice_id,
         fallback_lookback_hours=fallback,
     )
 
@@ -209,8 +203,6 @@ def upsert_project_automation(
             timezone=normalized.timezone,
             days_of_week=list(normalized.days_of_week),
             local_time=normalized.local_time,
-            delivery_text_channel_id=normalized.delivery_text_channel_id,
-            voice_id=normalized.voice_id,
             fallback_lookback_hours=normalized.fallback_lookback_hours,
             last_successful_window_end_at=None,
             next_run_at=compute_next_run_at(
@@ -228,8 +220,6 @@ def upsert_project_automation(
         existing.timezone = normalized.timezone
         existing.days_of_week = list(normalized.days_of_week)
         existing.local_time = normalized.local_time
-        existing.delivery_text_channel_id = normalized.delivery_text_channel_id
-        existing.voice_id = normalized.voice_id
         existing.fallback_lookback_hours = normalized.fallback_lookback_hours
         if existing.next_run_at <= timestamp:
             existing.next_run_at = compute_next_run_at(
@@ -343,6 +333,92 @@ def enqueue_due_project_automation_runs(
         session.rollback()
         return ()
     return tuple(scheduled)
+
+
+def enqueue_project_automation_run_now(
+    *,
+    session: Session,
+    tenant_id: str,
+    project_id: str,
+    kind: str,
+    now: datetime | None = None,
+) -> ScheduledProjectAutomation:
+    timestamp = now or _utc_now()
+    normalized_kind = _normalize_kind(kind)
+    automation = get_project_automation_by_kind(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        kind=normalized_kind,
+    )
+    if automation is None:
+        raise ValueError(f"Project automation '{normalized_kind}' is not configured")
+    if not automation.enabled:
+        raise ValueError(f"Project automation '{normalized_kind}' is disabled")
+
+    scheduled_for = timestamp
+    dedupe_key = f"{automation.automation_id}:manual:{scheduled_for.isoformat()}"
+    existing = get_execution_by_dedupe_key(session=session, dedupe_key=dedupe_key)
+    if existing is not None:
+        raise ValueError("Project automation run already queued for this request timestamp")
+
+    execution = ProjectAutomationExecution(
+        execution_id=uuid4().hex,
+        automation_id=automation.automation_id,
+        scheduled_for=scheduled_for,
+        window_start_at=automation.last_successful_window_end_at
+        or (scheduled_for - timedelta(hours=max(1, int(automation.fallback_lookback_hours or 24)))),
+        window_end_at=scheduled_for,
+        status=PROJECT_AUTOMATION_EXECUTION_STATUS_QUEUED,
+        dedupe_key=dedupe_key,
+        started_at=None,
+        completed_at=None,
+        discord_message_id=None,
+        last_error=None,
+        created_at=timestamp,
+        updated_at=timestamp,
+    )
+    session.add(execution)
+    session.flush()
+
+    request_id = uuid4().hex
+    enqueue_result = enqueue_webhook_job(
+        session,
+        request=WebhookJobEnqueueRequest(
+            transport=WEBHOOK_TRANSPORT_PROJECT_AUTOMATION,
+            request_id=request_id,
+            tenant_id=automation.tenant_id,
+            project_id=automation.project_id,
+            subject_key=f"project_automation:{automation.tenant_id}:{automation.project_id}:{automation.kind}",
+            dedupe_key=dedupe_key,
+            event_type=automation.kind,
+            payload_json={
+                "execution_id": execution.execution_id,
+                "automation_id": automation.automation_id,
+            },
+            context_json={},
+        ),
+        now=timestamp,
+    )
+    job = enqueue_result.job
+    notify_webhook_job_enqueued(
+        session=session,
+        transport=job.transport,
+        tenant_id=job.tenant_id,
+        project_id=job.project_id,
+        subject_key=job.subject_key,
+        job_id=job.job_id,
+        dedupe_key=job.dedupe_key,
+    )
+    automation.updated_at = timestamp
+
+    session.commit()
+    session.refresh(execution)
+    return ScheduledProjectAutomation(
+        automation=automation,
+        execution=execution,
+        job_id=job.job_id,
+    )
 
 
 def mark_execution_running(
