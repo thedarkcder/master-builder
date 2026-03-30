@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from orchestrator.api.jira_oauth.connection_service import tenant_jira_oauth_context
 from orchestrator.core.agent_runtime_resolver import build_runtime_for_selector
-from orchestrator.core.codex_invocation import AgentInvocationContext, invoke_codex_json
+from orchestrator.core.runtime_invocation import AgentInvocationContext, invoke_runtime_json
 from orchestrator.core.platform_secret_service import resolve_platform_secret_ref
 from orchestrator.core.prompt_templates import render_prompt
 from orchestrator.core.tenant_secret_service import resolve_scoped_secret_ref
@@ -295,7 +295,7 @@ def build_project_automation_briefing(
         project_id=project.project_id,
         selector=f"workflow.{automation.kind}",
     )
-    payload = invoke_codex_json(
+    payload = invoke_runtime_json(
         runtime=runtime,
         context=AgentInvocationContext(
             channel="system",

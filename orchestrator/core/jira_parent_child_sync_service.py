@@ -9,7 +9,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from orchestrator.core.codex_invocation import AgentInvocationContext
+from orchestrator.core.runtime_invocation import AgentInvocationContext
 from orchestrator.core.codex_runtime import CodexRuntimeError
 from orchestrator.core.followup_context_service import (
     FOLLOWUP_CONTEXT_ENGINEERING_CLARIFICATION,

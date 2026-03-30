@@ -16,7 +16,7 @@ from orchestrator.core.config import get_settings
 from orchestrator.core.knowledge_base import build_knowledge_prompt_context
 from orchestrator.core.project_policy import resolve_effective_policy
 from orchestrator.core.codex_runtime import CodexRuntime, CodexRuntimeError
-from orchestrator.core.codex_telemetry import build_codex_log_sink
+from orchestrator.core.runtime_telemetry import build_runtime_log_sink
 from orchestrator.core.run_logs import extract_turn_completed_usage
 from orchestrator.core.run_logs import record_run_log_event, record_run_log_events_batch
 from orchestrator.storage.db import create_session_factory
@@ -38,7 +38,7 @@ _FINAL_RESPONSE_TYPE = "final_response"
 
 
 @dataclass(frozen=True)
-class CodexInvocationContext:
+class AgentInvocationContext:
     channel: str
     tenant_id: str | None
     project_id: str | None
@@ -54,18 +54,14 @@ class CodexInvocationContext:
     codex_session_id: str | None = None
 
 
-# Canonical public name: invocations are tied to agent runtime, not a single LLM vendor.
-AgentInvocationContext = CodexInvocationContext
-
-
 @dataclass(frozen=True)
 class _QueuedLogLine:
-    context: CodexInvocationContext
+    context: AgentInvocationContext
     stream: str
     message: str
 
 
-class _AsyncCodexLogWriter:
+class _AsyncRuntimeLogWriter:
     def __init__(self, *, max_queue_size: int = 2000) -> None:
         self._queue: Queue[_QueuedLogLine] = Queue(maxsize=max_queue_size)
         self._pending_counts: dict[str, int] = {}
@@ -96,7 +92,7 @@ class _AsyncCodexLogWriter:
             ),
         )
 
-    def enqueue(self, *, context: CodexInvocationContext, stream: str, message: str) -> bool:
+    def enqueue(self, *, context: AgentInvocationContext, stream: str, message: str) -> bool:
         invocation_id = str(context.invocation_id or "").strip()
         if not invocation_id:
             return False
@@ -158,7 +154,7 @@ class _AsyncCodexLogWriter:
                 if str(queued.context.invocation_id or "").strip()
             }
             try:
-                _persist_codex_log_lines(items=items)
+                _persist_runtime_log_lines(items=items)
             except Exception as exc:  # noqa: BLE001
                 logger.exception(
                     "codex_log_persist_failed batch_size=%s invocation_count=%s error=%s",
@@ -185,13 +181,13 @@ class _AsyncCodexLogWriter:
                     self._queue.task_done()
 
 
-_log_writer: _AsyncCodexLogWriter | None = None
+_log_writer: _AsyncRuntimeLogWriter | None = None
 
 
-def _get_log_writer() -> _AsyncCodexLogWriter:
+def _get_log_writer() -> _AsyncRuntimeLogWriter:
     global _log_writer
     if _log_writer is None:
-        _log_writer = _AsyncCodexLogWriter()
+        _log_writer = _AsyncRuntimeLogWriter()
     return _log_writer
 
 
@@ -256,7 +252,7 @@ def _collect_context_injection_metrics(*, working_dir: str) -> dict[str, int | b
 
 def _resolve_knowledge_policy_for_context(
     *,
-    context: CodexInvocationContext,
+    context: AgentInvocationContext,
 ) -> tuple[str | None, bool, str, str, str, bool]:
     settings = get_settings()
     database_url = str(getattr(settings, "database_url", "") or "").strip()
@@ -349,7 +345,7 @@ def _resolve_knowledge_policy_for_context(
 
 def _augment_prompt_with_knowledge_context(
     *,
-    context: CodexInvocationContext,
+    context: AgentInvocationContext,
     system_prompt: str,
     user_prompt: str,
 ) -> tuple[str, dict[str, object], str, str, bool]:
@@ -471,7 +467,7 @@ def _augment_prompt_with_knowledge_context(
 
 def _emit_invocation_event(
     *,
-    context: CodexInvocationContext,
+    context: AgentInvocationContext,
     event_kind: str,
     payload: dict[str, object],
 ) -> None:
@@ -506,7 +502,7 @@ def _emit_invocation_event(
             session.commit()
     except Exception as exc:  # noqa: BLE001
         logger.debug(
-            "codex_invocation_telemetry_event_skipped event_kind=%s tenant_id=%s run_id=%s error=%s",
+            "runtime_invocation_telemetry_event_skipped event_kind=%s tenant_id=%s run_id=%s error=%s",
             event_kind,
             tenant_id,
             context.run_id,
@@ -514,7 +510,7 @@ def _emit_invocation_event(
         )
 
 
-def _session_column_for_context(*, context: CodexInvocationContext) -> str | None:
+def _session_column_for_context(*, context: AgentInvocationContext) -> str | None:
     command = str(context.command or "").strip().lower()
     stage = str(context.stage or "").strip().lower()
     if command != "workflow":
@@ -528,7 +524,7 @@ def _session_column_for_context(*, context: CodexInvocationContext) -> str | Non
     return None
 
 
-def _load_run_codex_session_id(*, run_id: str | None, session_column: str | None) -> str | None:
+def _load_run_session_id(*, run_id: str | None, session_column: str | None) -> str | None:
     normalized_run_id = str(run_id or "").strip()
     normalized_column = str(session_column or "").strip()
     if not normalized_run_id or not normalized_column:
@@ -552,7 +548,7 @@ def _load_run_codex_session_id(*, run_id: str | None, session_column: str | None
         return None
 
 
-def _persist_run_codex_session_id(*, run_id: str | None, session_id: str | None, session_column: str | None) -> None:
+def _persist_run_session_id(*, run_id: str | None, session_id: str | None, session_column: str | None) -> None:
     normalized_run_id = str(run_id or "").strip()
     normalized_session_id = str(session_id or "").strip()
     normalized_column = str(session_column or "").strip()
@@ -581,7 +577,7 @@ def _persist_run_codex_session_id(*, run_id: str | None, session_id: str | None,
 
 def _append_raw_log_line(
     *,
-    context: CodexInvocationContext,
+    context: AgentInvocationContext,
     stream: str,
     message: str,
 ) -> None:
@@ -633,7 +629,7 @@ def _should_persist_db_line(
     return line_index % sample_every == 0
 
 
-def _enqueue_codex_log_line(*, context: CodexInvocationContext, stream: str, message: str) -> None:
+def _enqueue_runtime_log_line(*, context: AgentInvocationContext, stream: str, message: str) -> None:
     writer = _get_log_writer()
     writer.enqueue(context=context, stream=stream, message=message)
 
@@ -645,16 +641,16 @@ def _is_recoverable_json_parse_failure(exc: Exception) -> bool:
     return any(marker in failure_reason_lower for marker in _JSON_PARSE_ERROR_MARKERS)
 
 
-def invoke_codex_json(
+def invoke_runtime_json(
     *,
     runtime: CodexRuntime,
-    context: CodexInvocationContext,
+    context: AgentInvocationContext,
     system_prompt: str,
     user_prompt: str,
     extra_on_log_line: Callable[[str, str], None] | None = None,
     require_json: bool = True,
 ) -> dict:
-    payload, _ = _invoke_codex_json_once(
+    payload, _ = _invoke_runtime_json_once(
         runtime=runtime,
         context=context,
         system_prompt=system_prompt,
@@ -665,10 +661,10 @@ def invoke_codex_json(
     return payload
 
 
-def invoke_codex_json_with_tools(
+def invoke_runtime_json_with_tools(
     *,
     runtime: CodexRuntime,
-    context: CodexInvocationContext,
+    context: AgentInvocationContext,
     system_prompt: str,
     user_prompt: str,
     allowed_tools: set[str],
@@ -682,9 +678,9 @@ def invoke_codex_json_with_tools(
     normalized_allowed_tools = {str(tool).strip() for tool in allowed_tools if str(tool).strip()}
 
     for tool_hop in range(max(0, int(max_tool_hops)) + 1):
-        payload, observed_session_id = _invoke_codex_json_once(
+        payload, observed_session_id = _invoke_runtime_json_once(
             runtime=runtime,
-            context=CodexInvocationContext(
+            context=AgentInvocationContext(
                 channel=context.channel,
                 tenant_id=context.tenant_id,
                 project_id=context.project_id,
@@ -752,10 +748,10 @@ def invoke_codex_json_with_tools(
     raise RuntimeError("Codex tool hop limit exceeded")
 
 
-def _invoke_codex_json_once(
+def _invoke_runtime_json_once(
     *,
     runtime: CodexRuntime,
-    context: CodexInvocationContext,
+    context: AgentInvocationContext,
     system_prompt: str,
     user_prompt: str,
     extra_on_log_line: Callable[[str, str], None] | None = None,
@@ -786,10 +782,10 @@ def _invoke_codex_json_once(
     context_metrics = _collect_context_injection_metrics(working_dir=context.working_dir)
     session_column = _session_column_for_context(context=context)
     explicit_session_id = str(context.codex_session_id or "").strip() or None
-    run_session_id = _load_run_codex_session_id(run_id=context.run_id, session_column=session_column)
+    run_session_id = _load_run_session_id(run_id=context.run_id, session_column=session_column)
     resume_session_id = explicit_session_id or run_session_id
     invocation_started_monotonic = time.monotonic()
-    invocation_context = CodexInvocationContext(
+    invocation_context = AgentInvocationContext(
         channel=context.channel,
         tenant_id=context.tenant_id,
         project_id=context.project_id,
@@ -816,6 +812,15 @@ def _invoke_codex_json_once(
         "completion_tokens": None,
         "total_tokens": None,
     }
+    runtime_command = str(getattr(runtime, "command", "") or "").strip().lower()
+    runtime_model = str(getattr(runtime, "model", "") or "").strip()
+    # HTTP runtimes (OpenAI-compatible providers including LM Studio) should
+    # use their execution-profile model instead of codex policy defaults.
+    resolved_model_override = (
+        runtime_model
+        if runtime_command.startswith("http:") and runtime_model
+        else resolved_codex_model
+    )
     _emit_invocation_event(
         context=invocation_context,
         event_kind="stage_invocation_started",
@@ -823,7 +828,7 @@ def _invoke_codex_json_once(
             "status": "started",
             "resumed_session": bool(resume_session_id),
             "codex_session_id": resume_session_id or "",
-            "model": resolved_codex_model,
+            "model": resolved_model_override,
             "reasoning_effort": effective_reasoning_effort,
             **prompt_metrics,
             **context_metrics,
@@ -845,7 +850,7 @@ def _invoke_codex_json_once(
                 usage_state=usage_state,
             ),
             reasoning_effort=effective_reasoning_effort,
-            model_override=resolved_codex_model,
+            model_override=resolved_model_override,
             resume_session_id=resume_session_id,
             on_session_id=lambda session_id: _capture_session_id(
                 context=invocation_context,
@@ -925,7 +930,7 @@ def _build_tool_result_prompt(*, tool_result: dict[str, object]) -> str:
 
 def _capture_session_id(
     *,
-    context: CodexInvocationContext,
+    context: AgentInvocationContext,
     sink_state: dict[str, int | bool | str],
     session_id: str,
     session_column: str | None,
@@ -934,7 +939,7 @@ def _capture_session_id(
     if not normalized_session_id:
         return
     sink_state["codex_session_id"] = normalized_session_id
-    _persist_run_codex_session_id(
+    _persist_run_session_id(
         run_id=context.run_id,
         session_id=normalized_session_id,
         session_column=session_column,
@@ -953,12 +958,12 @@ def _capture_usage_metrics(*, usage_state: dict[str, int | None], usage: dict[st
 
 def _combined_log_sink(
     *,
-    context: CodexInvocationContext,
+    context: AgentInvocationContext,
     extra_on_log_line: Callable[[str, str], None] | None,
     sink_state: dict[str, int | bool],
     usage_state: dict[str, int | None],
 ) -> Callable[[str, str], None]:
-    telemetry_sink = build_codex_log_sink(
+    telemetry_sink = build_runtime_log_sink(
         channel=context.channel,
         tenant_id=context.tenant_id,
         project_id=context.project_id,
@@ -1007,7 +1012,7 @@ def _combined_log_sink(
                 extra_on_log_line(stream, message)
             return
         try:
-            _enqueue_codex_log_line(context=context, stream=stream, message=message_text)
+            _enqueue_runtime_log_line(context=context, stream=stream, message=message_text)
             sink_state["db_persisted_lines"] = int(sink_state.get("db_persisted_lines", 0)) + 1
         except Exception as exc:  # noqa: BLE001
             logger.exception(
@@ -1025,7 +1030,7 @@ def _combined_log_sink(
     return _sink
 
 
-def _persist_codex_log_line(*, context: CodexInvocationContext, stream: str, message: str) -> None:
+def _persist_runtime_log_line(*, context: AgentInvocationContext, stream: str, message: str) -> None:
     tenant_id = str(context.tenant_id or "").strip()
     if not tenant_id:
         return
@@ -1051,7 +1056,7 @@ def _persist_codex_log_line(*, context: CodexInvocationContext, stream: str, mes
         session.commit()
 
 
-def _persist_codex_log_lines(*, items: list[_QueuedLogLine]) -> None:
+def _persist_runtime_log_lines(*, items: list[_QueuedLogLine]) -> None:
     if not items:
         return
     settings = get_settings()

@@ -328,6 +328,8 @@ class AdminApiTests(unittest.TestCase):
         self.assertIn("voice_room_pm", body["available_named_agents"])
         self.assertNotIn("discord.voice_entry_router", body["available_named_agents"])
         self.assertIn("discord.voice_entry_router", body["available_selectors"])
+        self.assertIn("workflow.standup_voice_brief", body["available_selectors"])
+        self.assertIn("workflow.retro_voice_brief", body["available_selectors"])
         self.assertIn("pm_conversation_fast", body["available_profiles"])
         self.assertEqual(body["effective_defaults"]["role_routing"]["pm"], "pm_conversation_default")
         self.assertEqual(body["effective_defaults"]["name_routing"]["workflow_dev_default"], "engineering_execution_default")
@@ -450,7 +452,11 @@ class AdminApiTests(unittest.TestCase):
             json={
                 "role_routing": {"pm": "pm_conversation_fast"},
                 "name_routing": {"workflow_review_default": "engineering_execution_deep"},
-                "selector_routing": {"discord.voice_room_pm": "pm_conversation_fast"},
+                "selector_routing": {
+                    "discord.voice_room_pm": "pm_conversation_fast",
+                    "workflow.standup_voice_brief": "general_planning_default",
+                    "workflow.retro_voice_brief": "general_planning_default",
+                },
             },
             auth=("admin", "secret"),
         )
@@ -459,11 +465,21 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(body["role_routing"]["pm"], "pm_conversation_fast")
         self.assertEqual(body["name_routing"]["workflow_review_default"], "engineering_execution_deep")
         self.assertEqual(body["selector_routing"]["discord.voice_room_pm"], "pm_conversation_fast")
+        self.assertEqual(body["selector_routing"]["workflow.standup_voice_brief"], "general_planning_default")
+        self.assertEqual(body["selector_routing"]["workflow.retro_voice_brief"], "general_planning_default")
 
         get_response = self.client.get("/api/admin/agent-runtimes", auth=("admin", "secret"))
         self.assertEqual(get_response.status_code, 200)
         self.assertEqual(get_response.json()["role_routing"]["pm"], "pm_conversation_fast")
         self.assertEqual(get_response.json()["selector_routing"]["discord.voice_room_pm"], "pm_conversation_fast")
+        self.assertEqual(
+            get_response.json()["selector_routing"]["workflow.standup_voice_brief"],
+            "general_planning_default",
+        )
+        self.assertEqual(
+            get_response.json()["selector_routing"]["workflow.retro_voice_brief"],
+            "general_planning_default",
+        )
 
         session_factory = create_session_factory(self.database_url)
         with session_factory() as session:
@@ -472,6 +488,14 @@ class AdminApiTests(unittest.TestCase):
             self.assertEqual(row.value_json["role_routing"]["pm"], "pm_conversation_fast")
             self.assertEqual(row.value_json["name_routing"]["workflow_review_default"], "engineering_execution_deep")
             self.assertEqual(row.value_json["selector_routing"]["discord.voice_room_pm"], "pm_conversation_fast")
+            self.assertEqual(
+                row.value_json["selector_routing"]["workflow.standup_voice_brief"],
+                "general_planning_default",
+            )
+            self.assertEqual(
+                row.value_json["selector_routing"]["workflow.retro_voice_brief"],
+                "general_planning_default",
+            )
 
         reset_response = self.client.post("/api/admin/agent-runtimes/reset", auth=("admin", "secret"))
         self.assertEqual(reset_response.status_code, 200)

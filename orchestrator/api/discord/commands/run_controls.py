@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestrator.api.schemas import DiscordCommandRequest, DiscordCommandResponse
-from orchestrator.core.codex_invocation import AgentInvocationContext
+from orchestrator.core.runtime_invocation import AgentInvocationContext
 from orchestrator.core.codex_runtime import CodexRuntimeError
 from orchestrator.core.communications.command_pipeline import CommandScope
 from orchestrator.core.communications.enqueue_reason_contract import (

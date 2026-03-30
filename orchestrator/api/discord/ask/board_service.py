@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import HTTPException, status
 
-from orchestrator.core.codex_invocation import AgentInvocationContext
+from orchestrator.core.runtime_invocation import AgentInvocationContext
 from orchestrator.storage.models import Tenant
 
 
