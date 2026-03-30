@@ -67,7 +67,8 @@ def build_command_followup_message(
     persona_name = str(response_data.get("persona_name") or "").strip()
     persona_role = str(response_data.get("persona_role") or "").strip()
     persona_id = str(response_data.get("persona_id") or "").strip()
-    is_voice_mode = bool(response_data.get("room_mode") or response_data.get("voice_mode"))
+    room_src = str(response_data.get("room_source") or "").strip().lower()
+    is_voice_style = bool(response_data.get("room_mode")) or room_src in {"voice_note", "live_voice"}
     if command_name == "issues" and created_issue_keys:
         lines[0] = f"{lines[0]} Issue seeding completed."
     elif command_name == "bug" and created_issue_keys:
@@ -77,9 +78,9 @@ def build_command_followup_message(
     elif command_name in {"run", "retry"}:
         lines[0] = f"{lines[0]} Run queued."
     elif response_message:
-        if command_name in {"ask", "gap"}:
+        if command_name in {"ask", "gap", "pm"}:
             response_message = _linkify_issue_mentions(response_message)
-        if is_voice_mode:
+        if is_voice_style:
             persona_label = format_voice_room_persona_label(
                 persona_id=persona_id,
                 persona_name=persona_name,

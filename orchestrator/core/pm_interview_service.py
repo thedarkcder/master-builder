@@ -9,7 +9,8 @@ from uuid import uuid4
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from orchestrator.core.codex_invocation import CodexInvocationContext, invoke_codex_json
+from orchestrator.core.codex_agents import _invoke_discord_json_maybe_tools
+from orchestrator.core.codex_invocation import CodexInvocationContext
 from orchestrator.core.codex_runtime import CodexRuntime, CodexRuntimeError
 from orchestrator.core.prompt_templates import render_prompt
 from orchestrator.storage.models import PMInterviewCase
@@ -850,30 +851,37 @@ def plan_pm_interview_with_codex(
     invocation_context: CodexInvocationContext,
     history: Sequence[Mapping[str, Any]] | None = None,
     github_context: Mapping[str, Any] | None = None,
+    sqlalchemy_session: Session | None = None,
+    settings: Any | None = None,
 ) -> dict[str, Any]:
     normalized_brief = normalize_pm_interview_brief(brief)
     normalized_evidence = [item.to_payload() for item in normalize_pm_interview_evidence(evidence)]
     normalized_history = [dict(item) for item in history or [] if isinstance(item, Mapping)]
     next_question_payload = next_question.to_payload() if next_question is not None else None
 
-    payload = invoke_codex_json(
+    user_prompt = render_prompt(
+        "discord/pm_interview_user.j2",
+        request_text=request_text,
+        brief_json=json.dumps(normalized_brief.to_payload()),
+        evidence_json=json.dumps(normalized_evidence),
+        missing_slots_json=json.dumps(list(missing_slots)),
+        next_question_json=json.dumps(next_question_payload or {}),
+        next_question_examples_json=json.dumps(list(next_question.examples) if next_question is not None else []),
+        project_keys_json=json.dumps(project_keys),
+        status_counts_json=json.dumps(status_counts),
+        github_context_json=json.dumps(dict(github_context or {})),
+        history_json=json.dumps(normalized_history),
+        issues_json=json.dumps(issues[:40]),
+    )
+    payload = _invoke_discord_json_maybe_tools(
         runtime=runtime,
         context=invocation_context,
         system_prompt=render_prompt("discord/pm_interview_system.j2"),
-        user_prompt=render_prompt(
-            "discord/pm_interview_user.j2",
-            request_text=request_text,
-            brief_json=json.dumps(normalized_brief.to_payload()),
-            evidence_json=json.dumps(normalized_evidence),
-            missing_slots_json=json.dumps(list(missing_slots)),
-            next_question_json=json.dumps(next_question_payload or {}),
-            next_question_examples_json=json.dumps(list(next_question.examples) if next_question is not None else []),
-            project_keys_json=json.dumps(project_keys),
-            status_counts_json=json.dumps(status_counts),
-            github_context_json=json.dumps(dict(github_context or {})),
-            history_json=json.dumps(normalized_history),
-            issues_json=json.dumps(issues[:40]),
-        ),
+        user_prompt=user_prompt,
+        tool_stage="discord_pm_interview",
+        sqlalchemy_session=sqlalchemy_session,
+        settings=settings,
+        max_tool_hops=10,
     )
     if not isinstance(payload, dict):
         raise CodexRuntimeError("Codex did not return a PM interview JSON object")

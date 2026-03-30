@@ -15,6 +15,7 @@ def ask_board_message(
     question: str,
     scoped_issue_key: str | None,
     scoped_project_id: str | None,
+    answer_persona_id: str | None = None,
     prune_missing_issue_keys_from_ask_history_fn,
     recent_ask_history_fn,
     collect_ask_context_with_history_context_fn,
@@ -99,6 +100,9 @@ def ask_board_message(
             ),
             history=history_context,
             github_context=github_context,
+            sqlalchemy_session=session,
+            settings=settings,
+            answer_persona_id=answer_persona_id,
         )
     except codex_runtime_error_type as exc:
         raise HTTPException(

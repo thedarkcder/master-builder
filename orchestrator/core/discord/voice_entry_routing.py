@@ -6,8 +6,8 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from orchestrator.core.agent_runtime_resolver import build_runtime_for_selector
-from orchestrator.core.codex_agents import route_voice_entry_with_codex
-from orchestrator.core.codex_invocation import CodexInvocationContext
+from orchestrator.core.codex_agents import route_voice_entry_with_runtime
+from orchestrator.core.codex_invocation import AgentInvocationContext
 from orchestrator.core.codex_runtime import CodexRuntimeError
 from orchestrator.core.config import Settings
 from orchestrator.storage.models import Tenant
@@ -36,10 +36,10 @@ def route_discord_voice_entry(
             project_id=project_id,
             selector="discord.voice_entry_router",
         )
-        routed = route_voice_entry_with_codex(
+        routed = route_voice_entry_with_runtime(
             runtime=runtime,
             transcript=transcript,
-            invocation_context=CodexInvocationContext(
+            invocation_context=AgentInvocationContext(
                 channel="discord",
                 tenant_id=tenant.tenant_id,
                 project_id=project_id,
@@ -51,6 +51,8 @@ def route_discord_voice_entry(
             entry_source=entry_source,
             history=history,
             room_context=room_context,
+            sqlalchemy_session=session,
+            settings=settings,
         )
     except CodexRuntimeError as exc:
         logger.warning(

@@ -19,7 +19,6 @@ class DiscordMessageApplicationTests(unittest.TestCase):
         room_voice_reply_enabled=False,
         build_room_voice_reply_action=None,
         route_voice_entry=None,
-        execute_voice_room_persona_voice_note=None,
     ) -> DiscordMessageIngressDeps:
         logger = MagicMock()
         return DiscordMessageIngressDeps(
@@ -48,8 +47,7 @@ class DiscordMessageApplicationTests(unittest.TestCase):
             logger=logger,
             settings=SimpleNamespace(),
             route_voice_entry=route_voice_entry
-            or MagicMock(return_value={"lane": "pm", "persona": "pm", "confidence": 1.0, "reason": "default"}),
-            execute_voice_room_persona_voice_note=execute_voice_room_persona_voice_note or MagicMock(),
+            or MagicMock(return_value={"lane": "interview", "persona": "pm", "confidence": 1.0, "reason": "default"}),
         )
 
     def test_pm_command_opens_interview_thread(self) -> None:
@@ -180,27 +178,27 @@ class DiscordMessageApplicationTests(unittest.TestCase):
         self.assertEqual(result.actions[0].followup_context_type, "pm_interview")
         self.assertEqual(execute.call_args.kwargs["payload"].command, "!pm create a share feature")
 
-    def test_voice_note_router_maps_persona_pm_to_voice_room_persona_executor(self) -> None:
-        execute = MagicMock()
-        persona_execute = MagicMock(
+    def test_voice_note_router_ask_lane_dispatches_ask_with_router_persona(self) -> None:
+        execute = MagicMock(
             return_value=SimpleNamespace(
                 ok=True,
-                command="voice_room_persona",
+                command="ask",
                 message="Persona reply",
                 data={
                     "persona_id": "pm",
                     "persona_name": "Andy",
                     "persona_role": "PM",
+                    "room_mode": True,
+                    "room_source": "voice_note",
                 },
             )
         )
-        route = MagicMock(return_value={"lane": "persona", "persona": "pm", "confidence": 0.8, "reason": "routing"})
+        route = MagicMock(return_value={"lane": "ask", "persona": "pm", "confidence": 0.8, "reason": "routing"})
         deps = self._deps(
             execute_tenant_discord_command=execute,
             resolve_followup_context_match=MagicMock(return_value=SimpleNamespace(status="no_match", context=None, matches=())),
             transcribe_audio_attachment=MagicMock(return_value=("hello from voice", None)),
             route_voice_entry=route,
-            execute_voice_room_persona_voice_note=persona_execute,
         )
 
         result = build_discord_message_ingress_result(
@@ -223,9 +221,59 @@ class DiscordMessageApplicationTests(unittest.TestCase):
             deps=deps,
         )
 
-        execute.assert_not_called()
-        persona_execute.assert_called_once()
-        self.assertEqual(persona_execute.call_args.kwargs["transcript"], "hello from voice")
-        self.assertEqual(persona_execute.call_args.kwargs["persona_id"], "pm")
+        execute.assert_called_once()
+        self.assertEqual(execute.call_args.kwargs["payload"].command, "!ask hello from voice")
+        self.assertEqual(
+            execute.call_args.kwargs["payload"].command_params,
+            {
+                "room_mode": "true",
+                "room_source": "voice_note",
+                "persona_id": "pm",
+            },
+        )
         self.assertEqual(len(result.actions), 1)
+
+    def test_voice_note_router_interview_lane_dispatches_pm(self) -> None:
+        execute = MagicMock(
+            return_value=SimpleNamespace(
+                ok=True,
+                command="pm",
+                message="PM guidance",
+                data={"pm_mode": True, "followup_context_type": "pm_interview", "issue_key": "TP-1"},
+            )
+        )
+        route = MagicMock(return_value={"lane": "interview", "persona": "pm", "confidence": 0.9, "reason": "brief"})
+        deps = self._deps(
+            execute_tenant_discord_command=execute,
+            resolve_followup_context_match=MagicMock(return_value=SimpleNamespace(status="no_match", context=None, matches=())),
+            transcribe_audio_attachment=MagicMock(return_value=("scope the dashboard", None)),
+            route_voice_entry=route,
+        )
+
+        build_discord_message_ingress_result(
+            payload={
+                "id": "msg-6",
+                "channel_id": "root-1",
+                "author": {"id": "user-1", "bot": False},
+                "content": "",
+                "attachments": [
+                    {
+                        "id": "att-3",
+                        "url": "https://example.com/note3.ogg",
+                        "filename": "note3.ogg",
+                        "content_type": "audio/ogg",
+                        "size": "100",
+                    }
+                ],
+            },
+            session=MagicMock(),
+            deps=deps,
+        )
+
+        execute.assert_called_once()
+        self.assertEqual(execute.call_args.kwargs["payload"].command, "!pm scope the dashboard")
+        self.assertEqual(
+            execute.call_args.kwargs["payload"].command_params,
+            {"room_mode": "true", "room_source": "voice_note"},
+        )
 

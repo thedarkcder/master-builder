@@ -251,7 +251,10 @@ class PMInterviewServiceTests(unittest.TestCase):
             return template_name
 
         with (
-            patch("orchestrator.core.pm_interview_service.invoke_codex_json", return_value={"message": "What user group?", "brief": {"objective": "Share the app with friends"}}),
+            patch(
+                "orchestrator.core.pm_interview_service._invoke_discord_json_maybe_tools",
+                return_value={"message": "What user group?", "brief": {"objective": "Share the app with friends"}},
+            ),
             patch("orchestrator.core.pm_interview_service.render_prompt", side_effect=_render_prompt),
         ):
             payload = plan_pm_interview_with_codex(

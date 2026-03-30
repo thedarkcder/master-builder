@@ -12,7 +12,7 @@ from orchestrator.core.codex_agents import answer_voice_room_persona_with_codex
 from orchestrator.core.codex_invocation import CodexInvocationContext
 from orchestrator.core.codex_runtime import CodexRuntimeError
 from orchestrator.core.config import get_settings
-from orchestrator.core.discord.personas import VOICE_ROOM_PERSONA_IDS, resolve_voice_room_persona_profile
+from orchestrator.core.discord.personas import resolve_voice_room_persona_profile
 from orchestrator.storage.models import Tenant
 
 _PERSONA_COMMAND_TO_ID = {
@@ -21,22 +21,6 @@ _PERSONA_COMMAND_TO_ID = {
     "tester": "qa",
     "security": "security",
     "reviewer": "reviewer",
-}
-
-_VOICE_ROOM_RUNTIME_SELECTOR_BY_PERSONA: dict[str, str] = {
-    "pm": "discord.voice_room_pm",
-    "architect": "discord.voice_room_architect",
-    "engineer": "discord.voice_room_engineer",
-    "qa": "discord.voice_room_qa",
-    "security": "discord.voice_room_security",
-}
-
-_HISTORY_COMMAND_NAME_BY_PERSONA: dict[str, str] = {
-    "pm": "voice_room_pm",
-    "architect": "architect",
-    "engineer": "engineer",
-    "qa": "tester",
-    "security": "security",
 }
 
 
@@ -146,6 +130,8 @@ def dispatch_persona_command(
             ),
             history=history_context,
             github_context=github_context,
+            sqlalchemy_session=session,
+            settings=settings,
         )
     except CodexRuntimeError as exc:
         raise HTTPException(
@@ -173,120 +159,6 @@ def dispatch_persona_command(
         message=message,
         data={
             "question": question,
-            "issue_key": normalized_issue_key,
-            "status": requested_status,
-            "status_counts": status_counts,
-            "issues": issues,
-            "brief": brief,
-            "advisory_only": True,
-            "persona_id": persona_profile.persona_id,
-            "persona_name": persona_profile.display_name,
-            "persona_role": persona_profile.role_label,
-            "persona_voice_id": persona_profile.voice_id,
-        },
-    )
-
-
-def execute_voice_room_persona_voice_entry(
-    *,
-    session: Session,
-    tenant: Tenant,
-    normalized_user_id: str,
-    normalized_channel_id: str,
-    transcript: str,
-    persona_id: str,
-    issue_key_pattern,
-    collect_ask_context_with_history_context: Callable[..., Any],
-    collect_github_ask_context: Callable[..., Any],
-    store_ask_history_entry: Callable[..., Any],
-    scoped_project_keys: list[str],
-    scoped_project_id: str | None,
-    codex_working_dir: str,
-) -> DiscordCommandResponse:
-    """Voice-room persona answer for transcribed entry when !pm would be wrong (e.g. lane persona + pm)."""
-    normalized = str(persona_id or "").strip().lower()
-    if normalized not in set(VOICE_ROOM_PERSONA_IDS):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid voice-room persona for voice entry.",
-        )
-    normalized_project_keys = _normalized_project_keys(scoped_project_keys)
-    normalized_issue_key, requested_status, issues, status_counts, history_context = (
-        collect_ask_context_with_history_context(
-            session=session,
-            tenant=tenant,
-            user_id=normalized_user_id,
-            channel_id=normalized_channel_id,
-            question=transcript,
-            scoped_issue_key=None,
-        )
-    )
-    settings = get_settings()
-    selector = _VOICE_ROOM_RUNTIME_SELECTOR_BY_PERSONA.get(normalized, "discord.voice_room_pm")
-    runtime = build_runtime_for_selector(
-        session=session,
-        settings=settings,
-        tenant_id=tenant.tenant_id,
-        project_id=scoped_project_id,
-        selector=selector,
-    )
-    github_context = collect_github_ask_context(
-        session=session,
-        tenant=tenant,
-        project_keys=normalized_project_keys,
-    )
-    persona_profile = resolve_voice_room_persona_profile(
-        persona_id=normalized,
-        tenant_discord_config=getattr(tenant, "discord_config", None) or {},
-        project_discord_config=None,
-    )
-    history_command = _HISTORY_COMMAND_NAME_BY_PERSONA.get(normalized, "voice_room_pm")
-    try:
-        answer_payload = answer_voice_room_persona_with_codex(
-            runtime=runtime,
-            persona_id=normalized,
-            transcript=transcript,
-            project_keys=normalized_project_keys,
-            issues=issues,
-            status_counts=status_counts,
-            invocation_context=CodexInvocationContext(
-                channel="discord",
-                tenant_id=tenant.tenant_id,
-                project_id=scoped_project_id,
-                command=history_command,
-                stage=f"{history_command}-answer",
-                working_dir=codex_working_dir,
-                issue_key=normalized_issue_key,
-            ),
-            history=history_context,
-            github_context=github_context,
-        )
-    except CodexRuntimeError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Codex voice-room assistant is unavailable: {exc}",
-        ) from exc
-
-    message = str(answer_payload.get("message") or "").strip()
-    brief = answer_payload.get("brief")
-    if not isinstance(brief, dict):
-        brief = {}
-    store_ask_history_entry(
-        session=session,
-        tenant=tenant,
-        user_id=normalized_user_id,
-        channel_id=normalized_channel_id,
-        question=_persona_history_question(command_name=history_command, question=transcript),
-        answer=message,
-        issue_key=normalized_issue_key,
-        status_name=requested_status,
-    )
-    return DiscordCommandResponse(
-        ok=True,
-        command="voice_room_persona",
-        message=message,
-        data={
-            "question": transcript,
             "issue_key": normalized_issue_key,
             "status": requested_status,
             "status_counts": status_counts,

@@ -13,7 +13,6 @@ from uuid import uuid4
 from sqlalchemy import select
 
 from orchestrator.api.commands.entrypoint import execute_tenant_discord_command
-from orchestrator.api.discord.ingress.executor import execute_voice_room_persona_for_voice_note
 from orchestrator.api.discord.shared.room_history import DiscordRoomHistoryService
 from orchestrator.core.codex_working_dir import resolve_codex_working_dir
 from orchestrator.core.config import get_settings
@@ -520,7 +519,6 @@ class DiscordGatewayListener:
             logger=logger,
             settings=self._settings,
             route_voice_entry=_route_voice_entry,
-            execute_voice_room_persona_voice_note=execute_voice_room_persona_for_voice_note,
         )
 
     def _execute_ingress_result(

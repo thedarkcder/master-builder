@@ -119,6 +119,46 @@ TOOL_ALLOWLIST: dict[str, set[str]] = {
         "project.request_runtime_values",
         "run.request_human_input",
     },
+    "voice_entry_router": {
+        "knowledge.exact_read",
+        "knowledge.read",
+        "jira.get_issue",
+        "project.get_runtime_values",
+        "project.list_runtime_keys",
+    },
+    # Persona-specific framing lives in ask_answer_*.j2 (persona_id); tool allowlist is shared across personas.
+    "discord_ask_answer": {
+        "knowledge.exact_read",
+        "knowledge.read",
+        "jira.get_issue",
+        "jira.comment",
+        "repo.read",
+        "project.get_runtime_values",
+        "project.list_runtime_keys",
+        "project.request_runtime_values",
+        "run.request_human_input",
+    },
+    "discord_voice_room_persona": {
+        "knowledge.exact_read",
+        "knowledge.read",
+        "jira.get_issue",
+        "repo.read",
+        "project.get_runtime_values",
+        "project.list_runtime_keys",
+    },
+    "discord_pm_interview": {
+        "jira.get_issue",
+        "jira.comment",
+        "jira.transition",
+        "decision.read_state",
+        "knowledge.exact_read",
+        "knowledge.read",
+        "project.get_runtime_values",
+        "project.list_runtime_keys",
+        "project.request_runtime_values",
+        "run.request_human_input",
+        "repo.read",
+    },
 }
 
 TOOL_DESCRIPTIONS: dict[str, str] = {

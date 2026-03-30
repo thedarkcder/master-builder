@@ -30,7 +30,7 @@ from orchestrator.core.pm_interview_service import (
     resolve_pm_interview_case,
     upsert_pm_interview_case,
 )
-from orchestrator.core.discord.personas import resolve_voice_room_persona_profile
+from orchestrator.core.discord.personas import VOICE_ROOM_PERSONA_IDS, resolve_voice_room_persona_profile
 from orchestrator.core.specialist_planning import SpecialistPlanningRequest, run_specialist_planning_fanout
 from orchestrator.storage.models import Project, Tenant
 
@@ -147,9 +147,17 @@ def _voice_turn_history_answer(*, answer: str, persona_id: str) -> str:
     return f"{prefix}: {compact}".strip()
 
 
-def _ask_room_voice_overlay(*, tenant: Tenant) -> dict[str, Any]:
+def _normalized_voice_ask_persona_id(raw: str | None) -> str:
+    pid = str(raw or "").strip().lower()
+    if pid in set(VOICE_ROOM_PERSONA_IDS):
+        return pid
+    return "engineer"
+
+
+def _ask_room_voice_overlay(*, tenant: Tenant, persona_id: str) -> dict[str, Any]:
+    normalized = _normalized_voice_ask_persona_id(persona_id)
     profile = resolve_voice_room_persona_profile(
-        persona_id="engineer",
+        persona_id=normalized,
         tenant_discord_config=getattr(tenant, "discord_config", None) or {},
         project_discord_config=None,
     )
@@ -171,7 +179,14 @@ def _merge_ask_voice_reply_fields(
     room_on = str(command_params.get("room_mode") or "").strip().lower() in {"1", "true", "yes"}
     if room_on and room_src in {"voice_note", "live_voice"}:
         merged = dict(data)
-        merged.update(_ask_room_voice_overlay(tenant=tenant))
+        merged.update(
+            _ask_room_voice_overlay(
+                tenant=tenant,
+                persona_id=str(command_params.get("persona_id") or "").strip(),
+            )
+        )
+        merged["room_mode"] = True
+        merged["room_source"] = room_src
         return merged
     return data
 
@@ -275,10 +290,10 @@ def dispatch_ask_command(
             )
         command_params = payload.command_params if isinstance(payload.command_params, dict) else {}
         is_voice_room_mode = str(command_params.get("room_mode") or "").strip().lower() in {"1", "true", "yes"}
-        is_voice_mode = str(command_params.get("voice_mode") or "").strip().lower() in {"1", "true", "yes"}
-        is_routed_voice_mode = is_voice_room_mode or is_voice_mode
+        room_source_mode = str(command_params.get("room_source") or "text").strip().lower() or "text"
+        is_voice_ingress = is_voice_room_mode or room_source_mode in {"voice_note", "live_voice"}
         first_token = arguments[0].strip().lower()
-        if first_token == "approve" and not is_routed_voice_mode:
+        if first_token == "approve" and not is_voice_ingress:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Usage: !pm <product request>",
@@ -309,7 +324,7 @@ def dispatch_ask_command(
             project_id=scoped_project_id,
             selector="discord.pm_answer",
             agent_role="pm",
-            agent_name="voice_room_pm" if is_routed_voice_mode else "pm_primary",
+            agent_name="voice_room_pm" if is_voice_ingress else "pm_primary",
         )
         github_context = collect_github_ask_context(
             session=session,
@@ -319,7 +334,6 @@ def dispatch_ask_command(
         scoped_project = session.get(Project, scoped_project_id) if scoped_project_id else None
         linked_text_channel_id = str(command_params.get("linked_text_channel_id") or "").strip() or None
         voice_channel_id = str(command_params.get("voice_channel_id") or "").strip() or None
-        room_source_mode = str(command_params.get("room_source") or "text").strip().lower() or "text"
         history_owner = scoped_project if scoped_project is not None else tenant
         room_history = _history_context
         room_id = None
@@ -378,8 +392,10 @@ def dispatch_ask_command(
                     working_dir=codex_working_dir,
                     issue_key=normalized_issue_key,
                 ),
-                history=room_history if is_routed_voice_mode else _history_context,
+                history=room_history if is_voice_ingress else _history_context,
                 github_context=github_context,
+                sqlalchemy_session=session,
+                settings=settings,
             )
         except CodexRuntimeError as exc:
             raise HTTPException(
@@ -427,7 +443,7 @@ def dispatch_ask_command(
             question_history=question_history,
             current_question=final_assessment.next_question,
             next_question=final_assessment.next_question,
-            notes={"room_source": room_source_mode} if is_routed_voice_mode else {},
+            notes={"room_source": room_source_mode} if is_voice_ingress else {},
         )
 
         store_ask_history_entry(
@@ -437,12 +453,12 @@ def dispatch_ask_command(
             channel_id=normalized_channel_id,
             question=(
                 _voice_turn_history_question(question=question, room_mode=is_voice_room_mode)
-                if is_routed_voice_mode
+                if is_voice_ingress
                 else _pm_history_question(question=question)
             ),
             answer=(
                 _voice_turn_history_answer(answer=message, persona_id="pm")
-                if is_routed_voice_mode
+                if is_voice_ingress
                 else _pm_history_answer(message)
             ),
             issue_key=normalized_issue_key,
@@ -503,8 +519,8 @@ def dispatch_ask_command(
             "persona_id": "pm",
             "persona_role": "Product Manager",
             "persona_name": "PM",
-            "room_mode": is_voice_room_mode,
-            "voice_mode": is_routed_voice_mode,
+            "room_mode": is_voice_room_mode or is_voice_ingress,
+            "room_source": room_source_mode,
             "room_config": getattr(history_owner, "discord_config", None) if is_voice_room_mode else None,
         }
         if not final_assessment.ready_to_write:
@@ -564,7 +580,7 @@ def dispatch_ask_command(
                 related_issues=tuple(issues),
                 status_counts=status_counts,
                 github_context=github_context,
-                conversation_history=tuple(room_history if is_routed_voice_mode else _history_context),
+                conversation_history=tuple(room_history if is_voice_ingress else _history_context),
                 working_dir=codex_working_dir,
             )
             planning_result = run_specialist_planning_fanout(
@@ -778,6 +794,7 @@ def dispatch_ask_command(
                 },
             )
 
+        ask_voice_persona = _normalized_voice_ask_persona_id(str(ask_command_params.get("persona_id") or ""))
         message = answer_board_question_with_codex(
             runtime=build_runtime_for_selector(
                 session=session,
@@ -801,6 +818,7 @@ def dispatch_ask_command(
             ),
             history=history_context,
             github_context=github_context,
+            answer_persona_id=ask_voice_persona,
         )
         store_ask_history_entry(
             session=session,
@@ -827,6 +845,7 @@ def dispatch_ask_command(
             data=ask_data,
         )
 
+    ask_voice_persona = _normalized_voice_ask_persona_id(str(ask_command_params.get("persona_id") or ""))
     message, data = ask_board_message(
         session=session,
         tenant=tenant,
@@ -835,6 +854,7 @@ def dispatch_ask_command(
         question=question,
         scoped_issue_key=scoped_issue_key,
         scoped_project_id=scoped_project_id,
+        answer_persona_id=ask_voice_persona,
     )
     if isinstance(data, dict):
         merged_data = _merge_ask_voice_reply_fields(dict(data), tenant=tenant, command_params=ask_command_params)
