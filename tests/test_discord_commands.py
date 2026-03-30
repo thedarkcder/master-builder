@@ -1307,6 +1307,70 @@ class DiscordCommandApiTests(unittest.TestCase):
         planning_mock.assert_called_once()
         seed_children_mock.assert_called_once()
 
+    def test_pm_ready_to_write_stage_spi_env_blocks_parent_seed(self) -> None:
+        prev_spi = os.environ.get("ORCHESTRATOR_STAGE_SPI_ENABLED")
+        os.environ["ORCHESTRATOR_STAGE_SPI_ENABLED"] = "true"
+        get_settings.cache_clear()
+        try:
+            with (
+                self.session_factory() as session,
+                patch(
+                    "orchestrator.api.discord.ingress.ask_runtime.collect_ask_context_with_history_context",
+                    return_value=(None, None, [{"key": "TP-20", "summary": "Do thing", "status": "To Do"}], {"To Do": 1}, []),
+                ),
+                patch("orchestrator.api.discord.commands.ask.build_codex_runtime"),
+                patch(
+                    "orchestrator.api.discord.commands.ask.plan_pm_interview_with_codex",
+                    return_value={
+                        "message": "The PM brief is complete and ready for parent creation.",
+                        "brief": {
+                            "objective": "Ship checkout recovery",
+                            "user_value": "Customers recover cleanly from checkout failures.",
+                            "target_user": "Customers experiencing checkout failure",
+                            "primary_journey": "Retry after a failed checkout",
+                            "acceptance_criteria": [
+                                "Customers can retry checkout from the failure state",
+                                "Fallback UX explains what to do next",
+                            ],
+                            "ui_references": ["Checkout failure screen"],
+                            "constraints": ["Use the existing checkout system"],
+                            "success_outcomes": ["Higher recovery rate from checkout failures"],
+                            "recommendation": "Focus on the customer-visible fallback first.",
+                            "scope_in": ["Retry telemetry", "Fallback UX"],
+                            "scope_out": ["Provider migration"],
+                            "risks": ["Analytics gap"],
+                            "open_questions": [],
+                            "next_steps": ["Review the parent feature with product"],
+                        },
+                        "status": "ready_to_write",
+                        "ready_to_write": True,
+                    },
+                ),
+                patch("orchestrator.api.discord.ingress.seed_runtime.seed_parent_issues_with_codex") as seed_mock,
+            ):
+                command_response = execute_discord_command(
+                    tenant_id=self.tenant_id,
+                    payload=DiscordCommandRequest(
+                        user_id="u-viewer",
+                        channel_id="discord-channel-1",
+                        command="!pm final handoff for TP-20 checkout reliability",
+                    ),
+                    session=session,
+                )
+
+            self.assertTrue(command_response.ok)
+            self.assertEqual(command_response.command, "pm")
+            self.assertEqual(command_response.data.get("stage_plugin"), "design")
+            self.assertFalse(command_response.data["stage_ready_for_implementation"])
+            self.assertIn("design direction", command_response.message.lower())
+            seed_mock.assert_not_called()
+        finally:
+            if prev_spi is None:
+                os.environ.pop("ORCHESTRATOR_STAGE_SPI_ENABLED", None)
+            else:
+                os.environ["ORCHESTRATOR_STAGE_SPI_ENABLED"] = prev_spi
+            get_settings.cache_clear()
+
     def test_pm_approve_is_rejected(self) -> None:
         response = self.client.post(
             f"/discord/command/{self.tenant_id}",
