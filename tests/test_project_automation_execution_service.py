@@ -111,6 +111,56 @@ class ProjectAutomationExecutionServiceTests(unittest.TestCase):
         assert plan.action is not None
         self.assertEqual(plan.action.channel_id, "999")
 
+    def test_prepare_execution_requires_delivery_text_channel_id(self) -> None:
+        now = datetime(2026, 3, 28, 9, 0, tzinfo=UTC)
+        with self.session_factory() as session:
+            project = session.get(Project, "example-default")
+            tenant = session.get(Tenant, "example")
+            assert project is not None
+            assert tenant is not None
+            automation = upsert_project_automation(
+                session=session,
+                tenant_id=tenant.tenant_id,
+                project_id=project.project_id,
+                payload=ProjectAutomationWrite(
+                    kind=PROJECT_AUTOMATION_KIND_STANDUP,
+                    enabled=True,
+                    timezone="UTC",
+                    days_of_week=(5,),
+                    local_time="09:00",
+                    delivery_text_channel_id=None,
+                    voice_id=None,
+                    fallback_lookback_hours=24,
+                ),
+                now=now,
+            )
+            execution = ProjectAutomationExecution(
+                execution_id="exec-no-channel",
+                automation_id=automation.automation_id,
+                scheduled_for=now,
+                window_start_at=now.replace(hour=8),
+                window_end_at=now,
+                status="queued",
+                dedupe_key="dedupe-no-channel",
+                started_at=None,
+                completed_at=None,
+                discord_message_id=None,
+                last_error=None,
+                created_at=now,
+                updated_at=now,
+            )
+            session.add(execution)
+            session.commit()
+            with self.assertRaisesRegex(ValueError, "delivery_text_channel_id"):
+                prepare_project_automation_execution(
+                    session=session,
+                    settings=type("S", (), {"secrets_encryption_key": ""})(),
+                    tenant=tenant,
+                    project=project,
+                    request_id="req-nc",
+                    payload_json={"execution_id": "exec-no-channel", "automation_id": automation.automation_id},
+                )
+
     def test_mark_failure_is_safe_for_missing_execution(self) -> None:
         with self.session_factory() as session:
             mark_project_automation_execution_failure(

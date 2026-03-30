@@ -747,6 +747,57 @@ def classify_engineering_clarification_with_codex(
     return payload
 
 
+def route_voice_entry_with_codex(
+    *,
+    runtime: CodexRuntime,
+    transcript: str,
+    invocation_context: CodexInvocationContext,
+    entry_source: str,
+    history: list[dict] | None = None,
+    room_context: dict | None = None,
+) -> dict:
+    """Route voice transcript to ask vs pm vs persona lane (strict JSON from Codex)."""
+    normalized_history = history if isinstance(history, list) else []
+    payload = invoke_codex_json(
+        runtime=runtime,
+        context=invocation_context,
+        system_prompt=render_prompt("discord/voice_entry_router_system.j2"),
+        user_prompt=render_prompt(
+            "discord/voice_entry_router_user.j2",
+            transcript=transcript,
+            entry_source=entry_source,
+            history_json=json.dumps(normalized_history[-25:]),
+            room_context_json=json.dumps(room_context or {}),
+        ),
+    )
+    if not isinstance(payload, dict):
+        raise CodexRuntimeError("Codex did not return a voice-entry router JSON object")
+    lane = str(payload.get("lane") or "").strip().lower()
+    if lane not in {"ask", "pm", "persona"}:
+        lane = "ask"
+    persona_id = str(payload.get("persona") or "").strip().lower()
+    valid_personas = {"pm", "architect", "engineer", "qa", "security"}
+    if persona_id not in valid_personas:
+        if lane == "persona":
+            persona_id = "pm"
+        elif lane == "pm":
+            persona_id = "pm"
+        else:
+            persona_id = "engineer"
+    try:
+        confidence = float(payload.get("confidence"))
+    except (TypeError, ValueError):
+        confidence = 0.0
+    confidence = max(0.0, min(1.0, confidence))
+    reason = str(payload.get("reason") or "").strip()
+    return {
+        "lane": lane,
+        "persona": persona_id,
+        "confidence": confidence,
+        "reason": reason,
+    }
+
+
 def route_voice_room_persona_with_codex(
     *,
     runtime: CodexRuntime,

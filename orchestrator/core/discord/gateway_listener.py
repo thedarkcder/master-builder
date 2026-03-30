@@ -13,6 +13,11 @@ from uuid import uuid4
 from sqlalchemy import select
 
 from orchestrator.api.commands.entrypoint import execute_tenant_discord_command
+from orchestrator.api.discord.ingress.executor import execute_voice_room_persona_for_voice_note
+from orchestrator.api.discord.shared.room_history import DiscordRoomHistoryService
+from orchestrator.core.codex_working_dir import resolve_codex_working_dir
+from orchestrator.core.config import get_settings
+from orchestrator.core.discord.voice_entry_routing import route_discord_voice_entry
 from orchestrator.api.transport_runtime import (
     build_discord_transport_executor,
     build_transport_action_executors,
@@ -448,6 +453,46 @@ class DiscordGatewayListener:
         )
 
     def _message_dispatch_deps(self, *, bot_token: str) -> DiscordMessageIngressDeps:
+        def _route_voice_entry(
+            session,
+            tenant,
+            *,
+            user_id: str,
+            channel_id: str,
+            project_id: str | None,
+            transcript: str,
+            project_keys: list[str],
+            room_channel_ids: frozenset[str],
+        ) -> dict[str, Any]:
+            _ = user_id
+            settings = get_settings()
+            working_dir = resolve_codex_working_dir(
+                session=session,
+                tenant=tenant,
+                settings=settings,
+                project_id=project_id,
+                project_keys=project_keys,
+            )
+            history = DiscordRoomHistoryService().recent_room_history(
+                discord_config=getattr(tenant, "discord_config", None) or {},
+                channel_id=channel_id,
+                limit=8,
+            )
+            return route_discord_voice_entry(
+                session=session,
+                settings=settings,
+                tenant=tenant,
+                project_id=project_id,
+                codex_working_dir=working_dir,
+                transcript=transcript,
+                entry_source="voice_note",
+                history=history,
+                room_context={
+                    "project_keys": project_keys,
+                    "channel_in_voice_room": channel_id in room_channel_ids,
+                },
+            )
+
         return DiscordMessageIngressDeps(
             find_tenant_for_channel=self._find_tenant_for_channel,
             resolve_project_for_discord_channel=resolve_project_for_discord_channel,
@@ -474,6 +519,8 @@ class DiscordGatewayListener:
             emit_hard_error=emit_hard_error,
             logger=logger,
             settings=self._settings,
+            route_voice_entry=_route_voice_entry,
+            execute_voice_room_persona_voice_note=execute_voice_room_persona_for_voice_note,
         )
 
     def _execute_ingress_result(

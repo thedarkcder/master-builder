@@ -83,6 +83,7 @@ _DEFAULT_ROUTING = {
     "discord.ask_answer": PROFILE_GENERAL_PLANNING,
     "discord.ask_intent": PROFILE_GENERAL_PLANNING,
     "discord.issue_seed": PROFILE_GENERAL_PLANNING,
+    "discord.voice_entry_router": PROFILE_GENERAL_PLANNING,
     "discord.voice_room_router": PROFILE_GENERAL_PLANNING,
     "discord.voice_room_architect": PROFILE_GENERAL_PLANNING,
     "discord.voice_room_engineer": PROFILE_GENERAL_PLANNING,

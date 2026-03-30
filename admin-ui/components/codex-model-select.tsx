@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { CodexModelOptionRecord } from "@/lib/api";
 import { Input } from "@/components/ui/input";
@@ -15,6 +15,8 @@ type Props = {
   helperText?: string;
   effectiveLabel?: string;
   disabled?: boolean;
+  /** When this changes (e.g. profile/tenant being edited), exit explicit custom mode. */
+  editorSurfaceKey?: string | null;
   onChange: (value: string | null) => void;
 };
 
@@ -26,6 +28,7 @@ export function CodexModelSelect({
   helperText,
   effectiveLabel,
   disabled = false,
+  editorSurfaceKey,
   onChange,
 }: Props) {
   const normalizedValue = String(value || "").trim();
@@ -34,15 +37,38 @@ export function CodexModelSelect({
     [models],
   );
   const valueIsPreset = normalizedValue.length > 0 && optionIds.has(normalizedValue);
+  /** User chose "Custom model…"; stay in custom UI even if the id matches a catalog preset. */
+  const customExplicitRef = useRef(false);
   const [customMode, setCustomMode] = useState<boolean>(normalizedValue.length > 0 && !valueIsPreset);
   const [customValue, setCustomValue] = useState<string>(valueIsPreset ? "" : normalizedValue);
 
   useEffect(() => {
-    const nextNormalized = String(value || "").trim();
+    customExplicitRef.current = false;
+  }, [editorSurfaceKey]);
+
+  useEffect(() => {
+    const nextNormalized = String(value ?? "").trim();
     const nextPreset = nextNormalized.length > 0 && optionIds.has(nextNormalized);
-    setCustomMode(nextNormalized.length > 0 && !nextPreset);
-    setCustomValue(nextPreset ? "" : nextNormalized);
-  }, [optionIds, value]);
+
+    if (customExplicitRef.current) {
+      setCustomMode(true);
+      setCustomValue(nextNormalized);
+      return;
+    }
+
+    if (nextPreset) {
+      setCustomMode(false);
+      setCustomValue("");
+      return;
+    }
+    if (nextNormalized.length > 0) {
+      setCustomMode(true);
+      setCustomValue(nextNormalized);
+      return;
+    }
+    setCustomMode(false);
+    setCustomValue("");
+  }, [optionIds, value, editorSurfaceKey]);
 
   const selectValue = customMode ? CUSTOM_MODEL_VALUE : normalizedValue;
 
@@ -55,11 +81,13 @@ export function CodexModelSelect({
         onChange={(event) => {
           const next = event.target.value;
           if (next === CUSTOM_MODEL_VALUE) {
+            customExplicitRef.current = true;
             setCustomMode(true);
             setCustomValue("");
             onChange(null);
             return;
           }
+          customExplicitRef.current = false;
           setCustomMode(false);
           setCustomValue("");
           onChange(next.trim() || null);

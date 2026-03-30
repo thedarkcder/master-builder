@@ -328,6 +328,7 @@ class AdminApiTests(unittest.TestCase):
         self.assertIn("voice_room_pm", body["available_named_agents"])
         self.assertNotIn("discord.voice_room_router", body["available_named_agents"])
         self.assertIn("discord.voice_room_router", body["available_selectors"])
+        self.assertIn("discord.voice_entry_router", body["available_selectors"])
         self.assertIn("pm_conversation_fast", body["available_profiles"])
         self.assertEqual(body["effective_defaults"]["role_routing"]["pm"], "pm_conversation_default")
         self.assertEqual(body["effective_defaults"]["name_routing"]["workflow_dev_default"], "engineering_execution_default")
@@ -1115,6 +1116,53 @@ class AdminApiTests(unittest.TestCase):
             self.assertTrue(automation.enabled)
             self.assertEqual(automation.kind, "standup_voice_brief")
             self.assertEqual(automation.delivery_text_channel_id, "12345")
+
+    def test_project_automations_allow_null_delivery_text_channel_id(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_tenant.status_code, 201)
+
+        projects_response = self.client.get("/api/admin/tenants/tenant-a/projects", auth=("admin", "secret"))
+        self.assertEqual(projects_response.status_code, 200)
+        project_id = projects_response.json()[0]["project_id"]
+
+        update_response = self.client.put(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/automations",
+            json={
+                "automations": [
+                    {
+                        "kind": "standup_voice_brief",
+                        "enabled": True,
+                        "timezone": "Europe/London",
+                        "days_of_week": [0, 1, 2, 3, 4],
+                        "local_time": "09:30",
+                        "delivery_text_channel_id": None,
+                        "voice_id": "alloy",
+                        "fallback_lookback_hours": 24,
+                    }
+                ],
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(update_response.status_code, 200)
+        body = update_response.json()["automations"][0]
+        self.assertIsNone(body.get("delivery_text_channel_id"))
+
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            automation = (
+                session.query(ProjectAutomation)
+                .filter_by(project_id=project_id, tenant_id="tenant-a")
+                .one_or_none()
+            )
+            self.assertIsNotNone(automation)
+            assert automation is not None
+            self.assertIsNone(automation.delivery_text_channel_id)
 
     def test_project_automations_validate_scoping_and_values(self) -> None:
         payload = self._tenant_payload()

@@ -244,15 +244,21 @@ export default function AgentRuntimesPage() {
     ((currentTransportNeedsBaseUrl || runtimeKind === "openai" || runtimeKind === "claude") && !String(draft.base_url || "").trim()) ||
     (currentTransportNeedsApiKey && !String(draft.api_key_secret_ref || "").trim());
 
-  async function loadModelCatalog(nextRuntimeKind: string): Promise<void> {
-    if (!credentials) return;
-    try {
-      const catalog = await listCodexModels(credentials, { runtimeKind: nextRuntimeKind });
-      setModelCatalog(catalog);
-    } catch (error) {
-      setProfilesStatusLine(`Failed to load models: ${(error as Error).message}`);
-    }
-  }
+  const loadModelCatalog = useCallback(
+    async (nextRuntimeKind: string, profileName: string | null) => {
+      if (!credentials) return;
+      try {
+        const catalog = await listCodexModels(credentials, {
+          runtimeKind: nextRuntimeKind,
+          profileName: profileName?.trim() ? profileName.trim() : null,
+        });
+        setModelCatalog(catalog);
+      } catch (error) {
+        setProfilesStatusLine(`Failed to load models: ${(error as Error).message}`);
+      }
+    },
+    [credentials],
+  );
 
   async function saveRouting(): Promise<void> {
     if (!credentials) return;
@@ -371,8 +377,8 @@ export default function AgentRuntimesPage() {
 
   useEffect(() => {
     if (!credentials) return;
-    void loadModelCatalog(runtimeKind);
-  }, [credentials, runtimeKind]);
+    void loadModelCatalog(runtimeKind, editingProfileName);
+  }, [credentials, runtimeKind, editingProfileName, loadModelCatalog]);
 
   if (!principalReady) {
     return <main className="p-8 text-sm text-muted-foreground">Loading agent runtimes...</main>;
@@ -431,6 +437,13 @@ export default function AgentRuntimesPage() {
                     <CardTitle className="text-base">Runtime routing</CardTitle>
                     <p className="text-sm text-muted-foreground">
                       Named-agent overrides win over role defaults. Leave a row blank to inherit.
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Text <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">!pm</code> uses{" "}
+                      <span className="font-mono">pm_primary</span> (built-in default profile{" "}
+                      <span className="font-mono">pm_conversation_default</span>). Routed voice PM uses{" "}
+                      <span className="font-mono">voice_room_pm</span> (default{" "}
+                      <span className="font-mono">pm_conversation_fast</span>).
                     </p>
                     <p className="mt-1 text-xs text-muted-foreground">
                       Selector rows are separate (for values like <code>discord.voice_room_router</code>) and are the correct place to change
@@ -764,10 +777,11 @@ export default function AgentRuntimesPage() {
                 <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Model</label>
                 <CodexModelSelect
                   ariaLabel="Model"
+                  editorSurfaceKey={editingProfileName ?? "__create_profile__"}
                   value={draft.model}
                   models={modelCatalog?.models ?? []}
                   inheritLabel="Select model"
-                  helperText="Preset options are filtered by runtime. Custom model ids are still allowed."
+                  helperText="Presets come from this profile and other profiles using the same runtime. The value saved here is sent to the server as the OpenAI-style model id (must match LM Studio’s loaded model). Text Discord !pm uses the profile routed for pm_primary (default pm_conversation_default), not necessarily the row you are editing."
                   disabled={savingProfile}
                   onChange={(value) => setDraft((current) => ({ ...current, model: value }))}
                 />

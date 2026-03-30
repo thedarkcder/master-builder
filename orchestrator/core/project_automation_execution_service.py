@@ -64,6 +64,11 @@ def prepare_project_automation_execution(
         raise ValueError(f"Project automation '{automation_id}' was not found")
     if project is None:
         raise ValueError("Project automation project context is missing")
+    delivery_channel = str(automation.delivery_text_channel_id or "").strip()
+    if not delivery_channel:
+        raise ValueError(
+            "Project automation has no delivery_text_channel_id; configure a Discord text channel to post briefings."
+        )
     mark_execution_running(session=session, execution_id=execution.execution_id)
     window_start_at = _to_utc(execution.window_start_at)
     window_end_at = _to_utc(execution.window_end_at)
@@ -86,7 +91,7 @@ def prepare_project_automation_execution(
         },
     )
     action = DiscordChannelMessageWithAttachmentAction(
-        channel_id=automation.delivery_text_channel_id,
+        channel_id=delivery_channel,
         content=f"{briefing.summary}\n\nAI-generated, source-derived briefing.",
         filename=audio.filename,
         file_bytes=audio.audio_bytes,
