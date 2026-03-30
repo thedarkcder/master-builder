@@ -409,6 +409,26 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 auth=admin,
             ),
             ("GET", "/api/admin/secrets"): RouteScenario(path="/api/admin/secrets", auth=admin),
+            ("GET", "/api/admin/agent-runtimes"): RouteScenario(
+                path="/api/admin/agent-runtimes",
+                auth=admin,
+            ),
+            ("GET", "/api/admin/agent-runtime-tools"): RouteScenario(
+                path="/api/admin/agent-runtime-tools",
+                auth=admin,
+            ),
+            ("PUT", "/api/admin/agent-runtimes"): RouteScenario(
+                path="/api/admin/agent-runtimes",
+                auth=admin,
+                json={
+                    "role_routing": {"pm": "pm_conversation_fast"},
+                    "name_routing": {"workflow_review_default": "engineering_execution_deep"},
+                },
+            ),
+            ("POST", "/api/admin/agent-runtimes/reset"): RouteScenario(
+                path="/api/admin/agent-runtimes/reset",
+                auth=admin,
+            ),
             ("POST", "/api/admin/secrets/resolve"): RouteScenario(
                 path="/api/admin/secrets/resolve",
                 auth=admin,
@@ -564,6 +584,15 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                     "discord": {"notify_events": []},
                     "is_archived": False,
                 },
+            ),
+            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/automations"): RouteScenario(
+                path="/api/admin/tenants/example/projects/example-default/automations",
+                auth=admin,
+            ),
+            ("PUT", "/api/admin/tenants/{tenant_id}/projects/{project_id}/automations"): RouteScenario(
+                path="/api/admin/tenants/example/projects/example-default/automations",
+                auth=admin,
+                json={"automations": []},
             ),
             ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/knowledge/assets"): RouteScenario(
                 path="/api/admin/tenants/example/projects/example-default/knowledge/assets",

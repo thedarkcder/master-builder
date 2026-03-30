@@ -124,29 +124,108 @@ def build_discord_guild_commands() -> list[dict]:
         },
         {
             "name": "pm",
-            "description": "Ask a product question and get a structured PM brief",
+            "description": "Create or refine one PM-owned product feature issue",
             "options": [
                 {
                     "type": 3,  # STRING
                     "name": "question",
-                    "description": "Product or prioritization question",
+                    "description": "Product request or PM clarification",
+                    "required": True,
+                },
+            ],
+        },
+        {
+            "name": "architect",
+            "description": "Ask the architect for system design guidance",
+            "options": [
+                {
+                    "type": 3,  # STRING
+                    "name": "question",
+                    "description": "Architecture question",
                     "required": True,
                 },
                 {
                     "type": 3,  # STRING
-                    "name": "action",
-                    "description": "Optional PM mode (for example: approve)",
+                    "name": "issue_key",
+                    "description": "Optional issue key to scope the answer",
                     "required": False,
-                    "choices": [
-                        {
-                            "name": "Ask",
-                            "value": "ask",
-                        },
-                        {
-                            "name": "Approve",
-                            "value": "approve",
-                        },
-                    ],
+                    "autocomplete": True,
+                },
+            ],
+        },
+        {
+            "name": "engineer",
+            "description": "Ask the engineer for implementation guidance",
+            "options": [
+                {
+                    "type": 3,  # STRING
+                    "name": "question",
+                    "description": "Engineering question",
+                    "required": True,
+                },
+                {
+                    "type": 3,  # STRING
+                    "name": "issue_key",
+                    "description": "Optional issue key to scope the answer",
+                    "required": False,
+                    "autocomplete": True,
+                },
+            ],
+        },
+        {
+            "name": "tester",
+            "description": "Ask the tester for QA and validation guidance",
+            "options": [
+                {
+                    "type": 3,  # STRING
+                    "name": "question",
+                    "description": "Testing question",
+                    "required": True,
+                },
+                {
+                    "type": 3,  # STRING
+                    "name": "issue_key",
+                    "description": "Optional issue key to scope the answer",
+                    "required": False,
+                    "autocomplete": True,
+                },
+            ],
+        },
+        {
+            "name": "security",
+            "description": "Ask the security reviewer for risk guidance",
+            "options": [
+                {
+                    "type": 3,  # STRING
+                    "name": "question",
+                    "description": "Security question",
+                    "required": True,
+                },
+                {
+                    "type": 3,  # STRING
+                    "name": "issue_key",
+                    "description": "Optional issue key to scope the answer",
+                    "required": False,
+                    "autocomplete": True,
+                },
+            ],
+        },
+        {
+            "name": "reviewer",
+            "description": "Ask the reviewer for change-review guidance",
+            "options": [
+                {
+                    "type": 3,  # STRING
+                    "name": "question",
+                    "description": "Review question",
+                    "required": True,
+                },
+                {
+                    "type": 3,  # STRING
+                    "name": "issue_key",
+                    "description": "Optional issue key to scope the answer",
+                    "required": False,
+                    "autocomplete": True,
                 },
             ],
         },
@@ -208,17 +287,30 @@ def build_discord_guild_commands() -> list[dict]:
         },
         {
             "name": "issues",
-            "description": "Seed Jira issues from markdown spec",
+            "description": "Batch-create or refine PM parent feature issues",
             "options": [
                 {
                     "type": 1,  # SUB_COMMAND
                     "name": "seed",
-                    "description": "Split markdown into Jira task issues",
+                    "description": "Split markdown into multiple PM parent issues",
                     "options": [
                         {
                             "type": 3,  # STRING
                             "name": "spec",
-                            "description": "Markdown spec to split into tasks",
+                            "description": "Markdown batch brief to turn into PM parent issues",
+                            "required": True,
+                        }
+                    ],
+                },
+                {
+                    "type": 1,  # SUB_COMMAND
+                    "name": "followup",
+                    "description": "Answer outstanding PM clarification questions for a batch",
+                    "options": [
+                        {
+                            "type": 3,  # STRING
+                            "name": "answers",
+                            "description": "Follow-up answers for the pending PM batch",
                             "required": True,
                         }
                     ],
@@ -240,7 +332,7 @@ def build_discord_guild_commands() -> list[dict]:
                             "value": "run_controls",
                         },
                         {
-                            "name": "Issue seeding (!issues seed)",
+                            "name": "PM batch seeding (!issues seed)",
                             "value": "seed_issues",
                         },
                         {

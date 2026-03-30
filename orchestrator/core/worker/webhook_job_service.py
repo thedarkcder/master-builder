@@ -14,6 +14,7 @@ from orchestrator.api.jira_oauth.connection_service import tenant_jira_oauth_con
 from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.api.transport_runtime import (
     build_http_transport_action_executors,
+    execute_side_effect_action,
     execute_side_effect_ingress_result,
 )
 from orchestrator.api.webhooks.github_application import build_github_webhook_ingress_result
@@ -35,11 +36,17 @@ from orchestrator.core.communications import (
     TransportEnvelope,
 )
 from orchestrator.core.github.transport_executor import GitHubTransportExecutor
+from orchestrator.core.project_automation_execution_service import (
+    mark_project_automation_execution_failure,
+    mark_project_automation_execution_success,
+    prepare_project_automation_execution,
+)
 from orchestrator.core.webhook_job_queue import (
     WEBHOOK_TRANSPORT_DISCORD_COMMAND,
     WEBHOOK_TRANSPORT_DISCORD_INTERACTION,
     WEBHOOK_TRANSPORT_GITHUB,
     WEBHOOK_TRANSPORT_JIRA,
+    WEBHOOK_TRANSPORT_PROJECT_AUTOMATION,
     WebhookJob,
     claim_next_webhook_job,
     claim_pending_jobs_for_subject,
@@ -324,6 +331,92 @@ def _process_github_job(
     return mark_webhook_jobs_done(session, jobs=(claimed_job,), owner_id=owner_id)
 
 
+def _process_project_automation_job(
+    *,
+    session: Session,
+    settings: Settings,
+    owner_id: str,
+    claimed_job: WebhookJob,
+) -> tuple[WebhookJob, ...]:
+    if not claimed_job.tenant_id:
+        return mark_webhook_jobs_failed(
+            session,
+            jobs=(claimed_job,),
+            owner_id=owner_id,
+            error="Project automation webhook job is missing tenant_id",
+        )
+    tenant = session.get(Tenant, claimed_job.tenant_id)
+    if tenant is None or not tenant.is_enabled:
+        return mark_webhook_jobs_failed(
+            session,
+            jobs=(claimed_job,),
+            owner_id=owner_id,
+            error=f"Project automation tenant '{claimed_job.tenant_id}' is unavailable",
+        )
+    project = session.get(Project, claimed_job.project_id) if claimed_job.project_id else None
+    if project is not None and bool(getattr(project, "is_archived", False)):
+        return mark_webhook_jobs_failed(
+            session,
+            jobs=(claimed_job,),
+            owner_id=owner_id,
+            error=f"Project '{project.project_id}' is archived",
+        )
+
+    payload = dict(claimed_job.payload_json or {})
+    execution_id = str(payload.get("execution_id") or "").strip() or claimed_job.request_id
+    plan = None
+    try:
+        plan = prepare_project_automation_execution(
+            session=session,
+            settings=settings,
+            tenant=tenant,
+            project=project,
+            request_id=claimed_job.request_id,
+            payload_json=payload,
+        )
+        if plan.already_succeeded or plan.action is None:
+            return mark_webhook_jobs_done(session, jobs=(claimed_job,), owner_id=owner_id)
+        delivery = execute_side_effect_action(
+            action=plan.action,
+            envelope=TransportEnvelope(
+                transport=WEBHOOK_TRANSPORT_PROJECT_AUTOMATION,
+                event_type=str(claimed_job.event_type or "project_automation"),
+                request_id=claimed_job.request_id,
+                tenant_id_hint=claimed_job.tenant_id,
+                delivery_id=claimed_job.dedupe_key,
+            ),
+            transport_action_executors=build_http_transport_action_executors(
+                session=session,
+                settings=settings,
+            ),
+        )
+        discord_message_id = str((delivery or {}).get("message_id") or "").strip()
+        if not discord_message_id:
+            raise RuntimeError("Project automation delivery did not return a Discord message id")
+        mark_project_automation_execution_success(
+            session=session,
+            execution_id=plan.execution_id,
+            window_end_at=plan.window_end_at,
+            discord_message_id=discord_message_id,
+        )
+        return mark_webhook_jobs_done(session, jobs=(claimed_job,), owner_id=owner_id)
+    except Exception as exc:  # noqa: BLE001
+        try:
+            mark_project_automation_execution_failure(
+                session=session,
+                execution_id=execution_id if plan is None else plan.execution_id,
+                error=str(exc),
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "project_automation_execution_failure_mark_failed request_id=%s tenant_id=%s job_id=%s",
+                claimed_job.request_id,
+                claimed_job.tenant_id,
+                claimed_job.job_id,
+            )
+        raise
+
+
 def _process_discord_command_job(
     *,
     session: Session,
@@ -420,6 +513,13 @@ def process_next_webhook_job(
             )
         elif job.transport == WEBHOOK_TRANSPORT_GITHUB:
             processed = _process_github_job(
+                session=session,
+                settings=settings,
+                owner_id=owner_id,
+                claimed_job=job,
+            )
+        elif job.transport == WEBHOOK_TRANSPORT_PROJECT_AUTOMATION:
+            processed = _process_project_automation_job(
                 session=session,
                 settings=settings,
                 owner_id=owner_id,

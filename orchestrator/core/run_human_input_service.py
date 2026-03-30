@@ -230,6 +230,7 @@ def create_human_input_request(
         channel_id=str(send_result.channel_id or "").strip() or None,
         thread_channel_id=request.thread_channel_id,
         root_message_id=request.thread_message_id,
+        origin_command="human_input",
         issue_key=request.issue_key,
         request_id=request.request_id,
         run_id=run.run_id,

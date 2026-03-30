@@ -1,5 +1,4 @@
 Stage: discord-pm-answer
-Action: {{ action }}
 Question: {{ question }}
 Projects: {{ project_keys_json }}
 Status counts: {{ status_counts_json }}
@@ -9,9 +8,14 @@ Issues (sample): {{ issues_json }}
 
 Output contract:
 - Keep the response product-first, conversational, and decision-oriented.
+- Treat this as PM brief creation/refinement for a non-technical parent Jira feature issue.
 - If the request is incomplete, ask the single highest-signal clarifying question.
 - brief.objective should be one sentence.
+- brief.user_value should describe why the feature matters in stakeholder language.
+- brief.acceptance_criteria should capture externally observable behavior, not implementation.
+- brief.ui_references should include concrete design references or explicitly note when none are needed.
 - brief.scope_in and brief.scope_out should be concrete and non-overlapping.
 - brief.risks should call out evidence gaps explicitly when relevant.
 - brief.open_questions should list the shortest path to a GTD brief.
-- brief.next_steps should be executable by PM/engineering leads.
+- brief.next_steps should be executable by PM/product leads without forcing technical breakdown.
+- brief.success_outcomes should make user value and business value explicit.

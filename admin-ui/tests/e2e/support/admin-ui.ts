@@ -6,6 +6,8 @@ import {
   DEFAULT_API_BASE_URL,
 } from "../../../lib/auth-constants";
 import type {
+  ProjectAutomationExecutionRecord,
+  ProjectAutomationRecord,
   ProjectRecord,
   RunEventRecord,
   RunLogEventRecord,
@@ -25,7 +27,7 @@ import type {
 export const ADMIN_ACCESS_TOKEN = "playwright-admin-token";
 export const TENANT_ACCESS_TOKEN = "playwright-tenant-token";
 
-const APP_BASE_URL = "http://localhost:4100";
+export const APP_BASE_URL = process.env.PLAYWRIGHT_BASE_URL ?? `http://localhost:${process.env.PLAYWRIGHT_APP_PORT ?? "4101"}`;
 const BACKEND_BASE_URL = DEFAULT_API_BASE_URL;
 const AUTH_SECRET = process.env.AUTH_SECRET ?? process.env.NEXTAUTH_SECRET ?? "local-dev-authjs-secret";
 const AUTH_SESSION_COOKIE_NAME = "authjs.session-token";
@@ -240,6 +242,47 @@ export function makeProject(overrides: Partial<ProjectRecord> = {}): ProjectReco
   };
 }
 
+export function makeProjectAutomationExecution(
+  overrides: Partial<ProjectAutomationExecutionRecord> = {},
+): ProjectAutomationExecutionRecord {
+  return {
+    execution_id: "exec-1",
+    automation_id: "automation-1",
+    scheduled_for: "2026-03-28T09:00:00Z",
+    window_start_at: "2026-03-28T08:00:00Z",
+    window_end_at: "2026-03-28T09:00:00Z",
+    status: "succeeded",
+    dedupe_key: "dedupe-1",
+    started_at: "2026-03-28T08:01:00Z",
+    completed_at: "2026-03-28T08:05:00Z",
+    discord_message_id: "9876543210",
+    last_error: null,
+    created_at: "2026-03-28T08:00:00Z",
+    updated_at: "2026-03-28T08:05:00Z",
+    ...overrides,
+  };
+}
+
+export function makeProjectAutomation(overrides: Partial<ProjectAutomationRecord> = {}): ProjectAutomationRecord {
+  return {
+    automation_id: "automation-1",
+    project_id: "example-default",
+    tenant_id: "example",
+    kind: "standup_voice_brief",
+    enabled: true,
+    timezone: "UTC",
+    days_of_week: [1, 2, 3, 4, 5],
+    local_time: "09:30",
+    fallback_lookback_hours: 24,
+    last_successful_window_end_at: "2026-03-28T09:00:00Z",
+    next_run_at: "2026-03-29T09:30:00Z",
+    executions: [makeProjectAutomationExecution()],
+    created_at: "2026-03-27T16:00:00Z",
+    updated_at: "2026-03-28T08:05:00Z",
+    ...overrides,
+  };
+}
+
 export function makeRun(overrides: Partial<RunRecord> = {}): RunRecord {
   return {
     run_id: "5de2cedf-b7ae-400c-a53c-3beecf078a51",
@@ -386,7 +429,7 @@ export function makeInvite(overrides: Partial<TenantInviteRecord> = {}): TenantI
     team_ids: [],
     mode_override: null,
     status: "pending",
-    invite_url: "http://localhost:4100/invite/accept?token=invite-token",
+    invite_url: `${APP_BASE_URL}/invite/accept?token=invite-token`,
     expires_at: "2026-03-29T16:00:00Z",
     accepted_at: null,
     revoked_at: null,

@@ -504,6 +504,44 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
         self.assertEqual(upsert_mock.call_args.kwargs["thread_channel_id"], "thread-1")
         session.commit.assert_called_once()
 
+    def test_send_discord_ask_response_with_thread_marks_pm_interview_origin(self) -> None:
+        from orchestrator.api.discord.interactions.followup import _send_discord_ask_response_with_thread
+
+        session = MagicMock()
+        tenant = SimpleNamespace(tenant_id="t1", discord_config={}, updated_at=None)
+        project = SimpleNamespace(discord_config={}, updated_at=None)
+        settings = SimpleNamespace(discord_bot_token_secret_ref="token/ref", secrets_encryption_key="enc")
+
+        with (
+            patch("orchestrator.api.discord.interactions.followup.resolve_platform_secret_ref", return_value="token"),
+            patch("orchestrator.api.discord.interactions.followup._resolve_project_for_channel", return_value=project),
+            patch("orchestrator.api.discord.interactions.followup._project_ask_thread_channel_ids_for_tenant", return_value=set()),
+            patch("orchestrator.api.discord.interactions.followup_threading.upsert_followup_context") as upsert_mock,
+            patch("orchestrator.api.discord.interactions.followup_transport.DiscordApiClient") as client_cls,
+        ):
+            client = MagicMock()
+            client.post_message.side_effect = [{"id": "posted-1"}, {"id": "final-msg"}]
+            client.create_thread_from_message.return_value = "thread-1"
+            client_cls.return_value = client
+            _send_discord_ask_response_with_thread(
+                session=session,
+                settings=settings,
+                tenant=tenant,
+                channel_id="channel-1",
+                user_id="u1",
+                content="content",
+                issue_key="MAB-159",
+                followup_context_type="pm_interview",
+            )
+
+        self.assertEqual(upsert_mock.call_args.kwargs["context_type"], "pm_interview")
+        self.assertEqual(upsert_mock.call_args.kwargs["origin_command"], "pm")
+        self.assertEqual(upsert_mock.call_args.kwargs["issue_key"], "MAB-159")
+        self.assertEqual(upsert_mock.call_args.kwargs["thread_channel_id"], "thread-1")
+        self.assertEqual(client.post_message.call_args_list[-1].kwargs["channel_id"], "thread-1")
+        self.assertEqual(client.post_message.call_args_list[-1].kwargs["content"], "<@u1> Continue here with PM follow-up questions.")
+        session.commit.assert_called_once()
+
     def test_send_discord_ask_response_with_thread_requires_token_and_message_id(self) -> None:
         from orchestrator.api.discord.interactions.followup import _send_discord_ask_response_with_thread
 

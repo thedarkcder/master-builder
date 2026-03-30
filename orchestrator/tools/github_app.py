@@ -66,7 +66,10 @@ class PullRequestSummary:
     html_url: str
     head_ref: str
     base_ref: str
+    created_at: str | None = None
     updated_at: str | None = None
+    closed_at: str | None = None
+    merged_at: str | None = None
 
 
 @dataclass(frozen=True)
@@ -85,6 +88,7 @@ class PullRequestReviewComment:
     path: str | None
     line: int | None
     state: str | None
+    created_at: str | None
     user_login: str | None
 
 
@@ -495,12 +499,24 @@ class GitHubAppClient:
             raise GitHubApiError(f"GitHub file content could not be decoded: {exc}") from exc
         return decoded.decode("utf-8")
 
-    def list_open_pull_requests(self, *, repo_full_name: str, limit: int = 20) -> list[PullRequestSummary]:
+    def list_pull_requests(
+        self,
+        *,
+        repo_full_name: str,
+        state: str = "open",
+        limit: int = 20,
+    ) -> list[PullRequestSummary]:
         installation_token = self.get_installation_token()
+        normalized_state = str(state or "").strip().lower() or "open"
+        if normalized_state not in {"open", "closed", "all"}:
+            raise ValueError(f"Unsupported pull request state '{state}'")
         safe_limit = min(max(1, int(limit)), 100)
         response = self._request_json(
             method="GET",
-            path=f"/repos/{repo_full_name}/pulls?state=open&sort=updated&direction=desc&per_page={safe_limit}",
+            path=(
+                f"/repos/{repo_full_name}/pulls"
+                f"?state={quote(normalized_state, safe='')}&sort=updated&direction=desc&per_page={safe_limit}"
+            ),
             bearer_token=installation_token,
         )
         if not isinstance(response, list):
@@ -514,7 +530,10 @@ class GitHubAppClient:
             title = item.get("title")
             state = item.get("state")
             html_url = item.get("html_url")
+            created_at = item.get("created_at")
             updated_at = item.get("updated_at")
+            closed_at = item.get("closed_at")
+            merged_at = item.get("merged_at")
             head = item.get("head")
             base = item.get("base")
             head_ref = head.get("ref") if isinstance(head, dict) else None
@@ -539,10 +558,16 @@ class GitHubAppClient:
                     html_url=html_url.strip(),
                     head_ref=head_ref.strip(),
                     base_ref=base_ref.strip(),
+                    created_at=created_at.strip() if isinstance(created_at, str) and created_at.strip() else None,
                     updated_at=updated_at.strip() if isinstance(updated_at, str) and updated_at.strip() else None,
+                    closed_at=closed_at.strip() if isinstance(closed_at, str) and closed_at.strip() else None,
+                    merged_at=merged_at.strip() if isinstance(merged_at, str) and merged_at.strip() else None,
                 )
             )
         return parsed
+
+    def list_open_pull_requests(self, *, repo_full_name: str, limit: int = 20) -> list[PullRequestSummary]:
+        return self.list_pull_requests(repo_full_name=repo_full_name, state="open", limit=limit)
 
     def find_open_pull_request(
         self,
@@ -1002,5 +1027,6 @@ class GitHubAppClient:
             path=item.get("path") if isinstance(item.get("path"), str) else None,
             line=line if isinstance(line, int) else None,
             state=item.get("state") if isinstance(item.get("state"), str) else None,
+            created_at=created_at.strip() if isinstance((created_at := item.get("created_at")), str) and created_at.strip() else None,
             user_login=user_login.strip() if isinstance(user_login, str) and user_login.strip() else None,
         )

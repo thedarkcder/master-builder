@@ -140,6 +140,8 @@ export type CodexModelOptionRecord = {
 export type CodexModelCatalogRecord = {
   default_model: string;
   default_reasoning_effort: "low" | "medium" | "high";
+  runtime_kind: string;
+  profile_name?: string | null;
   models: CodexModelOptionRecord[];
   reasoning_efforts: CodexModelOptionRecord[];
 };
@@ -169,6 +171,56 @@ export type ProjectRecord = {
   is_archived: boolean;
   created_at: string;
   updated_at: string;
+};
+
+export type ProjectAutomationExecutionRecord = {
+  execution_id: string;
+  automation_id: string;
+  scheduled_for: string;
+  window_start_at: string;
+  window_end_at: string;
+  status: string;
+  dedupe_key: string;
+  started_at: string | null;
+  completed_at: string | null;
+  discord_message_id: string | null;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ProjectAutomationRecord = {
+  automation_id: string;
+  project_id: string;
+  tenant_id: string;
+  kind: string;
+  enabled: boolean;
+  timezone: string;
+  days_of_week: number[];
+  local_time: string;
+  fallback_lookback_hours: number;
+  last_successful_window_end_at: string | null;
+  next_run_at: string;
+  executions: ProjectAutomationExecutionRecord[];
+  created_at: string;
+  updated_at: string;
+};
+
+export type ProjectAutomationWritePayload = {
+  kind: string;
+  enabled: boolean;
+  timezone: string;
+  days_of_week: Array<number | string>;
+  local_time: string;
+  fallback_lookback_hours: number;
+};
+
+export type ProjectAutomationsPayload = {
+  automations: ProjectAutomationWritePayload[];
+};
+
+export type ProjectAutomationsRecord = {
+  automations: ProjectAutomationRecord[];
 };
 
 export type ProjectCreatePayload = {
@@ -728,6 +780,71 @@ export type ManagedSecretResolveResult = {
   secret_ref: string;
   source: "managed" | "environment" | "missing" | string;
   resolved: boolean;
+};
+
+export type AgentExecutionProfileRecord = {
+  profile_name: string;
+  runtime_kind: string;
+  cli_command: string;
+  model: string;
+  reasoning_effort: "low" | "medium" | "high" | null;
+  tool_bridge_allowed: boolean;
+  fallback_profile: string | null;
+  base_url: string | null;
+  api_key_secret_ref: string | null;
+  is_builtin: boolean;
+  is_overridden: boolean;
+  can_delete: boolean;
+  can_reset: boolean;
+  usage_references: string[];
+};
+
+export type AgentExecutionProfileWritePayload = {
+  runtime_kind: string;
+  cli_command: string;
+  model: string;
+  reasoning_effort: "low" | "medium" | "high" | null;
+  tool_bridge_allowed: boolean;
+  fallback_profile: string | null;
+  base_url: string | null;
+  api_key_secret_ref: string | null;
+};
+
+export type AgentExecutionProfileCreatePayload = AgentExecutionProfileWritePayload & {
+  profile_name: string;
+};
+
+export type AgentExecutionProfilesRecord = {
+  profiles: Record<string, AgentExecutionProfileRecord>;
+};
+
+export type AgentRuntimeToolRecord = {
+  tool_name: string;
+  category: string;
+  description: string;
+  stages: string[];
+};
+
+export type AgentRuntimeToolsRecord = {
+  available_stages: string[];
+  tools: AgentRuntimeToolRecord[];
+};
+
+export type AgentRuntimeRoutingDefaultsRecord = {
+  role_routing: Record<string, string>;
+  name_routing: Record<string, string>;
+  selector_routing: Record<string, string>;
+};
+
+export type AgentRuntimeRoutingRecord = {
+  role_routing: Record<string, string>;
+  name_routing: Record<string, string>;
+  selector_routing: Record<string, string>;
+  available_roles: string[];
+  available_named_agents: string[];
+  available_selectors: string[];
+  available_profiles: Record<string, AgentExecutionProfileRecord>;
+  effective_defaults: AgentRuntimeRoutingDefaultsRecord;
 };
 
 export type DiscordAllowlistRequestRecord = {
@@ -1344,8 +1461,19 @@ export function getTenant(credentials: Credentials, tenantId: string): Promise<T
   return request<TenantRecord>(credentials, `/api/admin/tenants/${encodeURIComponent(tenantId)}`);
 }
 
-export function listCodexModels(credentials: Credentials): Promise<CodexModelCatalogRecord> {
-  return request<CodexModelCatalogRecord>(credentials, "/api/admin/codex/models");
+export function listCodexModels(
+  credentials: Credentials,
+  options?: { runtimeKind?: string | null; profileName?: string | null }
+): Promise<CodexModelCatalogRecord> {
+  const query = new URLSearchParams();
+  if (options?.runtimeKind) {
+    query.set("runtime_kind", options.runtimeKind);
+  }
+  if (options?.profileName) {
+    query.set("profile_name", options.profileName);
+  }
+  const suffix = query.size > 0 ? `?${query.toString()}` : "";
+  return request<CodexModelCatalogRecord>(credentials, `/api/admin/codex/models${suffix}`);
 }
 
 export function createTenant(
@@ -1573,6 +1701,48 @@ export function getProject(credentials: Credentials, tenantId: string, projectId
   return request<ProjectRecord>(
     credentials,
     `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}`
+  );
+}
+
+export function getProjectAutomations(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string
+): Promise<ProjectAutomationsRecord> {
+  return request<ProjectAutomationsRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/automations`
+  );
+}
+
+export function updateProjectAutomations(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  payload: ProjectAutomationsPayload
+): Promise<ProjectAutomationsRecord> {
+  return request<ProjectAutomationsRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/automations`,
+    {
+      method: "PUT",
+      body: JSON.stringify(payload)
+    }
+  );
+}
+
+export function runProjectAutomationNow(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  kind: string
+): Promise<ProjectAutomationsRecord> {
+  return request<ProjectAutomationsRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/automations/${encodeURIComponent(kind)}/run-now`,
+    {
+      method: "POST"
+    }
   );
 }
 
@@ -2262,6 +2432,85 @@ export function resolveManagedSecret(
     method: "POST",
     body: JSON.stringify({ secret_ref: secretRef })
   });
+}
+
+export function getAgentRuntimeRouting(credentials: Credentials): Promise<AgentRuntimeRoutingRecord> {
+  return request<AgentRuntimeRoutingRecord>(credentials, "/api/admin/agent-runtimes");
+}
+
+export function updateAgentRuntimeRouting(
+  credentials: Credentials,
+  payload: Pick<AgentRuntimeRoutingRecord, "role_routing" | "name_routing" | "selector_routing">
+): Promise<AgentRuntimeRoutingRecord> {
+  return request<AgentRuntimeRoutingRecord>(credentials, "/api/admin/agent-runtimes", {
+    method: "PUT",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function resetAgentRuntimeRouting(credentials: Credentials): Promise<AgentRuntimeRoutingRecord> {
+  return request<AgentRuntimeRoutingRecord>(credentials, "/api/admin/agent-runtimes/reset", {
+    method: "POST"
+  });
+}
+
+export function listAgentRuntimeProfiles(credentials: Credentials): Promise<AgentExecutionProfilesRecord> {
+  return request<AgentExecutionProfilesRecord>(credentials, "/api/admin/agent-runtime-profiles");
+}
+
+export function listAgentRuntimeTools(credentials: Credentials): Promise<AgentRuntimeToolsRecord> {
+  return request<AgentRuntimeToolsRecord>(credentials, "/api/admin/agent-runtime-tools");
+}
+
+export function createAgentRuntimeProfile(
+  credentials: Credentials,
+  payload: AgentExecutionProfileCreatePayload
+): Promise<AgentExecutionProfileRecord> {
+  return request<AgentExecutionProfileRecord>(credentials, "/api/admin/agent-runtime-profiles", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function updateAgentRuntimeProfile(
+  credentials: Credentials,
+  profileName: string,
+  payload: AgentExecutionProfileWritePayload
+): Promise<AgentExecutionProfileRecord> {
+  return request<AgentExecutionProfileRecord>(
+    credentials,
+    `/api/admin/agent-runtime-profiles/${encodeURIComponent(profileName)}`,
+    {
+      method: "PUT",
+      body: JSON.stringify(payload)
+    }
+  );
+}
+
+export function resetAgentRuntimeProfile(
+  credentials: Credentials,
+  profileName: string
+): Promise<AgentExecutionProfileRecord> {
+  return request<AgentExecutionProfileRecord>(
+    credentials,
+    `/api/admin/agent-runtime-profiles/${encodeURIComponent(profileName)}/reset`,
+    {
+      method: "POST"
+    }
+  );
+}
+
+export function deleteAgentRuntimeProfile(
+  credentials: Credentials,
+  profileName: string
+): Promise<AgentExecutionProfilesRecord> {
+  return request<AgentExecutionProfilesRecord>(
+    credentials,
+    `/api/admin/agent-runtime-profiles/${encodeURIComponent(profileName)}`,
+    {
+      method: "DELETE"
+    }
+  );
 }
 
 export function upsertTenantManagedSecret(

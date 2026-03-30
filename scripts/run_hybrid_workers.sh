@@ -36,6 +36,7 @@ DOCKER_SERVICES=(
   api
   run-worker
   webhook-worker
+  project-automation
   knowledge-sync
   discord-gateway
   discord-live-voice
@@ -254,4 +255,4 @@ echo "Local worker capability: ${ORCHESTRATOR_WORKER_CAPABILITIES}"
 echo "Local Codex sandbox: ${ORCHESTRATOR_CODEX_SANDBOX_MODE}"
 echo "Shared repo checkout dir: ${ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR}"
 echo "Starting local run worker..."
-exec "${VENV_DIR}/bin/python" -m orchestrator worker-runs
+"${VENV_DIR}/bin/python" -m orchestrator worker-runs

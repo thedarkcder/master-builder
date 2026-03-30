@@ -99,6 +99,12 @@ class JiraPayloadContractsTests(unittest.TestCase):
         self.assertIn("why failing?", str(arg))
         self.assertIsNone(error)
 
+        clarify_payload = {"comment": {"body": "/mb clarify Which customer-facing fallback should win?"}}
+        command, arg, error = jira_payload_contracts.parse_jira_comment_command(clarify_payload)
+        self.assertEqual(command, "clarify")
+        self.assertIn("fallback", str(arg))
+        self.assertIsNone(error)
+
     def test_extract_status_transition_reads_status_items(self) -> None:
         payload = {
             "changelog": {
@@ -109,6 +115,18 @@ class JiraPayloadContractsTests(unittest.TestCase):
             }
         }
         self.assertEqual(jira_payload_contracts.extract_status_transition(payload), ("To Do", "In Progress"))
+
+    def test_extract_changed_fields_normalizes_and_dedupes(self) -> None:
+        payload = {
+            "changelog": {
+                "items": [
+                    {"field": "Summary"},
+                    {"field": "description"},
+                    {"field": "Summary"},
+                ]
+            }
+        }
+        self.assertEqual(jira_payload_contracts.extract_changed_fields(payload), ["summary", "description"])
 
 
 class WebhookContractsTests(unittest.TestCase):

@@ -8,11 +8,16 @@ import subprocess
 import tempfile
 import threading
 import time
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
+from orchestrator.core.agent_execution_profiles import AgentExecutionProfile
 from orchestrator.core.config import Settings
+from orchestrator.core.platform_secret_service import platform_secret_service
 
 _JSON_BLOCK_PATTERN = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL | re.IGNORECASE)
 _ANSI_ESCAPE_PATTERN = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
@@ -29,6 +34,24 @@ class CodexRuntimeError(RuntimeError):
     def __init__(self, message: str, payload_preview: str | None = None):
         super().__init__(message)
         self.payload_preview = payload_preview
+
+    def __str__(self) -> str:
+        base = str(self.args[0]) if self.args else ""
+        preview = str(self.payload_preview or "").strip()
+        if preview:
+            return f"{base}: {preview}"
+        return base or super().__str__()
+
+
+def _openai_compatible_base_url_for_local_server(*, base_url: str, runtime_kind: str) -> str:
+    """Ensure LM Studio / llama.cpp bases include /v1 before /chat/completions."""
+    u = str(base_url or "").strip().rstrip("/")
+    if not u:
+        return u
+    rk = str(runtime_kind or "").strip().lower()
+    if rk in {"lm_studio", "llama_cpp"} and not re.search(r"/v\d+$", u):
+        return f"{u}/v1"
+    return u
 
 
 def _shorten_preview(value: str, *, max_len: int = 2048) -> str:
@@ -85,6 +108,38 @@ def _extract_first_url(content: str) -> str | None:
     if match is None:
         return None
     return match.group(0).strip()
+
+
+@dataclass
+class _HttpConversationSession:
+    session_id: str
+    runtime_kind: str
+    system_prompt: str
+    messages: list[dict[str, str]]
+
+
+class _HttpConversationStore:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._sessions: dict[str, _HttpConversationSession] = {}
+
+    def load(self, *, session_id: str, runtime_kind: str) -> _HttpConversationSession | None:
+        normalized_session_id = str(session_id or "").strip()
+        normalized_runtime_kind = str(runtime_kind or "").strip().lower()
+        if not normalized_session_id or not normalized_runtime_kind:
+            return None
+        with self._lock:
+            session = self._sessions.get(normalized_session_id)
+            if session is None or session.runtime_kind != normalized_runtime_kind:
+                return None
+            return session
+
+    def save(self, session: _HttpConversationSession) -> None:
+        with self._lock:
+            self._sessions[session.session_id] = session
+
+
+_HTTP_CONVERSATION_STORE = _HttpConversationStore()
 
 
 @dataclass(frozen=True)
@@ -470,6 +525,34 @@ def _resolve_codex_tool_database_url(
     return normalized_database_url or None
 
 
+def _ensure_http_conversation_session(
+    *,
+    runtime_kind: str,
+    system_prompt: str,
+    user_prompt: str,
+    resume_session_id: str | None,
+) -> _HttpConversationSession:
+    normalized_runtime_kind = str(runtime_kind or "").strip().lower()
+    normalized_resume_session_id = str(resume_session_id or "").strip()
+    existing = _HTTP_CONVERSATION_STORE.load(
+        session_id=normalized_resume_session_id,
+        runtime_kind=normalized_runtime_kind,
+    )
+    if existing is not None:
+        existing.messages.append({"role": "user", "content": user_prompt})
+        _HTTP_CONVERSATION_STORE.save(existing)
+        return existing
+
+    session = _HttpConversationSession(
+        session_id=normalized_resume_session_id or str(uuid4()),
+        runtime_kind=normalized_runtime_kind,
+        system_prompt=system_prompt,
+        messages=[{"role": "user", "content": user_prompt}],
+    )
+    _HTTP_CONVERSATION_STORE.save(session)
+    return session
+
+
 def _build_codex_subprocess_env(*, settings: Settings) -> dict[str, str]:
     env = os.environ.copy()
     tool_database_url = _resolve_codex_tool_database_url(
@@ -486,6 +569,323 @@ def build_codex_runtime(
     session: Session | None = None,
     settings: Settings,
     request_override: Callable[[str, str, str | None], str] | None = None,
+) -> CodexRuntime:
+    return build_cli_runtime(
+        session=session,
+        settings=settings,
+        request_override=request_override,
+        cli_command_override=settings.codex_cli_command,
+        default_model_override=settings.codex_model,
+        default_reasoning_effort_override=settings.codex_reasoning_effort,
+    )
+
+
+def build_runtime_for_execution_profile(
+    *,
+    session: Session | None = None,
+    settings: Settings,
+    profile: AgentExecutionProfile,
+    request_override: Callable[[str, str, str | None], str] | None = None,
+) -> CodexRuntime:
+    normalized_runtime_kind = str(profile.runtime_kind or "").strip().lower()
+    if normalized_runtime_kind in {"openai", "claude", "llama_cpp", "lm_studio"}:
+        api_key = None
+        if profile.api_key_secret_ref:
+            if session is None:
+                raise CodexRuntimeError("Session is required to resolve runtime API credentials")
+            api_key = platform_secret_service.get(
+                session=session,
+                secret_ref=profile.api_key_secret_ref,
+                encryption_key=settings.secrets_encryption_key,
+            )
+            if api_key is None:
+                raise CodexRuntimeError(
+                    f"Runtime API credential could not be resolved for secret ref '{profile.api_key_secret_ref}'"
+                )
+        return build_http_runtime(
+            settings=settings,
+            runtime_kind=normalized_runtime_kind,
+            base_url=profile.base_url,
+            api_key=api_key,
+            request_override=request_override,
+            default_model_override=str(profile.model or "").strip() or settings.codex_model,
+            default_reasoning_effort_override=(
+                str(profile.reasoning_effort or "").strip().lower() or settings.codex_reasoning_effort
+            ),
+        )
+    normalized_cli_command = str(profile.cli_command or "").strip() or settings.codex_cli_command
+    normalized_model = str(profile.model or "").strip() or settings.codex_model
+    normalized_reasoning_effort = (
+        str(profile.reasoning_effort or "").strip().lower()
+        or settings.codex_reasoning_effort
+    )
+    return build_cli_runtime(
+        session=session,
+        settings=settings,
+        request_override=request_override,
+        cli_command_override=normalized_cli_command,
+        default_model_override=normalized_model,
+        default_reasoning_effort_override=normalized_reasoning_effort,
+    )
+
+
+def _http_json_request(
+    *,
+    method: str,
+    url: str,
+    headers: dict[str, str],
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    body = json.dumps(payload).encode("utf-8")
+    request = urllib_request.Request(
+        url=url,
+        data=body,
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            **headers,
+        },
+        method=method,
+    )
+    try:
+        with urllib_request.urlopen(request, timeout=120) as response:
+            raw_body = response.read().decode("utf-8")
+    except urllib_error.HTTPError as exc:
+        error_body = exc.read().decode("utf-8", errors="replace")
+        raise CodexRuntimeError(
+            f"Runtime HTTP request failed with status {exc.code}",
+            payload_preview=_shorten_preview(error_body, max_len=4000),
+        ) from exc
+    except urllib_error.URLError as exc:
+        raise CodexRuntimeError(f"Runtime HTTP request failed: {exc.reason}") from exc
+    try:
+        parsed = json.loads(raw_body)
+    except json.JSONDecodeError as exc:
+        raise CodexRuntimeError(
+            "Runtime HTTP request did not return valid JSON",
+            payload_preview=_shorten_preview(raw_body, max_len=4000),
+        ) from exc
+    if not isinstance(parsed, dict):
+        raise CodexRuntimeError(
+            "Runtime HTTP request did not return a JSON object",
+            payload_preview=_shorten_preview(raw_body, max_len=4000),
+        )
+    return parsed
+
+
+def _extract_openai_text(payload: dict[str, Any]) -> str:
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices:
+        raise CodexRuntimeError("OpenAI-compatible runtime returned no choices")
+    message = choices[0].get("message") if isinstance(choices[0], dict) else None
+    content = message.get("content") if isinstance(message, dict) else None
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        texts: list[str] = []
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text":
+                texts.append(str(item.get("text") or ""))
+        joined = "".join(texts).strip()
+        if joined:
+            return joined
+    raise CodexRuntimeError("OpenAI-compatible runtime returned no text content")
+
+
+def _extract_claude_text(payload: dict[str, Any]) -> str:
+    content = payload.get("content")
+    if not isinstance(content, list):
+        raise CodexRuntimeError("Claude runtime returned no content")
+    texts: list[str] = []
+    for item in content:
+        if isinstance(item, dict) and item.get("type") == "text":
+            texts.append(str(item.get("text") or ""))
+    joined = "".join(texts).strip()
+    if not joined:
+        raise CodexRuntimeError("Claude runtime returned no text content")
+    return joined
+
+
+def build_http_runtime(
+    *,
+    settings: Settings,
+    runtime_kind: str,
+    base_url: str | None,
+    api_key: str | None,
+    request_override: Callable[[str, str, str | None], str] | None = None,
+    default_model_override: str | None = None,
+    default_reasoning_effort_override: str | None = None,
+) -> CodexRuntime:
+    if request_override is not None:
+        return build_cli_runtime(
+            settings=settings,
+            request_override=request_override,
+            cli_command_override="override",
+            default_model_override=default_model_override,
+            default_reasoning_effort_override=default_reasoning_effort_override,
+        )
+
+    normalized_runtime_kind = str(runtime_kind or "").strip().lower()
+    normalized_model = str(default_model_override or settings.codex_model or "").strip() or settings.codex_model
+    normalized_reasoning_effort = (
+        str(default_reasoning_effort_override or settings.codex_reasoning_effort or "").strip().lower()
+        or settings.codex_reasoning_effort
+    )
+    normalized_base_url = str(base_url or "").strip()
+    if normalized_runtime_kind == "openai":
+        normalized_base_url = normalized_base_url or "https://api.openai.com/v1"
+    elif normalized_runtime_kind == "claude":
+        normalized_base_url = normalized_base_url or "https://api.anthropic.com"
+    if not normalized_base_url:
+        raise CodexRuntimeError(f"Base URL is required for runtime kind '{normalized_runtime_kind}'")
+    chat_completions_base = _openai_compatible_base_url_for_local_server(
+        base_url=normalized_base_url,
+        runtime_kind=normalized_runtime_kind,
+    )
+
+    def _request(
+        system_prompt: str,
+        user_prompt: str,
+        working_dir: str | None,
+        on_log_line: Callable[[str, str], None] | None,
+        reasoning_effort: str | None,
+        resume_session_id: str | None,
+        on_session_id: Callable[[str], None] | None,
+        on_usage: Callable[[dict[str, int]], None] | None,
+        model_override: str | None,
+    ) -> str:
+        _ = working_dir
+        resolved_model = str(model_override or normalized_model).strip() or normalized_model
+        resolved_reasoning_effort = str(reasoning_effort or normalized_reasoning_effort).strip().lower() or normalized_reasoning_effort
+        session = _ensure_http_conversation_session(
+            runtime_kind=normalized_runtime_kind,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            resume_session_id=resume_session_id,
+        )
+        if on_session_id is not None:
+            on_session_id(session.session_id)
+        if on_log_line is not None:
+            on_log_line(
+                "stdout",
+                f"[runtime:{normalized_runtime_kind}] model={resolved_model} reasoning={resolved_reasoning_effort} session={session.session_id}",
+            )
+        if normalized_runtime_kind in {"openai", "llama_cpp", "lm_studio"}:
+            headers: dict[str, str] = {}
+            if api_key:
+                headers["Authorization"] = f"Bearer {api_key}"
+            payload = _http_json_request(
+                method="POST",
+                url=f"{chat_completions_base.rstrip('/')}/chat/completions",
+                headers=headers,
+                payload={
+                    "model": resolved_model,
+                    "messages": [
+                        {"role": "system", "content": session.system_prompt},
+                        *session.messages,
+                    ],
+                    "temperature": 0,
+                    "max_tokens": settings.codex_max_output_tokens,
+                },
+            )
+            usage = payload.get("usage")
+            if on_usage is not None and isinstance(usage, dict):
+                on_usage({key: int(value) for key, value in usage.items() if isinstance(value, (int, float))})
+            response_text = _extract_openai_text(payload)
+            session.messages.append({"role": "assistant", "content": response_text})
+            _HTTP_CONVERSATION_STORE.save(session)
+            return response_text
+        if normalized_runtime_kind == "claude":
+            headers = {
+                "anthropic-version": "2023-06-01",
+            }
+            if api_key:
+                headers["x-api-key"] = api_key
+            payload = _http_json_request(
+                method="POST",
+                url=f"{normalized_base_url.rstrip('/')}/v1/messages",
+                headers=headers,
+                payload={
+                    "model": resolved_model,
+                    "system": session.system_prompt,
+                    "max_tokens": settings.codex_max_output_tokens,
+                    "messages": session.messages,
+                },
+            )
+            usage = payload.get("usage")
+            if on_usage is not None and isinstance(usage, dict):
+                on_usage({key: int(value) for key, value in usage.items() if isinstance(value, (int, float))})
+            response_text = _extract_claude_text(payload)
+            session.messages.append({"role": "assistant", "content": response_text})
+            _HTTP_CONVERSATION_STORE.save(session)
+            return response_text
+        raise CodexRuntimeError(f"Unsupported HTTP runtime kind '{normalized_runtime_kind}'")
+
+    return CodexRuntime(
+        model=normalized_model,
+        max_output_tokens=settings.codex_max_output_tokens,
+        command=f"http:{normalized_runtime_kind}",
+        _request=_request,
+    )
+
+
+def build_runtime_with_fallback(
+    *,
+    primary_runtime: CodexRuntime,
+    fallback_runtime: CodexRuntime,
+) -> CodexRuntime:
+    def _request_with_fallback(
+        system_prompt: str,
+        user_prompt: str,
+        working_dir: str | None,
+        on_log_line: Callable[[str, str], None] | None,
+        reasoning_effort: str | None,
+        resume_session_id: str | None,
+        on_session_id: Callable[[str], None] | None,
+        on_usage: Callable[[dict[str, int]], None] | None,
+        model_override: str | None,
+    ) -> str:
+        try:
+            return primary_runtime._request(
+                system_prompt,
+                user_prompt,
+                working_dir,
+                on_log_line,
+                reasoning_effort,
+                resume_session_id,
+                on_session_id,
+                on_usage,
+                model_override,
+            )
+        except CodexRuntimeError:
+            return fallback_runtime._request(
+                system_prompt,
+                user_prompt,
+                working_dir,
+                on_log_line,
+                reasoning_effort,
+                resume_session_id,
+                on_session_id,
+                on_usage,
+                model_override,
+            )
+
+    return CodexRuntime(
+        model=primary_runtime.model,
+        max_output_tokens=primary_runtime.max_output_tokens,
+        command=f"{primary_runtime.command}||{fallback_runtime.command}",
+        _request=_request_with_fallback,
+    )
+
+
+def build_cli_runtime(
+    *,
+    session: Session | None = None,
+    settings: Settings,
+    request_override: Callable[[str, str, str | None], str] | None = None,
+    cli_command_override: str | None = None,
+    default_model_override: str | None = None,
+    default_reasoning_effort_override: str | None = None,
 ) -> CodexRuntime:
     _ = session
     if request_override is not None:
@@ -513,13 +913,13 @@ def build_codex_runtime(
                 return request_override(system_prompt, user_prompt)  # type: ignore[misc]
 
         return CodexRuntime(
-            model=settings.codex_model,
+            model=str(default_model_override or settings.codex_model or "").strip() or settings.codex_model,
             max_output_tokens=settings.codex_max_output_tokens,
             command="override",
             _request=_request_with_override,
         )
 
-    codex_command = (settings.codex_cli_command or "").strip()
+    codex_command = str(cli_command_override or settings.codex_cli_command or "").strip()
     if not codex_command:
         raise CodexRuntimeError("Codex CLI command is not configured")
     if shutil.which(codex_command) is None:
@@ -550,9 +950,13 @@ def build_codex_runtime(
         stderr_log_mode = _normalize_stderr_log_mode(getattr(settings, "codex_stderr_log_mode", "all"))
         normalized_reasoning_effort = str(reasoning_effort or settings.codex_reasoning_effort).strip().lower()
         if normalized_reasoning_effort not in {"low", "medium", "high"}:
-            normalized_reasoning_effort = settings.codex_reasoning_effort
+            normalized_reasoning_effort = (
+                str(default_reasoning_effort_override or settings.codex_reasoning_effort).strip().lower()
+                or settings.codex_reasoning_effort
+            )
         normalized_resume_session_id = str(resume_session_id or "").strip()
-        resolved_model = str(model_override or settings.codex_model).strip() or settings.codex_model
+        default_model = str(default_model_override or settings.codex_model).strip() or settings.codex_model
+        resolved_model = str(model_override or default_model).strip() or default_model
         session_callback_invoked = False
         command: list[str]
         normalized_sandbox_mode = str(settings.codex_sandbox_mode or "").strip().lower()
@@ -740,7 +1144,7 @@ def build_codex_runtime(
             raise CodexRuntimeError("Codex CLI returned empty output")
 
     return CodexRuntime(
-        model=settings.codex_model,
+        model=str(default_model_override or settings.codex_model or "").strip() or settings.codex_model,
         max_output_tokens=settings.codex_max_output_tokens,
         command=codex_command,
         _request=_request,

@@ -1,0 +1,287 @@
+from __future__ import annotations
+
+import json
+from tempfile import TemporaryDirectory
+import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
+
+import pytest
+
+from orchestrator.core.pm_interview_service import (
+    PM_INTERVIEW_STATUS_ABANDONED,
+    PM_INTERVIEW_STATUS_PM_COMPLETED,
+    PM_INTERVIEW_STATUS_READY_TO_WRITE,
+    PM_INTERVIEW_STATUS_QUESTION_PENDING,
+    assess_pm_interview_brief,
+    format_pm_interview_question,
+    mark_pm_interview_case_abandoned,
+    mark_pm_interview_case_completed,
+    normalize_pm_interview_evidence,
+    plan_pm_interview_with_codex,
+    resolve_pm_interview_case,
+    resolve_pm_interview_case_match,
+    select_next_pm_interview_question,
+    upsert_pm_interview_case,
+)
+from orchestrator.storage.models import PMInterviewCase
+
+try:
+    from tests.production_path_support import (
+        clear_runtime_environment,
+        configure_runtime_environment,
+        seed_core_runtime_state,
+        session_factory_for,
+    )
+except ModuleNotFoundError:  # pragma: no cover - local test runner path quirk
+    from production_path_support import (  # type: ignore[no-redef]
+        clear_runtime_environment,
+        configure_runtime_environment,
+        seed_core_runtime_state,
+        session_factory_for,
+    )
+
+
+pytestmark = pytest.mark.contract
+
+
+class PMInterviewServiceTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp_dir = TemporaryDirectory()
+        self.database_url, _ = configure_runtime_environment(
+            temp_dir=self.temp_dir,
+            database_name="pm_interview_service.db",
+        )
+        self.session_factory = session_factory_for(self.database_url)
+        seed_core_runtime_state(self.session_factory)
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+        clear_runtime_environment()
+
+    def test_assess_pm_interview_brief_selects_next_question_with_examples(self) -> None:
+        assessment = assess_pm_interview_brief(brief={"objective": "Share the app with friends"})
+
+        self.assertEqual(assessment.status, PM_INTERVIEW_STATUS_QUESTION_PENDING)
+        self.assertGreater(len(assessment.missing_slots), 0)
+        self.assertIsNotNone(assessment.next_question)
+        assert assessment.next_question is not None
+        self.assertEqual(assessment.next_question.slot_key, "user_value")
+        question_text = format_pm_interview_question(assessment.next_question)
+        self.assertIn("Why does the user want this feature?", question_text)
+        self.assertIn("Examples:", question_text)
+        self.assertIn("friction during onboarding", question_text)
+
+    def test_assess_pm_interview_brief_uses_evidence_updates_and_reaches_ready_to_write(self) -> None:
+        evidence = normalize_pm_interview_evidence(
+            [
+                {
+                    "evidence_id": "e-file",
+                    "evidence_type": "file",
+                    "source_ref": "drive://share-spec",
+                    "metadata": {
+                        "slot_values": {
+                            "objective": "Share the app with friends",
+                            "user_value": "Help users invite friends without friction",
+                            "target_user": "New users",
+                            "primary_journey": "From onboarding",
+                            "acceptance_criteria": [
+                                "Users can copy or send a share link",
+                                "The link opens the right store page if the app is not installed",
+                            ],
+                            "scope_in": ["Share link", "Invite link copy"],
+                            "scope_out": ["Rewards", "Referral tracking"],
+                            "ui_references": ["Onboarding screen"],
+                            "constraints": ["iOS and Android"],
+                            "risks": ["Spam and abuse"],
+                            "success_outcomes": ["More invites sent"],
+                        }
+                    },
+                },
+                {
+                    "evidence_id": "e-link",
+                    "evidence_type": "link",
+                    "source_ref": "https://example.com/product",
+                    "metadata": {"slot_values": {"scope_in": ["Profile entry point"]}},
+                },
+                {
+                    "evidence_id": "e-research",
+                    "evidence_type": "web_research",
+                    "source_ref": "https://example.com/research",
+                    "metadata": {"slot_values": {"risks": ["Platform policy"]}},
+                },
+            ]
+        )
+        assessment = assess_pm_interview_brief(brief={}, evidence=evidence)
+
+        self.assertEqual(assessment.status, PM_INTERVIEW_STATUS_READY_TO_WRITE)
+        self.assertTrue(assessment.ready_to_write)
+        self.assertEqual(assessment.missing_slots, ())
+        self.assertIsNone(assessment.next_question)
+        self.assertEqual(assessment.brief.objective, "Share the app with friends")
+        self.assertIn("Profile entry point", assessment.brief.scope_in)
+        self.assertIn("Platform policy", assessment.brief.risks)
+
+    def test_pm_interview_case_round_trips_and_resolves_by_explicit_identity(self) -> None:
+        with self.session_factory() as session:
+            case = upsert_pm_interview_case(
+                session=session,
+                tenant_id="example",
+                project_id="example-default",
+                request_id="pm-req-1",
+                source_kind="voice_note",
+                channel_id="discord-channel-1",
+                thread_channel_id="thread-1",
+                root_message_id="message-1",
+                owner_user_id="u-1",
+                source_text="share feature",
+                brief={"objective": "Share the app with friends"},
+                evidence=[
+                    {
+                        "evidence_id": "e-1",
+                        "evidence_type": "stakeholder_answer",
+                        "metadata": {
+                            "slot_values": {
+                                "user_value": "Users can bring in friends easily",
+                                "target_user": "New users",
+                                "primary_journey": "From profile",
+                                "acceptance_criteria": ["Users can send a share link"],
+                                "scope_in": ["Share link"],
+                                "scope_out": ["Rewards"],
+                                "ui_references": ["Profile page"],
+                                "constraints": ["iOS"],
+                                "risks": ["Abuse"],
+                                "success_outcomes": ["More invites"],
+                            }
+                        },
+                    }
+                ],
+            )
+            session.commit()
+            self.assertEqual(case.status, PM_INTERVIEW_STATUS_READY_TO_WRITE)
+
+        with self.session_factory() as session:
+            resolved = resolve_pm_interview_case(
+                session=session,
+                tenant_id="example",
+                request_id="pm-req-1",
+            )
+            self.assertIsNotNone(resolved)
+            assert resolved is not None
+            self.assertEqual(resolved.request_id, "pm-req-1")
+
+            by_thread = resolve_pm_interview_case_match(
+                session=session,
+                tenant_id="example",
+                thread_channel_id="thread-1",
+            )
+            self.assertEqual(by_thread.status, "matched")
+
+            by_root_message = resolve_pm_interview_case_match(
+                session=session,
+                tenant_id="example",
+                root_message_id="message-1",
+            )
+            self.assertEqual(by_root_message.status, "matched")
+
+            by_channel_only = resolve_pm_interview_case_match(
+                session=session,
+                tenant_id="example",
+                channel_id="discord-channel-1",
+            )
+            self.assertEqual(by_channel_only.status, "no_match")
+
+    def test_pm_interview_case_terminal_transitions_close_the_case(self) -> None:
+        with self.session_factory() as session:
+            upsert_pm_interview_case(
+                session=session,
+                tenant_id="example",
+                project_id="example-default",
+                request_id="pm-req-2",
+                source_kind="command",
+                channel_id="discord-channel-1",
+                source_text="create onboarding flow",
+                brief={"objective": "Improve onboarding"},
+            )
+            mark_pm_interview_case_completed(
+                session=session,
+                tenant_id="example",
+                request_id="pm-req-2",
+                parent_issue_key="TP-123",
+            )
+            session.commit()
+
+        with self.session_factory() as session:
+            completed = resolve_pm_interview_case(
+                session=session,
+                tenant_id="example",
+                request_id="pm-req-2",
+            )
+            self.assertIsNone(completed)
+
+            row = session.query(PMInterviewCase).filter_by(request_id="pm-req-2").one()
+            self.assertEqual(row.status, PM_INTERVIEW_STATUS_PM_COMPLETED)
+            self.assertEqual(row.parent_issue_key, "TP-123")
+            self.assertIsNotNone(row.closed_at)
+
+        with self.session_factory() as session:
+            abandoned = upsert_pm_interview_case(
+                session=session,
+                tenant_id="example",
+                project_id="example-default",
+                request_id="pm-req-3",
+                source_kind="command",
+                channel_id="discord-channel-1",
+                source_text="cancel this",
+                brief={"objective": "Abort"},
+            )
+            mark_pm_interview_case_abandoned(
+                session=session,
+                tenant_id="example",
+                request_id="pm-req-3",
+            )
+            session.commit()
+            self.assertEqual(abandoned.status, PM_INTERVIEW_STATUS_ABANDONED)
+
+    def test_plan_pm_interview_with_codex_uses_question_examples_and_json_contract(self) -> None:
+        captured: dict[str, object] = {}
+
+        def _render_prompt(template_name: str, **kwargs):  # noqa: ANN001
+            captured[template_name] = kwargs
+            return template_name
+
+        with (
+            patch(
+                "orchestrator.core.pm_interview_service._invoke_discord_json_maybe_tools",
+                return_value={"message": "What user group?", "brief": {"objective": "Share the app with friends"}},
+            ),
+            patch("orchestrator.core.pm_interview_service.render_prompt", side_effect=_render_prompt),
+        ):
+            payload = plan_pm_interview_with_codex(
+                runtime=SimpleNamespace(),
+                request_text="create a share feature",
+                brief={"objective": "Share the app with friends"},
+                evidence=[],
+                missing_slots=["user_value", "target_user"],
+                next_question=select_next_pm_interview_question(missing_slots=["user_value", "target_user"]),
+                project_keys=["TP"],
+                issues=[],
+                status_counts={},
+                invocation_context=SimpleNamespace(),
+                history=[{"speaker": "user", "text": "create a share feature"}],
+                github_context={"repository": "org/repo"},
+            )
+
+        self.assertEqual(payload["message"], "What user group?")
+        self.assertEqual(payload["status"], PM_INTERVIEW_STATUS_QUESTION_PENDING)
+        self.assertEqual(payload["missing_slots"], ["user_value", "target_user"])
+        self.assertIn("discord/pm_interview_system.j2", captured)
+        user_kwargs = captured["discord/pm_interview_user.j2"]
+        self.assertIn("next_question_examples_json", user_kwargs)
+        self.assertTrue(json.loads(user_kwargs["next_question_examples_json"]))
+        self.assertIn("brief_json", user_kwargs)
+        self.assertEqual(json.loads(user_kwargs["brief_json"])["objective"], "Share the app with friends")
+
+
+if __name__ == "__main__":
+    unittest.main()

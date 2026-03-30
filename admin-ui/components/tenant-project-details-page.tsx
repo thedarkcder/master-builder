@@ -18,7 +18,7 @@ import {
 } from "lucide-react";
 
 import { useAuth } from "@/components/auth-provider";
-import { ProjectNotificationsContent } from "@/components/tenant-project-discord-page";
+import { ProjectAutomationsContent, ProjectNotificationsContent } from "@/components/tenant-project-discord-page";
 import { CodexModelSelect } from "@/components/codex-model-select";
 import { OverrideSegmentedControl } from "@/components/override-segmented-control";
 import { Badge } from "@/components/ui/badge";
@@ -49,7 +49,7 @@ import {
 } from "@/lib/auth-routing";
 import { buildProjectSectionPath, buildRunDetailPath, resolveProjectSection } from "@/lib/dashboard-paths";
 
-type Tab = "overview" | "settings" | "runs" | "notifications" | "secrets";
+type Tab = "overview" | "settings" | "runs" | "notifications" | "automations" | "secrets";
 type SettingsSection = "general" | "ai" | "automation" | "knowledge" | "governance";
 type OverrideToggleValue = "inherit" | "enabled" | "disabled";
 type RequireAgentsValue = "inherit" | "required";
@@ -84,6 +84,7 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "settings", label: "Settings" },
   { id: "runs", label: "Runs" },
   { id: "notifications", label: "Notifications" },
+  { id: "automations", label: "Automations" },
   { id: "secrets", label: "Secrets" },
 ];
 
@@ -250,7 +251,9 @@ export function TenantProjectDetailsPage() {
     if (allowProjectManagement) {
       return resolved;
     }
-    return resolved === "settings" || resolved === "notifications" || resolved === "secrets" ? "overview" : resolved;
+    return resolved === "settings" || resolved === "notifications" || resolved === "automations" || resolved === "secrets"
+      ? "overview"
+      : resolved;
   }, [allowProjectManagement, pathname]);
   const visibleTabs = useMemo(
     () => (allowProjectManagement ? TABS : TABS.filter((tab) => tab.id === "overview" || tab.id === "runs")),
@@ -268,7 +271,7 @@ export function TenantProjectDetailsPage() {
       const tenant = await getTenant(credentials, params.tenantId);
       if (canReadCodexModels) {
         try {
-          const modelCatalog = await listCodexModels(credentials);
+          const modelCatalog = await listCodexModels(credentials, { profileName: "engineering_execution" });
           setCodexModels(modelCatalog.models);
           setGlobalCodexModel(modelCatalog.default_model);
           setReasoningEfforts(modelCatalog.reasoning_efforts);
@@ -714,6 +717,9 @@ export function TenantProjectDetailsPage() {
                           <Button asChild size="sm" variant="outline">
                             <Link href={buildProjectSectionPath(params.tenantId, params.projectId, "notifications")}>Notifications</Link>
                           </Button>
+                          <Button asChild size="sm" variant="outline">
+                            <Link href={buildProjectSectionPath(params.tenantId, params.projectId, "automations")}>Automations</Link>
+                          </Button>
                         </>
                       ) : null}
                     </div>
@@ -1021,14 +1027,14 @@ export function TenantProjectDetailsPage() {
                   <CardContent className="grid gap-4 md:grid-cols-2">
                     <div className="space-y-1.5 md:col-span-2">
                       <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                        Codex model override
+                        Execution model override
                       </label>
                       <CodexModelSelect
                         value={form.codex_model}
                         models={codexModels}
                         inheritLabel="Inherit tenant model"
                         effectiveLabel={`Effective model: ${project.effective_policy.codex_model ?? (globalCodexModel || "global default")}`}
-                        helperText={globalCodexModel ? `Global default: ${globalCodexModel}` : undefined}
+                        helperText={globalCodexModel ? `Global engineering runtime default: ${globalCodexModel}` : undefined}
                         disabled={busy}
                         onChange={(next) => setForm((prev) => ({ ...prev, codex_model: next }))}
                       />
@@ -1040,15 +1046,19 @@ export function TenantProjectDetailsPage() {
                       <select
                         className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
                         value={form.codex_reasoning_effort ?? ""}
+                        disabled={busy || reasoningEfforts.length === 0}
                         onChange={(e) =>
                           setForm((prev) => ({
                             ...prev,
                             codex_reasoning_effort: (e.target.value || null) as ProjectFormState["codex_reasoning_effort"],
                           }))
                         }
-                        disabled={busy}
                       >
-                        <option value="">Inherit tenant reasoning mode</option>
+                        <option value="">
+                          {reasoningEfforts.length > 0
+                            ? "Inherit tenant reasoning mode"
+                            : "Not supported by the current engineering runtime"}
+                        </option>
                         {reasoningEfforts.map((option) => (
                           <option key={option.id} value={option.id}>
                             {option.label}
@@ -1563,6 +1573,14 @@ export function TenantProjectDetailsPage() {
       {/* ── Notifications tab ────────────────────────────────────────────── */}
       {activeTab === "notifications" ? (
         <ProjectNotificationsContent
+          tenantId={params.tenantId}
+          projectId={params.projectId}
+          credentials={credentials}
+        />
+      ) : null}
+
+      {activeTab === "automations" ? (
+        <ProjectAutomationsContent
           tenantId={params.tenantId}
           projectId={params.projectId}
           credentials={credentials}

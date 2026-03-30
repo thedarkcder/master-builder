@@ -10,8 +10,7 @@ from orchestrator.core.voice.prewarm import prewarm_voice_dependencies
 class VoicePrewarmTests(unittest.TestCase):
     def test_prewarm_loads_enabled_transcription_and_voice_dependencies(self) -> None:
         settings = Settings(
-            voice_transcription_provider="whisper",
-            voice_reply_provider="pocket_tts",
+            voice_provider="pocket_tts",
         )
 
         with (
@@ -23,17 +22,15 @@ class VoicePrewarmTests(unittest.TestCase):
         ):
             result = prewarm_voice_dependencies(settings=settings)
 
-        transcription_mock.assert_called_once_with(settings=settings)
+        transcription_mock.assert_not_called()
         tts_mock.assert_called_once_with(settings=settings)
-        self.assertEqual(result.transcription_provider, "whisper")
-        self.assertTrue(result.transcription_ready)
-        self.assertEqual(result.voice_reply_provider, "pocket_tts")
+        self.assertEqual(result.voice_provider, "pocket_tts")
+        self.assertFalse(result.transcription_ready)
         self.assertEqual(result.prewarmed_voice_ids, ("alba", "jean"))
 
     def test_prewarm_skips_disabled_dependencies(self) -> None:
         settings = Settings(
-            voice_transcription_provider="disabled",
-            voice_reply_provider="disabled",
+            voice_provider="disabled",
         )
 
         with (
@@ -44,9 +41,8 @@ class VoicePrewarmTests(unittest.TestCase):
 
         transcription_mock.assert_not_called()
         tts_mock.assert_not_called()
-        self.assertEqual(result.transcription_provider, "disabled")
+        self.assertEqual(result.voice_provider, "disabled")
         self.assertFalse(result.transcription_ready)
-        self.assertEqual(result.voice_reply_provider, "disabled")
         self.assertEqual(result.prewarmed_voice_ids, ())
 
 

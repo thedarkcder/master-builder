@@ -119,6 +119,70 @@ TOOL_ALLOWLIST: dict[str, set[str]] = {
         "project.request_runtime_values",
         "run.request_human_input",
     },
+    "voice_entry_router": {
+        "knowledge.exact_read",
+        "knowledge.read",
+        "jira.get_issue",
+        "project.get_runtime_values",
+        "project.list_runtime_keys",
+    },
+    # Persona-specific framing lives in ask_answer_*.j2 (persona_id); tool allowlist is shared across personas.
+    "discord_ask_answer": {
+        "knowledge.exact_read",
+        "knowledge.read",
+        "jira.get_issue",
+        "jira.comment",
+        "repo.read",
+        "project.get_runtime_values",
+        "project.list_runtime_keys",
+        "project.request_runtime_values",
+        "run.request_human_input",
+    },
+    "discord_voice_room_persona": {
+        "knowledge.exact_read",
+        "knowledge.read",
+        "jira.get_issue",
+        "repo.read",
+        "project.get_runtime_values",
+        "project.list_runtime_keys",
+    },
+    "discord_pm_interview": {
+        "jira.get_issue",
+        "jira.comment",
+        "jira.transition",
+        "decision.read_state",
+        "knowledge.exact_read",
+        "knowledge.read",
+        "project.get_runtime_values",
+        "project.list_runtime_keys",
+        "project.request_runtime_values",
+        "run.request_human_input",
+        "repo.read",
+    },
+}
+
+TOOL_DESCRIPTIONS: dict[str, str] = {
+    "decision.read_state": "Read the current decision-gate state for the active issue.",
+    "github.commit_all": "Commit staged repository changes for the active branch.",
+    "github.create_branch": "Create a branch for the active issue workflow.",
+    "github.get_pr_details": "Read pull request metadata and current status.",
+    "github.list_check_suites": "List CI check suites for a pull request head commit.",
+    "github.list_pr_files": "List files changed in the active pull request.",
+    "github.list_pr_issue_comments": "Read top-level issue comments on the pull request.",
+    "github.list_pr_review_comments": "Read inline pull request review comments.",
+    "github.list_pr_reviews": "Read submitted pull request reviews.",
+    "github.open_pr": "Open or update a pull request for the current branch.",
+    "github.push_branch": "Push the current branch to the configured remote.",
+    "jira.comment": "Post a Jira comment on the active issue.",
+    "jira.get_issue": "Read Jira issue details for the active issue key.",
+    "jira.transition": "Transition the active Jira issue to a new workflow state.",
+    "knowledge.exact_read": "Read a specific knowledge asset or exact knowledge match.",
+    "knowledge.read": "Search and summarize relevant knowledge context.",
+    "project.get_runtime_values": "Resolve requested runtime values for the current project.",
+    "project.list_runtime_keys": "List available runtime keys for the current project.",
+    "project.request_runtime_values": "Request missing runtime values from a human operator.",
+    "repo.read": "Read files and repository metadata using guarded read-only commands.",
+    "run.request_human_input": "Create a human input request tied to the active run.",
 }
 
 _READ_ONLY_SHELL_OPERATOR_PATTERN = re.compile(r"[|;&><`]|(?:\$\()")
@@ -170,6 +234,26 @@ def _ensure_repo_checkout_exists(repo_dir: Path) -> None:
 
 def allowed_tools_for_stage(stage: str) -> set[str]:
     return set(TOOL_ALLOWLIST.get(str(stage or "").strip().lower(), set()))
+
+
+def list_implemented_tools() -> list[dict[str, object]]:
+    stage_order = list(TOOL_ALLOWLIST.keys())
+    tool_stage_membership: dict[str, list[str]] = {}
+    for stage in stage_order:
+        for tool_name in sorted(TOOL_ALLOWLIST[stage]):
+            tool_stage_membership.setdefault(tool_name, []).append(stage)
+    tools: list[dict[str, object]] = []
+    for tool_name in sorted(tool_stage_membership.keys()):
+        category, _, _ = tool_name.partition(".")
+        tools.append(
+            {
+                "tool_name": tool_name,
+                "category": category or "other",
+                "description": TOOL_DESCRIPTIONS.get(tool_name, "Implemented governed tool."),
+                "stages": tool_stage_membership[tool_name],
+            }
+        )
+    return tools
 
 
 def build_agent_tool_command(

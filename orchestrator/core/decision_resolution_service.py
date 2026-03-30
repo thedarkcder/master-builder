@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 from typing import Callable
 
-from orchestrator.core.codex_invocation import CodexInvocationContext
+from orchestrator.core.runtime_invocation import AgentInvocationContext
 from orchestrator.core.knowledge_base import SlotResolution, parse_source_timestamp
 from orchestrator.core.project_policy import resolve_effective_policy
 
@@ -81,7 +81,7 @@ def resolve_slots_with_codex(
     issue_description: str | None,
     missing_slots: list[str],
     build_codex_runtime_fn,
-    invoke_codex_json_fn,
+    invoke_runtime_json_fn,
     project_repo_dir_fn,
     codex_runtime_error_type,
 ) -> dict[str, SlotResolution]:
@@ -104,9 +104,9 @@ def resolve_slots_with_codex(
     if not repo_evidence.strip() and not issue_context:
         return {}
     try:
-        payload = invoke_codex_json_fn(
+        payload = invoke_runtime_json_fn(
             runtime=runtime,
-            context=CodexInvocationContext(
+            context=AgentInvocationContext(
                 channel="system",
                 tenant_id=tenant.tenant_id,
                 project_id=project.project_id,

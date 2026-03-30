@@ -36,7 +36,7 @@ export ORCHESTRATOR_CODEX_MODEL=gpt-5-codex
 export ORCHESTRATOR_CODEX_STDERR_LOG_MODE=errors_only # all|errors_only|off
 export ORCHESTRATOR_CODEX_PERSIST_TURN_COMPLETED_USAGE=true
 export ORCHESTRATOR_WORKER_POLL_INTERVAL_SECONDS=5
-export ORCHESTRATOR_VOICE_REPLY_PROVIDER=pocket_tts
+export ORCHESTRATOR_VOICE_PROVIDER=pocket_tts
 # Optional fallback voice if room/persona config does not supply one.
 export ORCHESTRATOR_POCKET_TTS_VOICE=alba
 export ORCHESTRATOR_SECRETS_ENCRYPTION_KEY=$(python - <<'PY'

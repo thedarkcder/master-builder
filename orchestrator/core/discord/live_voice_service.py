@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import base64
 import asyncio
-import hashlib
 import io
 import json
 import logging
@@ -11,23 +10,24 @@ import shutil
 import threading
 import time
 import wave
-from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from collections.abc import Callable
 from typing import Any
 
+from fastapi import HTTPException
 from sqlalchemy import select
 
 from orchestrator.api.discord.ask.context import tenant_project_keys
+from orchestrator.api.discord.ingress.executor import execute_tenant_command_ingress
+from orchestrator.api.schemas import DiscordCommandRequest, DiscordCommandResponse
 from orchestrator.api.discord.shared.room_history import DiscordRoomHistoryService
 from orchestrator.api.discord.shared.state import (
     live_voice_enabled_from_discord_config,
     live_voice_room_links_from_discord_config,
 )
 from orchestrator.api.discord.shared.state_repository import resolve_project_for_discord_channel
-from orchestrator.core.codex_invocation import CodexInvocationContext
-from orchestrator.core.codex_runtime import CodexRuntimeError, build_codex_runtime
+from orchestrator.core.codex_runtime import CodexRuntimeError
 from orchestrator.core.codex_working_dir import resolve_codex_working_dir
 from orchestrator.core.config import Settings
 from orchestrator.core.discord.live_voice_audio import (
@@ -49,10 +49,13 @@ from orchestrator.core.discord.live_voice_transport_client import (
     LiveVoiceTransportRoom,
     build_live_voice_transport_client,
 )
-from orchestrator.core.discord.persona_room import answer_voice_room_turn
+from orchestrator.core.discord.persona_room import VoiceRoomTurnResult
+from orchestrator.core.discord.voice_entry_routing import route_discord_voice_entry
 from orchestrator.core.discord.personas import (
+    build_voice_room_config,
     build_voice_room_spoken_reply_text,
     format_voice_room_persona_label,
+    resolve_voice_room_persona_profile,
 )
 from orchestrator.core.observability import scoped_log_context
 from orchestrator.core.platform_secret_service import (
@@ -74,7 +77,6 @@ logger = logging.getLogger("orchestrator.discord_live_voice")
 
 _LIVE_VOICE_HISTORY_LIMIT = 8
 _LIVE_VOICE_REASONING_EFFORT = "low"
-_LIVE_VOICE_RUNTIME_CACHE_MAX = 8
 _ISSUE_KEY_PATTERN = re.compile(r"\b[A-Z][A-Z0-9_]+-\d+\b")
 
 
@@ -141,8 +143,6 @@ class DiscordLiveVoiceService:
         self._connected_room_keys: set[str] = set()
         self._room_operation_locks: dict[str, asyncio.Lock] = {}
         self._decoder_by_key: dict[str, Any] = {}
-        self._codex_runtime_lock = threading.Lock()
-        self._codex_runtime_cache: OrderedDict[str, Any] = OrderedDict()
         self._runtime_lock = threading.RLock()
         self._turn_worker_lock = threading.Lock()
         self._pending_turns: dict[str, tuple[int, LiveVoiceTurn] | None] = {}
@@ -161,9 +161,9 @@ class DiscordLiveVoiceService:
         except LiveVoiceAudioError as exc:
             raise DiscordLiveVoiceDependencyFailure(str(exc)) from exc
 
-        if str(self._settings.voice_reply_provider or "").strip().lower() in {"", "disabled"}:
+        if str(self._settings.voice_provider or "").strip().lower() in {"", "disabled"}:
             raise DiscordLiveVoiceDependencyFailure(
-                "Live voice requires ORCHESTRATOR_VOICE_REPLY_PROVIDER to be configured."
+                "Live voice requires ORCHESTRATOR_VOICE_PROVIDER to be configured."
             )
         if shutil.which("ffmpeg") is None:
             raise DiscordLiveVoiceDependencyFailure(
@@ -594,37 +594,6 @@ class DiscordLiveVoiceService:
                 self._runtime.mark_bot_speaking(binding=room.binding, speaking=False)
         logger.info("discord_live_voice_playback_interrupted room_key=%s reason=%s", room.room_key, reason)
 
-    def _runtime_cache_key(
-        self,
-        *,
-        tenant: Tenant,
-        project: Project | None,
-        codex_working_dir: str,
-    ) -> str:
-        payload = {
-            "tenant_id": str(tenant.tenant_id),
-            "project_id": str(getattr(project, "project_id", "") or ""),
-            "tenant_discord_config": getattr(tenant, "discord_config", None) or {},
-            "project_discord_config": getattr(project, "discord_config", None) or {},
-            "working_dir": str(codex_working_dir or ""),
-            "codex_model": str(getattr(self._settings, "codex_model", "") or ""),
-            "voice_reply_provider": str(getattr(self._settings, "voice_reply_provider", "") or ""),
-        }
-        serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-        return hashlib.sha1(serialized.encode("utf-8")).hexdigest()
-
-    def _get_codex_runtime(self, *, session, cache_key: str) -> Any:  # noqa: ANN001
-        with self._codex_runtime_lock:
-            runtime = self._codex_runtime_cache.get(cache_key)
-            if runtime is not None:
-                self._codex_runtime_cache.move_to_end(cache_key)
-                return runtime
-            runtime = build_codex_runtime(session=session, settings=self._settings)
-            self._codex_runtime_cache[cache_key] = runtime
-            while len(self._codex_runtime_cache) > _LIVE_VOICE_RUNTIME_CACHE_MAX:
-                self._codex_runtime_cache.popitem(last=False)
-            return runtime
-
     def _collect_live_voice_context(
         self,
         *,
@@ -651,6 +620,40 @@ class DiscordLiveVoiceService:
             project_keys=project_keys,
         )
         return normalized_issue_key, requested_status, project_keys, codex_working_dir
+
+    @staticmethod
+    def _live_voice_turn_from_discord_response(
+        resp: DiscordCommandResponse,
+        *,
+        entry_confidence: float,
+        entry_reason: str,
+        tenant_discord_config: dict,
+        project_discord_config: dict | None,
+    ) -> VoiceRoomTurnResult:
+        data = resp.data if isinstance(resp.data, dict) else {}
+        persona_id = str(data.get("persona_id") or "pm").strip().lower() or "pm"
+        profile = resolve_voice_room_persona_profile(
+            persona_id=persona_id,
+            tenant_discord_config=tenant_discord_config,
+            project_discord_config=project_discord_config,
+        )
+        brief = data.get("brief") if isinstance(data.get("brief"), dict) else {}
+        try:
+            rc = float(entry_confidence)
+        except (TypeError, ValueError):
+            rc = 0.0
+        rc = max(0.0, min(1.0, rc))
+        return VoiceRoomTurnResult(
+            persona_id=profile.persona_id,
+            persona_role=profile.role_label,
+            persona_name=profile.display_name,
+            persona_voice_id=profile.voice_id,
+            message=str(resp.message or "").strip(),
+            brief=brief,
+            router_confidence=rc,
+            router_reason=str(entry_reason or "").strip(),
+            room_config=build_voice_room_config(tenant_discord_config, project_discord_config),
+        )
 
     def _turn_version_is_current(self, *, room_key: str, turn_version: int) -> bool:
         with self._turn_worker_lock:
@@ -774,68 +777,147 @@ class DiscordLiveVoiceService:
                 normalized_issue_key or "",
             )
             history_owner = project if project is not None else tenant
-            runtime_cache_key = self._runtime_cache_key(
-                tenant=tenant,
-                project=project,
-                codex_working_dir=codex_working_dir,
-            )
-            runtime = self._get_codex_runtime(session=session, cache_key=runtime_cache_key)
 
-            history_config, _ = self._room_history.append_room_history_entry(
-                discord_config=getattr(history_owner, "discord_config", None),
-                room_id=room.linked_text_channel_id,
-                channel_id=room.linked_text_channel_id,
-                voice_channel_id=room.voice_channel_id,
-                linked_text_channel_id=room.linked_text_channel_id,
-                speaker_type="user",
-                source_mode="live_voice",
-                text=transcript,
-                user_id=turn.user_id,
-                issue_key=normalized_issue_key,
-                status_name=requested_status,
-                metadata={"finalization_reason": turn.finalization_reason},
-            )
-            _set_discord_config(target=history_owner, discord_config=history_config)
-            updated_history = self._room_history.recent_room_history(
+            pre_history = self._room_history.recent_room_history(
                 discord_config=getattr(history_owner, "discord_config", None),
                 linked_text_channel_id=room.linked_text_channel_id,
                 voice_channel_id=room.voice_channel_id,
             )
-            trimmed_history = updated_history[-_LIVE_VOICE_HISTORY_LIMIT:]
+            trimmed_for_router = pre_history[-_LIVE_VOICE_HISTORY_LIMIT:]
+
+            routed = route_discord_voice_entry(
+                session=session,
+                settings=self._settings,
+                tenant=tenant,
+                project_id=scoped_project_id,
+                codex_working_dir=codex_working_dir,
+                transcript=transcript,
+                entry_source="live_voice",
+                history=trimmed_for_router,
+                room_context={
+                    "project_keys": project_keys,
+                    "linked_text_channel_id": room.linked_text_channel_id,
+                    "voice_channel_id": room.voice_channel_id,
+                },
+            )
+            lane = str(routed.get("lane") or "ask").strip().lower()
+            entry_persona = str(routed.get("persona") or "pm").strip().lower()
+            conf = float(routed.get("confidence") or 0.0)
+            reason = str(routed.get("reason") or "").strip()
+            logger.info(
+                "discord_live_voice_entry_routed lane=%s persona=%s confidence=%s reason=%s",
+                lane,
+                entry_persona,
+                conf,
+                reason,
+            )
+
+            live_params = {
+                "room_mode": "true",
+                "room_source": "live_voice",
+                "linked_text_channel_id": room.linked_text_channel_id,
+                "voice_channel_id": room.voice_channel_id,
+            }
+
+            tenant_dc = getattr(tenant, "discord_config", None) or {}
+            project_dc = getattr(project, "discord_config", None) if project is not None else None
 
             answer_started_at = time.perf_counter()
+            result: VoiceRoomTurnResult
             try:
                 with scoped_log_context(
                     correlation_id=turn_correlation_id,
                     tenant_id=tenant.tenant_id,
                     project_id=scoped_project_id,
                 ):
-                    result = answer_voice_room_turn(
-                        runtime=runtime,
-                        transcript=transcript,
-                        project_keys=project_keys,
-                        issues=[],
-                        status_counts={},
-                        invocation_context=CodexInvocationContext(
-                            channel="discord",
+                    if lane == "interview":
+                        resp = execute_tenant_command_ingress(
                             tenant_id=tenant.tenant_id,
-                            project_id=getattr(project, "project_id", None),
-                            command="pm",
-                            stage="live-voice-room",
-                            working_dir=codex_working_dir,
+                            payload=DiscordCommandRequest(
+                                user_id=turn.user_id,
+                                channel_id=room.linked_text_channel_id,
+                                command=f"!pm {transcript}",
+                                command_params=live_params,
+                            ),
+                            session=session,
+                            require_ask_confirmation=False,
+                            ingress_source="discord",
+                        )
+                        result = self._live_voice_turn_from_discord_response(
+                            resp,
+                            entry_confidence=conf,
+                            entry_reason=reason,
+                            tenant_discord_config=tenant_dc,
+                            project_discord_config=project_dc,
+                        )
+                    else:
+                        ask_params = {**live_params, "persona_id": entry_persona}
+                        resp = execute_tenant_command_ingress(
+                            tenant_id=tenant.tenant_id,
+                            payload=DiscordCommandRequest(
+                                user_id=turn.user_id,
+                                channel_id=room.linked_text_channel_id,
+                                command=f"!ask {transcript}",
+                                command_params=ask_params,
+                            ),
+                            session=session,
+                            require_ask_confirmation=False,
+                            ingress_source="discord",
+                        )
+                        result = self._live_voice_turn_from_discord_response(
+                            resp,
+                            entry_confidence=conf,
+                            entry_reason=reason,
+                            tenant_discord_config=tenant_dc,
+                            project_discord_config=project_dc,
+                        )
+                        session.refresh(history_owner)
+                        history_config, _ = self._room_history.append_room_history_entry(
+                            discord_config=getattr(history_owner, "discord_config", None),
+                            room_id=room.linked_text_channel_id,
+                            channel_id=room.linked_text_channel_id,
+                            voice_channel_id=room.voice_channel_id,
+                            linked_text_channel_id=room.linked_text_channel_id,
+                            speaker_type="user",
+                            source_mode="live_voice",
+                            text=transcript,
+                            user_id=turn.user_id,
                             issue_key=normalized_issue_key,
-                            reasoning_effort=_LIVE_VOICE_REASONING_EFFORT,
-                        ),
-                        history=trimmed_history,
-                        github_context={},
-                        tenant_discord_config=getattr(tenant, "discord_config", None) or {},
-                        project_discord_config=getattr(project, "discord_config", None) or {},
-                    )
-            except CodexRuntimeError as exc:
-                session.commit()
+                            status_name=requested_status,
+                            metadata={"finalization_reason": turn.finalization_reason, "voice_entry_lane": "ask"},
+                        )
+                        _set_discord_config(target=history_owner, discord_config=history_config)
+                        history_config, _ = self._room_history.append_room_history_entry(
+                            discord_config=getattr(history_owner, "discord_config", None),
+                            room_id=room.linked_text_channel_id,
+                            channel_id=room.linked_text_channel_id,
+                            voice_channel_id=room.voice_channel_id,
+                            linked_text_channel_id=room.linked_text_channel_id,
+                            speaker_type="persona",
+                            source_mode="live_voice",
+                            text=result.message,
+                            persona_id=result.persona_id,
+                            issue_key=normalized_issue_key,
+                            status_name=requested_status,
+                            metadata={
+                                "router_confidence": result.router_confidence,
+                                "router_reason": result.router_reason,
+                                "voice_entry_lane": "ask",
+                            },
+                        )
+                        _set_discord_config(target=history_owner, discord_config=history_config)
+            except HTTPException as exc:
+                session.rollback()
                 self._post_text_notice(
                     channel_id=room.linked_text_channel_id,
-                    content=f"Live voice persona routing failed: {exc}",
+                    content=f"Live voice command failed: {exc.detail}",
+                )
+                return
+            except CodexRuntimeError as exc:
+                session.rollback()
+                self._post_text_notice(
+                    channel_id=room.linked_text_channel_id,
+                    content=f"Live voice assistant error: {exc}",
                 )
                 return
             logger.info(
@@ -854,36 +936,8 @@ class DiscordLiveVoiceService:
                 session.commit()
                 return
 
-            history_config, _ = self._room_history.append_room_history_entry(
-                discord_config=getattr(history_owner, "discord_config", None),
-                room_id=room.linked_text_channel_id,
-                channel_id=room.linked_text_channel_id,
-                voice_channel_id=room.voice_channel_id,
-                linked_text_channel_id=room.linked_text_channel_id,
-                speaker_type="persona",
-                source_mode="live_voice",
-                text=result.message,
-                persona_id=result.persona_id,
-                issue_key=normalized_issue_key,
-                status_name=requested_status,
-                metadata={"router_confidence": result.router_confidence, "router_reason": result.router_reason},
-            )
-            _set_discord_config(target=history_owner, discord_config=history_config)
             session.commit()
 
-        self._post_text_notice(
-            channel_id=room.linked_text_channel_id,
-            content=f"<@{turn.user_id}> {transcript}",
-        )
-        persona_label = format_voice_room_persona_label(
-            persona_id=result.persona_id,
-            persona_name=result.persona_name,
-            persona_role=getattr(result, "persona_role", None),
-        )
-        self._post_text_notice(
-            channel_id=room.linked_text_channel_id,
-            content=f"**{persona_label}:** {result.message}",
-        )
         logger.info(
             "discord_live_voice_turn_answered room_key=%s persona_id=%s response_chars=%s",
             room.room_key,

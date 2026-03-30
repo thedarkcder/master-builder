@@ -92,6 +92,8 @@ class JiraWebhookProductionPathTests(unittest.TestCase):
         self.assertEqual(response.status_code, 202)
         body = response.json()
         self.assertTrue(body["accepted"])
+        self.assertFalse(body["enqueued"])
+        self.assertTrue(body["queued"])
         self.assertEqual(body["reason"], "queued_for_reconciliation")
         self.assertEqual(body["issue_key"], "TP-42")
         self.assertIsNotNone(processed)

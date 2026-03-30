@@ -10,6 +10,9 @@ from orchestrator.core.worker_capabilities import (
     worker_label_for_capability,
 )
 
+_PM_PARENT_LABELS = {"pm-parent"}
+_SYNC_BLOCKING_LABELS = {"sync-stale", "sync-blocked"}
+
 
 @dataclass(frozen=True)
 class PreRunCheckResult:
@@ -84,6 +87,7 @@ def evaluate_execution_readiness_only(
     ready_label_present = bool(
         normalized_ready_label and normalized_ready_label.casefold() in normalized_labels
     )
+    sync_guard = _execution_sync_guard(normalized_labels=normalized_labels)
     required_worker_capability = infer_required_worker_capability(
         issue_summary=issue_summary,
         issue_description=issue_description,
@@ -95,8 +99,8 @@ def evaluate_execution_readiness_only(
     required_worker_label = worker_label_for_capability(required_worker_capability)
     required_worker_label_present = required_worker_label.casefold() in normalized_labels
     ready_for_agent_label_override = any(label in normalized_labels for label in ready_for_agent_labels)
-    outcome = "ready_for_agent"
-    if normalized_ready_label is not None and not ready_label_present and not ready_for_agent_label_override:
+    outcome = "gtd_required" if sync_guard is not None else "ready_for_agent"
+    if sync_guard is None and normalized_ready_label is not None and not ready_label_present and not ready_for_agent_label_override:
         outcome = "missing_ready_label"
     return PreRunCheckResult(
         outcome=outcome,
@@ -107,18 +111,34 @@ def evaluate_execution_readiness_only(
         required_worker_label_present=required_worker_label_present,
         decision_gate=DecisionGateResult(
             triggered=False,
-            reason="Decision Gate permanently satisfied",
+            reason="Execution blocked by Jira parent/child sync policy" if sync_guard is not None else "Decision Gate permanently satisfied",
             missing_sections=(),
             questions=(),
-            recommendation="Proceed with execution.",
+            recommendation="Update the Jira hierarchy before execution." if sync_guard is not None else "Proceed with execution.",
             tags=(),
         ),
-        gtd=GoodToDoValidationResult(
+        gtd=sync_guard or GoodToDoValidationResult(
             valid=True,
             missing_criteria=(),
             clarification_questions=(),
         ),
     )
+
+
+def _execution_sync_guard(*, normalized_labels: set[str]) -> GoodToDoValidationResult | None:
+    if any(label in normalized_labels for label in _PM_PARENT_LABELS):
+        return GoodToDoValidationResult(
+            valid=False,
+            missing_criteria=("Engineering child ticket required",),
+            clarification_questions=("Create or select an engineering child ticket before execution.",),
+        )
+    if any(label in normalized_labels for label in _SYNC_BLOCKING_LABELS):
+        return GoodToDoValidationResult(
+            valid=False,
+            missing_criteria=("Parent-child sync must be current",),
+            clarification_questions=("Refresh this engineering child from the latest parent feature before execution.",),
+        )
+    return None
 
 
 def evaluate_pre_run_check(
@@ -143,6 +163,35 @@ def evaluate_pre_run_check(
     ready_label_present = bool(
         normalized_ready_label and normalized_ready_label.casefold() in normalized_labels
     )
+    sync_guard = _execution_sync_guard(normalized_labels=normalized_labels)
+    if sync_guard is not None:
+        required_worker_capability = infer_required_worker_capability(
+            issue_summary=issue_summary,
+            issue_description=issue_description,
+            issue_labels=issue_labels,
+            tenant_id=tenant_id,
+            project_id=project_id,
+            issue_key=issue_key,
+        )
+        required_worker_label = worker_label_for_capability(required_worker_capability)
+        required_worker_label_present = required_worker_label.casefold() in normalized_labels
+        return PreRunCheckResult(
+            outcome="gtd_required",
+            ready_label=normalized_ready_label,
+            ready_label_present=ready_label_present,
+            required_worker_capability=required_worker_capability,
+            required_worker_label=required_worker_label,
+            required_worker_label_present=required_worker_label_present,
+            decision_gate=DecisionGateResult(
+                triggered=False,
+                reason="Execution blocked by Jira parent/child sync policy",
+                missing_sections=(),
+                questions=(),
+                recommendation="Update the Jira hierarchy before execution.",
+                tags=(),
+            ),
+            gtd=sync_guard,
+        )
     ready_for_agent_label_override = bool(
         any(label in normalized_labels for label in ready_for_agent_labels)
     )

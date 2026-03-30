@@ -62,7 +62,7 @@ from orchestrator.core.pre_run_check import (
     evaluate_pre_run_check,
 )
 from orchestrator.core.precheck_decision import precheck_classification, precheck_missing_slots
-from orchestrator.core.codex_invocation import invoke_codex_json
+from orchestrator.core.runtime_invocation import invoke_runtime_json
 from orchestrator.core.codex_runtime import CodexRuntimeError, build_codex_runtime
 from orchestrator.core.runs import is_ready_for_agent_precheck, resolve_precheck_outcome_for_enqueue
 from orchestrator.storage.models import (
@@ -1057,7 +1057,7 @@ def evaluate_decision_event(
             resolve_slots_with_codex_fn=lambda **kwargs: resolve_slots_with_codex_resolution(
                 **kwargs,
                 build_codex_runtime_fn=build_codex_runtime,
-                invoke_codex_json_fn=invoke_codex_json,
+                invoke_runtime_json_fn=invoke_runtime_json,
                 project_repo_dir_fn=project_repo_dir,
                 codex_runtime_error_type=CodexRuntimeError,
             ),

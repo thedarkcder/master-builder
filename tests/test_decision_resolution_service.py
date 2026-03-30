@@ -21,7 +21,7 @@ def test_resolve_slots_with_codex_uses_issue_context_without_repo_evidence() -> 
         issue_description="Security owner is Platform Security.",
         missing_slots=["decision_owner"],
         build_codex_runtime_fn=lambda **_kwargs: object(),
-        invoke_codex_json_fn=invoke_mock,
+        invoke_runtime_json_fn=invoke_mock,
         project_repo_dir_fn=lambda **_kwargs: __import__("pathlib").Path("/tmp/does-not-exist"),
         codex_runtime_error_type=_CodexRuntimeError,
     )
@@ -43,7 +43,7 @@ def test_resolve_slots_with_codex_skips_when_no_repo_or_issue_context() -> None:
         issue_description="",
         missing_slots=["decision_owner"],
         build_codex_runtime_fn=lambda **_kwargs: object(),
-        invoke_codex_json_fn=invoke_mock,
+        invoke_runtime_json_fn=invoke_mock,
         project_repo_dir_fn=lambda **_kwargs: __import__("pathlib").Path("/tmp/does-not-exist"),
         codex_runtime_error_type=_CodexRuntimeError,
     )

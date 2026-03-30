@@ -47,8 +47,10 @@ def _format_elapsed_seconds(*, started_at: datetime | None, created_at: datetime
 def _command_help_message() -> str:
     return (
         "Commands: !help, !status, !runs [N], !run <ISSUE_KEY>, !cancel <RUN_ID>, "
-        "!retry <ISSUE_KEY|RUN_ID>, !issues seed <markdown>, !issues followup <answers>, "
-        "!bug <summary> [-- details], !gap <ISSUE_KEY>, !pm <product request>, !policy, !link <ISSUE_KEY>, "
+        "!retry <ISSUE_KEY|RUN_ID>, !issues seed <markdown batch brief>, !issues followup <answers>, "
+        "!pm <product request>, !architect [@ISSUE-123] <question>, !engineer [@ISSUE-123] <question>, "
+        "!tester [@ISSUE-123] <question>, !security [@ISSUE-123] <question>, !reviewer [@ISSUE-123] <question>, "
+        "!bug <summary> [-- details], !gap <ISSUE_KEY>, !policy, !link <ISSUE_KEY>, "
         "!request <run_controls|seed_issues|all_sensitive> [reason]"
     )
 

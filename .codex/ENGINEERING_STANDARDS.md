@@ -28,7 +28,7 @@ These are non-negotiable standards for agent and human changes in this repo. If 
   - behavior / end-to-end tests for real workflows
   - UI automation for user-visible journeys
 - Core logic must be testable without external services.
-- Keep side effects at the edges (DB / HTTP / queues / browser / filesystem / third-party APIs) to keep core logic clean and testable.
+- Keep side effects at the edges (DB / HTTP / queues / filesystem / third-party APIs) to keep core logic clean and testable.
 - Tests must validate the layer where the behavior actually lives.
 - Never mock the layer you are trying to prove works; mock only beyond the system boundary.
 - A page rendering is not proof of behavior.
@@ -37,6 +37,7 @@ These are non-negotiable standards for agent and human changes in this repo. If 
 - Never describe partial coverage as full coverage.
 - For bug fixes, add a regression test that fails before the fix and passes after it.
 - Implementation is not complete until the relevant automated tests are written and passing.
+- For user facing applications, API tests are not enough. Verify the real operation path in browser, computer application, mobile app for all flows, including runtime-specific required fields and defaults.
 
 ## UI automation standard
 

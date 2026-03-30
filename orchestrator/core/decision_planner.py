@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import json
 
 from orchestrator.core.agent_tools import allowed_tools_for_stage, execute_agent_tool
-from orchestrator.core.codex_invocation import CodexInvocationContext, invoke_codex_json_with_tools
+from orchestrator.core.runtime_invocation import AgentInvocationContext, invoke_runtime_json_with_tools
 from orchestrator.core.codex_runtime import CodexRuntimeError, build_codex_runtime
 from orchestrator.core.prompt_templates import render_prompt
 from orchestrator.storage.models import DecisionCase, DecisionCycle, Project, Tenant
@@ -48,9 +48,9 @@ def plan_decision_questions(
     runtime = build_codex_runtime(session=session, settings=settings)
     allowed_tools = sorted(allowed_tools_for_stage("decision_planner"))
     try:
-        payload = invoke_codex_json_with_tools(
+        payload = invoke_runtime_json_with_tools(
             runtime=runtime,
-            context=CodexInvocationContext(
+            context=AgentInvocationContext(
                 channel="system",
                 tenant_id=tenant.tenant_id,
                 project_id=project.project_id,

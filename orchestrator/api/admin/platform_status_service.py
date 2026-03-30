@@ -39,8 +39,12 @@ def _worker_row_capabilities(row: WorkerRuntimeState) -> list[str]:
     return [_capability_label(item) for item in sorted(capabilities)]
 
 
+def _worker_row_last_seen(row: WorkerRuntimeState) -> datetime | None:
+    return _coerce_aware(row.last_heartbeat_at) or _coerce_aware(row.updated_at)
+
+
 def _is_worker_row_fresh(*, row: WorkerRuntimeState, now: datetime) -> bool:
-    last_seen = _coerce_aware(row.last_heartbeat_at) or _coerce_aware(row.updated_at)
+    last_seen = _worker_row_last_seen(row)
     if last_seen is None:
         return False
     return last_seen >= (now - timedelta(seconds=WORKER_RUNTIME_HEARTBEAT_STALE_SECONDS))
@@ -65,6 +69,43 @@ def _worker_instance_status(
     return "idle", "Worker is idle and ready for work."
 
 
+def _worker_identity_key(row: WorkerRuntimeState) -> tuple[str, str]:
+    agent_id = str(row.agent_id or "").strip()
+    worker_mode = str(row.worker_mode or "").strip().lower()
+    if agent_id:
+        return agent_id, worker_mode
+    return str(row.service_instance_id or "").strip(), worker_mode
+
+
+def _visible_worker_rows(*, rows: list[WorkerRuntimeState], now: datetime) -> list[WorkerRuntimeState]:
+    selected: dict[tuple[str, str], WorkerRuntimeState] = {}
+    for row in rows:
+        identity_key = _worker_identity_key(row)
+        current = selected.get(identity_key)
+        if current is None:
+            selected[identity_key] = row
+            continue
+        current_last_seen = _worker_row_last_seen(current)
+        row_last_seen = _worker_row_last_seen(row)
+        current_fresh = _is_worker_row_fresh(row=current, now=now)
+        row_fresh = _is_worker_row_fresh(row=row, now=now)
+        if row_fresh and not current_fresh:
+            selected[identity_key] = row
+            continue
+        if row_fresh == current_fresh and (row_last_seen or datetime.min.replace(tzinfo=timezone.utc)) > (
+            current_last_seen or datetime.min.replace(tzinfo=timezone.utc)
+        ):
+            selected[identity_key] = row
+    return sorted(
+        selected.values(),
+        key=lambda row: (
+            str(row.agent_id or "").strip() or str(row.service_instance_id or "").strip(),
+            str(row.worker_mode or "").strip(),
+            str(row.service_instance_id or "").strip(),
+        ),
+    )
+
+
 def _worker_instances(*, session, now: datetime) -> list[PlatformServiceInstanceRead]:  # noqa: ANN001
     run_counts = dict(
         session.execute(
@@ -80,19 +121,23 @@ def _worker_instances(*, session, now: datetime) -> list[PlatformServiceInstance
         ).all()
     )
     rows = session.execute(select(WorkerRuntimeState).order_by(WorkerRuntimeState.service_instance_id.asc())).scalars().all()
+    visible_rows = _visible_worker_rows(rows=rows, now=now)
     instances: list[PlatformServiceInstanceRead] = []
-    for row in rows:
+    for row in visible_rows:
         active_run_count = int(run_counts.get(row.service_instance_id, 0) or 0)
         instance_status, instance_summary = _worker_instance_status(
             row=row,
             now=now,
             active_run_count=active_run_count,
         )
-        last_seen = _coerce_aware(row.last_heartbeat_at) or _coerce_aware(row.updated_at)
+        last_seen = _worker_row_last_seen(row)
+        label = str(row.agent_id or "").strip() or row.service_instance_id
+        if str(row.worker_mode or "").strip():
+            label = f"{label} ({row.worker_mode})"
         instances.append(
             PlatformServiceInstanceRead(
                 instance_id=row.service_instance_id,
-                label=row.service_instance_id,
+                label=label,
                 status=instance_status,
                 summary=instance_summary,
                 updated_at=last_seen,

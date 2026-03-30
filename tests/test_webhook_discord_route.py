@@ -98,15 +98,15 @@ class DiscordWebhookRouteTests(unittest.IsolatedAsyncioTestCase):
         patched["notify_webhook_job_enqueued"].assert_called_once()
         session.commit.assert_called_once()
 
-    async def test_followup_context_subject_takes_precedence(self) -> None:
+    async def test_command_subject_key_uses_channel_scope_even_when_followup_exists(self) -> None:
         tenant = SimpleNamespace(is_enabled=True, discord_config={})
         _, _, patched = await self._call(
             payload={"user_id": "user1", "command": "!reply", "channel_id": "c1"},
             tenant=tenant,
-            _resolve_discord_command_subject_key=MagicMock(return_value="discord_followup:ctx-1"),
+            _resolve_discord_command_subject_key=MagicMock(return_value="discord_channel:example:c1"),
         )
         request = patched["enqueue_webhook_job"].call_args.kwargs["request"]
-        self.assertEqual(request.subject_key, "discord_followup:ctx-1")
+        self.assertEqual(request.subject_key, "discord_channel:example:c1")
 
 
 if __name__ == "__main__":

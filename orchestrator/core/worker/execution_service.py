@@ -17,7 +17,10 @@ from orchestrator.core.worker.decision_gate import apply_decision_gate
 from orchestrator.core.worker.jira_stage_service import send_stage_update_to_jira as _send_stage_update_to_jira
 from orchestrator.core.worker.jira_stage_service import transition_issue_status as _transition_issue_status
 from orchestrator.core.worker.queue_selector import claim_next_queued_run
-from orchestrator.core.worker.run_health import WorkerRunHeartbeatController, worker_service_instance_id
+from orchestrator.core.worker.run_health import (
+    WorkerRunHeartbeatController,
+    worker_service_instance_id_for_mode,
+)
 from orchestrator.core.worker.run_lifecycle import (
     bind_run_project,
     block_archived_project,
@@ -106,7 +109,7 @@ def process_next_webhook_job_with_dependencies(
         return process_next_webhook_job(
             session=session,
             settings=get_settings(),
-            owner_id=f"worker:{worker_service_instance_id()}",
+            owner_id=f"worker:{worker_service_instance_id_for_mode(settings=get_settings(), mode='webhooks')}",
         )
 
 
@@ -204,7 +207,10 @@ def _process_next_queued_run_impl(
         transition_issue_status_fn=_transition_issue_status,
         emit_agent_event_fn=_emit_agent_event,
         resolve_agent_id_fn=lambda: get_settings().agent_id,
-        resolve_worker_service_instance_id_fn=worker_service_instance_id,
+        resolve_worker_service_instance_id_fn=lambda: worker_service_instance_id_for_mode(
+            settings=get_settings(),
+            mode="runs",
+        ),
         run_status_queued=RUN_STATUS_QUEUED,
         run_status_running=RUN_STATUS_RUNNING,
         run_status_failed=RUN_STATUS_FAILED,

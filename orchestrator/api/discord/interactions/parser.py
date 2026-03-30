@@ -227,10 +227,14 @@ def _parse_discord_interaction_command(payload: dict) -> tuple[str, str, str, di
         if question:
             command_text = f"{command_text} {question}"
     elif normalized_command == "pm":
-        action = (_discord_option_value(options, name="action") or "").lower()
         question = _discord_option_value(options, name="question")
-        if action == "approve":
-            command_text = f"{command_text} approve"
+        if question:
+            command_text = f"{command_text} {question}"
+    elif normalized_command in {"architect", "engineer", "tester", "security", "reviewer"}:
+        issue_key = _discord_option_value(options, name="issue_key")
+        question = _discord_option_value(options, name="question")
+        if issue_key:
+            command_text = f"{command_text} @{issue_key}"
         if question:
             command_text = f"{command_text} {question}"
     elif normalized_command in {"run", "link", "gap"}:
@@ -252,9 +256,12 @@ def _parse_discord_interaction_command(payload: dict) -> tuple[str, str, str, di
             if not subcommand_name:
                 continue
             command_text = f"{command_text} {subcommand_name}"
-            spec = _discord_option_value(option.get("options"), name="spec")
-            if spec:
-                command_text = f"{command_text} {spec}"
+            subcommand_options = option.get("options")
+            spec = _discord_option_value(subcommand_options, name="spec")
+            answers = _discord_option_value(subcommand_options, name="answers")
+            trailing_text = spec or answers
+            if trailing_text:
+                command_text = f"{command_text} {trailing_text}"
             break
     elif normalized_command == "request":
         permission = _discord_option_value(options, name="permission")

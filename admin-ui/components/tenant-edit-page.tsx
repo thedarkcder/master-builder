@@ -142,7 +142,7 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
 
       if (isPlatformAdmin) {
         try {
-          const modelCatalog = await listCodexModels(credentials);
+          const modelCatalog = await listCodexModels(credentials, { profileName: "engineering_execution" });
           setCodexModels(modelCatalog.models);
           setGlobalCodexModel(modelCatalog.default_model);
           setReasoningEfforts(modelCatalog.reasoning_efforts);

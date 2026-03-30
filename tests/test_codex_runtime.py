@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 import unittest
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -12,8 +13,32 @@ from orchestrator.core.codex_runtime import (
     _extract_json_payload,
     _extract_session_id_from_json_line,
     _extract_usage_from_json_stdout,
+    _openai_compatible_base_url_for_local_server,
     build_codex_runtime,
+    build_http_runtime,
+    build_runtime_with_fallback,
 )
+
+
+class CodexRuntimeErrorTests(unittest.TestCase):
+    def test_str_includes_payload_preview(self) -> None:
+        err = CodexRuntimeError("Runtime HTTP request failed with status 400", payload_preview='{"error":"Unknown model"}')
+        self.assertIn("400", str(err))
+        self.assertIn("Unknown model", str(err))
+
+
+class OpenAiCompatibleBaseUrlTests(unittest.TestCase):
+    def test_lm_studio_appends_v1_when_missing(self) -> None:
+        self.assertEqual(
+            _openai_compatible_base_url_for_local_server(base_url="http://127.0.0.1:1234", runtime_kind="lm_studio"),
+            "http://127.0.0.1:1234/v1",
+        )
+
+    def test_lm_studio_preserves_existing_v1(self) -> None:
+        self.assertEqual(
+            _openai_compatible_base_url_for_local_server(base_url="http://host.docker.internal:1234/v1", runtime_kind="lm_studio"),
+            "http://host.docker.internal:1234/v1",
+        )
 
 
 class ExtractJsonPayloadTests(unittest.TestCase):
@@ -142,6 +167,259 @@ class CodexRuntimeTests(unittest.TestCase):
         )
         self.assertEqual(payload, {"ok": True})
         self.assertEqual(captured_usage, {"prompt_tokens": 12, "completion_tokens": 5, "total_tokens": 17})
+
+    def test_runtime_with_fallback_uses_secondary_runtime_after_primary_failure(self) -> None:
+        primary_runtime = CodexRuntime(
+            model="primary",
+            max_output_tokens=1000,
+            command="primary",
+            _request=lambda *_args, **_kwargs: (_ for _ in ()).throw(CodexRuntimeError("primary failed")),
+        )
+        fallback_runtime = CodexRuntime(
+            model="fallback",
+            max_output_tokens=1000,
+            command="fallback",
+            _request=lambda *_args, **_kwargs: '{"ok": true, "source": "fallback"}',
+        )
+        runtime = build_runtime_with_fallback(
+            primary_runtime=primary_runtime,
+            fallback_runtime=fallback_runtime,
+        )
+        self.assertEqual(
+            runtime.run_json(system_prompt="sys", user_prompt="usr"),
+            {"ok": True, "source": "fallback"},
+        )
+
+
+class BuildHttpRuntimeTests(unittest.TestCase):
+    def _settings(self) -> SimpleNamespace:
+        return SimpleNamespace(
+            database_url="postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator",
+            codex_model="gpt-5.4",
+            codex_max_output_tokens=4096,
+            codex_cli_command="codex",
+            codex_sandbox_mode="workspace-write",
+            codex_tool_database_url="",
+            codex_reasoning_effort="medium",
+            codex_stderr_log_mode="all",
+            codex_hang_detection_quiet_seconds=300,
+            codex_hang_detection_report_interval_seconds=120,
+        )
+
+    def test_openai_runtime_preserves_message_history_across_resume_calls(self) -> None:
+        settings = self._settings()
+        request_payloads: list[dict[str, object]] = []
+
+        class _FakeHttpResponse:
+            def __init__(self, payload: dict[str, object]) -> None:
+                self._payload = payload
+
+            def read(self) -> bytes:
+                return json.dumps(self._payload).encode("utf-8")
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> None:  # noqa: ANN001
+                return None
+
+        responses = iter(
+            [
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json.dumps(
+                                    {
+                                        "type": "tool_request",
+                                        "tool_name": "decision.read_state",
+                                        "tool_args": {"issue_key": "GP-124"},
+                                    }
+                                )
+                            }
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+                },
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json.dumps(
+                                    {
+                                        "type": "final_response",
+                                        "result": {"status": "ok"},
+                                    }
+                                )
+                            }
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 20, "completion_tokens": 6, "total_tokens": 26},
+                },
+            ]
+        )
+
+        def fake_urlopen(request, timeout=120):  # noqa: ANN001, ARG001
+            request_payloads.append(json.loads(request.data.decode("utf-8")))
+            return _FakeHttpResponse(next(responses))
+
+        with patch("orchestrator.core.codex_runtime.urllib_request.urlopen", side_effect=fake_urlopen):
+            runtime = build_http_runtime(
+                settings=settings,
+                runtime_kind="openai",
+                base_url="https://example-openai.test/v1",
+                api_key="secret",
+            )
+            captured_session_ids: list[str] = []
+            first = runtime.run_json(
+                system_prompt="system",
+                user_prompt="initial user request",
+                on_session_id=lambda session_id: captured_session_ids.append(session_id),
+            )
+            second = runtime.run_json(
+                system_prompt="system",
+                user_prompt='Tool result:\n{"tool_name":"decision.read_state","ok":true,"result":{"case":"ok"}}',
+                resume_session_id=captured_session_ids[0],
+                on_session_id=lambda session_id: captured_session_ids.append(session_id),
+            )
+
+        self.assertEqual(first["type"], "tool_request")
+        self.assertEqual(second["type"], "final_response")
+        self.assertEqual(len(captured_session_ids), 2)
+        self.assertEqual(captured_session_ids[0], captured_session_ids[1])
+
+        first_messages = request_payloads[0]["messages"]
+        second_messages = request_payloads[1]["messages"]
+        self.assertEqual(
+            first_messages,
+            [
+                {"role": "system", "content": "system"},
+                {"role": "user", "content": "initial user request"},
+            ],
+        )
+        self.assertEqual(
+            second_messages,
+            [
+                {"role": "system", "content": "system"},
+                {"role": "user", "content": "initial user request"},
+                {
+                    "role": "assistant",
+                    "content": json.dumps(
+                        {
+                            "type": "tool_request",
+                            "tool_name": "decision.read_state",
+                            "tool_args": {"issue_key": "GP-124"},
+                        }
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": 'Tool result:\n{"tool_name":"decision.read_state","ok":true,"result":{"case":"ok"}}',
+                },
+            ],
+        )
+
+    def test_claude_runtime_preserves_message_history_across_resume_calls(self) -> None:
+        settings = self._settings()
+        request_payloads: list[dict[str, object]] = []
+
+        class _FakeHttpResponse:
+            def __init__(self, payload: dict[str, object]) -> None:
+                self._payload = payload
+
+            def read(self) -> bytes:
+                return json.dumps(self._payload).encode("utf-8")
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> None:  # noqa: ANN001
+                return None
+
+        responses = iter(
+            [
+                {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": json.dumps(
+                                {
+                                    "type": "tool_request",
+                                    "tool_name": "decision.read_state",
+                                    "tool_args": {"issue_key": "GP-124"},
+                                }
+                            ),
+                        }
+                    ]
+                },
+                {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": json.dumps(
+                                {
+                                    "type": "final_response",
+                                    "result": {"status": "ok"},
+                                }
+                            ),
+                        }
+                    ]
+                },
+            ]
+        )
+
+        def fake_urlopen(request, timeout=120):  # noqa: ANN001, ARG001
+            request_payloads.append(json.loads(request.data.decode("utf-8")))
+            return _FakeHttpResponse(next(responses))
+
+        with patch("orchestrator.core.codex_runtime.urllib_request.urlopen", side_effect=fake_urlopen):
+            runtime = build_http_runtime(
+                settings=settings,
+                runtime_kind="claude",
+                base_url="https://example-claude.test",
+                api_key="secret",
+            )
+            captured_session_ids: list[str] = []
+            first = runtime.run_json(
+                system_prompt="system",
+                user_prompt="initial user request",
+                on_session_id=lambda session_id: captured_session_ids.append(session_id),
+            )
+            second = runtime.run_json(
+                system_prompt="system",
+                user_prompt='Tool result:\n{"tool_name":"decision.read_state","ok":true,"result":{"case":"ok"}}',
+                resume_session_id=captured_session_ids[0],
+                on_session_id=lambda session_id: captured_session_ids.append(session_id),
+            )
+
+        self.assertEqual(first["type"], "tool_request")
+        self.assertEqual(second["type"], "final_response")
+        self.assertEqual(captured_session_ids[0], captured_session_ids[1])
+        self.assertEqual(request_payloads[0]["system"], "system")
+        self.assertEqual(
+            request_payloads[0]["messages"],
+            [{"role": "user", "content": "initial user request"}],
+        )
+        self.assertEqual(
+            request_payloads[1]["messages"],
+            [
+                {"role": "user", "content": "initial user request"},
+                {
+                    "role": "assistant",
+                    "content": json.dumps(
+                        {
+                            "type": "tool_request",
+                            "tool_name": "decision.read_state",
+                            "tool_args": {"issue_key": "GP-124"},
+                        }
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": 'Tool result:\n{"tool_name":"decision.read_state","ok":true,"result":{"case":"ok"}}',
+                },
+            ],
+        )
 
 
 class BuildCodexRuntimeTests(unittest.TestCase):
