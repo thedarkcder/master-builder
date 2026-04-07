@@ -164,7 +164,8 @@ class CliEntrypointTests(unittest.TestCase):
             redirect_stdout(output),
             patch("orchestrator.cli.prewarm_voice_dependencies") as prewarm_mock,
         ):
-            prewarm_mock.return_value.voice_provider = "pocket_tts"
+            prewarm_mock.return_value.voice_stt_provider = "openai"
+            prewarm_mock.return_value.voice_tts_provider = "pocket_tts"
             prewarm_mock.return_value.transcription_ready = True
             prewarm_mock.return_value.prewarmed_voice_ids = ("alba", "jean")
             exit_code = cli_main(["voice-prewarm"])
@@ -172,7 +173,8 @@ class CliEntrypointTests(unittest.TestCase):
         payload = json.loads(output.getvalue())
         self.assertEqual(exit_code, 0)
         self.assertTrue(payload["ok"])
-        self.assertEqual(payload["voice_provider"], "pocket_tts")
+        self.assertEqual(payload["voice_stt_provider"], "openai")
+        self.assertEqual(payload["voice_tts_provider"], "pocket_tts")
         self.assertTrue(payload["transcription_ready"])
         self.assertEqual(payload["prewarmed_voice_ids"], ["alba", "jean"])
         prewarm_mock.assert_called_once()

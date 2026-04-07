@@ -55,7 +55,7 @@ def transcribe_audio_bytes(
     filename: str,
     content_type: str | None = None,
 ) -> str:
-    provider = str(settings.voice_provider or "").strip().lower()
+    provider = str(settings.voice_stt_provider or "").strip().lower()
     if provider in {"", "disabled"}:
         raise VoiceTranscriptionError("Voice transcription is disabled")
     if provider == "openai":
@@ -76,7 +76,7 @@ def transcribe_audio_bytes(
 
 
 def ensure_transcription_provider_ready(*, settings: Settings) -> None:
-    provider = str(settings.voice_provider or "").strip().lower()
+    provider = str(settings.voice_stt_provider or "").strip().lower()
     if provider in {"", "disabled"}:
         raise VoiceTranscriptionError("Voice transcription is disabled")
     if provider == "openai":
