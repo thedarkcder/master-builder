@@ -4,7 +4,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
@@ -14,7 +14,7 @@ from orchestrator.core.worker_capabilities import (
     required_worker_capability_for_run,
 )
 from orchestrator.core.worker.run_lifecycle import resolve_project_for_run, start_run
-from orchestrator.storage.models import Run, RunLock, Tenant, TenantRunClaim
+from orchestrator.storage.models import Run, Tenant, TenantRunClaim
 
 logger = logging.getLogger(__name__)
 
@@ -104,13 +104,6 @@ def _candidate_selection_details(
         candidate.status = failed_status
         candidate.last_error = "Tenant not found for queued run"
         candidate.finished_at = datetime.now(timezone.utc)
-        session.execute(
-            delete(RunLock).where(
-                RunLock.tenant_id == candidate.tenant_id,
-                RunLock.issue_key == candidate.issue_key,
-                RunLock.run_id == candidate.run_id,
-            )
-        )
         session.commit()
         session.refresh(candidate)
         return QueueSelectionResult(terminal_run=candidate)

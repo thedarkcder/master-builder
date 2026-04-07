@@ -4,7 +4,8 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from orchestrator.core.worker.stage_notifier import RunStageNotifier
-from orchestrator.storage.models import Run, Tenant
+from orchestrator.storage.models import Tenant
+from tests.workflow_test_support import make_run
 
 
 class WorkerStageNotifierTests(unittest.TestCase):
@@ -22,7 +23,7 @@ class WorkerStageNotifierTests(unittest.TestCase):
             created_at=now,
             updated_at=now,
         )
-        run = Run(
+        run = make_run(
             run_id="run-stage-1",
             tenant_id="tenant-stage",
             issue_key="MAB-910",
@@ -32,8 +33,6 @@ class WorkerStageNotifierTests(unittest.TestCase):
             branch=None,
             pr_url=None,
             status="running",
-            last_error=None,
-            plan=None,
             created_at=now,
             started_at=now,
             finished_at=None,

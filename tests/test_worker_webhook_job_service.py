@@ -20,6 +20,7 @@ from orchestrator.storage.db import create_session_factory, reset_db_engine_cach
 from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import Project, Run, Tenant, WebhookJob
 from orchestrator.core.communications import DiscordChannelMessageWithAttachmentAction
+from tests.workflow_test_support import add_run_with_workflow, make_run
 
 
 class WorkerWebhookJobServiceTests(unittest.TestCase):
@@ -64,8 +65,9 @@ class WorkerWebhookJobServiceTests(unittest.TestCase):
                     updated_at=now,
                 )
             )
-            session.add(
-                Run(
+            add_run_with_workflow(
+                session,
+                make_run(
                     run_id="run-1",
                     tenant_id="tenant-1",
                     project_id=None,
@@ -77,20 +79,23 @@ class WorkerWebhookJobServiceTests(unittest.TestCase):
                     pr_url=None,
                     dedupe_scope="issue_execution",
                     status="queued",
-                    last_error=None,
                     plan={"pre_check": {"outcome": "ready_for_agent"}},
                     created_at=now,
                     started_at=None,
                     last_heartbeat_at=None,
                     worker_service_instance_id=None,
                     finished_at=None,
-                )
+                ),
             )
             session.commit()
 
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
         reset_db_engine_cache()
+
+    @staticmethod
+    def _settings() -> SimpleNamespace:
+        return SimpleNamespace(secrets_encryption_key="test-key")
 
     @staticmethod
     def _request() -> WebhookJobEnqueueRequest:
@@ -168,7 +173,7 @@ class WorkerWebhookJobServiceTests(unittest.TestCase):
             ):
                 processed = process_next_webhook_job(
                     session=session,
-                    settings=SimpleNamespace(),
+                    settings=self._settings(),
                     owner_id="worker-1",
                 )
 
@@ -203,11 +208,7 @@ class WorkerWebhookJobServiceTests(unittest.TestCase):
             with patch(
                 "orchestrator.core.worker.webhook_job_service.execute_tenant_discord_ingress_command"
             ) as execute_command:
-                processed = process_next_webhook_job(
-                    session=session,
-                    settings=SimpleNamespace(),
-                    owner_id="worker-1",
-                )
+                processed = process_next_webhook_job(session=session, settings=self._settings(), owner_id="worker-1")
 
             self.assertIsNotNone(processed)
             execute_command.assert_called_once()
@@ -241,7 +242,7 @@ class WorkerWebhookJobServiceTests(unittest.TestCase):
                 ) as execute_side_effect,
                 patch("orchestrator.core.worker.webhook_job_service.mark_project_automation_execution_success") as mark_success,
             ):
-                processed = process_next_webhook_job(session=session, settings=SimpleNamespace(), owner_id="worker-1")
+                processed = process_next_webhook_job(session=session, settings=self._settings(), owner_id="worker-1")
 
             self.assertIsNotNone(processed)
             execute_side_effect.assert_called_once()
@@ -277,7 +278,7 @@ class WorkerWebhookJobServiceTests(unittest.TestCase):
                 ),
                 patch("orchestrator.core.worker.webhook_job_service.mark_project_automation_execution_failure") as mark_failed,
             ):
-                processed = process_next_webhook_job(session=session, settings=SimpleNamespace(), owner_id="worker-1")
+                processed = process_next_webhook_job(session=session, settings=self._settings(), owner_id="worker-1")
 
             self.assertIsNotNone(processed)
             mark_failed.assert_called_once()
@@ -315,7 +316,7 @@ class WorkerWebhookJobServiceTests(unittest.TestCase):
         ):
             processed = process_next_webhook_job(
                 session=session,
-                settings=SimpleNamespace(),
+                settings=self._settings(),
                 owner_id="worker-1",
             )
 

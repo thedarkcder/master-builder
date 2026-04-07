@@ -11,6 +11,8 @@ import time
 from typing import Callable
 from uuid import uuid4
 
+from sqlalchemy import select
+
 from orchestrator.core.codex_models import normalize_codex_reasoning_effort
 from orchestrator.core.config import get_settings
 from orchestrator.core.knowledge_base import build_knowledge_prompt_context
@@ -19,8 +21,9 @@ from orchestrator.core.codex_runtime import CodexRuntime, CodexRuntimeError
 from orchestrator.core.runtime_telemetry import build_runtime_log_sink
 from orchestrator.core.run_logs import extract_turn_completed_usage
 from orchestrator.core.run_logs import record_run_log_event, record_run_log_events_batch
+from orchestrator.core.workflow.checkpoints import checkpoint_kind_for_stage, normalize_checkpoint_stage, upsert_workflow_checkpoint
 from orchestrator.storage.db import create_session_factory
-from orchestrator.storage.models import Project, Run, Tenant
+from orchestrator.storage.models import Project, Run, Tenant, WorkflowCheckpoint
 
 logger = logging.getLogger(__name__)
 _ERROR_MARKERS = ("error", "failed", "fatal", "exception", "traceback")
@@ -45,6 +48,7 @@ class AgentInvocationContext:
     command: str
     stage: str
     working_dir: str
+    workflow_id: str | None = None
     issue_key: str | None = None
     run_id: str | None = None
     attempt: int | None = None
@@ -510,66 +514,85 @@ def _emit_invocation_event(
         )
 
 
-def _session_column_for_context(*, context: AgentInvocationContext) -> str | None:
+def _checkpoint_kind_for_context(*, context: AgentInvocationContext) -> str | None:
     command = str(context.command or "").strip().lower()
     stage = str(context.stage or "").strip().lower()
     if command != "workflow":
         return None
-    if stage == "orchestrated_run":
-        return "orchestrated_session_id"
-    if stage == _WORKFLOW_STAGE_PM:
-        return "pm_session_id"
-    if stage in _WORKFLOW_EXECUTION_STAGES:
-        return "dev_session_id"
-    return None
+    return checkpoint_kind_for_stage(stage)
 
 
-def _load_run_session_id(*, run_id: str | None, session_column: str | None) -> str | None:
+def _load_checkpoint_session_id(
+    *,
+    workflow_id: str | None,
+    run_id: str | None,
+    checkpoint_kind: str | None,
+) -> str | None:
+    normalized_workflow_id = str(workflow_id or "").strip()
     normalized_run_id = str(run_id or "").strip()
-    normalized_column = str(session_column or "").strip()
-    if not normalized_run_id or not normalized_column:
+    normalized_kind = str(checkpoint_kind or "").strip().lower()
+    if not normalized_workflow_id or not normalized_run_id or not normalized_kind:
         return None
     settings = get_settings()
     session_factory = create_session_factory(database_url=settings.database_url)
     try:
         with session_factory() as session:
-            run = session.get(Run, normalized_run_id)
-            if run is None:
+            checkpoint = session.execute(
+                select(WorkflowCheckpoint).where(
+                    WorkflowCheckpoint.workflow_id == normalized_workflow_id,
+                    WorkflowCheckpoint.run_id == normalized_run_id,
+                    WorkflowCheckpoint.checkpoint_kind == normalized_kind,
+                )
+            ).scalar_one_or_none()
+            if checkpoint is None:
                 return None
-            candidate = str(getattr(run, normalized_column, "") or "").strip()
+            candidate = str(getattr(checkpoint, "codex_session_id", "") or "").strip()
             return candidate or None
     except Exception as exc:  # noqa: BLE001
         logger.debug(
-            "codex_run_session_load_skipped run_id=%s session_column=%s error=%s",
+            "codex_checkpoint_session_load_skipped workflow_id=%s run_id=%s checkpoint_kind=%s error=%s",
+            normalized_workflow_id,
             normalized_run_id,
-            normalized_column,
+            normalized_kind,
             exc,
         )
         return None
 
 
-def _persist_run_session_id(*, run_id: str | None, session_id: str | None, session_column: str | None) -> None:
+def _persist_checkpoint_session_id(
+    *,
+    workflow_id: str | None,
+    run_id: str | None,
+    session_id: str | None,
+    checkpoint_kind: str | None,
+    stage: str | None,
+) -> None:
+    normalized_workflow_id = str(workflow_id or "").strip()
     normalized_run_id = str(run_id or "").strip()
     normalized_session_id = str(session_id or "").strip()
-    normalized_column = str(session_column or "").strip()
-    if not normalized_run_id or not normalized_session_id or not normalized_column:
+    normalized_kind = str(checkpoint_kind or "").strip().lower()
+    if not normalized_workflow_id or not normalized_run_id or not normalized_session_id or not normalized_kind:
         return
     settings = get_settings()
     session_factory = create_session_factory(database_url=settings.database_url)
     try:
         with session_factory() as session:
-            run = session.get(Run, normalized_run_id)
-            if run is None:
-                return
-            if str(getattr(run, normalized_column, "") or "").strip() == normalized_session_id:
-                return
-            setattr(run, normalized_column, normalized_session_id)
+            upsert_workflow_checkpoint(
+                session,
+                workflow_id=normalized_workflow_id,
+                run_id=normalized_run_id,
+                checkpoint_kind=normalized_kind,
+                stage=normalize_checkpoint_stage(stage),
+                payload=None,
+                codex_session_id=normalized_session_id,
+            )
             session.commit()
     except Exception as exc:  # noqa: BLE001
         logger.debug(
-            "codex_run_session_persist_skipped run_id=%s session_column=%s session_id=%s error=%s",
+            "codex_checkpoint_session_persist_skipped workflow_id=%s run_id=%s checkpoint_kind=%s session_id=%s error=%s",
+            normalized_workflow_id,
             normalized_run_id,
-            normalized_column,
+            normalized_kind,
             normalized_session_id,
             exc,
         )
@@ -687,6 +710,7 @@ def invoke_runtime_json_with_tools(
                 command=context.command,
                 stage=context.stage,
                 working_dir=context.working_dir,
+                workflow_id=context.workflow_id,
                 issue_key=context.issue_key,
                 run_id=context.run_id,
                 attempt=context.attempt,
@@ -780,9 +804,13 @@ def _invoke_runtime_json_once(
         "issue_description_chars": max(0, int(context.issue_description_chars or 0)),
     }
     context_metrics = _collect_context_injection_metrics(working_dir=context.working_dir)
-    session_column = _session_column_for_context(context=context)
+    checkpoint_kind = _checkpoint_kind_for_context(context=context)
     explicit_session_id = str(context.codex_session_id or "").strip() or None
-    run_session_id = _load_run_session_id(run_id=context.run_id, session_column=session_column)
+    run_session_id = _load_checkpoint_session_id(
+        workflow_id=context.workflow_id,
+        run_id=context.run_id,
+        checkpoint_kind=checkpoint_kind,
+    )
     resume_session_id = explicit_session_id or run_session_id
     invocation_started_monotonic = time.monotonic()
     invocation_context = AgentInvocationContext(
@@ -792,6 +820,7 @@ def _invoke_runtime_json_once(
         command=context.command,
         stage=context.stage,
         working_dir=context.working_dir,
+        workflow_id=context.workflow_id,
         issue_key=context.issue_key,
         run_id=context.run_id,
         attempt=context.attempt,
@@ -856,7 +885,7 @@ def _invoke_runtime_json_once(
                 context=invocation_context,
                 sink_state=sink_state,
                 session_id=session_id,
-                session_column=session_column,
+                checkpoint_kind=checkpoint_kind,
             ),
             on_usage=lambda usage: _capture_usage_metrics(
                 usage_state=usage_state,
@@ -933,16 +962,18 @@ def _capture_session_id(
     context: AgentInvocationContext,
     sink_state: dict[str, int | bool | str],
     session_id: str,
-    session_column: str | None,
+    checkpoint_kind: str | None,
 ) -> None:
     normalized_session_id = str(session_id or "").strip()
     if not normalized_session_id:
         return
     sink_state["codex_session_id"] = normalized_session_id
-    _persist_run_session_id(
+    _persist_checkpoint_session_id(
+        workflow_id=context.workflow_id,
         run_id=context.run_id,
         session_id=normalized_session_id,
-        session_column=session_column,
+        checkpoint_kind=checkpoint_kind,
+        stage=context.stage,
     )
 
 

@@ -12,6 +12,7 @@ from unittest.mock import MagicMock, patch
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import Run, WorkerRuntimeState
+from tests.workflow_test_support import add_workflow_attempt
 
 
 class _FakeConn:
@@ -725,30 +726,21 @@ class WorkerRuntimeRegistryTests(unittest.TestCase):
 
         now = datetime.now(timezone.utc)
         with session_factory() as session:
-            session.add(
-                Run(
-                    run_id="run-1",
-                    tenant_id="tenant-1",
-                    project_id=None,
-                    issue_key="GP-1",
-                    issue_summary="Issue",
-                    issue_description=None,
-                    repo_url=None,
-                    branch=None,
-                    pr_url=None,
-                    dev_session_id=None,
-                    pm_session_id=None,
-                    orchestrated_session_id=None,
-                    dedupe_scope="issue_execution",
-                    status="running",
-                    last_error=None,
-                    plan=None,
-                    created_at=now,
-                    started_at=now,
-                    last_heartbeat_at=now,
-                    worker_service_instance_id=service_instance_id,
-                    finished_at=None,
-                )
+            add_workflow_attempt(
+                session,
+                run_id="run-1",
+                tenant_id="tenant-1",
+                project_id=None,
+                issue_key="GP-1",
+                issue_summary="Issue",
+                issue_description=None,
+                repo_url=None,
+                created_at=now,
+                run_status="running",
+                workflow_status="running",
+                started_at=now,
+                last_heartbeat_at=now,
+                worker_service_instance_id=service_instance_id,
             )
             session.commit()
 

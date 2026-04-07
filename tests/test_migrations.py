@@ -49,7 +49,7 @@ class MigrationTests(unittest.TestCase):
 
         duplicates = {revision_id: count for revision_id, count in Counter(revision_ids).items() if count > 1}
         self.assertEqual(duplicates, {})
-        self.assertEqual(script.get_heads(), ["20260330_0052"])
+        self.assertEqual(script.get_heads(), ["20260407_0053"])
 
     def test_jira_feature_migrations_chain_after_staging_worker_head(self) -> None:
         """Branch-specific migrations chained after staging merge head (20260328_0045)."""
@@ -88,6 +88,10 @@ class MigrationTests(unittest.TestCase):
             "20260330_0052_drop_project_automation_delivery_channel.py": (
                 'revision = "20260330_0052"',
                 'down_revision = "20260330_0051"',
+            ),
+            "20260407_0053_workflow_execution.py": (
+                'revision = "20260407_0053"',
+                'down_revision = "20260330_0052"',
             ),
         }
 
@@ -154,7 +158,7 @@ class MigrationTests(unittest.TestCase):
             self.assertIn("tenant_user_discord_identities", inspector.get_table_names())
             with engine.begin() as connection:
                 versions = connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
-            self.assertEqual(versions, ["20260330_0052"])
+            self.assertEqual(versions, ["20260407_0053"])
 
     def test_run_migrations_repairs_legacy_stream_only_0039_head(self) -> None:
         with TemporaryDirectory() as tmp_dir:
@@ -198,7 +202,7 @@ class MigrationTests(unittest.TestCase):
             self.assertIn("tenant_user_discord_identities", inspector.get_table_names())
             with engine.begin() as connection:
                 versions = connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
-            self.assertEqual(versions, ["20260330_0052"])
+            self.assertEqual(versions, ["20260407_0053"])
 
     def test_run_migrations_repairs_stamp_when_schema_0045_but_version_0044(self) -> None:
         with TemporaryDirectory() as tmp_dir:
@@ -212,7 +216,7 @@ class MigrationTests(unittest.TestCase):
 
             with engine.begin() as connection:
                 versions = connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
-            self.assertEqual(versions, ["20260330_0052"])
+            self.assertEqual(versions, ["20260407_0053"])
 
     def test_run_migrations_disables_alembic_logger_reconfiguration(self) -> None:
         fake_config = MagicMock()
@@ -242,7 +246,8 @@ class MigrationTests(unittest.TestCase):
             self.assertIn("tenants", inspector.get_table_names())
             self.assertIn("jira_oauth_connections", inspector.get_table_names())
             self.assertIn("runs", inspector.get_table_names())
-            self.assertIn("run_locks", inspector.get_table_names())
+            self.assertIn("workflow_executions", inspector.get_table_names())
+            self.assertIn("workflow_checkpoints", inspector.get_table_names())
             self.assertIn("webhook_deliveries", inspector.get_table_names())
             self.assertIn("repo_bootstrap_states", inspector.get_table_names())
             self.assertIn("managed_secrets", inspector.get_table_names())
@@ -252,6 +257,42 @@ class MigrationTests(unittest.TestCase):
             self.assertIn("discord_command_sync_runtime_states", inspector.get_table_names())
             self.assertIn("project_automations", inspector.get_table_names())
             self.assertIn("project_automation_executions", inspector.get_table_names())
+            self.assertNotIn("run_locks", inspector.get_table_names())
+
+            run_columns = {column["name"] for column in inspector.get_columns("runs")}
+            self.assertIn("workflow_id", run_columns)
+            self.assertIn("attempt_number", run_columns)
+            self.assertIn("parent_run_id", run_columns)
+            self.assertIn("entry_mode", run_columns)
+            self.assertIn("entry_stage", run_columns)
+            self.assertIn("entry_checkpoint_id", run_columns)
+            self.assertNotIn("dev_session_id", run_columns)
+            self.assertNotIn("pm_session_id", run_columns)
+            self.assertNotIn("orchestrated_session_id", run_columns)
+
+            workflow_columns = {column["name"] for column in inspector.get_columns("workflow_executions")}
+            self.assertIn("workflow_id", workflow_columns)
+            self.assertIn("last_error", workflow_columns)
+            self.assertIn("active_run_id", workflow_columns)
+            self.assertIn("latest_checkpoint_id", workflow_columns)
+            self.assertIn("source_workflow_id", workflow_columns)
+            self.assertIn("source_run_id", workflow_columns)
+            self.assertIn("updated_at", workflow_columns)
+
+            checkpoint_columns = {column["name"] for column in inspector.get_columns("workflow_checkpoints")}
+            self.assertIn("workflow_id", checkpoint_columns)
+            self.assertIn("checkpoint_kind", checkpoint_columns)
+            self.assertIn("stage", checkpoint_columns)
+            self.assertIn("payload_json", checkpoint_columns)
+            self.assertIn("codex_session_id", checkpoint_columns)
+
+            human_input_columns = {column["name"] for column in inspector.get_columns("run_human_input_requests")}
+            self.assertIn("workflow_id", human_input_columns)
+            self.assertIn("checkpoint_id", human_input_columns)
+            self.assertIn("consumed_by_run_id", human_input_columns)
+            self.assertNotIn("resumed_run_id", human_input_columns)
+            self.assertNotIn("resume_stage", human_input_columns)
+            self.assertNotIn("resume_session_id", human_input_columns)
 
             automation_indexes = {index["name"] for index in inspector.get_indexes("project_automations")}
             execution_indexes = {index["name"] for index in inspector.get_indexes("project_automation_executions")}
@@ -335,23 +376,6 @@ class MigrationTests(unittest.TestCase):
             self.assertIn("decision_cycles", inspector.get_table_names())
             self.assertIn("decision_events", inspector.get_table_names())
             self.assertIn("decision_effects_outbox", inspector.get_table_names())
-
-    def test_orchestrated_session_migration_is_idempotent_when_column_already_exists(self) -> None:
-        with TemporaryDirectory() as tmp_dir:
-            database_url = f"sqlite:///{tmp_dir}/test.db"
-            run_migrations(database_url=database_url)
-
-            engine = create_engine(database_url)
-            with engine.begin() as connection:
-                connection.execute(text("UPDATE alembic_version SET version_num = '20260310_0023'"))
-
-            run_migrations(database_url=database_url)
-
-            inspector = inspect(engine)
-            run_columns = {column["name"] for column in inspector.get_columns("runs")}
-            run_indexes = {index["name"] for index in inspector.get_indexes("runs")}
-            self.assertIn("orchestrated_session_id", run_columns)
-            self.assertIn("ix_runs_orchestrated_session_id", run_indexes)
 
     def test_pgvector_migration_serializes_extension_creation(self) -> None:
         migration_file = (
@@ -491,7 +515,7 @@ class MigrationTests(unittest.TestCase):
             with engine.begin() as connection:
                 current_revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
 
-            self.assertEqual(current_revision, "20260330_0052")
+            self.assertEqual(current_revision, "20260407_0053")
 
     def test_run_migrations_rejects_sqlite_without_test_opt_in(self) -> None:
         previous = os.environ.get("ORCHESTRATOR_ALLOW_SQLITE_FOR_TESTS")
@@ -506,3 +530,205 @@ class MigrationTests(unittest.TestCase):
             else:
                 os.environ["ORCHESTRATOR_ALLOW_SQLITE_FOR_TESTS"] = previous
             get_settings.cache_clear()
+
+    def test_workflow_execution_migration_backfills_existing_runs_and_scrubs_resume_metadata(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            database_url = f"sqlite:///{tmp_dir}/test.db"
+            self._alembic_upgrade(database_url, "20260330_0052")
+
+            engine = create_engine(database_url)
+            now = datetime.now(timezone.utc).isoformat()
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO tenants (
+                            tenant_id, name, is_enabled, jira_config, github_config, repos_config,
+                            policy_config, discord_config, created_at, updated_at
+                        ) VALUES (
+                            :tenant_id, :name, :is_enabled, :jira_config, :github_config, :repos_config,
+                            :policy_config, :discord_config, :created_at, :updated_at
+                        )
+                        """
+                    ),
+                    {
+                        "tenant_id": "tenant-a",
+                        "name": "Tenant A",
+                        "is_enabled": True,
+                        "jira_config": json.dumps({}),
+                        "github_config": json.dumps({}),
+                        "repos_config": json.dumps({}),
+                        "policy_config": json.dumps({}),
+                        "discord_config": json.dumps({}),
+                        "created_at": now,
+                        "updated_at": now,
+                    },
+                )
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO runs (
+                            run_id, tenant_id, issue_key, issue_summary, issue_description, repo_url, branch, pr_url,
+                            dev_session_id, pm_session_id, orchestrated_session_id, dedupe_scope, status, last_error,
+                            plan, created_at, started_at, finished_at
+                        ) VALUES (
+                            :run_id, :tenant_id, :issue_key, :issue_summary, :issue_description, :repo_url, :branch, :pr_url,
+                            :dev_session_id, :pm_session_id, :orchestrated_session_id, :dedupe_scope, :status, :last_error,
+                            :plan, :created_at, :started_at, :finished_at
+                        )
+                        """
+                    ),
+                    {
+                        "run_id": "run-legacy-1",
+                        "tenant_id": "tenant-a",
+                        "issue_key": "GP-184",
+                        "issue_summary": "Legacy run",
+                        "issue_description": "Legacy run description",
+                        "repo_url": "https://github.com/example/repo",
+                        "branch": "feature/GP-184",
+                        "pr_url": None,
+                        "dev_session_id": "dev-session-1",
+                        "pm_session_id": None,
+                        "orchestrated_session_id": None,
+                        "dedupe_scope": "issue_execution",
+                        "status": "failed",
+                        "last_error": "boom",
+                        "plan": json.dumps(
+                            {
+                                "trigger_context": {
+                                    "resume_stage": "dev",
+                                    "resume_session_id": "dev-session-1",
+                                    "resume_source_run_id": "run-legacy-0",
+                                    "resume_source_plan": {"plan_steps": ["restore auth flow"]},
+                                    "resume_source_state": {"review_feedback": "check it"},
+                                    "human_input_request_ids": ["request-1"],
+                                    "source": "manual",
+                                },
+                                "plan": {"plan_steps": ["restore auth flow"]},
+                            }
+                        ),
+                        "created_at": now,
+                        "started_at": now,
+                        "finished_at": now,
+                    },
+                )
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO run_human_input_requests (
+                            request_id, tenant_id, project_id, source_run_id, resumed_run_id, issue_key, source_stage,
+                            resume_stage, resume_session_id, request_type, prompt, instructions,
+                            expected_reply_format, status, request_context_json, thread_channel_id, thread_message_id,
+                            answer_encrypted, answer_source_ref, answered_at, expires_at, created_at, updated_at
+                        ) VALUES (
+                            :request_id, :tenant_id, :project_id, :source_run_id, :resumed_run_id, :issue_key, :source_stage,
+                            :resume_stage, :resume_session_id, :request_type, :prompt, :instructions,
+                            :expected_reply_format, :status, :request_context_json, :thread_channel_id, :thread_message_id,
+                            :answer_encrypted, :answer_source_ref, :answered_at, :expires_at, :created_at, :updated_at
+                        )
+                        """
+                    ),
+                    {
+                        "request_id": "request-1",
+                        "tenant_id": "tenant-a",
+                        "project_id": None,
+                        "source_run_id": "run-legacy-1",
+                        "resumed_run_id": None,
+                        "issue_key": "GP-184",
+                        "source_stage": "dev",
+                        "resume_stage": "dev",
+                        "resume_session_id": "dev-session-1",
+                        "request_type": "verification_code",
+                        "prompt": "Reply with the code",
+                        "instructions": None,
+                        "expected_reply_format": None,
+                        "status": "pending",
+                        "request_context_json": json.dumps(
+                            {
+                                "resume_source_plan": {"plan_steps": ["restore auth flow"]},
+                                "resume_source_state": {"review_feedback": "check it"},
+                                "human_input_request_ids": ["request-1"],
+                            }
+                        ),
+                        "thread_channel_id": "thread-1",
+                        "thread_message_id": "message-1",
+                        "answer_encrypted": None,
+                        "answer_source_ref": None,
+                        "answered_at": None,
+                        "expires_at": now,
+                        "created_at": now,
+                        "updated_at": now,
+                    },
+                )
+
+            run_migrations(database_url=database_url)
+
+            with engine.begin() as connection:
+                workflow_row = connection.execute(
+                    text(
+                        """
+                        SELECT workflow_id, status, active_run_id, latest_checkpoint_id
+                        FROM workflow_executions
+                        WHERE issue_key = 'GP-184'
+                        """
+                    )
+                ).mappings().one()
+                run_row = connection.execute(
+                    text(
+                        """
+                        SELECT workflow_id, attempt_number, parent_run_id, entry_mode, entry_stage, entry_checkpoint_id, plan
+                        FROM runs
+                        WHERE run_id = 'run-legacy-1'
+                        """
+                    )
+                ).mappings().one()
+                request_row = connection.execute(
+                    text(
+                        """
+                        SELECT workflow_id, checkpoint_id, consumed_by_run_id, status, request_context_json
+                        FROM run_human_input_requests
+                        WHERE request_id = 'request-1'
+                        """
+                    )
+                ).mappings().one()
+                checkpoint_row = connection.execute(
+                    text(
+                        """
+                        SELECT checkpoint_id, workflow_id, checkpoint_kind, stage, payload_json, codex_session_id
+                        FROM workflow_checkpoints
+                        WHERE run_id = 'run-legacy-1'
+                        """
+                    )
+                ).mappings().one()
+
+            self.assertEqual(workflow_row["workflow_id"], run_row["workflow_id"])
+            self.assertIsNone(workflow_row["active_run_id"])
+            self.assertEqual(workflow_row["latest_checkpoint_id"], run_row["entry_checkpoint_id"])
+            self.assertEqual(run_row["attempt_number"], 1)
+            self.assertIsNone(run_row["parent_run_id"])
+            self.assertEqual(run_row["entry_mode"], "fresh")
+            self.assertEqual(run_row["entry_stage"], "orchestrated")
+            self.assertEqual(run_row["entry_checkpoint_id"], checkpoint_row["checkpoint_id"])
+            self.assertEqual(request_row["workflow_id"], workflow_row["workflow_id"])
+            self.assertEqual(request_row["checkpoint_id"], checkpoint_row["checkpoint_id"])
+            self.assertIsNone(request_row["consumed_by_run_id"])
+            self.assertEqual(request_row["status"], "pending")
+            self.assertEqual(checkpoint_row["workflow_id"], workflow_row["workflow_id"])
+            self.assertEqual(checkpoint_row["checkpoint_kind"], "orchestrated")
+            self.assertEqual(checkpoint_row["stage"], "orchestrated")
+            self.assertIsNone(checkpoint_row["codex_session_id"])
+
+            run_plan = json.loads(run_row["plan"]) if isinstance(run_row["plan"], str) else run_row["plan"]
+            request_context = (
+                json.loads(request_row["request_context_json"])
+                if isinstance(request_row["request_context_json"], str)
+                else request_row["request_context_json"]
+            )
+            checkpoint_payload = (
+                json.loads(checkpoint_row["payload_json"])
+                if isinstance(checkpoint_row["payload_json"], str)
+                else checkpoint_row["payload_json"]
+            )
+            self.assertEqual(run_plan["trigger_context"], {"source": "manual"})
+            self.assertEqual(request_context, {})
+            self.assertIn("trigger_context", checkpoint_payload)

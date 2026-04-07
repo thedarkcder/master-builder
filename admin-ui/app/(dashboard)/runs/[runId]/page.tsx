@@ -13,16 +13,16 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { TokenStackedBarChart } from "@/components/charts";
 import {
   cancelRun,
+  createWorkflowAttempt,
   getRun,
   getTokenTimeline,
   listRunEvents,
   listRunLogs,
-  rerunRun,
   streamRunEvents,
   type RunEventRecord,
   type RunLogEventRecord,
   type RunRecord,
-  type RunRerunPayload,
+  type WorkflowAttemptCreatePayload,
   type TokenTimelineRecord
 } from "@/lib/api";
 import { buildRunDetailPath, resolveRunRouteContext } from "@/lib/dashboard-paths";
@@ -117,12 +117,11 @@ type RunPanelTab = "overview" | "agents" | "diagnostics" | "cost";
 type AgentStage = "pm" | "dev" | "test" | "review";
 const CHAT_PAGE_SIZE = 40;
 
-type RerunSessionOption = {
+type RerunAttemptOption = {
   key: string;
   label: string;
-  payload: RunRerunPayload;
-  sessionId: string | null;
-  isLastSession: boolean;
+  payload: WorkflowAttemptCreatePayload;
+  detail: string;
 };
 
 const PANEL_TABS: { id: RunPanelTab; label: string }[] = [
@@ -534,8 +533,11 @@ export default function RunDetailPage() {
     setForceRerunBusy(true);
     try {
       const cancelled = await cancelRun(credentials, run.run_id);
-      const nextRun = await rerunRun(credentials, cancelled.run_id, { mode: "fresh" });
-      setStatusLine(`Force-cancelled ${cancelled.run_id} and queued rerun ${nextRun.run_id}.`);
+      const nextRun = await createWorkflowAttempt(credentials, cancelled.workflow_id, {
+        mode: "restart",
+        checkpoint_kind: "orchestrated"
+      });
+      setStatusLine(`Force-cancelled ${cancelled.run_id} and queued restart ${nextRun.run_id}.`);
       router.push(
         buildRunDetailPath({
           tenantId: run.tenant_id,
@@ -786,85 +788,48 @@ export default function RunDetailPage() {
   }, [logs, orchestrationTrace.stageEvents, run?.created_at, run?.started_at]);
   const latestCodexSessionId = useMemo(() => {
     const fromTimeline = invocationSessionRows.find((row) => row.codexSessionId)?.codexSessionId;
-    if (fromTimeline) {
-      return fromTimeline;
-    }
-    return run?.dev_session_id ?? null;
-  }, [invocationSessionRows, run?.dev_session_id]);
-  const hasReviewResumeState = useMemo(() => {
-    if (!run?.dev_session_id || !isRecord(run.plan)) {
-      return false;
-    }
-    if (stageCheckpoints.review) {
-      return true;
-    }
-    const reviewSummary = toStringList(run.plan["review_summary"]);
-    const reviewFeedback = String(run.plan["review_feedback"] ?? "").trim();
-    return reviewSummary.length > 0 || reviewFeedback.length > 0;
-  }, [run?.dev_session_id, run?.plan, stageCheckpoints.review]);
-  const rerunSessionOptions = useMemo(() => {
+    return fromTimeline ?? null;
+  }, [invocationSessionRows]);
+  const rerunOptions = useMemo(() => {
     if (!run) {
-      return [] as RerunSessionOption[];
+      return [] as RerunAttemptOption[];
     }
-    const recencyBySession = new Map<string, number>();
-    for (const row of invocationSessionRows) {
-      const sessionId = String(row.codexSessionId ?? "").trim();
-      if (!sessionId) {
-        continue;
-      }
-      const rowTime = new Date(row.startedAt ?? row.finishedAt ?? 0).getTime();
-      const current = recencyBySession.get(sessionId) ?? Number.NEGATIVE_INFINITY;
-      if (rowTime > current) {
-        recencyBySession.set(sessionId, rowTime);
-      }
+    const options: RerunAttemptOption[] = [];
+    const hasExecutionCheckpoint = Boolean(
+      stageCheckpoints.dev || stageCheckpoints.test || stageCheckpoints.review
+    );
+    if (hasExecutionCheckpoint) {
+      options.push({
+        key: "execution",
+        label: "Resume execution",
+        payload: { mode: "resume", checkpoint_kind: "execution" },
+        detail: "Continue from the latest dev/test/review checkpoint."
+      });
     }
-    const candidates: Array<Omit<RerunSessionOption, "isLastSession">> = [
-      {
-        key: "orchestrated",
-        label: "Orchestrated",
-        payload: { mode: "resume" as const, resume_stage: "orchestrated" as const },
-        sessionId: run.orchestrated_session_id,
-      },
-      {
+    if (stageCheckpoints.pm) {
+      options.push({
         key: "pm",
-        label: "PM",
-        payload: { mode: "resume" as const, resume_stage: "pm" as const },
-        sessionId: run.pm_session_id,
-      },
-      {
-        key: "dev",
-        label: "Dev",
-        payload: { mode: "resume" as const, resume_stage: "dev" as const },
-        sessionId: run.dev_session_id,
-      },
-      {
-        key: "review",
-        label: "Review",
-        payload: { mode: "resume" as const, resume_stage: "review" as const },
-        sessionId: hasReviewResumeState ? run.dev_session_id : null,
-      },
-    ].filter((option) => Boolean(option.sessionId));
-    const sorted = candidates.sort((a, b) => {
-      const aRank = recencyBySession.get(String(a.sessionId)) ?? Number.NEGATIVE_INFINITY;
-      const bRank = recencyBySession.get(String(b.sessionId)) ?? Number.NEGATIVE_INFINITY;
-      if (aRank !== bRank) {
-        return bRank - aRank;
-      }
-      return a.label.localeCompare(b.label);
+        label: "Resume PM",
+        payload: { mode: "resume", checkpoint_kind: "pm" },
+        detail: "Continue from the latest PM checkpoint."
+      });
+    }
+    options.push({
+      key: "orchestrated",
+      label: "Restart from start",
+      payload: { mode: "restart", checkpoint_kind: "orchestrated" },
+      detail: "Create a new attempt from the orchestrated checkpoint."
     });
-    return sorted.map((option) => ({
-      ...option,
-      isLastSession: Boolean(latestCodexSessionId) && option.sessionId === latestCodexSessionId,
-    }));
-  }, [hasReviewResumeState, invocationSessionRows, latestCodexSessionId, run]);
+    return options;
+  }, [run, stageCheckpoints.dev, stageCheckpoints.pm, stageCheckpoints.review, stageCheckpoints.test]);
 
-  async function handleRerunSelection(payload: RunRerunPayload, label: string) {
+  async function handleRerunSelection(payload: WorkflowAttemptCreatePayload, label: string) {
     if (!credentials || !run) {
       return;
     }
     setRerunBusy(true);
     try {
-      const nextRun = await rerunRun(credentials, run.run_id, payload);
+      const nextRun = await createWorkflowAttempt(credentials, run.workflow_id, payload);
       setStatusLine(`Queued ${label.toLowerCase()} as run ${nextRun.run_id} for ${nextRun.issue_key}.`);
       router.push(
         buildRunDetailPath({
@@ -1356,37 +1321,19 @@ export default function RunDetailPage() {
                   {rerunBusy ? "Requeueing..." : "Rerun"}
                 </summary>
                 <div className="absolute right-0 z-20 mt-2 min-w-64 rounded-md border border-border bg-background p-1 shadow-lg">
-                  {rerunSessionOptions.map((option) => (
+                  {rerunOptions.map((option) => (
                     <button
                       key={option.key}
                       data-testid={`rerun-option-${option.key}`}
                       type="button"
                       className="flex w-full items-center justify-between rounded px-3 py-2 text-left text-xs hover:bg-muted"
-                      onClick={() => void handleRerunSelection(option.payload, `resume from ${option.label}`)}
+                      onClick={() => void handleRerunSelection(option.payload, option.label)}
                       disabled={rerunBusy}
                     >
                       <span>{option.label}</span>
-                      <span className="flex items-center gap-2">
-                        {option.isLastSession ? (
-                          <span className="rounded bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide">
-                            Last session
-                          </span>
-                        ) : null}
-                        {option.sessionId ? (
-                          <code className="max-w-28 truncate rounded bg-muted px-1">{option.sessionId}</code>
-                        ) : null}
-                      </span>
+                      <span className="max-w-40 text-right text-[10px] text-muted-foreground">{option.detail}</span>
                     </button>
                   ))}
-                  <button
-                    data-testid="rerun-option-fresh"
-                    type="button"
-                    className="flex w-full items-center justify-between rounded px-3 py-2 text-left text-xs hover:bg-muted"
-                    onClick={() => void handleRerunSelection({ mode: "fresh" }, "fresh rerun")}
-                    disabled={rerunBusy}
-                  >
-                    <span>Rerun from start</span>
-                  </button>
                 </div>
               </details>
             ) : null}

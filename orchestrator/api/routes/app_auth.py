@@ -33,7 +33,12 @@ from orchestrator.core.auth_tokens import create_auth_access_token
 from orchestrator.core.config import get_settings
 from orchestrator.core.discord.oauth import DiscordOAuthError, exchange_code_for_user, parse_discord_oauth_state
 from orchestrator.core.password_reset_email import send_password_reset_email
-from orchestrator.core.password_reset_tokens import PasswordResetTokenError, issue_password_reset_token, parse_password_reset_token
+from orchestrator.core.password_reset_tokens import (
+    PasswordResetTokenError,
+    issue_password_reset_token,
+    normalize_password_reset_timestamp,
+    parse_password_reset_token,
+)
 from orchestrator.core.platform_secret_service import (
     PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF,
     resolve_platform_secret_ref,
@@ -132,16 +137,6 @@ class PasswordResetRequest(BaseModel):
 class PasswordResetConfirmRequest(BaseModel):
     token: str = Field(min_length=1)
     new_password: str = Field(min_length=8)
-
-
-def _normalize_password_updated_at(value) -> str:  # noqa: ANN001
-    if value is None:
-        return ""
-    if value.tzinfo is None:
-        return value.replace(tzinfo=UTC).isoformat()
-    return value.astimezone(UTC).isoformat()
-
-
 @router.post("/api/public/register", response_model=PublicRegistrationResponse, status_code=status.HTTP_201_CREATED)
 def public_register(
     payload: PublicRegistrationRequest,
@@ -242,7 +237,7 @@ def confirm_password_reset(
     credential = session.get(TenantUserCredential, tenant_user.user_id)
     if credential is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid password reset token")
-    if _normalize_password_updated_at(credential.password_updated_at) != token_payload.password_updated_at:
+    if normalize_password_reset_timestamp(credential.password_updated_at) != token_payload.password_updated_at:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid password reset token")
     reset_user_password(session=session, user_id=tenant_user.user_id, new_password=payload.new_password)
     session.commit()

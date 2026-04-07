@@ -23,6 +23,7 @@ import psycopg
 
 database_url = os.environ["DATABASE_URL"]
 run_id = os.environ["RUN_ID"]
+workflow_id = os.environ["WORKFLOW_ID"]
 tenant_id = os.environ["TENANT_ID"]
 project_id = os.environ["PROJECT_ID"]
 now = datetime.now(timezone.utc)
@@ -31,8 +32,8 @@ with psycopg.connect(database_url) as connection:
     with connection.cursor() as cursor:
         cursor.execute(
             """
-            insert into runs (
-                run_id,
+            insert into workflow_executions (
+                workflow_id,
                 tenant_id,
                 project_id,
                 issue_key,
@@ -41,9 +42,72 @@ with psycopg.connect(database_url) as connection:
                 repo_url,
                 branch,
                 pr_url,
-                dev_session_id,
-                pm_session_id,
-                orchestrated_session_id,
+                dedupe_scope,
+                status,
+                last_error,
+                active_run_id,
+                latest_checkpoint_id,
+                source_workflow_id,
+                source_run_id,
+                blocked_reason,
+                created_at,
+                started_at,
+                finished_at,
+                updated_at
+            ) values (
+                %(workflow_id)s,
+                %(tenant_id)s,
+                %(project_id)s,
+                %(issue_key)s,
+                %(issue_summary)s,
+                %(issue_description)s,
+                %(repo_url)s,
+                null,
+                null,
+                'issue_execution',
+                'queued',
+                null,
+                %(run_id)s,
+                null,
+                null,
+                null,
+                null,
+                %(created_at)s,
+                null,
+                null,
+                %(created_at)s
+            )
+            """,
+            {
+                "workflow_id": workflow_id,
+                "run_id": run_id,
+                "tenant_id": tenant_id,
+                "project_id": project_id or None,
+                "issue_key": "PW-101",
+                "issue_summary": "Playwright pipeline regression",
+                "issue_description": "Seeded for invited-user pipeline verification",
+                "repo_url": "https://github.com/example/repo",
+                "created_at": now,
+            },
+        )
+        cursor.execute(
+            """
+            insert into runs (
+                run_id,
+                workflow_id,
+                tenant_id,
+                project_id,
+                issue_key,
+                issue_summary,
+                issue_description,
+                repo_url,
+                branch,
+                pr_url,
+                attempt_number,
+                parent_run_id,
+                entry_mode,
+                entry_stage,
+                entry_checkpoint_id,
                 dedupe_scope,
                 status,
                 last_error,
@@ -55,6 +119,7 @@ with psycopg.connect(database_url) as connection:
                 finished_at
             ) values (
                 %(run_id)s,
+                %(workflow_id)s,
                 %(tenant_id)s,
                 %(project_id)s,
                 %(issue_key)s,
@@ -63,8 +128,10 @@ with psycopg.connect(database_url) as connection:
                 %(repo_url)s,
                 null,
                 null,
+                1,
                 null,
-                null,
+                'fresh',
+                'orchestrated',
                 null,
                 'issue_execution',
                 'queued',
@@ -79,6 +146,7 @@ with psycopg.connect(database_url) as connection:
             """,
             {
                 "run_id": run_id,
+                "workflow_id": workflow_id,
                 "tenant_id": tenant_id,
                 "project_id": project_id or None,
                 "issue_key": "PW-101",
@@ -95,6 +163,7 @@ with psycopg.connect(database_url) as connection:
       ...process.env,
       DATABASE_URL: psycopgDatabaseUrl,
       RUN_ID: runId,
+      WORKFLOW_ID: `workflow-${runId}`,
       TENANT_ID: tenantId,
       PROJECT_ID: projectId ?? "",
     },

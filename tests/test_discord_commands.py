@@ -26,7 +26,7 @@ from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.pre_run_check import PreRunCheckResult
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
-from orchestrator.storage.models import JiraOAuthConnection, Project, Run, Tenant
+from orchestrator.storage.models import JiraOAuthConnection, Project, Run, Tenant, WorkflowExecution
 from orchestrator.tools.github_app import GitHubApiError
 from orchestrator.tools.jira_oauth import (
     JiraIssueBulkCreateResult,
@@ -116,22 +116,58 @@ class DiscordCommandApiTests(unittest.TestCase):
     def _queue_run(self, *, run_id: str, issue_key: str, status: str, project_id: str | None = None) -> None:
         with self.session_factory() as session:
             now = datetime.now(timezone.utc)
+            workflow_id = f"workflow-{run_id}"
+            project_id = project_id or f"{self.tenant_id}-default"
             session.add(
-                Run(
-                    run_id=run_id,
+                WorkflowExecution(
+                    workflow_id=workflow_id,
                     tenant_id=self.tenant_id,
-                    project_id=project_id or f"{self.tenant_id}-default",
+                    project_id=project_id,
                     issue_key=issue_key,
                     issue_summary=f"Issue {issue_key}",
                     issue_description="desc",
                     repo_url="https://github.com/example/repo",
                     branch=None,
                     pr_url=None,
+                    dedupe_scope="issue_execution",
+                    status=status,
+                    last_error=None,
+                    active_run_id=run_id,
+                    latest_checkpoint_id=None,
+                    source_workflow_id=None,
+                    source_run_id=None,
+                    blocked_reason=None,
+                    created_at=now,
+                    started_at=now if status == "running" else None,
+                    finished_at=None if status in {"queued", "running"} else now,
+                    updated_at=now,
+                )
+            )
+            session.add(
+                Run(
+                    run_id=run_id,
+                    workflow_id=workflow_id,
+                    tenant_id=self.tenant_id,
+                    project_id=project_id,
+                    issue_key=issue_key,
+                    issue_summary=f"Issue {issue_key}",
+                    issue_description="desc",
+                    repo_url="https://github.com/example/repo",
+                    branch=None,
+                    pr_url=None,
+                    attempt_number=1,
+                    parent_run_id=None,
+                    entry_mode="fresh",
+                    entry_stage="orchestrated",
+                    entry_checkpoint_id=None,
+                    dedupe_scope="issue_execution",
                     status=status,
                     last_error=None,
                     plan=None,
                     created_at=now,
                     started_at=now if status == "running" else None,
+                    last_heartbeat_at=None,
+                    worker_service_instance_id=None,
                     finished_at=None if status in {"queued", "running"} else now,
                 )
             )

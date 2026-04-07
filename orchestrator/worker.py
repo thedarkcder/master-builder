@@ -20,7 +20,6 @@ from orchestrator.core.platform_metrics import platform_metrics
 from orchestrator.core.project_policy import resolve_effective_policy
 from orchestrator.core.runs import RUN_STATUS_RUNNING
 from orchestrator.core.worker.run_health import (
-    cleanup_orphan_run_locks,
     recover_stale_running_runs,
     worker_service_instance_id_for_mode,
 )
@@ -318,15 +317,12 @@ def _recover_worker_run_health_once(
     service_instance_id: str,
 ) -> None:
     with session_factory() as session:
-        orphaned_locks = cleanup_orphan_run_locks(session=session)
         recovered = recover_stale_running_runs(
             session=session,
             settings=settings,
             recovered_by_agent_id=agent_id,
             recovered_by_service_instance_id=service_instance_id,
         )
-    if orphaned_locks:
-        logger.info("worker_orphan_lock_cleanup_completed removed=%s", orphaned_locks)
     for item in recovered:
         logger.warning(
             "worker_stale_run_recovered run_id=%s tenant_id=%s issue_key=%s previous_owner=%s last_heartbeat_at=%s",

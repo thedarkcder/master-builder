@@ -74,6 +74,7 @@ from orchestrator.core.discord.oauth import (
     discord_oauth_is_configured,
     issue_discord_oauth_state,
 )
+from orchestrator.core.email_delivery import EmailDeliveryError
 from orchestrator.core.invites import email_delivery
 from orchestrator.core.platform_secret_service import (
     PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF,
@@ -135,6 +136,27 @@ def _build_invite_url(*, request: Request, raw_token: str) -> str:
     settings = get_settings()
     base_url = resolve_public_base_url(request=request, configured_base_url=settings.admin_ui_base_url)
     return f"{base_url}/invite/accept?token={raw_token}"
+
+
+def _send_tenant_invite_email_or_raise(
+    *,
+    email: str,
+    full_name: str | None,
+    invite_url: str,
+    tenant_name: str,
+) -> None:
+    try:
+        email_delivery.send_tenant_invite_email(
+            email=email,
+            full_name=full_name,
+            invite_url=invite_url,
+            tenant_name=tenant_name,
+        )
+    except EmailDeliveryError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Invite email delivery is unavailable",
+        ) from exc
 
 
 def _invite_to_schema_with_url(invite: object, *, invite_url: str | None = None) -> TenantInviteRead:
@@ -331,14 +353,14 @@ def create_tenant_invite(
         mode_override=payload.mode_override,
         invited_by_user_id=principal.user_id,
     )
-    session.commit()
     invite_url = _build_invite_url(request=request, raw_token=raw_token)
-    email_delivery.send_tenant_invite_email(
+    _send_tenant_invite_email_or_raise(
         email=invite.email,
         full_name=invite.full_name,
         invite_url=invite_url,
         tenant_name=tenant.name,
     )
+    session.commit()
     return _invite_to_schema_with_url(invite, invite_url=invite_url)
 
 
@@ -374,14 +396,14 @@ def resend_tenant_invite(
     if invite is None or tenant is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invite not found")
     next_invite, raw_token = resend_invite(session=session, invite=invite, invited_by_user_id=principal.user_id)
-    session.commit()
     invite_url = _build_invite_url(request=request, raw_token=raw_token)
-    email_delivery.send_tenant_invite_email(
+    _send_tenant_invite_email_or_raise(
         email=next_invite.email,
         full_name=next_invite.full_name,
         invite_url=invite_url,
         tenant_name=tenant.name,
     )
+    session.commit()
     return TenantInviteActionResult(invite=_invite_to_schema_with_url(next_invite, invite_url=invite_url))
 
 

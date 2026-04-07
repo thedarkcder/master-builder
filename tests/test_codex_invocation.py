@@ -218,16 +218,17 @@ class CodexInvocationTests(unittest.TestCase):
             command="workflow",
             stage="pm",
             working_dir=".",
+            workflow_id="workflow-1",
             run_id="run-1",
         )
 
         with (
             patch("orchestrator.core.runtime_invocation._get_log_writer", return_value=self._Writer()),
             patch(
-                "orchestrator.core.runtime_invocation._load_run_session_id",
+                "orchestrator.core.runtime_invocation._load_checkpoint_session_id",
                 return_value="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
             ) as load_mock,
-            patch("orchestrator.core.runtime_invocation._persist_run_session_id") as persist_mock,
+            patch("orchestrator.core.runtime_invocation._persist_checkpoint_session_id") as persist_mock,
         ):
             payload = invoke_runtime_json(
                 runtime=runtime,
@@ -238,11 +239,17 @@ class CodexInvocationTests(unittest.TestCase):
 
         self.assertEqual(payload, {"ok": True})
         self.assertEqual(runtime_call["resume_session_id"], "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
-        load_mock.assert_called_with(run_id="run-1", session_column="pm_session_id")
+        load_mock.assert_called_with(
+            workflow_id="workflow-1",
+            run_id="run-1",
+            checkpoint_kind="pm",
+        )
         persist_mock.assert_called_with(
+            workflow_id="workflow-1",
             run_id="run-1",
             session_id="bbbbbbbb-cccc-dddd-eeee-ffffffffffff",
-            session_column="pm_session_id",
+            checkpoint_kind="pm",
+            stage="pm",
         )
 
     def test_invoke_runtime_json_uses_execution_session_bucket_for_dev(self) -> None:
@@ -275,13 +282,14 @@ class CodexInvocationTests(unittest.TestCase):
             command="workflow",
             stage="dev",
             working_dir=".",
+            workflow_id="workflow-1",
             run_id="run-1",
         )
 
         with (
             patch("orchestrator.core.runtime_invocation._get_log_writer", return_value=self._Writer()),
-            patch("orchestrator.core.runtime_invocation._load_run_session_id", return_value=None) as load_mock,
-            patch("orchestrator.core.runtime_invocation._persist_run_session_id") as persist_mock,
+            patch("orchestrator.core.runtime_invocation._load_checkpoint_session_id", return_value=None) as load_mock,
+            patch("orchestrator.core.runtime_invocation._persist_checkpoint_session_id") as persist_mock,
         ):
             payload = invoke_runtime_json(
                 runtime=runtime,
@@ -292,11 +300,17 @@ class CodexInvocationTests(unittest.TestCase):
 
         self.assertEqual(payload, {"ok": True})
         self.assertEqual(runtime_call["resume_session_id"], None)
-        load_mock.assert_called_with(run_id="run-1", session_column="dev_session_id")
+        load_mock.assert_called_with(
+            workflow_id="workflow-1",
+            run_id="run-1",
+            checkpoint_kind="execution",
+        )
         persist_mock.assert_called_with(
+            workflow_id="workflow-1",
             run_id="run-1",
             session_id="bbbbbbbb-cccc-dddd-eeee-ffffffffffff",
-            session_column="dev_session_id",
+            checkpoint_kind="execution",
+            stage="dev",
         )
 
     def test_invoke_runtime_json_uses_orchestrated_session_bucket(self) -> None:
@@ -329,16 +343,17 @@ class CodexInvocationTests(unittest.TestCase):
             command="workflow",
             stage="orchestrated_run",
             working_dir=".",
+            workflow_id="workflow-1",
             run_id="run-1",
         )
 
         with (
             patch("orchestrator.core.runtime_invocation._get_log_writer", return_value=self._Writer()),
             patch(
-                "orchestrator.core.runtime_invocation._load_run_session_id",
+                "orchestrator.core.runtime_invocation._load_checkpoint_session_id",
                 return_value="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
             ) as load_mock,
-            patch("orchestrator.core.runtime_invocation._persist_run_session_id") as persist_mock,
+            patch("orchestrator.core.runtime_invocation._persist_checkpoint_session_id") as persist_mock,
         ):
             payload = invoke_runtime_json(
                 runtime=runtime,
@@ -349,11 +364,17 @@ class CodexInvocationTests(unittest.TestCase):
 
         self.assertEqual(payload, {"ok": True})
         self.assertEqual(runtime_call["resume_session_id"], "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
-        load_mock.assert_called_with(run_id="run-1", session_column="orchestrated_session_id")
+        load_mock.assert_called_with(
+            workflow_id="workflow-1",
+            run_id="run-1",
+            checkpoint_kind="orchestrated",
+        )
         persist_mock.assert_called_with(
+            workflow_id="workflow-1",
             run_id="run-1",
             session_id="bbbbbbbb-cccc-dddd-eeee-ffffffffffff",
-            session_column="orchestrated_session_id",
+            checkpoint_kind="orchestrated",
+            stage="orchestrated_run",
         )
 
     def test_invoke_runtime_json_emits_actual_usage_metrics(self) -> None:

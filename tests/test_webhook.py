@@ -45,6 +45,7 @@ from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import FollowupContext, Project, Run, Tenant, WebhookJob
 from orchestrator.tools.discord_api import DiscordApiError
 from orchestrator.tools.jira_oauth import JiraIssueDetail, JiraIssuePreview, JiraOAuthError
+from tests.workflow_test_support import add_run_with_workflow, make_run
 
 pytestmark = pytest.mark.contract
 
@@ -1110,7 +1111,7 @@ class JiraWebhookTests(unittest.TestCase):
 
     def test_webhook_suppresses_rerun_during_decision_gate_cooldown(self) -> None:
         with self.session_factory() as session:
-            run = Run(
+            run = make_run(
                 run_id="run-decision-gate-1",
                 tenant_id="tenant-webhook",
                 project_id=None,
@@ -1122,12 +1123,11 @@ class JiraWebhookTests(unittest.TestCase):
                 pr_url=None,
                 status="blocked",
                 last_error="Decision Gate required: Missing GTD sections",
-                plan=None,
                 created_at=datetime.now(timezone.utc) - timedelta(minutes=2),
                 started_at=None,
                 finished_at=datetime.now(timezone.utc) - timedelta(minutes=2),
             )
-            session.add(run)
+            add_run_with_workflow(session, run, workflow_status="blocked")
             session.commit()
 
         payload = self._jira_issue_payload(issue_key="TP-804", status_name="To Do")
@@ -1142,7 +1142,7 @@ class JiraWebhookTests(unittest.TestCase):
 
     def test_webhook_allows_rerun_after_decision_gate_cooldown(self) -> None:
         with self.session_factory() as session:
-            run = Run(
+            run = make_run(
                 run_id="run-decision-gate-2",
                 tenant_id="tenant-webhook",
                 project_id=None,
@@ -1154,12 +1154,11 @@ class JiraWebhookTests(unittest.TestCase):
                 pr_url=None,
                 status="blocked",
                 last_error="Decision Gate required: Missing GTD sections",
-                plan=None,
                 created_at=datetime.now(timezone.utc) - timedelta(minutes=20),
                 started_at=None,
                 finished_at=datetime.now(timezone.utc) - timedelta(minutes=20),
             )
-            session.add(run)
+            add_run_with_workflow(session, run, workflow_status="blocked")
             session.commit()
 
         payload = self._jira_issue_payload(issue_key="TP-805", status_name="To Do")

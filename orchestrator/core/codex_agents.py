@@ -151,21 +151,22 @@ class CodexWorkflowAgents:
         return _emit
 
     def _resume_session_id_for_stage(self, *, request: WorkflowRequest, stage: str) -> str | None:
-        if str(request.resume_mode or "").strip().lower() != "resume":
+        if str(request.entry_mode or "").strip().lower() != "resume":
             return None
-        resume_stage = str(request.resume_stage or "").strip().lower()
-        session_id = str(request.resume_session_id or "").strip() or None
+        checkpoint_kind = str(request.checkpoint_kind or "").strip().lower()
+        session_id = str(request.checkpoint_session_id or "").strip() or None
         if not session_id:
             return None
-        if resume_stage == stage:
+        if checkpoint_kind == "orchestrated" and stage == "pm":
             return session_id
-        if resume_stage == "orchestrated" and stage == "pm":
+        if checkpoint_kind == "pm" and stage == "pm":
+            return session_id
+        if checkpoint_kind == "execution" and stage in {"dev", "test", "review"}:
             return session_id
         return None
 
     def _resume_source_state(self, *, request: WorkflowRequest) -> dict[str, Any]:
-        trigger_context = request.trigger_context if isinstance(request.trigger_context, dict) else {}
-        payload = trigger_context.get("resume_source_state")
+        payload = request.checkpoint_payload
         return dict(payload) if isinstance(payload, dict) else {}
 
     def _invoke_stage_payload(
@@ -185,6 +186,7 @@ class CodexWorkflowAgents:
             command="workflow",
             stage=stage,
             working_dir=request.execution_repo_dir or ".",
+            workflow_id=request.workflow_id,
             issue_key=request.issue_key,
             run_id=request.run_id,
             attempt=attempt,

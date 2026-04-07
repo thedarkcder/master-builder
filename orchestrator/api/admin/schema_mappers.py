@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from orchestrator.api.admin.project_normalization import normalize_project_discord_config
-from orchestrator.api.schemas import ProjectRead, RunRead, TenantRead
+from orchestrator.api.schemas import ProjectRead, RunRead, TenantRead, WorkflowRead
 from orchestrator.core.config import get_settings
 from orchestrator.core.project_policy import resolve_effective_policy
-from orchestrator.storage.models import Project, Run, Tenant
+from orchestrator.storage.models import Project, Run, Tenant, WorkflowExecution
 
 
 def tenant_to_schema(tenant: Tenant) -> TenantRead:
@@ -29,6 +29,12 @@ def tenant_to_schema(tenant: Tenant) -> TenantRead:
 def run_to_schema(run: Run) -> RunRead:
     return RunRead(
         run_id=run.run_id,
+        workflow_id=run.workflow_id,
+        attempt_number=run.attempt_number,
+        parent_run_id=run.parent_run_id,
+        entry_mode=run.entry_mode,
+        entry_stage=run.entry_stage,
+        entry_checkpoint_id=run.entry_checkpoint_id,
         tenant_id=run.tenant_id,
         project_id=run.project_id,
         issue_key=run.issue_key,
@@ -37,15 +43,40 @@ def run_to_schema(run: Run) -> RunRead:
         repo_url=run.repo_url,
         branch=run.branch,
         pr_url=run.pr_url,
-        dev_session_id=run.dev_session_id,
-        pm_session_id=run.pm_session_id,
-        orchestrated_session_id=run.orchestrated_session_id,
         status=run.status,
+        waiting_for_input=run.status == "waiting_for_input",
+        pending_input_request_id=None,
         last_error=None if run.status == "succeeded" else run.last_error,
         plan=run.plan,
         created_at=run.created_at,
         started_at=run.started_at,
         finished_at=run.finished_at,
+    )
+
+
+def workflow_to_schema(workflow: WorkflowExecution, *, runs: list[RunRead], pending_input_request_id: str | None, latest_checkpoint_kind: str | None) -> WorkflowRead:
+    return WorkflowRead(
+        workflow_id=workflow.workflow_id,
+        tenant_id=workflow.tenant_id,
+        project_id=workflow.project_id,
+        issue_key=workflow.issue_key,
+        issue_summary=workflow.issue_summary,
+        repo_url=workflow.repo_url,
+        branch=workflow.branch,
+        pr_url=workflow.pr_url,
+        dedupe_scope=workflow.dedupe_scope,
+        status=workflow.status,
+        active_run_id=workflow.active_run_id,
+        latest_checkpoint_id=workflow.latest_checkpoint_id,
+        source_workflow_id=workflow.source_workflow_id,
+        source_run_id=workflow.source_run_id,
+        blocked_reason=workflow.blocked_reason,
+        pending_input_request_id=pending_input_request_id,
+        latest_checkpoint_kind=latest_checkpoint_kind,
+        runs=runs,
+        created_at=workflow.created_at,
+        started_at=workflow.started_at,
+        finished_at=workflow.finished_at,
     )
 
 

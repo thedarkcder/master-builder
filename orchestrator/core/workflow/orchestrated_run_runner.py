@@ -133,8 +133,8 @@ class OrchestratedRunWorkflowExecutor:
         last_test_result: TestResult | None = None
         last_review_result: ReviewResult | None = None
 
-        if _should_resume_from_dev(request):
-            plan = _resume_pm_plan(request.resume_source_plan)
+        if _should_resume_from_pm(request) or _should_resume_from_dev(request):
+            plan = _resume_pm_plan(request.checkpoint_payload)
             if plan is None:
                 return self._failure_result(
                     request=request,
@@ -161,7 +161,7 @@ class OrchestratedRunWorkflowExecutor:
                 )
             )
         elif _should_resume_from_review(request):
-            plan = _resume_pm_plan(request.resume_source_plan)
+            plan = _resume_pm_plan(request.checkpoint_payload)
             if plan is None:
                 return self._failure_result(
                     request=request,
@@ -265,7 +265,7 @@ class OrchestratedRunWorkflowExecutor:
                 )
             return None
 
-        if _should_resume_from_dev(request):
+        if _should_resume_from_pm(request) or _should_resume_from_dev(request):
             checkpoint_failure = _persist_stage_checkpoint(
                 WorkflowStageCheckpoint(
                     stage="pm",
@@ -839,23 +839,31 @@ class OrchestratedRunWorkflowExecutor:
         )
 
 
+def _should_resume_from_pm(request: WorkflowRequest) -> bool:
+    return (
+        str(request.entry_mode or "").strip().lower() == "resume"
+        and str(request.checkpoint_kind or "").strip().lower() == "pm"
+    )
+
+
 def _should_resume_from_dev(request: WorkflowRequest) -> bool:
     return (
-        str(request.resume_mode or "").strip().lower() == "resume"
-        and str(request.resume_stage or "").strip().lower() == "dev"
+        str(request.entry_mode or "").strip().lower() == "resume"
+        and str(request.checkpoint_kind or "").strip().lower() == "execution"
+        and str(request.entry_stage or "").strip().lower() == "dev"
     )
 
 
 def _should_resume_from_review(request: WorkflowRequest) -> bool:
     return (
-        str(request.resume_mode or "").strip().lower() == "resume"
-        and str(request.resume_stage or "").strip().lower() == "review"
+        str(request.entry_mode or "").strip().lower() == "resume"
+        and str(request.checkpoint_kind or "").strip().lower() == "execution"
+        and str(request.entry_stage or "").strip().lower() == "review"
     )
 
 
 def _resume_source_state(request: WorkflowRequest) -> dict[str, Any]:
-    trigger_context = request.trigger_context if isinstance(request.trigger_context, dict) else {}
-    payload = trigger_context.get("resume_source_state")
+    payload = request.checkpoint_payload
     return dict(payload) if isinstance(payload, dict) else {}
 
 
@@ -882,6 +890,8 @@ def _resume_test_result(source_state: dict[str, Any], *, default_guidance: list[
 def _resume_pm_plan(payload: dict | None) -> PmPlan | None:
     if not isinstance(payload, dict):
         return None
+    if isinstance(payload.get("plan"), dict):
+        payload = dict(payload.get("plan"))
     return PmPlan(
         plan_steps=[str(item).strip() for item in payload.get("plan_steps", []) if str(item).strip()],
         acceptance_criteria=[

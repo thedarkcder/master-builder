@@ -2,14 +2,18 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import delete
 from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from orchestrator.core.project_routing import find_active_project_for_issue_key
 from orchestrator.core.runs import mark_run_terminal
+from orchestrator.core.workflow.checkpoints import (
+    checkpoint_kind_for_stage,
+    checkpoint_payload_for_plan,
+    upsert_workflow_checkpoint,
+)
 from orchestrator.core.workflow.runner import WorkflowResult, WorkflowStageCheckpoint
-from orchestrator.storage.models import Project, Run, RunLock
+from orchestrator.storage.models import Project, Run, WorkflowExecution
 from orchestrator.storage.run_queue_events import notify_run_enqueued
 
 RUN_STATUS_RUNNING = "running"
@@ -80,14 +84,8 @@ def _apply_stage_checkpoint(plan_payload: dict, checkpoint: WorkflowStageCheckpo
     return merged
 
 
-def _release_run_lock(session: Session, *, run: Run) -> None:
-    session.execute(
-        delete(RunLock).where(
-            RunLock.tenant_id == run.tenant_id,
-            RunLock.issue_key == run.issue_key,
-            RunLock.run_id == run.run_id,
-        )
-    )
+def _workflow_for_run(session: Session, *, run: Run) -> WorkflowExecution | None:
+    return session.get(WorkflowExecution, run.workflow_id)
 
 
 def start_run(
@@ -104,6 +102,12 @@ def start_run(
         run.started_at = started_at
         run.last_heartbeat_at = started_at
         run.worker_service_instance_id = str(worker_service_instance_id or "").strip() or None
+        workflow = _workflow_for_run(session, run=run)
+        if workflow is not None:
+            workflow.status = RUN_STATUS_RUNNING
+            workflow.started_at = workflow.started_at or started_at
+            workflow.active_run_id = run.run_id
+            workflow.updated_at = started_at
         session.commit()
         session.refresh(run)
         return run
@@ -128,6 +132,12 @@ def start_run(
     run.started_at = started_at
     run.last_heartbeat_at = started_at
     run.worker_service_instance_id = str(worker_service_instance_id or "").strip() or None
+    workflow = _workflow_for_run(session, run=run)
+    if workflow is not None:
+        workflow.status = RUN_STATUS_RUNNING
+        workflow.started_at = workflow.started_at or started_at
+        workflow.active_run_id = run.run_id
+        workflow.updated_at = started_at
     session.commit()
     session.refresh(run)
     return run
@@ -259,7 +269,15 @@ def finalize_cancelled_run(
     )
     if run.finished_at is None:
         run.finished_at = datetime.now(timezone.utc)
-    _release_run_lock(session, run=run)
+    run.last_heartbeat_at = None
+    run.worker_service_instance_id = None
+    workflow = _workflow_for_run(session, run=run)
+    if workflow is not None:
+        workflow.status = run.status
+        workflow.last_error = run.last_error
+        workflow.active_run_id = run.run_id
+        workflow.finished_at = run.finished_at
+        workflow.updated_at = run.finished_at or datetime.now(timezone.utc)
     session.commit()
     session.refresh(run)
     return run
@@ -293,6 +311,8 @@ def finalize_workflow_result(
     run.plan = _merge_run_plan(current_plan=run.plan, next_plan=plan_payload)
     run.pr_url = workflow_result.pr_url
     run.finished_at = datetime.now(timezone.utc)
+    run.last_heartbeat_at = None
+    run.worker_service_instance_id = None
     if workflow_result.succeeded:
         run.status = RUN_STATUS_SUCCEEDED
         run.last_error = None
@@ -303,7 +323,14 @@ def finalize_workflow_result(
         else:
             run.last_error = "Workflow failed without diagnostics"
 
-    _release_run_lock(session, run=run)
+    workflow = _workflow_for_run(session, run=run)
+    if workflow is not None:
+        workflow.status = run.status
+        workflow.last_error = run.last_error
+        workflow.active_run_id = run.run_id
+        workflow.finished_at = run.finished_at
+        workflow.updated_at = run.finished_at or datetime.now(timezone.utc)
+        workflow.blocked_reason = None
     session.commit()
     session.refresh(run)
     return run
@@ -346,6 +373,13 @@ def requeue_workflow_result_for_capability(
     run.last_heartbeat_at = None
     run.finished_at = None
     run.worker_service_instance_id = None
+    workflow = _workflow_for_run(session, run=run)
+    if workflow is not None:
+        workflow.status = "queued"
+        workflow.last_error = None
+        workflow.finished_at = None
+        workflow.active_run_id = run.run_id
+        workflow.updated_at = datetime.now(timezone.utc)
     notify_run_enqueued(
         session,
         tenant_id=run.tenant_id,
@@ -353,7 +387,6 @@ def requeue_workflow_result_for_capability(
         run_id=run.run_id,
         issue_key=run.issue_key,
     )
-    _release_run_lock(session, run=run)
     session.commit()
     session.refresh(run)
     return run
@@ -396,6 +429,13 @@ def requeue_workflow_result_for_stale_snapshot(
     run.last_heartbeat_at = None
     run.finished_at = None
     run.worker_service_instance_id = None
+    workflow = _workflow_for_run(session, run=run)
+    if workflow is not None:
+        workflow.status = "queued"
+        workflow.last_error = None
+        workflow.finished_at = None
+        workflow.active_run_id = run.run_id
+        workflow.updated_at = datetime.now(timezone.utc)
     notify_run_enqueued(
         session,
         tenant_id=run.tenant_id,
@@ -403,7 +443,6 @@ def requeue_workflow_result_for_stale_snapshot(
         run_id=run.run_id,
         issue_key=run.issue_key,
     )
-    _release_run_lock(session, run=run)
     session.commit()
     session.refresh(run)
     return run
@@ -442,6 +481,17 @@ def persist_stage_checkpoint(
         run.pr_url = checkpoint.dev_result.pr_url
     elif checkpoint.stage == "review" and checkpoint.review_result is not None:
         run.pr_url = checkpoint.review_result.pr_url or run.pr_url
+    checkpoint_kind = checkpoint_kind_for_stage(checkpoint.stage)
+    if checkpoint_kind is not None:
+        upsert_workflow_checkpoint(
+            session,
+            workflow_id=run.workflow_id,
+            run_id=run.run_id,
+            checkpoint_kind=checkpoint_kind,
+            stage=checkpoint.stage,
+            payload=checkpoint_payload_for_plan(checkpoint_kind=checkpoint_kind, plan=next_plan),
+            now=datetime.now(timezone.utc),
+        )
     session.commit()
     session.refresh(run)
     return run
