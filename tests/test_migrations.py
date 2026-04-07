@@ -14,6 +14,7 @@ from sqlalchemy import create_engine, inspect
 from sqlalchemy import text
 
 from orchestrator.core.config import get_settings
+from orchestrator.core.secrets import encrypt_value
 from orchestrator.storage.migrations import run_migrations
 
 
@@ -49,7 +50,7 @@ class MigrationTests(unittest.TestCase):
 
         duplicates = {revision_id: count for revision_id, count in Counter(revision_ids).items() if count > 1}
         self.assertEqual(duplicates, {})
-        self.assertEqual(script.get_heads(), ["20260407_0053"])
+        self.assertEqual(script.get_heads(), ["20260407_0054"])
 
     def test_jira_feature_migrations_chain_after_staging_worker_head(self) -> None:
         """Branch-specific migrations chained after staging merge head (20260328_0045)."""
@@ -92,6 +93,10 @@ class MigrationTests(unittest.TestCase):
             "20260407_0053_workflow_execution.py": (
                 'revision = "20260407_0053"',
                 'down_revision = "20260330_0052"',
+            ),
+            "20260407_0054_move_project_secret_refs_to_managed.py": (
+                'revision = "20260407_0054"',
+                'down_revision = "20260407_0053"',
             ),
         }
 
@@ -158,7 +163,7 @@ class MigrationTests(unittest.TestCase):
             self.assertIn("tenant_user_discord_identities", inspector.get_table_names())
             with engine.begin() as connection:
                 versions = connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
-            self.assertEqual(versions, ["20260407_0053"])
+            self.assertEqual(versions, ["20260407_0054"])
 
     def test_run_migrations_repairs_legacy_stream_only_0039_head(self) -> None:
         with TemporaryDirectory() as tmp_dir:
@@ -202,7 +207,7 @@ class MigrationTests(unittest.TestCase):
             self.assertIn("tenant_user_discord_identities", inspector.get_table_names())
             with engine.begin() as connection:
                 versions = connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
-            self.assertEqual(versions, ["20260407_0053"])
+            self.assertEqual(versions, ["20260407_0054"])
 
     def test_run_migrations_repairs_stamp_when_schema_0045_but_version_0044(self) -> None:
         with TemporaryDirectory() as tmp_dir:
@@ -216,7 +221,7 @@ class MigrationTests(unittest.TestCase):
 
             with engine.begin() as connection:
                 versions = connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
-            self.assertEqual(versions, ["20260407_0053"])
+            self.assertEqual(versions, ["20260407_0054"])
 
     def test_run_migrations_disables_alembic_logger_reconfiguration(self) -> None:
         fake_config = MagicMock()
@@ -515,7 +520,7 @@ class MigrationTests(unittest.TestCase):
             with engine.begin() as connection:
                 current_revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
 
-            self.assertEqual(current_revision, "20260407_0053")
+            self.assertEqual(current_revision, "20260407_0054")
 
     def test_run_migrations_rejects_sqlite_without_test_opt_in(self) -> None:
         previous = os.environ.get("ORCHESTRATOR_ALLOW_SQLITE_FOR_TESTS")
@@ -732,3 +737,161 @@ class MigrationTests(unittest.TestCase):
             self.assertEqual(run_plan["trigger_context"], {"source": "manual"})
             self.assertEqual(request_context, {})
             self.assertIn("trigger_context", checkpoint_payload)
+
+    def test_project_secret_migration_moves_existing_refs_to_project_managed_secrets(self) -> None:
+        previous_key = os.environ.get("ORCHESTRATOR_SECRETS_ENCRYPTION_KEY")
+        encryption_key = "REMOVED_PRIVATE_CREDENTIAL"
+        try:
+            os.environ["ORCHESTRATOR_SECRETS_ENCRYPTION_KEY"] = encryption_key
+            get_settings.cache_clear()
+            with TemporaryDirectory() as tmp_dir:
+                database_url = f"sqlite:///{tmp_dir}/test.db"
+                self._alembic_upgrade(database_url, "20260407_0053")
+
+                engine = create_engine(database_url)
+                now = datetime.now(timezone.utc).isoformat()
+                with engine.begin() as connection:
+                    connection.execute(
+                        text(
+                            """
+                            INSERT INTO tenants (
+                                tenant_id, name, is_enabled, jira_config, github_config, repos_config,
+                                policy_config, discord_config, created_at, updated_at
+                            ) VALUES (
+                                :tenant_id, :name, :is_enabled, :jira_config, :github_config, :repos_config,
+                                :policy_config, :discord_config, :created_at, :updated_at
+                            )
+                            """
+                        ),
+                        {
+                            "tenant_id": "tenant-a",
+                            "name": "Tenant A",
+                            "is_enabled": True,
+                            "jira_config": json.dumps({}),
+                            "github_config": json.dumps({}),
+                            "repos_config": json.dumps({}),
+                            "policy_config": json.dumps({}),
+                            "discord_config": json.dumps({}),
+                            "created_at": now,
+                            "updated_at": now,
+                        },
+                    )
+                    connection.execute(
+                        text(
+                            """
+                            INSERT INTO projects (
+                                project_id, tenant_id, name, github_repository, jira_project_key,
+                                policy_overrides, environment, secret_refs, discord_config, is_archived,
+                                created_at, updated_at
+                            ) VALUES (
+                                :project_id, :tenant_id, :name, :github_repository, :jira_project_key,
+                                :policy_overrides, :environment, :secret_refs, :discord_config, :is_archived,
+                                :created_at, :updated_at
+                            )
+                            """
+                        ),
+                        {
+                            "project_id": "project-1",
+                            "tenant_id": "tenant-a",
+                            "name": "Project One",
+                            "github_repository": "https://github.com/example/project-one",
+                            "jira_project_key": "APP",
+                            "policy_overrides": json.dumps({}),
+                            "environment": json.dumps({}),
+                            "secret_refs": json.dumps(
+                                {
+                                    "SERVICE_ID": "SUPABASE_APPLE_SERVICE_ID",
+                                    "CALLBACK_URL": "tenant/tenant-a/SUPABASE_APPLE_CALLBACK_URL",
+                                    "INLINE_SECRET": "Ft6ygA&aYkf%hy",
+                                }
+                            ),
+                            "discord_config": json.dumps({}),
+                            "is_archived": False,
+                            "created_at": now,
+                            "updated_at": now,
+                        },
+                    )
+                    connection.execute(
+                        text(
+                            """
+                            INSERT INTO managed_secrets (secret_ref, value_encrypted, created_at, updated_at)
+                            VALUES (:secret_ref, :value_encrypted, :created_at, :updated_at)
+                            """
+                        ),
+                        {
+                            "secret_ref": "tenant/tenant-a/SUPABASE_APPLE_SERVICE_ID",
+                            "value_encrypted": encrypt_value(
+                                plaintext="com.example.app",
+                                encryption_key=encryption_key,
+                            ),
+                            "created_at": now,
+                            "updated_at": now,
+                        },
+                    )
+                    connection.execute(
+                        text(
+                            """
+                            INSERT INTO managed_secrets (secret_ref, value_encrypted, created_at, updated_at)
+                            VALUES (:secret_ref, :value_encrypted, :created_at, :updated_at)
+                            """
+                        ),
+                        {
+                            "secret_ref": "tenant/tenant-a/SUPABASE_APPLE_CALLBACK_URL",
+                            "value_encrypted": encrypt_value(
+                                plaintext="https://example.example.com/auth/callback",
+                                encryption_key=encryption_key,
+                            ),
+                            "created_at": now,
+                            "updated_at": now,
+                        },
+                    )
+
+                run_migrations(database_url=database_url)
+
+                with engine.begin() as connection:
+                    project_row = connection.execute(
+                        text(
+                            """
+                            SELECT secret_refs
+                            FROM projects
+                            WHERE project_id = 'project-1'
+                            """
+                        )
+                    ).mappings().one()
+                    managed_rows = connection.execute(
+                        text(
+                            """
+                            SELECT secret_ref
+                            FROM managed_secrets
+                            WHERE secret_ref IN (
+                                'project/tenant-a/project-1/SERVICE_ID',
+                                'project/tenant-a/project-1/CALLBACK_URL',
+                                'project/tenant-a/project-1/INLINE_SECRET'
+                            )
+                            ORDER BY secret_ref
+                            """
+                        )
+                    ).scalars().all()
+
+                self.assertEqual(
+                    json.loads(project_row["secret_refs"]),
+                    {
+                        "CALLBACK_URL": "project/tenant-a/project-1/CALLBACK_URL",
+                        "INLINE_SECRET": "project/tenant-a/project-1/INLINE_SECRET",
+                        "SERVICE_ID": "project/tenant-a/project-1/SERVICE_ID",
+                    },
+                )
+                self.assertEqual(
+                    managed_rows,
+                    [
+                        "project/tenant-a/project-1/CALLBACK_URL",
+                        "project/tenant-a/project-1/INLINE_SECRET",
+                        "project/tenant-a/project-1/SERVICE_ID",
+                    ],
+                )
+        finally:
+            if previous_key is None:
+                os.environ.pop("ORCHESTRATOR_SECRETS_ENCRYPTION_KEY", None)
+            else:
+                os.environ["ORCHESTRATOR_SECRETS_ENCRYPTION_KEY"] = previous_key
+            get_settings.cache_clear()

@@ -534,8 +534,8 @@ export type RunRecord = {
 };
 
 export type WorkflowAttemptCreatePayload = {
-  mode: "restart" | "resume";
-  checkpoint_kind: "orchestrated" | "pm" | "execution";
+  mode: "fresh" | "restart" | "resume";
+  checkpoint_kind?: "pm" | "execution";
 };
 
 export type RunEventRecord = {

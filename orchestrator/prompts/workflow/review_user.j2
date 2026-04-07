@@ -40,6 +40,7 @@ Required actions:
 1. Decide if this run can be accepted now.
 2. Provide concise findings and unresolved blockers.
 3. Treat the PM evidence ledger as the current ticket prerequisite summary; do not invent new external blockers from missing repo evidence alone.
+3a. When acceptance depends on missing config, secrets, issue state, or external context, inspect the allowed tool list and use any relevant tool that can resolve that uncertainty before concluding the run is blocked.
 4. Preserve fail-closed behavior when verification is incomplete.
 5. If a one-time transient human input can unblock the remaining verification, request it with `run.request_human_input` before using outcome="blocked" with blocker_category="awaiting_human_input".
 6. If PR creation required by policy is `true`, you must not approve the run unless a PR exists and `pr_url` is set.

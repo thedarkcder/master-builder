@@ -163,15 +163,6 @@ def project_run_repo_dir(
     ) / "repo"
 
 
-def project_legacy_run_repo_dir(*, base_dir: str, tenant_id: str, project_id: str, run_id: str) -> Path:
-    return project_run_root_dir(
-        base_dir=base_dir,
-        tenant_id=tenant_id,
-        project_id=project_id,
-        run_id=run_id,
-    ) / "repo"
-
-
 def execution_branch_name(*, issue_key: str, run_id: str) -> str:
     normalized_issue = re.sub(r"[^a-z0-9._/-]+", "-", str(issue_key).strip().lower()).strip("-")
     normalized_run = re.sub(r"[^a-z0-9._/-]+", "-", str(run_id).strip().lower()).strip("-")
@@ -395,14 +386,6 @@ def cleanup_run_workspaces(
     else:
         if workspaces_root.exists():
             shutil.rmtree(workspaces_root, ignore_errors=True)
-        legacy_repo = project_legacy_run_repo_dir(
-            base_dir=base_dir,
-            tenant_id=tenant_id,
-            project_id=project_id,
-            run_id=run_id,
-        )
-        if legacy_repo.exists():
-            _remove_run_worktree(repo_dir=repo_dir, run_repo_dir=legacy_repo)
 
     if run_root.exists():
         try:
@@ -491,17 +474,8 @@ def ensure_run_worktree(
         run_id=run_id,
         workspace_key=normalized_workspace_key,
     )
-    legacy_run_repo = project_legacy_run_repo_dir(
-        base_dir=base_dir,
-        tenant_id=tenant_id,
-        project_id=project.project_id,
-        run_id=run_id,
-    )
     execution_branch = execution_branch_name(issue_key=issue_key, run_id=run_id)
     _run_git(["fetch", "origin", "--prune"], cwd=repo_dir)
-    if legacy_run_repo.exists():
-        _remove_run_worktree(repo_dir=repo_dir, run_repo_dir=legacy_run_repo)
-        _run_git(["worktree", "prune"], cwd=repo_dir)
     start_point_ref = _resolve_worktree_start_point(
         repo_dir=repo_dir,
         base_branch=base_branch,

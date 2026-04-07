@@ -73,7 +73,7 @@ def _resolve_agent_execution_profiles(
     platform_selector_routing = normalize_execution_profile_routing(platform_selector_routing)
     merged_routing = dict(routing)
     merged_routing.update(platform_selector_routing or {})
-    # Respect explicit effective-policy overrides as a compatibility path.
+    # Respect explicit effective-policy overrides when no profile explicitly pins those values.
     effective_model = str(effective_policy.get("codex_model") or settings.codex_model).strip() or settings.codex_model
     effective_effort = (
         str(effective_policy.get("codex_reasoning_effort") or settings.codex_reasoning_effort).strip().lower()

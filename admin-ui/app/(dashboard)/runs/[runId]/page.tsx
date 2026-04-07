@@ -532,10 +532,11 @@ export default function RunDetailPage() {
     }
     setForceRerunBusy(true);
     try {
+      const restartCheckpointKind = stageCheckpoints.pm ? "pm" : "execution";
       const cancelled = await cancelRun(credentials, run.run_id);
       const nextRun = await createWorkflowAttempt(credentials, cancelled.workflow_id, {
         mode: "restart",
-        checkpoint_kind: "orchestrated"
+        checkpoint_kind: restartCheckpointKind
       });
       setStatusLine(`Force-cancelled ${cancelled.run_id} and queued restart ${nextRun.run_id}.`);
       router.push(
@@ -795,6 +796,12 @@ export default function RunDetailPage() {
       return [] as RerunAttemptOption[];
     }
     const options: RerunAttemptOption[] = [];
+    options.push({
+      key: "fresh",
+      label: "Start from the start",
+      payload: { mode: "fresh" },
+      detail: "Create a brand-new run with no checkpoint or prior thread reuse."
+    });
     const hasExecutionCheckpoint = Boolean(
       stageCheckpoints.dev || stageCheckpoints.test || stageCheckpoints.review
     );
@@ -813,13 +820,20 @@ export default function RunDetailPage() {
         payload: { mode: "resume", checkpoint_kind: "pm" },
         detail: "Continue from the latest PM checkpoint."
       });
+      options.push({
+        key: "restart-pm",
+        label: "Restart from PM",
+        payload: { mode: "restart", checkpoint_kind: "pm" },
+        detail: "Create a new attempt from the PM checkpoint."
+      });
+    } else if (hasExecutionCheckpoint) {
+      options.push({
+        key: "restart-execution",
+        label: "Restart from execution",
+        payload: { mode: "restart", checkpoint_kind: "execution" },
+        detail: "Create a new attempt from the latest execution checkpoint."
+      });
     }
-    options.push({
-      key: "orchestrated",
-      label: "Restart from start",
-      payload: { mode: "restart", checkpoint_kind: "orchestrated" },
-      detail: "Create a new attempt from the orchestrated checkpoint."
-    });
     return options;
   }, [run, stageCheckpoints.dev, stageCheckpoints.pm, stageCheckpoints.review, stageCheckpoints.test]);
 

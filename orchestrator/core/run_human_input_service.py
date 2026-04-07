@@ -34,6 +34,68 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _request_questions(request_context: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not isinstance(request_context, dict):
+        return []
+    raw_questions = request_context.get("questions")
+    if not isinstance(raw_questions, list):
+        return []
+    questions: list[dict[str, Any]] = []
+    for item in raw_questions:
+        if not isinstance(item, dict):
+            continue
+        question_text = str(item.get("question") or "").strip()
+        if not question_text:
+            continue
+        options = [str(option).strip() for option in item.get("options", []) if str(option).strip()]
+        question: dict[str, Any] = {
+            "id": str(item.get("id") or "").strip() or None,
+            "question": question_text,
+        }
+        if options:
+            question["options"] = options
+        questions.append(question)
+    return questions
+
+
+def _build_human_input_message(
+    *,
+    issue_key: str,
+    source_stage: str,
+    request_type: str,
+    run_id: str,
+    prompt: str,
+    instructions: str | None,
+    expected_reply_format: str | None,
+    request_context: dict[str, Any] | None,
+) -> str:
+    message_lines = [
+        f"Human input needed for `{issue_key}`",
+        f"- Stage: {source_stage}",
+        f"- Type: {request_type}",
+        f"- Run: {run_id}",
+        "",
+        prompt,
+    ]
+    questions = _request_questions(request_context)
+    if questions:
+        message_lines.extend(["", "Please answer these items:"])
+        for index, question in enumerate(questions, start=1):
+            message_lines.append(f"{index}. {question['question']}")
+            options = question.get("options")
+            if isinstance(options, list):
+                for option_index, option in enumerate(options, start=1):
+                    message_lines.append(f"   {index}.{option_index} {option}")
+    if instructions:
+        message_lines.extend(["", f"Instructions: {instructions}"])
+    elif questions:
+        message_lines.extend(["", "Instructions: reply in this thread and answer each numbered item in order."])
+    if expected_reply_format:
+        message_lines.extend(["", f"Reply format: {expected_reply_format}"])
+    message_lines.extend(["", "Reply in this thread. The value is transient and will only be used to resume this workflow."])
+    return "\n".join(message_lines)
+
+
 def create_human_input_request(
     *,
     session: Session,
@@ -105,24 +167,20 @@ def create_human_input_request(
         created_at=now,
         updated_at=now,
     )
-    message_lines = [
-        f"Human input needed for `{request.issue_key}`",
-        f"- Stage: {request.source_stage}",
-        f"- Type: {request.request_type}",
-        f"- Run: {run.run_id}",
-        "",
-        normalized_prompt,
-    ]
-    if request.instructions:
-        message_lines.extend(["", f"Instructions: {request.instructions}"])
-    if request.expected_reply_format:
-        message_lines.extend(["", f"Reply format: {request.expected_reply_format}"])
-    message_lines.extend(["", "Reply in this thread. The value is transient and will only be used to resume this workflow."])
     send_result = send_tenant_discord_message(
         session=session,
         tenant=tenant,
         project=project,
-        message="\n".join(message_lines),
+        message=_build_human_input_message(
+            issue_key=request.issue_key,
+            source_stage=request.source_stage,
+            request_type=request.request_type,
+            run_id=run.run_id,
+            prompt=normalized_prompt,
+            instructions=request.instructions,
+            expected_reply_format=request.expected_reply_format,
+            request_context=request.request_context_json,
+        ),
         settings=settings,
         event=None,
         open_thread=True,
