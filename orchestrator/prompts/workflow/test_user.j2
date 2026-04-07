@@ -45,10 +45,11 @@ Required actions:
 6a. When a validation command fails because config, secrets, issue state, or external context may be missing, inspect the allowed tool list and use any relevant tool that can resolve that uncertainty before concluding the run is blocked.
 7. Fail closed when verification cannot be completed.
 8. If a one-time transient human input can unblock verification, request it with `run.request_human_input` before using blocker_category="awaiting_human_input".
+9. If validation is blocked or fails because of environment, secrets, external systems, or account setup, make `feedback` and any non-null `blocker_message` operator-friendly: keep the failure concise, then add a short `Troubleshooting:` section with 1-3 concrete fix actions supported by the observed evidence.
 
 Output contract:
 - passed: boolean readiness signal.
 - guidance: array of concrete validation actions.
-- feedback: blocking reason string or null.
+- feedback: blocking reason string or null. For blocked or failed validation outcomes, include a short `Troubleshooting:` section with concrete operator actions.
 - blocker_category: terminal blocker category or null.
-- blocker_message: terminal blocker detail or null.
+- blocker_message: terminal blocker detail or null. When non-null, include a short `Troubleshooting:` section with concrete operator actions.

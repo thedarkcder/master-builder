@@ -3,6 +3,8 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 
+from orchestrator.core.guardrails import redact_sensitive_text
+
 logger = logging.getLogger(__name__)
 
 
@@ -56,7 +58,7 @@ def build_runtime_log_sink(
                     "command": normalized_command,
                     "issue_key": normalized_issue_key,
                     "stream": str(stream or "").strip().lower() or "stdout",
-                    "message": str(message or "").strip(),
+                    "message": redact_sensitive_text(str(message or "").strip()),
                     "phase": "line",
                 },
             },

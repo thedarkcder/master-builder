@@ -150,6 +150,79 @@ class CodexInvocationTests(unittest.TestCase):
         self.assertEqual(finished_payload["actual_total_tokens"], 64)
         self.assertEqual(finished_payload["actual_usage_observed"], True)
 
+    def test_runtime_log_sink_redacts_sensitive_content_before_persistence(self) -> None:
+        captured_raw: list[str] = []
+        captured_db: list[str] = []
+
+        def _request(  # noqa: ANN001
+            _system_prompt,
+            _user_prompt,
+            _working_dir,
+            on_log_line,
+            _reasoning_effort,
+            _resume_session_id,
+            _on_session_id,
+            _on_usage,
+        ) -> str:
+            if on_log_line is not None:
+                on_log_line(
+                    "stderr",
+                    (
+                        "run_id=123e4567-e89b-12d3-a456-426614174000 "
+                        "APP_STORE_CONNECT_API_KEY_BASE64=super-secret-value "
+                        "email=user@example.com"
+                    ),
+                )
+            return '{"ok": true}'
+
+        runtime = CodexRuntime(
+            model="m",
+            max_output_tokens=10,
+            command="override",
+            _request=_request,
+        )
+        context = AgentInvocationContext(
+            channel="worker",
+            tenant_id="tenant-1",
+            project_id="proj-1",
+            command="workflow",
+            stage="test",
+            working_dir=".",
+            run_id="run-1",
+        )
+
+        def _capture_raw(*, context, stream: str, message: str) -> None:  # noqa: ANN001
+            _ = context
+            _ = stream
+            captured_raw.append(message)
+
+        def _capture_db(*, context, stream: str, message: str) -> None:  # noqa: ANN001
+            _ = context
+            _ = stream
+            captured_db.append(message)
+
+        with (
+            patch("orchestrator.core.runtime_invocation._get_log_writer", return_value=self._Writer()),
+            patch("orchestrator.core.runtime_invocation._append_raw_log_line", side_effect=_capture_raw),
+            patch("orchestrator.core.runtime_invocation._enqueue_runtime_log_line", side_effect=_capture_db),
+            patch("orchestrator.core.runtime_invocation._emit_invocation_event"),
+        ):
+            payload = invoke_runtime_json(
+                runtime=runtime,
+                context=context,
+                system_prompt="system",
+                user_prompt="user",
+            )
+
+        self.assertEqual(payload, {"ok": True})
+        self.assertEqual(len(captured_raw), 1)
+        self.assertEqual(len(captured_db), 1)
+        for message in (*captured_raw, *captured_db):
+            self.assertNotIn("super-secret-value", message)
+            self.assertNotIn("user@example.com", message)
+            self.assertIn("123e4567-e89b-12d3-a456-426614174000", message)
+            self.assertIn("[REDACTED]", message)
+
     def test_invoke_runtime_json_flushes_invocation_logs(self) -> None:
         runtime = CodexRuntime(
             model="m",

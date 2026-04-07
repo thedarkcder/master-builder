@@ -9,6 +9,7 @@ from uuid import uuid4
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
+from orchestrator.core.guardrails import redact_sensitive_text
 from orchestrator.core.log_event_bus import EVENT_KIND_CODEX_LOG, register_stream_offsets
 from orchestrator.storage.models import RunLogEvent, RunStreamEvent, RunTokenUsage
 
@@ -335,6 +336,7 @@ def _normalize_run_log_event(
     normalized_message = str(message or "").strip()
     if not normalized_message:
         return None
+    normalized_message = redact_sensitive_text(normalized_message)
     normalized_message = normalized_message[:MAX_LOG_MESSAGE_CHARS]
     timestamp = recorded_at or datetime.now(timezone.utc)
     normalized_stream = str(stream or "").strip().lower() or "stdout"
