@@ -1,5 +1,6 @@
-import unittest
 import json
+import os
+import unittest
 from collections import Counter
 from datetime import datetime, timezone
 from tempfile import TemporaryDirectory
@@ -12,6 +13,7 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, inspect
 from sqlalchemy import text
 
+from orchestrator.core.config import get_settings
 from orchestrator.storage.migrations import run_migrations
 
 
@@ -490,3 +492,17 @@ class MigrationTests(unittest.TestCase):
                 current_revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
 
             self.assertEqual(current_revision, "20260330_0052")
+
+    def test_run_migrations_rejects_sqlite_without_test_opt_in(self) -> None:
+        previous = os.environ.get("ORCHESTRATOR_ALLOW_SQLITE_FOR_TESTS")
+        try:
+            os.environ["ORCHESTRATOR_ALLOW_SQLITE_FOR_TESTS"] = "false"
+            get_settings.cache_clear()
+            with self.assertRaisesRegex(RuntimeError, "requires PostgreSQL"):
+                run_migrations(database_url="sqlite:///tmp/test.db")
+        finally:
+            if previous is None:
+                os.environ.pop("ORCHESTRATOR_ALLOW_SQLITE_FOR_TESTS", None)
+            else:
+                os.environ["ORCHESTRATOR_ALLOW_SQLITE_FOR_TESTS"] = previous
+            get_settings.cache_clear()

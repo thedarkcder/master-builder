@@ -118,6 +118,20 @@ class PlatformMetricsTests(unittest.TestCase):
         error_rate = float(error_rate_line.split(" ", maxsplit=1)[1])
         self.assertEqual(error_rate, 1.0)
 
+    def test_create_app_rejects_sqlite_without_test_opt_in(self) -> None:
+        previous = os.environ.get("ORCHESTRATOR_ALLOW_SQLITE_FOR_TESTS")
+        try:
+            os.environ["ORCHESTRATOR_ALLOW_SQLITE_FOR_TESTS"] = "false"
+            get_settings.cache_clear()
+            with self.assertRaisesRegex(RuntimeError, "requires PostgreSQL"):
+                create_app()
+        finally:
+            if previous is None:
+                os.environ.pop("ORCHESTRATOR_ALLOW_SQLITE_FOR_TESTS", None)
+            else:
+                os.environ["ORCHESTRATOR_ALLOW_SQLITE_FOR_TESTS"] = previous
+            get_settings.cache_clear()
+
 
 if __name__ == "__main__":
     unittest.main()

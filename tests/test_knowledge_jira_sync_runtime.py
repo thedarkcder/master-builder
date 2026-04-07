@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from orchestrator.core.config import Settings
 from orchestrator.core.knowledge_jira_sync_runtime import (
+    KnowledgeJiraSyncDependencyFailure,
     KnowledgeJiraSyncRuntime,
     _classify_project_failure,
     get_knowledge_jira_sync_runtime_status,
@@ -173,6 +174,17 @@ def test_list_sync_projects_filters_to_enabled_kb_projects() -> None:
         assert [(project.tenant_id, project.project_id, project.jira_project_key) for project in projects] == [
             ("tenant-1", "project-1", "GP")
         ]
+
+
+def test_run_forever_requires_postgres() -> None:
+    runtime = KnowledgeJiraSyncRuntime(settings=_settings("sqlite:///tmp/test.db"))
+    with patch.object(runtime, "_write_runtime_status"):
+        try:
+            runtime.run_forever()
+        except KnowledgeJiraSyncDependencyFailure as exc:
+            assert "requires PostgreSQL" in str(exc)
+        else:  # pragma: no cover - defensive assertion
+            raise AssertionError("Expected non-Postgres runtime to be rejected")
 
 
 def test_run_sync_pass_persists_runtime_and_project_status() -> None:

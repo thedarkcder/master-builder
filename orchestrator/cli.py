@@ -18,6 +18,7 @@ from orchestrator.core.knowledge_jira_sync_runtime import run_knowledge_jira_syn
 from orchestrator.core.project_automation_runtime import run_project_automation_runtime
 from orchestrator.core.runs import enqueue_run, resolve_precheck_outcome_for_enqueue
 from orchestrator.core.voice.prewarm import prewarm_voice_dependencies
+from orchestrator.storage.database_support import ensure_postgres_database_url
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import Run, Tenant
@@ -78,6 +79,12 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _handle_run(*, tenant_id: str, issue_key: str) -> int:
+    settings = get_settings()
+    ensure_postgres_database_url(
+        database_url=settings.database_url,
+        context="CLI runtime",
+        allow_sqlite_for_tests=bool(getattr(settings, "allow_sqlite_for_tests", False)),
+    )
     session_factory = create_session_factory()
     with session_factory() as session:
         tenant = session.get(Tenant, tenant_id)
@@ -146,6 +153,12 @@ def _tenant_poll_snapshot(session, tenant: Tenant) -> dict:  # noqa: ANN001
 
 
 def _handle_poll(*, tenant_filter: str) -> int:
+    settings = get_settings()
+    ensure_postgres_database_url(
+        database_url=settings.database_url,
+        context="CLI runtime",
+        allow_sqlite_for_tests=bool(getattr(settings, "allow_sqlite_for_tests", False)),
+    )
     session_factory = create_session_factory()
     with session_factory() as session:
         query = select(Tenant).order_by(Tenant.tenant_id.asc())
@@ -187,6 +200,11 @@ def _handle_agent_tool(
         return 2
 
     settings = get_settings()
+    ensure_postgres_database_url(
+        database_url=settings.database_url,
+        context="CLI runtime",
+        allow_sqlite_for_tests=bool(getattr(settings, "allow_sqlite_for_tests", False)),
+    )
     session_factory = create_session_factory()
     print_tool_event(stage=stage, tool_name=tool_name, args=parsed_args, outcome="started")
     with session_factory() as session:
