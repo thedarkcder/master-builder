@@ -48,6 +48,15 @@ def _workflow_runs(*, session, workflow_id: str) -> list[Run]:  # noqa: ANN001
     ).scalars().all()
 
 
+def _latest_run_for_workflow(*, session, workflow_id: str) -> Run | None:  # noqa: ANN001
+    return session.execute(
+        select(Run)
+        .where(Run.workflow_id == workflow_id)
+        .order_by(desc(Run.attempt_number))
+        .limit(1)
+    ).scalar_one_or_none()
+
+
 def _workflow_schema(*, session, workflow, workflow_to_schema_fn, run_to_schema_fn):  # noqa: ANN001
     latest_checkpoint = (
         session.get(WorkflowCheckpoint, workflow.latest_checkpoint_id)
@@ -74,6 +83,31 @@ def _resolve_project(*, session, workflow, selected_checkpoint) -> Project | Non
         if parent_project_id:
             return session.get(Project, parent_project_id)
     return None
+
+
+def _resolve_project_for_fresh_start(*, session, workflow, source_run) -> Project | None:  # noqa: ANN001
+    project_id = str(workflow.project_id or "").strip() or None
+    if project_id:
+        project = session.get(Project, project_id)
+        if project is not None:
+            return project
+    source_project_id = str(getattr(source_run, "project_id", "") or "").strip() or None
+    if source_project_id:
+        return session.get(Project, source_project_id)
+    return None
+
+
+def _fresh_start_plan(*, source_run: Run | None) -> dict[str, object] | None:
+    if source_run is None or not isinstance(source_run.plan, dict):
+        return None
+    next_plan: dict[str, object] = {}
+    trigger_context = source_run.plan.get("trigger_context")
+    if isinstance(trigger_context, dict) and trigger_context:
+        next_plan["trigger_context"] = dict(trigger_context)
+    pre_check = source_run.plan.get("pre_check")
+    if isinstance(pre_check, dict) and pre_check:
+        next_plan["pre_check"] = dict(pre_check)
+    return next_plan or None
 
 
 def _cancel_open_input_requests(*, session, workflow_id: str) -> None:  # noqa: ANN001
@@ -155,7 +189,7 @@ def create_workflow_attempt(
     session,
     workflow_id: str,
     mode: str,
-    checkpoint_kind: str,
+    checkpoint_kind: str | None,
     tenant_model,
     run_to_schema_fn,
 ):  # noqa: ANN001
@@ -164,28 +198,39 @@ def create_workflow_attempt(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow not found")
 
     normalized_mode = str(mode or "").strip().lower()
-    if normalized_mode not in {"restart", "resume"}:
+    if normalized_mode not in {"fresh", "restart", "resume"}:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid attempt mode")
-
-    selected_checkpoint = _latest_checkpoint_for_kind(
-        session=session,
-        workflow_id=workflow_id,
-        checkpoint_kind=checkpoint_kind,
-    )
-    if selected_checkpoint is None:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="No checkpoint is available for that kind")
+    selected_checkpoint = None
+    source_run = _latest_run_for_workflow(session=session, workflow_id=workflow_id)
+    if normalized_mode == "fresh":
+        if workflow.status in ACTIVE_WORKFLOW_STATUSES:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Workflow already has an active attempt",
+            )
+    else:
+        selected_checkpoint = _latest_checkpoint_for_kind(
+            session=session,
+            workflow_id=workflow_id,
+            checkpoint_kind=str(checkpoint_kind or "").strip(),
+        )
+        if selected_checkpoint is None:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="No checkpoint is available for that kind")
 
     tenant = session.get(tenant_model, workflow.tenant_id)
     if tenant is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found for workflow")
 
-    project = _resolve_project(session=session, workflow=workflow, selected_checkpoint=selected_checkpoint)
+    if normalized_mode == "fresh":
+        project = _resolve_project_for_fresh_start(session=session, workflow=workflow, source_run=source_run)
+    else:
+        project = _resolve_project(session=session, workflow=workflow, selected_checkpoint=selected_checkpoint)
     if project is None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="No active project mapping found for workflow")
     if bool(getattr(project, "is_archived", False)):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Project {project.project_id} is archived")
 
-    same_workflow = workflow.status == "waiting_for_input"
+    same_workflow = normalized_mode != "fresh" and workflow.status == "waiting_for_input"
     if workflow.status in ACTIVE_WORKFLOW_STATUSES and not same_workflow:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -203,15 +248,15 @@ def create_workflow_attempt(
             issue_summary=workflow.issue_summary,
             issue_description=workflow.issue_description,
             repo_url=workflow.repo_url,
-            branch=workflow.branch,
-            pr_url=workflow.pr_url,
+            branch=None if normalized_mode == "fresh" else workflow.branch,
+            pr_url=None if normalized_mode == "fresh" else workflow.pr_url,
             dedupe_scope=workflow.dedupe_scope,
             status="queued",
             last_error=None,
             active_run_id=None,
-            latest_checkpoint_id=selected_checkpoint.checkpoint_id,
+            latest_checkpoint_id=selected_checkpoint.checkpoint_id if selected_checkpoint is not None else None,
             source_workflow_id=workflow.workflow_id,
-            source_run_id=selected_checkpoint.run_id,
+            source_run_id=(source_run.run_id if normalized_mode == "fresh" and source_run is not None else selected_checkpoint.run_id),
             blocked_reason=None,
             created_at=now,
             started_at=None,
@@ -225,7 +270,7 @@ def create_workflow_attempt(
         next_workflow.last_error = None
         next_workflow.blocked_reason = None
         next_workflow.finished_at = None
-        next_workflow.latest_checkpoint_id = selected_checkpoint.checkpoint_id
+        next_workflow.latest_checkpoint_id = selected_checkpoint.checkpoint_id if selected_checkpoint is not None else None
         next_workflow.updated_at = now
 
     next_run = Run(
@@ -240,14 +285,14 @@ def create_workflow_attempt(
         branch=next_workflow.branch,
         pr_url=next_workflow.pr_url,
         attempt_number=1 if not same_workflow else _next_attempt_number(session=session, workflow_id=workflow.workflow_id),
-        parent_run_id=selected_checkpoint.run_id,
+        parent_run_id=(source_run.run_id if normalized_mode == "fresh" and source_run is not None else selected_checkpoint.run_id if selected_checkpoint is not None else None),
         entry_mode=normalized_mode,
-        entry_stage=selected_checkpoint.stage,
-        entry_checkpoint_id=selected_checkpoint.checkpoint_id,
+        entry_stage="orchestrated" if normalized_mode == "fresh" else selected_checkpoint.stage,
+        entry_checkpoint_id=None if normalized_mode == "fresh" else selected_checkpoint.checkpoint_id,
         dedupe_scope=next_workflow.dedupe_scope,
         status="queued",
         last_error=None,
-        plan=dict(selected_checkpoint.payload_json or {}),
+        plan=_fresh_start_plan(source_run=source_run) if normalized_mode == "fresh" else dict(selected_checkpoint.payload_json or {}),
         created_at=now,
         started_at=None,
         last_heartbeat_at=None,

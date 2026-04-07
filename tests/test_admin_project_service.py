@@ -368,6 +368,54 @@ def test_update_project_migrates_inline_secret_values_to_project_managed_refs() 
     assert ("project/t1/p1/APPLE_TEST_PASSWORD", "Ft6ygA&aYkf%hy") in upsert_calls
 
 
+def test_get_project_does_not_mutate_existing_secret_refs() -> None:
+    from orchestrator.storage.models import Tenant
+
+    session = _Session()
+    tenant = SimpleNamespace(tenant_id="t1", policy_config={}, updated_at=None)
+    session.set(Tenant, "t1", tenant)
+    existing_project = Project(
+        project_id="p1",
+        tenant_id="t1",
+        name="Existing",
+        github_repository="https://github.com/example/repo",
+        jira_project_key="TP",
+        policy_overrides={},
+        environment={},
+        secret_refs={
+            "SERVICE_ID": "SUPABASE_APPLE_SERVICE_ID",
+            "CALLBACK_URL": "tenant/t1/SUPABASE_APPLE_CALLBACK_URL",
+        },
+        discord_config={},
+        is_archived=False,
+        created_at=None,  # type: ignore[arg-type]
+        updated_at=None,  # type: ignore[arg-type]
+    )
+    session.set(Project, "p1", existing_project)
+    service = AdminProjectService(
+        normalize_project_repo=lambda value: value.strip(),
+        normalize_project_key=lambda value: value.strip().upper(),
+        normalize_project_policy_overrides=lambda value: value or {},
+        normalize_string_map=lambda value: value or {},
+        normalize_project_discord_config=lambda value: value or {},
+        with_preserved_discord_system_fields=lambda existing, proposed: {**existing, **proposed},
+        resolve_project_discord_channel_binding=_resolve_project_discord_channel_binding,
+        sync_tenant_jira_project_keys=_sync_tenant_jira_project_keys,
+        ensure_project_repository_checkout=_ensure_project_repository_checkout,
+        resolve_project_run_board_id=_resolve_project_run_board_id,
+        project_to_schema=_project_to_schema,
+        settings_factory=lambda: SimpleNamespace(secrets_encryption_key="enc-key"),
+    )
+
+    result = service.get_project(session=session, tenant_id="t1", project_id="p1")
+
+    assert result["project_id"] == "p1"
+    assert existing_project.secret_refs == {
+        "SERVICE_ID": "SUPABASE_APPLE_SERVICE_ID",
+        "CALLBACK_URL": "tenant/t1/SUPABASE_APPLE_CALLBACK_URL",
+    }
+
+
 def test_normalize_project_discord_config_preserves_persona_maps() -> None:
     normalized = normalize_project_discord_config(
         {

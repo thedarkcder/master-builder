@@ -7,7 +7,7 @@ from uuid import uuid4
 
 from orchestrator.core.dashboard_links import admin_run_url
 from orchestrator.core.project_policy import resolve_effective_policy
-from orchestrator.core.runs import mark_run_terminal
+from orchestrator.core.runs import RUN_STATUS_WAITING_FOR_INPUT, mark_run_terminal
 from orchestrator.core.run_logs import record_run_log_event
 from orchestrator.core.worker.manual_pr_remediation_completion import publish_manual_pr_remediation_completion
 from orchestrator.core.worker_capabilities import (
@@ -441,6 +441,9 @@ def process_next_queued_run(
             terminal_status="succeeded" if workflow_result.succeeded else "failed",
             workspace_key=worker_workspace_key,
         )
+        session.refresh(run)
+        if str(getattr(run, "status", "") or "").strip().lower() == RUN_STATUS_WAITING_FOR_INPUT:
+            return run
         if not workflow_result.succeeded:
             error_text = (
                 workflow_result.diagnostics.message

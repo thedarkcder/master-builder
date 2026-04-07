@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, Field, field_validator, model_serializer
+from pydantic import BaseModel, Field, field_validator, model_serializer, model_validator
 
 from orchestrator.core.agent_execution_profiles import (
     normalize_execution_profile_routing,
@@ -983,8 +983,18 @@ class WorkflowRead(BaseModel):
 
 
 class WorkflowAttemptCreateRequest(BaseModel):
-    mode: str = Field(pattern="^(restart|resume)$")
-    checkpoint_kind: str = Field(pattern="^(orchestrated|pm|execution)$")
+    mode: str = Field(pattern="^(fresh|restart|resume)$")
+    checkpoint_kind: str | None = Field(default=None, pattern="^(pm|execution)$")
+
+    @model_validator(mode="after")
+    def validate_checkpoint_contract(self) -> WorkflowAttemptCreateRequest:
+        if self.mode == "fresh":
+            if self.checkpoint_kind is not None:
+                raise ValueError("checkpoint_kind must be omitted for fresh attempts")
+            return self
+        if self.checkpoint_kind is None:
+            raise ValueError("checkpoint_kind is required for restart and resume attempts")
+        return self
 
 
 class RunEventRead(BaseModel):

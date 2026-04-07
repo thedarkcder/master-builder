@@ -42,6 +42,7 @@ Required actions:
    - For verbose commands, capture full output in an artifact file and summarize key failures in guidance.
 5. Provide concrete guidance for missing verification or failures.
 6. Treat the PM evidence ledger as the current prerequisite summary; only challenge it if new authoritative tool evidence contradicts it.
+6a. When a validation command fails because config, secrets, issue state, or external context may be missing, inspect the allowed tool list and use any relevant tool that can resolve that uncertainty before concluding the run is blocked.
 7. Fail closed when verification cannot be completed.
 8. If a one-time transient human input can unblock verification, request it with `run.request_human_input` before using blocker_category="awaiting_human_input".
 

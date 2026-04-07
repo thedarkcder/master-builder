@@ -11,8 +11,6 @@ import time
 from typing import Callable
 from uuid import uuid4
 
-from sqlalchemy import select
-
 from orchestrator.core.codex_models import normalize_codex_reasoning_effort
 from orchestrator.core.config import get_settings
 from orchestrator.core.knowledge_base import build_knowledge_prompt_context
@@ -23,7 +21,7 @@ from orchestrator.core.run_logs import extract_turn_completed_usage
 from orchestrator.core.run_logs import record_run_log_event, record_run_log_events_batch
 from orchestrator.core.workflow.checkpoints import checkpoint_kind_for_stage, normalize_checkpoint_stage, upsert_workflow_checkpoint
 from orchestrator.storage.db import create_session_factory
-from orchestrator.storage.models import Project, Run, Tenant, WorkflowCheckpoint
+from orchestrator.storage.models import Project, Run, Tenant
 
 logger = logging.getLogger(__name__)
 _ERROR_MARKERS = ("error", "failed", "fatal", "exception", "traceback")
@@ -522,43 +520,6 @@ def _checkpoint_kind_for_context(*, context: AgentInvocationContext) -> str | No
     return checkpoint_kind_for_stage(stage)
 
 
-def _load_checkpoint_session_id(
-    *,
-    workflow_id: str | None,
-    run_id: str | None,
-    checkpoint_kind: str | None,
-) -> str | None:
-    normalized_workflow_id = str(workflow_id or "").strip()
-    normalized_run_id = str(run_id or "").strip()
-    normalized_kind = str(checkpoint_kind or "").strip().lower()
-    if not normalized_workflow_id or not normalized_run_id or not normalized_kind:
-        return None
-    settings = get_settings()
-    session_factory = create_session_factory(database_url=settings.database_url)
-    try:
-        with session_factory() as session:
-            checkpoint = session.execute(
-                select(WorkflowCheckpoint).where(
-                    WorkflowCheckpoint.workflow_id == normalized_workflow_id,
-                    WorkflowCheckpoint.run_id == normalized_run_id,
-                    WorkflowCheckpoint.checkpoint_kind == normalized_kind,
-                )
-            ).scalar_one_or_none()
-            if checkpoint is None:
-                return None
-            candidate = str(getattr(checkpoint, "codex_session_id", "") or "").strip()
-            return candidate or None
-    except Exception as exc:  # noqa: BLE001
-        logger.debug(
-            "codex_checkpoint_session_load_skipped workflow_id=%s run_id=%s checkpoint_kind=%s error=%s",
-            normalized_workflow_id,
-            normalized_run_id,
-            normalized_kind,
-            exc,
-        )
-        return None
-
-
 def _persist_checkpoint_session_id(
     *,
     workflow_id: str | None,
@@ -805,13 +766,7 @@ def _invoke_runtime_json_once(
     }
     context_metrics = _collect_context_injection_metrics(working_dir=context.working_dir)
     checkpoint_kind = _checkpoint_kind_for_context(context=context)
-    explicit_session_id = str(context.codex_session_id or "").strip() or None
-    run_session_id = _load_checkpoint_session_id(
-        workflow_id=context.workflow_id,
-        run_id=context.run_id,
-        checkpoint_kind=checkpoint_kind,
-    )
-    resume_session_id = explicit_session_id or run_session_id
+    resume_session_id = str(context.codex_session_id or "").strip() or None
     invocation_started_monotonic = time.monotonic()
     invocation_context = AgentInvocationContext(
         channel=context.channel,

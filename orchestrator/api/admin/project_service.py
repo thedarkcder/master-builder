@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import datetime, timezone
-import re
 from uuid import uuid4
 
 from fastapi import HTTPException, status
@@ -10,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from orchestrator.storage.models import Project, Tenant
+from orchestrator.core.platform_secret_service import resolve_platform_secret_ref
 from orchestrator.core.secret_manager import normalize_secret_ref
 from orchestrator.core.tenant_secret_service import resolve_scoped_secret_ref, tenant_secret_service
 from orchestrator.tools.discord_api import DiscordApiError
@@ -53,24 +53,6 @@ class AdminProjectService:
             raise ValueError("Project secret variable names must not include a scope prefix")
         return f"project/{tenant_id}/{project_id}/{normalized_key}"
 
-    def _looks_like_inline_secret_value(self, value: str) -> bool:
-        normalized = str(value or "").strip()
-        if not normalized:
-            return False
-        if normalized.startswith(("platform/", "tenant/", "project/")):
-            return False
-        if "://" in normalized:
-            return True
-        if normalized.startswith(("sb_publishable_", "sbp_", "eyJ")):
-            return True
-        if re.search(r"\s", normalized):
-            return True
-        if any(char in normalized for char in ("@", "&", "%", "=")):
-            return True
-        if len(normalized) >= 24 and re.search(r"[a-z]", normalized) and re.search(r"\d", normalized):
-            return True
-        return False
-
     def _materialize_project_secret_refs(
         self,
         *,
@@ -87,6 +69,11 @@ class AdminProjectService:
             candidate = str(raw_value or "").strip()
             if not variable_name or not candidate:
                 continue
+            managed_ref = self._project_secret_ref(
+                tenant_id=tenant_id,
+                project_id=project_id,
+                secret_key=variable_name,
+            )
 
             normalized_candidate: str | None
             try:
@@ -95,25 +82,40 @@ class AdminProjectService:
                 normalized_candidate = None
 
             if normalized_candidate is not None:
-                if normalized_candidate.startswith(("platform/", "tenant/", "project/")):
-                    materialized[variable_name] = normalized_candidate
+                if normalized_candidate == managed_ref:
+                    materialized[variable_name] = managed_ref
                     continue
-                resolved_value = resolve_scoped_secret_ref(
-                    session,
-                    secret_ref=normalized_candidate,
-                    encryption_key=encryption_key,
-                    tenant_id=tenant_id,
-                    project_id=project_id,
-                )
-                if resolved_value is not None or not self._looks_like_inline_secret_value(normalized_candidate):
-                    materialized[variable_name] = normalized_candidate
-                    continue
+                if normalized_candidate.startswith("platform/"):
+                    resolved_value = resolve_platform_secret_ref(
+                        session,
+                        secret_ref=normalized_candidate,
+                        encryption_key=encryption_key,
+                    )
+                    if resolved_value is None:
+                        raise ValueError(f"Project secret '{variable_name}' references missing secret '{normalized_candidate}'")
+                    candidate = resolved_value
+                elif normalized_candidate.startswith(("tenant/", "project/")):
+                    resolved_value = resolve_scoped_secret_ref(
+                        session,
+                        secret_ref=normalized_candidate,
+                        encryption_key=encryption_key,
+                        tenant_id=tenant_id,
+                        project_id=project_id,
+                    )
+                    if resolved_value is None:
+                        raise ValueError(f"Project secret '{variable_name}' references missing secret '{normalized_candidate}'")
+                    candidate = resolved_value
+                else:
+                    resolved_value = resolve_scoped_secret_ref(
+                        session,
+                        secret_ref=normalized_candidate,
+                        encryption_key=encryption_key,
+                        tenant_id=tenant_id,
+                        project_id=project_id,
+                    )
+                    if resolved_value is not None:
+                        candidate = resolved_value
 
-            managed_ref = self._project_secret_ref(
-                tenant_id=tenant_id,
-                project_id=project_id,
-                secret_key=variable_name,
-            )
             tenant_secret_service.upsert_secret(
                 session=session,
                 secret_ref=managed_ref,
@@ -123,24 +125,6 @@ class AdminProjectService:
             )
             materialized[variable_name] = managed_ref
         return materialized
-
-    def _repair_project_secret_refs(self, *, session, project: Project) -> bool:
-        settings = self._settings_factory()
-        encryption_key = str(getattr(settings, "secrets_encryption_key", "") or "").strip()
-        materialized = self._materialize_project_secret_refs(
-            session=session,
-            tenant_id=project.tenant_id,
-            project_id=project.project_id,
-            raw_secret_refs=project.secret_refs,
-            encryption_key=encryption_key,
-        )
-        if materialized == (project.secret_refs or {}):
-            return False
-        project.secret_refs = materialized
-        project.updated_at = datetime.now(timezone.utc)
-        session.commit()
-        session.refresh(project)
-        return True
 
     def list_projects(self, *, session, tenant_id: str) -> list[object]:
         tenant = session.get(Tenant, tenant_id)
@@ -159,7 +143,6 @@ class AdminProjectService:
         tenant = session.get(Tenant, tenant_id)
         if tenant is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
-        self._repair_project_secret_refs(session=session, project=project)
         return self._project_to_schema(project, tenant_policy=tenant.policy_config)
 
     def create_project(self, *, session, tenant_id: str, payload) -> object:  # noqa: ANN001

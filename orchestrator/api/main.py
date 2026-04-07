@@ -52,8 +52,6 @@ from orchestrator.storage.database_support import ensure_postgres_database_url
 from orchestrator.storage.migrations import run_migrations
 
 logger = logging.getLogger(__name__)
-# Backward-compatible logger handle used by observability tests.
-request_logger = logger
 
 
 def create_app() -> FastAPI:

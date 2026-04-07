@@ -213,6 +213,7 @@ class AdminApiTests(unittest.TestCase):
         run_status: str = "queued",
         checkpoint_id: str | None = None,
         checkpoint_kind: str | None = None,
+        checkpoint_stage: str | None = None,
         pending_request_id: str | None = None,
     ) -> None:
         session_factory = create_session_factory(self.database_url)
@@ -233,7 +234,7 @@ class AdminApiTests(unittest.TestCase):
                 run_status=run_status,
                 entry_checkpoint_id=checkpoint_id,
                 checkpoint_kind=checkpoint_kind,
-                checkpoint_stage="pm" if checkpoint_kind == "pm" else "orchestrated",
+                checkpoint_stage=checkpoint_stage or ("pm" if checkpoint_kind == "pm" else "test"),
                 checkpoint_payload={"checkpoint": checkpoint_kind, "run_id": run_id},
                 checkpoint_session_id="checkpoint-session" if checkpoint_kind == "pm" else None,
                 blocked_reason="human_input_expired" if workflow_status == "blocked" else None,
@@ -1036,7 +1037,10 @@ class AdminApiTests(unittest.TestCase):
         project_id = create_project.json()["project_id"]
         self.assertEqual(create_project.json()["jira_project_key"], "MBAPP")
         self.assertEqual(create_project.json()["environment"], {"APP_ENV": "prod"})
-        self.assertEqual(create_project.json()["secret_refs"], {"API_TOKEN": "RUNNER_TOKEN"})
+        self.assertEqual(
+            create_project.json()["secret_refs"],
+            {"API_TOKEN": f"project/tenant-a/{project_id}/API_TOKEN"},
+        )
         self.assertIsNone(create_project.json()["discord"])
         self.assertEqual(create_project.json()["effective_policy"]["codex_model"], "gpt-5.4")
         self.assertEqual(create_project.json()["effective_policy"]["codex_reasoning_effort"], "medium")
@@ -1083,7 +1087,10 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(update_project.status_code, 200)
         self.assertTrue(update_project.json()["is_archived"])
         self.assertEqual(update_project.json()["environment"], {"APP_ENV": "stage"})
-        self.assertEqual(update_project.json()["secret_refs"], {"API_TOKEN": "RUNNER_TOKEN_NEXT"})
+        self.assertEqual(
+            update_project.json()["secret_refs"],
+            {"API_TOKEN": f"project/tenant-a/{project_id}/API_TOKEN"},
+        )
         self.assertIsNone(update_project.json()["discord"])
         self.assertEqual(update_project.json()["policy_overrides"]["codex_model"], "gpt-5.3-codex-spark")
         self.assertFalse(update_project.json()["policy_overrides"]["allow_code_reviews"])
@@ -1745,7 +1752,7 @@ class AdminApiTests(unittest.TestCase):
         self.assertNotEqual(body["workflow_id"], "workflow-terminal-1")
         self.assertEqual(body["attempt_number"], 1)
         self.assertEqual(body["entry_mode"], "restart")
-        self.assertEqual(body["entry_stage"], "orchestrated")
+        self.assertEqual(body["entry_stage"], "test")
         self.assertEqual(body["entry_checkpoint_id"], "checkpoint-terminal-1")
 
         session_factory = create_session_factory(self.database_url)
@@ -1756,6 +1763,87 @@ class AdminApiTests(unittest.TestCase):
             self.assertEqual(workflow.source_workflow_id, "workflow-terminal-1")
             self.assertEqual(workflow.source_run_id, "run-terminal-1")
             self.assertEqual(workflow.status, "queued")
+
+    def test_create_fresh_workflow_attempt_from_terminal_workflow_starts_without_checkpoint(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201)
+
+        self._seed_workflow_attempt(
+            workflow_id="workflow-terminal-fresh-1",
+            run_id="run-terminal-fresh-1",
+            issue_key="TP-1002",
+            issue_summary="Terminal workflow fresh start",
+            workflow_status="failed",
+            run_status="failed",
+            checkpoint_id="checkpoint-terminal-fresh-1",
+            checkpoint_kind="execution",
+        )
+
+        with create_session_factory(self.database_url)() as session:
+            source_run = session.get(Run, "run-terminal-fresh-1")
+            assert source_run is not None
+            source_run.plan = {
+                "trigger_context": {"source": "manual_fix_request", "pr_number": 42},
+                "pre_check": {"outcome": "ready_for_agent"},
+                "diagnostics": {"message": "old"},
+            }
+            session.commit()
+
+        response = self.client.post(
+            "/api/admin/workflows/workflow-terminal-fresh-1/attempts",
+            json={"mode": "fresh"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 201, response.text)
+        body = response.json()
+        self.assertNotEqual(body["workflow_id"], "workflow-terminal-fresh-1")
+        self.assertEqual(body["attempt_number"], 1)
+        self.assertEqual(body["entry_mode"], "fresh")
+        self.assertEqual(body["entry_stage"], "orchestrated")
+        self.assertIsNone(body["entry_checkpoint_id"])
+        self.assertIsNone(body["branch"])
+        self.assertIsNone(body["pr_url"])
+
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            workflow = session.get(WorkflowExecution, body["workflow_id"])
+            self.assertIsNotNone(workflow)
+            assert workflow is not None
+            self.assertEqual(workflow.source_workflow_id, "workflow-terminal-fresh-1")
+            self.assertEqual(workflow.source_run_id, "run-terminal-fresh-1")
+            self.assertIsNone(workflow.latest_checkpoint_id)
+            self.assertIsNone(workflow.branch)
+            self.assertIsNone(workflow.pr_url)
+            run = session.get(Run, body["run_id"])
+            self.assertIsNotNone(run)
+            assert run is not None
+            self.assertEqual(run.plan, {"trigger_context": {"source": "manual_fix_request", "pr_number": 42}, "pre_check": {"outcome": "ready_for_agent"}})
+
+    def test_fresh_workflow_attempt_rejects_checkpoint_kind(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201)
+
+        self._seed_workflow_attempt(
+            workflow_id="workflow-terminal-fresh-invalid",
+            run_id="run-terminal-fresh-invalid",
+            issue_key="TP-1003",
+            issue_summary="Terminal workflow invalid fresh",
+            workflow_status="failed",
+            run_status="failed",
+            checkpoint_id="checkpoint-terminal-fresh-invalid",
+            checkpoint_kind="pm",
+        )
+
+        response = self.client.post(
+            "/api/admin/workflows/workflow-terminal-fresh-invalid/attempts",
+            json={"mode": "fresh", "checkpoint_kind": "pm"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 422, response.text)
 
     def test_cancel_active_run_from_admin(self) -> None:
         payload = self._tenant_payload()

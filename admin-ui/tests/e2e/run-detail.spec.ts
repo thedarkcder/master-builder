@@ -142,9 +142,43 @@ test("offers execution resume when review state exists and posts the workflow at
 
   await expect(page.getByText("Loading run details...")).toHaveCount(0, { timeout: 15000 });
   await page.getByTestId("run-rerun-trigger").click();
+  await expect(page.getByTestId("rerun-option-fresh")).toBeVisible();
   await expect(page.getByTestId("rerun-option-execution")).toBeVisible();
   await page.getByTestId("rerun-option-execution").click();
 
   expect(rerunPayload).toEqual({ mode: "resume", checkpoint_kind: "execution" });
+  await expect(page).toHaveURL(/8e8957f2-79f8-4dc8-8deb-786b2c93828d$/, { timeout: 15000 });
+});
+
+test("offers start from the start as a fresh rerun with no checkpoint payload", async ({ page }) => {
+  const run = makeRun({
+    plan: {
+      stage_checkpoints: {
+        pm: {
+          status: "completed",
+          completed_at: "2026-03-27T16:55:00Z",
+          summary: "PM plan captured.",
+        },
+      },
+    },
+  });
+  let rerunPayload: unknown = null;
+
+  await seedAdminSession(page);
+  await mockRunDetailApis(page, {
+    run,
+    onCreateAttempt: (payload) => {
+      rerunPayload = payload;
+    },
+  });
+
+  await page.goto(`/runs/${run.run_id}`);
+
+  await expect(page.getByText("Loading run details...")).toHaveCount(0, { timeout: 15000 });
+  await page.getByTestId("run-rerun-trigger").click();
+  await expect(page.getByTestId("rerun-option-fresh")).toBeVisible();
+  await page.getByTestId("rerun-option-fresh").click();
+
+  expect(rerunPayload).toEqual({ mode: "fresh" });
   await expect(page).toHaveURL(/8e8957f2-79f8-4dc8-8deb-786b2c93828d$/, { timeout: 15000 });
 });

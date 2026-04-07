@@ -344,8 +344,8 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                     checkpoint_id="checkpoint-e2e",
                     workflow_id="workflow-e2e",
                     run_id="run-e2e",
-                    checkpoint_kind="orchestrated",
-                    stage="orchestrated",
+                    checkpoint_kind="pm",
+                    stage="pm",
                     payload_json={"source": "smoke"},
                     codex_session_id=None,
                     created_at=now,
@@ -424,7 +424,7 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
             ("POST", "/api/admin/workflows/{workflow_id}/attempts"): RouteScenario(
                 path="/api/admin/workflows/workflow-e2e/attempts",
                 auth=admin,
-                json={"mode": "resume", "checkpoint_kind": "orchestrated"},
+                json={"mode": "resume", "checkpoint_kind": "pm"},
                 expected_statuses=(201, 409),
             ),
             ("POST", "/api/admin/runs/{run_id}/cancel"): RouteScenario(
