@@ -48,6 +48,7 @@ from orchestrator.core.logging import configure_logging
 from orchestrator.core.platform_metrics import platform_metrics
 from orchestrator.core.observability import reset_log_context, set_log_context
 from orchestrator.core.sentry import initialize_sentry
+from orchestrator.storage.database_support import ensure_postgres_database_url
 from orchestrator.storage.migrations import run_migrations
 
 logger = logging.getLogger(__name__)
@@ -57,6 +58,11 @@ request_logger = logger
 
 def create_app() -> FastAPI:
     settings = get_settings()
+    ensure_postgres_database_url(
+        database_url=settings.database_url,
+        context="API runtime",
+        allow_sqlite_for_tests=bool(getattr(settings, "allow_sqlite_for_tests", False)),
+    )
     configure_logging(
         settings.log_level,
         environment=settings.sentry_environment,

@@ -88,9 +88,10 @@ class KnowledgeJiraSyncRuntime:
             logger.info("knowledge_jira_sync_runtime_disabled")
             return
         if not is_postgres_database_url(self._settings.database_url):
-            self._write_runtime_status(state="skipped_non_postgres", leader_acquired=False)
-            logger.info("knowledge_jira_sync_runtime_skipped_non_postgres")
-            return
+            raise KnowledgeJiraSyncDependencyFailure(
+                "Knowledge Jira sync runtime requires PostgreSQL advisory locks; "
+                "set ORCHESTRATOR_DATABASE_URL to a postgresql URL."
+            )
         if psycopg is None:
             raise KnowledgeJiraSyncDependencyFailure(
                 "Knowledge Jira sync runtime requires psycopg to coordinate leader lock."

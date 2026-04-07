@@ -111,6 +111,20 @@ class CliEntrypointTests(unittest.TestCase):
         self.assertEqual(len(payload["tenants"]), 1)
         self.assertEqual(payload["tenants"][0]["tenant_id"], "tenant-cli")
 
+    def test_run_command_rejects_sqlite_without_test_opt_in(self) -> None:
+        previous = os.environ.get("ORCHESTRATOR_ALLOW_SQLITE_FOR_TESTS")
+        try:
+            os.environ["ORCHESTRATOR_ALLOW_SQLITE_FOR_TESTS"] = "false"
+            get_settings.cache_clear()
+            with self.assertRaisesRegex(RuntimeError, "requires PostgreSQL"):
+                cli_main(["run", "--tenant", "tenant-cli", "--issue", "TP-502"])
+        finally:
+            if previous is None:
+                os.environ.pop("ORCHESTRATOR_ALLOW_SQLITE_FOR_TESTS", None)
+            else:
+                os.environ["ORCHESTRATOR_ALLOW_SQLITE_FOR_TESTS"] = previous
+            get_settings.cache_clear()
+
     def test_discord_gateway_command_invokes_runtime(self) -> None:
         with patch("orchestrator.cli.run_discord_gateway") as gateway_mock:
             exit_code = cli_main(["discord-gateway"])

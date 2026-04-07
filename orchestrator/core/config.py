@@ -5,7 +5,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    database_url: str = "sqlite:///./orchestrator.db"
+    database_url: str = "postgresql+psycopg://orchestrator:orchestrator@127.0.0.1:4402/orchestrator"
+    allow_sqlite_for_tests: bool = False
     db_pool_size: int = 10
     db_pool_max_overflow: int = 20
     db_pool_timeout_seconds: int = 60
