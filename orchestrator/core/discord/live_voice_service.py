@@ -161,9 +161,9 @@ class DiscordLiveVoiceService:
         except LiveVoiceAudioError as exc:
             raise DiscordLiveVoiceDependencyFailure(str(exc)) from exc
 
-        if str(self._settings.voice_provider or "").strip().lower() in {"", "disabled"}:
+        if str(self._settings.voice_stt_provider or "").strip().lower() in {"", "disabled"}:
             raise DiscordLiveVoiceDependencyFailure(
-                "Live voice requires ORCHESTRATOR_VOICE_PROVIDER to be configured."
+                "Live voice requires ORCHESTRATOR_VOICE_STT_PROVIDER to be configured."
             )
         if shutil.which("ffmpeg") is None:
             raise DiscordLiveVoiceDependencyFailure(
