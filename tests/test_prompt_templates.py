@@ -57,6 +57,20 @@ class PromptTemplateTests(unittest.TestCase):
         self.assertIn('Do not emit `missing_evidence_sources=["decision_state"]` unless you actually called `decision.read_state`', prompt_text)
         self.assertIn("If `decision.read_state` succeeds and reports that no prior decision state exists, that is a valid result", prompt_text)
 
+    def test_pm_user_prompt_defines_run_request_human_input_contract(self) -> None:
+        prompt_path = (
+            Path(__file__).resolve().parents[1]
+            / "orchestrator"
+            / "prompts"
+            / "workflow"
+            / "pm_user.j2"
+        )
+        prompt_text = prompt_path.read_text(encoding="utf-8")
+        self.assertIn("`run.request_human_input` requires this exact argument shape", prompt_text)
+        self.assertIn('"request_type":"<stable snake_case type>"', prompt_text)
+        self.assertIn("Never emit top-level `questions`", prompt_text)
+        self.assertIn('use `request_type="decision_gate_clarification"`', prompt_text)
+
     def test_test_user_prompt_requires_changed_scope_before_full_suite(self) -> None:
         prompt_path = (
             Path(__file__).resolve().parents[1]
@@ -69,6 +83,8 @@ class PromptTemplateTests(unittest.TestCase):
         self.assertIn("execute targeted tests/checks only for the code you changed first", prompt_text)
         self.assertIn("Do not default to broad `xcodebuild test`", prompt_text)
         self.assertIn("If you cannot identify a targeted test", prompt_text)
+        self.assertIn("inspect the allowed tool list", prompt_text)
+        self.assertIn("before concluding the run is blocked", prompt_text)
 
     def test_dev_and_review_prompts_require_pr_head_to_use_integration_branch(self) -> None:
         prompts_dir = Path(__file__).resolve().parents[1] / "orchestrator" / "prompts" / "workflow"
@@ -77,8 +93,24 @@ class PromptTemplateTests(unittest.TestCase):
 
         self.assertIn("Integration branch as the only valid PR head branch", dev_prompt_text)
         self.assertIn("Never open or update a PR from the Execution branch", dev_prompt_text)
+        self.assertIn("inspect the allowed tool list", dev_prompt_text)
         self.assertIn("Integration branch as the canonical PR head branch", review_prompt_text)
         self.assertIn("Execution branch (`run/...`)", review_prompt_text)
+        self.assertIn("inspect the allowed tool list", review_prompt_text)
+
+    def test_workflow_stage_prompts_treat_tool_base_as_part_of_diagnosis(self) -> None:
+        prompts_dir = Path(__file__).resolve().parents[1] / "orchestrator" / "prompts" / "workflow"
+        for prompt_name in ("pm_user.j2", "dev_system.j2", "test_system.j2", "review_system.j2"):
+            prompt_text = (prompts_dir / prompt_name).read_text(encoding="utf-8")
+            self.assertIn("inspect the allowed tool list", prompt_text)
+            self.assertIn("before concluding the blocker is real", prompt_text)
+
+    def test_execution_stage_system_prompts_frame_tools_as_diagnostic_catalog(self) -> None:
+        prompts_dir = Path(__file__).resolve().parents[1] / "orchestrator" / "prompts" / "workflow"
+        for prompt_name in ("dev_system.j2", "test_system.j2", "review_system.j2"):
+            prompt_text = (prompts_dir / prompt_name).read_text(encoding="utf-8")
+            self.assertIn("authoritative path for governed context and diagnosis", prompt_text)
+            self.assertNotIn("governed side effects", prompt_text)
 
     def test_voice_room_engineer_prompt_enforces_spoken_style(self) -> None:
         system_prompt_path = (

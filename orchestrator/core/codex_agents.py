@@ -7,7 +7,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from orchestrator.core.agent_tools import allowed_tools_for_stage, execute_agent_tool
+from orchestrator.core.agent_tools import allowed_tools_for_stage, execute_agent_tool, tool_catalog_for_stage
 from orchestrator.core.runtime_invocation import (
     AgentInvocationContext,
     invoke_runtime_json,
@@ -279,7 +279,7 @@ class CodexWorkflowAgents:
                 current_worker_capability=request.current_worker_capability,
                 available_worker_capabilities_json=json.dumps(request.available_worker_capabilities),
                 human_inputs_json=json.dumps(request.human_inputs),
-                allowed_tools_json=json.dumps(sorted(allowed_tools_for_stage("pm"))),
+                allowed_tools_json=json.dumps(tool_catalog_for_stage("pm")),
             ),
         )
         raw_response = _extract_raw_response(payload)
@@ -364,7 +364,7 @@ class CodexWorkflowAgents:
                 confirmed_external_blockers_json=json.dumps(plan.confirmed_external_blockers),
                 missing_evidence_sources_json=json.dumps(plan.missing_evidence_sources),
                 human_inputs_json=json.dumps(request.human_inputs),
-                allowed_tools_json=json.dumps(sorted(allowed_tools_for_stage("dev"))),
+                allowed_tools_json=json.dumps(tool_catalog_for_stage("dev")),
             ),
         )
         raw_response = _extract_raw_response(payload)
@@ -436,7 +436,7 @@ class CodexWorkflowAgents:
                 confirmed_external_blockers_json=json.dumps(plan.confirmed_external_blockers),
                 missing_evidence_sources_json=json.dumps(plan.missing_evidence_sources),
                 human_inputs_json=json.dumps(request.human_inputs),
-                allowed_tools_json=json.dumps(sorted(allowed_tools_for_stage("test"))),
+                allowed_tools_json=json.dumps(tool_catalog_for_stage("test")),
             ),
         )
 
@@ -525,7 +525,7 @@ class CodexWorkflowAgents:
                 human_inputs_json=json.dumps(request.human_inputs),
                 previous_review_summary_json=json.dumps(resume_source_state.get("review_summary") or []),
                 previous_review_feedback=str(resume_source_state.get("review_feedback") or "").strip() or "none",
-                allowed_tools_json=json.dumps(sorted(allowed_tools_for_stage("review"))),
+                allowed_tools_json=json.dumps(tool_catalog_for_stage("review")),
             ),
         )
 

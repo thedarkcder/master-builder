@@ -150,8 +150,44 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         self.assertEqual(captured["execution_branch"], "run/MAB-54/run-1")
         self.assertEqual(captured["integration_branch"], "feature/MAB-54")
         self.assertEqual(captured["allow_pr_creation"], "false")
-        self.assertIn("decision.read_state", str(captured["allowed_tools_json"]))
+        allowed_tools = json.loads(str(captured["allowed_tools_json"]))
+        decision_tool = next(item for item in allowed_tools if item["tool_name"] == "decision.read_state")
+        self.assertEqual(decision_tool["category"], "decision")
+        self.assertIn("Decision Gate", decision_tool["description"])
         self.assertNotIn("agent_tool_command", captured)
+
+    def test_test_prompt_receives_structured_tool_catalog_with_descriptions(self) -> None:
+        runtime = CodexRuntime(
+            model="gpt-5-codex",
+            max_output_tokens=1200,
+            command="override",
+            _request=_RuntimeQueue(
+                [
+                    '{"plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"next_stage":"dev"}',
+                    '{"change_summary":["implemented"],"pr_url":null,"blocker_category":null,"blocker_message":null}',
+                    '{"passed":true,"guidance":["run tests"],"feedback":null,"blocker_category":null,"blocker_message":null}',
+                ]
+            ),
+        )
+        agents = CodexWorkflowAgents(runtime=runtime)
+        request = self._request()
+        captured: dict[str, object] = {}
+
+        def _render_prompt(template_name: str, **kwargs) -> str:
+            if template_name == "workflow/test_user.j2":
+                captured.update(kwargs)
+            return template_name
+
+        with patch("orchestrator.core.codex_agents.render_prompt", side_effect=_render_prompt):
+            plan = agents.pm(request, 1, None, [], None, None, None)
+            dev = agents.dev(request, plan, 1, None)
+            agents.test(request, plan, dev, 1)
+
+        allowed_tools = json.loads(str(captured["allowed_tools_json"]))
+        runtime_tool = next(item for item in allowed_tools if item["tool_name"] == "project.get_runtime_values")
+        self.assertEqual(runtime_tool["category"], "project")
+        self.assertIn("project-configured runtime values by key", runtime_tool["description"])
+        self.assertIn("source of truth", runtime_tool["description"])
 
     def test_stage_prompts_include_answered_human_inputs(self) -> None:
         runtime = CodexRuntime(
