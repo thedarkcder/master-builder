@@ -93,10 +93,24 @@ class PromptTemplateTests(unittest.TestCase):
 
         self.assertIn("Integration branch as the only valid PR head branch", dev_prompt_text)
         self.assertIn("Never open or update a PR from the Execution branch", dev_prompt_text)
+        self.assertIn("github.push_branch", dev_prompt_text)
+        self.assertIn("Do not use raw `git push`", dev_prompt_text)
         self.assertIn("inspect the allowed tool list", dev_prompt_text)
         self.assertIn("Integration branch as the canonical PR head branch", review_prompt_text)
         self.assertIn("Execution branch (`run/...`)", review_prompt_text)
+        self.assertIn("github.push_branch", review_prompt_text)
+        self.assertIn("Do not use raw `git push`", review_prompt_text)
         self.assertIn("inspect the allowed tool list", review_prompt_text)
+
+    def test_dev_and_review_system_prompts_make_remote_publication_tool_owned(self) -> None:
+        prompts_dir = Path(__file__).resolve().parents[1] / "orchestrator" / "prompts" / "workflow"
+        dev_system_prompt = (prompts_dir / "dev_system.j2").read_text(encoding="utf-8")
+        review_system_prompt = (prompts_dir / "review_system.j2").read_text(encoding="utf-8")
+
+        self.assertIn("Remote branch publication and PR creation/update are governed actions", dev_system_prompt)
+        self.assertIn("instead of raw `git push`", dev_system_prompt)
+        self.assertIn("Remote branch publication and PR creation/update are governed actions", review_system_prompt)
+        self.assertIn("instead of raw `git push`", review_system_prompt)
 
     def test_workflow_stage_prompts_treat_tool_base_as_part_of_diagnosis(self) -> None:
         prompts_dir = Path(__file__).resolve().parents[1] / "orchestrator" / "prompts" / "workflow"
@@ -111,6 +125,13 @@ class PromptTemplateTests(unittest.TestCase):
             prompt_text = (prompts_dir / prompt_name).read_text(encoding="utf-8")
             self.assertIn("authoritative path for governed context and diagnosis", prompt_text)
             self.assertNotIn("governed side effects", prompt_text)
+
+    def test_execution_stage_prompts_require_troubleshooting_section_for_blocking_outputs(self) -> None:
+        prompts_dir = Path(__file__).resolve().parents[1] / "orchestrator" / "prompts" / "workflow"
+        for prompt_name in ("dev_system.j2", "dev_user.j2", "test_system.j2", "test_user.j2", "review_system.j2", "review_user.j2"):
+            prompt_text = (prompts_dir / prompt_name).read_text(encoding="utf-8")
+            self.assertIn("Troubleshooting:", prompt_text)
+            self.assertIn("concrete operator actions", prompt_text)
 
     def test_voice_room_engineer_prompt_enforces_spoken_style(self) -> None:
         system_prompt_path = (

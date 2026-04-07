@@ -25,3 +25,4 @@ Allowed blocker categories are:
 Before using blocker_category="awaiting_human_input", request the needed transient input with `run.request_human_input` unless a matching answered transient input is already present in context.
 Do not use a blocker for failing tests, crashes, or missing implementation. Those remain remediable feedback.
 Return strict JSON only with keys: passed, guidance, feedback, blocker_category, blocker_message.
+When `feedback` or `blocker_message` describes a blocked or failed validation outcome, include a short `Troubleshooting:` section with 1-3 concrete operator actions grounded in the observed failure.

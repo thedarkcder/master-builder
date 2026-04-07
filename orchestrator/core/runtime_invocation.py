@@ -13,6 +13,7 @@ from uuid import uuid4
 
 from orchestrator.core.codex_models import normalize_codex_reasoning_effort
 from orchestrator.core.config import get_settings
+from orchestrator.core.guardrails import redact_sensitive_text
 from orchestrator.core.knowledge_base import build_knowledge_prompt_context
 from orchestrator.core.project_policy import resolve_effective_policy
 from orchestrator.core.codex_runtime import CodexRuntime, CodexRuntimeError
@@ -881,8 +882,12 @@ def _invoke_runtime_json_once(
                 "model": resolved_codex_model,
                 "reasoning_effort": effective_reasoning_effort,
                 "output_keys": sorted(payload.keys()) if isinstance(payload, dict) else [],
-                "error": failure_reason or "",
-                "failure_payload_preview": failure_payload_preview,
+                "error": redact_sensitive_text(failure_reason or ""),
+                "failure_payload_preview": (
+                    redact_sensitive_text(failure_payload_preview)
+                    if failure_payload_preview is not None
+                    else None
+                ),
                 "actual_prompt_tokens": usage_state.get("prompt_tokens"),
                 "actual_completion_tokens": usage_state.get("completion_tokens"),
                 "actual_total_tokens": usage_state.get("total_tokens"),
@@ -961,6 +966,7 @@ def _combined_log_sink(
     def _sink(stream: str, message: str) -> None:
         telemetry_sink(stream, message)
         message_text = str(message or "")
+        sanitized_message = redact_sensitive_text(message_text)
         parsed_usage = extract_turn_completed_usage(message_text)
         usage_from_line: dict[str, int] | None = None
         if parsed_usage is not None:
@@ -981,7 +987,7 @@ def _combined_log_sink(
             and "null" in message_text
         ):
             sink_state["no_assistant_output_detected"] = True
-        _append_raw_log_line(context=context, stream=stream, message=message_text)
+        _append_raw_log_line(context=context, stream=stream, message=sanitized_message)
         settings = get_settings()
         sample_every = max(1, int(getattr(settings, "codex_db_log_sampling_interval", 100)))
         persist_turn_completed_usage = bool(
@@ -998,7 +1004,7 @@ def _combined_log_sink(
                 extra_on_log_line(stream, message)
             return
         try:
-            _enqueue_runtime_log_line(context=context, stream=stream, message=message_text)
+            _enqueue_runtime_log_line(context=context, stream=stream, message=sanitized_message)
             sink_state["db_persisted_lines"] = int(sink_state.get("db_persisted_lines", 0)) + 1
         except Exception as exc:  # noqa: BLE001
             logger.exception(
