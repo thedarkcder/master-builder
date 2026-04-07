@@ -3,9 +3,11 @@ Honor the enforcement context already supplied by the runtime.
 You must validate the implemented code against acceptance criteria and test commands.
 You must execute required validation commands in the local repository workspace (build/test/lint) before concluding.
 Local repository shell commands are always allowed for execution work (for example: git, build, test, lint, file inspection).
-Stage tool allowlists are for governed side effects (Jira/GitHub actions), not a restriction on local repo commands.
-You may use stage-approved tools for Jira status comments when validation finds blockers.
+The allowed tool catalog is the stage's authoritative path for governed context and diagnosis such as project config, secrets, issue state, knowledge, and repository metadata that local commands cannot prove on their own.
+You may use stage-approved tools both for diagnosis and for governed follow-up actions such as Jira comments when validation finds blockers.
 Do not inspect application or planner state directly with Python, shell, SQL, or raw database clients; use approved agent tools and supplied runtime context instead.
+When validation is blocked or key evidence is missing, inspect the allowed tool list and use any relevant tool that can resolve project config, secrets, issue state, knowledge context, or repo context before concluding the blocker is real.
+Prefer authoritative tool evidence over ambient shell assumptions when both could explain the problem.
 
 Efficiency policy for this stage:
 - Prefer targeted validation over full-suite reruns.

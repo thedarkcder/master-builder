@@ -162,27 +162,27 @@ TOOL_ALLOWLIST: dict[str, set[str]] = {
 }
 
 TOOL_DESCRIPTIONS: dict[str, str] = {
-    "decision.read_state": "Read the current decision-gate state for the active issue.",
-    "github.commit_all": "Commit staged repository changes for the active branch.",
-    "github.create_branch": "Create a branch for the active issue workflow.",
-    "github.get_pr_details": "Read pull request metadata and current status.",
-    "github.list_check_suites": "List CI check suites for a pull request head commit.",
-    "github.list_pr_files": "List files changed in the active pull request.",
-    "github.list_pr_issue_comments": "Read top-level issue comments on the pull request.",
-    "github.list_pr_review_comments": "Read inline pull request review comments.",
-    "github.list_pr_reviews": "Read submitted pull request reviews.",
-    "github.open_pr": "Open or update a pull request for the current branch.",
-    "github.push_branch": "Push the current branch to the configured remote.",
-    "jira.comment": "Post a Jira comment on the active issue.",
-    "jira.get_issue": "Read Jira issue details for the active issue key.",
-    "jira.transition": "Transition the active Jira issue to a new workflow state.",
-    "knowledge.exact_read": "Read a specific knowledge asset or exact knowledge match.",
-    "knowledge.read": "Search and summarize relevant knowledge context.",
-    "project.get_runtime_values": "Resolve requested runtime values for the current project.",
-    "project.list_runtime_keys": "List available runtime keys for the current project.",
-    "project.request_runtime_values": "Request missing runtime values from a human operator.",
-    "repo.read": "Read files and repository metadata using guarded read-only commands.",
-    "run.request_human_input": "Create a human input request tied to the active run.",
+    "decision.read_state": "Check whether the active issue has an open, answered, or cleared Decision Gate. Use this before planning or execution when prerequisite or clarification state may block the run.",
+    "github.commit_all": "Create a git commit from already-staged changes on the active branch. Use this after local edits are complete and verified.",
+    "github.create_branch": "Create or reset the working branch for the active issue from the repository base branch. Use this before making issue-scoped changes.",
+    "github.get_pr_details": "Fetch the active pull request's title, body, branches, status, and URLs. Use this to confirm current PR state before review, follow-up work, or status reporting.",
+    "github.list_check_suites": "Fetch CI and check-suite results for a pull request head commit. Use this to see whether automation is passing, failing, or still running.",
+    "github.list_pr_files": "List the files changed in the active pull request. Use this to scope review, testing, or targeted follow-up fixes.",
+    "github.list_pr_issue_comments": "Read top-level conversation comments on the pull request. Use this to see reviewer or stakeholder discussion that is not attached to specific lines.",
+    "github.list_pr_review_comments": "Read inline review comments attached to changed lines in the pull request. Use this to address actionable code review feedback.",
+    "github.list_pr_reviews": "Read submitted pull request reviews and states such as APPROVED or CHANGES_REQUESTED. Use this to understand overall review status.",
+    "github.open_pr": "Create a new pull request or update the current branch's pull request against the target branch. Use this when implementation is ready for review or needs a PR refresh.",
+    "github.push_branch": "Push the active branch to the configured remote repository. Use this after committing so the remote branch, PR, and CI see the latest changes.",
+    "jira.comment": "Add a comment to the active Jira issue. Use this to report progress, blockers, validation steps, or handoff notes.",
+    "jira.get_issue": "Fetch the active Jira issue's live summary, description, status, and related metadata. Use this when you need authoritative ticket scope or status.",
+    "jira.transition": "Move the active Jira issue to another workflow state. Use this only when the stage outcome is clear, for example Testing, Done, or Blocked.",
+    "knowledge.exact_read": "Read a specific knowledge asset or exact knowledge match by identifier. Use this when you already know the document you need and want authoritative contents.",
+    "knowledge.read": "Search the knowledge base and summarize the most relevant results for the active issue. Use this when you need supporting context but do not know the exact document.",
+    "project.get_runtime_values": "Fetch project-configured runtime values by key, including environment entries and secret-backed values. Use this before running commands that need project credentials or config, and treat the result as the source of truth for whether a key is present.",
+    "project.list_runtime_keys": "List the runtime configuration keys available for the current project from environment values and secret refs. Use this to discover what config or credential names exist before requesting values.",
+    "project.request_runtime_values": "Send a request for missing project runtime values to a human operator. Use this when required config or secrets are not configured and you need someone to provide them.",
+    "repo.read": "Run guarded read-only repository commands and return file or git metadata. Use this to inspect code, files, branches, or diffs without making changes.",
+    "run.request_human_input": "Create a structured human-input request for the active run and pause the workflow until a reply arrives. Use this when one-time operator clarification or data is required to continue.",
 }
 
 _READ_ONLY_SHELL_OPERATOR_PATTERN = re.compile(r"[|;&><`]|(?:\$\()")
@@ -254,6 +254,17 @@ def list_implemented_tools() -> list[dict[str, object]]:
             }
         )
     return tools
+
+
+def tool_catalog_for_stage(stage: str) -> list[dict[str, object]]:
+    normalized_stage = str(stage or "").strip().lower()
+    if not normalized_stage:
+        return []
+    return [
+        tool
+        for tool in list_implemented_tools()
+        if normalized_stage in tool.get("stages", [])
+    ]
 
 
 def build_agent_tool_command(

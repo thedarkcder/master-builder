@@ -7,7 +7,12 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from orchestrator.core.agent_tools import allowed_tools_for_stage, execute_agent_tool
+from orchestrator.core.agent_tools import (
+    allowed_tools_for_stage,
+    execute_agent_tool,
+    list_implemented_tools,
+    tool_catalog_for_stage,
+)
 from orchestrator.storage.models import DecisionCycle
 from orchestrator.tools.github_app import PullRequestSummary
 
@@ -34,6 +39,32 @@ def test_allowed_tools_for_stage_pm_contains_evidence_tools() -> None:
 def test_allowed_tools_for_stage_dev_contains_human_input_request_tool() -> None:
     tools = allowed_tools_for_stage("dev")
     assert "run.request_human_input" in tools
+
+
+def test_tool_catalog_descriptions_explain_usage() -> None:
+    tools = list_implemented_tools()
+    assert tools
+    by_name = {str(item["tool_name"]): str(item["description"]) for item in tools}
+
+    for tool_name, description in by_name.items():
+        assert description
+        assert description != "Implemented governed tool."
+        assert "Use " in description, f"{tool_name} description should explain when to use the tool"
+
+    runtime_description = by_name["project.get_runtime_values"]
+    assert "environment entries" in runtime_description
+    assert "secret-backed values" in runtime_description
+    assert "source of truth" in runtime_description
+
+
+def test_tool_catalog_for_stage_returns_structured_entries() -> None:
+    tools = tool_catalog_for_stage("test")
+    assert tools
+
+    runtime_tool = next(item for item in tools if item["tool_name"] == "project.get_runtime_values")
+    assert runtime_tool["category"] == "project"
+    assert "Fetch project-configured runtime values by key" in str(runtime_tool["description"])
+    assert "test" in runtime_tool["stages"]
 
 
 def test_execute_agent_tool_rejects_disallowed_stage_tool() -> None:
@@ -176,6 +207,87 @@ def test_run_request_human_input_creates_request() -> None:
         "expires_at": "2026-03-13T12:00:00+00:00",
     }
     create_mock.assert_called_once()
+
+
+def test_run_request_human_input_rejects_missing_request_type() -> None:
+    class _FakeTenant:
+        tenant_id = "route25"
+        github_config = {}
+        policy_config = {}
+
+    class _FakeProject:
+        project_id = "route25-default"
+        github_repository = "https://github.com/acme/repo"
+        policy_overrides = {}
+
+    class _FakeContext:
+        tenant = _FakeTenant()
+        project = _FakeProject()
+        stage = "pm"
+        issue_key = "GP-125"
+        run_id = "run-1"
+        repo_dir = Path("/tmp/repo")
+
+    fake_session = MagicMock()
+    fake_session.get.return_value = SimpleNamespace(run_id="run-1")
+
+    with patch("orchestrator.core.agent_tools._resolve_context", return_value=_FakeContext()):
+        with pytest.raises(ValueError, match="requires non-empty 'request_type'"):
+            execute_agent_tool(
+                session=fake_session,
+                settings=SimpleNamespace(),
+                tenant_id="route25",
+                project_id="route25-default",
+                run_id="run-1",
+                issue_key="GP-125",
+                stage="pm",
+                tool_name="run.request_human_input",
+                tool_args={"prompt": "Need a clarification"},
+            )
+
+
+def test_run_request_human_input_rejects_top_level_questions_payload() -> None:
+    class _FakeTenant:
+        tenant_id = "route25"
+        github_config = {}
+        policy_config = {}
+
+    class _FakeProject:
+        project_id = "route25-default"
+        github_repository = "https://github.com/acme/repo"
+        policy_overrides = {}
+
+    class _FakeContext:
+        tenant = _FakeTenant()
+        project = _FakeProject()
+        stage = "pm"
+        issue_key = "GP-125"
+        run_id = "run-1"
+        repo_dir = Path("/tmp/repo")
+
+    fake_session = MagicMock()
+    fake_session.get.return_value = SimpleNamespace(run_id="run-1")
+
+    with patch("orchestrator.core.agent_tools._resolve_context", return_value=_FakeContext()):
+        with pytest.raises(ValueError, match="requires non-empty 'prompt'"):
+            execute_agent_tool(
+                session=fake_session,
+                settings=SimpleNamespace(),
+                tenant_id="route25",
+                project_id="route25-default",
+                run_id="run-1",
+                issue_key="GP-125",
+                stage="pm",
+                tool_name="run.request_human_input",
+                tool_args={
+                    "questions": [
+                        {
+                            "id": "sync_failure_policy",
+                            "question": "If StoreKit status is indeterminate, should gating fail closed?",
+                        }
+                    ]
+                },
+            )
 
 
 def test_github_create_branch_uses_supplied_base_branch_for_sync() -> None:
