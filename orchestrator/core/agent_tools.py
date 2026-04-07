@@ -840,7 +840,9 @@ def _execute_run_tool(
     return {
         "request_id": request.request_id,
         "request_type": request.request_type,
-        "resume_stage": request.resume_stage,
+        "source_stage": request.source_stage,
+        "workflow_id": request.workflow_id,
+        "checkpoint_id": request.checkpoint_id,
         "thread_channel_id": request.thread_channel_id,
         "expires_at": request.expires_at.isoformat() if request.expires_at else None,
     }

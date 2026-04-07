@@ -14,6 +14,8 @@ class WorkflowRequest:
     issue_summary: str
     issue_description: str
     max_dev_test_review_loops: int
+    workflow_id: str | None = None
+    attempt_number: int = 1
     allow_pr_creation: bool = False
     suggested_test_commands: list[str] = field(default_factory=list)
     execution_repo_dir: str | None = None
@@ -32,10 +34,12 @@ class WorkflowRequest:
     start_point_sha: str | None = None
     pr_number: int | None = None
     trigger_context: dict | None = None
-    resume_mode: str | None = None
-    resume_stage: str | None = None
-    resume_session_id: str | None = None
-    resume_source_plan: dict | None = None
+    entry_mode: str = "fresh"
+    entry_stage: str | None = None
+    checkpoint_kind: str | None = None
+    checkpoint_id: str | None = None
+    checkpoint_payload: dict | None = None
+    checkpoint_session_id: str | None = None
     human_inputs: list[dict[str, str]] = field(default_factory=list)
 
 

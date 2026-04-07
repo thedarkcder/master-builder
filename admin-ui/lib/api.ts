@@ -509,6 +509,12 @@ export type RunStatus = (typeof RUN_STATUSES)[number];
 
 export type RunRecord = {
   run_id: string;
+  workflow_id: string;
+  attempt_number: number;
+  parent_run_id: string | null;
+  entry_mode: string;
+  entry_stage: string | null;
+  entry_checkpoint_id: string | null;
   tenant_id: string;
   project_id: string | null;
   issue_key: string;
@@ -517,10 +523,9 @@ export type RunRecord = {
   repo_url: string | null;
   branch: string | null;
   pr_url: string | null;
-  dev_session_id: string | null;
-  pm_session_id: string | null;
-  orchestrated_session_id: string | null;
   status: RunStatus;
+  waiting_for_input: boolean;
+  pending_input_request_id: string | null;
   last_error: string | null;
   created_at: string;
   started_at: string | null;
@@ -528,9 +533,9 @@ export type RunRecord = {
   plan: Record<string, unknown> | null;
 };
 
-export type RunRerunPayload = {
-  mode: "fresh" | "resume";
-  resume_stage?: "orchestrated" | "pm" | "dev" | "review";
+export type WorkflowAttemptCreatePayload = {
+  mode: "restart" | "resume";
+  checkpoint_kind: "orchestrated" | "pm" | "execution";
 };
 
 export type RunEventRecord = {
@@ -2040,12 +2045,12 @@ export function getRun(credentials: Credentials, runId: string): Promise<RunReco
   return request<RunRecord>(credentials, `/api/admin/runs/${encodeURIComponent(runId)}`);
 }
 
-export function rerunRun(
+export function createWorkflowAttempt(
   credentials: Credentials,
-  runId: string,
-  payload: RunRerunPayload = { mode: "fresh" }
+  workflowId: string,
+  payload: WorkflowAttemptCreatePayload
 ): Promise<RunRecord> {
-  return request<RunRecord>(credentials, `/api/admin/runs/${encodeURIComponent(runId)}/rerun`, {
+  return request<RunRecord>(credentials, `/api/admin/workflows/${encodeURIComponent(workflowId)}/attempts`, {
     method: "POST",
     body: JSON.stringify(payload)
   });

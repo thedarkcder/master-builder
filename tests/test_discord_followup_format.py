@@ -193,7 +193,7 @@ class DiscordFollowupFormatTests(unittest.TestCase):
             issue_key_pattern=pattern,
         )
 
-        self.assertIn("<@u9> Bill from Engineering: We should unblock Apple auth first.", message)
+        self.assertIn("<@u9> Judy from Engineering: We should unblock Apple auth first.", message)
 
     def test_merge_ask_voice_reply_fields_sets_room_mode_and_room_source(self) -> None:
         tenant = MagicMock()

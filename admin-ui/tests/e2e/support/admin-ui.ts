@@ -12,7 +12,7 @@ import type {
   RunEventRecord,
   RunLogEventRecord,
   RunRecord,
-  RunRerunPayload,
+  WorkflowAttemptCreatePayload,
   AuthenticatedPrincipalRecord,
   DeliverySummaryRecord,
   MembershipRecord,
@@ -286,6 +286,12 @@ export function makeProjectAutomation(overrides: Partial<ProjectAutomationRecord
 export function makeRun(overrides: Partial<RunRecord> = {}): RunRecord {
   return {
     run_id: "5de2cedf-b7ae-400c-a53c-3beecf078a51",
+    workflow_id: "workflow-gp-124",
+    attempt_number: 1,
+    parent_run_id: null,
+    entry_mode: "fresh",
+    entry_stage: "orchestrated",
+    entry_checkpoint_id: "checkpoint-orchestrated-gp-124",
     tenant_id: "route25",
     project_id: "route25-default",
     issue_key: "GP-124",
@@ -294,10 +300,9 @@ export function makeRun(overrides: Partial<RunRecord> = {}): RunRecord {
     repo_url: "https://github.com/thedarkcder/girl-power",
     branch: "feature/GP-124",
     pr_url: "https://github.com/thedarkcder/girl-power/pull/21",
-    dev_session_id: "019d1c32-5b72-7c53-bad0-8be1f842b1c2",
-    pm_session_id: "019d1c2d-c6ea-7370-b5f8-1e8ddbe79e8d",
-    orchestrated_session_id: null,
     status: "failed",
+    waiting_for_input: false,
+    pending_input_request_id: null,
     last_error: "Recovered stale running run after heartbeat timeout.",
     created_at: "2026-03-27T16:50:00Z",
     started_at: "2026-03-27T16:50:10Z",
@@ -557,16 +562,17 @@ export async function mockRunDetailApis(
     tokenTimeline?: TokenTimelineRecord;
     tenant?: TenantRecord;
     projects?: ProjectRecord[];
-    rerunResponse?: RunRecord;
-    onRerun?: (payload: RunRerunPayload) => void;
+    nextAttemptResponse?: RunRecord;
+    onCreateAttempt?: (payload: WorkflowAttemptCreatePayload) => void;
   },
 ): Promise<void> {
   const tenant = options.tenant ?? makeTenant({ tenant_id: options.run.tenant_id });
   const projects = options.projects ?? [makeProject({ tenant_id: options.run.tenant_id, project_id: options.run.project_id ?? "route25-default" })];
   const nextRun =
-    options.rerunResponse ??
+    options.nextAttemptResponse ??
     makeRun({
       run_id: "8e8957f2-79f8-4dc8-8deb-786b2c93828d",
+      workflow_id: "workflow-gp-124-restart",
       status: "queued",
       created_at: "2026-03-27T17:10:00Z",
       started_at: null,
@@ -631,10 +637,10 @@ export async function mockRunDetailApis(
     },
     {
       method: "POST",
-      pathname: `/api/bff/api/admin/runs/${encodeURIComponent(options.run.run_id)}/rerun`,
+      pathname: `/api/bff/api/admin/workflows/${encodeURIComponent(options.run.workflow_id)}/attempts`,
       handler: async (route) => {
-        const payload = JSON.parse(route.request().postData() ?? "{}") as RunRerunPayload;
-        options.onRerun?.(payload);
+        const payload = JSON.parse(route.request().postData() ?? "{}") as WorkflowAttemptCreatePayload;
+        options.onCreateAttempt?.(payload);
         await fulfillJson(route, nextRun);
       },
     },

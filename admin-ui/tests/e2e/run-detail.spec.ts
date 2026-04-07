@@ -36,7 +36,7 @@ test("renders checkpoint-backed failed-after-dev runs with separate execution an
     command: "stage.dev",
     startedAt: "2026-03-27T17:00:00Z",
     finishedAt: "2026-03-27T17:02:57Z",
-    codexSessionId: run.dev_session_id ?? undefined,
+    codexSessionId: "019d1c32-5b72-7c53-bad0-8be1f842b1c2",
   });
 
   await seedAdminSession(page);
@@ -84,7 +84,7 @@ test("marks a finished stage without a checkpoint as interrupted on terminal run
     command: "stage.dev",
     startedAt: "2026-03-27T17:00:00Z",
     finishedAt: "2026-03-27T17:02:57Z",
-    codexSessionId: run.dev_session_id ?? undefined,
+    codexSessionId: "019d1c32-5b72-7c53-bad0-8be1f842b1c2",
   });
 
   await seedAdminSession(page);
@@ -101,7 +101,7 @@ test("marks a finished stage without a checkpoint as interrupted on terminal run
   await expect(page.getByText("agent finished, checkpoint missing")).toBeVisible({ timeout: 15000 });
 });
 
-test("offers review rerun when review state exists and posts the review resume payload", async ({ page }) => {
+test("offers execution resume when review state exists and posts the workflow attempt payload", async ({ page }) => {
   const run = makeRun({
     plan: {
       stage_checkpoints: {
@@ -133,7 +133,7 @@ test("offers review rerun when review state exists and posts the review resume p
   await seedAdminSession(page);
   await mockRunDetailApis(page, {
     run,
-    onRerun: (payload) => {
+    onCreateAttempt: (payload) => {
       rerunPayload = payload;
     },
   });
@@ -142,9 +142,9 @@ test("offers review rerun when review state exists and posts the review resume p
 
   await expect(page.getByText("Loading run details...")).toHaveCount(0, { timeout: 15000 });
   await page.getByTestId("run-rerun-trigger").click();
-  await expect(page.getByTestId("rerun-option-review")).toBeVisible();
-  await page.getByTestId("rerun-option-review").click();
+  await expect(page.getByTestId("rerun-option-execution")).toBeVisible();
+  await page.getByTestId("rerun-option-execution").click();
 
-  expect(rerunPayload).toEqual({ mode: "resume", resume_stage: "review" });
+  expect(rerunPayload).toEqual({ mode: "resume", checkpoint_kind: "execution" });
   await expect(page).toHaveURL(/8e8957f2-79f8-4dc8-8deb-786b2c93828d$/, { timeout: 15000 });
 });

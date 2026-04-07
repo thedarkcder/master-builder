@@ -3,14 +3,11 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
-from sqlalchemy import delete
-
 from orchestrator.core.communications.enqueue_reason_contract import enqueue_reason_guidance
 from orchestrator.core.dashboard_links import admin_run_url
 from orchestrator.core.jira_links import tenant_jira_issue_url
 from orchestrator.core.pre_run_check import evaluate_execution_readiness_only
 from orchestrator.core.runs import mark_run_terminal
-from orchestrator.storage.models import RunLock
 from orchestrator.core.worker.run_lifecycle import resolve_project_for_run
 from orchestrator.core.worker.stage_events import run_not_ready_update
 
@@ -66,13 +63,6 @@ def apply_decision_gate(
         run.status = failed_status
         run.last_error = f"Execution readiness check failed: {exc}"
         run.finished_at = datetime.now(timezone.utc)
-        session.execute(
-            delete(RunLock).where(
-                RunLock.tenant_id == run.tenant_id,
-                RunLock.issue_key == run.issue_key,
-                RunLock.run_id == run.run_id,
-            )
-        )
         session.commit()
         session.refresh(run)
         return run, None

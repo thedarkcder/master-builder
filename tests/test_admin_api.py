@@ -18,7 +18,6 @@ from orchestrator.core.agent_observability import (
     record_agent_lifecycle_event,
     reset_agent_observability_for_tests,
 )
-from orchestrator.core.runs import RUN_DEDUPE_SCOPE_PR_REMEDIATION
 from orchestrator.core.run_logs import record_run_log_event
 from orchestrator.core.secrets import encrypt_value
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
@@ -36,7 +35,7 @@ from orchestrator.storage.models import (
     Project,
     ProjectAutomation,
     Run,
-    RunLock,
+    RunHumanInputRequest,
     Tenant,
     TenantInvite,
     TenantMembership,
@@ -46,9 +45,12 @@ from orchestrator.storage.models import (
     TenantUser,
     TenantUserCredential,
     TenantUserDiscordIdentity,
+    WorkflowCheckpoint,
+    WorkflowExecution,
     WorkerRuntimeState,
 )
 from orchestrator.tools.github_app import InstallationRepository
+from tests.workflow_test_support import add_human_input_request, add_run_with_workflow, add_workflow_attempt, make_run
 
 
 class AdminApiTests(unittest.TestCase):
@@ -196,6 +198,71 @@ class AdminApiTests(unittest.TestCase):
                 )
             )
             session.commit()
+
+    def _seed_workflow_attempt(
+        self,
+        *,
+        workflow_id: str,
+        run_id: str,
+        tenant_id: str = "tenant-a",
+        project_id: str = "tenant-a-default",
+        issue_key: str = "TP-1",
+        issue_summary: str = "workflow attempt",
+        issue_description: str | None = "desc",
+        workflow_status: str = "queued",
+        run_status: str = "queued",
+        checkpoint_id: str | None = None,
+        checkpoint_kind: str | None = None,
+        pending_request_id: str | None = None,
+    ) -> None:
+        session_factory = create_session_factory(self.database_url)
+        now = datetime.now(timezone.utc)
+        with session_factory() as session:
+            add_workflow_attempt(
+                session,
+                workflow_id=workflow_id,
+                run_id=run_id,
+                tenant_id=tenant_id,
+                project_id=project_id,
+                issue_key=issue_key,
+                issue_summary=issue_summary,
+                issue_description=issue_description,
+                repo_url="https://github.com/example/repo",
+                branch="feature/test",
+                workflow_status=workflow_status,
+                run_status=run_status,
+                entry_checkpoint_id=checkpoint_id,
+                checkpoint_kind=checkpoint_kind,
+                checkpoint_stage="pm" if checkpoint_kind == "pm" else "orchestrated",
+                checkpoint_payload={"checkpoint": checkpoint_kind, "run_id": run_id},
+                checkpoint_session_id="checkpoint-session" if checkpoint_kind == "pm" else None,
+                blocked_reason="human_input_expired" if workflow_status == "blocked" else None,
+                last_error=None if workflow_status != "failed" and run_status not in {"failed", "blocked"} else "run failed",
+                plan={"source": "test"} if checkpoint_id else None,
+                now=now,
+            )
+            if pending_request_id:
+                request_status = "pending" if workflow_status == "waiting_for_input" else "answered"
+                add_human_input_request(
+                    session,
+                    request_id=pending_request_id,
+                    tenant_id=tenant_id,
+                    project_id=project_id,
+                    workflow_id=workflow_id,
+                    checkpoint_id=checkpoint_id or "checkpoint-missing",
+                    source_run_id=run_id,
+                    issue_key=issue_key,
+                    source_stage="pm",
+                    request_type="human_reply",
+                    status=request_status,
+                    now=now,
+                )
+            session.commit()
+
+    def _persist_run(self, session, *, workflow_status: str | None = None, **run_kwargs) -> Run:
+        run = make_run(**run_kwargs)
+        add_run_with_workflow(session, run, workflow_status=workflow_status)
+        return run
 
     def test_admin_routes_require_auth(self) -> None:
         response = self.client.get("/api/admin/tenants")
@@ -1527,48 +1594,24 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(create_project.status_code, 201)
         created_project_id = create_project.json()["project_id"]
 
-        session_factory = create_session_factory(self.database_url)
-        now = datetime.now(timezone.utc)
-        with session_factory() as session:
-            session.add_all(
-                [
-                    Run(
-                        run_id="run-default-project",
-                        tenant_id="tenant-a",
-                        project_id="tenant-a-default",
-                        issue_key="TP-1",
-                        issue_summary="Default project run",
-                        issue_description="desc",
-                        repo_url="https://github.com/example/repo",
-                        branch=None,
-                        pr_url=None,
-                        status="queued",
-                        last_error=None,
-                        plan=None,
-                        created_at=now,
-                        started_at=None,
-                        finished_at=None,
-                    ),
-                    Run(
-                        run_id="run-created-project",
-                        tenant_id="tenant-a",
-                        project_id=created_project_id,
-                        issue_key="MBAPP-2",
-                        issue_summary="Created project run",
-                        issue_description="desc",
-                        repo_url="https://github.com/example/mobile-app",
-                        branch=None,
-                        pr_url=None,
-                        status="running",
-                        last_error=None,
-                        plan=None,
-                        created_at=now + timedelta(seconds=1),
-                        started_at=now + timedelta(seconds=1),
-                        finished_at=None,
-                    ),
-                ]
-            )
-            session.commit()
+        self._seed_workflow_attempt(
+            workflow_id="workflow-default-project",
+            run_id="run-default-project",
+            project_id="tenant-a-default",
+            issue_key="TP-1",
+            issue_summary="Default project run",
+            workflow_status="queued",
+            run_status="queued",
+        )
+        self._seed_workflow_attempt(
+            workflow_id="workflow-created-project",
+            run_id="run-created-project",
+            project_id=created_project_id,
+            issue_key="MBAPP-2",
+            issue_summary="Created project run",
+            workflow_status="running",
+            run_status="running",
+        )
 
         all_runs_response = self.client.get("/api/admin/runs?tenant_id=tenant-a", auth=("admin", "secret"))
         self.assertEqual(all_runs_response.status_code, 200)
@@ -1583,189 +1626,136 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(len(filtered_runs), 1)
         self.assertEqual(filtered_runs[0]["run_id"], "run-created-project")
         self.assertEqual(filtered_runs[0]["project_id"], created_project_id)
+        self.assertEqual(filtered_runs[0]["workflow_id"], "workflow-created-project")
+        self.assertEqual(filtered_runs[0]["attempt_number"], 1)
+        self.assertEqual(filtered_runs[0]["entry_mode"], "fresh")
+        self.assertEqual(filtered_runs[0]["entry_stage"], "orchestrated")
+        self.assertNotIn("dev_session_id", filtered_runs[0])
 
-    def test_rerun_failed_run_from_admin(self) -> None:
-        payload = self._tenant_payload()
-        self._insert_jira_connection(connection_id="conn-1")
-        create_tenant = self.client.post(
-            "/api/admin/tenants",
-            json=payload,
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(create_tenant.status_code, 201)
-        now = datetime.now(timezone.utc)
-        session_factory = create_session_factory(self.database_url)
-        with session_factory() as session:
-            session.add(
-                Run(
-                    run_id="run-failed-rerun",
-                    tenant_id="tenant-a",
-                    project_id="tenant-a-default",
-                    issue_key="TP-999",
-                    issue_summary="failed run",
-                    issue_description="Objective: rerun from admin.",
-                    repo_url="https://github.com/example/repo",
-                    branch="feature/TP-999",
-                    pr_url=None,
-                    dev_session_id="dev-session-123",
-                    pm_session_id="pm-session-456",
-                    orchestrated_session_id="orchestrated-session-789",
-                    status="failed",
-                    last_error="boom",
-                    plan={"plan": {"plan_steps": ["restore auth flow"], "acceptance_criteria": ["login works"], "risks": []}},
-                    created_at=now,
-                    started_at=now,
-                    finished_at=now,
-                )
-            )
-            session.commit()
-
+    def test_legacy_admin_run_rerun_route_is_removed(self) -> None:
         response = self.client.post(
-            "/api/admin/runs/run-failed-rerun/rerun",
-            json={"mode": "fresh"},
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(response.status_code, 201)
-        body = response.json()
-        self.assertEqual(body["tenant_id"], "tenant-a")
-        self.assertEqual(body["issue_key"], "TP-999")
-        self.assertEqual(body["status"], "queued")
-        self.assertNotEqual(body["run_id"], "run-failed-rerun")
-        self.assertEqual(body["branch"], "feature/TP-999")
-        self.assertIsNone(body["dev_session_id"])
-        self.assertIsNone(body["pm_session_id"])
-        self.assertIsNone(body["orchestrated_session_id"])
-        self.assertEqual(body["plan"]["trigger_context"]["rerun_mode"], "fresh")
-
-    def test_rerun_failed_run_is_not_blocked_by_active_pr_remediation_run(self) -> None:
-        payload = self._tenant_payload()
-        self._insert_jira_connection(connection_id="conn-1")
-        create_tenant = self.client.post(
-            "/api/admin/tenants",
-            json=payload,
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(create_tenant.status_code, 201)
-        now = datetime.now(timezone.utc)
-        session_factory = create_session_factory(self.database_url)
-        with session_factory() as session:
-            session.add_all(
-                [
-                    Run(
-                        run_id="run-failed-rerun-remediation-source",
-                        tenant_id="tenant-a",
-                        project_id="tenant-a-default",
-                        issue_key="TP-1001",
-                        issue_summary="failed run",
-                        issue_description="Objective: rerun from admin.",
-                        repo_url="https://github.com/example/repo",
-                        branch=None,
-                        pr_url=None,
-                        status="failed",
-                        last_error="boom",
-                        plan={"plan": {"plan_steps": ["restore auth flow"]}},
-                        created_at=now,
-                        started_at=now,
-                        finished_at=now,
-                    ),
-                    Run(
-                        run_id="run-active-pr-remediation",
-                        tenant_id="tenant-a",
-                        project_id="tenant-a-default",
-                        issue_key="TP-1001",
-                        issue_summary="TP-1001: PR remediation for #42",
-                        issue_description="Automated remediation run triggered from GitHub PR #42.",
-                        repo_url="https://github.com/example/repo",
-                        branch="feature/tp-1001",
-                        pr_url="https://github.com/example/repo/pull/42",
-                        dedupe_scope=RUN_DEDUPE_SCOPE_PR_REMEDIATION,
-                        status="queued",
-                        last_error=None,
-                        plan={"trigger_context": {"source": "github_pr_review_feedback", "pr_number": 42}},
-                        created_at=now + timedelta(seconds=1),
-                        started_at=None,
-                        finished_at=None,
-                    ),
-                    RunLock(
-                        tenant_id="tenant-a",
-                        issue_key="TP-1001",
-                        dedupe_scope=RUN_DEDUPE_SCOPE_PR_REMEDIATION,
-                        run_id="run-active-pr-remediation",
-                        locked_at=now + timedelta(seconds=1),
-                    ),
-                ]
-            )
-            session.commit()
-
-        response = self.client.post(
-            "/api/admin/runs/run-failed-rerun-remediation-source/rerun",
-            json={"mode": "fresh"},
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(response.status_code, 201)
-        self.assertNotIn(response.json()["run_id"], {"run-failed-rerun-remediation-source", "run-active-pr-remediation"})
-
-    def test_resume_rerun_from_dev_stage_copies_session_and_plan(self) -> None:
-        payload = self._tenant_payload()
-        self._insert_jira_connection(connection_id="conn-1")
-        create_tenant = self.client.post(
-            "/api/admin/tenants",
-            json=payload,
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(create_tenant.status_code, 201)
-        now = datetime.now(timezone.utc)
-        session_factory = create_session_factory(self.database_url)
-        with session_factory() as session:
-            session.add(
-                Run(
-                    run_id="run-failed-resume",
-                    tenant_id="tenant-a",
-                    project_id="tenant-a-default",
-                    issue_key="TP-1000",
-                    issue_summary="failed run",
-                    issue_description="Objective: resume from dev.",
-                    repo_url="https://github.com/example/repo",
-                    branch="feature/TP-1000",
-                    pr_url=None,
-                    dev_session_id="dev-session-123",
-                    pm_session_id="pm-session-456",
-                    orchestrated_session_id="orchestrated-session-789",
-                    status="failed",
-                    last_error="boom",
-                    plan={
-                        "plan": {
-                            "plan_steps": ["restore auth flow"],
-                            "acceptance_criteria": ["login works"],
-                            "risks": ["stale session"],
-                            "resolved_prerequisites": ["supabase configured"],
-                        }
-                    },
-                    created_at=now,
-                    started_at=now,
-                    finished_at=now,
-                )
-            )
-            session.commit()
-
-        response = self.client.post(
-            "/api/admin/runs/run-failed-resume/rerun",
+            "/api/admin/runs/run-missing/rerun",
             json={"mode": "resume", "resume_stage": "dev"},
             auth=("admin", "secret"),
         )
-        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.status_code, 404)
+
+    def test_list_and_get_workflows_from_admin(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201)
+
+        self._seed_workflow_attempt(
+            workflow_id="workflow-read-1",
+            run_id="run-read-1",
+            issue_key="TP-999",
+            issue_summary="Workflow read model",
+            workflow_status="waiting_for_input",
+            run_status="waiting_for_input",
+            checkpoint_id="checkpoint-read-1",
+            checkpoint_kind="pm",
+            pending_request_id="request-read-1",
+        )
+
+        list_response = self.client.get("/api/admin/workflows?tenant_id=tenant-a", auth=("admin", "secret"))
+        self.assertEqual(list_response.status_code, 200, list_response.text)
+        list_body = list_response.json()
+        self.assertEqual(len(list_body), 1)
+        self.assertEqual(list_body[0]["workflow_id"], "workflow-read-1")
+        self.assertEqual(list_body[0]["latest_checkpoint_kind"], "pm")
+        self.assertEqual(list_body[0]["pending_input_request_id"], "request-read-1")
+        self.assertEqual(list_body[0]["runs"][0]["workflow_id"], "workflow-read-1")
+        self.assertNotIn("dev_session_id", list_body[0]["runs"][0])
+
+        detail_response = self.client.get("/api/admin/workflows/workflow-read-1", auth=("admin", "secret"))
+        self.assertEqual(detail_response.status_code, 200, detail_response.text)
+        detail_body = detail_response.json()
+        self.assertEqual(detail_body["status"], "waiting_for_input")
+        self.assertEqual(detail_body["runs"][0]["attempt_number"], 1)
+        self.assertEqual(detail_body["runs"][0]["entry_checkpoint_id"], "checkpoint-read-1")
+
+    def test_create_workflow_attempt_reuses_waiting_workflow(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201)
+
+        self._seed_workflow_attempt(
+            workflow_id="workflow-waiting-1",
+            run_id="run-waiting-1",
+            issue_key="TP-1000",
+            issue_summary="Waiting workflow",
+            workflow_status="waiting_for_input",
+            run_status="waiting_for_input",
+            checkpoint_id="checkpoint-waiting-1",
+            checkpoint_kind="pm",
+            pending_request_id="request-waiting-1",
+        )
+
+        response = self.client.post(
+            "/api/admin/workflows/workflow-waiting-1/attempts",
+            json={"mode": "resume", "checkpoint_kind": "pm"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 201, response.text)
         body = response.json()
-        self.assertEqual(body["status"], "queued")
-        self.assertEqual(body["branch"], "feature/TP-1000")
-        self.assertEqual(body["dev_session_id"], "dev-session-123")
-        self.assertIsNone(body["pm_session_id"])
-        self.assertIsNone(body["orchestrated_session_id"])
-        trigger = body["plan"]["trigger_context"]
-        self.assertEqual(trigger["rerun_mode"], "resume")
-        self.assertEqual(trigger["resume_stage"], "dev")
-        self.assertEqual(trigger["resume_session_id"], "dev-session-123")
-        self.assertEqual(trigger["resume_source_run_id"], "run-failed-resume")
-        self.assertEqual(trigger["resume_source_plan"]["plan_steps"], ["restore auth flow"])
+        self.assertEqual(body["workflow_id"], "workflow-waiting-1")
+        self.assertEqual(body["attempt_number"], 2)
+        self.assertEqual(body["entry_mode"], "resume")
+        self.assertEqual(body["entry_stage"], "pm")
+        self.assertEqual(body["entry_checkpoint_id"], "checkpoint-waiting-1")
+
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            workflow = session.get(WorkflowExecution, "workflow-waiting-1")
+            self.assertIsNotNone(workflow)
+            assert workflow is not None
+            self.assertEqual(workflow.status, "queued")
+            self.assertEqual(workflow.active_run_id, body["run_id"])
+            request = session.get(RunHumanInputRequest, "request-waiting-1")
+            self.assertIsNotNone(request)
+            assert request is not None
+            self.assertEqual(request.status, "cancelled")
+
+    def test_create_workflow_attempt_from_terminal_workflow_creates_new_workflow_lineage(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201)
+
+        self._seed_workflow_attempt(
+            workflow_id="workflow-terminal-1",
+            run_id="run-terminal-1",
+            issue_key="TP-1001",
+            issue_summary="Terminal workflow",
+            workflow_status="failed",
+            run_status="failed",
+            checkpoint_id="checkpoint-terminal-1",
+            checkpoint_kind="execution",
+        )
+
+        response = self.client.post(
+            "/api/admin/workflows/workflow-terminal-1/attempts",
+            json={"mode": "restart", "checkpoint_kind": "execution"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 201, response.text)
+        body = response.json()
+        self.assertNotEqual(body["workflow_id"], "workflow-terminal-1")
+        self.assertEqual(body["attempt_number"], 1)
+        self.assertEqual(body["entry_mode"], "restart")
+        self.assertEqual(body["entry_stage"], "orchestrated")
+        self.assertEqual(body["entry_checkpoint_id"], "checkpoint-terminal-1")
+
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            workflow = session.get(WorkflowExecution, body["workflow_id"])
+            self.assertIsNotNone(workflow)
+            assert workflow is not None
+            self.assertEqual(workflow.source_workflow_id, "workflow-terminal-1")
+            self.assertEqual(workflow.source_run_id, "run-terminal-1")
+            self.assertEqual(workflow.status, "queued")
 
     def test_cancel_active_run_from_admin(self) -> None:
         payload = self._tenant_payload()
@@ -1776,38 +1766,14 @@ class AdminApiTests(unittest.TestCase):
             auth=("admin", "secret"),
         )
         self.assertEqual(create_tenant.status_code, 201)
-        now = datetime.now(timezone.utc)
-        session_factory = create_session_factory(self.database_url)
-        with session_factory() as session:
-            session.add(
-                Run(
-                    run_id="run-active-cancel",
-                    tenant_id="tenant-a",
-                    project_id="tenant-a-default",
-                    issue_key="TP-998",
-                    issue_summary="active run",
-                    issue_description="Objective: cancel from admin.",
-                    repo_url="https://github.com/example/repo",
-                    branch=None,
-                    pr_url=None,
-                    status="running",
-                    last_error=None,
-                    plan=None,
-                    created_at=now,
-                    started_at=now,
-                    finished_at=None,
-                )
-            )
-            session.add(
-                RunLock(
-                    tenant_id="tenant-a",
-                    issue_key="TP-998",
-                    dedupe_scope="issue_execution",
-                    run_id="run-active-cancel",
-                    locked_at=now,
-                )
-            )
-            session.commit()
+        self._seed_workflow_attempt(
+            workflow_id="workflow-active-cancel",
+            run_id="run-active-cancel",
+            issue_key="TP-998",
+            issue_summary="active run",
+            workflow_status="running",
+            run_status="running",
+        )
 
         response = self.client.post("/api/admin/runs/run-active-cancel/cancel", auth=("admin", "secret"))
         self.assertEqual(response.status_code, 200)
@@ -1815,74 +1781,16 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(body["run_id"], "run-active-cancel")
         self.assertEqual(body["status"], "cancelled")
 
-        with session_factory() as session:
-            lock = session.execute(
-                select(RunLock).where(
-                    RunLock.tenant_id == "tenant-a",
-                    RunLock.issue_key == "TP-998",
-                )
-            ).scalar_one_or_none()
-            self.assertIsNone(lock)
-
-    def test_rerun_resume_review_uses_dev_session(self) -> None:
-        payload = self._tenant_payload()
-        self._insert_jira_connection(connection_id="conn-1")
-        create_tenant = self.client.post(
-            "/api/admin/tenants",
-            json=payload,
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(create_tenant.status_code, 201)
-        now = datetime.now(timezone.utc)
         session_factory = create_session_factory(self.database_url)
         with session_factory() as session:
-            session.add(
-                Run(
-                    run_id="run-review-resume",
-                    tenant_id="tenant-a",
-                    project_id="tenant-a-default",
-                    issue_key="TP-1001",
-                    issue_summary="failed review run",
-                    issue_description="Objective: resume from review.",
-                    repo_url="https://github.com/example/repo",
-                    branch="feature/TP-1001",
-                    pr_url="https://github.com/example/repo/pull/12",
-                    dev_session_id="dev-session-123",
-                    pm_session_id="pm-session-456",
-                    orchestrated_session_id="orchestrated-session-789",
-                    status="failed",
-                    last_error="review failed",
-                    plan={
-                        "plan": {
-                            "plan_steps": ["restore auth flow"],
-                            "acceptance_criteria": ["login works"],
-                            "risks": [],
-                        },
-                        "review_summary": ["Verify nonce handling"],
-                        "review_feedback": "Verify nonce handling with the QA account",
-                    },
-                    created_at=now,
-                    started_at=now,
-                    finished_at=now,
-                )
-            )
-            session.commit()
-
-        response = self.client.post(
-            "/api/admin/runs/run-review-resume/rerun",
-            json={"mode": "resume", "resume_stage": "review"},
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(response.status_code, 201)
-        body = response.json()
-        self.assertEqual(body["status"], "queued")
-        self.assertEqual(body["branch"], "feature/TP-1001")
-        self.assertEqual(body["dev_session_id"], "dev-session-123")
-        trigger = body["plan"]["trigger_context"]
-        self.assertEqual(trigger["rerun_mode"], "resume")
-        self.assertEqual(trigger["resume_stage"], "review")
-        self.assertEqual(trigger["resume_session_id"], "dev-session-123")
-        self.assertEqual(trigger["resume_source_state"]["review_feedback"], "Verify nonce handling with the QA account")
+            cancelled = session.get(Run, "run-active-cancel")
+            self.assertIsNotNone(cancelled)
+            assert cancelled is not None
+            self.assertEqual(cancelled.status, "cancelled")
+            workflow = session.get(WorkflowExecution, "workflow-active-cancel")
+            self.assertIsNotNone(workflow)
+            assert workflow is not None
+            self.assertEqual(workflow.status, "cancelled")
 
     def test_cancel_terminal_run_from_admin_returns_conflict(self) -> None:
         payload = self._tenant_payload()
@@ -1893,29 +1801,14 @@ class AdminApiTests(unittest.TestCase):
             auth=("admin", "secret"),
         )
         self.assertEqual(create_tenant.status_code, 201)
-        now = datetime.now(timezone.utc)
-        session_factory = create_session_factory(self.database_url)
-        with session_factory() as session:
-            session.add(
-                Run(
-                    run_id="run-terminal-cancel",
-                    tenant_id="tenant-a",
-                    project_id="tenant-a-default",
-                    issue_key="TP-997",
-                    issue_summary="terminal run",
-                    issue_description="Objective: cancel from admin.",
-                    repo_url="https://github.com/example/repo",
-                    branch=None,
-                    pr_url=None,
-                    status="failed",
-                    last_error="boom",
-                    plan=None,
-                    created_at=now,
-                    started_at=now,
-                    finished_at=now,
-                )
-            )
-            session.commit()
+        self._seed_workflow_attempt(
+            workflow_id="workflow-terminal-cancel",
+            run_id="run-terminal-cancel",
+            issue_key="TP-997",
+            issue_summary="terminal run",
+            workflow_status="failed",
+            run_status="failed",
+        )
 
         response = self.client.post("/api/admin/runs/run-terminal-cancel/cancel", auth=("admin", "secret"))
         self.assertEqual(response.status_code, 409)
@@ -1933,24 +1826,19 @@ class AdminApiTests(unittest.TestCase):
         now = datetime.now(timezone.utc)
         session_factory = create_session_factory(self.database_url)
         with session_factory() as session:
-            session.add(
-                Run(
-                    run_id="run-events-1",
-                    tenant_id="tenant-a",
-                    project_id="tenant-a-default",
-                    issue_key="TP-501",
-                    issue_summary="event run",
-                    issue_description="desc",
-                    repo_url="https://github.com/example/repo",
-                    branch=None,
-                    pr_url=None,
-                    status="running",
-                    last_error=None,
-                    plan=None,
-                    created_at=now,
-                    started_at=now,
-                    finished_at=None,
-                )
+            add_workflow_attempt(
+                session,
+                run_id="run-events-1",
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                issue_key="TP-501",
+                issue_summary="event run",
+                issue_description="desc",
+                repo_url="https://github.com/example/repo",
+                created_at=now,
+                run_status="running",
+                workflow_status="running",
+                started_at=now,
             )
             record_agent_lifecycle_event(
                 session=session,
@@ -1983,24 +1871,19 @@ class AdminApiTests(unittest.TestCase):
         now = datetime.now(timezone.utc)
         session_factory = create_session_factory(self.database_url)
         with session_factory() as session:
-            session.add(
-                Run(
-                    run_id="run-log-1",
-                    tenant_id="tenant-a",
-                    project_id="tenant-a-default",
-                    issue_key="TP-503",
-                    issue_summary="event log run",
-                    issue_description="desc",
-                    repo_url="https://github.com/example/repo",
-                    branch=None,
-                    pr_url=None,
-                    status="running",
-                    last_error=None,
-                    plan=None,
-                    created_at=now,
-                    started_at=now,
-                    finished_at=None,
-                )
+            add_workflow_attempt(
+                session,
+                run_id="run-log-1",
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                issue_key="TP-503",
+                issue_summary="event log run",
+                issue_description="desc",
+                repo_url="https://github.com/example/repo",
+                created_at=now,
+                run_status="running",
+                workflow_status="running",
+                started_at=now,
             )
             session.flush()
             record_run_log_event(
@@ -2041,24 +1924,19 @@ class AdminApiTests(unittest.TestCase):
         now = datetime.now(timezone.utc)
         session_factory = create_session_factory(self.database_url)
         with session_factory() as session:
-            session.add(
-                Run(
-                    run_id="run-log-page",
-                    tenant_id="tenant-a",
-                    project_id="tenant-a-default",
-                    issue_key="TP-504",
-                    issue_summary="event log page run",
-                    issue_description="desc",
-                    repo_url="https://github.com/example/repo",
-                    branch=None,
-                    pr_url=None,
-                    status="running",
-                    last_error=None,
-                    plan=None,
-                    created_at=now,
-                    started_at=now,
-                    finished_at=None,
-                )
+            add_workflow_attempt(
+                session,
+                run_id="run-log-page",
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                issue_key="TP-504",
+                issue_summary="event log page run",
+                issue_description="desc",
+                repo_url="https://github.com/example/repo",
+                created_at=now,
+                run_status="running",
+                workflow_status="running",
+                started_at=now,
             )
             session.flush()
             record_run_log_event(
@@ -2142,24 +2020,19 @@ class AdminApiTests(unittest.TestCase):
         now = datetime.now(timezone.utc)
         session_factory = create_session_factory(self.database_url)
         with session_factory() as session:
-            session.add(
-                Run(
-                    run_id="run-events-stream",
-                    tenant_id="tenant-a",
-                    project_id="tenant-a-default",
-                    issue_key="TP-502",
-                    issue_summary="event stream run",
-                    issue_description="desc",
-                    repo_url="https://github.com/example/repo",
-                    branch=None,
-                    pr_url=None,
-                    status="running",
-                    last_error=None,
-                    plan=None,
-                    created_at=now,
-                    started_at=now,
-                    finished_at=None,
-                )
+            add_workflow_attempt(
+                session,
+                run_id="run-events-stream",
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                issue_key="TP-502",
+                issue_summary="event stream run",
+                issue_description="desc",
+                repo_url="https://github.com/example/repo",
+                created_at=now,
+                run_status="running",
+                workflow_status="running",
+                started_at=now,
             )
             record_agent_lifecycle_event(
                 session=session,
@@ -2264,77 +2137,58 @@ class AdminApiTests(unittest.TestCase):
         now = datetime.now(timezone.utc)
         session_factory = create_session_factory(self.database_url)
         with session_factory() as session:
-            session.add_all(
-                [
-                    Run(
-                        run_id="metrics-run-queued-stale",
-                        tenant_id="tenant-a",
-                        project_id=project_id,
-                        issue_key="MBAPP-1",
-                        issue_summary="stale queued",
-                        issue_description="desc",
-                        repo_url="https://github.com/example/mobile-app",
-                        branch=None,
-                        pr_url=None,
-                        status="queued",
-                        last_error=None,
-                        plan=None,
-                        created_at=now - timedelta(hours=3),
-                        started_at=None,
-                        finished_at=None,
-                    ),
-                    Run(
-                        run_id="metrics-run-queued-fresh",
-                        tenant_id="tenant-a",
-                        project_id=project_id,
-                        issue_key="MBAPP-2",
-                        issue_summary="fresh queued",
-                        issue_description="desc",
-                        repo_url="https://github.com/example/mobile-app",
-                        branch=None,
-                        pr_url=None,
-                        status="queued",
-                        last_error=None,
-                        plan=None,
-                        created_at=now - timedelta(minutes=30),
-                        started_at=None,
-                        finished_at=None,
-                    ),
-                    Run(
-                        run_id="metrics-run-succeeded",
-                        tenant_id="tenant-a",
-                        project_id=project_id,
-                        issue_key="MBAPP-3",
-                        issue_summary="succeeded",
-                        issue_description="desc",
-                        repo_url="https://github.com/example/mobile-app",
-                        branch=None,
-                        pr_url=None,
-                        status="succeeded",
-                        last_error=None,
-                        plan=None,
-                        created_at=now - timedelta(minutes=20),
-                        started_at=now - timedelta(minutes=18),
-                        finished_at=now - timedelta(minutes=10),
-                    ),
-                    Run(
-                        run_id="metrics-run-failed",
-                        tenant_id="tenant-a",
-                        project_id=project_id,
-                        issue_key="MBAPP-4",
-                        issue_summary="failed",
-                        issue_description="desc",
-                        repo_url="https://github.com/example/mobile-app",
-                        branch=None,
-                        pr_url=None,
-                        status="failed",
-                        last_error="boom",
-                        plan=None,
-                        created_at=now - timedelta(minutes=8),
-                        started_at=now - timedelta(minutes=7),
-                        finished_at=now - timedelta(minutes=1),
-                    ),
-                ]
+            add_workflow_attempt(
+                session,
+                run_id="metrics-run-queued-stale",
+                tenant_id="tenant-a",
+                project_id=project_id,
+                issue_key="MBAPP-1",
+                issue_summary="stale queued",
+                issue_description="desc",
+                repo_url="https://github.com/example/mobile-app",
+                created_at=now - timedelta(hours=3),
+            )
+            add_workflow_attempt(
+                session,
+                run_id="metrics-run-queued-fresh",
+                tenant_id="tenant-a",
+                project_id=project_id,
+                issue_key="MBAPP-2",
+                issue_summary="fresh queued",
+                issue_description="desc",
+                repo_url="https://github.com/example/mobile-app",
+                created_at=now - timedelta(minutes=30),
+            )
+            add_workflow_attempt(
+                session,
+                run_id="metrics-run-succeeded",
+                tenant_id="tenant-a",
+                project_id=project_id,
+                issue_key="MBAPP-3",
+                issue_summary="succeeded",
+                issue_description="desc",
+                repo_url="https://github.com/example/mobile-app",
+                created_at=now - timedelta(minutes=20),
+                run_status="succeeded",
+                workflow_status="succeeded",
+                started_at=now - timedelta(minutes=18),
+                finished_at=now - timedelta(minutes=10),
+            )
+            add_workflow_attempt(
+                session,
+                run_id="metrics-run-failed",
+                tenant_id="tenant-a",
+                project_id=project_id,
+                issue_key="MBAPP-4",
+                issue_summary="failed",
+                issue_description="desc",
+                repo_url="https://github.com/example/mobile-app",
+                created_at=now - timedelta(minutes=8),
+                run_status="failed",
+                workflow_status="failed",
+                last_error="boom",
+                started_at=now - timedelta(minutes=7),
+                finished_at=now - timedelta(minutes=1),
             )
             session.commit()
 
@@ -2678,30 +2532,16 @@ class AdminApiTests(unittest.TestCase):
                     updated_at=now,
                 )
             )
-            session.add(
-                Run(
-                    run_id="run-1",
-                    tenant_id="tenant-a",
-                    project_id=None,
-                    issue_key="TP-1",
-                    issue_summary="Test run",
-                    issue_description=None,
-                    repo_url=None,
-                    branch=None,
-                    pr_url=None,
-                    dev_session_id=None,
-                    pm_session_id=None,
-                    orchestrated_session_id=None,
-                    dedupe_scope="issue_execution",
-                    status="queued",
-                    last_error=None,
-                    plan=None,
-                    created_at=now,
-                    started_at=None,
-                    last_heartbeat_at=None,
-                    worker_service_instance_id=None,
-                    finished_at=None,
-                )
+            add_workflow_attempt(
+                session,
+                run_id="run-1",
+                tenant_id="tenant-a",
+                project_id=None,
+                issue_key="TP-1",
+                issue_summary="Test run",
+                issue_description=None,
+                repo_url=None,
+                created_at=now,
             )
             session.commit()
 
@@ -4460,37 +4300,28 @@ class AdminApiTests(unittest.TestCase):
                     updated_at=now,
                 )
             )
-            session.add(
-                Run(
-                    run_id="run-1",
-                    tenant_id="route25",
-                    project_id="route25-default",
-                    issue_key="GP-1",
-                    issue_summary="Issue",
-                    issue_description=None,
-                    repo_url=None,
-                    branch=None,
-                    pr_url=None,
-                    dev_session_id=None,
-                    pm_session_id=None,
-                    orchestrated_session_id=None,
-                    dedupe_scope="issue_execution",
-                    status="running",
-                    last_error=None,
-                    plan=None,
-                    created_at=now,
-                    started_at=now,
-                    last_heartbeat_at=now,
-                    worker_service_instance_id="worker-1",
-                    finished_at=None,
-                )
+            add_workflow_attempt(
+                session,
+                run_id="run-1",
+                tenant_id="route25",
+                project_id="route25-default",
+                issue_key="GP-1",
+                issue_summary="Issue",
+                issue_description=None,
+                repo_url=None,
+                created_at=now,
+                run_status="running",
+                workflow_status="running",
+                started_at=now,
+                last_heartbeat_at=now,
+                worker_service_instance_id="worker-1",
             )
             session.add(
                 KnowledgeJiraSyncRuntimeState(
                     runtime_name="knowledge-jira-sync",
                     state="running",
                     enabled=True,
-                    database_backend="sqlite",
+                    database_backend="postgresql",
                     started_at=now,
                     stopped_at=None,
                     last_pass_started_at=now,
@@ -4568,30 +4399,21 @@ class AdminApiTests(unittest.TestCase):
                     updated_at=now,
                 )
             )
-            session.add(
-                Run(
-                    run_id="run-sticky-1",
-                    tenant_id="route25",
-                    project_id="route25-default",
-                    issue_key="GP-9",
-                    issue_summary="Sticky worker",
-                    issue_description=None,
-                    repo_url=None,
-                    branch=None,
-                    pr_url=None,
-                    dev_session_id=None,
-                    pm_session_id=None,
-                    orchestrated_session_id=None,
-                    dedupe_scope="issue_execution",
-                    status="running",
-                    last_error=None,
-                    plan=None,
-                    created_at=now,
-                    started_at=now,
-                    last_heartbeat_at=now,
-                    worker_service_instance_id="worker-linux-local:runs",
-                    finished_at=None,
-                )
+            add_workflow_attempt(
+                session,
+                run_id="run-sticky-1",
+                tenant_id="route25",
+                project_id="route25-default",
+                issue_key="GP-9",
+                issue_summary="Sticky worker",
+                issue_description=None,
+                repo_url=None,
+                created_at=now,
+                run_status="running",
+                workflow_status="running",
+                started_at=now,
+                last_heartbeat_at=now,
+                worker_service_instance_id="worker-linux-local:runs",
             )
             session.commit()
 

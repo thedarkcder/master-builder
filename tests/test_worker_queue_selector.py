@@ -11,7 +11,12 @@ from orchestrator.core.worker.queue_selector import (
 )
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
-from orchestrator.storage.models import Project, Run, Tenant, TenantRunClaim
+from orchestrator.storage.models import Project, Tenant, TenantRunClaim
+from tests.workflow_test_support import add_run_with_workflow, make_run
+
+
+def _add_run(session, *, now: datetime, **kwargs) -> None:
+    add_run_with_workflow(session, make_run(created_at=now, **kwargs))
 
 
 class WorkerQueueSelectorTests(unittest.TestCase):
@@ -38,23 +43,21 @@ class WorkerQueueSelectorTests(unittest.TestCase):
     def test_select_next_queued_run_marks_missing_tenant_terminal(self) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
-            session.add(
-                Run(
-                    run_id="run-missing-tenant",
-                    tenant_id="tenant-missing",
-                    issue_key="MAB-900",
-                    issue_summary="Missing tenant",
-                    issue_description="How to test: verify missing tenant handling.",
-                    repo_url="https://github.com/example/missing",
-                    branch=None,
-                    pr_url=None,
-                    status="queued",
-                    last_error=None,
-                    plan={"required_worker_capability": "linux"},
-                    created_at=now,
-                    started_at=None,
-                    finished_at=None,
-                )
+            _add_run(
+                session,
+                now=now,
+                run_id="run-missing-tenant",
+                tenant_id="tenant-missing",
+                issue_key="MAB-900",
+                issue_summary="Missing tenant",
+                issue_description="How to test: verify missing tenant handling.",
+                repo_url="https://github.com/example/missing",
+                branch=None,
+                pr_url=None,
+                status="queued",
+                plan={"required_worker_capability": "linux"},
+                started_at=None,
+                finished_at=None,
             )
             session.commit()
 
@@ -102,59 +105,53 @@ class WorkerQueueSelectorTests(unittest.TestCase):
                     updated_at=now,
                 )
             )
-            session.add(
-                Run(
-                    run_id="run-a-running",
-                    tenant_id="tenant-a",
-                    issue_key="MAB-901",
-                    issue_summary="Tenant A running",
-                    issue_description="running",
-                    repo_url="https://github.com/example/a",
-                    branch=None,
-                    pr_url=None,
-                    status="running",
-                    last_error=None,
-                    plan={"required_worker_capability": "linux"},
-                    created_at=now,
-                    started_at=now,
-                    finished_at=None,
-                )
+            _add_run(
+                session,
+                now=now,
+                run_id="run-a-running",
+                tenant_id="tenant-a",
+                issue_key="MAB-901",
+                issue_summary="Tenant A running",
+                issue_description="running",
+                repo_url="https://github.com/example/a",
+                branch=None,
+                pr_url=None,
+                status="running",
+                plan={"required_worker_capability": "linux"},
+                started_at=now,
+                finished_at=None,
             )
-            session.add(
-                Run(
-                    run_id="run-a-queued",
-                    tenant_id="tenant-a",
-                    issue_key="MAB-902",
-                    issue_summary="Tenant A queued",
-                    issue_description="queued",
-                    repo_url="https://github.com/example/a",
-                    branch=None,
-                    pr_url=None,
-                    status="queued",
-                    last_error=None,
-                    plan={"required_worker_capability": "linux"},
-                    created_at=now,
-                    started_at=None,
-                    finished_at=None,
-                )
+            _add_run(
+                session,
+                now=now,
+                run_id="run-a-queued",
+                tenant_id="tenant-a",
+                issue_key="MAB-902",
+                issue_summary="Tenant A queued",
+                issue_description="queued",
+                repo_url="https://github.com/example/a",
+                branch=None,
+                pr_url=None,
+                status="queued",
+                plan={"required_worker_capability": "linux"},
+                started_at=None,
+                finished_at=None,
             )
-            session.add(
-                Run(
-                    run_id="run-b-queued",
-                    tenant_id="tenant-b",
-                    issue_key="MAB-903",
-                    issue_summary="Tenant B queued",
-                    issue_description="queued",
-                    repo_url="https://github.com/example/b",
-                    branch=None,
-                    pr_url=None,
-                    status="queued",
-                    last_error=None,
-                    plan={"required_worker_capability": "linux"},
-                    created_at=now,
-                    started_at=None,
-                    finished_at=None,
-                )
+            _add_run(
+                session,
+                now=now,
+                run_id="run-b-queued",
+                tenant_id="tenant-b",
+                issue_key="MAB-903",
+                issue_summary="Tenant B queued",
+                issue_description="queued",
+                repo_url="https://github.com/example/b",
+                branch=None,
+                pr_url=None,
+                status="queued",
+                plan={"required_worker_capability": "linux"},
+                started_at=None,
+                finished_at=None,
             )
             session.commit()
 
@@ -192,23 +189,21 @@ class WorkerQueueSelectorTests(unittest.TestCase):
                     updated_at=now,
                 )
             )
-            session.add(
-                Run(
-                    run_id="run-race-queued",
-                    tenant_id="tenant-race",
-                    issue_key="MAB-904",
-                    issue_summary="Tenant race queued",
-                    issue_description="queued",
-                    repo_url="https://github.com/example/race",
-                    branch=None,
-                    pr_url=None,
-                    status="queued",
-                    last_error=None,
-                    plan={"required_worker_capability": "linux"},
-                    created_at=now,
-                    started_at=None,
-                    finished_at=None,
-                )
+            _add_run(
+                session,
+                now=now,
+                run_id="run-race-queued",
+                tenant_id="tenant-race",
+                issue_key="MAB-904",
+                issue_summary="Tenant race queued",
+                issue_description="queued",
+                repo_url="https://github.com/example/race",
+                branch=None,
+                pr_url=None,
+                status="queued",
+                plan={"required_worker_capability": "linux"},
+                started_at=None,
+                finished_at=None,
             )
             session.commit()
 
@@ -284,60 +279,54 @@ class WorkerQueueSelectorTests(unittest.TestCase):
                     updated_at=now,
                 )
             )
-            session.add(
-                Run(
-                    run_id="run-a-running",
-                    tenant_id="tenant-a",
-                    issue_key="MAB-100",
-                    issue_summary="Tenant A running",
-                    issue_description="running",
-                    repo_url="https://github.com/example/a",
-                    branch=None,
-                    pr_url=None,
-                    status="running",
-                    last_error=None,
-                    plan={"required_worker_capability": "linux"},
-                    created_at=now,
-                    started_at=now,
-                    finished_at=None,
-                )
+            _add_run(
+                session,
+                now=now,
+                run_id="run-a-running",
+                tenant_id="tenant-a",
+                issue_key="MAB-100",
+                issue_summary="Tenant A running",
+                issue_description="running",
+                repo_url="https://github.com/example/a",
+                branch=None,
+                pr_url=None,
+                status="running",
+                plan={"required_worker_capability": "linux"},
+                started_at=now,
+                finished_at=None,
             )
-            session.add(
-                Run(
-                    run_id="run-a-queued-unbound",
-                    tenant_id="tenant-a",
-                    project_id=None,
-                    issue_key="MAB-101",
-                    issue_summary="Tenant A queued",
-                    issue_description="queued",
-                    repo_url="https://github.com/example/a",
-                    branch=None,
-                    pr_url=None,
-                    status="queued",
-                    last_error=None,
-                    plan={"required_worker_capability": "linux"},
-                    created_at=now,
-                    started_at=None,
-                    finished_at=None,
-                )
+            _add_run(
+                session,
+                now=now,
+                run_id="run-a-queued-unbound",
+                tenant_id="tenant-a",
+                project_id=None,
+                issue_key="MAB-101",
+                issue_summary="Tenant A queued",
+                issue_description="queued",
+                repo_url="https://github.com/example/a",
+                branch=None,
+                pr_url=None,
+                status="queued",
+                plan={"required_worker_capability": "linux"},
+                started_at=None,
+                finished_at=None,
             )
-            session.add(
-                Run(
-                    run_id="run-b-queued",
-                    tenant_id="tenant-b",
-                    issue_key="XYZ-1",
-                    issue_summary="Tenant B queued",
-                    issue_description="queued",
-                    repo_url="https://github.com/example/b",
-                    branch=None,
-                    pr_url=None,
-                    status="queued",
-                    last_error=None,
-                    plan={"required_worker_capability": "linux"},
-                    created_at=now,
-                    started_at=None,
-                    finished_at=None,
-                )
+            _add_run(
+                session,
+                now=now,
+                run_id="run-b-queued",
+                tenant_id="tenant-b",
+                issue_key="XYZ-1",
+                issue_summary="Tenant B queued",
+                issue_description="queued",
+                repo_url="https://github.com/example/b",
+                branch=None,
+                pr_url=None,
+                status="queued",
+                plan={"required_worker_capability": "linux"},
+                started_at=None,
+                finished_at=None,
             )
             session.commit()
 
@@ -369,41 +358,37 @@ class WorkerQueueSelectorTests(unittest.TestCase):
                     updated_at=now,
                 )
             )
-            session.add(
-                Run(
-                    run_id="run-macos",
-                    tenant_id="tenant-capabilities",
-                    issue_key="IOS-1",
-                    issue_summary="Build iOS app with SwiftUI",
-                    issue_description="Implement iOS app shell",
-                    repo_url="https://github.com/example/mobile",
-                    branch=None,
-                    pr_url=None,
-                    status="queued",
-                    last_error=None,
-                    plan={"required_worker_capability": "macos"},
-                    created_at=now,
-                    started_at=None,
-                    finished_at=None,
-                )
+            _add_run(
+                session,
+                now=now,
+                run_id="run-macos",
+                tenant_id="tenant-capabilities",
+                issue_key="IOS-1",
+                issue_summary="Build iOS app with SwiftUI",
+                issue_description="Implement iOS app shell",
+                repo_url="https://github.com/example/mobile",
+                branch=None,
+                pr_url=None,
+                status="queued",
+                plan={"required_worker_capability": "macos"},
+                started_at=None,
+                finished_at=None,
             )
-            session.add(
-                Run(
-                    run_id="run-linux",
-                    tenant_id="tenant-capabilities",
-                    issue_key="LINUX-1",
-                    issue_summary="Build backend service",
-                    issue_description="Implement API endpoint",
-                    repo_url="https://github.com/example/backend",
-                    branch=None,
-                    pr_url=None,
-                    status="queued",
-                    last_error=None,
-                    plan={"required_worker_capability": "linux"},
-                    created_at=now,
-                    started_at=None,
-                    finished_at=None,
-                )
+            _add_run(
+                session,
+                now=now,
+                run_id="run-linux",
+                tenant_id="tenant-capabilities",
+                issue_key="LINUX-1",
+                issue_summary="Build backend service",
+                issue_description="Implement API endpoint",
+                repo_url="https://github.com/example/backend",
+                branch=None,
+                pr_url=None,
+                status="queued",
+                plan={"required_worker_capability": "linux"},
+                started_at=None,
+                finished_at=None,
             )
             session.commit()
 

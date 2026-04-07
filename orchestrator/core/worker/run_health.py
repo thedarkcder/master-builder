@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from orchestrator.core.agent_observability import record_agent_lifecycle_event
@@ -16,7 +16,7 @@ from orchestrator.core.config import Settings, get_settings
 from orchestrator.core.run_logs import record_run_log_event
 from orchestrator.core.runs import RUN_STATUS_FAILED, RUN_STATUS_RUNNING
 from orchestrator.storage.db import create_session_factory
-from orchestrator.storage.models import Run, RunLock
+from orchestrator.storage.models import Run, WorkflowExecution
 
 logger = logging.getLogger(__name__)
 
@@ -75,20 +75,6 @@ def touch_run_heartbeat(
     return True
 
 
-def cleanup_orphan_run_locks(*, session: Session) -> int:
-    removed = 0
-    locks = session.execute(select(RunLock)).scalars().all()
-    for lock in locks:
-        run = session.get(Run, lock.run_id)
-        if run is not None and run.status in {"queued", RUN_STATUS_RUNNING}:
-            continue
-        session.delete(lock)
-        removed += 1
-    if removed:
-        session.commit()
-    return removed
-
-
 @dataclass(frozen=True)
 class StaleRunRecoveryRecord:
     run_id: str
@@ -145,13 +131,13 @@ def recover_stale_running_runs(
         if int(result.rowcount or 0) == 0:
             session.rollback()
             continue
-        session.execute(
-            delete(RunLock).where(
-                RunLock.tenant_id == row.tenant_id,
-                RunLock.issue_key == row.issue_key,
-                RunLock.run_id == row.run_id,
-            )
-        )
+        workflow = session.get(WorkflowExecution, row.workflow_id)
+        if workflow is not None and workflow.status == RUN_STATUS_RUNNING:
+            workflow.status = RUN_STATUS_FAILED
+            workflow.last_error = message
+            workflow.finished_at = recovered_at
+            workflow.updated_at = recovered_at
+            workflow.blocked_reason = None
         record_run_log_event(
             session=session,
             tenant_id=row.tenant_id,

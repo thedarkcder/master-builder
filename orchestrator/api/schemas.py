@@ -934,6 +934,12 @@ class AgentRuntimeToolsRead(BaseModel):
 
 class RunRead(BaseModel):
     run_id: str
+    workflow_id: str
+    attempt_number: int
+    parent_run_id: str | None = None
+    entry_mode: str
+    entry_stage: str | None = None
+    entry_checkpoint_id: str | None = None
     tenant_id: str
     project_id: str | None
     issue_key: str
@@ -942,10 +948,9 @@ class RunRead(BaseModel):
     repo_url: str | None
     branch: str | None
     pr_url: str | None
-    dev_session_id: str | None = None
-    pm_session_id: str | None = None
-    orchestrated_session_id: str | None = None
     status: str
+    waiting_for_input: bool = False
+    pending_input_request_id: str | None = None
     last_error: str | None
     plan: dict | None
     created_at: datetime
@@ -953,19 +958,33 @@ class RunRead(BaseModel):
     finished_at: datetime | None
 
 
-class RunRerunRequest(BaseModel):
-    mode: str = Field(default="fresh", pattern="^(fresh|resume)$")
-    resume_stage: str | None = Field(default=None, pattern="^(orchestrated|pm|dev|review)$")
+class WorkflowRead(BaseModel):
+    workflow_id: str
+    tenant_id: str
+    project_id: str | None
+    issue_key: str
+    issue_summary: str | None = None
+    repo_url: str | None = None
+    branch: str | None = None
+    pr_url: str | None = None
+    dedupe_scope: str
+    status: str
+    active_run_id: str | None = None
+    latest_checkpoint_id: str | None = None
+    source_workflow_id: str | None = None
+    source_run_id: str | None = None
+    blocked_reason: str | None = None
+    pending_input_request_id: str | None = None
+    latest_checkpoint_kind: str | None = None
+    runs: list[RunRead] = Field(default_factory=list)
+    created_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
 
-    @field_validator("resume_stage")
-    @classmethod
-    def validate_resume_stage(cls, value: str | None, info):  # type: ignore[override]
-        mode = info.data.get("mode")
-        if mode == "resume" and not value:
-            raise ValueError("resume_stage is required when mode=resume")
-        if mode != "resume" and value is not None:
-            raise ValueError("resume_stage is only allowed when mode=resume")
-        return value
+
+class WorkflowAttemptCreateRequest(BaseModel):
+    mode: str = Field(pattern="^(restart|resume)$")
+    checkpoint_kind: str = Field(pattern="^(orchestrated|pm|execution)$")
 
 
 class RunEventRead(BaseModel):

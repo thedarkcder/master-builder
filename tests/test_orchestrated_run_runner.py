@@ -360,13 +360,16 @@ class OrchestratedRunRunnerTests(unittest.TestCase):
 
         request = replace(
             self._request(),
-            resume_mode="resume",
-            resume_stage="dev",
-            resume_session_id="dev-session-123",
-            resume_source_plan={
-                "plan_steps": ["resume from persisted plan"],
-                "acceptance_criteria": ["ac1"],
-                "risks": ["risk1"],
+            entry_mode="resume",
+            entry_stage="dev",
+            checkpoint_kind="execution",
+            checkpoint_session_id="dev-session-123",
+            checkpoint_payload={
+                "plan": {
+                    "plan_steps": ["resume from persisted plan"],
+                    "acceptance_criteria": ["ac1"],
+                    "risks": ["risk1"],
+                }
             },
         )
 
@@ -498,24 +501,23 @@ class OrchestratedRunRunnerTests(unittest.TestCase):
         result = self._executor(stage_agents).execute(
             replace(
                 self._request(),
-                resume_mode="resume",
-                resume_stage="review",
-                resume_session_id="dev-session-123",
-                resume_source_plan={
-                    "plan_steps": ["plan"],
-                    "acceptance_criteria": ["ac1"],
-                    "risks": [],
+                entry_mode="resume",
+                entry_stage="review",
+                checkpoint_kind="execution",
+                checkpoint_session_id="dev-session-123",
+                checkpoint_payload={
+                    "plan": {
+                        "plan_steps": ["plan"],
+                        "acceptance_criteria": ["ac1"],
+                        "risks": [],
+                    },
+                    "dev_rationale": ["Implemented onboarding flow"],
+                    "test_guidance": ["pytest -q"],
+                    "review_summary": ["Needs nonce verification"],
+                    "review_feedback": "Verify nonce handling with the QA account",
+                    "pr_url": "https://example/pull/1",
                 },
-                trigger_context={
-                    "resume_source_state": {
-                        "dev_rationale": ["Implemented onboarding flow"],
-                        "test_guidance": ["pytest -q"],
-                        "review_summary": ["Needs nonce verification"],
-                        "review_feedback": "Verify nonce handling with the QA account",
-                        "pr_url": "https://example/pull/1",
-                    }
-                },
-            )
+            ),
         )
 
         self.assertTrue(result.succeeded)

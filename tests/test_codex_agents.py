@@ -280,9 +280,10 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             base_branch="main",
             integration_branch="feature/MAB-54",
             pr_target_branch="main",
-            resume_mode="resume",
-            resume_stage="dev",
-            resume_session_id="dev-session-123",
+            entry_mode="resume",
+            entry_stage="dev",
+            checkpoint_kind="execution",
+            checkpoint_session_id="dev-session-123",
         )
         captured_contexts: list[AgentInvocationContext] = []
 
@@ -326,14 +327,18 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             base_branch="main",
             integration_branch="feature/MAB-54",
             pr_target_branch="main",
-            resume_mode="resume",
-            resume_stage="review",
-            resume_session_id="dev-session-123",
-            trigger_context={
-                "resume_source_state": {
-                    "review_summary": ["Needs nonce verification"],
-                    "review_feedback": "Verify the nonce flow with the QA account",
-                }
+            entry_mode="resume",
+            entry_stage="review",
+            checkpoint_kind="execution",
+            checkpoint_session_id="dev-session-123",
+            checkpoint_payload={
+                "plan": {
+                    "plan_steps": ["step"],
+                    "acceptance_criteria": ["ac"],
+                    "risks": [],
+                },
+                "review_summary": ["Needs nonce verification"],
+                "review_feedback": "Verify the nonce flow with the QA account",
             },
         )
         captured: dict[str, object] = {}

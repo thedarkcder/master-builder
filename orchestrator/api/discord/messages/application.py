@@ -40,7 +40,8 @@ class DiscordMessageIngressDeps:
     is_audio_attachment: object
     transcribe_audio_attachment: object
     load_pending_human_input_request: object
-    resume_run_from_human_input_reply: object
+    answer_human_input_request: object
+    resume_workflow_from_human_input_answer: object
     resolve_followup_context_match: object
     resolve_followup_context: object
     resolve_followup_reaction: object
@@ -294,16 +295,21 @@ def build_discord_message_ingress_result(
         )
         if request is not None:
             try:
-                resumed_run = deps.resume_run_from_human_input_reply(
+                answered_request = deps.answer_human_input_request(
                     session=session,
                     settings=deps.settings,
                     request=request,
                     reply_text=content,
                     source_ref=str(payload.get("id") or "").strip() or None,
                 )
+                resumed_run = deps.resume_workflow_from_human_input_answer(
+                    session=session,
+                    settings=deps.settings,
+                    request=answered_request,
+                )
                 message_content = (
                     f"<@{user_id}> Captured input for `{request.issue_key}` "
-                    f"and queued resumed run `{resumed_run.run_id}`."
+                    f"and queued workflow attempt `{resumed_run.run_id}`."
                 )
             except Exception as exc:  # noqa: BLE001
                 deps.logger.exception(

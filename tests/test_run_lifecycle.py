@@ -18,7 +18,7 @@ from orchestrator.core.runs import (
 )
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
-from orchestrator.storage.models import Run, RunLock, Tenant
+from orchestrator.storage.models import Run, Tenant, WorkflowExecution
 
 
 class RunLifecycleTests(unittest.TestCase):
@@ -81,15 +81,12 @@ class RunLifecycleTests(unittest.TestCase):
             )
             session.commit()
 
-    def _get_lock(self, session, *, issue_key: str, dedupe_scope: str = RUN_DEDUPE_SCOPE_ISSUE_EXECUTION):
-        return session.get(
-            RunLock,
-            {
-                "tenant_id": "tenant-runs",
-                "issue_key": issue_key,
-                "dedupe_scope": dedupe_scope,
-            },
-        )
+    def _get_workflow(self, session, *, issue_key: str, dedupe_scope: str = RUN_DEDUPE_SCOPE_ISSUE_EXECUTION):
+        return session.query(WorkflowExecution).filter_by(
+            tenant_id="tenant-runs",
+            issue_key=issue_key,
+            dedupe_scope=dedupe_scope,
+        ).one_or_none()
 
     def test_enqueue_is_idempotent_for_active_issue(self) -> None:
         with self.session_factory() as session:
@@ -101,9 +98,11 @@ class RunLifecycleTests(unittest.TestCase):
             self.assertEqual(second.reason, "run_already_active")
             self.assertEqual(second.run.run_id, first.run.run_id)
 
-            lock = self._get_lock(session, issue_key="TP-901")
-            self.assertIsNotNone(lock)
-            self.assertEqual(lock.run_id, first.run.run_id)
+            workflow = self._get_workflow(session, issue_key="TP-901")
+            self.assertIsNotNone(workflow)
+            assert workflow is not None
+            self.assertEqual(workflow.active_run_id, first.run.run_id)
+            self.assertEqual(workflow.status, "queued")
 
     def test_enqueue_allows_parallel_pr_remediation_and_issue_execution(self) -> None:
         with self.session_factory() as session:
@@ -125,15 +124,16 @@ class RunLifecycleTests(unittest.TestCase):
             self.assertTrue(issue_run.enqueued)
             self.assertTrue(remediation_run.enqueued)
             self.assertNotEqual(issue_run.run.run_id, remediation_run.run.run_id)
-            self.assertEqual(self._get_lock(session, issue_key="TP-907").run_id, issue_run.run.run_id)
-            self.assertEqual(
-                self._get_lock(
-                    session,
-                    issue_key="TP-907",
-                    dedupe_scope=RUN_DEDUPE_SCOPE_PR_REMEDIATION,
-                ).run_id,
-                remediation_run.run.run_id,
+            workflow = self._get_workflow(session, issue_key="TP-907")
+            remediation_workflow = self._get_workflow(
+                session,
+                issue_key="TP-907",
+                dedupe_scope=RUN_DEDUPE_SCOPE_PR_REMEDIATION,
             )
+            assert workflow is not None
+            assert remediation_workflow is not None
+            self.assertEqual(workflow.active_run_id, issue_run.run.run_id)
+            self.assertEqual(remediation_workflow.active_run_id, remediation_run.run.run_id)
 
     def test_enqueue_deduplicates_delivery_identifier(self) -> None:
         with self.session_factory() as session:
@@ -179,7 +179,7 @@ class RunLifecycleTests(unittest.TestCase):
             self.assertEqual(second.reason, "tenant_concurrency_limit_reached")
             self.assertEqual(second.run.run_id, first.run.run_id)
 
-    def test_running_to_success_releases_lock_and_persists_timestamps(self) -> None:
+    def test_running_to_success_updates_workflow_and_persists_timestamps(self) -> None:
         with self.session_factory() as session:
             enqueue = enqueue_run(session, tenant_id="tenant-runs", project_id=None, issue_key="TP-903")
             running = mark_run_running(session, run_id=enqueue.run.run_id)
@@ -196,10 +196,13 @@ class RunLifecycleTests(unittest.TestCase):
             self.assertIsNotNone(completed.started_at)
             self.assertIsNotNone(completed.finished_at)
 
-            lock = self._get_lock(session, issue_key="TP-903")
-            self.assertIsNone(lock)
+            workflow = self._get_workflow(session, issue_key="TP-903")
+            assert workflow is not None
+            self.assertEqual(workflow.status, RUN_STATUS_SUCCEEDED)
+            self.assertEqual(workflow.active_run_id, enqueue.run.run_id)
+            self.assertIsNotNone(workflow.finished_at)
 
-    def test_failure_path_marks_blocked_and_cleans_up_lock(self) -> None:
+    def test_failure_path_marks_blocked_without_finishing_workflow(self) -> None:
         with self.session_factory() as session:
             enqueue = enqueue_run(session, tenant_id="tenant-runs", project_id=None, issue_key="TP-904")
             mark_run_running(session, run_id=enqueue.run.run_id)
@@ -214,8 +217,11 @@ class RunLifecycleTests(unittest.TestCase):
             self.assertEqual(blocked.last_error, "jira label mutation failed")
             self.assertIsNotNone(blocked.finished_at)
 
-            lock = self._get_lock(session, issue_key="TP-904")
-            self.assertIsNone(lock)
+            workflow = self._get_workflow(session, issue_key="TP-904")
+            assert workflow is not None
+            self.assertEqual(workflow.status, RUN_STATUS_BLOCKED)
+            self.assertEqual(workflow.blocked_reason, "jira label mutation failed")
+            self.assertIsNone(workflow.finished_at)
 
     def test_invalid_state_transition_is_rejected(self) -> None:
         with self.session_factory() as session:
@@ -229,7 +235,7 @@ class RunLifecycleTests(unittest.TestCase):
             with self.assertRaises(RunStateTransitionError):
                 mark_run_running(session, run_id=enqueue.run.run_id)
 
-    def test_enqueue_ignores_stale_lock_for_terminal_run(self) -> None:
+    def test_enqueue_creates_new_workflow_after_terminal_run(self) -> None:
         with self.session_factory() as session:
             first = enqueue_run(session, tenant_id="tenant-runs", project_id=None, issue_key="TP-906")
             mark_run_terminal(
@@ -238,19 +244,10 @@ class RunLifecycleTests(unittest.TestCase):
                 terminal_status=RUN_STATUS_SUCCEEDED,
             )
 
-            stale_lock = RunLock(
-                tenant_id="tenant-runs",
-                issue_key="TP-906",
-                dedupe_scope=RUN_DEDUPE_SCOPE_ISSUE_EXECUTION,
-                run_id=first.run.run_id,
-                locked_at=datetime.now(timezone.utc),
-            )
-            session.add(stale_lock)
-            session.commit()
-
             second = enqueue_run(session, tenant_id="tenant-runs", project_id=None, issue_key="TP-906")
             self.assertTrue(second.enqueued)
             self.assertNotEqual(second.run.run_id, first.run.run_id)
+            self.assertNotEqual(second.run.workflow_id, first.run.workflow_id)
 
     def test_enqueue_applies_bootstrap_before_queue_notification(self) -> None:
         observed: dict[str, object] = {}
@@ -264,7 +261,9 @@ class RunLifecycleTests(unittest.TestCase):
             observed["plan"] = dict(staged_run.plan or {})
             observed["branch"] = staged_run.branch
             observed["pr_url"] = staged_run.pr_url
-            observed["dev_session_id"] = staged_run.dev_session_id
+            observed["entry_mode"] = staged_run.entry_mode
+            observed["entry_stage"] = staged_run.entry_stage
+            observed["entry_checkpoint_id"] = staged_run.entry_checkpoint_id
 
         with self.session_factory() as session:
             with patch("orchestrator.core.runs.notify_run_enqueued", side_effect=capture_notification):
@@ -277,12 +276,12 @@ class RunLifecycleTests(unittest.TestCase):
                     bootstrap=RunBootstrap(
                         branch="feature/TP-912",
                         pr_url="https://github.com/example/repo/pull/12",
-                        dev_session_id="dev-session-123",
+                        entry_mode="resume",
+                        entry_stage="dev",
+                        entry_checkpoint_id="checkpoint-dev",
                         plan={
                             "trigger_context": {
-                                "rerun_mode": "resume",
-                                "resume_stage": "dev",
-                                "resume_session_id": "dev-session-123",
+                                "source": "manual",
                             }
                         },
                     ),
@@ -295,15 +294,15 @@ class RunLifecycleTests(unittest.TestCase):
         self.assertEqual(observed["run_id"], result.run.run_id)
         self.assertEqual(observed["branch"], "feature/TP-912")
         self.assertEqual(observed["pr_url"], "https://github.com/example/repo/pull/12")
-        self.assertEqual(observed["dev_session_id"], "dev-session-123")
+        self.assertEqual(observed["entry_mode"], "resume")
+        self.assertEqual(observed["entry_stage"], "dev")
+        self.assertEqual(observed["entry_checkpoint_id"], "checkpoint-dev")
         self.assertEqual(
             observed["plan"],
             {
                 "pre_check": {"outcome": "ready_for_agent"},
                 "trigger_context": {
-                    "rerun_mode": "resume",
-                    "resume_stage": "dev",
-                    "resume_session_id": "dev-session-123",
+                    "source": "manual",
                 },
             },
         )

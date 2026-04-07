@@ -135,7 +135,9 @@ def test_run_request_human_input_creates_request() -> None:
     fake_request = SimpleNamespace(
         request_id="request-1",
         request_type="verification_code",
-        resume_stage="dev",
+        source_stage="test",
+        workflow_id="workflow-1",
+        checkpoint_id="checkpoint-1",
         thread_channel_id="thread-1",
         expires_at=SimpleNamespace(isoformat=lambda: "2026-03-13T12:00:00+00:00"),
     )
@@ -167,7 +169,9 @@ def test_run_request_human_input_creates_request() -> None:
     assert payload == {
         "request_id": "request-1",
         "request_type": "verification_code",
-        "resume_stage": "dev",
+        "source_stage": "test",
+        "workflow_id": "workflow-1",
+        "checkpoint_id": "checkpoint-1",
         "thread_channel_id": "thread-1",
         "expires_at": "2026-03-13T12:00:00+00:00",
     }

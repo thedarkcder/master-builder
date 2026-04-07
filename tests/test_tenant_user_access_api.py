@@ -10,9 +10,11 @@ from fastapi.testclient import TestClient
 
 from orchestrator.api.main import create_app
 from orchestrator.core.config import get_settings
+from orchestrator.core.email_delivery import EmailDeliveryError
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
-from orchestrator.storage.models import Project, Run, Tenant
+from orchestrator.storage.models import Project, Run, Tenant, WorkflowCheckpoint, WorkflowExecution
+from tests.workflow_test_support import add_run_with_workflow, add_workflow_attempt, make_run
 
 
 class TenantUserAccessApiTests(unittest.TestCase):
@@ -189,8 +191,8 @@ class TenantUserAccessApiTests(unittest.TestCase):
         now = datetime.now(timezone.utc)
         with session_factory() as session:
             session.add(
-                Run(
-                    run_id="tenant-user-visible-run",
+                WorkflowExecution(
+                    workflow_id="workflow-tenant-user-visible-run",
                     tenant_id=tenant_id,
                     project_id=f"{tenant_id}-default",
                     issue_key="TP-101",
@@ -199,11 +201,45 @@ class TenantUserAccessApiTests(unittest.TestCase):
                     repo_url="https://github.com/example/repo",
                     branch=None,
                     pr_url=None,
+                    dedupe_scope="issue_execution",
+                    status="queued",
+                    last_error=None,
+                    active_run_id="tenant-user-visible-run",
+                    latest_checkpoint_id=None,
+                    source_workflow_id=None,
+                    source_run_id=None,
+                    blocked_reason=None,
+                    created_at=now,
+                    started_at=None,
+                    finished_at=None,
+                    updated_at=now,
+                )
+            )
+            session.add(
+                Run(
+                    run_id="tenant-user-visible-run",
+                    workflow_id="workflow-tenant-user-visible-run",
+                    tenant_id=tenant_id,
+                    project_id=f"{tenant_id}-default",
+                    issue_key="TP-101",
+                    issue_summary="Tenant run",
+                    issue_description="desc",
+                    repo_url="https://github.com/example/repo",
+                    branch=None,
+                    pr_url=None,
+                    attempt_number=1,
+                    parent_run_id=None,
+                    entry_mode="fresh",
+                    entry_stage="orchestrated",
+                    entry_checkpoint_id=None,
+                    dedupe_scope="issue_execution",
                     status="queued",
                     last_error=None,
                     plan=None,
                     created_at=now,
                     started_at=None,
+                    last_heartbeat_at=None,
+                    worker_service_instance_id=None,
                     finished_at=None,
                 )
             )
@@ -217,6 +253,96 @@ class TenantUserAccessApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()[0]["run_id"], "tenant-user-visible-run")
 
+    def test_tenant_user_can_list_and_get_workflows_for_their_workspace(self) -> None:
+        registration = self._register()
+        token = self._login()
+        tenant_id = registration["tenant"]["tenant_id"]
+        session_factory = create_session_factory(self.database_url)
+        now = datetime.now(timezone.utc)
+        with session_factory() as session:
+            session.add(
+                WorkflowExecution(
+                    workflow_id="tenant-user-visible-workflow",
+                    tenant_id=tenant_id,
+                    project_id=f"{tenant_id}-default",
+                    issue_key="TP-111",
+                    issue_summary="Tenant workflow",
+                    issue_description="desc",
+                    repo_url="https://github.com/example/repo",
+                    branch="feature/workflow",
+                    pr_url=None,
+                    dedupe_scope="issue_execution",
+                    status="waiting_for_input",
+                    last_error=None,
+                    active_run_id="tenant-user-workflow-run",
+                    latest_checkpoint_id="tenant-user-workflow-checkpoint",
+                    source_workflow_id=None,
+                    source_run_id=None,
+                    blocked_reason=None,
+                    created_at=now,
+                    started_at=now,
+                    finished_at=None,
+                    updated_at=now,
+                )
+            )
+            session.add(
+                Run(
+                    run_id="tenant-user-workflow-run",
+                    workflow_id="tenant-user-visible-workflow",
+                    tenant_id=tenant_id,
+                    project_id=f"{tenant_id}-default",
+                    issue_key="TP-111",
+                    issue_summary="Tenant workflow",
+                    issue_description="desc",
+                    repo_url="https://github.com/example/repo",
+                    branch="feature/workflow",
+                    pr_url=None,
+                    attempt_number=1,
+                    parent_run_id=None,
+                    entry_mode="fresh",
+                    entry_stage="orchestrated",
+                    entry_checkpoint_id="tenant-user-workflow-checkpoint",
+                    dedupe_scope="issue_execution",
+                    status="waiting_for_input",
+                    last_error=None,
+                    plan=None,
+                    created_at=now,
+                    started_at=now,
+                    last_heartbeat_at=None,
+                    worker_service_instance_id=None,
+                    finished_at=None,
+                )
+            )
+            session.add(
+                WorkflowCheckpoint(
+                    checkpoint_id="tenant-user-workflow-checkpoint",
+                    workflow_id="tenant-user-visible-workflow",
+                    run_id="tenant-user-workflow-run",
+                    checkpoint_kind="pm",
+                    stage="pm",
+                    payload_json={"source": "test"},
+                    codex_session_id=None,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.commit()
+
+        list_response = self.client.get(
+            f"/api/admin/workflows?tenant_id={tenant_id}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        self.assertEqual(list_response.status_code, 200, list_response.text)
+        self.assertEqual(list_response.json()[0]["workflow_id"], "tenant-user-visible-workflow")
+        self.assertEqual(list_response.json()[0]["runs"][0]["attempt_number"], 1)
+
+        detail_response = self.client.get(
+            "/api/admin/workflows/tenant-user-visible-workflow",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        self.assertEqual(detail_response.status_code, 200, detail_response.text)
+        self.assertEqual(detail_response.json()["workflow_id"], "tenant-user-visible-workflow")
+
     def test_business_member_can_read_runs_without_extra_team_permissions(self) -> None:
         registration = self._register()
         tenant_id = registration["tenant"]["tenant_id"]
@@ -224,8 +350,9 @@ class TenantUserAccessApiTests(unittest.TestCase):
         session_factory = create_session_factory(self.database_url)
         now = datetime.now(timezone.utc)
         with session_factory() as session:
-            session.add(
-                Run(
+            add_run_with_workflow(
+                session,
+                make_run(
                     run_id="business-member-visible-run",
                     tenant_id=tenant_id,
                     project_id=f"{tenant_id}-default",
@@ -233,15 +360,9 @@ class TenantUserAccessApiTests(unittest.TestCase):
                     issue_summary="Business member run",
                     issue_description="desc",
                     repo_url="https://github.com/example/repo",
-                    branch=None,
-                    pr_url=None,
-                    status="queued",
-                    last_error=None,
-                    plan=None,
                     created_at=now,
-                    started_at=None,
-                    finished_at=None,
-                )
+                    status="queued",
+                ),
             )
             session.commit()
 
@@ -284,6 +405,18 @@ class TenantUserAccessApiTests(unittest.TestCase):
 
         response = self.client.get(
             "/api/admin/runs",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        self.assertEqual(response.status_code, 400, response.text)
+        self.assertIn("tenant_id is required", response.json()["detail"])
+
+    def test_tenant_user_workflows_listing_requires_explicit_tenant_scope(self) -> None:
+        self._register()
+        token = self._login()
+
+        response = self.client.get(
+            "/api/admin/workflows",
             headers={"Authorization": f"Bearer {token}"},
         )
 
@@ -478,6 +611,37 @@ class TenantUserAccessApiTests(unittest.TestCase):
         self.assertTrue(payload["invite_url"])
         email_mock.assert_called_once()
 
+    def test_tenant_admin_create_invite_returns_503_when_email_delivery_fails(self) -> None:
+        registration = self._register()
+        token = self._login()
+        tenant_id = registration["tenant"]["tenant_id"]
+
+        with patch(
+            "orchestrator.api.routes.admin_tenants.email_delivery.send_tenant_invite_email",
+            side_effect=EmailDeliveryError("smtp unavailable"),
+        ):
+            response = self.client.post(
+                f"/api/admin/tenants/{tenant_id}/invites",
+                json={
+                    "email": "new.user@example.com",
+                    "full_name": "New User",
+                    "role": "business_member",
+                    "team_ids": [],
+                    "mode_override": "non_technical",
+                },
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+        self.assertEqual(response.status_code, 503, response.text)
+        self.assertEqual(response.json()["detail"], "Invite email delivery is unavailable")
+
+        session_factory = create_session_factory(self.database_url)
+        from orchestrator.storage.models import TenantInvite
+
+        with session_factory() as session:
+            invites = session.query(TenantInvite).filter(TenantInvite.tenant_id == tenant_id).all()
+            self.assertEqual(invites, [])
+
     def test_tenant_admin_can_create_team(self) -> None:
         registration = self._register()
         token = self._login()
@@ -642,6 +806,38 @@ class TenantUserAccessApiTests(unittest.TestCase):
             self.assertEqual(revoke_response.status_code, 200, revoke_response.text)
             self.assertEqual(revoke_response.json()["invite"]["status"], "revoked")
             self.assertEqual(email_mock.call_count, 2)
+
+    def test_tenant_admin_resend_invite_returns_503_when_email_delivery_fails(self) -> None:
+        registration = self._register()
+        token = self._login()
+        tenant_id = registration["tenant"]["tenant_id"]
+
+        with patch("orchestrator.core.invites.email_delivery.send_tenant_invite_email"):
+            create_response = self.client.post(
+                f"/api/admin/tenants/{tenant_id}/invites",
+                json={
+                    "email": "invitee@example.com",
+                    "full_name": "Invitee",
+                    "role": "business_member",
+                    "team_ids": [],
+                    "mode_override": "non_technical",
+                },
+                headers={"Authorization": f"Bearer {token}"},
+            )
+        self.assertEqual(create_response.status_code, 201, create_response.text)
+        invite_id = create_response.json()["invite_id"]
+
+        with patch(
+            "orchestrator.api.routes.admin_tenants.email_delivery.send_tenant_invite_email",
+            side_effect=EmailDeliveryError("smtp unavailable"),
+        ):
+            resend_response = self.client.post(
+                f"/api/admin/tenants/{tenant_id}/invites/{invite_id}/resend",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+        self.assertEqual(resend_response.status_code, 503, resend_response.text)
+        self.assertEqual(resend_response.json()["detail"], "Invite email delivery is unavailable")
 
     def test_public_invite_acceptance_creates_user_and_marks_invite_accepted(self) -> None:
         registration = self._register()
@@ -821,78 +1017,57 @@ class TenantUserAccessApiTests(unittest.TestCase):
                     updated_at=now,
                 )
             )
-            session.add_all(
-                [
-                    Run(
-                        run_id="run-succeeded",
-                        tenant_id=tenant_id,
-                        project_id=project_id,
-                        issue_key="ACME-1",
-                        issue_summary="Completed story",
-                        issue_description=None,
-                        repo_url=None,
-                        branch=None,
-                        pr_url="https://github.com/example/repo/pull/1",
-                        dev_session_id=None,
-                        pm_session_id=None,
-                        orchestrated_session_id=None,
-                        dedupe_scope="issue_execution",
-                        status="succeeded",
-                        last_error=None,
-                        plan=None,
-                        created_at=now - timedelta(days=2),
-                        started_at=now - timedelta(days=2, minutes=-5),
-                        last_heartbeat_at=now - timedelta(days=2),
-                        worker_service_instance_id=None,
-                        finished_at=now - timedelta(days=2, minutes=-20),
-                    ),
-                    Run(
-                        run_id="run-blocked",
-                        tenant_id=tenant_id,
-                        project_id=project_id,
-                        issue_key="ACME-2",
-                        issue_summary="Blocked story",
-                        issue_description=None,
-                        repo_url=None,
-                        branch=None,
-                        pr_url=None,
-                        dev_session_id=None,
-                        pm_session_id=None,
-                        orchestrated_session_id=None,
-                        dedupe_scope="issue_execution",
-                        status="blocked",
-                        last_error="blocked",
-                        plan=None,
-                        created_at=now - timedelta(days=1),
-                        started_at=now - timedelta(days=1, minutes=-3),
-                        last_heartbeat_at=now - timedelta(days=1),
-                        worker_service_instance_id=None,
-                        finished_at=now - timedelta(days=1, minutes=-7),
-                    ),
-                    Run(
-                        run_id="run-failed",
-                        tenant_id=tenant_id,
-                        project_id=project_id,
-                        issue_key="ACME-3",
-                        issue_summary="Failed story",
-                        issue_description=None,
-                        repo_url=None,
-                        branch=None,
-                        pr_url=None,
-                        dev_session_id=None,
-                        pm_session_id=None,
-                        orchestrated_session_id=None,
-                        dedupe_scope="issue_execution",
-                        status="failed",
-                        last_error="failed",
-                        plan=None,
-                        created_at=now - timedelta(hours=12),
-                        started_at=now - timedelta(hours=12, minutes=-4),
-                        last_heartbeat_at=now - timedelta(hours=12),
-                        worker_service_instance_id=None,
-                        finished_at=now - timedelta(hours=12, minutes=-11),
-                    ),
-                ]
+            add_workflow_attempt(
+                session,
+                run_id="run-succeeded",
+                tenant_id=tenant_id,
+                project_id=project_id,
+                issue_key="ACME-1",
+                issue_summary="Completed story",
+                issue_description=None,
+                repo_url=None,
+                pr_url="https://github.com/example/repo/pull/1",
+                created_at=now - timedelta(days=2),
+                run_status="succeeded",
+                workflow_status="succeeded",
+                started_at=now - timedelta(days=2, minutes=-5),
+                last_heartbeat_at=now - timedelta(days=2),
+                finished_at=now - timedelta(days=2, minutes=-20),
+            )
+            add_workflow_attempt(
+                session,
+                run_id="run-blocked",
+                tenant_id=tenant_id,
+                project_id=project_id,
+                issue_key="ACME-2",
+                issue_summary="Blocked story",
+                issue_description=None,
+                repo_url=None,
+                created_at=now - timedelta(days=1),
+                run_status="blocked",
+                workflow_status="blocked",
+                last_error="blocked",
+                started_at=now - timedelta(days=1, minutes=-3),
+                last_heartbeat_at=now - timedelta(days=1),
+                finished_at=now - timedelta(days=1, minutes=-7),
+                blocked_reason="blocked",
+            )
+            add_workflow_attempt(
+                session,
+                run_id="run-failed",
+                tenant_id=tenant_id,
+                project_id=project_id,
+                issue_key="ACME-3",
+                issue_summary="Failed story",
+                issue_description=None,
+                repo_url=None,
+                created_at=now - timedelta(hours=12),
+                run_status="failed",
+                workflow_status="failed",
+                last_error="failed",
+                started_at=now - timedelta(hours=12, minutes=-4),
+                last_heartbeat_at=now - timedelta(hours=12),
+                finished_at=now - timedelta(hours=12, minutes=-11),
             )
             session.commit()
 

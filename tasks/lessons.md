@@ -103,3 +103,10 @@
 2026-03-30
 
 - When integrating third-party APIs, never introduce new API keys as env vars; resolve keys from the tenant secret manager using a scoped secret ref (for Stitch: `tenant/<tenant_id>/STITCH_API_KEY`).
+
+2026-04-07
+
+- When a user provides a bare UUID and asks about "our run", do not assume an external tracker object just because the identifier looks like a Linear UUID. First search local run storage and repo databases for the ID or prefix, then only branch into external systems if the user explicitly says it is a tracker record.
+- When the user narrows implementation scope to a specific slice or ownership boundary, immediately re-scope the plan and edits to that slice instead of continuing the broader refactor from prior context.
+- When the user narrows implementation scope to a specific slice or file ownership boundary, stop the broader rollout immediately and restate the constrained scope before making more changes. Do not keep building adjacent slices just because the larger plan exists.
+- When replacing a legacy execution model, do not preserve old fields or constructor shims just to keep existing tests green. Remove the legacy path, then update fixtures, services, and tests to create valid objects under the new model and use the full suite to close the remaining gaps.

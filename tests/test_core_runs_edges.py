@@ -49,7 +49,7 @@ class CoreRunsEdgeTests(unittest.TestCase):
     def test_enqueue_raises_when_concurrency_limit_reached_without_active_run(self) -> None:
         session = MagicMock()
         with (
-            patch("orchestrator.core.runs._active_run_for_issue", return_value=None),
+            patch("orchestrator.core.runs._active_workflow_for_issue", return_value=None),
             patch("orchestrator.core.runs._active_run_count_for_tenant", return_value=1),
             patch("orchestrator.core.runs._first_active_run_for_tenant", return_value=None),
         ):
@@ -66,7 +66,7 @@ class CoreRunsEdgeTests(unittest.TestCase):
         session = MagicMock()
         session.commit.side_effect = IntegrityError("stmt", {}, Exception("db"))
         with (
-            patch("orchestrator.core.runs._active_run_for_issue", return_value=None),
+            patch("orchestrator.core.runs._active_workflow_for_issue", return_value=None),
             patch("orchestrator.core.runs._active_run_count_for_tenant", return_value=0),
             patch("orchestrator.core.runs.notify_run_enqueued"),
         ):
@@ -105,12 +105,29 @@ class CoreRunsEdgeTests(unittest.TestCase):
         self.assertEqual(result.reason, "duplicate_delivery")
         self.assertEqual(result.run.run_id, "run-1")
 
+    def test_enqueue_integrity_retry_raises_unknown_conflict_without_active_workflow(self) -> None:
+        session = MagicMock()
+        session.commit.side_effect = IntegrityError("stmt", {}, Exception("db"))
+        with (
+            patch("orchestrator.core.runs._active_workflow_for_issue", return_value=None),
+            patch("orchestrator.core.runs._active_run_count_for_tenant", return_value=0),
+            patch("orchestrator.core.runs.notify_run_enqueued"),
+        ):
+            with self.assertRaises(RunStateTransitionError):
+                enqueue_run(
+                    session,
+                    tenant_id="tenant-a",
+                    project_id=None,
+                    issue_key="TP-3",
+                    max_concurrent_runs=1,
+                )
+
     def test_enqueue_integrity_retry_returns_concurrency_limit_result(self) -> None:
         session = MagicMock()
         session.commit.side_effect = IntegrityError("stmt", {}, Exception("db"))
         limited_run = SimpleNamespace(run_id="run-limited")
         with (
-            patch("orchestrator.core.runs._active_run_for_issue", return_value=None),
+            patch("orchestrator.core.runs._active_workflow_for_issue", return_value=None),
             patch("orchestrator.core.runs._active_run_count_for_tenant", side_effect=[0, 1]),
             patch("orchestrator.core.runs._first_active_run_for_tenant", return_value=limited_run),
             patch("orchestrator.core.runs.notify_run_enqueued"),
@@ -160,6 +177,7 @@ class CoreRunsEdgeTests(unittest.TestCase):
         session = MagicMock()
         run = SimpleNamespace(
             run_id="run-1",
+            workflow_id="workflow-1",
             status=RUN_STATUS_RUNNING,
             tenant_id="tenant-a",
             issue_key="TP-6",
@@ -167,7 +185,23 @@ class CoreRunsEdgeTests(unittest.TestCase):
             finished_at=None,
             last_error=None,
         )
-        session.get.return_value = run
+        workflow = SimpleNamespace(
+            workflow_id="workflow-1",
+            status=RUN_STATUS_RUNNING,
+            last_error=None,
+            finished_at=None,
+            updated_at=None,
+        )
+
+        def fake_get(model, key):  # noqa: ANN001
+            name = getattr(model, "__name__", "")
+            if name == "Run":
+                return run
+            if name == "WorkflowExecution":
+                return workflow
+            return None
+
+        session.get.side_effect = fake_get
         cancelled = cancel_run(session, run_id="run-1", cancelled_by="user")
         self.assertEqual(cancelled.status, "cancelled")
         self.assertIn("Cancelled by user", str(cancelled.last_error))

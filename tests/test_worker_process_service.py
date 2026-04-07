@@ -49,7 +49,7 @@ class WorkerProcessServiceTests(unittest.TestCase):
             self.assertIs(target, run)
             refresh_calls.append(attribute_names)
             if attribute_names == ["plan"]:
-                run.plan = {"trigger_context": {"resume_stage": "dev"}}
+                run.plan = {"trigger_context": {"source": "manual"}}
                 return
             self.assertIsNone(attribute_names)
 
@@ -72,7 +72,7 @@ class WorkerProcessServiceTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual(run.plan["trigger_context"], {"resume_stage": "dev"})
+        self.assertEqual(run.plan["trigger_context"], {"source": "manual"})
         self.assertEqual(len(run.plan["live_stage_updates"]), 1)
         self.assertEqual(run.plan["live_stage_updates"][0]["stage"], "plan_posted")
         session.commit.assert_called_once()
