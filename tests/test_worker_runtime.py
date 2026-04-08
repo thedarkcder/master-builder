@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
-from orchestrator.storage.models import Run, WorkerRuntimeState
+from orchestrator.storage.models import WorkerRuntimeState
 from tests.workflow_test_support import add_workflow_attempt
 
 
@@ -231,68 +231,6 @@ class WorkerTests(unittest.TestCase):
         runner_mock.assert_called_once_with(session=run_session)
         run_mock.assert_called_once_with(run_session, runner_mock.return_value)
 
-    def test_run_worker_slot_retries_transient_database_errors(self) -> None:
-        import orchestrator.worker as worker_module
-        from sqlalchemy.exc import OperationalError
-
-        transient_error = OperationalError(
-            "SELECT 1",
-            {},
-            Exception("server closed the connection unexpectedly"),
-        )
-        process_mock = MagicMock(side_effect=[transient_error, None])
-
-        async def _retry_now(*, stop_event: object, timeout_seconds: object) -> bool:
-            _ = stop_event
-            _ = timeout_seconds
-            return False
-
-        with patch.object(worker_module, "_wait_for_worker_retry_delay", new=_retry_now):
-            asyncio.run(
-                worker_module._run_worker_slot(
-                    session_factory=MagicMock(),
-                    stop_event=asyncio.Event(),
-                    process_next_work_item_once=process_mock,
-                )
-            )
-
-        self.assertEqual(process_mock.call_count, 2)
-
-    def test_run_worker_slot_reraises_non_retryable_operational_errors(self) -> None:
-        import orchestrator.worker as worker_module
-        from sqlalchemy.exc import OperationalError
-
-        process_mock = MagicMock(
-            side_effect=OperationalError(
-                "SELECT 1",
-                {},
-                Exception("password authentication failed for user \"orchestrator\""),
-            )
-        )
-
-        with self.assertRaisesRegex(OperationalError, "password authentication failed"):
-            asyncio.run(
-                worker_module._run_worker_slot(
-                    session_factory=MagicMock(),
-                    stop_event=asyncio.Event(),
-                    process_next_work_item_once=process_mock,
-                )
-            )
-
-    def test_run_worker_slot_reraises_non_retryable_errors(self) -> None:
-        import orchestrator.worker as worker_module
-
-        process_mock = MagicMock(side_effect=RuntimeError("boom"))
-
-        with self.assertRaisesRegex(RuntimeError, "boom"):
-            asyncio.run(
-                worker_module._run_worker_slot(
-                    session_factory=MagicMock(),
-                    stop_event=asyncio.Event(),
-                    process_next_work_item_once=process_mock,
-                )
-            )
-
     def test_process_next_queued_run_passes_send_discord_fn(self) -> None:
         import orchestrator.worker as worker_module
 
@@ -314,6 +252,7 @@ class WorkerTests(unittest.TestCase):
         )
         listener = MagicMock()
         wait_calls = {"count": 0}
+        spawned_modes: list[str] = []
 
         async def _wait_for_wake_or_stop(*, wake_event: asyncio.Event, stop_event: asyncio.Event) -> None:
             wait_calls["count"] += 1
@@ -322,15 +261,19 @@ class WorkerTests(unittest.TestCase):
                 return
             stop_event.set()
 
-        async def _run_worker_slot(
-            *,
-            session_factory: object,
-            stop_event: asyncio.Event,
-            process_next_work_item_once: object,
-        ) -> None:
-            _ = session_factory
-            self.assertIs(process_next_work_item_once, worker_module._process_next_webhook_job_once)
-            stop_event.set()
+        async def _spawn_worker_child_process(*, mode: str, wake_event: asyncio.Event):
+            _ = wake_event
+            spawned_modes.append(mode)
+            child_result = worker_module.WorkerChildProcessResult(
+                return_code=worker_module.WORKER_CHILD_EXIT_IDLE,
+                processed=False,
+                dependency_failure=False,
+            )
+            process = SimpleNamespace(pid=321, returncode=child_result.return_code, terminate=lambda: None)
+            return worker_module.WorkerChildProcessHandle(
+                process=process,
+                wait_task=asyncio.create_task(asyncio.sleep(0, result=child_result)),
+            )
 
         with (
             patch.object(worker_module, "get_settings", return_value=fake_settings),
@@ -340,14 +283,15 @@ class WorkerTests(unittest.TestCase):
             patch.object(worker_module, "postgres_dsn_from_database_url", return_value="postgres://dsn"),
             patch.object(worker_module, "RunQueueNotificationBridge", return_value=listener),
             patch.object(worker_module, "wait_for_wake_or_stop", new=_wait_for_wake_or_stop),
-            patch.object(worker_module, "_resolve_parallel_slots_from_policy", return_value=1),
-            patch.object(worker_module, "_run_worker_slot", new=_run_worker_slot),
+            patch.object(worker_module, "_resolve_worker_child_capacity", return_value=1),
+            patch.object(worker_module, "_spawn_worker_child_process", new=_spawn_worker_child_process),
             patch.object(worker_module, "_recover_worker_run_health_once") as recovery_mock,
             patch.object(worker_module, "_run_stale_recovery_loop") as stale_loop_mock,
             patch.object(worker_module, "worker_service_instance_id_for_mode", return_value="node-a:1234"),
         ):
             asyncio.run(worker_module.run_worker(mode="webhooks"))
 
+        self.assertIn("webhooks", spawned_modes)
         recovery_mock.assert_not_called()
         stale_loop_mock.assert_not_called()
         listener.start.assert_called_once()
@@ -365,20 +309,29 @@ class WorkerTests(unittest.TestCase):
         )
         listener = MagicMock()
         purge_mock = MagicMock()
+        spawned_modes: list[str] = []
+        wait_calls = {"count": 0}
 
         async def _wait_for_wake_or_stop(*, wake_event: asyncio.Event, stop_event: asyncio.Event) -> None:
-            _ = stop_event
-            wake_event.set()
-
-        async def _run_worker_slot(
-            *,
-            session_factory: object,
-            stop_event: asyncio.Event,
-            process_next_work_item_once: object,
-        ) -> None:
-            _ = session_factory
-            self.assertIs(process_next_work_item_once, worker_module._process_next_run_once)
+            wait_calls["count"] += 1
+            if wait_calls["count"] == 1:
+                wake_event.set()
+                return
             stop_event.set()
+
+        async def _spawn_worker_child_process(*, mode: str, wake_event: asyncio.Event):
+            _ = wake_event
+            spawned_modes.append(mode)
+            child_result = worker_module.WorkerChildProcessResult(
+                return_code=worker_module.WORKER_CHILD_EXIT_IDLE,
+                processed=False,
+                dependency_failure=False,
+            )
+            process = SimpleNamespace(pid=456, returncode=child_result.return_code, terminate=lambda: None)
+            return worker_module.WorkerChildProcessHandle(
+                process=process,
+                wait_task=asyncio.create_task(asyncio.sleep(0, result=child_result)),
+            )
 
         async def _stale_recovery_loop(*, stop_event: asyncio.Event, **_kwargs: object) -> None:
             await stop_event.wait()
@@ -394,8 +347,8 @@ class WorkerTests(unittest.TestCase):
             patch.object(worker_module, "postgres_dsn_from_database_url", return_value="postgres://dsn"),
             patch.object(worker_module, "RunQueueNotificationBridge", return_value=listener),
             patch.object(worker_module, "wait_for_wake_or_stop", new=_wait_for_wake_or_stop),
-            patch.object(worker_module, "_resolve_parallel_slots_from_policy", return_value=1),
-            patch.object(worker_module, "_run_worker_slot", new=_run_worker_slot),
+            patch.object(worker_module, "_resolve_worker_child_capacity", return_value=1),
+            patch.object(worker_module, "_spawn_worker_child_process", new=_spawn_worker_child_process),
             patch.object(worker_module, "_recover_worker_run_health_once") as recovery_mock,
             patch.object(worker_module, "_run_stale_recovery_loop", new=_stale_recovery_loop),
             patch.object(worker_module, "_purge_archived_tenants_once", new=purge_mock),
@@ -404,6 +357,7 @@ class WorkerTests(unittest.TestCase):
         ):
             asyncio.run(worker_module.run_worker(mode="runs"))
 
+        self.assertIn("runs", spawned_modes)
         recovery_mock.assert_called_once()
         purge_mock.assert_called_once()
         listener.start.assert_called_once()
@@ -438,6 +392,51 @@ class WorkerTests(unittest.TestCase):
             worker_module.main()
         run_mock.assert_called_once()
         run_worker_mock.assert_called_once_with(mode="runs")
+
+    def test_run_worker_child_once_returns_expected_exit_codes(self) -> None:
+        import orchestrator.worker as worker_module
+
+        fake_settings = SimpleNamespace(
+            log_level="INFO",
+            sentry_environment="test",
+            sentry_release=None,
+            agent_id="worker-test",
+        )
+
+        with (
+            patch.object(worker_module, "get_settings", return_value=fake_settings),
+            patch.object(worker_module, "configure_logging"),
+            patch.object(worker_module, "create_session_factory", return_value=MagicMock()),
+            patch.object(worker_module, "_resolve_worker_processor", return_value=MagicMock(return_value=object())),
+        ):
+            self.assertEqual(
+                worker_module.run_worker_child_once(mode="runs"),
+                worker_module.WORKER_CHILD_EXIT_PROCESSED,
+            )
+
+        with (
+            patch.object(worker_module, "get_settings", return_value=fake_settings),
+            patch.object(worker_module, "configure_logging"),
+            patch.object(worker_module, "create_session_factory", return_value=MagicMock()),
+            patch.object(worker_module, "_resolve_worker_processor", return_value=MagicMock(return_value=None)),
+        ):
+            self.assertEqual(
+                worker_module.run_worker_child_once(mode="webhooks"),
+                worker_module.WORKER_CHILD_EXIT_IDLE,
+            )
+
+    def test_resolve_worker_child_capacity_applies_policy_and_runtime_cap(self) -> None:
+        import orchestrator.worker as worker_module
+
+        settings = SimpleNamespace(worker_max_child_processes=2)
+        with patch.object(worker_module, "_resolve_parallel_slots_from_policy", return_value=5):
+            self.assertEqual(
+                worker_module._resolve_worker_child_capacity(
+                    settings=settings,
+                    session_factory=MagicMock(),
+                ),
+                2,
+            )
 
     def test_run_worker_processes_and_stops_cleanly(self) -> None:
         import orchestrator.worker as worker_module
@@ -476,6 +475,29 @@ class WorkerTests(unittest.TestCase):
         async def _stale_recovery_loop(*, stop_event: asyncio.Event, **_kwargs: object) -> None:
             await stop_event.wait()
 
+        async def _spawn_worker_child_process(*, mode: str, wake_event: asyncio.Event):
+            _ = mode
+            _ = wake_event
+            token = process_mock()
+            child_result = worker_module.WorkerChildProcessResult(
+                return_code=(
+                    worker_module.WORKER_CHILD_EXIT_PROCESSED
+                    if token is not None
+                    else worker_module.WORKER_CHILD_EXIT_IDLE
+                ),
+                processed=token is not None,
+                dependency_failure=False,
+            )
+            process = SimpleNamespace(
+                pid=1234,
+                returncode=child_result.return_code,
+                terminate=lambda: None,
+            )
+            return worker_module.WorkerChildProcessHandle(
+                process=process,
+                wait_task=asyncio.create_task(asyncio.sleep(0, result=child_result)),
+            )
+
         with (
             patch.object(worker_module, "get_settings", return_value=fake_settings),
             patch.object(worker_module, "configure_logging"),
@@ -484,8 +506,8 @@ class WorkerTests(unittest.TestCase):
             patch.object(worker_module, "postgres_dsn_from_database_url", return_value="postgres://dsn"),
             patch.object(worker_module, "RunQueueNotificationBridge", return_value=listener),
             patch.object(worker_module, "wait_for_wake_or_stop", new=_wait_for_wake_or_stop),
-            patch.object(worker_module, "build_workflow_runner_for_session", return_value=MagicMock()),
-            patch.object(worker_module, "process_next_queued_run", new=process_mock),
+            patch.object(worker_module, "_resolve_worker_child_capacity", return_value=1),
+            patch.object(worker_module, "_spawn_worker_child_process", new=_spawn_worker_child_process),
             patch.object(worker_module, "_recover_worker_run_health_once", new=recovery_mock),
             patch.object(worker_module, "_run_stale_recovery_loop", new=_stale_recovery_loop),
             patch.object(worker_module, "worker_service_instance_id_for_mode", return_value="node-a:1234"),
@@ -534,6 +556,25 @@ class WorkerTests(unittest.TestCase):
         async def _stale_recovery_loop(*, stop_event: asyncio.Event, **_kwargs: object) -> None:
             await stop_event.wait()
 
+        async def _spawn_worker_child_process(*, mode: str, wake_event: asyncio.Event):
+            _ = mode
+            _ = wake_event
+            token = process_mock()
+            child_result = worker_module.WorkerChildProcessResult(
+                return_code=(
+                    worker_module.WORKER_CHILD_EXIT_PROCESSED
+                    if token is not None
+                    else worker_module.WORKER_CHILD_EXIT_IDLE
+                ),
+                processed=token is not None,
+                dependency_failure=False,
+            )
+            process = SimpleNamespace(pid=901, returncode=child_result.return_code, terminate=lambda: None)
+            return worker_module.WorkerChildProcessHandle(
+                process=process,
+                wait_task=asyncio.create_task(asyncio.sleep(0, result=child_result)),
+            )
+
         with (
             patch.object(worker_module, "get_settings", return_value=fake_settings),
             patch.object(worker_module, "configure_logging"),
@@ -542,9 +583,8 @@ class WorkerTests(unittest.TestCase):
             patch.object(worker_module, "postgres_dsn_from_database_url", return_value="postgres://dsn"),
             patch.object(worker_module, "RunQueueNotificationBridge", return_value=listener),
             patch.object(worker_module, "wait_for_wake_or_stop", new=_wait_for_wake_or_stop),
-            patch.object(worker_module, "_resolve_parallel_slots_from_policy", return_value=2) as slots_mock,
-            patch.object(worker_module, "build_workflow_runner_for_session", return_value=MagicMock()),
-            patch.object(worker_module, "process_next_queued_run", new=process_mock),
+            patch.object(worker_module, "_resolve_worker_child_capacity", return_value=2) as slots_mock,
+            patch.object(worker_module, "_spawn_worker_child_process", new=_spawn_worker_child_process),
             patch.object(worker_module, "_recover_worker_run_health_once", new=recovery_mock),
             patch.object(worker_module, "_run_stale_recovery_loop", new=_stale_recovery_loop),
             patch.object(worker_module, "worker_service_instance_id_for_mode", return_value="node-a:1234"),
@@ -552,11 +592,11 @@ class WorkerTests(unittest.TestCase):
             asyncio.run(worker_module.run_worker())
 
         self.assertTrue(slots_mock.called)
-        self.assertEqual(process_mock.call_count, 2)
+        self.assertGreaterEqual(process_mock.call_count, 2)
         listener.start.assert_called_once()
         listener.stop.assert_called_once()
 
-    def test_run_worker_recovers_after_worker_slot_failure(self) -> None:
+    def test_run_worker_recovers_after_worker_child_failure(self) -> None:
         import orchestrator.worker as worker_module
 
         fake_settings = SimpleNamespace(
@@ -569,32 +609,36 @@ class WorkerTests(unittest.TestCase):
 
         listener = MagicMock()
         recovery_mock = MagicMock()
-        slot_calls = {"count": 0}
+        child_spawns = {"count": 0}
 
         async def _wait_for_wake_or_stop(*, wake_event: asyncio.Event, stop_event: asyncio.Event) -> None:
-            if slot_calls["count"] == 0:
-                wake_event.set()
-                return
-            if slot_calls["count"] >= 2:
+            if child_spawns["count"] >= 2:
                 stop_event.set()
                 return
-            await stop_event.wait()
+            wake_event.set()
 
         async def _stale_recovery_loop(*, stop_event: asyncio.Event, **_kwargs: object) -> None:
             await stop_event.wait()
 
-        async def _run_worker_slot(
-            *,
-            session_factory: object,
-            stop_event: asyncio.Event,
-            process_next_work_item_once: object,
-        ) -> None:
-            _ = session_factory
-            self.assertIs(process_next_work_item_once, worker_module._process_next_run_once)
-            slot_calls["count"] += 1
-            if slot_calls["count"] == 1:
-                raise RuntimeError("slot boom")
-            stop_event.set()
+        async def _spawn_worker_child_process(*, mode: str, wake_event: asyncio.Event):
+            _ = mode
+            _ = wake_event
+            child_spawns["count"] += 1
+            return_code = (
+                worker_module.WORKER_CHILD_EXIT_RUNTIME_FAILURE
+                if child_spawns["count"] == 1
+                else worker_module.WORKER_CHILD_EXIT_IDLE
+            )
+            child_result = worker_module.WorkerChildProcessResult(
+                return_code=return_code,
+                processed=False,
+                dependency_failure=False,
+            )
+            process = SimpleNamespace(pid=654, returncode=child_result.return_code, terminate=lambda: None)
+            return worker_module.WorkerChildProcessHandle(
+                process=process,
+                wait_task=asyncio.create_task(asyncio.sleep(0, result=child_result)),
+            )
 
         with (
             patch.object(worker_module, "get_settings", return_value=fake_settings),
@@ -604,21 +648,21 @@ class WorkerTests(unittest.TestCase):
             patch.object(worker_module, "postgres_dsn_from_database_url", return_value="postgres://dsn"),
             patch.object(worker_module, "RunQueueNotificationBridge", return_value=listener),
             patch.object(worker_module, "wait_for_wake_or_stop", new=_wait_for_wake_or_stop),
-            patch.object(worker_module, "_resolve_parallel_slots_from_policy", return_value=1),
+            patch.object(worker_module, "_resolve_worker_child_capacity", return_value=1),
             patch.object(worker_module, "_recover_worker_run_health_once", new=recovery_mock),
             patch.object(worker_module, "_run_stale_recovery_loop", new=_stale_recovery_loop),
-            patch.object(worker_module, "_run_worker_slot", new=_run_worker_slot),
+            patch.object(worker_module, "_spawn_worker_child_process", new=_spawn_worker_child_process),
             patch.object(worker_module, "worker_service_instance_id_for_mode", return_value="node-a:1234"),
             patch.object(worker_module.platform_metrics, "record_worker_failure") as failure_metric,
         ):
             asyncio.run(worker_module.run_worker())
 
-        self.assertEqual(slot_calls["count"], 2)
-        failure_metric.assert_any_call(kind="slot_crash")
+        self.assertEqual(child_spawns["count"], 2)
+        failure_metric.assert_any_call(kind="child_crash")
         listener.start.assert_called_once()
         listener.stop.assert_called_once()
 
-    def test_run_worker_raises_runtime_unavailable_when_runner_build_fails(self) -> None:
+    def test_run_worker_raises_runtime_unavailable_when_child_reports_dependency_failure(self) -> None:
         import orchestrator.worker as worker_module
 
         fake_settings = SimpleNamespace(
@@ -628,26 +672,8 @@ class WorkerTests(unittest.TestCase):
             sentry_release=None,
             agent_id="worker-test",
         )
-        session = MagicMock()
-
-        class _SessionCtx:
-            def __enter__(self):  # noqa: ANN204
-                return session
-
-            def __exit__(self, exc_type: object, exc: object, tb: object) -> bool:
-                return False
-
-        def _session_factory():  # noqa: ANN202
-            return _SessionCtx()
 
         listener = MagicMock()
-        build_runner_mock = MagicMock(side_effect=worker_module.CodexRuntimeError("missing runtime"))
-        get_settings_mock = MagicMock(return_value=fake_settings)
-        configure_logging_mock = MagicMock()
-        create_session_factory_mock = MagicMock(return_value=_session_factory)
-        is_postgres_mock = MagicMock(return_value=True)
-        postgres_dsn_mock = MagicMock(return_value="postgres://dsn")
-        queue_bridge_mock = MagicMock(return_value=listener)
         recovery_mock = MagicMock()
 
         async def _wait_for_wake_or_stop(*, wake_event: asyncio.Event, stop_event: asyncio.Event) -> None:
@@ -657,15 +683,30 @@ class WorkerTests(unittest.TestCase):
         async def _stale_recovery_loop(*, stop_event: asyncio.Event, **_kwargs: object) -> None:
             await stop_event.wait()
 
+        async def _spawn_worker_child_process(*, mode: str, wake_event: asyncio.Event):
+            _ = mode
+            _ = wake_event
+            child_result = worker_module.WorkerChildProcessResult(
+                return_code=worker_module.WORKER_CHILD_EXIT_DEPENDENCY_FAILURE,
+                processed=False,
+                dependency_failure=True,
+            )
+            process = SimpleNamespace(pid=777, returncode=child_result.return_code, terminate=lambda: None)
+            return worker_module.WorkerChildProcessHandle(
+                process=process,
+                wait_task=asyncio.create_task(asyncio.sleep(0, result=child_result)),
+            )
+
         with (
-            patch.object(worker_module, "get_settings", new=get_settings_mock),
-            patch.object(worker_module, "configure_logging", new=configure_logging_mock),
-            patch.object(worker_module, "create_session_factory", new=create_session_factory_mock),
-            patch.object(worker_module, "is_postgres_database_url", new=is_postgres_mock),
-            patch.object(worker_module, "postgres_dsn_from_database_url", new=postgres_dsn_mock),
-            patch.object(worker_module, "RunQueueNotificationBridge", new=queue_bridge_mock),
+            patch.object(worker_module, "get_settings", return_value=fake_settings),
+            patch.object(worker_module, "configure_logging"),
+            patch.object(worker_module, "create_session_factory", return_value=MagicMock()),
+            patch.object(worker_module, "is_postgres_database_url", return_value=True),
+            patch.object(worker_module, "postgres_dsn_from_database_url", return_value="postgres://dsn"),
+            patch.object(worker_module, "RunQueueNotificationBridge", return_value=listener),
             patch.object(worker_module, "wait_for_wake_or_stop", new=_wait_for_wake_or_stop),
-            patch.object(worker_module, "build_workflow_runner_for_session", new=build_runner_mock),
+            patch.object(worker_module, "_resolve_worker_child_capacity", return_value=1),
+            patch.object(worker_module, "_spawn_worker_child_process", new=_spawn_worker_child_process),
             patch.object(worker_module, "_recover_worker_run_health_once", new=recovery_mock),
             patch.object(worker_module, "_run_stale_recovery_loop", new=_stale_recovery_loop),
             patch.object(worker_module, "worker_service_instance_id_for_mode", return_value="node-a:1234"),
