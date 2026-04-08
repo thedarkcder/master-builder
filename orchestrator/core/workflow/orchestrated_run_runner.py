@@ -127,35 +127,80 @@ class OrchestratedRunWorkflowExecutor:
         last_test_result: TestResult | None = None
         last_review_result: ReviewResult | None = None
 
-        resume_snapshot = ExecutionSnapshot.load(request.checkpoint_payload) if str(request.entry_mode or "").strip().lower() == "resume" else None
+        resume_mode = str(request.entry_mode or "").strip().lower() == "resume"
+        resume_from_pm = _should_resume_from_pm(request)
+        resume_from_dev = _should_resume_from_dev(request)
+        resume_from_review = _should_resume_from_review(request)
+        resume_snapshot = ExecutionSnapshot.load(request.checkpoint_payload) if resume_mode else None
+        resumed_from_persisted_pm = False
 
-        if _should_resume_from_pm(request) or _should_resume_from_dev(request):
+        if resume_from_pm or resume_from_dev:
             plan = resume_snapshot.plan() if resume_snapshot is not None else None
             if plan is None:
-                return self._failure_result(
-                    request=request,
-                    state=_ExecutionState(
-                        plan=None,
-                        stage_trace=stage_trace,
-                        history=history,
-                        dev_rationale=[],
-                        review_summary=[],
-                        review_feedback=None,
-                        test_guidance=test_guidance,
-                    ),
-                    stage="dev",
-                    attempts=1,
-                    message="Cannot resume dev stage because no valid persisted PM plan is available.",
+                if resume_from_pm:
+                    # PM can request transient human input before emitting a persisted PM artifact.
+                    # In that case, resume by re-entering PM with the answered input instead of failing.
+                    try:
+                        plan = agents.pm(
+                            request,
+                            1,
+                            None,
+                            history,
+                            last_dev_result,
+                            last_test_result,
+                            last_review_result,
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        return self._failure_result(
+                            request=request,
+                            state=_ExecutionState(
+                                plan=None,
+                                stage_trace=stage_trace,
+                                history=history,
+                                dev_rationale=[],
+                                review_summary=[],
+                                review_feedback=None,
+                                test_guidance=test_guidance,
+                            ),
+                            stage="pm",
+                            attempts=1,
+                            message=f"PM stage failed: {exc}",
+                        )
+                    stage_trace.append(
+                        _stage_trace_entry(
+                            stage="pm",
+                            status=_checkpoint_status_for_outcome(plan.outcome),
+                            attempt=1,
+                            summary=plan.blocker_message or _summarize_pm_plan(plan),
+                        )
+                    )
+                else:
+                    return self._failure_result(
+                        request=request,
+                        state=_ExecutionState(
+                            plan=None,
+                            stage_trace=stage_trace,
+                            history=history,
+                            dev_rationale=[],
+                            review_summary=[],
+                            review_feedback=None,
+                            test_guidance=test_guidance,
+                        ),
+                        stage="dev",
+                        attempts=1,
+                        message="Cannot resume dev stage because no valid persisted PM plan is available.",
+                    )
+            else:
+                resumed_from_persisted_pm = True
+                stage_trace.append(
+                    _stage_trace_entry(
+                        stage="pm",
+                        status="completed",
+                        attempt=1,
+                        summary="Resumed from persisted PM plan.",
+                    )
                 )
-            stage_trace.append(
-                _stage_trace_entry(
-                    stage="pm",
-                    status="completed",
-                    attempt=1,
-                    summary="Resumed from persisted PM plan.",
-                )
-            )
-        elif _should_resume_from_review(request):
+        elif resume_from_review:
             plan = resume_snapshot.plan() if resume_snapshot is not None else None
             if plan is None:
                 return self._failure_result(
@@ -239,7 +284,7 @@ class OrchestratedRunWorkflowExecutor:
                 )
             return None
 
-        if _should_resume_from_pm(request) or _should_resume_from_dev(request):
+        if resumed_from_persisted_pm:
             checkpoint_failure = _persist_stage_checkpoint(
                 WorkflowStageCheckpoint(
                     stage="pm",

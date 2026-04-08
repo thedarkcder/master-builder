@@ -427,6 +427,40 @@ class OrchestratedRunRunnerTests(unittest.TestCase):
         self.assertEqual(stage_agents.pm_calls, 0)
         self.assertEqual(result.plan.plan_steps, ["resume from persisted plan"])
 
+    def test_resume_from_pm_without_persisted_plan_reruns_pm_stage(self) -> None:
+        stage_agents = _StubStageAgents(
+            plan=PmPlan(
+                plan_steps=["resume via pm stage"],
+                acceptance_criteria=["ac1"],
+                risks=["risk1"],
+            ),
+            dev_results=[DevResult(change_summary=["implemented"], pr_url="https://example/pull/22")],
+            test_results=[TestResult(guidance=["pytest -q"])],
+            review_results=[
+                ReviewResult(
+                    outcome="continue",
+                    summary=["Looks good"],
+                    feedback=None,
+                    pr_url="https://example/pull/22",
+                )
+            ],
+        )
+
+        request = replace(
+            self._request(),
+            entry_mode="resume",
+            entry_stage="pm",
+            checkpoint_kind="pm",
+            checkpoint_session_id="pm-session-123",
+            checkpoint_payload=ExecutionSnapshot.empty().dump(),
+        )
+
+        result = self._executor(stage_agents).execute(request)
+
+        self.assertEqual(result.outcome, "success")
+        self.assertEqual(stage_agents.pm_calls, 1)
+        self.assertEqual(result.plan.plan_steps, ["resume via pm stage"])
+
     def test_non_terminal_dev_blocker_message_does_not_stop(self) -> None:
         stage_agents = _StubStageAgents(
             plan=PmPlan(plan_steps=["plan"], acceptance_criteria=["ac1"], risks=[]),
