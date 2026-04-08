@@ -54,8 +54,10 @@ class PromptTemplateTests(unittest.TestCase):
         prompt_text = prompt_path.read_text(encoding="utf-8")
         self.assertIn("`decision_state` means the persisted Decision Gate / clarification state", prompt_text)
         self.assertIn("The only authoritative way to determine `decision_state` is the `decision.read_state` tool", prompt_text)
-        self.assertIn('Do not emit `missing_evidence_sources=["decision_state"]` unless you actually called `decision.read_state`', prompt_text)
         self.assertIn("If `decision.read_state` succeeds and reports that no prior decision state exists, that is a valid result", prompt_text)
+        self.assertIn('If you can proceed, set outcome to `continue`', prompt_text)
+        self.assertIn('If you cannot proceed because of a real blocker, set outcome to `blocked` or `waiting_for_input`', prompt_text)
+        self.assertIn("Do not stop planning solely because a tool call failed", prompt_text)
 
     def test_pm_user_prompt_defines_run_request_human_input_contract(self) -> None:
         prompt_path = (
@@ -118,6 +120,9 @@ class PromptTemplateTests(unittest.TestCase):
             prompt_text = (prompts_dir / prompt_name).read_text(encoding="utf-8")
             self.assertIn("inspect the allowed tool list", prompt_text)
             self.assertIn("before concluding the blocker is real", prompt_text)
+        for prompt_name in ("dev_system.j2", "test_system.j2", "review_system.j2"):
+            prompt_text = (prompts_dir / prompt_name).read_text(encoding="utf-8")
+            self.assertIn("If a tool call fails or returns unavailable, treat that as advisory context", prompt_text)
 
     def test_execution_stage_system_prompts_frame_tools_as_diagnostic_catalog(self) -> None:
         prompts_dir = Path(__file__).resolve().parents[1] / "orchestrator" / "prompts" / "workflow"

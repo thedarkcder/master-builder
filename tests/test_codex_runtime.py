@@ -675,6 +675,7 @@ class BuildCodexRuntimeTests(unittest.TestCase):
 
         args = popen_mock.call_args.args[0]
         self.assertEqual(args[args.index("--model") + 1], "gpt-5.3-codex-spark")
+        self.assertEqual(args[2:6], ["--disable", "apps", "--disable", "plugins"])
         call_args = list(popen_mock.call_args.args[0])
         sandbox_idx = call_args.index("--sandbox") + 1
         self.assertEqual(call_args[sandbox_idx], "workspace-write")
@@ -1162,6 +1163,7 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             self.assertEqual(output, "resume-output")
             call_args = list(popen_mock.call_args.args[0])
             self.assertEqual(call_args[:4], ["codex", "exec", "resume", "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"])
+            self.assertEqual(call_args[4:8], ["--disable", "apps", "--disable", "plugins"])
             self.assertNotIn("--sandbox", call_args)
             self.assertIn("--full-auto", call_args)
             self.assertIn("--json", call_args)

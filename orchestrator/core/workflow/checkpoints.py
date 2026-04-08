@@ -6,6 +6,8 @@ import hashlib
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from orchestrator.core.workflow.checkpoint_codec import decode_pm_plan_payload
+from orchestrator.core.workflow.checkpoint_codec import encode_pm_plan
 from orchestrator.storage.models import WorkflowCheckpoint, WorkflowExecution
 
 _CHECKPOINT_KIND_BY_STAGE = {
@@ -46,7 +48,8 @@ def checkpoint_payload_for_plan(*, checkpoint_kind: str, plan: object) -> dict:
         return {}
     if checkpoint_kind == "pm":
         payload = plan.get("plan")
-        return dict(payload) if isinstance(payload, dict) else {}
+        decoded = decode_pm_plan_payload(payload if isinstance(payload, dict) else None)
+        return encode_pm_plan(decoded) if decoded is not None else {}
     if checkpoint_kind == "execution":
         return {
             "plan": dict(plan.get("plan")) if isinstance(plan.get("plan"), dict) else {},

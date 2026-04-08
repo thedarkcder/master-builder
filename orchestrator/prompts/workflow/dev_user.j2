@@ -18,8 +18,7 @@ Plan: {{ plan_json }}
 Acceptance criteria: {{ acceptance_criteria_json }}
 Resolved prerequisites: {{ resolved_prerequisites_json }}
 Unresolved prerequisites: {{ unresolved_prerequisites_json }}
-Confirmed external blockers: {{ confirmed_external_blockers_json }}
-Missing evidence sources: {{ missing_evidence_sources_json }}
+PM outcome: {{ pm_outcome }}
 Answered transient human inputs for this run: {{ human_inputs_json }}
 Allowed tools for this stage: {{ allowed_tools_json }}
 
@@ -38,16 +37,16 @@ Required actions:
 5. Treat the PM evidence ledger as the current ticket prerequisite summary; do not re-classify external blockers from scratch unless you have new authoritative tool evidence.
 5a. When a command fails because config, secrets, issue state, or external context may be missing, inspect the allowed tool list and use any relevant tool that can resolve that uncertainty before concluding the run is blocked.
 6. Treat only this run-owned worktree as authoritative local repo state. Do not adapt to unrelated in-flight changes, wrong branches, or shared dirty state.
-7. Use a blocker only for the allowed terminal categories from the system prompt, and include exact details in change_summary.
+7. If you can keep implementing, return outcome="continue" even when validation finds defects you can still address in this run.
 8. Apply jira-feature-flow using allowed tools where side effects are required (Jira comments/transitions, branch publication, PR actions).
 8a. If branch or PR actions are needed, treat the Integration branch as the only valid PR head branch. Never open or update a PR from the Execution branch (`run/...`).
 8b. Use `github.push_branch` for remote branch publication and `github.open_pr` for PR creation or update. Do not use raw `git push` or other ad hoc remote publication commands.
-9. If a one-time transient human input can unblock work, request it with `run.request_human_input` before using blocker_category="awaiting_human_input".
+9. If a one-time transient human input can unblock work, request it with `run.request_human_input` before returning outcome="waiting_for_input".
 10. If PR creation required by policy is `true`, do not treat implementation as complete until a PR exists and `pr_url` is set.
-11. If you return a terminal blocker, make `blocker_message` operator-friendly: keep the error concise, then add a short `Troubleshooting:` section with 1-3 concrete fix actions supported by the evidence you observed.
+11. If you return blocked or waiting_for_input, make `blocker_message` operator-friendly: keep the error concise, then add a short `Troubleshooting:` section with 1-3 concrete fix actions supported by the evidence you observed.
 
 Output contract:
+- outcome: "continue" | "waiting_for_input" | "blocked" | "failed".
 - change_summary: array of implemented changes (or concrete blocker facts).
 - pr_url: PR URL string or null.
-- blocker_category: terminal blocker category or null.
-- blocker_message: terminal blocker detail or null. When non-null, include a short `Troubleshooting:` section with concrete operator actions.
+- blocker_message: null unless outcome is blocked or waiting_for_input. When non-null, include a short `Troubleshooting:` section with concrete operator actions.

@@ -12,6 +12,7 @@ from orchestrator.core.workflow.checkpoints import (
     checkpoint_payload_for_plan,
     upsert_workflow_checkpoint,
 )
+from orchestrator.core.workflow.checkpoint_codec import encode_stage_checkpoint_artifact
 from orchestrator.core.workflow.runner import WorkflowResult, WorkflowStageCheckpoint
 from orchestrator.storage.models import Project, Run, WorkflowExecution
 from orchestrator.storage.run_queue_events import notify_run_enqueued
@@ -53,7 +54,7 @@ def _apply_stage_checkpoint(plan_payload: dict, checkpoint: WorkflowStageCheckpo
         "completed_at": completed_at,
         "summary": checkpoint.summary,
     }
-    artifact = checkpoint.artifact_payload()
+    artifact = encode_stage_checkpoint_artifact(checkpoint)
     if artifact is not None:
         stage_entry["artifact"] = artifact
     stage_checkpoints[checkpoint.stage] = stage_entry
@@ -61,26 +62,30 @@ def _apply_stage_checkpoint(plan_payload: dict, checkpoint: WorkflowStageCheckpo
     merged["latest_completed_stage"] = checkpoint.stage
     merged["latest_stage_attempt"] = checkpoint.attempt
     merged["latest_stage_status"] = checkpoint.status
-    if checkpoint.stage == "pm" and checkpoint.plan is not None:
+    if checkpoint.stage == "pm" and artifact is not None:
         merged["plan"] = artifact
-    elif checkpoint.stage == "dev" and checkpoint.dev_result is not None:
-        merged["dev_rationale"] = list(checkpoint.dev_result.change_summary)
-        if checkpoint.dev_result.pr_url is not None:
-            merged["pr_url"] = checkpoint.dev_result.pr_url
-    elif checkpoint.stage == "test" and checkpoint.test_result is not None:
-        merged["test_guidance"] = list(checkpoint.test_result.guidance)
-        if checkpoint.test_result.feedback:
-            merged["test_feedback"] = checkpoint.test_result.feedback
+    elif checkpoint.stage == "dev" and artifact is not None:
+        merged["dev_rationale"] = list(artifact.get("change_summary", []) or [])
+        pr_url = str(artifact.get("pr_url") or "").strip() or None
+        if pr_url is not None:
+            merged["pr_url"] = pr_url
+    elif checkpoint.stage == "test" and artifact is not None:
+        merged["test_guidance"] = list(artifact.get("guidance", []) or [])
+        feedback = str(artifact.get("feedback") or "").strip()
+        if feedback:
+            merged["test_feedback"] = feedback
         else:
             merged.pop("test_feedback", None)
-    elif checkpoint.stage == "review" and checkpoint.review_result is not None:
-        merged["review_summary"] = list(checkpoint.review_result.summary)
-        if checkpoint.review_result.feedback:
-            merged["review_feedback"] = checkpoint.review_result.feedback
+    elif checkpoint.stage == "review" and artifact is not None:
+        merged["review_summary"] = list(artifact.get("summary", []) or [])
+        review_feedback = str(artifact.get("feedback") or "").strip()
+        if review_feedback:
+            merged["review_feedback"] = review_feedback
         else:
             merged.pop("review_feedback", None)
-        if checkpoint.review_result.pr_url is not None:
-            merged["pr_url"] = checkpoint.review_result.pr_url
+        review_pr_url = str(artifact.get("pr_url") or "").strip() or None
+        if review_pr_url is not None:
+            merged["pr_url"] = review_pr_url
     return merged
 
 
@@ -259,12 +264,13 @@ def finalize_cancelled_run(
     run.plan = _merge_run_plan(
         current_plan=run.plan,
         next_plan={
-        "succeeded": False,
+        "outcome": "blocked",
         "attempts": 0,
         "summary": ["Run cancelled during execution"],
         "test_guidance": [],
         "pr_url": run.pr_url,
         "stage_updates": stage_updates,
+        "blocker_message": "Run cancelled during execution",
         },
     )
     if run.finished_at is None:
@@ -313,15 +319,23 @@ def finalize_workflow_result(
     run.finished_at = datetime.now(timezone.utc)
     run.last_heartbeat_at = None
     run.worker_service_instance_id = None
-    if workflow_result.succeeded:
+    if workflow_result.outcome == "success":
         run.status = RUN_STATUS_SUCCEEDED
         run.last_error = None
-    else:
+    elif workflow_result.outcome == "failed":
         run.status = RUN_STATUS_FAILED
-        if workflow_result.diagnostics is not None:
-            run.last_error = workflow_result.diagnostics.message
-        else:
-            run.last_error = "Workflow failed without diagnostics"
+        run.last_error = (
+            workflow_result.diagnostics.message
+            if workflow_result.diagnostics is not None
+            else (workflow_result.blocker_message or "Workflow failed without diagnostics")
+        )
+    else:
+        run.status = RUN_STATUS_BLOCKED
+        run.last_error = (
+            workflow_result.blocker_message
+            or (workflow_result.diagnostics.message if workflow_result.diagnostics is not None else None)
+            or "Workflow blocked without diagnostics"
+        )
 
     workflow = _workflow_for_run(session, run=run)
     if workflow is not None:

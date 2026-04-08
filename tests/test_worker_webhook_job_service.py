@@ -148,7 +148,7 @@ class WorkerWebhookJobServiceTests(unittest.TestCase):
             context_json={},
         )
 
-    def test_blocking_reconciliation_cancels_stale_queued_run(self) -> None:
+    def test_blocking_reconciliation_does_not_cancel_existing_run(self) -> None:
         with self.session_factory() as session:
             enqueue_webhook_job(session, request=self._request())
             session.commit()
@@ -181,8 +181,8 @@ class WorkerWebhookJobServiceTests(unittest.TestCase):
             job = session.get(WebhookJob, processed.job_id)
             run = session.get(Run, "run-1")
             self.assertEqual(job.status, "done")
-            self.assertEqual(run.status, "cancelled")
-            self.assertEqual(run.last_error, "Cancelled by jira_webhook:gtd_required")
+            self.assertEqual(run.status, "queued")
+            self.assertIsNone(run.last_error)
 
     def test_discord_command_jobs_derive_seed_deferral_in_worker_service(self) -> None:
         request = WebhookJobEnqueueRequest(

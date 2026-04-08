@@ -1,15 +1,13 @@
 from __future__ import annotations
 
 import json
-from time import perf_counter
-from traceback import format_exception
 from uuid import uuid4
 
 from orchestrator.core.dashboard_links import admin_run_url
 from orchestrator.core.project_policy import resolve_effective_policy
-from orchestrator.core.runs import RUN_STATUS_WAITING_FOR_INPUT, mark_run_terminal
+from orchestrator.core.runs import RUN_STATUS_WAITING_FOR_INPUT
 from orchestrator.core.run_logs import record_run_log_event
-from orchestrator.core.worker.manual_pr_remediation_completion import publish_manual_pr_remediation_completion
+from orchestrator.core.worker.finalization import CompletionTailExecutor, WorkflowFinalizer
 from orchestrator.core.worker_capabilities import (
     normalize_worker_capability,
     parse_worker_capabilities,
@@ -17,7 +15,6 @@ from orchestrator.core.worker_capabilities import (
 )
 from orchestrator.core.worker.stage_notifier import RunStageNotifier
 from orchestrator.core.worker_workspace import resolve_worker_workspace_key
-from orchestrator.core.workflow.runner import WorkflowDiagnostics, WorkflowResult
 
 
 def _emit_queue_wait_metric(*, session, run, project_id: str | None, agent_id: str) -> None:  # noqa: ANN001
@@ -330,7 +327,7 @@ def process_next_queued_run(
                 issue_key=run.issue_key,
                 agent_id=agent_id,
             )
-        if workflow_result.succeeded and workflow_request.start_point_ref and workflow_request.start_point_sha:
+        if workflow_result.outcome == "success" and workflow_request.start_point_ref and workflow_request.start_point_sha:
             freshness = check_run_snapshot_freshness_fn(
                 base_dir=settings.project_repo_checkout_base_dir,
                 tenant_id=tenant.tenant_id,
@@ -386,15 +383,11 @@ def process_next_queued_run(
                 issue_key=run.issue_key,
                 agent_id=agent_id,
             )
-        if not workflow_result.succeeded:
-            capability_requeue_target = _extract_capability_requeue_target(workflow_result)
+        if workflow_result.outcome == "requeue":
+            capability_requeue_target = normalize_worker_capability(workflow_result.requeue_target)
             if capability_requeue_target is not None:
                 required_worker_label = worker_label_for_capability(capability_requeue_target)
-                error_text = (
-                    workflow_result.diagnostics.message
-                    if workflow_result.diagnostics is not None
-                    else "Execution capability mismatch"
-                )
+                error_text = workflow_result.requeue_reason or "Execution capability mismatch"
                 notifier.append(
                     run_requeued_capability_update_fn(
                         tenant_id=run.tenant_id,
@@ -425,30 +418,15 @@ def process_next_queued_run(
                     expected_worker_service_instance_id=worker_service_instance_id,
                 )
 
-        workflow_result = _run_mandatory_completion_phase(
-            session=session,
-            tenant=tenant,
-            project=project,
-            run=run,
-            workflow_result=workflow_result,
-            settings=settings,
-            logger=logger,
-            send_jira_message_fn=send_jira_message_fn,
-            cleanup_run_workspaces_fn=cleanup_run_workspaces_fn,
-            base_dir=settings.project_repo_checkout_base_dir,
-            jira_issue_url=jira_issue_url,
-            agent_id=agent_id,
-            terminal_status="succeeded" if workflow_result.succeeded else "failed",
-            workspace_key=worker_workspace_key,
-        )
-        session.refresh(run)
-        if str(getattr(run, "status", "") or "").strip().lower() == RUN_STATUS_WAITING_FOR_INPUT:
-            return run
-        if not workflow_result.succeeded:
+        if workflow_result.outcome == "waiting_for_input":
+            session.refresh(run)
+            if str(getattr(run, "status", "") or "").strip().lower() == RUN_STATUS_WAITING_FOR_INPUT:
+                return run
+        if workflow_result.outcome in {"blocked", "failed"}:
             error_text = (
-                workflow_result.diagnostics.message
-                if workflow_result.diagnostics is not None
-                else "Workflow failed without diagnostics"
+                workflow_result.blocker_message
+                or (workflow_result.diagnostics.message if workflow_result.diagnostics is not None else None)
+                or "Workflow did not complete successfully"
             )
             notifier.append(
                 run_failed_update_fn(
@@ -460,411 +438,47 @@ def process_next_queued_run(
                     error=error_text,
                 )
             )
-        _record_completion_step_event(
+        finalization = WorkflowFinalizer(
             session=session,
-            run=run,
-            agent_id=agent_id,
-            step="finalize",
-            status="started",
-        )
-        try:
-            finalized_run = finalize_workflow_result_fn(
-                session,
-                run=run,
-                workflow_result=workflow_result,
-                stage_updates=notifier.stage_updates,
-                execution_context=execution_context,
-                expected_worker_service_instance_id=worker_service_instance_id,
-            )
-        except Exception as exc:  # noqa: BLE001
-            failure_message = f"Run finalization failed after mandatory completion: {type(exc).__name__}: {exc}"
-            logger.exception(
-                "worker_run_finalize_failed tenant_id=%s project_id=%s run_id=%s issue_key=%s error=%s",
-                run.tenant_id,
-                project.project_id,
-                run.run_id,
-                run.issue_key,
-                exc,
-            )
-            session.rollback()
-            try:
-                _record_completion_step_event(
-                    session=session,
-                    run=run,
-                    agent_id=agent_id,
-                    step="finalize",
-                    status="failed",
-                    error_class=type(exc).__name__,
-                    error_message=str(exc),
-                    stack_trace="".join(format_exception(type(exc), exc, exc.__traceback__)),
-                )
-            except Exception:  # noqa: BLE001
-                logger.exception(
-                    "worker_run_finalize_failure_log_failed tenant_id=%s project_id=%s run_id=%s issue_key=%s",
-                    run.tenant_id,
-                    project.project_id,
-                    run.run_id,
-                    run.issue_key,
-                )
-            finalized_run = mark_run_terminal(
-                session,
-                run_id=run.run_id,
-                terminal_status=run_status_failed,
-                last_error=failure_message,
-            )
-            emit_agent_event_fn(
-                event_type="RUN_FAILED",
-                tenant_id=finalized_run.tenant_id,
-                project_id=project.project_id,
-                run_id=finalized_run.run_id,
-                issue_key=finalized_run.issue_key,
-                agent_id=agent_id,
-            )
-            emit_agent_event_fn(
-                event_type="TASK_FAILED",
-                tenant_id=finalized_run.tenant_id,
-                project_id=project.project_id,
-                run_id=finalized_run.run_id,
-                issue_key=finalized_run.issue_key,
-                agent_id=agent_id,
-            )
-            return finalized_run
-        _record_completion_step_event(
-            session=session,
-            run=run,
-            agent_id=agent_id,
-            step="finalize",
-            status="succeeded",
-        )
-
-        if workflow_result.succeeded:
-            emit_agent_event_fn(
-                event_type="TASK_COMPLETED",
-                tenant_id=finalized_run.tenant_id,
-                project_id=project.project_id,
-                run_id=finalized_run.run_id,
-                issue_key=finalized_run.issue_key,
-                agent_id=agent_id,
-            )
-        else:
-            emit_agent_event_fn(
-                event_type="RUN_FAILED",
-                tenant_id=finalized_run.tenant_id,
-                project_id=project.project_id,
-                run_id=finalized_run.run_id,
-                issue_key=finalized_run.issue_key,
-                agent_id=agent_id,
-            )
-            emit_agent_event_fn(
-                event_type="TASK_FAILED",
-                tenant_id=finalized_run.tenant_id,
-                project_id=project.project_id,
-                run_id=finalized_run.run_id,
-                issue_key=finalized_run.issue_key,
-                agent_id=agent_id,
-            )
-            diagnostics_stage = (
-                workflow_result.diagnostics.stage.upper()
-                if workflow_result.diagnostics is not None and workflow_result.diagnostics.stage
-                else ""
-            )
-            if diagnostics_stage == "BUILD":
-                emit_agent_event_fn(
-                    event_type="BUILD_FAILED",
-                    tenant_id=finalized_run.tenant_id,
-                    project_id=project.project_id,
-                    run_id=finalized_run.run_id,
-                    issue_key=finalized_run.issue_key,
-                    agent_id=agent_id,
-                )
-            if diagnostics_stage == "TEST":
-                emit_agent_event_fn(
-                    event_type="TEST_FAILED",
-                    tenant_id=finalized_run.tenant_id,
-                    project_id=project.project_id,
-                    run_id=finalized_run.run_id,
-                    issue_key=finalized_run.issue_key,
-                    agent_id=agent_id,
-                )
-        return finalized_run
-    finally:
-        heartbeat_controller.stop()
-
-
-def _run_mandatory_completion_phase(
-    *,
-    session,
-    tenant,
-    project,
-    run,
-    workflow_result: WorkflowResult,
-    settings,
-    logger,
-    send_jira_message_fn,
-    cleanup_run_workspaces_fn,
-    base_dir: str,
-    jira_issue_url: str | None,
-    agent_id: str,
-    terminal_status: str,
-    workspace_key: str | None,
-) -> WorkflowResult:  # noqa: ANN001
-    failures: list[dict[str, str]] = []
-    _run_completion_step(
-        session=session,
-        run=run,
-        agent_id=agent_id,
-        logger=logger,
-        step="orchestration_trace",
-        failures=failures,
-        fn=lambda: _emit_orchestrated_trace_logs(
-            session=session,
-            run=run,
-            workflow_result=workflow_result,
-            agent_id=agent_id,
-        ),
-    )
-    _run_completion_step(
-        session=session,
-        run=run,
-        agent_id=agent_id,
-        logger=logger,
-        step="jira_feedback",
-        failures=failures,
-        fn=lambda: _emit_detailed_jira_feedback(
-            session=session,
-            tenant=tenant,
-            run=run,
-            settings=settings,
-            workflow_result=workflow_result,
-            send_jira_message_fn=send_jira_message_fn,
-        ),
-    )
-    _run_completion_step(
-        session=session,
-        run=run,
-        agent_id=agent_id,
-        logger=logger,
-        step="workspace_cleanup",
-        failures=failures,
-        fn=lambda: cleanup_run_workspaces_fn(
-            base_dir=base_dir,
-            tenant_id=run.tenant_id,
+            logger=logger,
+            finalize_workflow_result_fn=finalize_workflow_result_fn,
+            run_status_failed=run_status_failed,
             project_id=project.project_id,
-            run_id=run.run_id,
-            workspace_key=workspace_key,
-        ),
-    )
-    _run_completion_step(
-        session=session,
-        run=run,
-        agent_id=agent_id,
-        logger=logger,
-        step="manual_pr_reporting",
-        failures=failures,
-        fn=lambda: publish_manual_pr_remediation_completion(
+            agent_id=agent_id,
+        ).finalize(
+            run=run,
+            workflow_result=workflow_result,
+            stage_updates=notifier.stage_updates,
+            execution_context=execution_context,
+            expected_worker_service_instance_id=worker_service_instance_id,
+        )
+
+        for event_type in finalization.event_types:
+            emit_agent_event_fn(
+                event_type=event_type,
+                tenant_id=finalization.run.tenant_id,
+                project_id=project.project_id,
+                run_id=finalization.run.run_id,
+                issue_key=finalization.run.issue_key,
+                agent_id=agent_id,
+            )
+
+        CompletionTailExecutor(
             session=session,
             tenant=tenant,
             project=project,
-            run=run,
-            workflow_result=workflow_result,
             settings=settings,
-            issue_url=jira_issue_url,
-            logger_override=logger,
-            terminal_status=terminal_status,
-        ),
-    )
-    if not failures:
-        return workflow_result
-    return _workflow_result_with_completion_failures(workflow_result=workflow_result, failures=failures)
-
-
-def _run_completion_step(
-    *,
-    session,
-    run,
-    agent_id: str,
-    logger,
-    step: str,
-    failures: list[dict[str, str]],
-    fn,
-) -> None:  # noqa: ANN001
-    _record_completion_step_event(
-        session=session,
-        run=run,
-        agent_id=agent_id,
-        step=step,
-        status="started",
-    )
-    started = perf_counter()
-    try:
-        fn()
-    except Exception as exc:  # noqa: BLE001
-        duration_ms = max(0, int((perf_counter() - started) * 1000))
-        stack_trace = "".join(format_exception(type(exc), exc, exc.__traceback__))
-        try:
-            session.rollback()
-        except Exception:  # noqa: BLE001
-            logger.exception(
-                "worker_completion_step_rollback_failed tenant_id=%s project_id=%s run_id=%s issue_key=%s step=%s",
-                getattr(run, "tenant_id", ""),
-                getattr(run, "project_id", ""),
-                getattr(run, "run_id", ""),
-                getattr(run, "issue_key", ""),
-                step,
-            )
-        logger.exception(
-            "worker_completion_step_failed tenant_id=%s project_id=%s run_id=%s issue_key=%s step=%s error_class=%s error=%s",
-            getattr(run, "tenant_id", ""),
-            getattr(run, "project_id", ""),
-            getattr(run, "run_id", ""),
-            getattr(run, "issue_key", ""),
-            step,
-            type(exc).__name__,
-            exc,
-        )
-        _record_completion_step_event(
-            session=session,
-            run=run,
+            logger=logger,
+            send_jira_message_fn=send_jira_message_fn,
+            cleanup_run_workspaces_fn=cleanup_run_workspaces_fn,
+            base_dir=settings.project_repo_checkout_base_dir,
+            jira_issue_url=jira_issue_url,
             agent_id=agent_id,
-            step=step,
-            status="failed",
-            duration_ms=duration_ms,
-            error_class=type(exc).__name__,
-            error_message=str(exc),
-            stack_trace=stack_trace,
-        )
-        failures.append(
-            {
-                "step": step,
-                "error_class": type(exc).__name__,
-                "error_message": str(exc),
-            }
-        )
-        return
-    duration_ms = max(0, int((perf_counter() - started) * 1000))
-    _record_completion_step_event(
-        session=session,
-        run=run,
-        agent_id=agent_id,
-        step=step,
-        status="succeeded",
-        duration_ms=duration_ms,
-    )
-
-
-def _record_completion_step_event(
-    *,
-    session,
-    run,
-    agent_id: str,
-    step: str,
-    status: str,
-    duration_ms: int | None = None,
-    error_class: str | None = None,
-    error_message: str | None = None,
-    stack_trace: str | None = None,
-) -> None:  # noqa: ANN001
-    payload: dict[str, object] = {
-        "event_kind": f"completion_step_{status}",
-        "step": step,
-        "status": status,
-    }
-    if duration_ms is not None:
-        payload["duration_ms"] = duration_ms
-    if error_class:
-        payload["error_class"] = error_class
-    if error_message:
-        payload["error_message"] = error_message
-    if stack_trace:
-        payload["stack_trace"] = stack_trace
-    record_run_log_event(
-        session=session,
-        tenant_id=run.tenant_id,
-        project_id=getattr(run, "project_id", None),
-        run_id=run.run_id,
-        issue_key=run.issue_key,
-        agent_id=agent_id,
-        invocation_id=uuid4().hex,
-        channel="worker",
-        command="workflow.completion",
-        working_dir=None,
-        stage="telemetry",
-        attempt=None,
-        stream="system",
-        message=json.dumps(payload, sort_keys=True),
-    )
-    session.commit()
-
-
-def _workflow_result_with_completion_failures(
-    *,
-    workflow_result: WorkflowResult,
-    failures: list[dict[str, str]],
-) -> WorkflowResult:
-    failure_lines = [
-        f"{item['step']} ({item['error_class']}): {item['error_message']}"
-        for item in failures
-    ]
-    history = list(workflow_result.diagnostics.history) if workflow_result.diagnostics is not None else []
-    history.extend(
-        {
-            "stage": "completion",
-            "attempt": str(workflow_result.attempts),
-            "event": f"completion_step_failed:{item['step']}:{item['error_class']}:{item['error_message']}",
-        }
-        for item in failures
-    )
-    return WorkflowResult(
-        succeeded=False,
-        plan=workflow_result.plan,
-        pr_url=workflow_result.pr_url,
-        summary=list(workflow_result.summary),
-        test_guidance=list(workflow_result.test_guidance),
-        attempts=workflow_result.attempts,
-        dev_rationale=list(workflow_result.dev_rationale),
-        review_summary=list(workflow_result.review_summary),
-        review_feedback=workflow_result.review_feedback,
-        orchestration_stage_trace=list(workflow_result.orchestration_stage_trace),
-        orchestration_workstream_trace=list(workflow_result.orchestration_workstream_trace),
-        follow_up_issue=workflow_result.follow_up_issue,
-        diagnostics=WorkflowDiagnostics(
-            stage="completion",
-            message="Mandatory completion steps failed: " + "; ".join(failure_lines),
-            attempts=workflow_result.attempts,
-            history=history,
-            classification="completion_failure",
-        ),
-    )
-
-
-def _extract_capability_requeue_target(workflow_result) -> str | None:  # noqa: ANN001
-    if workflow_result.succeeded:
-        return None
-    diagnostics = workflow_result.diagnostics
-    if diagnostics is None or str(diagnostics.stage or "").strip().lower() != "pm":
-        return None
-    message = str(diagnostics.message or "")
-    if "Execution capability mismatch:" not in message:
-        return None
-    plan = workflow_result.plan
-    if plan is not None:
-        plan_capability = normalize_worker_capability(plan.execution_worker_capability)
-        if plan_capability is not None:
-            return plan_capability
-    for item in diagnostics.history or []:
-        event = str(item.get("event") or "")
-        if not event.startswith("execution_capability_mismatch:"):
-            continue
-        parts = event.split(":")[-1].split(",")
-        for part in parts:
-            key, _, raw_value = part.partition("=")
-            if key.strip() != "required":
-                continue
-            parsed = normalize_worker_capability(raw_value.strip())
-            if parsed is not None:
-                return parsed
-    return None
-
+            workspace_key=worker_workspace_key,
+        ).execute(finalization)
+        return finalization.run
+    finally:
+        heartbeat_controller.stop()
 
 def _execution_context(*, workflow_request) -> dict[str, str] | None:  # noqa: ANN001
     context: dict[str, str] = {}
@@ -908,220 +522,4 @@ def _cleanup_run_workspaces_safe(
             project_id,
             run_id,
             workspace_key,
-        )
-
-
-def _normalize_terminal_status(status: str) -> str:
-    normalized = str(status or "").strip().lower()
-    if normalized in {"completed", "approved", "succeeded", "success"}:
-        return "succeeded"
-    if normalized in {"needs_changes", "failed", "failure"}:
-        return "failed"
-    if normalized == "blocked":
-        return "blocked"
-    return "succeeded"
-
-
-def _emit_orchestrated_trace_logs(
-    *,
-    session,
-    run,
-    workflow_result,
-    agent_id: str,
-) -> None:  # noqa: ANN001
-    stage_trace = list(getattr(workflow_result, "orchestration_stage_trace", []) or [])
-    workstream_trace = list(getattr(workflow_result, "orchestration_workstream_trace", []) or [])
-    if not stage_trace and not workstream_trace:
-        return
-
-    for index, item in enumerate(stage_trace):
-        if not isinstance(item, dict):
-            continue
-        stage = str(item.get("stage") or "").strip().lower()
-        if stage not in {"pm", "dev", "test", "review"}:
-            continue
-        attempt = int(item["attempt"]) if isinstance(item.get("attempt"), int) else 1
-        invocation_id = str(item.get("invocation_id") or f"orchestrated-stage-{run.run_id}-{stage}-{index}").strip()
-        status = str(item.get("status") or "").strip().lower()
-        summary = str(item.get("summary") or "").strip()
-        started_payload: dict[str, object] = {
-            "event_kind": "stage_invocation_started",
-            "status": "started",
-            "source": "orchestrated_run_trace",
-            "virtual_stage": stage,
-            "trace_index": index,
-        }
-        if summary:
-            started_payload["summary"] = summary
-        record_run_log_event(
-            session=session,
-            tenant_id=run.tenant_id,
-            project_id=run.project_id,
-            run_id=run.run_id,
-            issue_key=run.issue_key,
-            agent_id=agent_id,
-            invocation_id=invocation_id,
-            channel="worker",
-            command=f"workflow.{stage}",
-            working_dir=None,
-            stage="telemetry",
-            attempt=attempt,
-            stream="system",
-            message=json.dumps(started_payload, sort_keys=True),
-        )
-        finished_payload: dict[str, object] = {
-            "event_kind": "stage_invocation_finished",
-            "status": _normalize_terminal_status(status),
-            "source": "orchestrated_run_trace",
-            "virtual_stage": stage,
-            "trace_index": index,
-        }
-        duration_ms = item.get("duration_ms")
-        if isinstance(duration_ms, int):
-            finished_payload["duration_ms"] = max(0, duration_ms)
-        if summary:
-            finished_payload["summary"] = summary
-        record_run_log_event(
-            session=session,
-            tenant_id=run.tenant_id,
-            project_id=run.project_id,
-            run_id=run.run_id,
-            issue_key=run.issue_key,
-            agent_id=agent_id,
-            invocation_id=invocation_id,
-            channel="worker",
-            command=f"workflow.{stage}",
-            working_dir=None,
-            stage="telemetry",
-            attempt=attempt,
-            stream="system",
-            message=json.dumps(finished_payload, sort_keys=True),
-        )
-        # Persist an explicit stage-scoped row so run logs can be filtered by PM/DEV/TEST/REVIEW
-        # even when orchestration runs as a single top-level invocation.
-        stage_row_payload = {
-            "event_kind": "orchestrated_stage_event",
-            "source": "orchestrated_run_trace",
-            "trace_index": index,
-            "stage": stage,
-            "status": _normalize_terminal_status(status),
-            "summary": summary,
-        }
-        record_run_log_event(
-            session=session,
-            tenant_id=run.tenant_id,
-            project_id=run.project_id,
-            run_id=run.run_id,
-            issue_key=run.issue_key,
-            agent_id=agent_id,
-            invocation_id=invocation_id,
-            channel="worker",
-            command=f"workflow.{stage}",
-            working_dir=None,
-            stage=stage,
-            attempt=attempt,
-            stream="system",
-            message=json.dumps(stage_row_payload, sort_keys=True),
-        )
-
-    for index, item in enumerate(workstream_trace):
-        if not isinstance(item, dict):
-            continue
-        name = str(item.get("name") or "").strip()
-        if not name:
-            continue
-        stage = str(item.get("stage") or "dev").strip().lower() or "dev"
-        if stage not in {"pm", "dev", "test", "review"}:
-            stage = "dev"
-        status = str(item.get("status") or "completed").strip().lower() or "completed"
-        workstream_payload: dict[str, object] = {
-            "event_kind": "orchestrated_workstream_event",
-            "source": "orchestrated_run_trace",
-            "trace_index": index,
-            "name": name,
-            "stage": stage,
-            "status": status,
-        }
-        summary = str(item.get("summary") or "").strip()
-        if summary:
-            workstream_payload["summary"] = summary
-        branch = str(item.get("branch") or "").strip()
-        if branch:
-            workstream_payload["branch"] = branch
-        record_run_log_event(
-            session=session,
-            tenant_id=run.tenant_id,
-            project_id=run.project_id,
-            run_id=run.run_id,
-            issue_key=run.issue_key,
-            agent_id=agent_id,
-            invocation_id=f"orchestrated-workstream-{run.run_id}-{index}",
-            channel="worker",
-            command=f"workflow.{stage}",
-            working_dir=None,
-            stage="telemetry",
-            attempt=1,
-            stream="system",
-            message=json.dumps(workstream_payload, sort_keys=True),
-        )
-
-
-def _format_multiline_jira_comment(*, title: str, lines: list[str], run_id: str) -> str:
-    content_lines = [str(line) for line in lines if str(line).strip()]
-    if not content_lines:
-        return ""
-    rendered = [f"{title} (run {run_id}):"]
-    rendered.extend(f"- {line}" for line in content_lines)
-    return "\n".join(rendered)
-
-
-def _emit_detailed_jira_feedback(
-    *,
-    session,
-    tenant,
-    run,
-    settings,
-    workflow_result,
-    send_jira_message_fn,
-):  # noqa: ANN001
-    dev_comment = _format_multiline_jira_comment(
-        title="Dev rationale",
-        lines=list(workflow_result.dev_rationale or []),
-        run_id=run.run_id,
-    )
-    if dev_comment:
-        send_jira_message_fn(
-            session=session,
-            tenant=tenant,
-            issue_key=run.issue_key,
-            stage="dev_rationale",
-            message=dev_comment,
-            settings=settings,
-        )
-
-    review_lines = list(workflow_result.review_summary or [])
-    review_comment = _format_multiline_jira_comment(
-        title="Review summary",
-        lines=review_lines,
-        run_id=run.run_id,
-    )
-    if review_comment:
-        send_jira_message_fn(
-            session=session,
-            tenant=tenant,
-            issue_key=run.issue_key,
-            stage="review_summary",
-            message=review_comment,
-            settings=settings,
-        )
-
-    review_feedback = str(workflow_result.review_feedback or "").strip()
-    if review_feedback:
-        send_jira_message_fn(
-            session=session,
-            tenant=tenant,
-            issue_key=run.issue_key,
-            stage="review_feedback",
-            message=f"Review feedback (run {run.run_id}):\n{review_feedback}",
-            settings=settings,
         )

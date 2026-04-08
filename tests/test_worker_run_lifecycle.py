@@ -232,7 +232,7 @@ class WorkerRunLifecycleTests(unittest.TestCase):
             session.refresh(run)
 
             result = WorkflowResult(
-                succeeded=False,
+                outcome="failed",
                 plan=PmPlan(
                     plan_steps=["a"],
                     acceptance_criteria=["b"],
@@ -320,7 +320,7 @@ class WorkerRunLifecycleTests(unittest.TestCase):
                 session,
                 run=run,
                 workflow_result=WorkflowResult(
-                    succeeded=True,
+                    outcome="success",
                     plan=PmPlan(plan_steps=["plan"], acceptance_criteria=["ac"], risks=[]),
                     pr_url=None,
                     summary=["done"],
@@ -430,7 +430,7 @@ class WorkerRunLifecycleTests(unittest.TestCase):
             session.refresh(run)
 
             workflow_result = WorkflowResult(
-                succeeded=True,
+                outcome="success",
                 plan=PmPlan(
                     plan_steps=["done"],
                     acceptance_criteria=["done"],
@@ -477,7 +477,7 @@ class WorkerRunLifecycleTests(unittest.TestCase):
             session.refresh(run)
 
             workflow_result = WorkflowResult(
-                succeeded=False,
+                outcome="requeue",
                 plan=PmPlan(
                     plan_steps=["retry on required capability"],
                     acceptance_criteria=["run is queued for a compatible worker"],
@@ -487,6 +487,8 @@ class WorkerRunLifecycleTests(unittest.TestCase):
                 summary=[],
                 test_guidance=[],
                 attempts=1,
+                requeue_target="macos",
+                requeue_reason="Execution capability mismatch: PM selected macos but current worker is linux.",
                 diagnostics=WorkflowDiagnostics(
                     stage="dev",
                     message="Execution capability mismatch: PM selected macos but current worker is linux.",
@@ -556,7 +558,7 @@ class WorkerRunLifecycleTests(unittest.TestCase):
             session.refresh(run)
 
             workflow_result = WorkflowResult(
-                succeeded=True,
+                outcome="success",
                 plan=PmPlan(
                     plan_steps=["finalize"],
                     acceptance_criteria=["PR exists"],

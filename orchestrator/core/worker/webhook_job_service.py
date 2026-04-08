@@ -54,21 +54,10 @@ from orchestrator.core.webhook_job_queue import (
     mark_webhook_jobs_done,
     mark_webhook_jobs_failed,
 )
-from orchestrator.core.runs import cancel_queued_issue_runs
 from orchestrator.core.config import Settings
 from orchestrator.storage.models import Project, Tenant
 
 logger = logging.getLogger(__name__)
-
-_STALE_QUEUE_BLOCKING_REASONS = {
-    "decision_gate_required",
-    "gtd_required",
-    "missing_ready_label",
-    "issue_done",
-    "issue_in_backlog",
-    "ready_for_agent_backlog",
-}
-
 
 def _rollback_job_session(
     session: Session,
@@ -118,20 +107,6 @@ def _refresh_jira_context_from_live_issue(*, context, session, settings) -> None
         session=session,
         tenant_id=context.tenant_id,
         issue_key=context.issue_key,
-    )
-
-
-def _cancel_stale_queued_runs_if_blocked(*, session, context, response_content: dict[str, object]) -> None:  # noqa: ANN001
-    if bool(response_content.get("enqueued")):
-        return
-    reason = str(response_content.get("reason") or "").strip()
-    if reason not in _STALE_QUEUE_BLOCKING_REASONS:
-        return
-    cancel_queued_issue_runs(
-        session,
-        tenant_id=context.tenant_id,
-        issue_key=context.issue_key,
-        cancelled_by=f"jira_webhook:{reason}",
     )
 
 
@@ -226,11 +201,6 @@ def _process_jira_subject_jobs(
             context=pending_issue_context,
             session=session,
             settings=settings,
-        )
-        _cancel_stale_queued_runs_if_blocked(
-            session=session,
-            context=pending_issue_context,
-            response_content=plan.content,
         )
         execute_side_effect_ingress_result(
             result=IngressResult(actions=plan.actions),

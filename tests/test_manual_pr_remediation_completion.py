@@ -14,11 +14,11 @@ from orchestrator.core.worker.manual_pr_remediation_completion import (
 from orchestrator.core.workflow.runner import WorkflowResult
 
 
-def _workflow_result(*, succeeded: bool = True) -> WorkflowResult:
+def _workflow_result(*, outcome: str = "success") -> WorkflowResult:
     return WorkflowResult(
-        succeeded=succeeded,
+        outcome=outcome,  # type: ignore[arg-type]
         plan=None,
-        pr_url="https://github.com/org/repo/pull/10" if succeeded else None,
+        pr_url="https://github.com/org/repo/pull/10" if outcome == "success" else None,
         summary=["Implemented the requested change."],
         test_guidance=[],
         attempts=1,
@@ -96,7 +96,7 @@ def test_build_manual_completion_actions_for_issue_comment() -> None:
     actions = build_manual_pr_remediation_completion_actions(
         project=project,
         run=run,
-        workflow_result=_workflow_result(succeeded=False),
+        workflow_result=_workflow_result(outcome="failed"),
         issue_url="https://jira.example.com/browse/GP-10",
     )
 
