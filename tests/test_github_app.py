@@ -1050,19 +1050,12 @@ class GitHubAppClientTests(unittest.TestCase):
         self.assertEqual(review_reaction.content, "eyes")
         self.assertEqual(request_json.call_count, 2)
 
-    def test_sync_pull_request_reaction_replaces_previous_actor_reaction(self) -> None:
+    def test_sync_pull_request_reaction_uses_reaction_create_without_actor_lookup(self) -> None:
         config = GitHubAppConfig(app_id="12345", installation_id="999", private_key_pem="unused")
         client = GitHubAppClient(config)
         with (
-            patch.object(client, "get_actor_login", return_value="master-builder[bot]"),
-            patch.object(
-                client,
-                "list_pull_request_reactions",
-                return_value=[
-                    SimpleNamespace(reaction_id=301, content="eyes", user_login="master-builder[bot]"),
-                    SimpleNamespace(reaction_id=302, content="heart", user_login="someone-else"),
-                ],
-            ),
+            patch.object(client, "get_actor_login") as get_actor_login,
+            patch.object(client, "list_pull_request_reactions") as list_reactions,
             patch.object(client, "delete_issue_reaction") as delete_reaction,
             patch.object(
                 client,
@@ -1076,10 +1069,9 @@ class GitHubAppClientTests(unittest.TestCase):
                 content="+1",
             )
 
-        delete_reaction.assert_called_once_with(
-            repo_full_name="example/repo",
-            reaction_id=301,
-        )
+        get_actor_login.assert_not_called()
+        list_reactions.assert_not_called()
+        delete_reaction.assert_not_called()
         add_reaction.assert_called_once_with(
             repo_full_name="example/repo",
             pr_number=10,
