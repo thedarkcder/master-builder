@@ -6,8 +6,7 @@ import hashlib
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from orchestrator.core.workflow.checkpoint_codec import decode_pm_plan_payload
-from orchestrator.core.workflow.checkpoint_codec import encode_pm_plan
+from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.storage.models import WorkflowCheckpoint, WorkflowExecution
 
 _CHECKPOINT_KIND_BY_STAGE = {
@@ -44,24 +43,9 @@ def checkpoint_id_for(*, run_id: str, checkpoint_kind: str) -> str:
 
 
 def checkpoint_payload_for_plan(*, checkpoint_kind: str, plan: object) -> dict:
-    if not isinstance(plan, dict):
-        return {}
-    if checkpoint_kind == "pm":
-        payload = plan.get("plan")
-        decoded = decode_pm_plan_payload(payload if isinstance(payload, dict) else None)
-        return encode_pm_plan(decoded) if decoded is not None else {}
-    if checkpoint_kind == "execution":
-        return {
-            "plan": dict(plan.get("plan")) if isinstance(plan.get("plan"), dict) else {},
-            "dev_rationale": list(plan.get("dev_rationale", []) or []),
-            "test_guidance": list(plan.get("test_guidance", []) or []),
-            "test_feedback": str(plan.get("test_feedback") or "").strip() or None,
-            "review_summary": list(plan.get("review_summary", []) or []),
-            "review_feedback": str(plan.get("review_feedback") or "").strip() or None,
-            "pr_url": str(plan.get("pr_url") or "").strip() or None,
-            "summary": list(plan.get("summary", []) or []),
-        }
-    return dict(plan)
+    _ = checkpoint_kind
+    snapshot = ExecutionSnapshot.require(plan, allow_empty=True)
+    return snapshot.dump()
 
 
 def load_checkpoint(

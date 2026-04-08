@@ -6,6 +6,7 @@ from orchestrator.core.decision_gate import DecisionGateResult
 from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.pre_run_check import PreRunCheckResult
 from orchestrator.core.worker.decision_gate import apply_decision_gate
+from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.storage.models import JiraOAuthConnection
 
 
@@ -259,7 +260,9 @@ def test_apply_decision_gate_passes_issue_context_into_readiness_check() -> None
 def test_apply_decision_gate_preserves_trigger_context_on_block() -> None:
     session = _Session()
     run = _run()
-    run.plan = {"trigger_context": {"source": "github_pr_review_feedback", "pr_number": 6}}
+    run.plan = ExecutionSnapshot.empty(
+        trigger_context={"source": "github_pr_review_feedback", "pr_number": 6}
+    ).dump()
     tenant = SimpleNamespace(tenant_id="tenant-1", jira_config={"ready_label": "agent:ready"})
     oauth = _oauth_context(client=_IssueDetailClient(labels=[]))
 
@@ -286,8 +289,8 @@ def test_apply_decision_gate_preserves_trigger_context_on_block() -> None:
 
     assert terminal is run
     assert isinstance(run.plan, dict)
-    assert run.plan.get("trigger_context") == {"source": "github_pr_review_feedback", "pr_number": 6}
-    assert run.plan.get("stage_updates", [{}])[0].get("stage") == "run_not_ready"
+    assert run.plan["context"]["trigger_context"] == {"source": "github_pr_review_feedback", "pr_number": 6}
+    assert run.plan["events"]["stage_updates"][0]["stage"] == "run_not_ready"
     assert session.refresh_attribute_names[0] == ["plan"]
 
 
@@ -302,7 +305,9 @@ def test_apply_decision_gate_refreshes_latest_plan_before_replacing_it() -> None
         session.refreshed = True
         session.refresh_attribute_names.append(attribute_names)
         if attribute_names == ["plan"]:
-            run.plan = {"trigger_context": {"source": "github_pr_review_feedback", "pr_number": 6}}
+            run.plan = ExecutionSnapshot.empty(
+                trigger_context={"source": "github_pr_review_feedback", "pr_number": 6}
+            ).dump()
 
     session.refresh = _refresh
 
@@ -329,4 +334,4 @@ def test_apply_decision_gate_refreshes_latest_plan_before_replacing_it() -> None
 
     assert terminal is run
     assert isinstance(run.plan, dict)
-    assert run.plan.get("trigger_context") == {"source": "github_pr_review_feedback", "pr_number": 6}
+    assert run.plan["context"]["trigger_context"] == {"source": "github_pr_review_feedback", "pr_number": 6}

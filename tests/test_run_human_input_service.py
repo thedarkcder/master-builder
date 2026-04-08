@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.core.run_human_input_service import (
     answer_human_input_request,
     create_human_input_request,
@@ -21,7 +22,9 @@ def test_create_human_input_request_snapshots_checkpoint_and_moves_run_to_waitin
         status="running",
         last_heartbeat_at="heartbeat",
         worker_service_instance_id="worker-1",
-        plan={"plan": {"plan_steps": ["Verify Apple Sign In"]}},
+        plan=ExecutionSnapshot.empty(
+            trigger_context={"source": "manual"}
+        ).dump(),
     )
     workflow = SimpleNamespace(
         workflow_id="workflow-1",
@@ -80,7 +83,7 @@ def test_create_human_input_request_renders_structured_questions_in_discord_mess
         status="running",
         last_heartbeat_at="heartbeat",
         worker_service_instance_id="worker-1",
-        plan={"plan": {"plan_steps": ["Clarify fallback policy"]}},
+        plan=ExecutionSnapshot.empty(trigger_context={"source": "manual"}).dump(),
     )
     workflow = SimpleNamespace(
         workflow_id="workflow-1",
@@ -167,11 +170,11 @@ def test_resume_workflow_from_human_input_answer_creates_resume_attempt_and_cons
         repo_url="https://github.com/example/repo",
         branch="feature/GP-122",
         pr_url="https://github.com/example/repo/pull/123",
-        plan={"review_feedback": "Confirm nonce handling"},
+        plan=ExecutionSnapshot.empty(trigger_context={"source": "manual"}).dump(),
     )
     checkpoint = SimpleNamespace(
         checkpoint_id="checkpoint-1",
-        payload_json={"review_feedback": "Confirm nonce handling"},
+        payload_json=ExecutionSnapshot.empty(trigger_context={"source": "manual"}).dump(),
     )
     resumed_run = SimpleNamespace(run_id="run-2")
     session.get.side_effect = lambda model, key: (

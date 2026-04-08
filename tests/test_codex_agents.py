@@ -10,7 +10,15 @@ from orchestrator.core.codex_agents import (
 )
 from orchestrator.core.runtime_invocation import AgentInvocationContext
 from orchestrator.core.codex_runtime import CodexRuntime, CodexRuntimeError
-from orchestrator.core.workflow.runner import DevResult, PmPlan, TestResult, WorkflowRequest
+from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
+from orchestrator.core.workflow.runner import (
+    DevResult,
+    PmPlan,
+    ReviewResult,
+    TestResult,
+    WorkflowRequest,
+    WorkflowStageCheckpoint,
+)
 
 
 class _RuntimeQueue:
@@ -53,7 +61,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             command="override",
             _request=_RuntimeQueue(
                 [
-                    '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":["risk1"],"next_stage":"dev"}',
+                    '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":["risk1"],"next_stage":"dev","execution_worker_capability":"linux"}',
                     '{"outcome":"continue","change_summary":["implemented"],"pr_url":"https://example/pull/1","blocker_message":null}',
                     '{"outcome":"continue","guidance":["run tests"],"feedback":null,"blocker_message":null}',
                     '{"outcome":"continue","summary":["looks good"],"feedback":null,"pr_url":"https://example/pull/1","blocker_message":null}',
@@ -83,7 +91,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
                 [
                     (
                         '{"outcome":"blocked","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":["risk1"],'
-                        '"next_stage":"dev","blocker_message":"Apple developer access still pending",'
+                        '"next_stage":"dev","execution_worker_capability":"linux","blocker_message":"Apple developer access still pending",'
                         '"resolved_prerequisites":["Supabase redirect URI approved"],'
                         '"unresolved_prerequisites":["Provision staging Service ID"]}'
                     ),
@@ -107,7 +115,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             command="override",
             _request=_RuntimeQueue(
                 [
-                    '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"next_stage":"dev"}',
+                    '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"next_stage":"dev","execution_worker_capability":"linux"}',
                 ]
             ),
         )
@@ -161,7 +169,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             command="override",
             _request=_RuntimeQueue(
                 [
-                    '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"next_stage":"dev"}',
+                    '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"next_stage":"dev","execution_worker_capability":"linux"}',
                     '{"outcome":"continue","change_summary":["implemented"],"pr_url":null,"blocker_message":null}',
                     '{"outcome":"continue","guidance":["run tests"],"feedback":null,"blocker_message":null}',
                 ]
@@ -194,7 +202,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             command="override",
             _request=_RuntimeQueue(
                 [
-                    '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"next_stage":"dev"}',
+                    '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"next_stage":"dev","execution_worker_capability":"linux"}',
                     '{"outcome":"continue","change_summary":["implemented"],"pr_url":null,"blocker_message":null}',
                 ]
             ),
@@ -250,7 +258,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             command="override",
             _request=_RuntimeQueue(
                 [
-                    '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":["risk1"],"next_stage":"dev"}',
+                    '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":["risk1"],"next_stage":"dev","execution_worker_capability":"linux"}',
                     '{"outcome":"continue","change_summary":["implemented"],"pr_url":"https://example/pull/1","blocker_message":null}',
                     '{"outcome":"continue","guidance":["run tests"],"feedback":null,"blocker_message":null}',
                     '{"outcome":"continue","summary":["looks good"],"feedback":null,"pr_url":"https://example/pull/1","blocker_message":null}',
@@ -325,7 +333,14 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             _ = kwargs
             captured_contexts.append(context)
             if context.stage == "pm":
-                return {"outcome": "continue", "plan_steps": ["step1"], "acceptance_criteria": ["ac1"], "risks": []}
+                return {
+                    "outcome": "continue",
+                    "plan_steps": ["step1"],
+                    "acceptance_criteria": ["ac1"],
+                    "risks": [],
+                    "next_stage": "dev",
+                    "execution_worker_capability": "linux",
+                }
             return {"outcome": "continue", "change_summary": ["implemented"], "pr_url": None}
 
         with (
@@ -348,6 +363,28 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             _request=_RuntimeQueue([]),
         )
         agents = CodexWorkflowAgents(runtime=runtime)
+        resume_snapshot = ExecutionSnapshot.empty()
+        resume_snapshot.apply_stage_checkpoint(
+            WorkflowStageCheckpoint(
+                stage="pm",
+                attempt=1,
+                status="completed",
+                summary="PM ready",
+                plan=PmPlan(plan_steps=["step"], acceptance_criteria=["ac"], risks=[]),
+            )
+        )
+        resume_snapshot.apply_stage_checkpoint(
+            WorkflowStageCheckpoint(
+                stage="review",
+                attempt=1,
+                status="blocked",
+                summary="Needs nonce verification",
+                review_result=ReviewResult(
+                    summary=["Needs nonce verification"],
+                    feedback="Verify the nonce flow with the QA account",
+                ),
+            )
+        )
         request = WorkflowRequest(
             tenant_id="tenant-1",
             run_id="run-1",
@@ -365,15 +402,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             entry_stage="review",
             checkpoint_kind="execution",
             checkpoint_session_id="dev-session-123",
-            checkpoint_payload={
-                "plan": {
-                    "plan_steps": ["step"],
-                    "acceptance_criteria": ["ac"],
-                    "risks": [],
-                },
-                "review_summary": ["Needs nonce verification"],
-                "review_feedback": "Verify the nonce flow with the QA account",
-            },
+            checkpoint_payload=resume_snapshot.dump(),
         )
         captured: dict[str, object] = {}
 
@@ -404,7 +433,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             command="override",
             _request=_RuntimeQueue(
                 [
-                    '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":["risk1"],"next_stage":"dev"}',
+                    '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":["risk1"],"next_stage":"dev","execution_worker_capability":"linux"}',
                     '{"outcome":"blocked","change_summary":["implemented"],"pr_url":null,"blocker_message":"APPLE_TEST_PASSWORD missing"}',
                     '{"outcome":"failed","guidance":["retry targeted UI test"],"feedback":"UI test failed","blocker_message":"xcodebuild missing"}',
                     '{"outcome":"blocked","summary":["Awaiting approval"],"feedback":"Need PM approval","blocker_message":"Decision owner approval missing"}',
@@ -434,7 +463,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             command="override",
             _request=_RuntimeQueue(
                 [
-                    '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":["risk1"],"next_stage":"dev"}',
+                    '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":["risk1"],"next_stage":"dev","execution_worker_capability":"linux"}',
                     '{"outcome":"continue","change_summary":["implemented"],"pr_url":"https://example/pull/1"}',
                     '{"outcome":"continue","guidance":["run tests"],"feedback":null}',
                     "approved, do not merge automatically",
@@ -458,7 +487,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             command="override",
             _request=_RuntimeQueue(
                 [
-                    '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":["risk1"],"next_stage":"dev"}',
+                    '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":["risk1"],"next_stage":"dev","execution_worker_capability":"linux"}',
                     '{"outcome":"continue","change_summary":["implemented"],"pr_url":"https://example/pull/1"}',
                     '{"outcome":"continue","guidance":["run tests"],"feedback":null}',
                     '{"outcome":"blocked","summary":["Governed runtime unavailable"],"feedback":"Governed runtime unavailable","blocker_message":"Governed runtime unavailable"}',
@@ -643,7 +672,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             if _on_log_line is not None:
                 _on_log_line("stdout", "line-1")
                 _on_log_line("stderr", "line-2")
-            return '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"next_stage":"dev"}'
+            return '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"next_stage":"dev","execution_worker_capability":"linux"}'
 
         runtime = CodexRuntime(
             model="gpt-5-codex",
@@ -669,7 +698,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         def _request(_system: str, _user: str, _working_dir: str | None = None, _on_log_line=None) -> str:
             if _on_log_line is not None:
                 _on_log_line("stdout", "line-1")
-            return '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"next_stage":"dev"}'
+            return '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"next_stage":"dev","execution_worker_capability":"linux"}'
 
         runtime = CodexRuntime(
             model="gpt-5-codex",

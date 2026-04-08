@@ -16,6 +16,7 @@ from orchestrator.core.runs import (
     mark_run_running,
     mark_run_terminal,
 )
+from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import Run, Tenant, WorkflowExecution
@@ -279,11 +280,11 @@ class RunLifecycleTests(unittest.TestCase):
                         entry_mode="resume",
                         entry_stage="dev",
                         entry_checkpoint_id="checkpoint-dev",
-                        plan={
-                            "trigger_context": {
+                        plan=ExecutionSnapshot.empty(
+                            trigger_context={
                                 "source": "manual",
                             }
-                        },
+                        ).dump(),
                     ),
                 )
 
@@ -300,9 +301,29 @@ class RunLifecycleTests(unittest.TestCase):
         self.assertEqual(
             observed["plan"],
             {
-                "pre_check": {"outcome": "ready_for_agent"},
-                "trigger_context": {
-                    "source": "manual",
+                "version": 1,
+                "context": {
+                    "trigger_context": {
+                        "source": "manual",
+                    },
+                    "execution_context": {
+                        "pre_check_outcome": "ready_for_agent",
+                    },
                 },
+                "workflow": {
+                    "outcome": None,
+                    "attempts": 0,
+                    "summary": [],
+                    "blocker_message": None,
+                    "requeue_target": None,
+                    "requeue_reason": None,
+                },
+                "events": {
+                    "stage_updates": [],
+                    "live_stage_updates": [],
+                    "stage_trace": [],
+                    "workstream_trace": [],
+                },
+                "stages": {},
             },
         )

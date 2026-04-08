@@ -6,11 +6,36 @@ from types import SimpleNamespace
 from unittest.mock import patch
 import unittest
 
+from orchestrator.core.worker_capability_normalization import WorkerCapability
+from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
+from orchestrator.core.workflow.runner import PmPlan, WorkflowStageCheckpoint
 from orchestrator.core.worker.workflow_request_service import build_workflow_request_for_run
 from orchestrator.tools.github_app import PullRequestSummary
 
 
 class WorkflowRequestServiceTests(unittest.TestCase):
+    @staticmethod
+    def _plan_with_trigger_context(trigger_context: dict) -> dict:
+        return ExecutionSnapshot.empty(trigger_context=trigger_context).dump()
+
+    @staticmethod
+    def _checkpoint_payload_with_pm_plan() -> dict:
+        snapshot = ExecutionSnapshot.empty()
+        snapshot.apply_stage_checkpoint(
+            WorkflowStageCheckpoint(
+                stage="pm",
+                attempt=1,
+                status="completed",
+                summary="PM ready",
+                plan=PmPlan(
+                    plan_steps=["restore auth flow"],
+                    acceptance_criteria=["login works"],
+                    risks=[],
+                ),
+            )
+        )
+        return snapshot.dump()
+
     def _session_with_no_human_inputs(self) -> SimpleNamespace:
         return SimpleNamespace(
             execute=lambda *_args, **_kwargs: SimpleNamespace(
@@ -54,6 +79,52 @@ class WorkflowRequestServiceTests(unittest.TestCase):
                     effective_policy=effective_policy,
                     settings=settings,
                 )
+
+    def test_build_workflow_request_rejects_invalid_worker_capability_settings(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            tenant, run, effective_policy, settings = self._base_inputs(tmp_dir)
+            settings.worker_capabilities = "linux,darwin"
+            project = SimpleNamespace(
+                project_id="project-1",
+                name="Project",
+                github_repository="https://github.com/example/repo",
+                jira_project_key="TP",
+                environment={},
+            )
+            checkout_dir = (
+                Path(tmp_dir)
+                / "tenant-1"
+                / "project-1"
+                / "runs"
+                / "run-1"
+                / "workspaces"
+                / "worker-a"
+                / "repo"
+            )
+            checkout_dir.mkdir(parents=True, exist_ok=True)
+            with (
+                patch(
+                    "orchestrator.core.worker.workflow_request_service.ensure_run_worktree",
+                    return_value=(checkout_dir, "run/tp-1/run-1"),
+                ),
+                patch(
+                    "orchestrator.core.worker.workflow_request_service.read_run_worktree_metadata",
+                    return_value={"start_point_ref": "origin/main", "start_point_sha": "abc123"},
+                ),
+                patch(
+                    "orchestrator.core.worker.workflow_request_service.validate_run_worktree",
+                    return_value=None,
+                ),
+            ):
+                with self.assertRaisesRegex(ValueError, "Invalid worker capability token\\(s\\)"):
+                    build_workflow_request_for_run(
+                        session=self._session_with_no_human_inputs(),
+                        tenant=tenant,
+                        run=run,
+                        project=project,
+                        effective_policy=effective_policy,
+                        settings=settings,
+                    )
 
     def test_build_workflow_request_requires_existing_checkout_dir(self) -> None:
         with TemporaryDirectory() as tmp_dir:
@@ -152,8 +223,8 @@ class WorkflowRequestServiceTests(unittest.TestCase):
             self.assertEqual(request.workspace_key, "worker-a")
             self.assertEqual(request.start_point_ref, "origin/main")
             self.assertEqual(request.start_point_sha, "abc123")
-            self.assertEqual(request.current_worker_capability, "linux")
-            self.assertEqual(request.available_worker_capabilities, ["linux"])
+            self.assertEqual(request.current_worker_capability, WorkerCapability.LINUX)
+            self.assertEqual(request.available_worker_capabilities, (WorkerCapability.LINUX,))
             self.assertEqual(request.project_id, "project-1")
             self.assertEqual(request.project_name, "Project")
             self.assertEqual(request.github_repository, "https://github.com/example/repo")
@@ -283,13 +354,7 @@ class WorkflowRequestServiceTests(unittest.TestCase):
                     return_value=SimpleNamespace(
                         checkpoint_id="checkpoint-1",
                         checkpoint_kind="execution",
-                        payload_json={
-                            "plan": {
-                                "plan_steps": ["restore auth flow"],
-                                "acceptance_criteria": ["login works"],
-                                "risks": [],
-                            }
-                        },
+                        payload_json=self._checkpoint_payload_with_pm_plan(),
                         codex_session_id="dev-session-123",
                     ),
                 ),
@@ -308,7 +373,10 @@ class WorkflowRequestServiceTests(unittest.TestCase):
             self.assertEqual(request.checkpoint_kind, "execution")
             self.assertEqual(request.checkpoint_id, "checkpoint-1")
             self.assertEqual(request.checkpoint_session_id, "dev-session-123")
-            self.assertEqual(request.checkpoint_payload["plan"]["plan_steps"], ["restore auth flow"])
+            self.assertEqual(
+                request.checkpoint_payload["stages"]["pm"]["artifact"]["plan_steps"],
+                ["restore auth flow"],
+            )
 
     def test_build_workflow_request_extracts_review_resume_metadata(self) -> None:
         with TemporaryDirectory() as tmp_dir:
@@ -352,13 +420,7 @@ class WorkflowRequestServiceTests(unittest.TestCase):
                     return_value=SimpleNamespace(
                         checkpoint_id="checkpoint-1",
                         checkpoint_kind="execution",
-                        payload_json={
-                            "plan": {
-                                "plan_steps": ["restore auth flow"],
-                                "acceptance_criteria": ["login works"],
-                                "risks": [],
-                            }
-                        },
+                        payload_json=self._checkpoint_payload_with_pm_plan(),
                         codex_session_id="dev-session-123",
                     ),
                 ),
@@ -376,20 +438,23 @@ class WorkflowRequestServiceTests(unittest.TestCase):
             self.assertEqual(request.entry_stage, "review")
             self.assertEqual(request.checkpoint_kind, "execution")
             self.assertEqual(request.checkpoint_session_id, "dev-session-123")
-            self.assertEqual(request.checkpoint_payload["plan"]["plan_steps"], ["restore auth flow"])
+            self.assertEqual(
+                request.checkpoint_payload["stages"]["pm"]["artifact"]["plan_steps"],
+                ["restore auth flow"],
+            )
 
     def test_build_workflow_request_prefers_remediation_trigger_branch_and_base(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             tenant, run, effective_policy, settings = self._base_inputs(tmp_dir)
             run.branch = "feature/TP-1-stale"
-            run.plan = {
-                "trigger_context": {
+            run.plan = self._plan_with_trigger_context(
+                {
                     "source": "github_pr_review_feedback",
                     "pr_number": 14,
                     "head_ref": "run/gp-122/6fc2dd62-c996-468f-84ba-3ac052c08703",
                     "base_ref": "main",
                 }
-            }
+            )
             project = SimpleNamespace(
                 project_id="project-1",
                 name="Project",

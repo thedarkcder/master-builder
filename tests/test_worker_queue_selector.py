@@ -9,6 +9,7 @@ from orchestrator.core.worker.queue_selector import (
     coerce_positive_int,
     select_next_queued_run,
 )
+from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import Project, Tenant, TenantRunClaim
@@ -17,6 +18,14 @@ from tests.workflow_test_support import add_run_with_workflow, make_run
 
 def _add_run(session, *, now: datetime, **kwargs) -> None:
     add_run_with_workflow(session, make_run(created_at=now, **kwargs))
+
+
+def _plan_for_capability(required_worker_capability: str) -> dict:
+    snapshot = ExecutionSnapshot.empty()
+    snapshot.workflow.outcome = "requeue"
+    snapshot.workflow.requeue_target = required_worker_capability
+    snapshot.workflow.requeue_reason = "Capability-specific worker required"
+    return snapshot.dump()
 
 
 class WorkerQueueSelectorTests(unittest.TestCase):
@@ -55,7 +64,7 @@ class WorkerQueueSelectorTests(unittest.TestCase):
                 branch=None,
                 pr_url=None,
                 status="queued",
-                plan={"required_worker_capability": "linux"},
+                plan=_plan_for_capability("linux"),
                 started_at=None,
                 finished_at=None,
             )
@@ -117,7 +126,7 @@ class WorkerQueueSelectorTests(unittest.TestCase):
                 branch=None,
                 pr_url=None,
                 status="running",
-                plan={"required_worker_capability": "linux"},
+                plan=_plan_for_capability("linux"),
                 started_at=now,
                 finished_at=None,
             )
@@ -133,7 +142,7 @@ class WorkerQueueSelectorTests(unittest.TestCase):
                 branch=None,
                 pr_url=None,
                 status="queued",
-                plan={"required_worker_capability": "linux"},
+                plan=_plan_for_capability("linux"),
                 started_at=None,
                 finished_at=None,
             )
@@ -149,7 +158,7 @@ class WorkerQueueSelectorTests(unittest.TestCase):
                 branch=None,
                 pr_url=None,
                 status="queued",
-                plan={"required_worker_capability": "linux"},
+                plan=_plan_for_capability("linux"),
                 started_at=None,
                 finished_at=None,
             )
@@ -201,7 +210,7 @@ class WorkerQueueSelectorTests(unittest.TestCase):
                 branch=None,
                 pr_url=None,
                 status="queued",
-                plan={"required_worker_capability": "linux"},
+                plan=_plan_for_capability("linux"),
                 started_at=None,
                 finished_at=None,
             )
@@ -291,7 +300,7 @@ class WorkerQueueSelectorTests(unittest.TestCase):
                 branch=None,
                 pr_url=None,
                 status="running",
-                plan={"required_worker_capability": "linux"},
+                plan=_plan_for_capability("linux"),
                 started_at=now,
                 finished_at=None,
             )
@@ -308,7 +317,7 @@ class WorkerQueueSelectorTests(unittest.TestCase):
                 branch=None,
                 pr_url=None,
                 status="queued",
-                plan={"required_worker_capability": "linux"},
+                plan=_plan_for_capability("linux"),
                 started_at=None,
                 finished_at=None,
             )
@@ -324,7 +333,7 @@ class WorkerQueueSelectorTests(unittest.TestCase):
                 branch=None,
                 pr_url=None,
                 status="queued",
-                plan={"required_worker_capability": "linux"},
+                plan=_plan_for_capability("linux"),
                 started_at=None,
                 finished_at=None,
             )
@@ -370,7 +379,7 @@ class WorkerQueueSelectorTests(unittest.TestCase):
                 branch=None,
                 pr_url=None,
                 status="queued",
-                plan={"required_worker_capability": "macos"},
+                plan=_plan_for_capability("macos"),
                 started_at=None,
                 finished_at=None,
             )
@@ -386,7 +395,7 @@ class WorkerQueueSelectorTests(unittest.TestCase):
                 branch=None,
                 pr_url=None,
                 status="queued",
-                plan={"required_worker_capability": "linux"},
+                plan=_plan_for_capability("linux"),
                 started_at=None,
                 finished_at=None,
             )

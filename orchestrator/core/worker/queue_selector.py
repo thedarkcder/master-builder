@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
 from orchestrator.core.project_policy import resolve_effective_policy
+from orchestrator.core.worker_capability_normalization import WorkerCapability
 from orchestrator.core.worker_capabilities import (
     parse_worker_capabilities,
     required_worker_capability_for_run,
@@ -85,7 +86,7 @@ def _candidate_selection_details(
     *,
     candidate: Run,
     failed_status: str,
-    allowed_capabilities: set[str],
+    allowed_capabilities: set[WorkerCapability],
 ) -> QueueSelectionResult:
     required_capability = required_worker_capability_for_run(candidate)
     if required_capability is not None and required_capability not in allowed_capabilities:
@@ -94,8 +95,8 @@ def _candidate_selection_details(
             candidate.run_id,
             candidate.tenant_id,
             candidate.issue_key,
-            required_capability,
-            ",".join(sorted(allowed_capabilities)),
+            required_capability.value,
+            ",".join(sorted(capability.value for capability in allowed_capabilities)),
         )
         return QueueSelectionResult()
 
@@ -127,7 +128,7 @@ def select_next_queued_run(
     queued_status: str,
     running_status: str,
     failed_status: str,
-    worker_capabilities: set[str] | None = None,
+    worker_capabilities: set[WorkerCapability] | None = None,
 ) -> QueueSelectionResult:
     allowed_capabilities = parse_worker_capabilities(worker_capabilities or [])
     queued_runs = session.execute(
@@ -156,7 +157,7 @@ def claim_next_queued_run(
     running_status: str,
     failed_status: str,
     worker_service_instance_id: str | None,
-    worker_capabilities: set[str] | None = None,
+    worker_capabilities: set[WorkerCapability] | None = None,
 ) -> QueueSelectionResult:
     allowed_capabilities = parse_worker_capabilities(worker_capabilities or [])
     candidate_run_ids = session.execute(

@@ -773,6 +773,21 @@ class WorkerRuntimeRegistryTests(unittest.TestCase):
             assert row is not None
             self.assertEqual(row.state, "stopped")
 
+    def test_worker_runtime_registration_rejects_invalid_capability_settings(self) -> None:
+        import orchestrator.worker as worker_module
+
+        session_factory = create_session_factory(self.database_url)
+        settings = SimpleNamespace(worker_capabilities="linux,darwin")
+
+        with self.assertRaisesRegex(ValueError, "Invalid worker capability token\\(s\\)"):
+            worker_module._register_worker_runtime_once(
+                session_factory=session_factory,
+                settings=settings,
+                agent_id="worker-a",
+                service_instance_id="node-a:1234",
+                worker_mode=worker_module.WORKER_MODE_RUNS,
+            )
+
 
 class MainEntryTests(unittest.TestCase):
     def test_module_main_invokes_cli_main(self) -> None:

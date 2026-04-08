@@ -3,6 +3,9 @@ from __future__ import annotations
 import unittest
 
 from orchestrator.core.workflow.checkpoint_codec import decode_pm_plan_payload
+from orchestrator.core.workflow.checkpoint_codec import decode_dev_result_payload
+from orchestrator.core.workflow.checkpoint_codec import decode_review_result_payload
+from orchestrator.core.workflow.checkpoint_codec import decode_test_result_payload
 from orchestrator.core.workflow.checkpoint_codec import encode_pm_plan
 from orchestrator.core.workflow.checkpoint_codec import encode_stage_checkpoint_artifact
 from orchestrator.core.workflow.runner import DevResult
@@ -13,18 +16,16 @@ from orchestrator.core.workflow.runner import WorkflowStageCheckpoint
 
 
 class CheckpointCodecTests(unittest.TestCase):
-    def test_decode_pm_plan_payload_accepts_nested_plan_payload(self) -> None:
+    def test_decode_pm_plan_payload_accepts_stage_artifact_payload(self) -> None:
         payload = {
-            "plan": {
-                "plan_steps": ["step-1"],
-                "acceptance_criteria": ["ac-1"],
-                "risks": ["risk-1"],
-                "outcome": "continue",
-                "next_stage": "dev",
-                "execution_worker_capability": "linux",
-                "resolved_prerequisites": ["repo access"],
-                "unresolved_prerequisites": [],
-            }
+            "plan_steps": ["step-1"],
+            "acceptance_criteria": ["ac-1"],
+            "risks": ["risk-1"],
+            "outcome": "continue",
+            "next_stage": "dev",
+            "execution_worker_capability": "linux",
+            "resolved_prerequisites": ["repo access"],
+            "unresolved_prerequisites": [],
         }
 
         plan = decode_pm_plan_payload(payload)
@@ -73,7 +74,31 @@ class CheckpointCodecTests(unittest.TestCase):
 
         self.assertIsNone(decode_pm_plan_payload(payload))
 
-    def test_encode_pm_plan_normalizes_requeue_target(self) -> None:
+    def test_decode_pm_plan_payload_rejects_empty_required_lists(self) -> None:
+        payload = {
+            "plan_steps": [],
+            "acceptance_criteria": ["ac-1"],
+            "risks": [],
+            "outcome": "continue",
+            "next_stage": "dev",
+            "execution_worker_capability": "linux",
+        }
+
+        self.assertIsNone(decode_pm_plan_payload(payload))
+
+    def test_decode_pm_plan_payload_rejects_blocked_without_blocker_message(self) -> None:
+        payload = {
+            "plan_steps": ["step-1"],
+            "acceptance_criteria": ["ac-1"],
+            "risks": [],
+            "outcome": "blocked",
+            "next_stage": "dev",
+            "execution_worker_capability": "linux",
+        }
+
+        self.assertIsNone(decode_pm_plan_payload(payload))
+
+    def test_encode_pm_plan_rejects_non_canonical_requeue_target(self) -> None:
         plan = PmPlan(
             plan_steps=["step-1"],
             acceptance_criteria=["ac-1"],
@@ -82,11 +107,67 @@ class CheckpointCodecTests(unittest.TestCase):
             next_stage="dev",
             execution_worker_capability="linux",
             requeue_target="MACOS",
+            requeue_reason="macOS worker required for iOS signing",
         )
 
-        payload = encode_pm_plan(plan)
+        with self.assertRaises(ValueError):
+            encode_pm_plan(plan)
 
-        self.assertEqual(payload["requeue_target"], "macos")
+    def test_decode_pm_plan_payload_rejects_requeue_fields_for_non_requeue_outcome(self) -> None:
+        payload = {
+            "plan_steps": ["step-1"],
+            "acceptance_criteria": ["ac-1"],
+            "risks": [],
+            "outcome": "continue",
+            "next_stage": "dev",
+            "execution_worker_capability": "linux",
+            "requeue_target": "macos",
+            "requeue_reason": "not needed",
+        }
+
+        self.assertIsNone(decode_pm_plan_payload(payload))
+
+    def test_encode_pm_plan_rejects_empty_required_lists(self) -> None:
+        plan = PmPlan(
+            plan_steps=[],
+            acceptance_criteria=["ac-1"],
+            risks=[],
+            outcome="continue",
+            next_stage="dev",
+            execution_worker_capability="linux",
+        )
+
+        with self.assertRaises(ValueError):
+            encode_pm_plan(plan)
+
+    def test_decode_stage_result_payloads_reject_blocked_without_blocker_message(self) -> None:
+        self.assertIsNone(
+            decode_dev_result_payload(
+                {
+                    "change_summary": ["implemented"],
+                    "outcome": "blocked",
+                    "pr_url": None,
+                }
+            )
+        )
+        self.assertIsNone(
+            decode_test_result_payload(
+                {
+                    "guidance": ["pytest -q"],
+                    "outcome": "blocked",
+                    "feedback": "env missing",
+                }
+            )
+        )
+        self.assertIsNone(
+            decode_review_result_payload(
+                {
+                    "summary": ["waiting"],
+                    "outcome": "blocked",
+                    "feedback": "approval missing",
+                }
+            )
+        )
 
     def test_encode_stage_checkpoint_artifact_serializes_stage_specific_payloads(self) -> None:
         pm_artifact = encode_stage_checkpoint_artifact(

@@ -7,8 +7,9 @@ from typing import Protocol
 
 from orchestrator.core.codex_agents import CodexWorkflowAgents
 from orchestrator.core.codex_runtime import CodexRuntime
-from orchestrator.core.workflow.checkpoint_codec import decode_pm_plan_payload
-from orchestrator.core.worker_capabilities import normalize_worker_capability
+from orchestrator.core.worker_capability_normalization import WorkerCapability
+from orchestrator.core.worker_capability_normalization import parse_worker_capability
+from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.core.workflow.runner import (
     DevResult,
     PmPlan,
@@ -126,8 +127,10 @@ class OrchestratedRunWorkflowExecutor:
         last_test_result: TestResult | None = None
         last_review_result: ReviewResult | None = None
 
+        resume_snapshot = ExecutionSnapshot.load(request.checkpoint_payload) if str(request.entry_mode or "").strip().lower() == "resume" else None
+
         if _should_resume_from_pm(request) or _should_resume_from_dev(request):
-            plan = decode_pm_plan_payload(request.checkpoint_payload)
+            plan = resume_snapshot.plan() if resume_snapshot is not None else None
             if plan is None:
                 return self._failure_result(
                     request=request,
@@ -153,7 +156,7 @@ class OrchestratedRunWorkflowExecutor:
                 )
             )
         elif _should_resume_from_review(request):
-            plan = decode_pm_plan_payload(request.checkpoint_payload)
+            plan = resume_snapshot.plan() if resume_snapshot is not None else None
             if plan is None:
                 return self._failure_result(
                     request=request,
@@ -173,8 +176,6 @@ class OrchestratedRunWorkflowExecutor:
             stage_trace.extend(
                 [
                     _stage_trace_entry(stage="pm", status="completed", attempt=1, summary="Resumed from persisted PM plan."),
-                    _stage_trace_entry(stage="dev", status="completed", attempt=1, summary="Resumed from persisted dev result."),
-                    _stage_trace_entry(stage="test", status="completed", attempt=1, summary="Resumed from persisted passing test result."),
                 ]
             )
         else:
@@ -252,13 +253,28 @@ class OrchestratedRunWorkflowExecutor:
                 return checkpoint_failure
 
         if _should_resume_from_review(request):
-            source_state = _resume_source_state(request)
-            resumed_dev_result = _resume_dev_result(source_state)
-            resumed_test_result = _resume_test_result(source_state, default_guidance=test_guidance)
+            resumed_dev_result = resume_snapshot.dev_result() if resume_snapshot is not None else None
+            resumed_test_result = resume_snapshot.test_result() if resume_snapshot is not None else None
+            if resumed_dev_result is None or resumed_test_result is None:
+                return self._failure_result(
+                    request=request,
+                    state=state,
+                    stage="review",
+                    attempts=1,
+                    message="Cannot resume review stage because no valid persisted dev/test artifacts are available.",
+                )
             state.dev_rationale[:] = list(resumed_dev_result.change_summary)
             state.test_guidance[:] = list(resumed_test_result.guidance or state.test_guidance)
-            state.review_summary[:] = list(source_state.get("review_summary", []) or [])
-            state.review_feedback = str(source_state.get("review_feedback") or "").strip() or None
+            previous_review = resume_snapshot.review_result() if resume_snapshot is not None else None
+            if previous_review is not None:
+                state.review_summary[:] = list(previous_review.summary)
+                state.review_feedback = previous_review.feedback
+            stage_trace.extend(
+                [
+                    _stage_trace_entry(stage="dev", status="completed", attempt=1, summary="Resumed from persisted dev result."),
+                    _stage_trace_entry(stage="test", status="completed", attempt=1, summary="Resumed from persisted passing test result."),
+                ]
+            )
             for checkpoint in (
                 WorkflowStageCheckpoint(stage="pm", attempt=1, status="completed", summary="Resumed from persisted PM plan.", plan=plan),
                 WorkflowStageCheckpoint(stage="dev", attempt=1, status="completed", summary="Resumed from persisted dev result.", dev_result=resumed_dev_result),
@@ -331,7 +347,12 @@ class OrchestratedRunWorkflowExecutor:
             )
 
         capability_mismatch_message = _capability_mismatch_message(request=request, plan=plan)
-        if plan.outcome == "continue" and capability_mismatch_message is not None:
+        required_worker_capability = _required_worker_capability(plan)
+        if (
+            plan.outcome == "continue"
+            and capability_mismatch_message is not None
+            and required_worker_capability is not None
+        ):
             history.append({"stage": "pm", "attempt": "1", "event": capability_mismatch_message})
             stage_trace[-1]["status"] = "requeue"
             stage_trace[-1]["summary"] = capability_mismatch_message
@@ -344,7 +365,7 @@ class OrchestratedRunWorkflowExecutor:
                 state=state,
                 outcome="requeue",
                 attempts=1,
-                requeue_target=plan.execution_worker_capability,
+                requeue_target=required_worker_capability,
                 requeue_reason=capability_mismatch_message,
             )
 
@@ -364,6 +385,24 @@ class OrchestratedRunWorkflowExecutor:
             )
             if checkpoint_failure is not None:
                 return checkpoint_failure
+            if plan.outcome == "requeue":
+                requeue_target = parse_worker_capability(plan.requeue_target) or _required_worker_capability(plan)
+                if requeue_target is None:
+                    return self._failure_result(
+                        request=request,
+                        state=state,
+                        stage="pm",
+                        attempts=1,
+                        message=f"PM requested requeue but did not provide a valid worker capability. {pm_message}",
+                        outcome="blocked",
+                    )
+                return self._workflow_result(
+                    state=state,
+                    outcome="requeue",
+                    attempts=1,
+                    requeue_target=requeue_target,
+                    requeue_reason=plan.requeue_reason or pm_message,
+                )
             return self._failure_result(
                 request=request,
                 state=state,
@@ -629,7 +668,7 @@ class OrchestratedRunWorkflowExecutor:
         state: _ExecutionState,
         outcome: WorkflowOutcome,
         attempts: int,
-        requeue_target: str | None = None,
+        requeue_target: WorkerCapability | None = None,
         requeue_reason: str | None = None,
         blocker_message: str | None = None,
     ) -> WorkflowResult:
@@ -675,31 +714,6 @@ def _should_resume_from_review(request: WorkflowRequest) -> bool:
     )
 
 
-def _resume_source_state(request: WorkflowRequest) -> dict[str, Any]:
-    payload = request.checkpoint_payload
-    return dict(payload) if isinstance(payload, dict) else {}
-
-
-def _resume_dev_result(source_state: dict[str, Any]) -> DevResult:
-    change_summary = source_state.get("dev_rationale")
-    if not isinstance(change_summary, list):
-        change_summary = source_state.get("summary")
-    normalized_summary = [str(item).strip() for item in change_summary or [] if str(item).strip()]
-    if not normalized_summary:
-        normalized_summary = ["Resumed from persisted development result."]
-    pr_url = str(source_state.get("pr_url") or "").strip() or None
-    return DevResult(change_summary=normalized_summary, pr_url=pr_url)
-
-
-def _resume_test_result(source_state: dict[str, Any], *, default_guidance: list[str]) -> TestResult:
-    guidance = source_state.get("test_guidance")
-    normalized_guidance = [str(item).strip() for item in guidance or [] if str(item).strip()]
-    if not normalized_guidance:
-        normalized_guidance = list(default_guidance or ["Run relevant project tests"])
-    feedback = str(source_state.get("test_feedback") or "").strip() or None
-    return TestResult(guidance=normalized_guidance, feedback=feedback)
-
-
 def _stage_trace_entry(*, stage: str, status: str, attempt: int, summary: str) -> dict[str, object]:
     return {
         "stage": stage,
@@ -710,14 +724,18 @@ def _stage_trace_entry(*, stage: str, status: str, attempt: int, summary: str) -
 
 
 def _capability_mismatch_message(*, request: WorkflowRequest, plan: PmPlan) -> str | None:
-    required = normalize_worker_capability(plan.execution_worker_capability)
-    current = normalize_worker_capability(request.current_worker_capability)
+    required = _required_worker_capability(plan)
+    current = parse_worker_capability(request.current_worker_capability)
     if required is None or current is None or required == current:
         return None
     return (
-        f"Execution capability mismatch: PM selected {required} but current worker is {current}. "
-        f"Requeue on worker:{required} before dev/test/review."
+        f"Execution capability mismatch: PM selected {required.value} but current worker is {current.value}. "
+        f"Requeue on worker:{required.value} before dev/test/review."
     )
+
+
+def _required_worker_capability(plan: PmPlan) -> WorkerCapability | None:
+    return parse_worker_capability(plan.execution_worker_capability)
 
 
 def _summarize_pm_plan(plan: PmPlan) -> str:

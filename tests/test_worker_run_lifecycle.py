@@ -5,6 +5,8 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from orchestrator.core.runs import RUN_DEDUPE_SCOPE_ISSUE_EXECUTION, enqueue_run
+from orchestrator.core.worker_capability_normalization import WorkerCapability
+from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.core.worker.run_lifecycle import (
     bind_run_project,
     block_archived_project,
@@ -106,6 +108,20 @@ class WorkerRunLifecycleTests(unittest.TestCase):
             issue_key=issue_key,
             dedupe_scope=dedupe_scope,
         ).one_or_none()
+
+    @staticmethod
+    def _canonical_plan(
+        *,
+        trigger_context: dict | None = None,
+        execution_context: dict | None = None,
+        live_stage_updates: list[dict] | None = None,
+    ) -> dict:
+        snapshot = ExecutionSnapshot.empty(trigger_context=trigger_context)
+        if execution_context:
+            snapshot.context.execution_context = dict(execution_context)
+        if live_stage_updates:
+            snapshot.events.live_stage_updates = [dict(item) for item in live_stage_updates]
+        return snapshot.dump()
 
     def test_resolve_project_for_run_and_bind_run_project(self) -> None:
         now = datetime.now(timezone.utc)
@@ -227,7 +243,9 @@ class WorkerRunLifecycleTests(unittest.TestCase):
             run.status = "running"
             run.last_error = None
             run.finished_at = None
-            run.plan = {"trigger_context": {"source": "github_pr_review_feedback", "pr_number": 6}}
+            run.plan = self._canonical_plan(
+                trigger_context={"source": "github_pr_review_feedback", "pr_number": 6}
+            )
             session.commit()
             session.refresh(run)
 
@@ -257,9 +275,9 @@ class WorkerRunLifecycleTests(unittest.TestCase):
             )
             self.assertEqual(finalized.status, "failed")
             self.assertEqual(finalized.last_error, "failure details")
-            self.assertEqual(finalized.plan["stage_updates"], [{"stage": "run_failed"}])
+            self.assertEqual(finalized.plan["events"]["stage_updates"], [{"stage": "run_failed"}])
             self.assertEqual(
-                finalized.plan.get("trigger_context"),
+                finalized.plan["context"]["trigger_context"],
                 {"source": "github_pr_review_feedback", "pr_number": 6},
             )
             workflow = self._get_workflow(session, issue_key="TA-200")
@@ -278,10 +296,10 @@ class WorkerRunLifecycleTests(unittest.TestCase):
                 issue_summary="persist checkpoints",
                 issue_description="desc",
                 repo_url="https://github.com/example/a",
-                plan={
-                    "trigger_context": {"source": "manual"},
-                    "live_stage_updates": [{"stage": "lock_acquired", "recorded_at": now.isoformat()}],
-                },
+                plan=self._canonical_plan(
+                    trigger_context={"source": "manual"},
+                    live_stage_updates=[{"stage": "lock_acquired", "recorded_at": now.isoformat()}],
+                ),
                 workflow_status="running",
                 run_status="running",
                 created_at=now,
@@ -309,12 +327,18 @@ class WorkerRunLifecycleTests(unittest.TestCase):
                 expected_worker_service_instance_id="node-a:1234",
             )
 
-            self.assertEqual(run.plan["trigger_context"], {"source": "manual"})
-            self.assertEqual(run.plan["plan"]["plan_steps"], ["plan"])
-            self.assertEqual(run.plan["stage_checkpoints"]["pm"]["status"], "completed")
-            self.assertEqual(run.plan["execution_context"]["execution_branch"], "run/ta-205/run-checkpoint")
-            self.assertEqual(run.plan["execution_context"]["integration_branch"], "feature/TA-205")
-            self.assertEqual(run.plan["live_stage_updates"][0]["stage"], "lock_acquired")
+            self.assertEqual(run.plan["context"]["trigger_context"], {"source": "manual"})
+            self.assertEqual(run.plan["stages"]["pm"]["artifact"]["plan_steps"], ["plan"])
+            self.assertEqual(run.plan["stages"]["pm"]["status"], "completed")
+            self.assertEqual(
+                run.plan["context"]["execution_context"]["execution_branch"],
+                "run/ta-205/run-checkpoint",
+            )
+            self.assertEqual(
+                run.plan["context"]["execution_context"]["integration_branch"],
+                "feature/TA-205",
+            )
+            self.assertEqual(run.plan["events"]["live_stage_updates"][0]["stage"], "lock_acquired")
 
             finalized = finalize_workflow_result(
                 session,
@@ -332,8 +356,8 @@ class WorkerRunLifecycleTests(unittest.TestCase):
             )
 
             self.assertEqual(finalized.status, "succeeded")
-            self.assertEqual(finalized.plan["stage_checkpoints"]["pm"]["status"], "completed")
-            self.assertEqual(finalized.plan["trigger_context"], {"source": "manual"})
+            self.assertEqual(finalized.plan["stages"]["pm"]["status"], "completed")
+            self.assertEqual(finalized.plan["context"]["trigger_context"], {"source": "manual"})
 
     def test_start_run_returns_none_when_status_does_not_match_expected(self) -> None:
         now = datetime.now(timezone.utc)
@@ -467,7 +491,9 @@ class WorkerRunLifecycleTests(unittest.TestCase):
                 workflow_status="running",
                 run_status="running",
                 last_error="old error",
-                plan={"trigger_context": {"source": "github_pr_review_feedback", "pr_number": 6}},
+                plan=self._canonical_plan(
+                    trigger_context={"source": "github_pr_review_feedback", "pr_number": 6}
+                ),
                 created_at=now,
                 started_at=now,
                 last_heartbeat_at=now,
@@ -487,7 +513,7 @@ class WorkerRunLifecycleTests(unittest.TestCase):
                 summary=[],
                 test_guidance=[],
                 attempts=1,
-                requeue_target="macos",
+                requeue_target=WorkerCapability.MACOS,
                 requeue_reason="Execution capability mismatch: PM selected macos but current worker is linux.",
                 diagnostics=WorkflowDiagnostics(
                     stage="dev",
@@ -513,11 +539,10 @@ class WorkerRunLifecycleTests(unittest.TestCase):
             self.assertIsNone(requeued.last_heartbeat_at)
             self.assertIsNone(requeued.finished_at)
             self.assertIsNone(requeued.worker_service_instance_id)
-            self.assertEqual(requeued.plan["required_worker_capability"], "macos")
-            self.assertEqual(requeued.plan["required_worker_label"], "macos")
-            self.assertTrue(requeued.plan["requeued"])
+            self.assertEqual(requeued.plan["workflow"]["requeue_target"], "macos")
+            self.assertEqual(requeued.plan["context"]["execution_context"]["required_worker_label"], "macos")
             self.assertEqual(
-                requeued.plan.get("trigger_context"),
+                requeued.plan["context"]["trigger_context"],
                 {"source": "github_pr_review_feedback", "pr_number": 6},
             )
             notify_mock.assert_called_once_with(
@@ -548,7 +573,9 @@ class WorkerRunLifecycleTests(unittest.TestCase):
                 workflow_status="running",
                 run_status="running",
                 last_error="old error",
-                plan={"trigger_context": {"source": "github_pr_review_feedback", "pr_number": 6}},
+                plan=self._canonical_plan(
+                    trigger_context={"source": "github_pr_review_feedback", "pr_number": 6}
+                ),
                 created_at=now,
                 started_at=now,
                 last_heartbeat_at=now,
@@ -587,11 +614,13 @@ class WorkerRunLifecycleTests(unittest.TestCase):
             self.assertIsNone(requeued.finished_at)
             self.assertIsNone(requeued.pr_url)
             self.assertIsNone(requeued.worker_service_instance_id)
-            self.assertTrue(requeued.plan["requeued"])
-            self.assertTrue(requeued.plan["stale_branch_snapshot"])
-            self.assertIn("Branch snapshot stale", requeued.plan["requeue_reason"])
+            self.assertTrue(requeued.plan["context"]["execution_context"]["stale_branch_snapshot"])
+            self.assertEqual(requeued.plan["workflow"]["outcome"], "requeue")
+            self.assertIsNone(requeued.plan["workflow"]["requeue_target"])
+            self.assertIn("Branch snapshot stale", requeued.plan["workflow"]["requeue_reason"])
+            self.assertIsNotNone(ExecutionSnapshot.load(requeued.plan))
             self.assertEqual(
-                requeued.plan.get("trigger_context"),
+                requeued.plan["context"]["trigger_context"],
                 {"source": "github_pr_review_feedback", "pr_number": 6},
             )
             notify_mock.assert_called_once_with(

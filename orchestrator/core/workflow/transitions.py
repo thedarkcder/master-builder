@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 
 WORKFLOW_STATUS_QUEUED = "queued"
@@ -50,6 +51,16 @@ TERMINAL_INPUT_STATUSES = {
     INPUT_STATUS_EXPIRED,
     INPUT_STATUS_CANCELLED,
 }
+
+ATTEMPT_ENTRY_MODES = frozenset({"fresh", "restart", "resume"})
+AttemptEntryMode = Literal["fresh", "restart", "resume"]
+
+
+@dataclass(frozen=True)
+class AttemptCreationPolicy:
+    allowed: bool
+    reuse_workflow: bool
+    reason: str | None = None
 
 
 class WorkflowTransitionError(ValueError):
@@ -198,3 +209,19 @@ def is_attempt_terminal(status: str) -> bool:
 
 def is_attempt_worker_active(status: str) -> bool:
     return status in ACTIVE_ATTEMPT_STATUSES
+
+
+def attempt_creation_policy(*, workflow_status: str, mode: str) -> AttemptCreationPolicy:
+    normalized_mode = str(mode or "").strip().lower()
+    if normalized_mode not in ATTEMPT_ENTRY_MODES:
+        return AttemptCreationPolicy(allowed=False, reuse_workflow=False, reason="invalid_mode")
+
+    normalized_status = str(workflow_status or "").strip().lower()
+    if normalized_status in {WORKFLOW_STATUS_QUEUED, WORKFLOW_STATUS_RUNNING}:
+        return AttemptCreationPolicy(allowed=False, reuse_workflow=False, reason="active_attempt")
+    if normalized_status == WORKFLOW_STATUS_WAITING_FOR_INPUT:
+        if normalized_mode == "resume":
+            return AttemptCreationPolicy(allowed=True, reuse_workflow=True)
+        return AttemptCreationPolicy(allowed=False, reuse_workflow=False, reason="waiting_for_input_requires_resume")
+
+    return AttemptCreationPolicy(allowed=True, reuse_workflow=False)

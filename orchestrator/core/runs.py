@@ -8,6 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.core.workflow.transitions import ACTIVE_WORKFLOW_STATUSES as WORKFLOW_ACTIVE_STATUSES, is_workflow_terminal
 from orchestrator.storage.models import Run, WebhookDelivery, WorkflowExecution
 from orchestrator.storage.run_queue_events import notify_run_enqueued
@@ -79,15 +80,13 @@ def _normalize_precheck_outcome(raw_outcome: object | None) -> str | None:
 
 
 def resolve_precheck_outcome_from_plan(plan: object | None) -> str | None:
-    if not isinstance(plan, dict):
+    if plan is None or (isinstance(plan, dict) and not plan):
         return None
-    pre_check_payload = plan.get("pre_check")
-    if not isinstance(pre_check_payload, dict):
-        return None
-    raw_outcome = pre_check_payload.get("outcome")
-    if not isinstance(raw_outcome, str):
-        return None
-    normalized_outcome = raw_outcome.strip()
+    snapshot = ExecutionSnapshot.load(plan)
+    if snapshot is None:
+        raise RunStateTransitionError("Unsupported execution snapshot version/shape")
+    raw_outcome = snapshot.context.execution_context.get("pre_check_outcome")
+    normalized_outcome = str(raw_outcome or "").strip()
     return normalized_outcome if normalized_outcome else None
 
 
@@ -177,10 +176,16 @@ def _build_initial_plan(
     bootstrap: RunBootstrap | None,
     normalized_precheck_outcome: str | None,
 ) -> dict[str, object] | None:
-    next_plan = dict(bootstrap.plan) if bootstrap is not None and isinstance(bootstrap.plan, dict) else {}
+    snapshot: ExecutionSnapshot
+    if bootstrap is not None and bootstrap.plan is not None:
+        snapshot = ExecutionSnapshot.load(bootstrap.plan)
+        if snapshot is None:
+            raise RunStateTransitionError("Bootstrap plan must be a canonical execution snapshot")
+    else:
+        snapshot = ExecutionSnapshot.empty()
     if normalized_precheck_outcome is not None:
-        next_plan["pre_check"] = {"outcome": normalized_precheck_outcome}
-    return next_plan or None
+        snapshot.context.execution_context["pre_check_outcome"] = normalized_precheck_outcome
+    return snapshot.dump()
 
 
 def _next_attempt_number(session: Session, workflow_id: str) -> int:

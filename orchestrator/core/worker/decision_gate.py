@@ -10,6 +10,8 @@ from orchestrator.core.pre_run_check import evaluate_execution_readiness_only
 from orchestrator.core.runs import mark_run_terminal
 from orchestrator.core.worker.run_lifecycle import resolve_project_for_run
 from orchestrator.core.worker.stage_events import run_not_ready_update
+from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
+from orchestrator.core.workflow.execution_snapshot import SnapshotWorkflow
 
 
 def _oauth_context_value(oauth_context: object, field: str) -> object | None:
@@ -93,30 +95,24 @@ def apply_decision_gate(
         next_steps=next_steps,
     )
     session.refresh(run, attribute_names=["plan"])
-    previous_plan = run.plan if isinstance(run.plan, dict) else {}
-    previous_trigger_context = (
-        dict(previous_plan.get("trigger_context"))
-        if isinstance(previous_plan.get("trigger_context"), dict)
-        else None
+    snapshot = ExecutionSnapshot.require(run.plan, allow_empty=True)
+    snapshot.workflow = SnapshotWorkflow(
+        outcome="blocked",
+        attempts=0,
+        summary=[],
+        blocker_message=reason,
+        requeue_target=None,
+        requeue_reason=None,
     )
-    next_plan = {
-        "succeeded": False,
-        "attempts": 0,
-        "summary": [],
-        "test_guidance": [],
-        "pr_url": None,
-        "stage_updates": [stage_update],
-        "run_not_ready": {
-            "ready_label": ready_label or None,
-            "reason": reason,
-        },
-        "pre_check": {
-            "outcome": getattr(pre_check, "outcome", None) if pre_check is not None else None,
-        },
+    snapshot.events.stage_updates = [stage_update]
+    snapshot.context.execution_context["run_not_ready"] = {
+        "ready_label": ready_label or None,
+        "reason": reason,
     }
-    if previous_trigger_context is not None:
-        next_plan["trigger_context"] = previous_trigger_context
-    run.plan = next_plan
+    snapshot.context.execution_context["pre_check_outcome"] = (
+        getattr(pre_check, "outcome", None) if pre_check is not None else None
+    )
+    run.plan = snapshot.dump()
     terminal_run = mark_run_terminal(
         session,
         run_id=run.run_id,

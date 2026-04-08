@@ -15,6 +15,7 @@ from orchestrator.core.decision_gate import DecisionGateResult
 from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.label_action_service import apply_issue_label_actions
 from orchestrator.core.pre_run_check import PreRunCheckResult
+from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 
 
 def _precheck(
@@ -44,6 +45,17 @@ def _precheck(
             clarification_questions=(),
         ),
     )
+
+
+def _run_plan(
+    *,
+    pre_check_outcome: str | None = None,
+    trigger_context: dict | None = None,
+) -> dict:
+    snapshot = ExecutionSnapshot.empty(trigger_context=trigger_context)
+    if pre_check_outcome:
+        snapshot.context.execution_context["pre_check_outcome"] = pre_check_outcome
+    return snapshot.dump()
 
 
 class DecisionEngineTests(unittest.TestCase):
@@ -122,10 +134,10 @@ class DecisionEngineTests(unittest.TestCase):
         self.assertEqual(
             resolve_enqueue_precheck_outcome(
                 source="admin_rerun",
-                precheck_source_plan={
-                    "pre_check": {"outcome": "gtd_required"},
-                    "trigger_context": {"source": "github_pr_review_feedback"},
-                },
+                precheck_source_plan=_run_plan(
+                    pre_check_outcome="gtd_required",
+                    trigger_context={"source": "github_pr_review_feedback"},
+                ),
             ),
             "ready_for_agent",
         )
@@ -134,7 +146,7 @@ class DecisionEngineTests(unittest.TestCase):
         self.assertEqual(
             resolve_enqueue_precheck_outcome(
                 source="admin_rerun",
-                precheck_source_plan={"pre_check": {"outcome": "gtd_required"}},
+                precheck_source_plan=_run_plan(pre_check_outcome="gtd_required"),
                 issue_summary="GP-115: PR remediation for #6",
                 issue_description=(
                     "Automated remediation run triggered from GitHub PR #6 "
@@ -146,7 +158,7 @@ class DecisionEngineTests(unittest.TestCase):
 
     def test_worker_decision_short_circuits_when_run_plan_is_ready(self) -> None:
         worker_decision = evaluate_worker_decision(
-            run_plan={"pre_check": {"outcome": "ready_for_agent"}},
+            run_plan=_run_plan(pre_check_outcome="ready_for_agent"),
             tenant_id="t1",
             project_id="p1",
             issue_key="TP-1",
@@ -161,10 +173,10 @@ class DecisionEngineTests(unittest.TestCase):
 
     def test_worker_decision_allows_pr_remediation_when_trigger_context_present(self) -> None:
         worker_decision = evaluate_worker_decision(
-            run_plan={
-                "pre_check": {"outcome": "gtd_required"},
-                "trigger_context": {"source": "github_pr_review_feedback"},
-            },
+            run_plan=_run_plan(
+                pre_check_outcome="gtd_required",
+                trigger_context={"source": "github_pr_review_feedback"},
+            ),
             tenant_id="t1",
             project_id="p1",
             issue_key="TP-1",
@@ -179,7 +191,7 @@ class DecisionEngineTests(unittest.TestCase):
 
     def test_worker_decision_allows_pr_remediation_via_legacy_issue_markers(self) -> None:
         worker_decision = evaluate_worker_decision(
-            run_plan={"pre_check": {"outcome": "gtd_required"}},
+            run_plan=_run_plan(pre_check_outcome="gtd_required"),
             tenant_id="t1",
             project_id="p1",
             issue_key="TP-1",

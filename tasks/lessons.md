@@ -126,3 +126,8 @@
 - When the user broadens a failure-handling fix from one stage to all workflows, stop optimizing for the first stage-specific symptom. Patch the shared runtime or workflow contract so tool misses degrade gracefully everywhere instead of adding another PM-only rule.
 - Do not auto-cancel workflow runs from Jira reconciliation when the user wants manual cancellation only. Webhook status churn should affect enqueue decisions and notifications, not terminate in-flight or queued runs implicitly.
 - When the user asks to simplify a workflow/result contract and remove legacy behavior, delete the old compatibility shims in the parser/model at the same time. Do not keep `passed`/`approved`/`succeeded` compatibility paths alive just because they make existing tests easier to preserve.
+- When the user asks for strong typed contracts, do not keep tolerant runtime normalization (lowercasing, trimming, alias mapping, or `str(...)` coercion) in decode paths. Keep runtime strict and move all compatibility handling into explicit one-time migration tooling.
+
+2026-04-08
+
+- When the user says "fix the issue, don’t add a fallback", correct the source contract at the producer boundary and remove downstream fallback logic instead of preserving dual-path behavior.

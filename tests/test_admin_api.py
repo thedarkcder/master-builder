@@ -20,6 +20,7 @@ from orchestrator.core.agent_observability import (
 )
 from orchestrator.core.run_logs import record_run_log_event
 from orchestrator.core.secrets import encrypt_value
+from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import (
@@ -110,6 +111,9 @@ class AdminApiTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
+        os.environ.pop("ORCHESTRATOR_DATABASE_URL", None)
+        os.environ.pop("ORCHESTRATOR_ADMIN_USERNAME", None)
+        os.environ.pop("ORCHESTRATOR_ADMIN_PASSWORD", None)
         os.environ.pop("ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET", None)
         os.environ.pop("ORCHESTRATOR_ADMIN_TOKEN_SECRET", None)
         os.environ.pop("ORCHESTRATOR_ADMIN_UI_BASE_URL", None)
@@ -119,6 +123,7 @@ class AdminApiTests(unittest.TestCase):
         os.environ.pop("ORCHESTRATOR_SECRETS_ENCRYPTION_KEY", None)
         os.environ.pop("ORCHESTRATOR_CODEX_MODEL", None)
         os.environ.pop("ORCHESTRATOR_CODEX_SUPPORTED_MODELS", None)
+        os.environ.pop("ORCHESTRATOR_WORKER_CAPABILITIES", None)
 
         get_settings.cache_clear()
         reset_db_engine_cache()
@@ -1725,6 +1730,31 @@ class AdminApiTests(unittest.TestCase):
             assert request is not None
             self.assertEqual(request.status, "cancelled")
 
+    def test_create_workflow_attempt_rejects_restart_while_waiting_for_input(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201)
+
+        self._seed_workflow_attempt(
+            workflow_id="workflow-waiting-restart-rejected-1",
+            run_id="run-waiting-restart-rejected-1",
+            issue_key="TP-1000B",
+            issue_summary="Waiting workflow restart rejected",
+            workflow_status="waiting_for_input",
+            run_status="waiting_for_input",
+            checkpoint_id="checkpoint-waiting-restart-rejected-1",
+            checkpoint_kind="pm",
+            pending_request_id="request-waiting-restart-rejected-1",
+        )
+
+        response = self.client.post(
+            "/api/admin/workflows/workflow-waiting-restart-rejected-1/attempts",
+            json={"mode": "restart", "checkpoint_kind": "pm"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 409, response.text)
+
     def test_create_workflow_attempt_from_terminal_workflow_creates_new_workflow_lineage(self) -> None:
         payload = self._tenant_payload()
         self._insert_jira_connection(connection_id="conn-1")
@@ -1784,11 +1814,11 @@ class AdminApiTests(unittest.TestCase):
         with create_session_factory(self.database_url)() as session:
             source_run = session.get(Run, "run-terminal-fresh-1")
             assert source_run is not None
-            source_run.plan = {
-                "trigger_context": {"source": "manual_fix_request", "pr_number": 42},
-                "pre_check": {"outcome": "ready_for_agent"},
-                "diagnostics": {"message": "old"},
-            }
+            snapshot = ExecutionSnapshot.empty(
+                trigger_context={"source": "manual_fix_request", "pr_number": 42}
+            )
+            snapshot.context.execution_context["pre_check_outcome"] = "ready_for_agent"
+            source_run.plan = snapshot.dump()
             session.commit()
 
         response = self.client.post(
@@ -1819,7 +1849,54 @@ class AdminApiTests(unittest.TestCase):
             run = session.get(Run, body["run_id"])
             self.assertIsNotNone(run)
             assert run is not None
-            self.assertEqual(run.plan, {"trigger_context": {"source": "manual_fix_request", "pr_number": 42}, "pre_check": {"outcome": "ready_for_agent"}})
+            assert isinstance(run.plan, dict)
+            self.assertEqual(
+                run.plan["context"]["trigger_context"],
+                {"source": "manual_fix_request", "pr_number": 42},
+            )
+            self.assertEqual(
+                run.plan["context"]["execution_context"]["pre_check_outcome"],
+                "ready_for_agent",
+            )
+
+    def test_create_fresh_workflow_attempt_from_blocked_workflow_creates_new_workflow_lineage(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201)
+
+        self._seed_workflow_attempt(
+            workflow_id="workflow-blocked-fresh-1",
+            run_id="run-blocked-fresh-1",
+            issue_key="TP-1002B",
+            issue_summary="Blocked workflow fresh retry",
+            workflow_status="blocked",
+            run_status="blocked",
+            checkpoint_id="checkpoint-blocked-fresh-1",
+            checkpoint_kind="execution",
+        )
+
+        response = self.client.post(
+            "/api/admin/workflows/workflow-blocked-fresh-1/attempts",
+            json={"mode": "fresh"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 201, response.text)
+        body = response.json()
+        self.assertNotEqual(body["workflow_id"], "workflow-blocked-fresh-1")
+        self.assertEqual(body["attempt_number"], 1)
+        self.assertEqual(body["entry_mode"], "fresh")
+        self.assertEqual(body["entry_stage"], "orchestrated")
+        self.assertIsNone(body["entry_checkpoint_id"])
+
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            workflow = session.get(WorkflowExecution, body["workflow_id"])
+            self.assertIsNotNone(workflow)
+            assert workflow is not None
+            self.assertEqual(workflow.source_workflow_id, "workflow-blocked-fresh-1")
+            self.assertEqual(workflow.source_run_id, "run-blocked-fresh-1")
+            self.assertEqual(workflow.status, "queued")
 
     def test_fresh_workflow_attempt_rejects_checkpoint_kind(self) -> None:
         payload = self._tenant_payload()
@@ -4327,8 +4404,6 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(payload["projects"][0]["failure_category"], "invalid_refresh_token")
 
     def test_admin_platform_status_reports_hosted_services(self) -> None:
-        os.environ["ORCHESTRATOR_WORKER_CAPABILITIES"] = "linux,macos"
-        get_settings.cache_clear()
         session_factory = create_session_factory(self.database_url)
         now = datetime.now(timezone.utc)
         with session_factory() as session:
@@ -4441,7 +4516,10 @@ class AdminApiTests(unittest.TestCase):
             )
             session.commit()
 
-        response = self.client.get("/api/admin/status", auth=("admin", "secret"))
+        with patch.dict(os.environ, {"ORCHESTRATOR_WORKER_CAPABILITIES": "linux,macos"}, clear=False):
+            get_settings.cache_clear()
+            response = self.client.get("/api/admin/status", auth=("admin", "secret"))
+        get_settings.cache_clear()
 
         self.assertEqual(response.status_code, 200)
         payload = response.json()
@@ -4516,6 +4594,18 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(instances[0]["label"], "worker-linux-local (runs)")
         self.assertEqual(instances[0]["status"], "busy")
         self.assertEqual(instances[0]["active_run_count"], 1)
+
+    def test_admin_platform_status_reports_invalid_worker_capability_configuration(self) -> None:
+        with patch.dict(os.environ, {"ORCHESTRATOR_WORKER_CAPABILITIES": "linux,darwin"}, clear=False):
+            get_settings.cache_clear()
+            response = self.client.get("/api/admin/status", auth=("admin", "secret"))
+        get_settings.cache_clear()
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        worker_service = next(service for service in payload["services"] if service["service_id"] == "workers")
+        self.assertEqual(worker_service["status"], "degraded")
+        self.assertIn("Invalid ORCHESTRATOR_WORKER_CAPABILITIES token(s): darwin", worker_service["summary"])
 
 
 if __name__ == "__main__":

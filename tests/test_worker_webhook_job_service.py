@@ -16,6 +16,7 @@ from orchestrator.core.webhook_job_queue import (
     enqueue_webhook_job,
 )
 from orchestrator.core.worker.webhook_job_service import process_next_webhook_job
+from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import Project, Run, Tenant, WebhookJob
@@ -34,6 +35,8 @@ class WorkerWebhookJobServiceTests(unittest.TestCase):
         self.session_factory = create_session_factory(database_url=self.database_url)
 
         now = datetime.now(timezone.utc)
+        ready_snapshot = ExecutionSnapshot.empty()
+        ready_snapshot.context.execution_context["pre_check_outcome"] = "ready_for_agent"
         with self.session_factory() as session:
             session.add(
                 Tenant(
@@ -79,7 +82,7 @@ class WorkerWebhookJobServiceTests(unittest.TestCase):
                     pr_url=None,
                     dedupe_scope="issue_execution",
                     status="queued",
-                    plan={"pre_check": {"outcome": "ready_for_agent"}},
+                    plan=ready_snapshot.dump(),
                     created_at=now,
                     started_at=None,
                     last_heartbeat_at=None,

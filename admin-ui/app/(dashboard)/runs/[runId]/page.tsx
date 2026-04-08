@@ -15,6 +15,7 @@ import {
   cancelRun,
   createWorkflowAttempt,
   getRun,
+  getWorkflow,
   getTokenTimeline,
   listRunEvents,
   listRunLogs,
@@ -22,6 +23,7 @@ import {
   type RunEventRecord,
   type RunLogEventRecord,
   type RunRecord,
+  type WorkflowRecord,
   type WorkflowAttemptCreatePayload,
   type TokenTimelineRecord
 } from "@/lib/api";
@@ -182,13 +184,13 @@ function parseStageCheckpoints(plan: Record<string, unknown> | null | undefined)
   if (!isRecord(plan)) {
     return {};
   }
-  const raw = plan["stage_checkpoints"];
-  if (!isRecord(raw)) {
+  const stagesRaw = isRecord(plan["stages"]) ? plan["stages"] : null;
+  if (!stagesRaw) {
     return {};
   }
   const parsed: Partial<Record<AgentStage, StageCheckpointEntry>> = {};
   for (const stage of ["pm", "dev", "test", "review"] as AgentStage[]) {
-    const item = raw[stage];
+    const item = stagesRaw[stage];
     if (!isRecord(item)) {
       continue;
     }
@@ -205,7 +207,10 @@ function parseExecutionContext(plan: Record<string, unknown> | null | undefined)
   if (!isRecord(plan)) {
     return {};
   }
-  const raw = plan["execution_context"];
+  const raw =
+    (isRecord(plan["context"]) && isRecord(plan["context"]["execution_context"]))
+      ? plan["context"]["execution_context"]
+      : null;
   if (!isRecord(raw)) {
     return {};
   }
@@ -225,6 +230,24 @@ function parseExecutionContext(plan: Record<string, unknown> | null | undefined)
     }
   }
   return parsed;
+}
+
+function parseStageArtifact(
+  plan: Record<string, unknown> | null | undefined,
+  stage: AgentStage,
+): Record<string, unknown> | null {
+  if (!isRecord(plan)) {
+    return null;
+  }
+  const stagesRaw = isRecord(plan["stages"]) ? plan["stages"] : null;
+  if (!stagesRaw) {
+    return null;
+  }
+  const stageRaw = stagesRaw[stage];
+  if (!isRecord(stageRaw)) {
+    return null;
+  }
+  return isRecord(stageRaw["artifact"]) ? stageRaw["artifact"] : null;
 }
 
 function stageFromCommand(command: string | null | undefined): string {
@@ -397,6 +420,7 @@ export default function RunDetailPage() {
   const { credentials, ready } = useAuth();
   const routeContext = useMemo(() => resolveRunRouteContext(pathname), [pathname]);
   const [run, setRun] = useState<RunRecord | null>(null);
+  const [workflow, setWorkflow] = useState<WorkflowRecord | null>(null);
   const [events, setEvents] = useState<RunEventRecord[]>([]);
   const [logs, setLogs] = useState<RunLogEventRecord[]>([]);
   const [busy, setBusy] = useState(false);
@@ -441,15 +465,24 @@ export default function RunDetailPage() {
         listRunLogs(credentials, params.runId, { limit: 200 })
       ]);
       let timeline: TokenTimelineRecord | null = null;
-      try {
-        timeline = await getTokenTimeline(credentials, params.runId, {
+      let workflowPayload: WorkflowRecord | null = null;
+      const [timelineResult, workflowResult] = await Promise.allSettled([
+        getTokenTimeline(credentials, params.runId, {
           tenantId: runPayload.tenant_id,
           include_retries: true
-        });
-      } catch (error) {
-        setTokenTimelineError(`Failed to load token timeline: ${(error as Error).message}`);
+        }),
+        getWorkflow(credentials, runPayload.workflow_id),
+      ]);
+      if (timelineResult.status === "fulfilled") {
+        timeline = timelineResult.value;
+      } else {
+        setTokenTimelineError(`Failed to load token timeline: ${(timelineResult.reason as Error).message}`);
+      }
+      if (workflowResult.status === "fulfilled") {
+        workflowPayload = workflowResult.value;
       }
       setRun(runPayload);
+      setWorkflow(workflowPayload);
       setEvents(runEvents);
       setLogs(dedupeRunLogs(runLogs));
       setTokenTimeline(timeline);
@@ -458,6 +491,7 @@ export default function RunDetailPage() {
     } catch (error) {
       setStatusLine(`Failed to load run: ${(error as Error).message}`);
       setTokenTimelineError(`Failed to load token timeline: ${(error as Error).message}`);
+      setWorkflow(null);
     } finally {
       setBusy(false);
       setTokenTimelineBusy(false);
@@ -532,7 +566,7 @@ export default function RunDetailPage() {
     }
     setForceRerunBusy(true);
     try {
-      const restartCheckpointKind = stageCheckpoints.pm ? "pm" : "execution";
+      const restartCheckpointKind = hasPmCheckpoint ? "pm" : "execution";
       const cancelled = await cancelRun(credentials, run.run_id);
       const nextRun = await createWorkflowAttempt(credentials, cancelled.workflow_id, {
         mode: "restart",
@@ -577,9 +611,15 @@ export default function RunDetailPage() {
 
   const isRerunnable = Boolean(run);
   const isActiveRun = run?.status === "queued" || run?.status === "running";
-  const liveStageUpdates = Array.isArray(run?.plan?.["live_stage_updates"])
-    ? (run?.plan?.["live_stage_updates"] as Array<Record<string, unknown>>)
-    : [];
+  const liveStageUpdates = useMemo(() => {
+    if (!isRecord(run?.plan)) {
+      return [] as Array<Record<string, unknown>>;
+    }
+    const eventsRoot = isRecord(run.plan["events"]) ? run.plan["events"] : null;
+    return Array.isArray(eventsRoot?.["live_stage_updates"])
+      ? (eventsRoot["live_stage_updates"] as Array<Record<string, unknown>>)
+      : [];
+  }, [run?.plan]);
   function selectedAgentStage(filter: string): string {
     if (filter === "tester") {
       return "test";
@@ -647,20 +687,13 @@ export default function RunDetailPage() {
         workstreamEvents: [] as OrchestrationWorkstreamTraceEntry[],
       };
     }
-    const planRoot = run.plan;
-    const orchestrationRoot = isRecord(planRoot["orchestration_trace"])
-      ? (planRoot["orchestration_trace"] as Record<string, unknown>)
-      : null;
-    const stageRaw = Array.isArray(planRoot["orchestration_stage_trace"])
-      ? planRoot["orchestration_stage_trace"]
-      : Array.isArray(orchestrationRoot?.["stage_events"])
-        ? (orchestrationRoot?.["stage_events"] as unknown[])
-        : [];
-    const workstreamRaw = Array.isArray(planRoot["orchestration_workstream_trace"])
-      ? planRoot["orchestration_workstream_trace"]
-      : Array.isArray(orchestrationRoot?.["workstream_events"])
-        ? (orchestrationRoot?.["workstream_events"] as unknown[])
-        : [];
+    const eventsRoot = isRecord(run.plan["events"]) ? run.plan["events"] : null;
+    const stageRaw = Array.isArray(eventsRoot?.["stage_trace"])
+      ? (eventsRoot["stage_trace"] as unknown[])
+      : [];
+    const workstreamRaw = Array.isArray(eventsRoot?.["workstream_trace"])
+      ? (eventsRoot["workstream_trace"] as unknown[])
+      : [];
     const stageEvents: OrchestrationStageTraceEntry[] = stageRaw
       .map((item, index) => {
         if (!isRecord(item)) {
@@ -708,6 +741,32 @@ export default function RunDetailPage() {
   }, [run?.plan]);
   const stageCheckpoints = useMemo(() => parseStageCheckpoints(run?.plan ?? null), [run?.plan]);
   const executionContext = useMemo(() => parseExecutionContext(run?.plan ?? null), [run?.plan]);
+  const workflowCheckpointAvailability = useMemo(() => {
+    const availability = { pm: false, execution: false };
+    if (!workflow) {
+      return availability;
+    }
+    for (const workflowRun of workflow.runs ?? []) {
+      const checkpoints = parseStageCheckpoints(workflowRun.plan ?? null);
+      if (checkpoints.pm) {
+        availability.pm = true;
+      }
+      if (checkpoints.dev || checkpoints.test || checkpoints.review) {
+        availability.execution = true;
+      }
+      if (availability.pm && availability.execution) {
+        break;
+      }
+    }
+    return availability;
+  }, [workflow]);
+  const hasExecutionCheckpoint = Boolean(
+    stageCheckpoints.dev ||
+    stageCheckpoints.test ||
+    stageCheckpoints.review ||
+    workflowCheckpointAvailability.execution,
+  );
+  const hasPmCheckpoint = Boolean(stageCheckpoints.pm || workflowCheckpointAvailability.pm);
   const invocationSessionRows = useMemo(() => {
     const telemetryRows = logs
       .filter((entry) => entry.stage === "telemetry" && entry.stream === "system")
@@ -802,9 +861,6 @@ export default function RunDetailPage() {
       payload: { mode: "fresh" },
       detail: "Create a brand-new run with no checkpoint or prior thread reuse."
     });
-    const hasExecutionCheckpoint = Boolean(
-      stageCheckpoints.dev || stageCheckpoints.test || stageCheckpoints.review
-    );
     if (hasExecutionCheckpoint) {
       options.push({
         key: "execution",
@@ -813,7 +869,7 @@ export default function RunDetailPage() {
         detail: "Continue from the latest dev/test/review checkpoint."
       });
     }
-    if (stageCheckpoints.pm) {
+    if (hasPmCheckpoint) {
       options.push({
         key: "pm",
         label: "Resume PM",
@@ -835,7 +891,7 @@ export default function RunDetailPage() {
       });
     }
     return options;
-  }, [run, stageCheckpoints.dev, stageCheckpoints.pm, stageCheckpoints.review, stageCheckpoints.test]);
+  }, [run, hasExecutionCheckpoint, hasPmCheckpoint]);
 
   async function handleRerunSelection(payload: WorkflowAttemptCreatePayload, label: string) {
     if (!credentials || !run) {
@@ -916,24 +972,25 @@ export default function RunDetailPage() {
     return items.slice(0, 6);
   }, [workflowDiagnostics?.history]);
   const agentOutcomes = useMemo(() => {
-    const planRoot = isRecord(run?.plan) ? run.plan : {};
-    const workflowPlan = isRecord(planRoot["plan"]) ? planRoot["plan"] : null;
-    const stageCheckpoints = isRecord(planRoot["stage_checkpoints"]) ? planRoot["stage_checkpoints"] : null;
+    const pmArtifact = parseStageArtifact(run?.plan ?? null, "pm");
+    const devArtifact = parseStageArtifact(run?.plan ?? null, "dev");
+    const testArtifact = parseStageArtifact(run?.plan ?? null, "test");
+    const reviewArtifact = parseStageArtifact(run?.plan ?? null, "review");
     const checkpointSummaryForStage = (stage: AgentStage): string[] => {
-      if (!stageCheckpoints || !isRecord(stageCheckpoints[stage])) {
+      const checkpoint = stageCheckpoints[stage];
+      if (!checkpoint || !checkpoint.summary) {
         return [];
       }
-      const summary = String(stageCheckpoints[stage]["summary"] ?? "").trim();
-      return summary ? [summary] : [];
+      return [checkpoint.summary];
     };
     const pmItems = [
       ...checkpointSummaryForStage("pm"),
-      ...toStringList(workflowPlan?.["plan_steps"]),
-      ...toStringList(workflowPlan?.["acceptance_criteria"]).map((item) => `AC: ${item}`),
-      ...toStringList(workflowPlan?.["risks"]).map((item) => `Risk: ${item}`)
+      ...toStringList(pmArtifact?.["plan_steps"]),
+      ...toStringList(pmArtifact?.["acceptance_criteria"]).map((item) => `AC: ${item}`),
+      ...toStringList(pmArtifact?.["risks"]).map((item) => `Risk: ${item}`)
     ];
-    const nextStage = workflowPlan ? String(workflowPlan["next_stage"] ?? "").trim() : "";
-    const executionWorker = workflowPlan ? String(workflowPlan["execution_worker_capability"] ?? "").trim() : "";
+    const nextStage = pmArtifact ? String(pmArtifact["next_stage"] ?? "").trim() : "";
+    const executionWorker = pmArtifact ? String(pmArtifact["execution_worker_capability"] ?? "").trim() : "";
     if (nextStage) {
       pmItems.push(`Next stage: ${nextStage}`);
     }
@@ -961,26 +1018,26 @@ export default function RunDetailPage() {
       {
         stage: "dev",
         label: "Dev",
-        items: [...checkpointSummaryForStage("dev"), ...toStringList(planRoot["dev_rationale"]), ...workstreamSummaries],
+        items: [...checkpointSummaryForStage("dev"), ...toStringList(devArtifact?.["change_summary"]), ...workstreamSummaries],
         feedback: null as string | null,
         emptyText: "No Dev rationale captured."
       },
       {
         stage: "test",
         label: "Test",
-        items: [...checkpointSummaryForStage("test"), ...toStringList(planRoot["test_guidance"])],
+        items: [...checkpointSummaryForStage("test"), ...toStringList(testArtifact?.["guidance"])],
         feedback: null as string | null,
         emptyText: "No test guidance captured."
       },
       {
         stage: "review",
         label: "Review",
-        items: [...checkpointSummaryForStage("review"), ...toStringList(planRoot["review_summary"]), ...reviewHistory],
-        feedback: String(planRoot["review_feedback"] ?? "").trim() || null,
+        items: [...checkpointSummaryForStage("review"), ...toStringList(reviewArtifact?.["summary"]), ...reviewHistory],
+        feedback: String(reviewArtifact?.["feedback"] ?? "").trim() || null,
         emptyText: "No review summary captured."
       }
     ];
-  }, [orchestrationTrace.workstreamEvents, run?.plan, workflowDiagnostics?.history]);
+  }, [orchestrationTrace.workstreamEvents, run?.plan, stageCheckpoints, workflowDiagnostics?.history]);
   const stageLiveSnapshots = useMemo(() => {
     const snapshots = new Map<AgentStage, { recordedAt: string; text: string }>();
     const validStages = new Set<AgentStage>(["pm", "dev", "test", "review"]);
