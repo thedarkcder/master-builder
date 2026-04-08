@@ -114,6 +114,7 @@ class Settings(BaseSettings):
     worker_run_heartbeat_interval_seconds: int = 30
     worker_run_stale_timeout_seconds: int = 300
     worker_stale_sweep_interval_seconds: int = 60
+    worker_max_child_processes: int = 5
     tenant_archive_retention_days: int = 60
     tenant_archive_sweep_interval_seconds: int = 3600
     discord_gateway_lock_key: int = 947102033127

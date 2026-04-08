@@ -132,6 +132,16 @@ class CliEntrypointTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         gateway_mock.assert_called_once_with()
 
+    def test_worker_child_commands_invoke_child_runtime(self) -> None:
+        with patch("orchestrator.cli.run_worker_child_once", return_value=0) as child_mock:
+            exit_code_runs = cli_main(["worker-child-runs"])
+            exit_code_webhooks = cli_main(["worker-child-webhooks"])
+        self.assertEqual(exit_code_runs, 0)
+        self.assertEqual(exit_code_webhooks, 0)
+        self.assertEqual(child_mock.call_count, 2)
+        self.assertEqual(child_mock.call_args_list[0].kwargs, {"mode": "runs"})
+        self.assertEqual(child_mock.call_args_list[1].kwargs, {"mode": "webhooks"})
+
     def test_discord_live_voice_command_invokes_runtime(self) -> None:
         with patch("orchestrator.cli.run_discord_live_voice") as voice_mock:
             exit_code = cli_main(["discord-live-voice"])

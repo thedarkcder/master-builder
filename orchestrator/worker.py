@@ -3,12 +3,13 @@ from __future__ import annotations
 import asyncio
 import logging
 import signal
+import sys
 from collections.abc import Callable
 from contextlib import suppress
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from sqlalchemy import func, select
-from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session, sessionmaker
 
 from orchestrator.api.admin.tenant_crud import purge_expired_archived_tenants
@@ -48,31 +49,30 @@ except ImportError:  # pragma: no cover - dependency is required at runtime
     psycopg = None
 
 logger = logging.getLogger(__name__)
-WORKER_DATABASE_RETRY_DELAY_SECONDS = 2.0
 WORKER_RUNTIME_HEARTBEAT_INTERVAL_SECONDS = 30
 WORKER_MODE_RUNS = "runs"
 WORKER_MODE_WEBHOOKS = "webhooks"
+WORKER_CHILD_EXIT_PROCESSED = 0
+WORKER_CHILD_EXIT_IDLE = 3
+WORKER_CHILD_EXIT_DEPENDENCY_FAILURE = 4
+WORKER_CHILD_EXIT_RUNTIME_FAILURE = 5
 
 
 class WorkerDependencyFailure(RuntimeError):
     pass
 
 
-def _is_retryable_database_error(exc: BaseException) -> bool:
-    if not isinstance(exc, DBAPIError):
-        return False
-    if getattr(exc, "connection_invalidated", False):
-        return True
-    error_text = str(getattr(exc, "orig", exc) or "").lower()
-    retryable_markers = (
-        "server closed the connection unexpectedly",
-        "the database system is shutting down",
-        "terminating connection due to administrator command",
-        "connection refused",
-        "connection not open",
-        "connection already closed",
-    )
-    return any(marker in error_text for marker in retryable_markers)
+@dataclass(frozen=True)
+class WorkerChildProcessResult:
+    return_code: int
+    processed: bool
+    dependency_failure: bool
+
+
+@dataclass(frozen=True)
+class WorkerChildProcessHandle:
+    process: asyncio.subprocess.Process
+    wait_task: asyncio.Task[WorkerChildProcessResult]
 
 
 def _coerce_parallel_slots(raw_value: object) -> int:
@@ -273,44 +273,63 @@ def _resolve_worker_processor(*, mode: str) -> Callable[..., object | None]:
     raise ValueError(f"Unsupported worker mode '{mode}'")
 
 
-async def _run_worker_slot(
+def _child_command_for_mode(*, mode: str) -> str:
+    normalized_mode = str(mode or "").strip().lower()
+    if normalized_mode == WORKER_MODE_RUNS:
+        return "worker-child-runs"
+    if normalized_mode == WORKER_MODE_WEBHOOKS:
+        return "worker-child-webhooks"
+    raise ValueError(f"Unsupported worker mode '{mode}'")
+
+
+def _resolve_worker_child_capacity(
     *,
+    settings: Settings,
     session_factory: sessionmaker[Session],
-    stop_event: asyncio.Event,
-    process_next_work_item_once: Callable[..., object | None],
+) -> int:
+    policy_slots = _resolve_parallel_slots_from_policy(session_factory=session_factory)
+    configured_cap = _coerce_parallel_slots(getattr(settings, "worker_max_child_processes", 5))
+    return max(1, min(policy_slots, configured_cap))
+
+
+async def _spawn_worker_child_process(
+    *,
+    mode: str,
+    wake_event: asyncio.Event,
+) -> WorkerChildProcessHandle:
+    _ = wake_event
+    process = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-m",
+        "orchestrator.cli",
+        _child_command_for_mode(mode=mode),
+    )
+
+    async def _await_result() -> WorkerChildProcessResult:
+        return_code = await process.wait()
+        return WorkerChildProcessResult(
+            return_code=return_code,
+            processed=return_code == WORKER_CHILD_EXIT_PROCESSED,
+            dependency_failure=return_code == WORKER_CHILD_EXIT_DEPENDENCY_FAILURE,
+        )
+
+    wait_task = asyncio.create_task(_await_result())
+    return WorkerChildProcessHandle(process=process, wait_task=wait_task)
+
+
+async def _terminate_worker_child_processes(
+    *,
+    active_children: dict[asyncio.Task[WorkerChildProcessResult], WorkerChildProcessHandle],
 ) -> None:
-    while not stop_event.is_set():
-        try:
-            processed = await asyncio.to_thread(
-                process_next_work_item_once,
-                session_factory=session_factory,
-            )
-        except WorkerDependencyFailure:
-            raise
-        except Exception as exc:
-            if not _is_retryable_database_error(exc):
-                raise
-            logger.warning(
-                "worker_slot_database_retry_scheduled error=%s retry_delay_seconds=%s",
-                exc,
-                WORKER_DATABASE_RETRY_DELAY_SECONDS,
-            )
-            if not await _wait_for_worker_retry_delay(
-                stop_event=stop_event,
-                timeout_seconds=WORKER_DATABASE_RETRY_DELAY_SECONDS,
-            ):
-                continue
-            return
-        if processed is None:
-            return
-
-
-async def _wait_for_worker_retry_delay(*, stop_event: asyncio.Event, timeout_seconds: float) -> bool:
-    try:
-        await asyncio.wait_for(stop_event.wait(), timeout=timeout_seconds)
-    except asyncio.TimeoutError:
-        return False
-    return True
+    handles = list(active_children.values())
+    for handle in handles:
+        if handle.process.returncode is not None:
+            continue
+        with suppress(ProcessLookupError):
+            handle.process.terminate()
+    waiters: list[asyncio.Task[WorkerChildProcessResult]] = [handle.wait_task for handle in handles]
+    if waiters:
+        await asyncio.gather(*waiters, return_exceptions=True)
 
 
 def _recover_worker_run_health_once(
@@ -427,6 +446,28 @@ async def _run_worker_runtime_heartbeat_loop(
             continue
 
 
+def run_worker_child_once(*, mode: str = WORKER_MODE_RUNS) -> int:
+    settings = get_settings()
+    configure_logging(
+        settings.log_level,
+        environment=settings.sentry_environment,
+        platform_version=settings.sentry_release or "dev-local",
+        default_agent_id=str(settings.agent_id or "").strip() or "worker",
+    )
+    session_factory = create_session_factory()
+    process_next_work_item_once = _resolve_worker_processor(mode=mode)
+    try:
+        processed = process_next_work_item_once(session_factory=session_factory)
+    except WorkerDependencyFailure:
+        platform_metrics.record_worker_failure(kind="dependency")
+        return WORKER_CHILD_EXIT_DEPENDENCY_FAILURE
+    except Exception:
+        platform_metrics.record_worker_failure(kind="child_crash")
+        logger.exception("worker_child_failed mode=%s", mode)
+        return WORKER_CHILD_EXIT_RUNTIME_FAILURE
+    return WORKER_CHILD_EXIT_PROCESSED if processed is not None else WORKER_CHILD_EXIT_IDLE
+
+
 async def run_worker(*, mode: str = WORKER_MODE_RUNS) -> None:
     settings = get_settings()
     configure_logging(
@@ -450,7 +491,6 @@ async def run_worker(*, mode: str = WORKER_MODE_RUNS) -> None:
         )
 
     wake_event = asyncio.Event()
-    process_next_work_item_once = _resolve_worker_processor(mode=mode)
     listener = RunQueueNotificationBridge(
         postgres_dsn=postgres_dsn_from_database_url(settings.database_url),
         wake_event=wake_event,
@@ -464,7 +504,8 @@ async def run_worker(*, mode: str = WORKER_MODE_RUNS) -> None:
     worker_runtime_heartbeat_task: asyncio.Task[None] | None = None
     service_instance_id = worker_service_instance_id_for_mode(settings=settings, mode=mode)
     agent_id = str(settings.agent_id or "").strip() or "worker"
-    slots: list[asyncio.Task[None]] = []
+    active_children: dict[asyncio.Task[WorkerChildProcessResult], WorkerChildProcessHandle] = {}
+    drain_requested = True
     try:
         listener.start()
         await asyncio.to_thread(
@@ -516,64 +557,95 @@ async def run_worker(*, mode: str = WORKER_MODE_RUNS) -> None:
 
         logger.info("worker_started mode=%s", mode)
         while not stop_event.is_set():
-            await wait_for_wake_or_stop(wake_event=wake_event, stop_event=stop_event)
+            completed_children = [task for task in active_children if task.done()]
+            completed_count = 0
+            any_processed = False
+            for task in completed_children:
+                completed_count += 1
+                handle = active_children.pop(task)
+                try:
+                    child_result = task.result()
+                except Exception as exc:  # noqa: BLE001
+                    platform_metrics.record_worker_failure(kind="child_crash")
+                    logger.exception("worker_child_task_failed mode=%s error=%s", mode, exc)
+                    drain_requested = True
+                    continue
+                if child_result.dependency_failure:
+                    raise WorkerDependencyFailure("Worker runtime unavailable in child process")
+                if child_result.return_code == WORKER_CHILD_EXIT_RUNTIME_FAILURE:
+                    platform_metrics.record_worker_failure(kind="child_crash")
+                    logger.error(
+                        "worker_child_failed mode=%s return_code=%s pid=%s",
+                        mode,
+                        child_result.return_code,
+                        handle.process.pid,
+                    )
+                    drain_requested = True
+                    continue
+                if child_result.return_code not in {WORKER_CHILD_EXIT_PROCESSED, WORKER_CHILD_EXIT_IDLE}:
+                    platform_metrics.record_worker_failure(kind="child_crash")
+                    logger.error(
+                        "worker_child_unexpected_exit mode=%s return_code=%s pid=%s",
+                        mode,
+                        child_result.return_code,
+                        handle.process.pid,
+                    )
+                    drain_requested = True
+                    continue
+                if child_result.processed:
+                    any_processed = True
+
+            if any_processed:
+                drain_requested = True
+            elif completed_count > 0 and not active_children and not wake_event.is_set():
+                drain_requested = False
+
+            if wake_event.is_set():
+                wake_event.clear()
+                drain_requested = True
+
             if stop_event.is_set():
                 break
-            wake_event.clear()
-            parallel_slots = _resolve_parallel_slots_from_policy(session_factory=session_factory)
-            while len(slots) < parallel_slots:
-                slots.append(
-                    asyncio.create_task(
-                        _run_worker_slot(
-                            session_factory=session_factory,
-                            stop_event=stop_event,
-                            process_next_work_item_once=process_next_work_item_once,
-                        )
-                    )
+
+            parallel_slots = _resolve_worker_child_capacity(
+                settings=settings,
+                session_factory=session_factory,
+            )
+            while drain_requested and len(active_children) < parallel_slots and not stop_event.is_set():
+                child = await _spawn_worker_child_process(
+                    mode=mode,
+                    wake_event=wake_event,
                 )
-            while slots and not stop_event.is_set():
+                active_children[child.wait_task] = child
+
+            if stop_event.is_set():
+                break
+
+            if not active_children and not drain_requested:
+                await wait_for_wake_or_stop(wake_event=wake_event, stop_event=stop_event)
+                continue
+
+            if active_children:
+                wake_task = asyncio.create_task(wait_for_wake_or_stop(wake_event=wake_event, stop_event=stop_event))
                 done, pending = await asyncio.wait(
-                    slots,
+                    set(active_children.keys()) | {wake_task},
                     return_when=asyncio.FIRST_COMPLETED,
                 )
-                slots = list(pending)
-                slot_failed = False
-                for task in done:
-                    try:
-                        task.result()
-                    except WorkerDependencyFailure:
-                        raise
-                    except Exception as exc:
-                        slot_failed = True
-                        platform_metrics.record_worker_failure(kind="slot_crash")
-                        logger.exception("worker_slot_failed error=%s", exc)
-                if slot_failed and not stop_event.is_set():
-                    wake_event.set()
-                if stop_event.is_set():
-                    break
-                if wake_event.is_set():
-                    wake_event.clear()
-                    parallel_slots = _resolve_parallel_slots_from_policy(session_factory=session_factory)
-                    while len(slots) < parallel_slots:
-                        slots.append(
-                            asyncio.create_task(
-                                _run_worker_slot(
-                                    session_factory=session_factory,
-                                    stop_event=stop_event,
-                                    process_next_work_item_once=process_next_work_item_once,
-                                )
-                            )
-                        )
+                if wake_task in done:
+                    with suppress(asyncio.CancelledError):
+                        wake_task.result()
+                else:
+                    wake_task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await wake_task
+                continue
     except WorkerDependencyFailure:
         raise
     except Exception:
         platform_metrics.record_worker_failure(kind="crash")
         raise
     finally:
-        for task in slots:
-            task.cancel()
-        if slots:
-            await asyncio.gather(*slots, return_exceptions=True)
+        await _terminate_worker_child_processes(active_children=active_children)
         if stale_recovery_task is not None:
             stale_recovery_task.cancel()
             with suppress(asyncio.CancelledError):

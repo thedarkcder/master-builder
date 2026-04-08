@@ -24,6 +24,7 @@ from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import Run, Tenant
 from orchestrator.worker import main as worker_main
+from orchestrator.worker import run_worker_child_once
 
 
 def _coerce_positive_int(value: object, *, default: int) -> int:
@@ -41,6 +42,8 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("worker", help="Run background run worker loop")
     subparsers.add_parser("worker-runs", help="Run background issue-execution worker loop")
     subparsers.add_parser("worker-webhooks", help="Run background webhook worker loop")
+    subparsers.add_parser("worker-child-runs", help="Run one child issue-execution job")
+    subparsers.add_parser("worker-child-webhooks", help="Run one child webhook job")
     subparsers.add_parser("discord-gateway", help="Run Discord gateway leader loop")
     subparsers.add_parser("discord-live-voice", help="Run Discord live voice leader loop")
     subparsers.add_parser("knowledge-jira-sync", help="Run Jira knowledge sync leader loop")
@@ -322,6 +325,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "worker-webhooks":
         worker_main(mode="webhooks")
         return 0
+
+    if args.command == "worker-child-runs":
+        return int(run_worker_child_once(mode="runs"))
+
+    if args.command == "worker-child-webhooks":
+        return int(run_worker_child_once(mode="webhooks"))
 
     if args.command == "discord-gateway":
         run_discord_gateway()
