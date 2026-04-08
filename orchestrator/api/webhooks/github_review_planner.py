@@ -11,6 +11,7 @@ from orchestrator.core.communications import (
     GitHubStickyReviewCommentAction,
     TransportAction,
 )
+from orchestrator.core.workflow.execution_snapshot import require_github_pr_remediation_context_from_plan
 
 @dataclass(frozen=True)
 class GitHubReviewPlan:
@@ -336,32 +337,22 @@ def plan_pull_request_targets(
                 else None
             )
             run_plan = getattr(remediation_result.run, "plan", None)
-            trigger_context = run_plan.get("trigger_context") if isinstance(run_plan, dict) else None
-            manual_context = (
-                trigger_context.get("manual_fix_request")
-                if isinstance(trigger_context, dict)
-                else None
-            )
-            instruction_text = (
-                str(manual_context.get("instruction_text") or "").strip()
-                if isinstance(manual_context, dict)
-                else ""
-            )
-            requested_comment = (
-                manual_context.get("requested_comment")
-                if isinstance(manual_context, dict)
-                else None
-            )
-            requested_comment_url = (
-                str(requested_comment.get("url") or "").strip()
-                if isinstance(requested_comment, dict)
-                else ""
-            )
-            requested_comment_type = (
-                str(requested_comment.get("type") or "").strip()
-                if isinstance(requested_comment, dict)
-                else ""
-            )
+            try:
+                trigger_context = require_github_pr_remediation_context_from_plan(run_plan)
+            except ValueError as exc:
+                logger.warning(
+                    "github_manual_fix_invalid_snapshot run_id=%s issue_key=%s pr_number=%s error=%s",
+                    remediation_run_id,
+                    remediation_result.issue_key,
+                    pr_number,
+                    exc,
+                )
+                trigger_context = None
+            manual_context = trigger_context.manual_fix_request if trigger_context is not None else None
+            instruction_text = manual_context.instruction_text if manual_context is not None else ""
+            requested_comment = manual_context.requested_comment if manual_context is not None else None
+            requested_comment_url = requested_comment.url if requested_comment is not None else ""
+            requested_comment_type = requested_comment.comment_type if requested_comment is not None else ""
             effective_comment_type = requested_comment_type
             if not effective_comment_type:
                 if github_event == "pull_request_review_comment":

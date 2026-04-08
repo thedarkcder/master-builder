@@ -13,6 +13,7 @@ from orchestrator.core.agent_observability import (
     reset_agent_observability_for_tests,
 )
 from orchestrator.core.runs import RUN_DEDUPE_SCOPE_ISSUE_EXECUTION, enqueue_run
+from orchestrator.core.worker_capability_normalization import WorkerCapability
 from orchestrator.core.workflow.runner import (
     PmPlan,
     WorkflowStageCheckpoint,
@@ -100,7 +101,7 @@ class _CapabilityMismatchRunner:
             summary=[],
             test_guidance=[],
             attempts=1,
-            requeue_target="macos",
+            requeue_target=WorkerCapability.MACOS,
             requeue_reason=(
                 "Execution capability mismatch: PM selected macos but current worker is linux. "
                 "Requeue on worker:macos before dev/test/review."
@@ -132,6 +133,7 @@ class WorkerWorkflowTests(unittest.TestCase):
         os.environ["ORCHESTRATOR_DATABASE_URL"] = self.database_url
         os.environ["ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR"] = self.repo_checkout_base_dir
         os.environ["ORCHESTRATOR_WORKER_WORKSPACE_KEY"] = "worker-a"
+        os.environ["ORCHESTRATOR_WORKER_CAPABILITIES"] = "linux"
         get_settings.cache_clear()
         reset_db_engine_cache()
         reset_agent_observability_for_tests()
@@ -173,6 +175,7 @@ class WorkerWorkflowTests(unittest.TestCase):
         self.temp_dir.cleanup()
         os.environ.pop("ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR", None)
         os.environ.pop("ORCHESTRATOR_WORKER_WORKSPACE_KEY", None)
+        os.environ.pop("ORCHESTRATOR_WORKER_CAPABILITIES", None)
         self.jira_oauth_patcher.stop()
         get_settings.cache_clear()
         reset_db_engine_cache()
@@ -361,12 +364,11 @@ class WorkerWorkflowTests(unittest.TestCase):
             self.assertIsNotNone(processed.started_at)
             self.assertIsNotNone(processed.finished_at)
             self.assertIsInstance(processed.plan, dict)
-            self.assertEqual(processed.plan["outcome"], "success")
-            self.assertEqual(processed.plan["attempts"], 1)
-            self.assertEqual(processed.plan["plan"]["plan_steps"], ["plan", "build", "validate"])
-            self.assertEqual(processed.plan["stage_checkpoints"]["pm"]["status"], "completed")
-            self.assertEqual(processed.plan["latest_completed_stage"], "pm")
-            stage_updates = processed.plan["stage_updates"]
+            self.assertEqual(processed.plan["workflow"]["outcome"], "success")
+            self.assertEqual(processed.plan["workflow"]["attempts"], 1)
+            self.assertEqual(processed.plan["stages"]["pm"]["artifact"]["plan_steps"], ["plan", "build", "validate"])
+            self.assertEqual(processed.plan["stages"]["pm"]["status"], "completed")
+            stage_updates = processed.plan["events"]["stage_updates"]
             self.assertEqual(
                 [entry["stage"] for entry in stage_updates],
                 ["lock_acquired", "plan_posted", "pr_opened"],
@@ -409,10 +411,9 @@ class WorkerWorkflowTests(unittest.TestCase):
             self.assertIsNone(processed.started_at)
             self.assertIsNone(processed.finished_at)
             self.assertIsNone(processed.pr_url)
-            self.assertTrue(processed.plan["requeued"])
-            self.assertTrue(processed.plan["stale_branch_snapshot"])
-            self.assertIn("Branch snapshot stale", processed.plan["requeue_reason"])
-            stage_updates = processed.plan["stage_updates"]
+            self.assertTrue(processed.plan["context"]["execution_context"]["stale_branch_snapshot"])
+            self.assertIn("Branch snapshot stale", processed.plan["workflow"]["requeue_reason"])
+            stage_updates = processed.plan["events"]["stage_updates"]
             self.assertEqual(
                 [entry["stage"] for entry in stage_updates],
                 ["lock_acquired", "plan_posted", "run_requeued_stale_snapshot"],
@@ -438,9 +439,8 @@ class WorkerWorkflowTests(unittest.TestCase):
             )
             self.assertIsNone(processed.pr_url)
             self.assertIsInstance(processed.plan, dict)
-            self.assertEqual(processed.plan["outcome"], "failed")
-            self.assertEqual(processed.plan["diagnostics"]["stage"], "test")
-            stage_updates = processed.plan["stage_updates"]
+            self.assertEqual(processed.plan["workflow"]["outcome"], "failed")
+            stage_updates = processed.plan["events"]["stage_updates"]
             self.assertEqual(
                 [entry["stage"] for entry in stage_updates],
                 ["lock_acquired", "plan_posted", "run_failed"],
@@ -467,10 +467,9 @@ class WorkerWorkflowTests(unittest.TestCase):
             self.assertIsNone(processed.started_at)
             self.assertIsNone(processed.finished_at)
             self.assertIsInstance(processed.plan, dict)
-            self.assertEqual(processed.plan["required_worker_capability"], "macos")
-            self.assertEqual(processed.plan["required_worker_label"], "worker:macos")
-            self.assertTrue(processed.plan["requeued"])
-            stage_updates = processed.plan["stage_updates"]
+            self.assertEqual(processed.plan["workflow"]["requeue_target"], "macos")
+            self.assertEqual(processed.plan["context"]["execution_context"]["required_worker_label"], "worker:macos")
+            stage_updates = processed.plan["events"]["stage_updates"]
             self.assertEqual(
                 [entry["stage"] for entry in stage_updates],
                 ["lock_acquired", "plan_posted", "run_requeued_capability_mismatch"],
@@ -502,8 +501,8 @@ class WorkerWorkflowTests(unittest.TestCase):
             self.assertEqual(processed.status, "blocked")
             self.assertIn("Issue is missing the configured ready label", processed.last_error or "")
             self.assertIsInstance(processed.plan, dict)
-            self.assertIn("run_not_ready", processed.plan)
-            stage_updates = processed.plan["stage_updates"]
+            self.assertIn("run_not_ready", processed.plan["context"]["execution_context"])
+            stage_updates = processed.plan["events"]["stage_updates"]
             self.assertEqual([entry["stage"] for entry in stage_updates], ["run_not_ready"])
             retry_enqueue = enqueue_run(
                 session,
@@ -630,7 +629,7 @@ class WorkerWorkflowTests(unittest.TestCase):
             processed = process_next_queued_run(session, runner)
             self.assertIsNotNone(processed)
             self.assertEqual(processed.run_id, run_id)
-            stage_updates = processed.plan["stage_updates"]
+            stage_updates = processed.plan["events"]["stage_updates"]
             self.assertIn(
                 "https://jira.example.test/browse/TP-555",
                 stage_updates[0]["discord_message"],

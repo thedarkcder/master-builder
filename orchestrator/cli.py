@@ -18,6 +18,7 @@ from orchestrator.core.knowledge_jira_sync_runtime import run_knowledge_jira_syn
 from orchestrator.core.project_automation_runtime import run_project_automation_runtime
 from orchestrator.core.runs import enqueue_run, resolve_precheck_outcome_for_enqueue
 from orchestrator.core.voice.prewarm import prewarm_voice_dependencies
+from orchestrator.core.workflow.execution_snapshot_migration import migrate_execution_snapshots
 from orchestrator.storage.database_support import ensure_postgres_database_url
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.migrations import run_migrations
@@ -46,6 +47,21 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("project-automation", help="Run project automation scheduler leader loop")
     subparsers.add_parser("knowledge-prewarm", help="Prewarm knowledge embedding dependencies")
     subparsers.add_parser("migrate", help="Apply DB migrations")
+    snapshot_migrate_parser = subparsers.add_parser(
+        "migrate-execution-snapshots",
+        help="Canonicalize legacy run/checkpoint execution snapshot payloads",
+    )
+    snapshot_migrate_parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="Persist converted payloads (default is dry-run)",
+    )
+    snapshot_migrate_parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Optional per-table row limit for migration scan",
+    )
     subparsers.add_parser("voice-prewarm", help="Prewarm voice model dependencies")
 
     run_parser = subparsers.add_parser("run", help="Queue a manual run for a tenant issue")
@@ -260,6 +276,37 @@ def _handle_knowledge_prewarm() -> int:
     return 0
 
 
+def _handle_execution_snapshot_migration(*, apply: bool, limit: int | None) -> int:
+    settings = get_settings()
+    ensure_postgres_database_url(
+        database_url=settings.database_url,
+        context="CLI runtime",
+        allow_sqlite_for_tests=bool(getattr(settings, "allow_sqlite_for_tests", False)),
+    )
+    session_factory = create_session_factory()
+    with session_factory() as session:
+        report = migrate_execution_snapshots(
+            session=session,
+            apply=apply,
+            limit=limit,
+        )
+    invalid_total = report.invalid_runs + report.invalid_checkpoints
+    payload = {
+        "ok": invalid_total == 0,
+        "apply": apply,
+        "scanned_runs": report.scanned_runs,
+        "converted_runs": report.converted_runs,
+        "invalid_runs": report.invalid_runs,
+        "scanned_checkpoints": report.scanned_checkpoints,
+        "converted_checkpoints": report.converted_checkpoints,
+        "invalid_checkpoints": report.invalid_checkpoints,
+        "invalid_run_ids": list(report.invalid_run_ids),
+        "invalid_checkpoint_ids": list(report.invalid_checkpoint_ids),
+    }
+    print(json.dumps(payload))
+    return 0 if invalid_total == 0 else 1
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -298,6 +345,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "migrate":
         run_migrations()
         return 0
+
+    if args.command == "migrate-execution-snapshots":
+        return _handle_execution_snapshot_migration(
+            apply=bool(args.apply),
+            limit=args.limit,
+        )
 
     if args.command == "voice-prewarm":
         return _handle_voice_prewarm()

@@ -32,7 +32,7 @@ from orchestrator.core.worker.queue_listener import (
     wait_for_wake_or_stop,
 )
 from orchestrator.core.worker.runtime_factory import build_workflow_runner_for_session
-from orchestrator.core.worker_capabilities import parse_worker_capabilities
+from orchestrator.core.worker_capabilities import resolve_worker_capability_context
 from orchestrator.core.workflow.runner import WorkflowRunner
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.run_queue_events import (
@@ -92,7 +92,11 @@ def _coerce_non_negative_int(raw_value: object) -> int:
 
 
 def _worker_runtime_capabilities(*, settings: Settings) -> list[str]:
-    return sorted(parse_worker_capabilities(getattr(settings, "worker_capabilities", None)))
+    context = resolve_worker_capability_context(
+        raw_value=getattr(settings, "worker_capabilities", None),
+        source="ORCHESTRATOR_WORKER_CAPABILITIES",
+    )
+    return list(context.available_values)
 
 
 def _worker_runtime_active_run_count(

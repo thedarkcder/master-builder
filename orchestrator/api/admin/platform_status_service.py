@@ -8,7 +8,8 @@ from orchestrator.api.schemas import PlatformServiceInstanceRead, PlatformServic
 from orchestrator.core.config import Settings
 from orchestrator.core.discord.command_sync_status import get_discord_command_sync_status
 from orchestrator.core.knowledge_jira_sync_status import get_runtime_status as get_knowledge_jira_sync_runtime_status
-from orchestrator.core.worker_capabilities import parse_worker_capabilities
+from orchestrator.core.worker_capability_normalization import WorkerCapability
+from orchestrator.core.worker_capabilities import parse_worker_capabilities_diagnostics
 from orchestrator.storage.models import Run, WorkerRuntimeState
 
 ACTIVE_RUN_STATUSES = {"queued", "running"}
@@ -35,8 +36,8 @@ def _capability_label(value: str) -> str:
 
 
 def _worker_row_capabilities(row: WorkerRuntimeState) -> list[str]:
-    capabilities = parse_worker_capabilities(row.capabilities_json)
-    return [_capability_label(item) for item in sorted(capabilities)]
+    capabilities, _invalid = parse_worker_capabilities_diagnostics(row.capabilities_json)
+    return [_capability_label(item.value) for item in sorted(capabilities, key=lambda item: item.value)]
 
 
 def _worker_row_last_seen(row: WorkerRuntimeState) -> datetime | None:
@@ -148,7 +149,11 @@ def _worker_instances(*, session, now: datetime) -> list[PlatformServiceInstance
     return instances
 
 
-def _worker_capabilities(*, instances: list[PlatformServiceInstanceRead], settings: Settings) -> list[str]:
+def _worker_capabilities(
+    *,
+    instances: list[PlatformServiceInstanceRead],
+    configured_capabilities: set[WorkerCapability],
+) -> list[str]:
     capability_ids: set[str] = set()
     for instance in instances:
         capability_ids.update(
@@ -159,7 +164,7 @@ def _worker_capabilities(*, instances: list[PlatformServiceInstanceRead], settin
             }
         )
     if not capability_ids:
-        capability_ids.update(parse_worker_capabilities(getattr(settings, "worker_capabilities", None)))
+        capability_ids.update({capability.value for capability in configured_capabilities})
     return [_capability_label(item) for item in sorted(capability_ids)]
 
 
@@ -177,7 +182,13 @@ def _api_status() -> PlatformServiceStatusRead:
 def _worker_status(*, session, settings: Settings) -> PlatformServiceStatusRead:  # noqa: ANN001
     now = _utcnow()
     instances = _worker_instances(session=session, now=now)
-    capabilities = _worker_capabilities(instances=instances, settings=settings)
+    configured_capabilities, invalid_configured_tokens = parse_worker_capabilities_diagnostics(
+        getattr(settings, "worker_capabilities", None)
+    )
+    capabilities = _worker_capabilities(
+        instances=instances,
+        configured_capabilities=configured_capabilities,
+    )
     fresh_instances = [instance for instance in instances if instance.status not in {"stale", "stopped"}]
     stale_instances = [instance for instance in instances if instance.status == "stale"]
     busy_instances = [instance for instance in fresh_instances if instance.status == "busy"]
@@ -205,6 +216,14 @@ def _worker_status(*, session, settings: Settings) -> PlatformServiceStatusRead:
     else:
         status = "unavailable"
         summary = "No worker runtime registrations are present."
+    if invalid_configured_tokens:
+        invalid = ", ".join(invalid_configured_tokens)
+        allowed = "linux, macos"
+        summary = (
+            f"{summary} Invalid ORCHESTRATOR_WORKER_CAPABILITIES token(s): {invalid}. "
+            f"Allowed values: {allowed}."
+        )
+        status = "degraded"
 
     return PlatformServiceStatusRead(
         service_id="workers",

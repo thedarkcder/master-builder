@@ -12,6 +12,7 @@ import type {
   RunEventRecord,
   RunLogEventRecord,
   RunRecord,
+  WorkflowRecord,
   WorkflowAttemptCreatePayload,
   AuthenticatedPrincipalRecord,
   DeliverySummaryRecord,
@@ -47,6 +48,64 @@ type TenantSessionSeed = {
   userName?: string | null;
   userEmail?: string | null;
 };
+
+type SnapshotStageSeed = {
+  attempt?: number;
+  status: string;
+  completed_at: string;
+  summary: string;
+  artifact?: Record<string, unknown>;
+};
+
+type SnapshotPlanSeed = {
+  stages?: Partial<Record<"pm" | "dev" | "test" | "review", SnapshotStageSeed>>;
+  execution_context?: Record<string, unknown>;
+  stage_updates?: Array<Record<string, unknown>>;
+  live_stage_updates?: Array<Record<string, unknown>>;
+  stage_trace?: Array<Record<string, unknown>>;
+  workstream_trace?: Array<Record<string, unknown>>;
+  workflow?: Record<string, unknown>;
+};
+
+export function makeExecutionSnapshotPlan(seed: SnapshotPlanSeed = {}): Record<string, unknown> {
+  const stagePayload: Record<string, unknown> = {};
+  for (const stage of ["pm", "dev", "test", "review"] as const) {
+    const value = seed.stages?.[stage];
+    if (!value) {
+      continue;
+    }
+    stagePayload[stage] = {
+      attempt: value.attempt ?? 1,
+      status: value.status,
+      completed_at: value.completed_at,
+      summary: value.summary,
+      ...(value.artifact ? { artifact: value.artifact } : {}),
+    };
+  }
+  return {
+    version: 1,
+    context: {
+      trigger_context: {},
+      execution_context: seed.execution_context ?? {},
+    },
+    workflow: {
+      outcome: null,
+      attempts: 0,
+      summary: [],
+      blocker_message: null,
+      requeue_target: null,
+      requeue_reason: null,
+      ...(seed.workflow ?? {}),
+    },
+    events: {
+      stage_updates: seed.stage_updates ?? [],
+      live_stage_updates: seed.live_stage_updates ?? [],
+      stage_trace: seed.stage_trace ?? [],
+      workstream_trace: seed.workstream_trace ?? [],
+    },
+    stages: stagePayload,
+  };
+}
 
 export async function seedAdminSession(page: Page, accessToken = ADMIN_ACCESS_TOKEN): Promise<void> {
   await seedAuthenticatedSession(page, {
@@ -307,8 +366,8 @@ export function makeRun(overrides: Partial<RunRecord> = {}): RunRecord {
     created_at: "2026-03-27T16:50:00Z",
     started_at: "2026-03-27T16:50:10Z",
     finished_at: "2026-03-27T17:08:27Z",
-    plan: {
-      stage_checkpoints: {
+    plan: makeExecutionSnapshotPlan({
+      stages: {
         pm: {
           status: "completed",
           completed_at: "2026-03-27T16:55:00Z",
@@ -326,7 +385,35 @@ export function makeRun(overrides: Partial<RunRecord> = {}): RunRecord {
         base_branch: "main",
         execution_repo_dir: "/tmp/worktree",
       },
-    },
+    }),
+    ...overrides,
+  };
+}
+
+export function makeWorkflow(overrides: Partial<WorkflowRecord> = {}): WorkflowRecord {
+  const baselineRun = makeRun();
+  return {
+    workflow_id: baselineRun.workflow_id,
+    tenant_id: baselineRun.tenant_id,
+    project_id: baselineRun.project_id,
+    issue_key: baselineRun.issue_key,
+    issue_summary: baselineRun.issue_summary,
+    repo_url: baselineRun.repo_url,
+    branch: baselineRun.branch,
+    pr_url: baselineRun.pr_url,
+    dedupe_scope: "issue_execution",
+    status: baselineRun.status,
+    active_run_id: baselineRun.run_id,
+    latest_checkpoint_id: baselineRun.entry_checkpoint_id,
+    source_workflow_id: null,
+    source_run_id: null,
+    blocked_reason: null,
+    pending_input_request_id: null,
+    latest_checkpoint_kind: "execution",
+    runs: [baselineRun],
+    created_at: baselineRun.created_at,
+    started_at: baselineRun.started_at,
+    finished_at: baselineRun.finished_at,
     ...overrides,
   };
 }
@@ -557,6 +644,7 @@ export async function mockRunDetailApis(
   page: Page,
   options: {
     run: RunRecord;
+    workflow?: WorkflowRecord;
     events?: RunEventRecord[];
     logs?: RunLogEventRecord[];
     tokenTimeline?: TokenTimelineRecord;
@@ -577,8 +665,29 @@ export async function mockRunDetailApis(
       created_at: "2026-03-27T17:10:00Z",
       started_at: null,
       finished_at: null,
-      plan: { pre_check: { outcome: "ready_for_agent" } },
+      plan: makeExecutionSnapshotPlan({
+        execution_context: { pre_check_outcome: "ready_for_agent" },
+      }),
       pr_url: null,
+    });
+  const workflow =
+    options.workflow ??
+    makeWorkflow({
+      workflow_id: options.run.workflow_id,
+      tenant_id: options.run.tenant_id,
+      project_id: options.run.project_id,
+      issue_key: options.run.issue_key,
+      issue_summary: options.run.issue_summary,
+      repo_url: options.run.repo_url,
+      branch: options.run.branch,
+      pr_url: options.run.pr_url,
+      status: options.run.status,
+      active_run_id: options.run.run_id,
+      latest_checkpoint_kind: "execution",
+      runs: [options.run],
+      created_at: options.run.created_at,
+      started_at: options.run.started_at,
+      finished_at: options.run.finished_at,
     });
   await installBffApiMocks(page, [
     {
@@ -601,6 +710,34 @@ export async function mockRunDetailApis(
           status: 404,
           contentType: "application/json",
           body: JSON.stringify({ detail: `Unknown run ${runId}` }),
+        });
+      },
+    },
+    {
+      method: "GET",
+      pathname: /^\/api\/bff\/api\/admin\/workflows\/[^/]+$/,
+      handler: (route, url) => {
+        const workflowId = decodeURIComponent(url.pathname.split("/").at(-1) ?? "");
+        if (workflowId === workflow.workflow_id) {
+          return fulfillJson(route, workflow);
+        }
+        if (workflowId === nextRun.workflow_id) {
+          return fulfillJson(route, {
+            ...workflow,
+            workflow_id: nextRun.workflow_id,
+            status: nextRun.status,
+            active_run_id: nextRun.run_id,
+            latest_checkpoint_kind: null,
+            runs: [nextRun],
+            created_at: nextRun.created_at,
+            started_at: nextRun.started_at,
+            finished_at: nextRun.finished_at,
+          } satisfies WorkflowRecord);
+        }
+        return route.fulfill({
+          status: 404,
+          contentType: "application/json",
+          body: JSON.stringify({ detail: `Unknown workflow ${workflowId}` }),
         });
       },
     },

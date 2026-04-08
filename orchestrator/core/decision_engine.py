@@ -61,6 +61,8 @@ from orchestrator.core.pre_run_check import (
     evaluate_execution_readiness_only,
     evaluate_pre_run_check,
 )
+from orchestrator.core.workflow.execution_snapshot import load_parsed_trigger_context_from_plan
+from orchestrator.core.workflow.trigger_context import GithubPrRemediationTriggerContext
 from orchestrator.core.precheck_decision import precheck_classification, precheck_missing_slots
 from orchestrator.core.runtime_invocation import invoke_runtime_json
 from orchestrator.core.codex_runtime import CodexRuntimeError, build_codex_runtime
@@ -80,16 +82,8 @@ _READY_FOR_AGENT_OVERRIDE_SOURCES = {
     "cli_run",
     "github_pr_remediation",
 }
-_PR_REMEDIATION_TRIGGER_SOURCE = "github_pr_review_feedback"
 _LEGACY_REMEDIATION_DESCRIPTION_PREFIX = "automated remediation run triggered from github pr #"
 _LEGACY_REMEDIATION_SUMMARY_MARKER = ": pr remediation for #"
-
-
-def _extract_trigger_context_from_plan(plan: object | None) -> dict | None:
-    if not isinstance(plan, dict):
-        return None
-    trigger_context = plan.get("trigger_context")
-    return trigger_context if isinstance(trigger_context, dict) else None
 
 
 def is_pr_remediation_run(
@@ -98,11 +92,9 @@ def is_pr_remediation_run(
     issue_summary: str | None,
     issue_description: str | None,
 ) -> bool:
-    trigger_context = _extract_trigger_context_from_plan(run_plan)
-    if isinstance(trigger_context, dict):
-        source = str(trigger_context.get("source") or "").strip().lower()
-        if source == _PR_REMEDIATION_TRIGGER_SOURCE:
-            return True
+    trigger_context = load_parsed_trigger_context_from_plan(run_plan)
+    if isinstance(trigger_context, GithubPrRemediationTriggerContext):
+        return True
 
     normalized_description = str(issue_description or "").strip().lower()
     if normalized_description.startswith(_LEGACY_REMEDIATION_DESCRIPTION_PREFIX):

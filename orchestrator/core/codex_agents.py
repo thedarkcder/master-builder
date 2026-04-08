@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
 from collections.abc import Callable
 from typing import Any
 
@@ -16,7 +15,8 @@ from orchestrator.core.runtime_invocation import (
 from orchestrator.core.codex_runtime import CodexRuntime, CodexRuntimeError
 from orchestrator.core.discord.personas import get_voice_room_persona_definition
 from orchestrator.core.prompt_templates import render_prompt
-from orchestrator.core.worker_capabilities import normalize_worker_capability
+from orchestrator.core.worker_capability_normalization import parse_worker_capability
+from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.core.workflow.runner import (
     DevResult,
     PmPlan,
@@ -168,7 +168,16 @@ class CodexWorkflowAgents:
 
     def _resume_source_state(self, *, request: WorkflowRequest) -> dict[str, Any]:
         payload = request.checkpoint_payload
-        return dict(payload) if isinstance(payload, dict) else {}
+        snapshot = ExecutionSnapshot.load(payload)
+        if snapshot is None:
+            return {}
+        review_result = snapshot.review_result()
+        if review_result is None:
+            return {}
+        return {
+            "review_summary": list(review_result.summary),
+            "review_feedback": review_result.feedback,
+        }
 
     def _invoke_stage_payload(
         self,
@@ -277,76 +286,52 @@ class CodexWorkflowAgents:
                     else "none"
                 ),
                 last_review_summary_json=json.dumps(last_review_result.summary if last_review_result else []),
-                current_worker_capability=request.current_worker_capability,
-                available_worker_capabilities_json=json.dumps(request.available_worker_capabilities),
+                current_worker_capability=request.current_worker_capability.value,
+                available_worker_capabilities_json=json.dumps(
+                    [capability.value for capability in request.available_worker_capabilities]
+                ),
                 human_inputs_json=json.dumps(request.human_inputs),
                 allowed_tools_json=json.dumps(tool_catalog_for_stage("pm")),
             ),
         )
-        raw_response = _extract_raw_response(payload)
         outcome = _require_stage_outcome(payload=payload, stage="pm")
-        next_stage = str(payload.get("next_stage") or _extract_next_stage(raw_response) or "dev").strip().lower()
+        next_stage_raw = payload.get("next_stage")
+        next_stage = next_stage_raw if isinstance(next_stage_raw, str) else None
         if next_stage not in {"dev", "test"}:
-            next_stage = "dev"
-        execution_worker_capability = (
-            normalize_worker_capability(payload.get("execution_worker_capability"))
-            or _extract_worker_capability(raw_response)
-            or normalize_worker_capability(request.current_worker_capability)
-            or "linux"
-        )
-        blocker_message_raw = payload.get("blocker_message")
-        blocker_message = (
-            str(blocker_message_raw).strip()
-            if isinstance(blocker_message_raw, str) and str(blocker_message_raw).strip()
-            else None
-        )
-        if blocker_message is None and outcome == "blocked":
-            blocker_message = _extract_prefixed_value(
-                raw_response,
-                keys=("blocker_message", "blocked", "blocker", "reason"),
-            )
+            raise CodexRuntimeError("Codex pm response missing valid required next_stage")
+        execution_worker_capability = parse_worker_capability(payload.get("execution_worker_capability"))
+        if execution_worker_capability is None:
+            raise CodexRuntimeError("Codex pm response missing valid required execution_worker_capability")
+        blocker_message = _optional_string(payload.get("blocker_message"))
         requeue_target_raw = payload.get("requeue_target")
         requeue_target = (
-            normalize_worker_capability(requeue_target_raw)
+            parse_worker_capability(requeue_target_raw)
             if requeue_target_raw is not None
             else None
         )
-        requeue_reason_raw = payload.get("requeue_reason")
-        requeue_reason = (
-            str(requeue_reason_raw).strip()
-            if isinstance(requeue_reason_raw, str) and str(requeue_reason_raw).strip()
-            else None
-        )
+        requeue_reason = _optional_string(payload.get("requeue_reason"))
+        if outcome == "blocked" and blocker_message is None:
+            raise CodexRuntimeError("Codex pm response missing blocker_message for blocked outcome")
+        if outcome == "requeue" and requeue_target is None:
+            raise CodexRuntimeError("Codex pm response missing requeue_target for requeue outcome")
+        if outcome == "requeue" and requeue_reason is None:
+            raise CodexRuntimeError("Codex pm response missing requeue_reason for requeue outcome")
         return PmPlan(
-            plan_steps=_string_list(
-                payload.get("plan_steps"),
-                fallback=_extract_marked_items(raw_response, max_items=5) or ["Analyze scope", "Implement", "Validate"],
-            ),
-            acceptance_criteria=_string_list(
+            plan_steps=_required_string_list(payload.get("plan_steps"), stage="pm", field="plan_steps"),
+            acceptance_criteria=_required_string_list(
                 payload.get("acceptance_criteria"),
-                fallback=(
-                    _extract_marked_items(raw_response, max_items=4)
-                    or ["Behavior implemented", "Tests and verification provided"]
-                ),
+                stage="pm",
+                field="acceptance_criteria",
             ),
-            risks=_string_list(
-                payload.get("risks"),
-                fallback=_extract_marked_items(raw_response, max_items=3),
-            ),
+            risks=_string_list(payload.get("risks")),
             outcome=outcome,
             next_stage=next_stage,
-            execution_worker_capability=execution_worker_capability,
+            execution_worker_capability=execution_worker_capability.value,
             blocker_message=blocker_message,
-            requeue_target=requeue_target,
+            requeue_target=(requeue_target.value if requeue_target is not None else None),
             requeue_reason=requeue_reason,
-            resolved_prerequisites=_string_list(
-                payload.get("resolved_prerequisites"),
-                fallback=[],
-            ),
-            unresolved_prerequisites=_string_list(
-                payload.get("unresolved_prerequisites"),
-                fallback=[],
-            ),
+            resolved_prerequisites=_string_list(payload.get("resolved_prerequisites")),
+            unresolved_prerequisites=_string_list(payload.get("unresolved_prerequisites")),
         )
 
     def dev(
@@ -387,29 +372,14 @@ class CodexWorkflowAgents:
                 allowed_tools_json=json.dumps(tool_catalog_for_stage("dev")),
             ),
         )
-        raw_response = _extract_raw_response(payload)
         pr_url_raw = payload.get("pr_url")
         pr_url = str(pr_url_raw).strip() if isinstance(pr_url_raw, str) and str(pr_url_raw).strip() else None
         outcome = _require_stage_outcome(payload=payload, stage="dev")
-        blocker_message_raw = payload.get("blocker_message")
-        blocker_message = (
-            str(blocker_message_raw).strip()
-            if isinstance(blocker_message_raw, str) and str(blocker_message_raw).strip()
-            else None
-        )
-        if blocker_message is None:
-            blocker_message = _extract_prefixed_value(
-                raw_response,
-                keys=("blocker_message", "blocked", "hard stop"),
-            )
+        blocker_message = _optional_string(payload.get("blocker_message"))
+        if outcome == "blocked" and blocker_message is None:
+            raise CodexRuntimeError("Codex dev response missing blocker_message for blocked outcome")
         return DevResult(
-            change_summary=_string_list(
-                payload.get("change_summary"),
-                fallback=(
-                    _extract_marked_items(raw_response, max_items=5)
-                    or ["No change summary provided by Codex"]
-                ),
-            ),
+            change_summary=_required_string_list(payload.get("change_summary"), stage="dev", field="change_summary"),
             pr_url=pr_url,
             outcome=outcome,
             blocker_message=blocker_message,
@@ -453,29 +423,13 @@ class CodexWorkflowAgents:
                 allowed_tools_json=json.dumps(tool_catalog_for_stage("test")),
             ),
         )
-
-        raw_response = _extract_raw_response(payload)
         outcome = _require_stage_outcome(payload=payload, stage="test")
         feedback_raw = payload.get("feedback")
         feedback = str(feedback_raw).strip() if isinstance(feedback_raw, str) and str(feedback_raw).strip() else None
-        if feedback is None:
-            feedback = _extract_prefixed_value(raw_response, keys=("feedback", "reason", "summary"))
-        blocker_message_raw = payload.get("blocker_message")
-        blocker_message = (
-            str(blocker_message_raw).strip()
-            if isinstance(blocker_message_raw, str) and str(blocker_message_raw).strip()
-            else None
-        )
-        if blocker_message is None and outcome in {"blocked", "failed"}:
-            blocker_message = _extract_prefixed_value(raw_response, keys=("blocker_message", "blocked"))
-        guidance = _string_list(
-            payload.get("guidance"),
-            fallback=(
-                _extract_marked_items(raw_response, max_items=5)
-                or request.suggested_test_commands
-                or ["Run project test suite"]
-            ),
-        )
+        blocker_message = _optional_string(payload.get("blocker_message"))
+        if outcome == "blocked" and blocker_message is None:
+            raise CodexRuntimeError("Codex test response missing blocker_message for blocked outcome")
+        guidance = _required_string_list(payload.get("guidance"), stage="test", field="guidance")
         return TestResult(
             guidance=guidance,
             outcome=outcome,
@@ -528,31 +482,16 @@ class CodexWorkflowAgents:
                 allowed_tools_json=json.dumps(tool_catalog_for_stage("review")),
             ),
         )
-
-        raw_response = _extract_raw_response(payload)
         feedback_raw = payload.get("feedback")
         feedback = str(feedback_raw).strip() if isinstance(feedback_raw, str) and str(feedback_raw).strip() else None
-        if feedback is None:
-            feedback = _extract_prefixed_value(raw_response, keys=("feedback", "summary", "reason"))
         pr_url_raw = payload.get("pr_url")
         pr_url = str(pr_url_raw).strip() if isinstance(pr_url_raw, str) and str(pr_url_raw).strip() else dev_result.pr_url
         outcome = _require_stage_outcome(payload=payload, stage="review")
-        blocker_message_raw = payload.get("blocker_message")
-        blocker_message = (
-            str(blocker_message_raw).strip()
-            if isinstance(blocker_message_raw, str) and str(blocker_message_raw).strip()
-            else None
-        )
-        if blocker_message is None and outcome == "blocked":
-            blocker_message = feedback or _extract_prefixed_value(raw_response, keys=("blocker_message", "blocked"))
+        blocker_message = _optional_string(payload.get("blocker_message"))
+        if outcome == "blocked" and blocker_message is None:
+            raise CodexRuntimeError("Codex review response missing blocker_message for blocked outcome")
         return ReviewResult(
-            summary=_string_list(
-                payload.get("summary"),
-                fallback=(
-                    _extract_marked_items(raw_response, max_items=5)
-                    or ["No review summary provided by Codex"]
-                ),
-            ),
+            summary=_required_string_list(payload.get("summary"), stage="review", field="summary"),
             outcome=outcome,
             feedback=feedback,
             pr_url=pr_url,
@@ -561,101 +500,39 @@ class CodexWorkflowAgents:
 
 
 
-def _string_list(value: object, *, fallback: list[str]) -> list[str]:
-    if isinstance(value, list):
-        normalized = [str(item).strip() for item in value if str(item).strip()]
-        if normalized:
-            return normalized
-    return fallback
+def _string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    parsed: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            return []
+        if not item.strip():
+            return []
+        parsed.append(item)
+    return parsed
 
 
-def _extract_raw_response(payload: dict) -> str:
-    raw = payload.get("_raw_response")
-    if isinstance(raw, str):
-        return raw.strip()
-    return ""
+def _required_string_list(value: object, *, stage: str, field: str) -> list[str]:
+    normalized = _string_list(value)
+    if normalized:
+        return normalized
+    raise CodexRuntimeError(f"Codex {stage} response missing required non-empty {field}")
 
 
-def _extract_marked_items(value: str, *, max_items: int = 6) -> list[str]:
-    extracted: list[str] = []
-    text = str(value or "").strip()
-    if not text:
-        return extracted
-    for raw_line in text.splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
-        match = re.match(r"^[\-\*\+]\s+(.*)$", line)
-        if match:
-            item = match.group(1).strip()
-        else:
-            match = re.match(r"^\d+[.)]\s*(.*)$", line)
-            if match:
-                item = match.group(1).strip()
-            else:
-                item = line
-        if item:
-            extracted.append(item)
-            if len(extracted) >= max_items:
-                break
-    return extracted
-
-
-def _extract_prefixed_value(value: str, *, keys: tuple[str, ...]) -> str | None:
-    for key in keys:
-        match = re.search(rf"{re.escape(key)}\s*[:=]\s*(.+)", value, flags=re.IGNORECASE)
-        if match:
-            candidate = match.group(1).strip()
-            if candidate:
-                return candidate.strip("\"'")
-    return None
-
-
-def _extract_next_stage(value: str) -> str | None:
-    match = re.search(r"\bnext\s*stage\s*[:=]\s*(dev|test)\b", value, flags=re.IGNORECASE)
-    return match.group(1).lower() if match else None
-
-
-def _extract_worker_capability(value: str) -> str | None:
-    lowered = str(value or "").lower()
-    selected_match = re.search(
-        r"\b(?:selected|required|target(?:ed)?|requested|planned)\s+(linux|macos|mac)\b",
-        lowered,
-    )
-    if selected_match:
-        normalized = normalize_worker_capability(selected_match.group(1))
-        if normalized:
-            return normalized
-
-    worker_label_match = re.search(r"\bworker:(linux|macos|mac)\b", lowered)
-    if worker_label_match:
-        normalized = normalize_worker_capability(worker_label_match.group(1))
-        if normalized:
-            return normalized
-
-    has_linux = "linux" in lowered
-    has_macos = "macos" in lowered or bool(re.search(r"\bmac\b", lowered))
-    if has_linux and has_macos:
-        current_match = re.search(r"\bcurrent worker(?:\s+is|\s*:)?\s*(linux|macos|mac)\b", lowered)
-        if current_match:
-            current = normalize_worker_capability(current_match.group(1))
-            if current == "linux":
-                return "macos"
-            if current == "macos":
-                return "linux"
+def _optional_string(value: object) -> str | None:
+    if value is None:
         return None
-    if has_linux:
-        return "linux"
-    if has_macos:
-        return "macos"
-    return None
+    if not isinstance(value, str):
+        return None
+    if not value.strip():
+        return None
+    return value
 
 
 def _normalize_stage_outcome(value: object) -> StageOutcome | None:
-    if isinstance(value, str):
-        normalized = value.strip().lower()
-        if normalized in {"continue", "requeue", "waiting_for_input", "blocked", "failed"}:
-            return normalized  # type: ignore[return-value]
+    if isinstance(value, str) and value in {"continue", "requeue", "waiting_for_input", "blocked", "failed"}:
+        return value  # type: ignore[return-value]
     return None
 
 

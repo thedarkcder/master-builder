@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from collections.abc import Callable
 from typing import Literal, Protocol
 
 from orchestrator.core.followups import build_backlog_follow_up_draft
+from orchestrator.core.worker_capability_normalization import WorkerCapability
 
 StageOutcome = Literal["continue", "requeue", "waiting_for_input", "blocked", "failed"]
 WorkflowOutcome = Literal["success", "requeue", "waiting_for_input", "blocked", "failed"]
@@ -28,8 +29,8 @@ class WorkflowRequest:
     project_name: str | None = None
     github_repository: str | None = None
     jira_project_key: str | None = None
-    current_worker_capability: str = "linux"
-    available_worker_capabilities: list[str] = field(default_factory=list)
+    current_worker_capability: WorkerCapability = WorkerCapability.LINUX
+    available_worker_capabilities: tuple[WorkerCapability, ...] = field(default_factory=lambda: (WorkerCapability.LINUX,))
     base_branch: str | None = None
     integration_branch: str | None = None
     pr_target_branch: str | None = None
@@ -126,40 +127,9 @@ class WorkflowResult:
     orchestration_workstream_trace: list[dict[str, object]] = field(default_factory=list)
     follow_up_issue: dict | None = None
     diagnostics: WorkflowDiagnostics | None = None
-    requeue_target: str | None = None
+    requeue_target: WorkerCapability | None = None
     requeue_reason: str | None = None
     blocker_message: str | None = None
-
-    def to_plan_payload(self) -> dict:
-        payload = {
-            "attempts": self.attempts,
-            "outcome": self.outcome,
-            "summary": self.summary,
-            "test_guidance": self.test_guidance,
-            "pr_url": self.pr_url,
-            "dev_rationale": self.dev_rationale,
-            "review_summary": self.review_summary,
-            "review_feedback": self.review_feedback,
-            "orchestration_stage_trace": self.orchestration_stage_trace,
-            "orchestration_workstream_trace": self.orchestration_workstream_trace,
-            "follow_up_issue": self.follow_up_issue,
-        }
-        if self.requeue_target:
-            payload["requeue_target"] = self.requeue_target
-        if self.requeue_reason:
-            payload["requeue_reason"] = self.requeue_reason
-        if self.blocker_message:
-            payload["blocker_message"] = self.blocker_message
-        if self.orchestration_stage_trace or self.orchestration_workstream_trace:
-            payload["orchestration_trace"] = {
-                "stage_events": self.orchestration_stage_trace,
-                "workstream_events": self.orchestration_workstream_trace,
-            }
-        if self.plan is not None:
-            payload["plan"] = asdict(self.plan)
-        if self.diagnostics is not None:
-            payload["diagnostics"] = asdict(self.diagnostics)
-        return payload
 
 
 class WorkflowAgents(Protocol):

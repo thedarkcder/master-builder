@@ -9,10 +9,10 @@ from orchestrator.core.project_routing import find_active_project_for_issue_key
 from orchestrator.core.runs import mark_run_terminal
 from orchestrator.core.workflow.checkpoints import (
     checkpoint_kind_for_stage,
-    checkpoint_payload_for_plan,
     upsert_workflow_checkpoint,
 )
-from orchestrator.core.workflow.checkpoint_codec import encode_stage_checkpoint_artifact
+from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
+from orchestrator.core.workflow.execution_snapshot import SnapshotWorkflow
 from orchestrator.core.workflow.runner import WorkflowResult, WorkflowStageCheckpoint
 from orchestrator.storage.models import Project, Run, WorkflowExecution
 from orchestrator.storage.run_queue_events import notify_run_enqueued
@@ -23,70 +23,8 @@ RUN_STATUS_FAILED = "failed"
 RUN_STATUS_BLOCKED = "blocked"
 
 
-def _with_preserved_trigger_context(*, current_plan: object | None, next_plan: dict) -> dict:
-    if isinstance(next_plan.get("trigger_context"), dict):
-        return next_plan
-    if not isinstance(current_plan, dict):
-        return next_plan
-    trigger_context = current_plan.get("trigger_context")
-    if not isinstance(trigger_context, dict):
-        return next_plan
-    merged = dict(next_plan)
-    merged["trigger_context"] = dict(trigger_context)
-    return merged
-
-
-def _merge_run_plan(*, current_plan: object | None, next_plan: dict) -> dict:
-    if isinstance(current_plan, dict):
-        merged = dict(current_plan)
-        merged.update(next_plan)
-        return _with_preserved_trigger_context(current_plan=current_plan, next_plan=merged)
-    return dict(next_plan)
-
-
-def _apply_stage_checkpoint(plan_payload: dict, checkpoint: WorkflowStageCheckpoint, *, completed_at: str) -> dict:
-    merged = dict(plan_payload)
-    existing_stage_checkpoints = merged.get("stage_checkpoints")
-    stage_checkpoints = dict(existing_stage_checkpoints) if isinstance(existing_stage_checkpoints, dict) else {}
-    stage_entry = {
-        "attempt": checkpoint.attempt,
-        "status": checkpoint.status,
-        "completed_at": completed_at,
-        "summary": checkpoint.summary,
-    }
-    artifact = encode_stage_checkpoint_artifact(checkpoint)
-    if artifact is not None:
-        stage_entry["artifact"] = artifact
-    stage_checkpoints[checkpoint.stage] = stage_entry
-    merged["stage_checkpoints"] = stage_checkpoints
-    merged["latest_completed_stage"] = checkpoint.stage
-    merged["latest_stage_attempt"] = checkpoint.attempt
-    merged["latest_stage_status"] = checkpoint.status
-    if checkpoint.stage == "pm" and artifact is not None:
-        merged["plan"] = artifact
-    elif checkpoint.stage == "dev" and artifact is not None:
-        merged["dev_rationale"] = list(artifact.get("change_summary", []) or [])
-        pr_url = str(artifact.get("pr_url") or "").strip() or None
-        if pr_url is not None:
-            merged["pr_url"] = pr_url
-    elif checkpoint.stage == "test" and artifact is not None:
-        merged["test_guidance"] = list(artifact.get("guidance", []) or [])
-        feedback = str(artifact.get("feedback") or "").strip()
-        if feedback:
-            merged["test_feedback"] = feedback
-        else:
-            merged.pop("test_feedback", None)
-    elif checkpoint.stage == "review" and artifact is not None:
-        merged["review_summary"] = list(artifact.get("summary", []) or [])
-        review_feedback = str(artifact.get("feedback") or "").strip()
-        if review_feedback:
-            merged["review_feedback"] = review_feedback
-        else:
-            merged.pop("review_feedback", None)
-        review_pr_url = str(artifact.get("pr_url") or "").strip() or None
-        if review_pr_url is not None:
-            merged["pr_url"] = review_pr_url
-    return merged
+def _load_or_init_snapshot(plan: object | None) -> ExecutionSnapshot:
+    return ExecutionSnapshot.require(plan, allow_empty=True)
 
 
 def _workflow_for_run(session: Session, *, run: Run) -> WorkflowExecution | None:
@@ -261,18 +199,17 @@ def finalize_cancelled_run(
         allow_statuses={run.status},
     ):
         return run
-    run.plan = _merge_run_plan(
-        current_plan=run.plan,
-        next_plan={
-        "outcome": "blocked",
-        "attempts": 0,
-        "summary": ["Run cancelled during execution"],
-        "test_guidance": [],
-        "pr_url": run.pr_url,
-        "stage_updates": stage_updates,
-        "blocker_message": "Run cancelled during execution",
-        },
+    snapshot = _load_or_init_snapshot(run.plan)
+    snapshot.workflow = SnapshotWorkflow(
+        outcome="blocked",
+        attempts=max(snapshot.workflow.attempts, 0),
+        summary=["Run cancelled during execution"],
+        blocker_message="Run cancelled during execution",
+        requeue_target=None,
+        requeue_reason=None,
     )
+    snapshot.events.stage_updates = [dict(item) for item in stage_updates if isinstance(item, dict)]
+    run.plan = snapshot.dump()
     if run.finished_at is None:
         run.finished_at = datetime.now(timezone.utc)
     run.last_heartbeat_at = None
@@ -310,11 +247,13 @@ def finalize_workflow_result(
         allow_statuses={RUN_STATUS_RUNNING},
     ):
         return run
-    plan_payload = workflow_result.to_plan_payload()
-    plan_payload["stage_updates"] = stage_updates
-    if execution_context:
-        plan_payload["execution_context"] = execution_context
-    run.plan = _merge_run_plan(current_plan=run.plan, next_plan=plan_payload)
+    snapshot = _load_or_init_snapshot(run.plan)
+    snapshot.apply_execution_context(execution_context)
+    snapshot.apply_workflow_result(
+        workflow_result=workflow_result,
+        stage_updates=stage_updates,
+    )
+    run.plan = snapshot.dump()
     run.pr_url = workflow_result.pr_url
     run.finished_at = datetime.now(timezone.utc)
     run.last_heartbeat_at = None
@@ -373,14 +312,15 @@ def requeue_workflow_result_for_capability(
         allow_statuses={RUN_STATUS_RUNNING},
     ):
         return run
-    plan_payload = workflow_result.to_plan_payload()
-    plan_payload["stage_updates"] = stage_updates
-    if execution_context:
-        plan_payload["execution_context"] = execution_context
-    plan_payload["required_worker_capability"] = required_worker_capability
-    plan_payload["required_worker_label"] = required_worker_label
-    plan_payload["requeued"] = True
-    run.plan = _merge_run_plan(current_plan=run.plan, next_plan=plan_payload)
+    snapshot = _load_or_init_snapshot(run.plan)
+    snapshot.apply_execution_context(execution_context)
+    snapshot.apply_workflow_result(
+        workflow_result=workflow_result,
+        stage_updates=stage_updates,
+    )
+    snapshot.workflow.requeue_target = required_worker_capability
+    snapshot.context.execution_context["required_worker_label"] = required_worker_label
+    run.plan = snapshot.dump()
     run.status = "queued"
     run.last_error = None
     run.started_at = None
@@ -428,14 +368,17 @@ def requeue_workflow_result_for_stale_snapshot(
         allow_statuses={RUN_STATUS_RUNNING},
     ):
         return run
-    plan_payload = workflow_result.to_plan_payload()
-    plan_payload["stage_updates"] = stage_updates
-    if execution_context:
-        plan_payload["execution_context"] = execution_context
-    plan_payload["requeued"] = True
-    plan_payload["stale_branch_snapshot"] = True
-    plan_payload["requeue_reason"] = error
-    run.plan = _merge_run_plan(current_plan=run.plan, next_plan=plan_payload)
+    snapshot = _load_or_init_snapshot(run.plan)
+    snapshot.apply_execution_context(execution_context)
+    snapshot.apply_workflow_result(
+        workflow_result=workflow_result,
+        stage_updates=stage_updates,
+    )
+    snapshot.context.execution_context["stale_branch_snapshot"] = True
+    snapshot.workflow.outcome = "requeue"
+    snapshot.workflow.requeue_target = None
+    snapshot.workflow.requeue_reason = error
+    run.plan = snapshot.dump()
     run.pr_url = None
     run.status = "queued"
     run.last_error = None
@@ -482,15 +425,10 @@ def persist_stage_checkpoint(
         allow_statuses={RUN_STATUS_RUNNING},
     ):
         raise RuntimeError("Run ownership lost while persisting stage checkpoint")
-    current_plan = dict(run.plan) if isinstance(run.plan, dict) else {}
-    next_plan = _apply_stage_checkpoint(
-        current_plan,
-        checkpoint,
-        completed_at=datetime.now(timezone.utc).isoformat(),
-    )
-    if execution_context:
-        next_plan["execution_context"] = execution_context
-    run.plan = next_plan
+    snapshot = _load_or_init_snapshot(run.plan)
+    snapshot.apply_stage_checkpoint(checkpoint)
+    snapshot.apply_execution_context(execution_context)
+    run.plan = snapshot.dump()
     if checkpoint.stage == "dev" and checkpoint.dev_result is not None:
         run.pr_url = checkpoint.dev_result.pr_url
     elif checkpoint.stage == "review" and checkpoint.review_result is not None:
@@ -503,7 +441,7 @@ def persist_stage_checkpoint(
             run_id=run.run_id,
             checkpoint_kind=checkpoint_kind,
             stage=checkpoint.stage,
-            payload=checkpoint_payload_for_plan(checkpoint_kind=checkpoint_kind, plan=next_plan),
+            payload=snapshot.dump(),
             now=datetime.now(timezone.utc),
         )
     session.commit()

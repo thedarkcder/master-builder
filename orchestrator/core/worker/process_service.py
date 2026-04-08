@@ -9,8 +9,7 @@ from orchestrator.core.runs import RUN_STATUS_WAITING_FOR_INPUT
 from orchestrator.core.run_logs import record_run_log_event
 from orchestrator.core.worker.finalization import CompletionTailExecutor, WorkflowFinalizer
 from orchestrator.core.worker_capabilities import (
-    normalize_worker_capability,
-    parse_worker_capabilities,
+    resolve_worker_capability_context,
     worker_label_for_capability,
 )
 from orchestrator.core.worker.stage_notifier import RunStageNotifier
@@ -93,6 +92,14 @@ def process_next_queued_run(
     run_status_cancelled: str,
 ):  # noqa: ANN001
     settings = settings_fn()
+    try:
+        capability_context = resolve_worker_capability_context(
+            raw_value=getattr(settings, "worker_capabilities", ""),
+            source="ORCHESTRATOR_WORKER_CAPABILITIES",
+        )
+    except ValueError as exc:
+        logger.error("worker_capability_configuration_invalid error=%s", exc)
+        raise
     worker_workspace_key = resolve_worker_workspace_key(settings=settings)
     agent_id = resolve_agent_id_fn()
     worker_service_instance_id = resolve_worker_service_instance_id_fn()
@@ -102,7 +109,7 @@ def process_next_queued_run(
         running_status=run_status_running,
         failed_status=run_status_failed,
         worker_service_instance_id=worker_service_instance_id,
-        worker_capabilities=parse_worker_capabilities(getattr(settings, "worker_capabilities", "")),
+        worker_capabilities=set(capability_context.available),
     )
     if selection.terminal_run is not None:
         return selection.terminal_run
@@ -384,7 +391,7 @@ def process_next_queued_run(
                 agent_id=agent_id,
             )
         if workflow_result.outcome == "requeue":
-            capability_requeue_target = normalize_worker_capability(workflow_result.requeue_target)
+            capability_requeue_target = workflow_result.requeue_target
             if capability_requeue_target is not None:
                 required_worker_label = worker_label_for_capability(capability_requeue_target)
                 error_text = workflow_result.requeue_reason or "Execution capability mismatch"
@@ -412,7 +419,7 @@ def process_next_queued_run(
                     run=run,
                     workflow_result=workflow_result,
                     stage_updates=notifier.stage_updates,
-                    required_worker_capability=capability_requeue_target,
+                    required_worker_capability=capability_requeue_target.value,
                     required_worker_label=required_worker_label,
                     execution_context=execution_context,
                     expected_worker_service_instance_id=worker_service_instance_id,

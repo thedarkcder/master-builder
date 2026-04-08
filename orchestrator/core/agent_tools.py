@@ -23,6 +23,8 @@ from orchestrator.core.project_policy import resolve_effective_policy
 from orchestrator.core.run_human_input_service import create_human_input_request
 from orchestrator.core.tenant_secret_service import resolve_scoped_secret_ref
 from orchestrator.core.worker_workspace import resolve_worker_workspace_key
+from orchestrator.core.workflow.execution_snapshot import load_parsed_trigger_context_from_plan
+from orchestrator.core.workflow.trigger_context import GithubPrRemediationTriggerContext
 from orchestrator.storage.models import (
     DecisionAnswer,
     DecisionCase,
@@ -80,6 +82,7 @@ TOOL_ALLOWLIST: dict[str, set[str]] = {
         "knowledge.exact_read",
         "jira.comment",
         "jira.transition",
+        "github.push_branch",
         "github.open_pr",
         "repo.read",
         "project.get_runtime_values",
@@ -1180,25 +1183,20 @@ def _sync_local_base_branch_to_origin(repo_dir: Path, *, base_branch: str, token
     _run_git(repo_dir, ["checkout", "-B", normalized_base_branch, f"origin/{normalized_base_branch}"])
 
 
-def _extract_trigger_context_from_run(run: object) -> dict | None:
+def _extract_trigger_context_from_run(run: object):
     plan = getattr(run, "plan", None)
-    if not isinstance(plan, dict):
-        return None
-    trigger_context = plan.get("trigger_context")
-    return trigger_context if isinstance(trigger_context, dict) else None
+    return load_parsed_trigger_context_from_plan(plan)
 
 
-def _is_pr_remediation_trigger_context(trigger_context: dict | None) -> bool:
-    if not isinstance(trigger_context, dict):
-        return False
-    return str(trigger_context.get("source") or "").strip().lower() == "github_pr_review_feedback"
+def _is_pr_remediation_trigger_context(trigger_context: object) -> bool:
+    return isinstance(trigger_context, GithubPrRemediationTriggerContext)
 
 
 def _extract_remediation_head_ref_from_run(run: object) -> str | None:
     trigger_context = _extract_trigger_context_from_run(run)
     if not _is_pr_remediation_trigger_context(trigger_context):
         return None
-    head_ref = str(trigger_context.get("head_ref") or "").strip()
+    head_ref = str(trigger_context.head_ref or "").strip()
     return head_ref or None
 
 
@@ -1206,10 +1204,7 @@ def _extract_remediation_pr_number_from_run(run: object) -> int | None:
     trigger_context = _extract_trigger_context_from_run(run)
     if not _is_pr_remediation_trigger_context(trigger_context):
         return None
-    value = trigger_context.get("pr_number")
-    if isinstance(value, int) and value > 0:
-        return value
-    return None
+    return trigger_context.pr_number
 
 
 def print_tool_event(*, stage: str, tool_name: str, args: dict[str, Any], outcome: str) -> None:  # noqa: ANN401

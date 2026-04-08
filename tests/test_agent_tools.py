@@ -13,6 +13,7 @@ from orchestrator.core.agent_tools import (
     list_implemented_tools,
     tool_catalog_for_stage,
 )
+from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.storage.models import DecisionCycle
 from orchestrator.tools.github_app import PullRequestSummary
 
@@ -490,14 +491,14 @@ def test_github_open_pr_prefers_remediation_pr_number_when_open() -> None:
 
     class _FakeRun:
         branch = None
-        plan = {
-            "trigger_context": {
+        plan = ExecutionSnapshot.empty(
+            trigger_context={
                 "source": "github_pr_review_feedback",
                 "pr_number": 14,
                 "head_ref": "run/gp-122/6fc2dd62-c996-468f-84ba-3ac052c08703",
                 "base_ref": "main",
             }
-        }
+        ).dump()
 
     class _FakeContext:
         tenant = _FakeTenant()
@@ -573,14 +574,14 @@ def test_github_open_pr_falls_back_when_remediation_pr_is_closed() -> None:
 
     class _FakeRun:
         branch = None
-        plan = {
-            "trigger_context": {
+        plan = ExecutionSnapshot.empty(
+            trigger_context={
                 "source": "github_pr_review_feedback",
                 "pr_number": 14,
                 "head_ref": "run/gp-122/6fc2dd62-c996-468f-84ba-3ac052c08703",
                 "base_ref": "main",
             }
-        }
+        ).dump()
 
     class _FakeContext:
         tenant = _FakeTenant()
@@ -668,14 +669,14 @@ def test_github_open_pr_uses_remediation_head_ref_over_stale_run_branch() -> Non
 
     class _FakeRun:
         branch = "feature/GP-122-stale"
-        plan = {
-            "trigger_context": {
+        plan = ExecutionSnapshot.empty(
+            trigger_context={
                 "source": "github_pr_review_feedback",
                 "pr_number": 14,
                 "head_ref": "run/gp-122/remediation-head",
                 "base_ref": "main",
             }
-        }
+        ).dump()
 
     class _FakeContext:
         tenant = _FakeTenant()

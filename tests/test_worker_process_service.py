@@ -12,6 +12,7 @@ from orchestrator.core.worker.finalization import _emit_detailed_jira_feedback
 from orchestrator.core.worker.finalization import _emit_orchestrated_trace_logs
 from orchestrator.core.worker.finalization import _run_completion_step
 from orchestrator.core.worker.stage_notifier import RunStageNotifier
+from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.core.workflow.runner import (
     PmPlan,
     WorkflowDiagnostics,
@@ -33,6 +34,57 @@ class _FakeHeartbeatController:
 
 
 class WorkerProcessServiceTests(unittest.TestCase):
+    def test_process_next_queued_run_rejects_invalid_worker_capability_settings(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Invalid worker capability token\\(s\\)"):
+            process_next_queued_run(
+                session=MagicMock(),
+                runner=MagicMock(),
+                logger=MagicMock(),
+                settings_fn=lambda: SimpleNamespace(
+                    worker_capabilities="linux,darwin",
+                    worker_workspace_key="worker-a",
+                    project_repo_checkout_base_dir="/tmp/workdirs",
+                    admin_ui_base_url="http://localhost:4100",
+                ),
+                claim_next_queued_run_fn=MagicMock(),
+                apply_decision_gate_fn=MagicMock(),
+                send_discord_message_fn=MagicMock(),
+                send_jira_message_fn=MagicMock(),
+                ask_reply_components_fn=MagicMock(),
+                resolve_project_for_run_fn=MagicMock(),
+                fail_missing_project_mapping_fn=MagicMock(),
+                block_archived_project_fn=MagicMock(),
+                ensure_project_repository_checkout_fn=MagicMock(),
+                fail_project_repository_checkout_fn=MagicMock(),
+                cleanup_run_workspaces_fn=MagicMock(),
+                build_run_heartbeat_controller_fn=lambda **_: _FakeHeartbeatController(),
+                bind_run_project_fn=MagicMock(),
+                workflow_request_for_run_fn=MagicMock(),
+                fail_guardrail_violation_fn=MagicMock(),
+                tenant_jira_issue_url_fn=MagicMock(),
+                lock_acquired_update_fn=MagicMock(),
+                plan_posted_update_fn=MagicMock(),
+                pr_opened_update_fn=MagicMock(),
+                run_failed_update_fn=MagicMock(),
+                run_requeued_capability_update_fn=MagicMock(),
+                run_requeued_stale_snapshot_update_fn=MagicMock(),
+                finalize_cancelled_run_fn=MagicMock(),
+                finalize_workflow_result_fn=MagicMock(),
+                persist_stage_checkpoint_fn=MagicMock(),
+                requeue_workflow_result_for_capability_fn=MagicMock(),
+                requeue_workflow_result_for_stale_snapshot_fn=MagicMock(),
+                check_run_snapshot_freshness_fn=MagicMock(),
+                transition_issue_status_fn=MagicMock(),
+                emit_agent_event_fn=MagicMock(),
+                resolve_agent_id_fn=lambda: "worker-linux-local",
+                resolve_worker_service_instance_id_fn=lambda: "node-a:1234",
+                run_status_queued="queued",
+                run_status_running="running",
+                run_status_failed="failed",
+                run_status_blocked="blocked",
+                run_status_cancelled="cancelled",
+            )
+
     def test_stage_notifier_refreshes_plan_before_appending_live_updates(self) -> None:
         run = SimpleNamespace(
             plan={},
@@ -48,7 +100,7 @@ class WorkerProcessServiceTests(unittest.TestCase):
             self.assertIs(target, run)
             refresh_calls.append(attribute_names)
             if attribute_names == ["plan"]:
-                run.plan = {"trigger_context": {"source": "manual"}}
+                run.plan = ExecutionSnapshot.empty(trigger_context={"source": "manual"}).dump()
                 return
             self.assertIsNone(attribute_names)
 
@@ -71,9 +123,9 @@ class WorkerProcessServiceTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual(run.plan["trigger_context"], {"source": "manual"})
-        self.assertEqual(len(run.plan["live_stage_updates"]), 1)
-        self.assertEqual(run.plan["live_stage_updates"][0]["stage"], "plan_posted")
+        self.assertEqual(run.plan["context"]["trigger_context"], {"source": "manual"})
+        self.assertEqual(len(run.plan["events"]["live_stage_updates"]), 1)
+        self.assertEqual(run.plan["events"]["live_stage_updates"][0]["stage"], "plan_posted")
         session.commit.assert_called_once()
         self.assertEqual(refresh_calls, [["plan"], None])
 
@@ -361,12 +413,12 @@ class WorkerProcessServiceTests(unittest.TestCase):
             worker_service_instance_id="node-a:1234",
             created_at=now,
             started_at=now,
-            plan={
-                "trigger_context": {
+            plan=ExecutionSnapshot.empty(
+                trigger_context={
                     "manual_fix_request": {"instruction_text": "fix this"},
                     "requested_comment": {"type": "review_comment", "id": 77},
                 }
-            },
+            ).dump(),
             pr_url=None,
             last_error=None,
         )
@@ -710,23 +762,10 @@ class WorkerProcessServiceTests(unittest.TestCase):
                     "start_point_sha": "abc123",
                 },
             )
-            run.plan = {
-                "plan": {
-                    "plan_steps": list(checkpoint.plan.plan_steps),
-                    "acceptance_criteria": list(checkpoint.plan.acceptance_criteria),
-                    "risks": list(checkpoint.plan.risks),
-                    "outcome": checkpoint.plan.outcome,
-                    "next_stage": checkpoint.plan.next_stage,
-                    "execution_worker_capability": checkpoint.plan.execution_worker_capability,
-                    "blocker_message": checkpoint.plan.blocker_message,
-                    "requeue_target": checkpoint.plan.requeue_target,
-                    "requeue_reason": checkpoint.plan.requeue_reason,
-                    "resolved_prerequisites": list(checkpoint.plan.resolved_prerequisites),
-                    "unresolved_prerequisites": list(checkpoint.plan.unresolved_prerequisites),
-                },
-                "stage_checkpoints": {checkpoint.stage: {"status": checkpoint.status}},
-                "execution_context": dict(execution_context),
-            }
+            snapshot = ExecutionSnapshot.empty()
+            snapshot.apply_stage_checkpoint(checkpoint)
+            snapshot.apply_execution_context(dict(execution_context))
+            run.plan = snapshot.dump()
             return run
 
         def _runner_run(_request, *, test_feedback_hook=None, stage_checkpoint_hook=None):  # noqa: ANN001,ARG001
@@ -750,8 +789,8 @@ class WorkerProcessServiceTests(unittest.TestCase):
             )
 
         def _finalize(*_args, run, **_kwargs):  # noqa: ANN001
-            self.assertEqual(run.plan["plan"]["plan_steps"], ["plan"])
-            self.assertEqual(run.plan["stage_checkpoints"]["pm"]["status"], "completed")
+            self.assertEqual(run.plan["stages"]["pm"]["artifact"]["plan_steps"], ["plan"])
+            self.assertEqual(run.plan["stages"]["pm"]["status"], "completed")
             return run
 
         result = process_next_queued_run(

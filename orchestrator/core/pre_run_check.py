@@ -5,8 +5,11 @@ from dataclasses import dataclass
 from orchestrator.core.decision_gate import DecisionGateResult
 from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.precheck_policy import evaluate_precheck_policy
+from orchestrator.core.worker_capability_normalization import WorkerCapability
 from orchestrator.core.worker_capabilities import (
     infer_required_worker_capability,
+    parse_worker_capability_labels,
+    WorkerLabelParseResult,
     worker_label_for_capability,
 )
 
@@ -87,8 +90,7 @@ def evaluate_execution_readiness_only(
     ready_label_present = bool(
         normalized_ready_label and normalized_ready_label.casefold() in normalized_labels
     )
-    sync_guard = _execution_sync_guard(normalized_labels=normalized_labels)
-    required_worker_capability = infer_required_worker_capability(
+    required_worker_capability, invalid_worker_labels, conflicting_worker_capabilities = _resolve_required_worker_capability(
         issue_summary=issue_summary,
         issue_description=issue_description,
         issue_labels=issue_labels,
@@ -98,9 +100,13 @@ def evaluate_execution_readiness_only(
     )
     required_worker_label = worker_label_for_capability(required_worker_capability)
     required_worker_label_present = required_worker_label.casefold() in normalized_labels
+    invalid_label_guard = _invalid_worker_label_guard(invalid_worker_labels)
+    conflicting_capability_guard = _conflicting_worker_capability_guard(conflicting_worker_capabilities)
+    sync_guard = _execution_sync_guard(normalized_labels=normalized_labels)
+    gtd_guard = invalid_label_guard or conflicting_capability_guard or sync_guard
     ready_for_agent_label_override = any(label in normalized_labels for label in ready_for_agent_labels)
-    outcome = "gtd_required" if sync_guard is not None else "ready_for_agent"
-    if sync_guard is None and normalized_ready_label is not None and not ready_label_present and not ready_for_agent_label_override:
+    outcome = "gtd_required" if gtd_guard is not None else "ready_for_agent"
+    if gtd_guard is None and normalized_ready_label is not None and not ready_label_present and not ready_for_agent_label_override:
         outcome = "missing_ready_label"
     return PreRunCheckResult(
         outcome=outcome,
@@ -111,13 +117,37 @@ def evaluate_execution_readiness_only(
         required_worker_label_present=required_worker_label_present,
         decision_gate=DecisionGateResult(
             triggered=False,
-            reason="Execution blocked by Jira parent/child sync policy" if sync_guard is not None else "Decision Gate permanently satisfied",
+            reason=(
+                "Execution blocked by invalid worker capability labels"
+                if invalid_label_guard is not None
+                else (
+                    "Execution blocked by conflicting worker capability labels"
+                    if conflicting_capability_guard is not None
+                    else (
+                        "Execution blocked by Jira parent/child sync policy"
+                        if sync_guard is not None
+                        else "Decision Gate permanently satisfied"
+                    )
+                )
+            ),
             missing_sections=(),
             questions=(),
-            recommendation="Update the Jira hierarchy before execution." if sync_guard is not None else "Proceed with execution.",
+            recommendation=(
+                "Fix invalid worker capability labels before execution."
+                if invalid_label_guard is not None
+                else (
+                    "Use exactly one worker capability label before execution."
+                    if conflicting_capability_guard is not None
+                    else (
+                        "Update the Jira hierarchy before execution."
+                        if sync_guard is not None
+                        else "Proceed with execution."
+                    )
+                )
+            ),
             tags=(),
         ),
-        gtd=sync_guard or GoodToDoValidationResult(
+        gtd=gtd_guard or GoodToDoValidationResult(
             valid=True,
             missing_criteria=(),
             clarification_questions=(),
@@ -163,18 +193,57 @@ def evaluate_pre_run_check(
     ready_label_present = bool(
         normalized_ready_label and normalized_ready_label.casefold() in normalized_labels
     )
+    required_worker_capability, invalid_worker_labels, conflicting_worker_capabilities = _resolve_required_worker_capability(
+        issue_summary=issue_summary,
+        issue_description=issue_description,
+        issue_labels=issue_labels,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        issue_key=issue_key,
+    )
+    required_worker_label = worker_label_for_capability(required_worker_capability)
+    required_worker_label_present = required_worker_label.casefold() in normalized_labels
+    invalid_label_guard = _invalid_worker_label_guard(invalid_worker_labels)
+    conflicting_capability_guard = _conflicting_worker_capability_guard(conflicting_worker_capabilities)
+    if invalid_label_guard is not None:
+        return PreRunCheckResult(
+            outcome="gtd_required",
+            ready_label=normalized_ready_label,
+            ready_label_present=ready_label_present,
+            required_worker_capability=required_worker_capability,
+            required_worker_label=required_worker_label,
+            required_worker_label_present=required_worker_label_present,
+            decision_gate=DecisionGateResult(
+                triggered=False,
+                reason="Execution blocked by invalid worker capability labels",
+                missing_sections=(),
+                questions=(),
+                recommendation="Fix invalid worker capability labels before execution.",
+                tags=(),
+            ),
+            gtd=invalid_label_guard,
+        )
+    if conflicting_capability_guard is not None:
+        return PreRunCheckResult(
+            outcome="gtd_required",
+            ready_label=normalized_ready_label,
+            ready_label_present=ready_label_present,
+            required_worker_capability=required_worker_capability,
+            required_worker_label=required_worker_label,
+            required_worker_label_present=required_worker_label_present,
+            decision_gate=DecisionGateResult(
+                triggered=False,
+                reason="Execution blocked by conflicting worker capability labels",
+                missing_sections=(),
+                questions=(),
+                recommendation="Use exactly one worker capability label before execution.",
+                tags=(),
+            ),
+            gtd=conflicting_capability_guard,
+        )
+
     sync_guard = _execution_sync_guard(normalized_labels=normalized_labels)
     if sync_guard is not None:
-        required_worker_capability = infer_required_worker_capability(
-            issue_summary=issue_summary,
-            issue_description=issue_description,
-            issue_labels=issue_labels,
-            tenant_id=tenant_id,
-            project_id=project_id,
-            issue_key=issue_key,
-        )
-        required_worker_label = worker_label_for_capability(required_worker_capability)
-        required_worker_label_present = required_worker_label.casefold() in normalized_labels
         return PreRunCheckResult(
             outcome="gtd_required",
             ready_label=normalized_ready_label,
@@ -196,16 +265,6 @@ def evaluate_pre_run_check(
         any(label in normalized_labels for label in ready_for_agent_labels)
     )
     if ready_for_agent_label_override:
-        required_worker_capability = infer_required_worker_capability(
-            issue_summary=issue_summary,
-            issue_description=issue_description,
-            issue_labels=issue_labels,
-            tenant_id=tenant_id,
-            project_id=project_id,
-            issue_key=issue_key,
-        )
-        required_worker_label = worker_label_for_capability(required_worker_capability)
-        required_worker_label_present = required_worker_label.casefold() in normalized_labels
         return PreRunCheckResult(
             outcome="ready_for_agent",
             ready_label=normalized_ready_label,
@@ -229,17 +288,6 @@ def evaluate_pre_run_check(
                 clarification_questions=(),
             ),
         )
-
-    required_worker_capability = infer_required_worker_capability(
-        issue_summary=issue_summary,
-        issue_description=issue_description,
-        issue_labels=issue_labels,
-        tenant_id=tenant_id,
-        project_id=project_id,
-        issue_key=issue_key,
-    )
-    required_worker_label = worker_label_for_capability(required_worker_capability)
-    required_worker_label_present = required_worker_label.casefold() in normalized_labels
 
     precheck_policy = evaluate_precheck_policy(
         issue_summary=issue_summary,
@@ -270,4 +318,58 @@ def evaluate_pre_run_check(
         required_worker_label_present=required_worker_label_present,
         decision_gate=decision_gate,
         gtd=gtd,
+    )
+
+
+def _resolve_required_worker_capability(
+    *,
+    issue_summary: str | None,
+    issue_description: str | None,
+    issue_labels: list[str] | None,
+    tenant_id: str | None = None,
+    project_id: str | None = None,
+    issue_key: str | None = None,
+) -> tuple[str, tuple[str, ...], tuple[WorkerCapability, ...]]:
+    label_parse: WorkerLabelParseResult = parse_worker_capability_labels(issue_labels)
+    if label_parse.selected_capability is not None:
+        return (
+            label_parse.selected_capability.value,
+            label_parse.invalid_labels,
+            label_parse.conflicting_capabilities,
+        )
+    return infer_required_worker_capability(
+        issue_summary=issue_summary,
+        issue_description=issue_description,
+        issue_labels=issue_labels,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        issue_key=issue_key,
+    ), label_parse.invalid_labels, label_parse.conflicting_capabilities
+
+
+def _invalid_worker_label_guard(invalid_labels: tuple[str, ...]) -> GoodToDoValidationResult | None:
+    if not invalid_labels:
+        return None
+    invalid = ", ".join(invalid_labels)
+    return GoodToDoValidationResult(
+        valid=False,
+        missing_criteria=("Worker capability labels must use canonical values.",),
+        clarification_questions=(
+            f"Replace invalid worker label(s): {invalid}. Use worker:linux or worker:macos.",
+        ),
+    )
+
+
+def _conflicting_worker_capability_guard(
+    conflicting_capabilities: tuple[WorkerCapability, ...],
+) -> GoodToDoValidationResult | None:
+    if not conflicting_capabilities:
+        return None
+    normalized = ", ".join(sorted(capability.value for capability in conflicting_capabilities))
+    return GoodToDoValidationResult(
+        valid=False,
+        missing_criteria=("Worker capability labels must not conflict.",),
+        clarification_questions=(
+            f"Conflicting worker capability labels detected: {normalized}. Keep exactly one of worker:linux or worker:macos.",
+        ),
     )

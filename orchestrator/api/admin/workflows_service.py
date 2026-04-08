@@ -6,7 +6,8 @@ from uuid import uuid4
 from fastapi import HTTPException, status
 from sqlalchemy import desc, or_, select
 
-from orchestrator.core.workflow.transitions import ACTIVE_WORKFLOW_STATUSES
+from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
+from orchestrator.core.workflow.transitions import ATTEMPT_ENTRY_MODES, attempt_creation_policy
 from orchestrator.storage.models import Project, Run, RunHumanInputRequest, WorkflowCheckpoint, WorkflowExecution
 from orchestrator.storage.run_queue_events import notify_run_enqueued
 
@@ -100,14 +101,13 @@ def _resolve_project_for_fresh_start(*, session, workflow, source_run) -> Projec
 def _fresh_start_plan(*, source_run: Run | None) -> dict[str, object] | None:
     if source_run is None or not isinstance(source_run.plan, dict):
         return None
-    next_plan: dict[str, object] = {}
-    trigger_context = source_run.plan.get("trigger_context")
-    if isinstance(trigger_context, dict) and trigger_context:
-        next_plan["trigger_context"] = dict(trigger_context)
-    pre_check = source_run.plan.get("pre_check")
-    if isinstance(pre_check, dict) and pre_check:
-        next_plan["pre_check"] = dict(pre_check)
-    return next_plan or None
+    source_snapshot = ExecutionSnapshot.load(source_run.plan)
+    if source_snapshot is None:
+        return None
+    next_snapshot = ExecutionSnapshot.empty(trigger_context=source_snapshot.context.trigger_context)
+    if source_snapshot.context.execution_context:
+        next_snapshot.context.execution_context = dict(source_snapshot.context.execution_context)
+    return next_snapshot.dump()
 
 
 def _cancel_open_input_requests(*, session, workflow_id: str) -> None:  # noqa: ANN001
@@ -198,17 +198,17 @@ def create_workflow_attempt(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow not found")
 
     normalized_mode = str(mode or "").strip().lower()
-    if normalized_mode not in {"fresh", "restart", "resume"}:
+    if normalized_mode not in ATTEMPT_ENTRY_MODES:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid attempt mode")
+    creation_policy = attempt_creation_policy(workflow_status=workflow.status, mode=normalized_mode)
+    if not creation_policy.allowed:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Workflow already has an active attempt",
+        )
     selected_checkpoint = None
     source_run = _latest_run_for_workflow(session=session, workflow_id=workflow_id)
-    if normalized_mode == "fresh":
-        if workflow.status in ACTIVE_WORKFLOW_STATUSES:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Workflow already has an active attempt",
-            )
-    else:
+    if normalized_mode != "fresh":
         selected_checkpoint = _latest_checkpoint_for_kind(
             session=session,
             workflow_id=workflow_id,
@@ -230,12 +230,7 @@ def create_workflow_attempt(
     if bool(getattr(project, "is_archived", False)):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Project {project.project_id} is archived")
 
-    same_workflow = normalized_mode != "fresh" and workflow.status == "waiting_for_input"
-    if workflow.status in ACTIVE_WORKFLOW_STATUSES and not same_workflow:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Workflow already has an active attempt",
-        )
+    same_workflow = creation_policy.reuse_workflow
 
     now = _now()
     next_workflow = workflow

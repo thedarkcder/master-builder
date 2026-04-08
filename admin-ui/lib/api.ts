@@ -533,6 +533,30 @@ export type RunRecord = {
   plan: Record<string, unknown> | null;
 };
 
+export type WorkflowRecord = {
+  workflow_id: string;
+  tenant_id: string;
+  project_id: string | null;
+  issue_key: string;
+  issue_summary: string | null;
+  repo_url: string | null;
+  branch: string | null;
+  pr_url: string | null;
+  dedupe_scope: string;
+  status: string;
+  active_run_id: string | null;
+  latest_checkpoint_id: string | null;
+  source_workflow_id: string | null;
+  source_run_id: string | null;
+  blocked_reason: string | null;
+  pending_input_request_id: string | null;
+  latest_checkpoint_kind: string | null;
+  runs: RunRecord[];
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+};
+
 export type WorkflowAttemptCreatePayload = {
   mode: "fresh" | "restart" | "resume";
   checkpoint_kind?: "pm" | "execution";
@@ -2043,6 +2067,10 @@ export function listRuns(
 
 export function getRun(credentials: Credentials, runId: string): Promise<RunRecord> {
   return request<RunRecord>(credentials, `/api/admin/runs/${encodeURIComponent(runId)}`);
+}
+
+export function getWorkflow(credentials: Credentials, workflowId: string): Promise<WorkflowRecord> {
+  return request<WorkflowRecord>(credentials, `/api/admin/workflows/${encodeURIComponent(workflowId)}`);
 }
 
 export function createWorkflowAttempt(

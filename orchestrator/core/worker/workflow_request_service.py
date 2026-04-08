@@ -7,9 +7,11 @@ from orchestrator.core.platform_secret_service import resolve_platform_secret_re
 from orchestrator.core.run_human_input_service import answered_human_inputs_for_attempt
 from orchestrator.core.tenant_secret_service import resolve_scoped_secret_ref
 from orchestrator.core.workflow.checkpoints import checkpoint_kind_for_stage
+from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot, load_parsed_trigger_context_from_plan
+from orchestrator.core.workflow.trigger_context import GithubPrRemediationTriggerContext
 from orchestrator.core.worker_workspace import resolve_worker_workspace_key
 from orchestrator.core.worker.queue_selector import coerce_positive_int
-from orchestrator.core.worker_capabilities import parse_worker_capabilities
+from orchestrator.core.worker_capabilities import resolve_worker_capability_context
 from orchestrator.core.workflow.runner import WorkflowRequest
 from orchestrator.storage.models import Project, Run, Tenant, WorkflowCheckpoint
 from orchestrator.tools.github_app import github_client_from_tenant_config
@@ -58,14 +60,18 @@ def build_workflow_request_for_run(
     else:
         issue_description = issue_description.strip()
     trigger_context = _extract_trigger_context(getattr(run, "plan", None))
+    parsed_trigger_context = load_parsed_trigger_context_from_plan(getattr(run, "plan", None))
     entry_mode = str(getattr(run, "entry_mode", "fresh") or "fresh").strip().lower() or "fresh"
     entry_stage = str(getattr(run, "entry_stage", "") or "").strip().lower() or None
     checkpoint = _entry_checkpoint(session=session, run=run)
+    checkpoint_payload = dict(checkpoint.payload_json) if checkpoint is not None else None
+    if checkpoint_payload is not None and ExecutionSnapshot.load(checkpoint_payload) is None:
+        raise ValueError("Unsupported execution snapshot version/shape in resume checkpoint payload")
     project_environment = getattr(project, "environment", {}) if project is not None else {}
     default_branch = project_environment.get("default_branch") if isinstance(project_environment, dict) else None
-    remediation_base_branch = _extract_remediation_base_ref(trigger_context)
+    remediation_base_branch = _extract_remediation_base_ref(parsed_trigger_context)
     base_branch = remediation_base_branch or _normalize_branch(default_branch) or "main"
-    remediation_head_branch = _extract_remediation_head_ref(trigger_context)
+    remediation_head_branch = _extract_remediation_head_ref(parsed_trigger_context)
     integration_branch = _resolve_integration_branch(
         session=session,
         settings=settings,
@@ -83,11 +89,14 @@ def build_workflow_request_for_run(
         base_branch=base_branch,
         integration_branch=integration_branch,
     )
-    available_worker_capabilities = sorted(
-        parse_worker_capabilities(getattr(settings, "worker_capabilities", ""))
+    capability_context = resolve_worker_capability_context(
+        raw_value=getattr(settings, "worker_capabilities", ""),
+        source="ORCHESTRATOR_WORKER_CAPABILITIES",
     )
-    current_worker_capability = available_worker_capabilities[0] if available_worker_capabilities else "linux"
-    pr_number = _extract_pr_number(trigger_context)
+    pr_number = _extract_pr_number(
+        parsed_trigger_context=parsed_trigger_context,
+        trigger_context=trigger_context,
+    )
     human_inputs = answered_human_inputs_for_attempt(
         session=session,
         settings=settings,
@@ -112,8 +121,8 @@ def build_workflow_request_for_run(
         suggested_test_commands=suggested_test_commands,
         execution_repo_dir=execution_repo_dir,
         workspace_key=workspace_key,
-        current_worker_capability=current_worker_capability,
-        available_worker_capabilities=available_worker_capabilities,
+        current_worker_capability=capability_context.current,
+        available_worker_capabilities=capability_context.available,
         base_branch=base_branch,
         integration_branch=integration_branch,
         pr_target_branch=base_branch,
@@ -130,7 +139,7 @@ def build_workflow_request_for_run(
             else (checkpoint_kind_for_stage(entry_stage) if entry_mode == "resume" and entry_stage else None)
         ),
         checkpoint_id=checkpoint.checkpoint_id if checkpoint is not None else None,
-        checkpoint_payload=dict(checkpoint.payload_json) if checkpoint is not None else None,
+        checkpoint_payload=checkpoint_payload,
         checkpoint_session_id=checkpoint.codex_session_id if checkpoint is not None else None,
         human_inputs=human_inputs,
     )
@@ -303,15 +312,22 @@ def _repo_full_name(repository_url: str) -> str | None:
 
 
 def _extract_trigger_context(plan: object) -> dict | None:
-    if not isinstance(plan, dict):
+    if plan is None or (isinstance(plan, dict) and not plan):
         return None
-    trigger_context = plan.get("trigger_context")
-    if isinstance(trigger_context, dict):
-        return dict(trigger_context) or None
-    return None
+    snapshot = ExecutionSnapshot.load(plan)
+    if snapshot is None:
+        raise ValueError("Unsupported execution snapshot version/shape")
+    trigger_context = snapshot.trigger_context()
+    return trigger_context or None
 
 
-def _extract_pr_number(trigger_context: dict | None) -> int | None:
+def _extract_pr_number(
+    *,
+    parsed_trigger_context: object,
+    trigger_context: dict | None,
+) -> int | None:
+    if isinstance(parsed_trigger_context, GithubPrRemediationTriggerContext):
+        return parsed_trigger_context.pr_number
     if not isinstance(trigger_context, dict):
         return None
     value = trigger_context.get("pr_number")
@@ -320,22 +336,16 @@ def _extract_pr_number(trigger_context: dict | None) -> int | None:
     return None
 
 
-def _extract_remediation_head_ref(trigger_context: dict | None) -> str | None:
-    if not isinstance(trigger_context, dict):
+def _extract_remediation_head_ref(parsed_trigger_context: object) -> str | None:
+    if not isinstance(parsed_trigger_context, GithubPrRemediationTriggerContext):
         return None
-    source = str(trigger_context.get("source") or "").strip().lower()
-    if source != "github_pr_review_feedback":
-        return None
-    return _normalize_branch(trigger_context.get("head_ref"))
+    return _normalize_branch(parsed_trigger_context.head_ref)
 
 
-def _extract_remediation_base_ref(trigger_context: dict | None) -> str | None:
-    if not isinstance(trigger_context, dict):
+def _extract_remediation_base_ref(parsed_trigger_context: object) -> str | None:
+    if not isinstance(parsed_trigger_context, GithubPrRemediationTriggerContext):
         return None
-    source = str(trigger_context.get("source") or "").strip().lower()
-    if source != "github_pr_review_feedback":
-        return None
-    return _normalize_branch(trigger_context.get("base_ref"))
+    return _normalize_branch(parsed_trigger_context.base_ref)
 
 
 def _entry_checkpoint(*, session, run: Run) -> WorkflowCheckpoint | None:  # noqa: ANN001

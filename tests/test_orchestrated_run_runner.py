@@ -2,6 +2,8 @@ import unittest
 from dataclasses import replace
 
 from orchestrator.core.codex_runtime import CodexRuntime
+from orchestrator.core.worker_capability_normalization import WorkerCapability
+from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.core.workflow.orchestrated_run_runner import OrchestratedRunWorkflowExecutor
 from orchestrator.core.workflow.runner import (
     DevResult,
@@ -76,14 +78,73 @@ class OrchestratedRunRunnerTests(unittest.TestCase):
             pr_target_branch="main",
         )
 
-    def _executor(self, stage_agents: _StubStageAgents) -> OrchestratedRunWorkflowExecutor:
+    def _executor(
+        self,
+        stage_agents: _StubStageAgents,
+        *,
+        execute_tool=None,
+    ) -> OrchestratedRunWorkflowExecutor:
         runtime = CodexRuntime(
             model="gpt-5-codex",
             max_output_tokens=1200,
             command="override",
             _request=_RuntimeNoop(),
         )
-        return OrchestratedRunWorkflowExecutor(runtime=runtime, stage_agents=stage_agents)
+        return OrchestratedRunWorkflowExecutor(
+            runtime=runtime,
+            stage_agents=stage_agents,
+            execute_tool=execute_tool,
+        )
+
+    def _resume_payload(
+        self,
+        *,
+        plan: PmPlan,
+        dev_result: DevResult | None = None,
+        test_result: TestResult | None = None,
+        review_result: ReviewResult | None = None,
+    ) -> dict:
+        snapshot = ExecutionSnapshot.empty()
+        snapshot.apply_stage_checkpoint(
+            WorkflowStageCheckpoint(
+                stage="pm",
+                attempt=1,
+                status="completed",
+                summary="PM completed",
+                plan=plan,
+            )
+        )
+        if dev_result is not None:
+            snapshot.apply_stage_checkpoint(
+                WorkflowStageCheckpoint(
+                    stage="dev",
+                    attempt=1,
+                    status="completed",
+                    summary="Dev completed",
+                    dev_result=dev_result,
+                )
+            )
+        if test_result is not None:
+            snapshot.apply_stage_checkpoint(
+                WorkflowStageCheckpoint(
+                    stage="test",
+                    attempt=1,
+                    status="completed",
+                    summary="Test completed",
+                    test_result=test_result,
+                )
+            )
+        if review_result is not None:
+            snapshot.apply_stage_checkpoint(
+                WorkflowStageCheckpoint(
+                    stage="review",
+                    attempt=1,
+                    status="completed",
+                    summary="Review completed",
+                    review_result=review_result,
+                )
+            )
+        return snapshot.dump()
 
     def test_review_needs_changes_loops_back_to_dev_until_approved(self) -> None:
         stage_agents = _StubStageAgents(
@@ -351,16 +412,13 @@ class OrchestratedRunRunnerTests(unittest.TestCase):
             entry_stage="dev",
             checkpoint_kind="execution",
             checkpoint_session_id="dev-session-123",
-            checkpoint_payload={
-                "plan": {
-                    "outcome": "continue",
-                    "plan_steps": ["resume from persisted plan"],
-                    "acceptance_criteria": ["ac1"],
-                    "risks": ["risk1"],
-                    "next_stage": "dev",
-                    "execution_worker_capability": "linux",
-                }
-            },
+            checkpoint_payload=self._resume_payload(
+                plan=PmPlan(
+                    plan_steps=["resume from persisted plan"],
+                    acceptance_criteria=["ac1"],
+                    risks=["risk1"],
+                )
+            ),
         )
 
         result = self._executor(stage_agents).execute(request)
@@ -397,13 +455,41 @@ class OrchestratedRunRunnerTests(unittest.TestCase):
         )
 
         result = self._executor(stage_agents).execute(
-            replace(self._request(), current_worker_capability="linux", available_worker_capabilities=["linux"])
+            replace(
+                self._request(),
+                current_worker_capability=WorkerCapability.LINUX,
+                available_worker_capabilities=(WorkerCapability.LINUX,),
+            )
         )
 
         self.assertEqual(result.outcome, "requeue")
-        self.assertEqual(result.requeue_target, "macos")
+        self.assertEqual(result.requeue_target, WorkerCapability.MACOS)
         self.assertIn("Execution capability mismatch:", result.requeue_reason)
         self.assertEqual(stage_agents.dev_calls, 0)
+
+    def test_pm_requeue_outcome_preserves_target_and_reason(self) -> None:
+        stage_agents = _StubStageAgents(
+            plan=PmPlan(
+                plan_steps=["plan"],
+                acceptance_criteria=["ac1"],
+                risks=[],
+                outcome="requeue",
+                requeue_target="macos",
+                requeue_reason="StoreKit validation requires macOS worker",
+                blocker_message="PM produced 1 execution steps and 1 acceptance criteria.",
+            ),
+            dev_results=[],
+            test_results=[],
+            review_results=[],
+        )
+
+        result = self._executor(stage_agents).execute(self._request())
+
+        self.assertEqual(result.outcome, "requeue")
+        self.assertEqual(result.requeue_target, WorkerCapability.MACOS)
+        self.assertEqual(result.requeue_reason, "StoreKit validation requires macOS worker")
+        self.assertIsNone(result.diagnostics)
+        self.assertEqual(result.orchestration_stage_trace[0]["status"], "requeue")
 
     def test_pm_missing_evidence_is_advisory_and_does_not_stop_before_dev(self) -> None:
         stage_agents = _StubStageAgents(
@@ -499,21 +585,25 @@ class OrchestratedRunRunnerTests(unittest.TestCase):
                 entry_stage="review",
                 checkpoint_kind="execution",
                 checkpoint_session_id="dev-session-123",
-                checkpoint_payload={
-                    "plan": {
-                        "outcome": "continue",
-                        "plan_steps": ["plan"],
-                        "acceptance_criteria": ["ac1"],
-                        "risks": [],
-                        "next_stage": "dev",
-                        "execution_worker_capability": "linux",
-                    },
-                    "dev_rationale": ["Implemented onboarding flow"],
-                    "test_guidance": ["pytest -q"],
-                    "review_summary": ["Needs nonce verification"],
-                    "review_feedback": "Verify nonce handling with the QA account",
-                    "pr_url": "https://example/pull/1",
-                },
+                checkpoint_payload=self._resume_payload(
+                    plan=PmPlan(plan_steps=["plan"], acceptance_criteria=["ac1"], risks=[]),
+                    dev_result=DevResult(
+                        outcome="continue",
+                        change_summary=["Implemented onboarding flow"],
+                        pr_url="https://example/pull/1",
+                    ),
+                    test_result=TestResult(
+                        outcome="continue",
+                        guidance=["pytest -q"],
+                        feedback=None,
+                    ),
+                    review_result=ReviewResult(
+                        outcome="failed",
+                        summary=["Needs nonce verification"],
+                        feedback="Verify nonce handling with the QA account",
+                        pr_url="https://example/pull/1",
+                    ),
+                ),
             ),
         )
 
@@ -523,7 +613,7 @@ class OrchestratedRunRunnerTests(unittest.TestCase):
         self.assertEqual(stage_agents.test_calls, 0)
         self.assertEqual(stage_agents.review_calls, 1)
 
-    def test_resume_from_dev_rejects_invalid_persisted_pm_plan_contract(self) -> None:
+    def test_review_resume_invalid_artifacts_do_not_mark_dev_and_test_completed(self) -> None:
         stage_agents = _StubStageAgents(
             plan=PmPlan(plan_steps=["unused"], acceptance_criteria=["unused"], risks=[]),
             dev_results=[],
@@ -535,18 +625,48 @@ class OrchestratedRunRunnerTests(unittest.TestCase):
             replace(
                 self._request(),
                 entry_mode="resume",
+                entry_stage="review",
+                checkpoint_kind="execution",
+                checkpoint_session_id="dev-session-123",
+                checkpoint_payload=self._resume_payload(
+                    plan=PmPlan(plan_steps=["plan"], acceptance_criteria=["ac1"], risks=[])
+                ),
+            ),
+        )
+
+        self.assertEqual(result.outcome, "blocked")
+        self.assertEqual(result.diagnostics.stage, "review")
+        self.assertIn("no valid persisted dev/test artifacts", result.diagnostics.message)
+        self.assertEqual(
+            [entry["stage"] for entry in result.orchestration_stage_trace],
+            ["pm"],
+        )
+
+    def test_resume_from_dev_rejects_invalid_persisted_pm_plan_contract(self) -> None:
+        stage_agents = _StubStageAgents(
+            plan=PmPlan(plan_steps=["unused"], acceptance_criteria=["unused"], risks=[]),
+            dev_results=[],
+            test_results=[],
+            review_results=[],
+        )
+
+        invalid_checkpoint_payload = self._resume_payload(
+            plan=PmPlan(
+                plan_steps=["resume from persisted plan"],
+                acceptance_criteria=["ac1"],
+                risks=["risk1"],
+            )
+        )
+        invalid_checkpoint_payload["stages"]["pm"]["artifact"]["next_stage"] = "ship-it"
+
+        result = self._executor(stage_agents).execute(
+            replace(
+                self._request(),
+                entry_mode="resume",
                 entry_stage="dev",
                 checkpoint_kind="execution",
                 checkpoint_session_id="dev-session-123",
-                checkpoint_payload={
-                    "plan": {
-                        "plan_steps": ["resume from persisted plan"],
-                        "acceptance_criteria": ["ac1"],
-                        "risks": ["risk1"],
-                        "next_stage": "ship-it",
-                        "execution_worker_capability": "linux",
-                    }
-                },
+                checkpoint_payload=invalid_checkpoint_payload,
             )
         )
 

@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 import {
+  makeExecutionSnapshotPlan,
   makeRun,
   makeStageInvocationLogs,
   mockRunDetailApis,
@@ -9,8 +10,8 @@ import {
 
 test("renders checkpoint-backed failed-after-dev runs with separate execution and integration branches", async ({ page }) => {
   const run = makeRun({
-    plan: {
-      stage_checkpoints: {
+    plan: makeExecutionSnapshotPlan({
+      stages: {
         pm: {
           status: "completed",
           completed_at: "2026-03-27T16:55:00Z",
@@ -28,7 +29,7 @@ test("renders checkpoint-backed failed-after-dev runs with separate execution an
         base_branch: "main",
         execution_repo_dir: "/tmp/worktree",
       },
-    },
+    }),
   });
   const logs = makeStageInvocationLogs({
     stage: "dev",
@@ -64,8 +65,8 @@ test("renders checkpoint-backed failed-after-dev runs with separate execution an
 
 test("marks a finished stage without a checkpoint as interrupted on terminal runs", async ({ page }) => {
   const run = makeRun({
-    plan: {
-      stage_checkpoints: {
+    plan: makeExecutionSnapshotPlan({
+      stages: {
         pm: {
           status: "completed",
           completed_at: "2026-03-27T16:55:00Z",
@@ -76,7 +77,7 @@ test("marks a finished stage without a checkpoint as interrupted on terminal run
         integration_branch: "feature/GP-124",
         execution_branch: "run/gp-124/5de2cedf-b7ae-400c-a53c-3beecf078a51",
       },
-    },
+    }),
   });
   const logs = makeStageInvocationLogs({
     stage: "dev",
@@ -103,30 +104,50 @@ test("marks a finished stage without a checkpoint as interrupted on terminal run
 
 test("offers execution resume when review state exists and posts the workflow attempt payload", async ({ page }) => {
   const run = makeRun({
-    plan: {
-      stage_checkpoints: {
+    plan: makeExecutionSnapshotPlan({
+      stages: {
         pm: {
           status: "completed",
           completed_at: "2026-03-27T16:55:00Z",
           summary: "PM plan captured.",
+          artifact: {
+            plan_steps: ["Define implementation scope."],
+            acceptance_criteria: ["AC 1"],
+            risks: [],
+            outcome: "continue",
+            next_stage: "dev",
+            execution_worker_capability: "linux",
+            resolved_prerequisites: [],
+            unresolved_prerequisites: [],
+          },
         },
         dev: {
           status: "completed",
           completed_at: "2026-03-27T17:02:57Z",
           summary: "Code pushed.",
+          artifact: {
+            change_summary: ["Implemented fix."],
+            pr_url: "https://github.com/thedarkcder/girl-power/pull/21",
+            outcome: "continue",
+          },
         },
         review: {
           status: "completed",
           completed_at: "2026-03-27T17:07:00Z",
           summary: "Review found follow-up items.",
+          artifact: {
+            summary: ["Address latest review feedback."],
+            outcome: "continue",
+            feedback: "Address latest review feedback.",
+            pr_url: "https://github.com/thedarkcder/girl-power/pull/21",
+          },
         },
       },
       execution_context: {
         integration_branch: "feature/GP-124",
         execution_branch: "run/gp-124/5de2cedf-b7ae-400c-a53c-3beecf078a51",
       },
-      review_summary: ["Address latest review feedback."],
-    },
+    }),
   });
   let rerunPayload: unknown = null;
 
@@ -152,15 +173,15 @@ test("offers execution resume when review state exists and posts the workflow at
 
 test("offers start from the start as a fresh rerun with no checkpoint payload", async ({ page }) => {
   const run = makeRun({
-    plan: {
-      stage_checkpoints: {
+    plan: makeExecutionSnapshotPlan({
+      stages: {
         pm: {
           status: "completed",
           completed_at: "2026-03-27T16:55:00Z",
           summary: "PM plan captured.",
         },
       },
-    },
+    }),
   });
   let rerunPayload: unknown = null;
 
