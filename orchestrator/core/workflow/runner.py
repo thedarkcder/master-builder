@@ -2,9 +2,13 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from collections.abc import Callable
-from typing import Protocol
+from typing import Literal, Protocol
 
 from orchestrator.core.followups import build_backlog_follow_up_draft
+
+StageOutcome = Literal["continue", "requeue", "waiting_for_input", "blocked", "failed"]
+WorkflowOutcome = Literal["success", "requeue", "waiting_for_input", "blocked", "failed"]
+
 
 @dataclass(frozen=True)
 class WorkflowRequest:
@@ -48,10 +52,12 @@ class PmPlan:
     plan_steps: list[str]
     acceptance_criteria: list[str]
     risks: list[str]
+    outcome: StageOutcome = "continue"
     next_stage: str = "dev"
     execution_worker_capability: str = "linux"
-    missing_evidence_sources: list[str] = field(default_factory=list)
-    confirmed_external_blockers: list[str] = field(default_factory=list)
+    blocker_message: str | None = None
+    requeue_target: str | None = None
+    requeue_reason: str | None = None
     resolved_prerequisites: list[str] = field(default_factory=list)
     unresolved_prerequisites: list[str] = field(default_factory=list)
 
@@ -60,16 +66,15 @@ class PmPlan:
 class DevResult:
     change_summary: list[str]
     pr_url: str | None
-    blocker_category: str | None = None
+    outcome: StageOutcome = "continue"
     blocker_message: str | None = None
 
 
 @dataclass(frozen=True)
 class TestResult:
-    passed: bool
     guidance: list[str]
+    outcome: StageOutcome = "continue"
     feedback: str | None = None
-    blocker_category: str | None = None
     blocker_message: str | None = None
 
 
@@ -79,12 +84,10 @@ TestResult.__test__ = False
 
 @dataclass(frozen=True)
 class ReviewResult:
-    approved: bool
     summary: list[str]
-    outcome: str = "needs_changes"
+    outcome: StageOutcome = "continue"
     feedback: str | None = None
     pr_url: str | None = None
-    blocker_category: str | None = None
     blocker_message: str | None = None
 
 
@@ -94,7 +97,6 @@ class WorkflowDiagnostics:
     message: str
     attempts: int
     history: list[dict[str, str]]
-    classification: str = "workflow_failure"
 
 
 @dataclass(frozen=True)
@@ -108,21 +110,10 @@ class WorkflowStageCheckpoint:
     test_result: TestResult | None = None
     review_result: ReviewResult | None = None
 
-    def artifact_payload(self) -> dict | None:
-        if self.plan is not None:
-            return asdict(self.plan)
-        if self.dev_result is not None:
-            return asdict(self.dev_result)
-        if self.test_result is not None:
-            return asdict(self.test_result)
-        if self.review_result is not None:
-            return asdict(self.review_result)
-        return None
-
 
 @dataclass(frozen=True)
 class WorkflowResult:
-    succeeded: bool
+    outcome: WorkflowOutcome
     plan: PmPlan | None
     pr_url: str | None
     summary: list[str]
@@ -135,11 +126,14 @@ class WorkflowResult:
     orchestration_workstream_trace: list[dict[str, object]] = field(default_factory=list)
     follow_up_issue: dict | None = None
     diagnostics: WorkflowDiagnostics | None = None
+    requeue_target: str | None = None
+    requeue_reason: str | None = None
+    blocker_message: str | None = None
 
     def to_plan_payload(self) -> dict:
         payload = {
             "attempts": self.attempts,
-            "succeeded": self.succeeded,
+            "outcome": self.outcome,
             "summary": self.summary,
             "test_guidance": self.test_guidance,
             "pr_url": self.pr_url,
@@ -150,6 +144,12 @@ class WorkflowResult:
             "orchestration_workstream_trace": self.orchestration_workstream_trace,
             "follow_up_issue": self.follow_up_issue,
         }
+        if self.requeue_target:
+            payload["requeue_target"] = self.requeue_target
+        if self.requeue_reason:
+            payload["requeue_reason"] = self.requeue_reason
+        if self.blocker_message:
+            payload["blocker_message"] = self.blocker_message
         if self.orchestration_stage_trace or self.orchestration_workstream_trace:
             payload["orchestration_trace"] = {
                 "stage_events": self.orchestration_stage_trace,
@@ -217,7 +217,6 @@ class WorkflowRunner:
         dev_rationale: list[str] | None = None,
         review_summary: list[str] | None = None,
         review_feedback: str | None = None,
-        classification: str = "workflow_failure",
     ) -> WorkflowResult:
         if follow_up_issue is None and request is not None and not skip_auto_follow_up:
             draft = build_backlog_follow_up_draft(
@@ -233,7 +232,7 @@ class WorkflowRunner:
             )
             follow_up_issue = draft.to_payload()
         return WorkflowResult(
-            succeeded=False,
+            outcome="blocked",
             plan=plan,
             pr_url=None,
             summary=[],
@@ -243,11 +242,11 @@ class WorkflowRunner:
             review_summary=list(review_summary or ()),
             review_feedback=review_feedback,
             follow_up_issue=follow_up_issue,
+            blocker_message=message,
             diagnostics=WorkflowDiagnostics(
                 stage=stage,
                 message=message,
                 attempts=attempts,
                 history=history,
-                classification=classification,
             ),
         )

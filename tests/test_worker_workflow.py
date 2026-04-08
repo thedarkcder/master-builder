@@ -48,7 +48,7 @@ class _SuccessRunner:
                 )
             )
         return WorkflowResult(
-            succeeded=True,
+            outcome="success",
             plan=PmPlan(
                 plan_steps=["plan", "build", "validate"],
                 acceptance_criteria=["has PR link"],
@@ -66,7 +66,7 @@ class _FailureRunner:
     def run(self, request, *, test_feedback_hook=None, stage_checkpoint_hook=None):  # noqa: ANN001,ARG002
         _ = stage_checkpoint_hook
         return WorkflowResult(
-            succeeded=False,
+            outcome="failed",
             plan=PmPlan(
                 plan_steps=["plan", "build", "validate"],
                 acceptance_criteria=["has PR link"],
@@ -89,7 +89,7 @@ class _CapabilityMismatchRunner:
     def run(self, request, *, test_feedback_hook=None, stage_checkpoint_hook=None):  # noqa: ANN001,ARG002
         _ = stage_checkpoint_hook
         return WorkflowResult(
-            succeeded=False,
+            outcome="requeue",
             plan=PmPlan(
                 plan_steps=["Plan implementation"],
                 acceptance_criteria=["Feature implemented"],
@@ -100,6 +100,11 @@ class _CapabilityMismatchRunner:
             summary=[],
             test_guidance=[],
             attempts=1,
+            requeue_target="macos",
+            requeue_reason=(
+                "Execution capability mismatch: PM selected macos but current worker is linux. "
+                "Requeue on worker:macos before dev/test/review."
+            ),
             diagnostics=WorkflowDiagnostics(
                 stage="pm",
                 message=(
@@ -356,7 +361,7 @@ class WorkerWorkflowTests(unittest.TestCase):
             self.assertIsNotNone(processed.started_at)
             self.assertIsNotNone(processed.finished_at)
             self.assertIsInstance(processed.plan, dict)
-            self.assertTrue(processed.plan["succeeded"])
+            self.assertEqual(processed.plan["outcome"], "success")
             self.assertEqual(processed.plan["attempts"], 1)
             self.assertEqual(processed.plan["plan"]["plan_steps"], ["plan", "build", "validate"])
             self.assertEqual(processed.plan["stage_checkpoints"]["pm"]["status"], "completed")
@@ -433,7 +438,7 @@ class WorkerWorkflowTests(unittest.TestCase):
             )
             self.assertIsNone(processed.pr_url)
             self.assertIsInstance(processed.plan, dict)
-            self.assertFalse(processed.plan["succeeded"])
+            self.assertEqual(processed.plan["outcome"], "failed")
             self.assertEqual(processed.plan["diagnostics"]["stage"], "test")
             stage_updates = processed.plan["stage_updates"]
             self.assertEqual(

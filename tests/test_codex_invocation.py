@@ -813,13 +813,21 @@ class CodexInvocationTests(unittest.TestCase):
         self.assertIn('"tool_name": "decision.read_state"', str(runtime_calls[1]["user_prompt"]))
         self.assertIn('"ok": true', str(runtime_calls[1]["user_prompt"]).lower())
 
-    def test_invoke_runtime_json_with_tools_rejects_disallowed_tool(self) -> None:
+    def test_invoke_runtime_json_with_tools_recovers_from_disallowed_tool(self) -> None:
+        runtime_calls: list[dict[str, object]] = []
+
         class _Runtime:
-            def run_json(self, **_kwargs):  # noqa: ANN003
+            def run_json(self, **kwargs):  # noqa: ANN003
+                runtime_calls.append(kwargs)
+                if len(runtime_calls) == 1:
+                    return {
+                        "type": "tool_request",
+                        "tool_name": "decision.read_state",
+                        "tool_args": {},
+                    }
                 return {
-                    "type": "tool_request",
-                    "tool_name": "decision.read_state",
-                    "tool_args": {},
+                    "type": "final_response",
+                    "result": {"message": "continued without disallowed tool"},
                 }
 
         context = AgentInvocationContext(
@@ -831,11 +839,8 @@ class CodexInvocationTests(unittest.TestCase):
             working_dir=".",
         )
 
-        with (
-            patch("orchestrator.core.runtime_invocation._get_log_writer", return_value=self._Writer()),
-            self.assertRaisesRegex(RuntimeError, "disallowed tool"),
-        ):
-            invoke_runtime_json_with_tools(
+        with patch("orchestrator.core.runtime_invocation._get_log_writer", return_value=self._Writer()):
+            payload = invoke_runtime_json_with_tools(
                 runtime=_Runtime(),  # type: ignore[arg-type]
                 context=context,
                 system_prompt="system",
@@ -844,7 +849,52 @@ class CodexInvocationTests(unittest.TestCase):
                 execute_tool=lambda _tool_name, _tool_args: {"ok": True},
             )
 
-    def test_invoke_runtime_json_with_tools_fails_after_tool_hop_limit(self) -> None:
+        self.assertEqual(payload, {"message": "continued without disallowed tool"})
+        self.assertIn("disallowed tool", str(runtime_calls[1]["user_prompt"]).lower())
+        self.assertIn("do not issue another tool_request", str(runtime_calls[1]["user_prompt"]).lower())
+
+    def test_invoke_runtime_json_with_tools_recovers_after_tool_hop_limit(self) -> None:
+        runtime_calls: list[dict[str, object]] = []
+
+        class _Runtime:
+            def run_json(self, **kwargs):  # noqa: ANN003
+                runtime_calls.append(kwargs)
+                if len(runtime_calls) <= 2:
+                    return {
+                        "type": "tool_request",
+                        "tool_name": "decision.read_state",
+                        "tool_args": {},
+                    }
+                return {
+                    "type": "final_response",
+                    "result": {"message": "continued after hop limit"},
+                }
+
+        context = AgentInvocationContext(
+            channel="system",
+            tenant_id="tenant-1",
+            project_id=None,
+            command="policy",
+            stage="decision_planner",
+            working_dir=".",
+        )
+
+        with patch("orchestrator.core.runtime_invocation._get_log_writer", return_value=self._Writer()):
+            payload = invoke_runtime_json_with_tools(
+                runtime=_Runtime(),  # type: ignore[arg-type]
+                context=context,
+                system_prompt="system",
+                user_prompt="user",
+                allowed_tools={"decision.read_state"},
+                execute_tool=lambda _tool_name, _tool_args: {"ok": True},
+                max_tool_hops=1,
+            )
+
+        self.assertEqual(payload, {"message": "continued after hop limit"})
+        self.assertIn("tool hop limit exceeded", str(runtime_calls[2]["user_prompt"]).lower())
+        self.assertIn("do not issue another tool_request", str(runtime_calls[2]["user_prompt"]).lower())
+
+    def test_invoke_runtime_json_with_tools_returns_fallback_payload_when_bridge_never_finalizes(self) -> None:
         class _Runtime:
             def run_json(self, **_kwargs):  # noqa: ANN003
                 return {
@@ -862,19 +912,18 @@ class CodexInvocationTests(unittest.TestCase):
             working_dir=".",
         )
 
-        with (
-            patch("orchestrator.core.runtime_invocation._get_log_writer", return_value=self._Writer()),
-            self.assertRaisesRegex(RuntimeError, "tool hop limit"),
-        ):
-            invoke_runtime_json_with_tools(
+        with patch("orchestrator.core.runtime_invocation._get_log_writer", return_value=self._Writer()):
+            payload = invoke_runtime_json_with_tools(
                 runtime=_Runtime(),  # type: ignore[arg-type]
                 context=context,
                 system_prompt="system",
                 user_prompt="user",
-                allowed_tools={"decision.read_state"},
+                allowed_tools=set(),
                 execute_tool=lambda _tool_name, _tool_args: {"ok": True},
-                max_tool_hops=1,
             )
+
+        self.assertIn("_tool_bridge_error", payload)
+        self.assertIn("tool bridge", str(payload["_tool_bridge_error"]).lower())
 
 
 if __name__ == "__main__":

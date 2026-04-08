@@ -661,8 +661,11 @@ def invoke_runtime_json_with_tools(
     resume_session_id = str(context.codex_session_id or "").strip() or None
     current_user_prompt = user_prompt
     normalized_allowed_tools = {str(tool).strip() for tool in allowed_tools if str(tool).strip()}
+    tool_hops_used = 0
+    final_response_required = False
+    bridge_error: str | None = None
 
-    for tool_hop in range(max(0, int(max_tool_hops)) + 1):
+    for tool_hop in range(max(0, int(max_tool_hops)) + 2):
         payload, observed_session_id = _invoke_runtime_json_once(
             runtime=runtime,
             context=AgentInvocationContext(
@@ -694,26 +697,91 @@ def invoke_runtime_json_with_tools(
             return payload
         if response_type == _FINAL_RESPONSE_TYPE:
             result = payload.get("result")
-            if not isinstance(result, dict):
-                raise RuntimeError("Codex tool bridge final_response must contain an object result")
-            return result
+            if isinstance(result, dict):
+                return result
+            bridge_error = "Codex tool bridge final_response must contain an object result"
+            current_user_prompt = _build_tool_result_prompt(
+                tool_result={
+                    "tool_name": "__tool_bridge__",
+                    "ok": False,
+                    "error": bridge_error,
+                },
+                require_final_response=True,
+            )
+            final_response_required = True
+            continue
         if response_type != _TOOL_REQUEST_TYPE:
-            raise RuntimeError(f"Codex tool bridge returned unsupported response type '{response_type}'")
-        if tool_hop >= max_tool_hops:
-            raise RuntimeError("Codex tool hop limit exceeded")
+            bridge_error = f"Codex tool bridge returned unsupported response type '{response_type}'"
+            current_user_prompt = _build_tool_result_prompt(
+                tool_result={
+                    "tool_name": "__tool_bridge__",
+                    "ok": False,
+                    "error": bridge_error,
+                },
+                require_final_response=True,
+            )
+            final_response_required = True
+            continue
+        if final_response_required:
+            bridge_error = "Codex tool bridge requested another tool after a tool-bridge error"
+            break
+        if tool_hops_used >= max_tool_hops:
+            bridge_error = "Codex tool hop limit exceeded"
+            current_user_prompt = _build_tool_result_prompt(
+                tool_result={
+                    "tool_name": "__tool_bridge__",
+                    "ok": False,
+                    "error": bridge_error,
+                },
+                require_final_response=True,
+            )
+            final_response_required = True
+            continue
+
+        tool_hops_used += 1
 
         tool_name = str(payload.get("tool_name") or "").strip()
         if not tool_name:
-            raise RuntimeError("Codex tool bridge tool_request missing tool_name")
+            bridge_error = "Codex tool bridge tool_request missing tool_name"
+            current_user_prompt = _build_tool_result_prompt(
+                tool_result={
+                    "tool_name": "__tool_bridge__",
+                    "ok": False,
+                    "error": bridge_error,
+                },
+                require_final_response=True,
+            )
+            final_response_required = True
+            continue
         if tool_name not in normalized_allowed_tools:
-            raise RuntimeError(f"Codex tool bridge requested disallowed tool '{tool_name}'")
+            bridge_error = f"Codex tool bridge requested disallowed tool '{tool_name}'"
+            current_user_prompt = _build_tool_result_prompt(
+                tool_result={
+                    "tool_name": tool_name,
+                    "ok": False,
+                    "error": bridge_error,
+                },
+                require_final_response=True,
+            )
+            final_response_required = True
+            continue
         raw_tool_args = payload.get("tool_args")
         if raw_tool_args is None:
             tool_args: dict[str, object] = {}
         elif isinstance(raw_tool_args, dict):
             tool_args = dict(raw_tool_args)
         else:
-            raise RuntimeError("Codex tool bridge tool_request tool_args must be an object")
+            bridge_error = "Codex tool bridge tool_request tool_args must be an object"
+            current_user_prompt = _build_tool_result_prompt(
+                tool_result={
+                    "tool_name": tool_name,
+                    "ok": False,
+                    "error": bridge_error,
+                },
+                require_final_response=True,
+            )
+            final_response_required = True
+            continue
 
         try:
             tool_result = execute_tool(tool_name, tool_args)
@@ -730,8 +798,13 @@ def invoke_runtime_json_with_tools(
             }
 
         current_user_prompt = _build_tool_result_prompt(tool_result=bridge_result)
+        final_response_required = False
 
-    raise RuntimeError("Codex tool hop limit exceeded")
+    fallback_message = bridge_error or "Codex tool bridge could not obtain a final response"
+    return {
+        "_raw_response": fallback_message,
+        "_tool_bridge_error": fallback_message,
+    }
 
 
 def _invoke_runtime_json_once(
@@ -908,12 +981,20 @@ def _invoke_runtime_json_once(
             )
 
 
-def _build_tool_result_prompt(*, tool_result: dict[str, object]) -> str:
+def _build_tool_result_prompt(*, tool_result: dict[str, object], require_final_response: bool = False) -> str:
+    continuation = (
+        "Continue from this result and return JSON only. "
+        "Tool failures are advisory unless they directly prove a real external blocker. "
+        "Use other available evidence or continue with best-effort reasoning rather than failing solely because a tool failed. "
+    )
+    if require_final_response:
+        continuation += "Do not issue another tool_request. Return a final_response now."
+    else:
+        continuation += "Return either another tool_request or a final_response."
     return (
         "Tool result:\n"
         f"{json.dumps(tool_result, sort_keys=True)}\n\n"
-        "Continue from this result and return JSON only. "
-        "Return either another tool_request or a final_response."
+        f"{continuation}"
     )
 
 

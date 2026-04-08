@@ -7,11 +7,10 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 from unittest.mock import patch
 
-from orchestrator.core.worker.process_service import _emit_detailed_jira_feedback
-from orchestrator.core.worker.process_service import _emit_orchestrated_trace_logs
-from orchestrator.core.worker.process_service import _extract_capability_requeue_target
-from orchestrator.core.worker.process_service import _run_completion_step
 from orchestrator.core.worker.process_service import process_next_queued_run
+from orchestrator.core.worker.finalization import _emit_detailed_jira_feedback
+from orchestrator.core.worker.finalization import _emit_orchestrated_trace_logs
+from orchestrator.core.worker.finalization import _run_completion_step
 from orchestrator.core.worker.stage_notifier import RunStageNotifier
 from orchestrator.core.workflow.runner import (
     PmPlan,
@@ -85,7 +84,7 @@ class WorkerProcessServiceTests(unittest.TestCase):
             recorded_rows.append(dict(kwargs))
 
         workflow_result = WorkflowResult(
-            succeeded=False,
+            outcome="blocked",
             plan=None,
             pr_url=None,
             summary=[],
@@ -98,7 +97,7 @@ class WorkerProcessServiceTests(unittest.TestCase):
             orchestration_workstream_trace=[],
         )
 
-        with patch("orchestrator.core.worker.process_service.record_run_log_event", side_effect=_record_run_log_event):
+        with patch("orchestrator.core.worker.finalization.record_run_log_event", side_effect=_record_run_log_event):
             _emit_orchestrated_trace_logs(
                 session=MagicMock(),
                 run=SimpleNamespace(
@@ -125,7 +124,7 @@ class WorkerProcessServiceTests(unittest.TestCase):
     def test_emit_detailed_jira_feedback_sends_dev_and_review_comments(self) -> None:
         send_jira = MagicMock()
         workflow_result = WorkflowResult(
-            succeeded=False,
+            outcome="blocked",
             plan=None,
             pr_url=None,
             summary=[],
@@ -156,7 +155,7 @@ class WorkerProcessServiceTests(unittest.TestCase):
         def _record_run_log_event(**kwargs: object) -> None:
             recorded_rows.append(dict(kwargs))
 
-        with patch("orchestrator.core.worker.process_service.record_run_log_event", side_effect=_record_run_log_event):
+        with patch("orchestrator.core.worker.finalization.record_run_log_event", side_effect=_record_run_log_event):
             _run_completion_step(
                 session=session,
                 run=SimpleNamespace(
@@ -182,45 +181,6 @@ class WorkerProcessServiceTests(unittest.TestCase):
                 for message in recorded_messages
             )
         )
-
-    def test_extract_capability_requeue_target_from_plan(self) -> None:
-        workflow_result = WorkflowResult(
-            succeeded=False,
-            plan=PmPlan(
-                plan_steps=["Plan"],
-                acceptance_criteria=["AC"],
-                risks=[],
-                execution_worker_capability="macos",
-            ),
-            pr_url=None,
-            summary=[],
-            test_guidance=[],
-            attempts=1,
-            diagnostics=WorkflowDiagnostics(
-                stage="pm",
-                message="Execution capability mismatch: PM selected macos but current worker is linux.",
-                attempts=1,
-                history=[],
-            ),
-        )
-        self.assertEqual(_extract_capability_requeue_target(workflow_result), "macos")
-
-    def test_extract_capability_requeue_target_returns_none_for_non_mismatch(self) -> None:
-        workflow_result = WorkflowResult(
-            succeeded=False,
-            plan=None,
-            pr_url=None,
-            summary=[],
-            test_guidance=[],
-            attempts=1,
-            diagnostics=WorkflowDiagnostics(
-                stage="test",
-                message="Max workflow attempts reached after test failures",
-                attempts=1,
-                history=[],
-            ),
-        )
-        self.assertIsNone(_extract_capability_requeue_target(workflow_result))
 
     def test_process_next_queued_run_uses_claimed_run_from_claim_service(self) -> None:
         run = SimpleNamespace(run_id="run-1", tenant_id="tenant-1", issue_key="GP-122", project_id="project-1")
@@ -319,7 +279,7 @@ class WorkerProcessServiceTests(unittest.TestCase):
             runner=SimpleNamespace(
                 run=MagicMock(
                     return_value=WorkflowResult(
-                        succeeded=True,
+                        outcome="success",
                         plan=None,
                         pr_url=None,
                         summary=[],
@@ -427,13 +387,13 @@ class WorkerProcessServiceTests(unittest.TestCase):
         session.refresh.side_effect = lambda _target, **_kwargs: None
         finalize_run = MagicMock(return_value=finalized_run)
 
-        with patch("orchestrator.core.worker.process_service.publish_manual_pr_remediation_completion") as publish_completion:
+        with patch("orchestrator.core.worker.finalization.publish_manual_pr_remediation_completion") as publish_completion:
             result = process_next_queued_run(
                 session=session,
                 runner=SimpleNamespace(
                     run=MagicMock(
                         return_value=WorkflowResult(
-                            succeeded=True,
+                            outcome="success",
                             plan=None,
                             pr_url="https://github.com/org/repo/pull/10",
                             summary=["Done"],
@@ -496,7 +456,7 @@ class WorkerProcessServiceTests(unittest.TestCase):
 
         self.assertIs(result, finalized_run)
         publish_completion.assert_called_once()
-        self.assertIs(publish_completion.call_args.kwargs["run"], run)
+        self.assertIs(publish_completion.call_args.kwargs["run"], finalized_run)
         self.assertEqual(publish_completion.call_args.kwargs["terminal_status"], "succeeded")
         self.assertTrue(heartbeat.started)
         self.assertTrue(heartbeat.stopped)
@@ -530,8 +490,8 @@ class WorkerProcessServiceTests(unittest.TestCase):
             session=session,
             runner=SimpleNamespace(
                 run=MagicMock(
-                    return_value=WorkflowResult(
-                        succeeded=True,
+                        return_value=WorkflowResult(
+                        outcome="success",
                         plan=None,
                         pr_url=None,
                         summary=["Done"],
@@ -615,6 +575,8 @@ class WorkerProcessServiceTests(unittest.TestCase):
         project = SimpleNamespace(project_id="project-1", policy_overrides={}, is_archived=False)
         heartbeat = _FakeHeartbeatController()
         session = MagicMock()
+        send_jira_message = MagicMock()
+        cleanup = MagicMock()
 
         def _refresh(target, **_kwargs):  # noqa: ANN001
             if target is run:
@@ -629,12 +591,13 @@ class WorkerProcessServiceTests(unittest.TestCase):
             runner=SimpleNamespace(
                 run=MagicMock(
                     return_value=WorkflowResult(
-                        succeeded=False,
+                        outcome="waiting_for_input",
                         plan=None,
                         pr_url=None,
                         summary=[],
                         test_guidance=[],
                         attempts=1,
+                        blocker_message="Decision Gate clarification requested",
                         diagnostics=WorkflowDiagnostics(
                             stage="pm",
                             message="Decision Gate clarification requested",
@@ -660,14 +623,14 @@ class WorkerProcessServiceTests(unittest.TestCase):
             ),
             apply_decision_gate_fn=lambda **_: (None, None),
             send_discord_message_fn=MagicMock(return_value=SimpleNamespace(sent=True, reason=None)),
-            send_jira_message_fn=MagicMock(),
+            send_jira_message_fn=send_jira_message,
             ask_reply_components_fn=MagicMock(),
             resolve_project_for_run_fn=MagicMock(return_value=project),
             fail_missing_project_mapping_fn=MagicMock(),
             block_archived_project_fn=MagicMock(),
             ensure_project_repository_checkout_fn=MagicMock(),
             fail_project_repository_checkout_fn=MagicMock(),
-            cleanup_run_workspaces_fn=MagicMock(),
+            cleanup_run_workspaces_fn=cleanup,
             build_run_heartbeat_controller_fn=lambda **_: heartbeat,
             bind_run_project_fn=MagicMock(),
             workflow_request_for_run_fn=MagicMock(return_value=SimpleNamespace(start_point_ref=None, start_point_sha=None)),
@@ -699,6 +662,9 @@ class WorkerProcessServiceTests(unittest.TestCase):
         self.assertIs(result, run)
         run_failed_update.assert_not_called()
         finalize_run.assert_not_called()
+        self.assertEqual(send_jira_message.call_count, 1)
+        self.assertEqual(send_jira_message.call_args.kwargs["stage"], "lock_acquired")
+        cleanup.assert_not_called()
         self.assertTrue(heartbeat.started)
         self.assertTrue(heartbeat.stopped)
 
@@ -749,10 +715,12 @@ class WorkerProcessServiceTests(unittest.TestCase):
                     "plan_steps": list(checkpoint.plan.plan_steps),
                     "acceptance_criteria": list(checkpoint.plan.acceptance_criteria),
                     "risks": list(checkpoint.plan.risks),
+                    "outcome": checkpoint.plan.outcome,
                     "next_stage": checkpoint.plan.next_stage,
                     "execution_worker_capability": checkpoint.plan.execution_worker_capability,
-                    "missing_evidence_sources": list(checkpoint.plan.missing_evidence_sources),
-                    "confirmed_external_blockers": list(checkpoint.plan.confirmed_external_blockers),
+                    "blocker_message": checkpoint.plan.blocker_message,
+                    "requeue_target": checkpoint.plan.requeue_target,
+                    "requeue_reason": checkpoint.plan.requeue_reason,
                     "resolved_prerequisites": list(checkpoint.plan.resolved_prerequisites),
                     "unresolved_prerequisites": list(checkpoint.plan.unresolved_prerequisites),
                 },
@@ -773,7 +741,7 @@ class WorkerProcessServiceTests(unittest.TestCase):
                 )
             )
             return WorkflowResult(
-                succeeded=True,
+                outcome="success",
                 plan=PmPlan(plan_steps=["plan"], acceptance_criteria=["ac"], risks=[]),
                 pr_url=None,
                 summary=["Done"],
@@ -895,13 +863,13 @@ class WorkerProcessServiceTests(unittest.TestCase):
         def _record_run_log_event(**kwargs: object) -> None:
             recorded_rows.append(dict(kwargs))
 
-        with patch("orchestrator.core.worker.process_service.record_run_log_event", side_effect=_record_run_log_event):
+        with patch("orchestrator.core.worker.finalization.record_run_log_event", side_effect=_record_run_log_event):
             result = process_next_queued_run(
                 session=session,
                 runner=SimpleNamespace(
                     run=MagicMock(
                         return_value=WorkflowResult(
-                            succeeded=True,
+                            outcome="success",
                             plan=None,
                             pr_url=None,
                             summary=["Done"],
@@ -967,14 +935,11 @@ class WorkerProcessServiceTests(unittest.TestCase):
         cleanup.assert_called_once()
         finalize_run.assert_called_once()
         finalized_workflow_result = finalize_run.call_args.kwargs["workflow_result"]
-        self.assertFalse(finalized_workflow_result.succeeded)
-        self.assertEqual(finalized_workflow_result.diagnostics.stage, "completion")
-        self.assertIn("jira_feedback", finalized_workflow_result.diagnostics.message)
-        self.assertIn("RuntimeError", finalized_workflow_result.diagnostics.message)
+        self.assertEqual(finalized_workflow_result.outcome, "success")
         event_types = [call.kwargs["event_type"] for call in emit_agent_event.call_args_list]
-        self.assertIn("RUN_FAILED", event_types)
-        self.assertIn("TASK_FAILED", event_types)
-        self.assertNotIn("TASK_COMPLETED", event_types)
+        self.assertIn("TASK_COMPLETED", event_types)
+        self.assertNotIn("RUN_FAILED", event_types)
+        self.assertNotIn("TASK_FAILED", event_types)
         recorded_messages = [json.loads(str(row["message"])) for row in recorded_rows if row.get("stage") == "telemetry"]
         self.assertTrue(
             any(
@@ -1021,9 +986,9 @@ class WorkerProcessServiceTests(unittest.TestCase):
             recorded_rows.append(dict(kwargs))
 
         with (
-            patch("orchestrator.core.worker.process_service.record_run_log_event", side_effect=_record_run_log_event),
+            patch("orchestrator.core.worker.finalization.record_run_log_event", side_effect=_record_run_log_event),
             patch(
-                "orchestrator.core.worker.process_service.publish_manual_pr_remediation_completion",
+                "orchestrator.core.worker.finalization.publish_manual_pr_remediation_completion",
                 side_effect=RuntimeError("github publish failed"),
             ),
         ):
@@ -1032,7 +997,7 @@ class WorkerProcessServiceTests(unittest.TestCase):
                 runner=SimpleNamespace(
                     run=MagicMock(
                         return_value=WorkflowResult(
-                            succeeded=True,
+                            outcome="success",
                             plan=None,
                             pr_url=None,
                             summary=["Done"],
@@ -1095,8 +1060,7 @@ class WorkerProcessServiceTests(unittest.TestCase):
 
         self.assertIs(result, finalized_run)
         finalized_workflow_result = finalize_run.call_args.kwargs["workflow_result"]
-        self.assertFalse(finalized_workflow_result.succeeded)
-        self.assertIn("manual_pr_reporting", finalized_workflow_result.diagnostics.message)
+        self.assertEqual(finalized_workflow_result.outcome, "success")
         recorded_messages = [json.loads(str(row["message"])) for row in recorded_rows if row.get("stage") == "telemetry"]
         self.assertTrue(
             any(

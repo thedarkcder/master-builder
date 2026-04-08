@@ -93,20 +93,18 @@ class OrchestratedRunRunnerTests(unittest.TestCase):
                 DevResult(change_summary=["implemented attempt 2"], pr_url="https://example/pull/1"),
             ],
             test_results=[
-                TestResult(passed=True, guidance=["pytest -q"]),
-                TestResult(passed=True, guidance=["pytest -q"]),
+                TestResult(guidance=["pytest -q"]),
+                TestResult(guidance=["pytest -q"]),
             ],
             review_results=[
                 ReviewResult(
-                    approved=False,
-                    outcome="needs_changes",
+                    outcome="failed",
                     summary=["Fix Apple nonce handling"],
                     feedback="Fix Apple nonce handling",
                     pr_url="https://example/pull/1",
                 ),
                 ReviewResult(
-                    approved=True,
-                    outcome="approved",
+                    outcome="continue",
                     summary=["Looks good"],
                     feedback=None,
                     pr_url="https://example/pull/1",
@@ -116,7 +114,7 @@ class OrchestratedRunRunnerTests(unittest.TestCase):
 
         result = self._executor(stage_agents).execute(self._request())
 
-        self.assertTrue(result.succeeded)
+        self.assertEqual(result.outcome, "success")
         self.assertEqual(result.attempts, 2)
         self.assertEqual(stage_agents.pm_calls, 1)
         self.assertEqual(stage_agents.dev_calls, 2)
@@ -129,11 +127,10 @@ class OrchestratedRunRunnerTests(unittest.TestCase):
         stage_agents = _StubStageAgents(
             plan=PmPlan(plan_steps=["plan"], acceptance_criteria=["ac1"], risks=[]),
             dev_results=[DevResult(change_summary=["implemented"], pr_url="https://example/pull/3")],
-            test_results=[TestResult(passed=True, guidance=["pytest -q"])],
+            test_results=[TestResult(guidance=["pytest -q"])],
             review_results=[
                 ReviewResult(
-                    approved=True,
-                    outcome="approved",
+                    outcome="continue",
                     summary=["Looks good"],
                     feedback=None,
                     pr_url="https://example/pull/3",
@@ -147,7 +144,7 @@ class OrchestratedRunRunnerTests(unittest.TestCase):
             stage_checkpoint_hook=checkpoints.append,
         )
 
-        self.assertTrue(result.succeeded)
+        self.assertEqual(result.outcome, "success")
         self.assertEqual(
             [(checkpoint.stage, checkpoint.status, checkpoint.attempt) for checkpoint in checkpoints],
             [
@@ -159,8 +156,8 @@ class OrchestratedRunRunnerTests(unittest.TestCase):
         )
         self.assertEqual(checkpoints[0].plan.plan_steps, ["plan"])
         self.assertEqual(checkpoints[1].dev_result.change_summary, ["implemented"])
-        self.assertTrue(checkpoints[2].test_result.passed)
-        self.assertTrue(checkpoints[3].review_result.approved)
+        self.assertEqual(checkpoints[2].test_result.outcome, "continue")
+        self.assertEqual(checkpoints[3].review_result.outcome, "continue")
 
     def test_review_approved_without_pr_loops_back_when_pr_creation_required(self) -> None:
         stage_agents = _StubStageAgents(
@@ -170,20 +167,18 @@ class OrchestratedRunRunnerTests(unittest.TestCase):
                 DevResult(change_summary=["implemented attempt 2"], pr_url="https://example/pull/2"),
             ],
             test_results=[
-                TestResult(passed=True, guidance=["pytest -q"]),
-                TestResult(passed=True, guidance=["pytest -q"]),
+                TestResult(guidance=["pytest -q"]),
+                TestResult(guidance=["pytest -q"]),
             ],
             review_results=[
                 ReviewResult(
-                    approved=True,
-                    outcome="approved",
+                    outcome="continue",
                     summary=["Looks good"],
                     feedback=None,
                     pr_url=None,
                 ),
                 ReviewResult(
-                    approved=True,
-                    outcome="approved",
+                    outcome="continue",
                     summary=["Looks good"],
                     feedback=None,
                     pr_url="https://example/pull/2",
@@ -193,7 +188,7 @@ class OrchestratedRunRunnerTests(unittest.TestCase):
 
         result = self._executor(stage_agents).execute(replace(self._request(), allow_pr_creation=True))
 
-        self.assertTrue(result.succeeded)
+        self.assertEqual(result.outcome, "success")
         self.assertEqual(result.attempts, 2)
         self.assertEqual(
             stage_agents.dev_feedback,
@@ -205,11 +200,10 @@ class OrchestratedRunRunnerTests(unittest.TestCase):
         stage_agents = _StubStageAgents(
             plan=PmPlan(plan_steps=["plan"], acceptance_criteria=["ac1"], risks=[]),
             dev_results=[DevResult(change_summary=["implemented"], pr_url=None)],
-            test_results=[TestResult(passed=True, guidance=["pytest -q"])],
+            test_results=[TestResult(guidance=["pytest -q"])],
             review_results=[
                 ReviewResult(
-                    approved=True,
-                    outcome="approved",
+                    outcome="continue",
                     summary=["Looks good"],
                     feedback=None,
                     pr_url=None,
@@ -221,7 +215,7 @@ class OrchestratedRunRunnerTests(unittest.TestCase):
             replace(self._request(), allow_pr_creation=True, max_dev_test_review_loops=1)
         )
 
-        self.assertFalse(result.succeeded)
+        self.assertEqual(result.outcome, "failed")
         self.assertIsNotNone(result.diagnostics)
         self.assertEqual(result.diagnostics.stage, "review")
         self.assertIn("no PR was created", result.diagnostics.message)
@@ -234,13 +228,12 @@ class OrchestratedRunRunnerTests(unittest.TestCase):
                 DevResult(change_summary=["implemented attempt 2"], pr_url="https://example/pull/2"),
             ],
             test_results=[
-                TestResult(passed=False, guidance=["pytest -q"], feedback="A unit test failed"),
-                TestResult(passed=True, guidance=["pytest -q"]),
+                TestResult(outcome="failed", guidance=["pytest -q"], feedback="A unit test failed"),
+                TestResult(guidance=["pytest -q"]),
             ],
             review_results=[
                 ReviewResult(
-                    approved=True,
-                    outcome="approved",
+                    outcome="continue",
                     summary=["Looks good"],
                     feedback=None,
                     pr_url="https://example/pull/2",
@@ -254,7 +247,7 @@ class OrchestratedRunRunnerTests(unittest.TestCase):
             test_feedback_hook=lambda attempt, feedback: captured_feedback.append((attempt, feedback)),
         )
 
-        self.assertTrue(result.succeeded)
+        self.assertEqual(result.outcome, "success")
         self.assertEqual(result.attempts, 2)
         self.assertEqual(captured_feedback, [(1, "A unit test failed")])
         self.assertEqual(stage_agents.dev_feedback, [None, "A unit test failed"])
@@ -263,15 +256,13 @@ class OrchestratedRunRunnerTests(unittest.TestCase):
         stage_agents = _StubStageAgents(
             plan=PmPlan(plan_steps=["plan"], acceptance_criteria=["ac1"], risks=[]),
             dev_results=[DevResult(change_summary=["implemented"], pr_url=None)],
-            test_results=[TestResult(passed=True, guidance=["pytest -q"])],
+            test_results=[TestResult(guidance=["pytest -q"])],
             review_results=[
                 ReviewResult(
-                    approved=False,
                     outcome="blocked",
                     summary=["Governed runtime unavailable"],
                     feedback="Governed runtime unavailable",
                     pr_url=None,
-                    blocker_category="repo_access_failure",
                     blocker_message="Governed runtime unavailable",
                 )
             ],
@@ -279,7 +270,7 @@ class OrchestratedRunRunnerTests(unittest.TestCase):
 
         result = self._executor(stage_agents).execute(self._request())
 
-        self.assertFalse(result.succeeded)
+        self.assertEqual(result.outcome, "blocked")
         self.assertIsNotNone(result.diagnostics)
         self.assertEqual(result.diagnostics.stage, "review")
         self.assertEqual(result.attempts, 1)
@@ -294,20 +285,18 @@ class OrchestratedRunRunnerTests(unittest.TestCase):
                 DevResult(change_summary=["implemented attempt 2"], pr_url="https://example/pull/1"),
             ],
             test_results=[
-                TestResult(passed=True, guidance=["pytest -q"]),
-                TestResult(passed=True, guidance=["pytest -q"]),
+                TestResult(guidance=["pytest -q"]),
+                TestResult(guidance=["pytest -q"]),
             ],
             review_results=[
                 ReviewResult(
-                    approved=False,
-                    outcome="blocked",
+                    outcome="failed",
                     summary=["App still crashes"],
                     feedback="App still crashes on login",
                     pr_url="https://example/pull/1",
                 ),
                 ReviewResult(
-                    approved=True,
-                    outcome="approved",
+                    outcome="continue",
                     summary=["Looks good"],
                     feedback=None,
                     pr_url="https://example/pull/1",
@@ -317,7 +306,7 @@ class OrchestratedRunRunnerTests(unittest.TestCase):
 
         result = self._executor(stage_agents).execute(self._request())
 
-        self.assertTrue(result.succeeded)
+        self.assertEqual(result.outcome, "success")
         self.assertEqual(result.attempts, 2)
         self.assertEqual(stage_agents.dev_feedback, [None, "App still crashes on login"])
 
@@ -328,7 +317,7 @@ class OrchestratedRunRunnerTests(unittest.TestCase):
                 DevResult(
                     change_summary=["xcodebuild unavailable"],
                     pr_url=None,
-                    blocker_category="toolchain_unavailable",
+                    outcome="blocked",
                     blocker_message="xcodebuild missing",
                 )
             ],
@@ -338,19 +327,17 @@ class OrchestratedRunRunnerTests(unittest.TestCase):
 
         result = self._executor(stage_agents).execute(replace(self._request(), max_dev_test_review_loops=1))
 
-        self.assertFalse(result.succeeded)
+        self.assertEqual(result.outcome, "blocked")
         self.assertEqual(result.diagnostics.stage, "dev")
-        self.assertEqual(result.diagnostics.classification, "implementation_blocked")
 
     def test_resume_from_dev_uses_persisted_pm_plan_without_rerunning_pm(self) -> None:
         stage_agents = _StubStageAgents(
             plan=PmPlan(plan_steps=["should not be used"], acceptance_criteria=["unused"], risks=[]),
             dev_results=[DevResult(change_summary=["implemented"], pr_url="https://example/pull/9")],
-            test_results=[TestResult(passed=True, guidance=["pytest -q"])],
+            test_results=[TestResult(guidance=["pytest -q"])],
             review_results=[
                 ReviewResult(
-                    approved=True,
-                    outcome="approved",
+                    outcome="continue",
                     summary=["Looks good"],
                     feedback=None,
                     pr_url="https://example/pull/9",
@@ -366,16 +353,19 @@ class OrchestratedRunRunnerTests(unittest.TestCase):
             checkpoint_session_id="dev-session-123",
             checkpoint_payload={
                 "plan": {
+                    "outcome": "continue",
                     "plan_steps": ["resume from persisted plan"],
                     "acceptance_criteria": ["ac1"],
                     "risks": ["risk1"],
+                    "next_stage": "dev",
+                    "execution_worker_capability": "linux",
                 }
             },
         )
 
         result = self._executor(stage_agents).execute(request)
 
-        self.assertTrue(result.succeeded)
+        self.assertEqual(result.outcome, "success")
         self.assertEqual(stage_agents.pm_calls, 0)
         self.assertEqual(result.plan.plan_steps, ["resume from persisted plan"])
 
@@ -383,13 +373,13 @@ class OrchestratedRunRunnerTests(unittest.TestCase):
         stage_agents = _StubStageAgents(
             plan=PmPlan(plan_steps=["plan"], acceptance_criteria=["ac1"], risks=[]),
             dev_results=[DevResult(change_summary=["App still crashes"], pr_url=None, blocker_message="App still crashes")],
-            test_results=[TestResult(passed=False, guidance=["Fix crash"], feedback="App still crashes")],
+            test_results=[TestResult(outcome="failed", guidance=["Fix crash"], feedback="App still crashes")],
             review_results=[],
         )
 
         result = self._executor(stage_agents).execute(replace(self._request(), max_dev_test_review_loops=1))
 
-        self.assertFalse(result.succeeded)
+        self.assertEqual(result.outcome, "failed")
         self.assertEqual(result.diagnostics.stage, "test")
         self.assertEqual(stage_agents.test_calls, 1)
 
@@ -410,55 +400,60 @@ class OrchestratedRunRunnerTests(unittest.TestCase):
             replace(self._request(), current_worker_capability="linux", available_worker_capabilities=["linux"])
         )
 
-        self.assertFalse(result.succeeded)
-        self.assertIsNotNone(result.diagnostics)
-        self.assertEqual(result.diagnostics.stage, "pm")
-        self.assertIn("Execution capability mismatch:", result.diagnostics.message)
+        self.assertEqual(result.outcome, "requeue")
+        self.assertEqual(result.requeue_target, "macos")
+        self.assertIn("Execution capability mismatch:", result.requeue_reason)
         self.assertEqual(stage_agents.dev_calls, 0)
 
-    def test_pm_missing_evidence_stops_before_dev(self) -> None:
+    def test_pm_missing_evidence_is_advisory_and_does_not_stop_before_dev(self) -> None:
         stage_agents = _StubStageAgents(
             plan=PmPlan(
                 plan_steps=["plan"],
                 acceptance_criteria=["ac1"],
                 risks=[],
-                missing_evidence_sources=["decision_state", "knowledge"],
             ),
-            dev_results=[],
-            test_results=[],
-            review_results=[],
+            dev_results=[DevResult(change_summary=["implemented"], pr_url="https://example/pull/1")],
+            test_results=[TestResult(guidance=["pytest -q"])],
+            review_results=[
+                ReviewResult(
+                    outcome="continue",
+                    summary=["Looks good"],
+                    feedback=None,
+                    pr_url="https://example/pull/1",
+                )
+            ],
         )
 
         result = self._executor(stage_agents).execute(self._request())
 
-        self.assertFalse(result.succeeded)
-        self.assertIsNotNone(result.diagnostics)
-        self.assertEqual(result.diagnostics.stage, "pm")
-        self.assertEqual(result.diagnostics.classification, "missing_context")
-        self.assertIn("decision_state, knowledge", result.diagnostics.message)
-        self.assertEqual(stage_agents.dev_calls, 0)
+        self.assertEqual(result.outcome, "success")
+        self.assertEqual(stage_agents.dev_calls, 1)
+        self.assertEqual(result.orchestration_stage_trace[0]["summary"], "PM produced 1 execution steps and 1 acceptance criteria.")
 
-    def test_pm_runtime_values_missing_evidence_stops_before_dev(self) -> None:
+    def test_pm_runtime_values_missing_evidence_is_advisory_and_does_not_stop_before_dev(self) -> None:
         stage_agents = _StubStageAgents(
             plan=PmPlan(
                 plan_steps=["plan"],
                 acceptance_criteria=["ac1"],
                 risks=[],
-                missing_evidence_sources=["runtime_values"],
             ),
-            dev_results=[],
-            test_results=[],
-            review_results=[],
+            dev_results=[DevResult(change_summary=["implemented"], pr_url="https://example/pull/2")],
+            test_results=[TestResult(guidance=["pytest -q"])],
+            review_results=[
+                ReviewResult(
+                    outcome="continue",
+                    summary=["Looks good"],
+                    feedback=None,
+                    pr_url="https://example/pull/2",
+                )
+            ],
         )
 
         result = self._executor(stage_agents).execute(self._request())
 
-        self.assertFalse(result.succeeded)
-        self.assertIsNotNone(result.diagnostics)
-        self.assertEqual(result.diagnostics.stage, "pm")
-        self.assertEqual(result.diagnostics.classification, "missing_context")
-        self.assertIn("runtime_values", result.diagnostics.message)
-        self.assertEqual(stage_agents.dev_calls, 0)
+        self.assertEqual(result.outcome, "success")
+        self.assertEqual(stage_agents.dev_calls, 1)
+        self.assertEqual(result.orchestration_stage_trace[0]["summary"], "PM produced 1 execution steps and 1 acceptance criteria.")
 
     def test_pm_confirmed_external_blocker_stops_before_dev(self) -> None:
         stage_agents = _StubStageAgents(
@@ -466,7 +461,8 @@ class OrchestratedRunRunnerTests(unittest.TestCase):
                 plan_steps=["plan"],
                 acceptance_criteria=["ac1"],
                 risks=[],
-                confirmed_external_blockers=["Apple developer access is not approved for staging"],
+                outcome="blocked",
+                blocker_message="Apple developer access is not approved for staging",
             ),
             dev_results=[],
             test_results=[],
@@ -475,10 +471,9 @@ class OrchestratedRunRunnerTests(unittest.TestCase):
 
         result = self._executor(stage_agents).execute(self._request())
 
-        self.assertFalse(result.succeeded)
+        self.assertEqual(result.outcome, "blocked")
         self.assertIsNotNone(result.diagnostics)
         self.assertEqual(result.diagnostics.stage, "pm")
-        self.assertEqual(result.diagnostics.classification, "external_blocker")
         self.assertIn("Apple developer access is not approved for staging", result.diagnostics.message)
         self.assertEqual(stage_agents.dev_calls, 0)
 
@@ -489,8 +484,7 @@ class OrchestratedRunRunnerTests(unittest.TestCase):
             test_results=[],
             review_results=[
                 ReviewResult(
-                    approved=True,
-                    outcome="approved",
+                    outcome="continue",
                     summary=["Looks good after clarification"],
                     feedback=None,
                     pr_url="https://example/pull/1",
@@ -507,9 +501,12 @@ class OrchestratedRunRunnerTests(unittest.TestCase):
                 checkpoint_session_id="dev-session-123",
                 checkpoint_payload={
                     "plan": {
+                        "outcome": "continue",
                         "plan_steps": ["plan"],
                         "acceptance_criteria": ["ac1"],
                         "risks": [],
+                        "next_stage": "dev",
+                        "execution_worker_capability": "linux",
                     },
                     "dev_rationale": ["Implemented onboarding flow"],
                     "test_guidance": ["pytest -q"],
@@ -520,11 +517,43 @@ class OrchestratedRunRunnerTests(unittest.TestCase):
             ),
         )
 
-        self.assertTrue(result.succeeded)
+        self.assertEqual(result.outcome, "success")
         self.assertEqual(stage_agents.pm_calls, 0)
         self.assertEqual(stage_agents.dev_calls, 0)
         self.assertEqual(stage_agents.test_calls, 0)
         self.assertEqual(stage_agents.review_calls, 1)
+
+    def test_resume_from_dev_rejects_invalid_persisted_pm_plan_contract(self) -> None:
+        stage_agents = _StubStageAgents(
+            plan=PmPlan(plan_steps=["unused"], acceptance_criteria=["unused"], risks=[]),
+            dev_results=[],
+            test_results=[],
+            review_results=[],
+        )
+
+        result = self._executor(stage_agents).execute(
+            replace(
+                self._request(),
+                entry_mode="resume",
+                entry_stage="dev",
+                checkpoint_kind="execution",
+                checkpoint_session_id="dev-session-123",
+                checkpoint_payload={
+                    "plan": {
+                        "plan_steps": ["resume from persisted plan"],
+                        "acceptance_criteria": ["ac1"],
+                        "risks": ["risk1"],
+                        "next_stage": "ship-it",
+                        "execution_worker_capability": "linux",
+                    }
+                },
+            )
+        )
+
+        self.assertEqual(result.outcome, "blocked")
+        self.assertEqual(result.diagnostics.stage, "dev")
+        self.assertIn("no valid persisted PM plan", result.diagnostics.message)
+        self.assertEqual(stage_agents.pm_calls, 0)
 
 
 if __name__ == "__main__":

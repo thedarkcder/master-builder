@@ -21,6 +21,7 @@ from orchestrator.core.workflow.runner import (
     DevResult,
     PmPlan,
     ReviewResult,
+    StageOutcome,
     TestResult,
     WorkflowRequest,
 )
@@ -258,17 +259,17 @@ class CodexWorkflowAgents:
                 history_json=json.dumps(history[-25:]),
                 last_dev_summary_json=json.dumps(last_dev_result.change_summary if last_dev_result else []),
                 last_dev_pr_url=last_dev_result.pr_url if last_dev_result and last_dev_result.pr_url else "none",
-                last_test_passed=(
+                last_test_outcome=(
                     "none"
                     if last_test_result is None
-                    else ("true" if last_test_result.passed else "false")
+                    else last_test_result.outcome
                 ),
                 last_test_feedback=last_test_result.feedback if last_test_result and last_test_result.feedback else "none",
                 last_test_guidance_json=json.dumps(last_test_result.guidance if last_test_result else []),
-                last_review_approved=(
+                last_review_outcome=(
                     "none"
                     if last_review_result is None
-                    else ("true" if last_review_result.approved else "false")
+                    else last_review_result.outcome
                 ),
                 last_review_feedback=(
                     last_review_result.feedback
@@ -283,6 +284,7 @@ class CodexWorkflowAgents:
             ),
         )
         raw_response = _extract_raw_response(payload)
+        outcome = _require_stage_outcome(payload=payload, stage="pm")
         next_stage = str(payload.get("next_stage") or _extract_next_stage(raw_response) or "dev").strip().lower()
         if next_stage not in {"dev", "test"}:
             next_stage = "dev"
@@ -291,6 +293,29 @@ class CodexWorkflowAgents:
             or _extract_worker_capability(raw_response)
             or normalize_worker_capability(request.current_worker_capability)
             or "linux"
+        )
+        blocker_message_raw = payload.get("blocker_message")
+        blocker_message = (
+            str(blocker_message_raw).strip()
+            if isinstance(blocker_message_raw, str) and str(blocker_message_raw).strip()
+            else None
+        )
+        if blocker_message is None and outcome == "blocked":
+            blocker_message = _extract_prefixed_value(
+                raw_response,
+                keys=("blocker_message", "blocked", "blocker", "reason"),
+            )
+        requeue_target_raw = payload.get("requeue_target")
+        requeue_target = (
+            normalize_worker_capability(requeue_target_raw)
+            if requeue_target_raw is not None
+            else None
+        )
+        requeue_reason_raw = payload.get("requeue_reason")
+        requeue_reason = (
+            str(requeue_reason_raw).strip()
+            if isinstance(requeue_reason_raw, str) and str(requeue_reason_raw).strip()
+            else None
         )
         return PmPlan(
             plan_steps=_string_list(
@@ -308,16 +333,12 @@ class CodexWorkflowAgents:
                 payload.get("risks"),
                 fallback=_extract_marked_items(raw_response, max_items=3),
             ),
+            outcome=outcome,
             next_stage=next_stage,
             execution_worker_capability=execution_worker_capability,
-            missing_evidence_sources=_string_list(
-                payload.get("missing_evidence_sources"),
-                fallback=[],
-            ),
-            confirmed_external_blockers=_string_list(
-                payload.get("confirmed_external_blockers"),
-                fallback=[],
-            ),
+            blocker_message=blocker_message,
+            requeue_target=requeue_target,
+            requeue_reason=requeue_reason,
             resolved_prerequisites=_string_list(
                 payload.get("resolved_prerequisites"),
                 fallback=[],
@@ -361,8 +382,7 @@ class CodexWorkflowAgents:
                 acceptance_criteria_json=json.dumps(plan.acceptance_criteria),
                 resolved_prerequisites_json=json.dumps(plan.resolved_prerequisites),
                 unresolved_prerequisites_json=json.dumps(plan.unresolved_prerequisites),
-                confirmed_external_blockers_json=json.dumps(plan.confirmed_external_blockers),
-                missing_evidence_sources_json=json.dumps(plan.missing_evidence_sources),
+                pm_outcome=plan.outcome,
                 human_inputs_json=json.dumps(request.human_inputs),
                 allowed_tools_json=json.dumps(tool_catalog_for_stage("dev")),
             ),
@@ -370,12 +390,7 @@ class CodexWorkflowAgents:
         raw_response = _extract_raw_response(payload)
         pr_url_raw = payload.get("pr_url")
         pr_url = str(pr_url_raw).strip() if isinstance(pr_url_raw, str) and str(pr_url_raw).strip() else None
-        blocker_category_raw = payload.get("blocker_category")
-        blocker_category = (
-            str(blocker_category_raw).strip()
-            if isinstance(blocker_category_raw, str) and str(blocker_category_raw).strip()
-            else None
-        )
+        outcome = _require_stage_outcome(payload=payload, stage="dev")
         blocker_message_raw = payload.get("blocker_message")
         blocker_message = (
             str(blocker_message_raw).strip()
@@ -396,7 +411,7 @@ class CodexWorkflowAgents:
                 ),
             ),
             pr_url=pr_url,
-            blocker_category=blocker_category,
+            outcome=outcome,
             blocker_message=blocker_message,
         )
 
@@ -433,37 +448,25 @@ class CodexWorkflowAgents:
                 suggested_test_commands_json=json.dumps(request.suggested_test_commands),
                 resolved_prerequisites_json=json.dumps(plan.resolved_prerequisites),
                 unresolved_prerequisites_json=json.dumps(plan.unresolved_prerequisites),
-                confirmed_external_blockers_json=json.dumps(plan.confirmed_external_blockers),
-                missing_evidence_sources_json=json.dumps(plan.missing_evidence_sources),
+                dev_outcome=dev_result.outcome,
                 human_inputs_json=json.dumps(request.human_inputs),
                 allowed_tools_json=json.dumps(tool_catalog_for_stage("test")),
             ),
         )
 
         raw_response = _extract_raw_response(payload)
-        passed = _coerce_bool(
-            value=payload.get("passed"),
-            raw_response=raw_response,
-            true_markers=("passed", "pass", "success", "passed.", "passes"),
-            false_markers=("failed", "fail", "blocked", "not passed", "needs fixes", "needs fixing", "retry"),
-        )
+        outcome = _require_stage_outcome(payload=payload, stage="test")
         feedback_raw = payload.get("feedback")
         feedback = str(feedback_raw).strip() if isinstance(feedback_raw, str) and str(feedback_raw).strip() else None
         if feedback is None:
             feedback = _extract_prefixed_value(raw_response, keys=("feedback", "reason", "summary"))
-        blocker_category_raw = payload.get("blocker_category")
-        blocker_category = (
-            str(blocker_category_raw).strip()
-            if isinstance(blocker_category_raw, str) and str(blocker_category_raw).strip()
-            else None
-        )
         blocker_message_raw = payload.get("blocker_message")
         blocker_message = (
             str(blocker_message_raw).strip()
             if isinstance(blocker_message_raw, str) and str(blocker_message_raw).strip()
             else None
         )
-        if blocker_message is None and passed is False:
+        if blocker_message is None and outcome in {"blocked", "failed"}:
             blocker_message = _extract_prefixed_value(raw_response, keys=("blocker_message", "blocked"))
         guidance = _string_list(
             payload.get("guidance"),
@@ -474,10 +477,9 @@ class CodexWorkflowAgents:
             ),
         )
         return TestResult(
-            passed=passed,
             guidance=guidance,
+            outcome=outcome,
             feedback=feedback,
-            blocker_category=blocker_category,
             blocker_message=blocker_message,
         )
 
@@ -514,14 +516,12 @@ class CodexWorkflowAgents:
                 plan_steps_json=json.dumps(plan.plan_steps),
                 acceptance_criteria_json=json.dumps(plan.acceptance_criteria),
                 dev_summary_json=json.dumps(dev_result.change_summary),
-                test_passed=str(test_result.passed).lower(),
+                test_outcome=test_result.outcome,
                 test_guidance_json=json.dumps(test_result.guidance),
                 test_feedback=test_result.feedback or "none",
                 pr_url=dev_result.pr_url or "none",
                 resolved_prerequisites_json=json.dumps(plan.resolved_prerequisites),
                 unresolved_prerequisites_json=json.dumps(plan.unresolved_prerequisites),
-                confirmed_external_blockers_json=json.dumps(plan.confirmed_external_blockers),
-                missing_evidence_sources_json=json.dumps(plan.missing_evidence_sources),
                 human_inputs_json=json.dumps(request.human_inputs),
                 previous_review_summary_json=json.dumps(resume_source_state.get("review_summary") or []),
                 previous_review_feedback=str(resume_source_state.get("review_feedback") or "").strip() or "none",
@@ -530,61 +530,22 @@ class CodexWorkflowAgents:
         )
 
         raw_response = _extract_raw_response(payload)
-        approved = _coerce_bool(
-            value=payload.get("approved"),
-            raw_response=raw_response,
-            true_markers=("approved", "pass", "acceptable", "looks good", "go"),
-            false_markers=("rejected", "reject", "request changes", "not approved", "blocked", "do not approve"),
-        )
-        outcome_raw = str(payload.get("outcome") or "").strip().lower()
-        if outcome_raw not in {"approved", "needs_changes", "blocked"}:
-            fallback_text_parts = [
-                raw_response,
-                str(payload.get("feedback") or ""),
-                " ".join(_string_list(payload.get("summary"), fallback=[])),
-            ]
-            lowered_response = " ".join(part for part in fallback_text_parts if part).lower()
-            if approved:
-                outcome_raw = "approved"
-            elif any(
-                marker in lowered_response
-                for marker in (
-                    "hard stop",
-                    "blocked",
-                    "cannot proceed",
-                    "cannot approve yet",
-                    "governed runtime unavailable",
-                    "governed runtime was unavailable",
-                    "missing approval",
-                    "missing approvals",
-                    "runtime unavailable",
-                )
-            ):
-                outcome_raw = "blocked"
-            else:
-                outcome_raw = "needs_changes"
         feedback_raw = payload.get("feedback")
         feedback = str(feedback_raw).strip() if isinstance(feedback_raw, str) and str(feedback_raw).strip() else None
         if feedback is None:
             feedback = _extract_prefixed_value(raw_response, keys=("feedback", "summary", "reason"))
         pr_url_raw = payload.get("pr_url")
         pr_url = str(pr_url_raw).strip() if isinstance(pr_url_raw, str) and str(pr_url_raw).strip() else dev_result.pr_url
-        blocker_category_raw = payload.get("blocker_category")
-        blocker_category = (
-            str(blocker_category_raw).strip()
-            if isinstance(blocker_category_raw, str) and str(blocker_category_raw).strip()
-            else None
-        )
+        outcome = _require_stage_outcome(payload=payload, stage="review")
         blocker_message_raw = payload.get("blocker_message")
         blocker_message = (
             str(blocker_message_raw).strip()
             if isinstance(blocker_message_raw, str) and str(blocker_message_raw).strip()
             else None
         )
-        if blocker_message is None and outcome_raw == "blocked":
+        if blocker_message is None and outcome == "blocked":
             blocker_message = feedback or _extract_prefixed_value(raw_response, keys=("blocker_message", "blocked"))
         return ReviewResult(
-            approved=approved,
             summary=_string_list(
                 payload.get("summary"),
                 fallback=(
@@ -592,10 +553,9 @@ class CodexWorkflowAgents:
                     or ["No review summary provided by Codex"]
                 ),
             ),
-            outcome=outcome_raw,
+            outcome=outcome,
             feedback=feedback,
             pr_url=pr_url,
-            blocker_category=blocker_category,
             blocker_message=blocker_message,
         )
 
@@ -691,29 +651,19 @@ def _extract_worker_capability(value: str) -> str | None:
     return None
 
 
-def _coerce_bool(
-    *,
-    value: object,
-    raw_response: str,
-    true_markers: tuple[str, ...],
-    false_markers: tuple[str, ...],
-) -> bool:
-    if isinstance(value, bool):
-        return value
+def _normalize_stage_outcome(value: object) -> StageOutcome | None:
     if isinstance(value, str):
         normalized = value.strip().lower()
-        if normalized in {"true", "yes", "1"}:
-            return True
-        if normalized in {"false", "no", "0"}:
-            return False
-    lowered = str(raw_response or "").lower()
-    for marker in false_markers:
-        if re.search(rf"\b{re.escape(marker)}\b", lowered):
-            return False
-    for marker in true_markers:
-        if re.search(rf"\b{re.escape(marker)}\b", lowered):
-            return True
-    return False
+        if normalized in {"continue", "requeue", "waiting_for_input", "blocked", "failed"}:
+            return normalized  # type: ignore[return-value]
+    return None
+
+
+def _require_stage_outcome(*, payload: dict[str, Any], stage: str) -> StageOutcome:
+    outcome = _normalize_stage_outcome(payload.get("outcome"))
+    if outcome is None:
+        raise CodexRuntimeError(f"Codex {stage} response missing valid required outcome")
+    return outcome
 
 
 

@@ -967,6 +967,10 @@ def build_cli_runtime(
                     "exec",
                     "resume",
                     normalized_resume_session_id,
+                    "--disable",
+                    "apps",
+                    "--disable",
+                    "plugins",
                     "--skip-git-repo-check",
                 ]
                 if normalized_sandbox_mode == "danger-full-access":
@@ -987,6 +991,10 @@ def build_cli_runtime(
                 command = [
                     codex_command,
                     "exec",
+                    "--disable",
+                    "apps",
+                    "--disable",
+                    "plugins",
                     "--skip-git-repo-check",
                     "--sandbox",
                     settings.codex_sandbox_mode,

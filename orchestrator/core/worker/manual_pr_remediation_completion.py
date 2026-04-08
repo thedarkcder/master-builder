@@ -205,7 +205,7 @@ def _change_summary(*, workflow_result) -> tuple[str, ...]:  # noqa: ANN001
         items = tuple(str(item).strip() for item in candidate if str(item).strip())
         if items:
             return items[:3]
-    if bool(getattr(workflow_result, "succeeded", False)):
+    if str(getattr(workflow_result, "outcome", "") or "").strip().lower() == "success":
         return ("Implemented the requested change.",)
     return ()
 
