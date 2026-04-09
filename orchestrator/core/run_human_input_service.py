@@ -15,6 +15,7 @@ from orchestrator.core.followup_context_service import (
 )
 from orchestrator.core.discord.notifications import send_tenant_discord_message
 from orchestrator.core.runs import (
+    NON_TERMINAL_RUN_STATUSES,
     RUN_STATUS_BLOCKED,
     RUN_STATUS_WAITING_FOR_INPUT,
     RunBootstrap,
@@ -389,12 +390,29 @@ def resume_workflow_from_human_input_answer(
             return existing_run
     if request.status != INPUT_STATUS_ANSWERED:
         raise ValueError("Human input request is not answered")
+    existing_resume_run = _existing_resume_run_for_request(session=session, request=request)
+    if existing_resume_run is not None:
+        request.status = INPUT_STATUS_CONSUMED
+        request.consumed_by_run_id = existing_resume_run.run_id
+        request.updated_at = _now()
+        close_followup_contexts(
+            session=session,
+            tenant_id=request.tenant_id,
+            context_type=FOLLOWUP_CONTEXT_HUMAN_INPUT,
+            request_id=request.request_id,
+            status=CLOSED_FOLLOWUP_CONTEXT_STATUS,
+        )
+        session.commit()
+        session.refresh(request)
+        session.refresh(existing_resume_run)
+        return existing_resume_run
     source_run = session.get(Run, request.source_run_id)
     if source_run is None:
         raise ValueError("Source run for human input request was not found")
     checkpoint = session.get(WorkflowCheckpoint, request.checkpoint_id)
     if checkpoint is None:
         raise ValueError("Checkpoint for human input request was not found")
+    checkpoint_plan = ExecutionSnapshot.require(checkpoint.payload_json, allow_empty=True).dump()
 
     enqueue_result = enqueue_attempt_for_workflow_uncommitted(
         session,
@@ -405,7 +423,7 @@ def resume_workflow_from_human_input_answer(
             entry_mode="resume",
             entry_stage=normalize_checkpoint_stage(request.source_stage),
             entry_checkpoint_id=request.checkpoint_id,
-            plan=dict(checkpoint.payload_json or {}),
+            plan=checkpoint_plan,
             branch=source_run.branch,
             pr_url=source_run.pr_url,
         ),
@@ -442,6 +460,28 @@ def resume_workflow_from_human_input_answer(
     session.refresh(enqueue_result.run)
     session.refresh(request)
     return enqueue_result.run
+
+
+def _existing_resume_run_for_request(*, session: Session, request: RunHumanInputRequest) -> Run | None:
+    normalized_source_run_id = str(request.source_run_id or "").strip()
+    normalized_checkpoint_id = str(request.checkpoint_id or "").strip()
+    if not normalized_source_run_id or not normalized_checkpoint_id:
+        return None
+    return (
+        session.execute(
+            select(Run)
+            .where(
+                Run.workflow_id == request.workflow_id,
+                Run.parent_run_id == normalized_source_run_id,
+                Run.entry_checkpoint_id == normalized_checkpoint_id,
+                Run.status.in_(NON_TERMINAL_RUN_STATUSES),
+            )
+            .order_by(Run.attempt_number.desc())
+            .limit(1)
+        )
+        .scalars()
+        .first()
+    )
 
 
 def _dispatch_human_input_request(

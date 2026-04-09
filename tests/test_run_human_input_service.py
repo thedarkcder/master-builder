@@ -177,7 +177,11 @@ def test_resume_workflow_from_human_input_answer_creates_resume_attempt_and_cons
         payload_json=ExecutionSnapshot.empty(trigger_context={"source": "manual"}).dump(),
     )
     resumed_run = SimpleNamespace(run_id="run-2")
-    session.execute.return_value.scalars.return_value.one_or_none.return_value = request
+    existing_resume_query = MagicMock()
+    existing_resume_query.scalars.return_value.first.return_value = None
+    lock_query = MagicMock()
+    lock_query.scalars.return_value.one_or_none.return_value = request
+    session.execute.side_effect = [lock_query, existing_resume_query]
     session.get.side_effect = lambda model, key: (
         source_run if key == "run-1" else checkpoint if key == "checkpoint-1" else None
     )
@@ -189,6 +193,7 @@ def test_resume_workflow_from_human_input_answer_creates_resume_attempt_and_cons
             "orchestrator.core.run_human_input_service.enqueue_attempt_for_workflow_uncommitted",
             return_value=enqueue_result,
         ) as enqueue_run_mock,
+        patch("orchestrator.core.run_human_input_service.close_followup_contexts"),
     ):
         answered = answer_human_input_request(
             session=session,
@@ -213,6 +218,39 @@ def test_resume_workflow_from_human_input_answer_creates_resume_attempt_and_cons
     assert bootstrap.branch == "feature/GP-122"
     assert request.status == "consumed"
     assert request.consumed_by_run_id == "run-2"
+
+
+def test_resume_workflow_from_human_input_answer_reuses_existing_resume_run() -> None:
+    session = MagicMock()
+    request = SimpleNamespace(
+        request_id="request-1",
+        workflow_id="workflow-1",
+        checkpoint_id="checkpoint-1",
+        source_run_id="run-1",
+        status="answered",
+        consumed_by_run_id=None,
+        tenant_id="route25",
+    )
+    existing_resume_run = SimpleNamespace(run_id="run-2", attempt_number=2)
+    lock_query = MagicMock()
+    lock_query.scalars.return_value.one_or_none.return_value = request
+    existing_resume_query = MagicMock()
+    existing_resume_query.scalars.return_value.first.return_value = existing_resume_run
+    session.execute.side_effect = [lock_query, existing_resume_query]
+
+    with patch(
+        "orchestrator.core.run_human_input_service.enqueue_attempt_for_workflow_uncommitted"
+    ) as enqueue_run_mock, patch("orchestrator.core.run_human_input_service.close_followup_contexts"):
+        result = resume_workflow_from_human_input_answer(
+            session=session,
+            settings=SimpleNamespace(secrets_encryption_key="secret-key"),
+            request=request,
+        )
+
+    assert result is existing_resume_run
+    assert request.status == "consumed"
+    assert request.consumed_by_run_id == "run-2"
+    enqueue_run_mock.assert_not_called()
 
 
 def test_create_human_input_request_commits_before_dispatching_discord_message() -> None:
