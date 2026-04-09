@@ -7,7 +7,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 ISSUE_KEY_PATTERN = re.compile(r"\b[A-Z][A-Z0-9_]+-\d+\b")
-COMMENT_MARKER_PATTERN = re.compile(r"^\s*(#|//|/\*+|\*+)\s*(TODO|FIXME)\b", re.IGNORECASE)
+COMMENT_MARKER_PATTERN = re.compile(r"(#|//|/\*+|\*+)\s*(TODO|FIXME)\b", re.IGNORECASE)
 SCAN_EXTENSIONS = {".py", ".ts", ".tsx", ".js", ".jsx", ".sh"}
 SCAN_ROOTS = (ROOT / "orchestrator", ROOT / "admin-ui", ROOT / "deploy")
 EXCLUDED_PARTS = {"tests", "__pycache__", "node_modules", ".next", "storage/migrations"}
@@ -20,6 +20,15 @@ def _should_skip(path: Path) -> bool:
     return path.suffix.lower() not in SCAN_EXTENSIONS
 
 
+def _has_untracked_todo_marker(line: str) -> bool:
+    marker = COMMENT_MARKER_PATTERN.search(line)
+    if marker is None:
+        return False
+    if ISSUE_KEY_PATTERN.search(line):
+        return False
+    return True
+
+
 def main() -> int:
     violations: list[str] = []
     for scan_root in SCAN_ROOTS:
@@ -30,9 +39,7 @@ def main() -> int:
                 continue
             source = path.read_text(encoding="utf-8")
             for lineno, raw_line in enumerate(source.splitlines(), start=1):
-                if not COMMENT_MARKER_PATTERN.search(raw_line):
-                    continue
-                if ISSUE_KEY_PATTERN.search(raw_line):
+                if not _has_untracked_todo_marker(raw_line):
                     continue
                 relative = path.relative_to(ROOT).as_posix()
                 violations.append(f"{relative}:{lineno}:{raw_line.strip()}")

@@ -11,6 +11,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 RUFF_RULES = "B,UP,SIM,C4,ARG,PL,RUF"
+DIFF_FILTER = "AMR"
 
 
 def _base_ref() -> str | None:
@@ -34,7 +35,7 @@ def _changed_python_files(base_ref: str) -> list[str]:
             "git",
             "diff",
             "--name-only",
-            "--diff-filter=AM",
+            f"--diff-filter={DIFF_FILTER}",
             f"origin/{base_ref}...HEAD",
             "--",
             "*.py",
