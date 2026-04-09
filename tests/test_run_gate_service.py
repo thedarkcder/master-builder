@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 from orchestrator.core.decision_engine import DecisionEngineResult
 from orchestrator.core.decision_gate import DecisionGateResult
-from orchestrator.core.decision_types import ExecutionGateReason, ExecutionGateState
+from orchestrator.core.decision_types import ExecutionGateReason, ExecutionGateResolution, ExecutionGateState
 from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.pre_run_check import PreRunCheckResult
 from orchestrator.core.run_gate_service import resolve_run_gate_block
@@ -55,13 +55,15 @@ def _decision_result(*, outcome: str) -> DecisionEngineResult:
         cycle_id=None,
         outbox_effect_ids=(),
         duplicate_event=False,
-        execution_gate_state=gate_state,
-        execution_gate_reason=ExecutionGateReason(
-            reason_code=outcome,
-            guidance="Guidance",
-            detail="Need a decision" if outcome == "decision_gate_required" else None,
-            ready_label="agent:ready" if outcome == "missing_ready_label" else None,
-        ) if gate_state != ExecutionGateState.ALLOW_EXECUTION else None,
+        execution_gate=ExecutionGateResolution(
+            state=gate_state,
+            reason=ExecutionGateReason(
+                reason_code=outcome,
+                guidance="Guidance",
+                detail="Need a decision" if outcome == "decision_gate_required" else None,
+                ready_label="agent:ready" if outcome == "missing_ready_label" else None,
+            ) if gate_state != ExecutionGateState.ALLOW_EXECUTION else None,
+        ),
     )
 
 
