@@ -176,7 +176,7 @@ def decision_result_for_duplicate_event(
             )
         ).scalars()
     )
-    execution_gate_state, execution_gate_reason = resolve_execution_gate_state(
+    execution_gate = resolve_execution_gate_state(
         decision=decision,
         classification=classification,
     )
@@ -191,8 +191,7 @@ def decision_result_for_duplicate_event(
         cycle_id=cycle.cycle_id if cycle is not None else None,
         outbox_effect_ids=outbox_effect_ids,
         duplicate_event=True,
-        execution_gate_state=execution_gate_state,
-        execution_gate_reason=execution_gate_reason,
+        execution_gate=execution_gate,
     )
 
 
