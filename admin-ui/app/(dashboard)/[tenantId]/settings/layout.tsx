@@ -21,10 +21,6 @@ export default function SettingsLayout({ children }: { children: React.ReactNode
 
   return (
     <div className="space-y-0">
-      <div className="mb-1">
-        <h1 className="text-xl font-semibold">Settings</h1>
-        <p className="text-sm text-muted-foreground">Configure integrations, policies, and workspace options.</p>
-      </div>
       <div className="overflow-x-auto border-b">
         <nav className="-mb-px flex min-w-max gap-0" aria-label="Settings tabs">
           {tabs.map((tab) => {

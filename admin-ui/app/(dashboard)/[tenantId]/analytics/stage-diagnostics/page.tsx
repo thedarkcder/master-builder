@@ -428,7 +428,7 @@ export default function TenantStageDiagnosticsPage() {
 
   return (
     <div className="space-y-6">
-      <details className="group rounded-lg border bg-card" open>
+      <details className="group rounded-lg border bg-background" open>
         <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-sm font-medium">
           <span>Filters</span>
           <span className="text-xs text-muted-foreground group-open:hidden">Show</span>
@@ -561,7 +561,6 @@ export default function TenantStageDiagnosticsPage() {
       <section className="overflow-hidden rounded-2xl border bg-background">
           <div className="p-6 pb-0">
             <h2 className="text-base font-semibold">Cross-project stage compare</h2>
-            <p className="mt-1 text-sm text-muted-foreground">Radar profile for stage metrics across selected projects.</p>
           </div>
           <div className="p-6 space-y-3">
             <div className="grid gap-2 md:grid-cols-3">
@@ -716,7 +715,7 @@ export default function TenantStageDiagnosticsPage() {
               {results.stages.map((stage) => (
                 <div
                   key={stage.stage}
-                  className="rounded-xl border px-4 py-3"
+                  className="rounded-xl border bg-background px-4 py-3"
                   style={{ borderLeft: `3px solid ${stageColor(stage.stage)}` }}
                 >
                   <p className="text-sm font-semibold uppercase">{stage.stage}</p>
@@ -727,16 +726,16 @@ export default function TenantStageDiagnosticsPage() {
                 </div>
               ))}
               {results.stages.length === 0 ? (
-                <div className="rounded-xl border px-4 py-3">
+                <div className="rounded-xl border bg-background px-4 py-3">
                   <p className="text-sm text-muted-foreground">No stage diagnostics available for current filters.</p>
                 </div>
               ) : null}
             </div>
-            <div className="rounded-xl border px-4 py-3 text-sm">
+            <div className="rounded-xl border bg-background px-4 py-3 text-sm">
               <span className="text-muted-foreground">Retest waste score:</span>{" "}
               <span className="font-semibold">{(results.retest_waste_score * 100).toFixed(1)}%</span>
             </div>
-            <div className="rounded-xl border px-4 py-3">
+            <div className="rounded-xl border bg-background px-4 py-3">
               <p className="mb-2 text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
                 Stage x attempt heatmap (avg delta input)
               </p>
@@ -778,7 +777,6 @@ export default function TenantStageDiagnosticsPage() {
             <section className="overflow-hidden rounded-2xl border bg-background">
               <div className="p-6 pb-0">
                 <h2 className="text-base font-semibold">Per-ticket stage usage</h2>
-                <p className="mt-1 text-sm text-muted-foreground">Token I/O split by stage for each issue key in current filters.</p>
               </div>
               <div className="p-6 space-y-3">
                 <TokenStackedBarChart
@@ -831,7 +829,7 @@ export default function TenantStageDiagnosticsPage() {
                 </div>
               </div>
             </section>
-            <div className="rounded-xl border px-4 py-3">
+            <div className="rounded-xl border bg-background px-4 py-3">
               <p className="mb-2 text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Heavy command signatures</p>
               <div className="overflow-x-auto">
                 <Table>
@@ -868,7 +866,6 @@ export default function TenantStageDiagnosticsPage() {
             <section className="overflow-hidden rounded-2xl border bg-background">
               <div className="p-6 pb-0">
                 <h2 className="text-base font-semibold">Runtime vs token delta</h2>
-                <p className="mt-1 text-sm text-muted-foreground">Scatter point = one token-turn row.</p>
               </div>
               <div className="p-6">
                 {scatterData.length === 0 ? (

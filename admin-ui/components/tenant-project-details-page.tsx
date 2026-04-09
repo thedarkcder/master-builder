@@ -18,7 +18,6 @@ import {
 } from "lucide-react";
 
 import { useAuth } from "@/components/auth-provider";
-import { ProjectInstallsContent } from "@/components/project-installs-content";
 import { ProjectAutomationsContent, ProjectNotificationsContent } from "@/components/tenant-project-discord-page";
 import { CodexModelSelect } from "@/components/codex-model-select";
 import { OverrideSegmentedControl } from "@/components/override-segmented-control";
@@ -52,7 +51,7 @@ import {
 } from "@/lib/auth-routing";
 import { buildProjectSectionPath, buildRunDetailPath, resolveProjectSection } from "@/lib/dashboard-paths";
 
-type Tab = "overview" | "settings" | "runs" | "notifications" | "automations" | "installs" | "secrets" | "danger";
+type Tab = "overview" | "settings" | "runs" | "webhooks" | "notifications" | "automations" | "secrets" | "danger";
 type SettingsSection = "general" | "ai" | "automation" | "knowledge" | "governance";
 type OverrideToggleValue = "inherit" | "enabled" | "disabled";
 type RequireAgentsValue = "inherit" | "required";
@@ -86,9 +85,9 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "overview", label: "Overview" },
   { id: "settings", label: "Settings" },
   { id: "runs", label: "Runs" },
+  { id: "webhooks", label: "Webhooks" },
   { id: "notifications", label: "Notifications" },
   { id: "automations", label: "Automations" },
-  { id: "installs", label: "Installs" },
   { id: "secrets", label: "Secrets" },
   { id: "danger", label: "Danger" },
 ];
@@ -261,7 +260,7 @@ export function TenantProjectDetailsPage() {
     if (allowProjectManagement) {
       return resolved;
     }
-    return resolved === "settings" || resolved === "notifications" || resolved === "automations" || resolved === "installs" || resolved === "secrets" || resolved === "danger"
+    return resolved === "settings" || resolved === "notifications" || resolved === "automations" || resolved === "secrets" || resolved === "danger"
       ? "overview"
       : resolved;
   }, [allowProjectManagement, pathname]);
@@ -392,7 +391,7 @@ export function TenantProjectDetailsPage() {
   }, [activeTab, ready, credentials, project, runFromDate, runIssueFilter, runPage, runPageSize, runPrFilter, runStatusFilter, runToDate]);
 
   useEffect(() => {
-    if (ready && credentials && project && activeTab === "runs") void loadWebhookJobs();
+    if (ready && credentials && project && activeTab === "webhooks") void loadWebhookJobs();
   }, [activeTab, ready, credentials, project, params.tenantId, params.projectId]);
 
   useEffect(() => {
@@ -768,7 +767,7 @@ export function TenantProjectDetailsPage() {
                     </div>
                   </aside>
                   <div className="space-y-5">
-                    <div className="rounded-xl border px-4 py-3">
+                    <div className="rounded-xl border bg-background px-4 py-3">
                       <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Repository</p>
                       <Link
                         className="mt-2 inline-flex items-center gap-1 text-sm text-primary hover:underline"
@@ -967,9 +966,6 @@ export function TenantProjectDetailsPage() {
                 <div className="flex flex-wrap items-center justify-between gap-3 p-6 pb-3">
                     <div>
                       <h2 className="text-base font-semibold">Settings</h2>
-                      <p className="mt-1 text-sm text-muted-foreground">
-                        Project-level overrides for execution, automation, and AI behavior.
-                      </p>
                     </div>
                     <div className="flex items-center gap-2">
                       <Button variant="ghost" size="sm" onClick={() => void loadOptions()} disabled={busy}>
@@ -1345,21 +1341,20 @@ export function TenantProjectDetailsPage() {
       {/* ── Runs tab ─────────────────────────────────────────────────────── */}
       {activeTab === "runs" ? (
         <div className="overflow-hidden rounded-2xl border bg-background">
-          <div className="flex items-center justify-between gap-2 p-6 pb-3">
-              <h2 className="text-base font-semibold">Project Runs</h2>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => void loadRuns()}
-                disabled={runsBusy}
-              >
-                <RefreshCw className={`h-3.5 w-3.5 ${runsBusy ? "animate-spin" : ""}`} />
-              </Button>
+          <div className="flex items-center justify-between gap-2 border-b px-5 py-3">
+            <h2 className="text-sm font-semibold">Project Runs</h2>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => void loadRuns()}
+              disabled={runsBusy}
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${runsBusy ? "animate-spin" : ""}`} />
+            </Button>
           </div>
-          <div className="px-6 pb-6 space-y-4">
-            {/* Filter toolbar */}
-            <div className="overflow-x-auto rounded-lg border bg-muted/30">
-              <div className="flex min-w-max flex-nowrap items-center gap-2 px-3 py-2.5 md:min-w-0 md:flex-wrap">
+
+          <div className="overflow-x-auto border-b px-5 py-3">
+            <div className="flex min-w-max flex-nowrap items-center gap-2 md:min-w-0 md:flex-wrap">
               <SlidersHorizontal className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
               <Input
                 className="h-8 w-40 text-sm"
@@ -1458,186 +1453,184 @@ export function TenantProjectDetailsPage() {
               >
                 Clear
               </Button>
-              </div>
             </div>
+          </div>
 
-            {runsStatusLine ? (
-              <p className="rounded-lg border bg-muted/30 px-4 py-3 text-sm text-muted-foreground">
-                {runsStatusLine}
-              </p>
-            ) : null}
+          {runsStatusLine ? (
+            <div className="border-b px-5 py-3 text-sm text-muted-foreground">
+              {runsStatusLine}
+            </div>
+          ) : null}
 
-            {runs.length === 0 ? (
-              <p className="rounded-lg border bg-muted/30 px-4 py-8 text-center text-sm text-muted-foreground">
-                No runs found for this project.
-              </p>
-            ) : (
-              <div className="overflow-hidden rounded-lg border">
-                <Table>
-                  <TableHeader>
-                    <TableRow className="bg-muted/40">
-                      <TableHead className="pl-4">Run</TableHead>
-                      <TableHead>Issue</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead>Created</TableHead>
-                      <TableHead>PR</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {runs.map((run) => (
-                      <TableRow
-                        key={run.run_id}
-                        className={`border-l-2 ${STATUS_BORDER[run.status] ?? "border-l-transparent"}`}
+          {runs.length === 0 ? (
+            <div className="px-5 py-12 text-center text-sm text-muted-foreground">
+              No runs found for this project.
+            </div>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="pl-5">Run</TableHead>
+                  <TableHead>Issue</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Created</TableHead>
+                  <TableHead>PR</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {runs.map((run) => (
+                  <TableRow
+                    key={run.run_id}
+                    className={`border-l-2 ${STATUS_BORDER[run.status] ?? "border-l-transparent"}`}
+                  >
+                    <TableCell className="pl-5 font-medium">
+                      <Link
+                        className="text-primary hover:underline"
+                        href={buildRunDetailPath({
+                          tenantId: params.tenantId,
+                          projectId: params.projectId,
+                          runId: run.run_id,
+                        })}
                       >
-                        <TableCell className="pl-4 font-medium">
-                          <Link
-                            className="text-primary hover:underline"
-                            href={buildRunDetailPath({
-                              tenantId: params.tenantId,
-                              projectId: params.projectId,
-                              runId: run.run_id,
-                            })}
-                          >
-                            {run.issue_summary?.trim() || run.issue_key || run.run_id}
-                          </Link>
-                          <p className="text-xs text-muted-foreground font-mono">{run.run_id}</p>
-                        </TableCell>
-                        <TableCell>
-                          {run.issue_url ? (
-                            <Link
-                              className="text-primary hover:underline text-sm"
-                              href={run.issue_url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                            >
-                              {run.issue_key}
-                            </Link>
-                          ) : (
-                            <span className="text-muted-foreground">{run.issue_key ?? "—"}</span>
-                          )}
-                        </TableCell>
-                        <TableCell>
-                          <StatusBadge status={run.status} />
-                        </TableCell>
-                        <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
-                          {new Date(run.created_at).toLocaleString()}
-                        </TableCell>
-                        <TableCell>
-                          {run.pr_url ? (
-                            <Link
-                              className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
-                              href={run.pr_url}
-                              target="_blank"
-                            >
-                              PR <ExternalLink className="h-3 w-3" />
-                            </Link>
-                          ) : (
-                            <span className="text-xs text-muted-foreground">—</span>
-                          )}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
-            )}
+                        {run.issue_summary?.trim() || run.issue_key || run.run_id}
+                      </Link>
+                      <p className="text-xs text-muted-foreground font-mono">{run.run_id}</p>
+                    </TableCell>
+                    <TableCell>
+                      {run.issue_url ? (
+                        <Link
+                          className="text-primary hover:underline text-sm"
+                          href={run.issue_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          {run.issue_key}
+                        </Link>
+                      ) : (
+                        <span className="text-muted-foreground">{run.issue_key ?? "—"}</span>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      <StatusBadge status={run.status} />
+                    </TableCell>
+                    <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
+                      {new Date(run.created_at).toLocaleString()}
+                    </TableCell>
+                    <TableCell>
+                      {run.pr_url ? (
+                        <Link
+                          className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
+                          href={run.pr_url}
+                          target="_blank"
+                        >
+                          PR <ExternalLink className="h-3 w-3" />
+                        </Link>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">—</span>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
 
-            {/* Pagination */}
-            <div className="flex items-center justify-end gap-2">
+          <div className="flex items-center justify-between border-t px-5 py-3">
+            <span className="text-xs text-muted-foreground">
+              {runs.length} run{runs.length !== 1 ? "s" : ""}
+            </span>
+            <div className="flex items-center gap-1">
               <Button
                 variant="outline"
                 size="sm"
+                className="h-7 text-xs"
                 onClick={() => setRunPage((prev) => Math.max(1, prev - 1))}
                 disabled={runsBusy || runPage <= 1}
               >
-                ← Prev
+                Prev
               </Button>
-              <span className="text-sm text-muted-foreground">Page {runPage}</span>
+              <span className="px-2 text-xs text-muted-foreground">Page {runPage}</span>
               <Button
                 variant="outline"
                 size="sm"
+                className="h-7 text-xs"
                 onClick={() => setRunPage((prev) => prev + 1)}
                 disabled={runsBusy || runs.length < runPageSize}
               >
-                Next →
+                Next
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {/* ── Webhooks tab ───────────────────────────────────────────────────── */}
+      {activeTab === "webhooks" ? (
+        <div className="space-y-4">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            {[
+              { label: "Pending", value: webhookSummary?.pending_count ?? 0 },
+              { label: "Processing", value: webhookSummary?.processing_count ?? 0 },
+              { label: "Failed", value: webhookSummary?.failed_count ?? 0 },
+              { label: "Done", value: webhookSummary?.done_count ?? 0 },
+            ].map((kpi) => (
+              <div key={kpi.label} className="rounded-xl border bg-background px-4 py-3">
+                <p className="text-xs text-muted-foreground">{kpi.label}</p>
+                <p className="mt-0.5 text-xl font-semibold">{kpi.value}</p>
+              </div>
+            ))}
+          </div>
+
+          {webhookStatusLine ? (
+            <div className="rounded-xl border px-4 py-3 text-sm text-muted-foreground">{webhookStatusLine}</div>
+          ) : null}
+
+          <div className="overflow-hidden rounded-2xl border bg-background">
+            <div className="flex items-center justify-between border-b px-5 py-3">
+              <h2 className="text-sm font-semibold">Webhook Queue</h2>
+              <Button variant="ghost" size="sm" onClick={() => void loadWebhookJobs()} disabled={webhookBusy}>
+                <RefreshCw className={`h-3.5 w-3.5 ${webhookBusy ? "animate-spin" : ""}`} />
               </Button>
             </div>
 
-            <div className="space-y-3 rounded-lg border bg-muted/20 p-4">
-              <div className="flex items-center justify-between gap-2">
-                <div>
-                  <p className="text-sm font-medium">Webhook queue</p>
-                  <p className="text-xs text-muted-foreground">Tenant + project scoped webhook jobs.</p>
-                </div>
-                <Button variant="ghost" size="sm" onClick={() => void loadWebhookJobs()} disabled={webhookBusy}>
-                  <RefreshCw className={`h-3.5 w-3.5 ${webhookBusy ? "animate-spin" : ""}`} />
-                </Button>
+            {webhookJobs.length === 0 ? (
+              <div className="px-5 py-12 text-center text-sm text-muted-foreground">
+                No webhook jobs found for this project.
               </div>
-
-              <div className="grid grid-cols-2 gap-2 text-xs md:grid-cols-4">
-                <div className="rounded border bg-background px-2 py-1.5">
-                  <p className="text-muted-foreground">Pending</p>
-                  <p className="font-semibold">{webhookSummary?.pending_count ?? 0}</p>
-                </div>
-                <div className="rounded border bg-background px-2 py-1.5">
-                  <p className="text-muted-foreground">Processing</p>
-                  <p className="font-semibold">{webhookSummary?.processing_count ?? 0}</p>
-                </div>
-                <div className="rounded border bg-background px-2 py-1.5">
-                  <p className="text-muted-foreground">Failed</p>
-                  <p className="font-semibold">{webhookSummary?.failed_count ?? 0}</p>
-                </div>
-                <div className="rounded border bg-background px-2 py-1.5">
-                  <p className="text-muted-foreground">Done</p>
-                  <p className="font-semibold">{webhookSummary?.done_count ?? 0}</p>
-                </div>
-              </div>
-
-              {webhookStatusLine ? (
-                <p className="rounded-lg border bg-background px-3 py-2 text-xs text-muted-foreground">{webhookStatusLine}</p>
-              ) : null}
-
-              {webhookJobs.length === 0 ? (
-                <p className="rounded-lg border bg-background px-3 py-4 text-center text-xs text-muted-foreground">
-                  No webhook jobs found for this project.
-                </p>
-              ) : (
-                <div className="overflow-hidden rounded-lg border bg-background">
-                  <Table>
-                    <TableHeader>
-                      <TableRow className="bg-muted/30">
-                        <TableHead className="pl-4">Status</TableHead>
-                        <TableHead>Transport</TableHead>
-                        <TableHead>Subject</TableHead>
-                        <TableHead>Owner</TableHead>
-                        <TableHead>Attempts</TableHead>
-                        <TableHead>Last Error</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {webhookJobs.map((job) => (
-                        <TableRow key={job.job_id}>
-                          <TableCell className="pl-4">
-                            <StatusBadge status={job.status} />
-                          </TableCell>
-                          <TableCell className="font-mono text-xs">{job.transport}</TableCell>
-                          <TableCell className="max-w-[280px] truncate font-mono text-xs" title={job.subject_key}>
-                            {job.subject_key}
-                          </TableCell>
-                          <TableCell className="max-w-[220px] truncate font-mono text-xs" title={job.owner_id ?? ""}>
-                            {job.owner_id ?? "—"}
-                          </TableCell>
-                          <TableCell className="text-xs">{job.attempt_count}</TableCell>
-                          <TableCell className="max-w-[300px] truncate text-xs text-muted-foreground" title={job.last_error ?? ""}>
-                            {job.last_error ?? "—"}
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </div>
-              )}
-            </div>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="pl-5">Status</TableHead>
+                    <TableHead>Transport</TableHead>
+                    <TableHead>Subject</TableHead>
+                    <TableHead>Owner</TableHead>
+                    <TableHead>Attempts</TableHead>
+                    <TableHead>Last Error</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {webhookJobs.map((job) => (
+                    <TableRow key={job.job_id}>
+                      <TableCell className="pl-5">
+                        <StatusBadge status={job.status} />
+                      </TableCell>
+                      <TableCell className="font-mono text-xs">{job.transport}</TableCell>
+                      <TableCell className="max-w-[280px] truncate font-mono text-xs" title={job.subject_key}>
+                        {job.subject_key}
+                      </TableCell>
+                      <TableCell className="max-w-[220px] truncate font-mono text-xs" title={job.owner_id ?? ""}>
+                        {job.owner_id ?? "—"}
+                      </TableCell>
+                      <TableCell className="text-xs">{job.attempt_count}</TableCell>
+                      <TableCell className="max-w-[300px] truncate text-xs text-muted-foreground" title={job.last_error ?? ""}>
+                        {job.last_error ?? "—"}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
           </div>
         </div>
       ) : null}
@@ -1659,23 +1652,12 @@ export function TenantProjectDetailsPage() {
         />
       ) : null}
 
-      {activeTab === "installs" ? (
-        <ProjectInstallsContent
-          tenantId={params.tenantId}
-          projectId={params.projectId}
-          credentials={credentials}
-        />
-      ) : null}
-
       {/* ── Danger tab ───────────────────────────────────────────────────── */}
       {activeTab === "danger" && project ? (
         <div className="space-y-6">
           <div className="overflow-hidden rounded-2xl border bg-background">
             <div className="px-6 pt-6">
               <h2 className="text-base font-semibold">Danger zone</h2>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Irreversible actions for this project. Proceed with caution.
-              </p>
             </div>
             <div className="divide-y">
               <div className="flex flex-wrap items-center justify-between gap-4 px-6 py-5">
@@ -1770,19 +1752,7 @@ export function TenantProjectDetailsPage() {
       {/* ── Secrets tab ──────────────────────────────────────────────────── */}
       {activeTab === "secrets" ? (
         <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10">
-                <KeyRound className="h-5 w-5 text-primary" />
-              </div>
-              <div>
-                <h2 className="text-base font-semibold">Project Secrets</h2>
-                <p className="text-sm text-muted-foreground">
-                  Stored as project-scoped managed secrets under{" "}
-                  <code className="rounded bg-muted px-1 font-mono text-xs">{projectSecretPrefix}{"{KEY}"}</code>.
-                </p>
-              </div>
-            </div>
+          <div className="flex items-center justify-end">
             <Button variant="outline" size="sm" onClick={() => void refreshSecrets()} disabled={secretsBusy}>
               <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${secretsBusy ? "animate-spin" : ""}`} />
               Refresh
@@ -1798,14 +1768,9 @@ export function TenantProjectDetailsPage() {
               <h2 className="text-base font-semibold">{editingSecretKey ? "Edit Secret" : "Add Secret"}</h2>
               {editingSecretKey ? (
                 <p className="mt-1 text-sm text-warning">
-                  Editing <code className="rounded bg-muted px-1 font-mono text-xs">{editingSecretKey}</code>. The
-                  existing value is never shown.
+                  Editing <code className="rounded bg-muted px-1 font-mono text-xs">{editingSecretKey}</code>.
                 </p>
-              ) : (
-                <p className="mt-1 text-sm text-muted-foreground">
-                  Enter a key and value. Values are encrypted and stored as managed project refs.
-                </p>
-              )}
+              ) : null}
             </div>
             <div className="px-6 pb-6 space-y-4">
               <div className="grid gap-4 md:grid-cols-2">

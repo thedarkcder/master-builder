@@ -39,7 +39,7 @@ type StatItemProps = {
 
 function StatItem({ label, value, sub, icon, iconBg }: StatItemProps) {
   return (
-    <div className="rounded-xl border px-4 py-3">
+    <div className="rounded-xl border bg-background px-4 py-3">
       <div className="flex items-start justify-between">
         <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">{label}</p>
         <div className={`flex h-8 w-8 items-center justify-center rounded-lg ${iconBg}`}>{icon}</div>
@@ -150,23 +150,17 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="min-w-0">
-          <h1 className="text-xl font-semibold">Operations Overview</h1>
-          <p className="text-sm text-muted-foreground">Live view of tenants, runs, and managed secrets.</p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button asChild variant="outline" size="sm">
-            <Link href="/tenants/new">
-              <Plus className="mr-1.5 h-3.5 w-3.5" />
-              New Tenant
-            </Link>
-          </Button>
-          <Button variant="outline" size="sm" onClick={() => void loadDashboard()} disabled={loading}>
-            <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
-            Refresh
-          </Button>
-        </div>
+      <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
+        <Button asChild variant="outline" size="sm">
+          <Link href="/tenants/new">
+            <Plus className="mr-1.5 h-3.5 w-3.5" />
+            New Tenant
+          </Link>
+        </Button>
+        <Button variant="outline" size="sm" onClick={() => void loadDashboard()} disabled={loading}>
+          <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
+          Refresh
+        </Button>
       </div>
 
       {errorMessage ? (

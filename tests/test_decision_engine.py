@@ -41,7 +41,7 @@ def _precheck(
             tags=(),
         ),
         gtd=GoodToDoValidationResult(
-            valid=(outcome != "gtd_required"),
+            valid=(outcome not in {"gtd_required", "execution_blocked"}),
             missing_criteria=(),
             clarification_questions=(),
         ),
@@ -120,15 +120,9 @@ class DecisionEngineTests(unittest.TestCase):
             ),
         )
 
-    def test_resolve_enqueue_precheck_outcome_uses_source_defaults(self) -> None:
-        self.assertEqual(
-            resolve_enqueue_precheck_outcome(source="admin_rerun"),
-            "ready_for_agent",
-        )
-        self.assertEqual(
-            resolve_enqueue_precheck_outcome(source="github_pr_remediation"),
-            "ready_for_agent",
-        )
+    def test_resolve_enqueue_precheck_outcome_requires_persisted_outcome_without_source_override(self) -> None:
+        self.assertIsNone(resolve_enqueue_precheck_outcome(source="admin_rerun"))
+        self.assertIsNone(resolve_enqueue_precheck_outcome(source="github_pr_remediation"))
         self.assertIsNone(resolve_enqueue_precheck_outcome(source="jira_webhook"))
 
     def test_resolve_enqueue_precheck_outcome_forces_ready_for_remediation_trigger_context(self) -> None:
@@ -223,7 +217,7 @@ class DecisionEngineTests(unittest.TestCase):
         self.assertIsNone(worker_decision.decision_gate)
         self.assertIsNone(worker_decision.configuration_error)
 
-    def test_worker_decision_returns_block_when_gate_triggered(self) -> None:
+    def test_worker_decision_returns_configuration_error_when_snapshot_missing(self) -> None:
         worker_decision = evaluate_worker_decision(
             run_plan=None,
             tenant_id="t1",
@@ -232,87 +226,66 @@ class DecisionEngineTests(unittest.TestCase):
             run_id="run-1",
             issue_summary="summary",
             issue_description="desc",
-            evaluate_decision_gate_fn=lambda **_: DecisionGateResult(
-                triggered=True,
-                reason="needs input",
-                missing_sections=(),
-                questions=("q1",),
-                recommendation="blocked",
-                tags=(),
-            ),
         )
         self.assertFalse(worker_decision.allowed)
-        self.assertIsNotNone(worker_decision.decision_gate)
-        self.assertIsNone(worker_decision.configuration_error)
+        self.assertIsNone(worker_decision.decision_gate)
+        self.assertIsNotNone(worker_decision.configuration_error)
+        self.assertEqual(worker_decision.block_reason, "policy_eval_failed")
 
-    def test_worker_decision_uses_canonical_clarification_service_when_context_available(self) -> None:
-        decision = SimpleNamespace(
-            pre_check=_precheck(outcome="decision_gate_required"),
-            block_reason="decision_gate_required",
-            policy_error=None,
+    def test_worker_decision_uses_persisted_precheck_outcome_ready(self) -> None:
+        worker_decision = evaluate_worker_decision(
+            run_plan=_run_plan(pre_check_outcome="ready_for_agent"),
+            tenant_id="t1",
+            project_id="p1",
+            issue_key="TP-1",
+            run_id="run-1",
+            issue_summary="summary",
+            issue_description="desc",
         )
-        with mock.patch(
-            "orchestrator.core.decision_clarification_service.evaluate_issue_clarification_state",
-            return_value=SimpleNamespace(
-                decision=decision,
-                classification="decision_gate",
-            ),
-        ) as evaluate_clarification:
-            worker_decision = evaluate_worker_decision(
-                run_plan=None,
-                tenant_id="t1",
-                project_id="p1",
-                issue_key="TP-1",
-                run_id="run-1",
-                issue_summary="summary",
-                issue_description="desc",
-                session=SimpleNamespace(),
-                tenant=SimpleNamespace(tenant_id="t1", jira_config={"ready_label": "agent:ready"}),
-                project=SimpleNamespace(project_id="p1"),
-                issue_labels=[],
-                settings=SimpleNamespace(),
-                tenant_jira_oauth_context_fn=lambda **_: None,
-                evaluate_pre_run_check_fn=lambda **_: _precheck(outcome="decision_gate_required"),
-            )
+        self.assertTrue(worker_decision.allowed)
+        self.assertIsNone(worker_decision.classification)
+        self.assertIsNone(worker_decision.decision_gate)
+        self.assertIsNone(worker_decision.block_reason)
 
-        self.assertFalse(worker_decision.allowed)
-        self.assertEqual(worker_decision.classification, "decision_gate")
-        self.assertEqual(worker_decision.block_reason, "decision_gate_required")
-        evaluate_clarification.assert_called_once()
-
-    def test_worker_decision_blocks_on_missing_ready_label_from_clarification_service(self) -> None:
-        decision = SimpleNamespace(
-            pre_check=_precheck(outcome="missing_ready_label", ready_label_present=False),
-            block_reason="missing_ready_label",
-            policy_error=None,
+    def test_worker_decision_blocks_on_missing_ready_label_from_persisted_outcome(self) -> None:
+        plan = _run_plan(pre_check_outcome="missing_ready_label")
+        snapshot = ExecutionSnapshot.load(plan)
+        assert snapshot is not None
+        snapshot.context.execution_context["run_not_ready"] = {"ready_label": "agent:ready"}
+        worker_decision = evaluate_worker_decision(
+            run_plan=snapshot.dump(),
+            tenant_id="t1",
+            project_id="p1",
+            issue_key="TP-1",
+            run_id="run-1",
+            issue_summary="summary",
+            issue_description="desc",
+            tenant=SimpleNamespace(tenant_id="t1", jira_config={"ready_label": "agent:ready"}),
         )
-        with mock.patch(
-            "orchestrator.core.decision_clarification_service.evaluate_issue_clarification_state",
-            return_value=SimpleNamespace(
-                decision=decision,
-                classification="clear",
-            ),
-        ):
-            worker_decision = evaluate_worker_decision(
-                run_plan=None,
-                tenant_id="t1",
-                project_id="p1",
-                issue_key="TP-1",
-                run_id="run-1",
-                issue_summary="summary",
-                issue_description="desc",
-                session=SimpleNamespace(),
-                tenant=SimpleNamespace(tenant_id="t1", jira_config={"ready_label": "agent:ready"}),
-                project=SimpleNamespace(project_id="p1"),
-                issue_labels=[],
-                settings=SimpleNamespace(),
-                tenant_jira_oauth_context_fn=lambda **_: None,
-                evaluate_pre_run_check_fn=lambda **_: _precheck(outcome="missing_ready_label", ready_label_present=False),
-            )
 
         self.assertFalse(worker_decision.allowed)
         self.assertEqual(worker_decision.block_reason, "missing_ready_label")
+        assert worker_decision.decision_gate is not None
+        self.assertTrue(worker_decision.decision_gate.triggered)
 
+    def test_worker_decision_blocks_on_gtd_required_from_persisted_outcome(self) -> None:
+        plan = _run_plan(pre_check_outcome="gtd_required")
+        snapshot = ExecutionSnapshot.load(plan)
+        assert snapshot is not None
+        snapshot.context.execution_context["run_not_ready"] = {"reason": "Dependencies unresolved"}
+        worker_decision = evaluate_worker_decision(
+            run_plan=snapshot.dump(),
+            tenant_id="t1",
+            project_id="p1",
+            issue_key="TP-1",
+            run_id="run-1",
+            issue_summary="summary",
+            issue_description="desc",
+        )
+        self.assertFalse(worker_decision.allowed)
+        self.assertIsNotNone(worker_decision.decision_gate)
+        self.assertEqual(worker_decision.block_reason, "gtd_required")
+        self.assertEqual(worker_decision.classification, "gtd")
 
 class LabelActionServiceTests(unittest.TestCase):
     def test_apply_issue_label_actions_respects_policy_and_dedupes(self) -> None:

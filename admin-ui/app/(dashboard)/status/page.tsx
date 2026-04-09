@@ -214,13 +214,7 @@ export default function PlatformStatusPage() {
 
   return (
     <div className="mx-auto w-full max-w-5xl space-y-6">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div className="space-y-1">
-          <h1 className="text-3xl font-semibold tracking-tight">Platform status</h1>
-          <p className="text-sm text-muted-foreground">
-            Health of the hosted Master Builder services and worker capability lanes.
-          </p>
-        </div>
+      <div className="flex flex-wrap items-center justify-end gap-3">
         <Button variant="outline" size="sm" onClick={() => void loadStatus()} disabled={loading}>
           <RefreshCw className={cn("mr-1.5 h-3.5 w-3.5", loading && "animate-spin")} />
           Refresh
@@ -250,9 +244,6 @@ export default function PlatformStatusPage() {
       <section className="overflow-hidden rounded-2xl border bg-background">
         <div className="border-b px-6 py-4">
           <h2 className="text-base font-semibold">Hosted services</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            This page tracks product-facing services only. Internal infrastructure is excluded.
-          </p>
         </div>
 
         {loading ? (

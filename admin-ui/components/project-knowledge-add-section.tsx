@@ -99,9 +99,6 @@ export function ProjectKnowledgeAddSection({
     <div className="overflow-hidden rounded-2xl border bg-background">
       <div className="p-6">
         <h2 className="text-base font-semibold">Add Knowledge</h2>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Upload files directly into the project knowledge store. Managed connectors and sync controls live in the Sources tab.
-        </p>
       </div>
       <div className="space-y-4 p-6 pt-0">
         <div className="rounded-md border p-4">

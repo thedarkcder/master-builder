@@ -34,8 +34,11 @@ def test_create_human_input_request_snapshots_checkpoint_and_moves_run_to_waitin
         blocked_reason=None,
         updated_at=None,
     )
-    session.execute.return_value.scalar_one_or_none.return_value = None
-    session.get.side_effect = lambda model, key: workflow if key == "workflow-1" else None
+    workflow_query = MagicMock()
+    workflow_query.scalars.return_value.one_or_none.return_value = workflow
+    pending_query = MagicMock()
+    pending_query.scalar_one_or_none.return_value = None
+    session.execute.side_effect = [workflow_query, pending_query]
     checkpoint = SimpleNamespace(checkpoint_id="checkpoint-1")
     send_result = SimpleNamespace(
         sent=True,
@@ -48,6 +51,7 @@ def test_create_human_input_request_snapshots_checkpoint_and_moves_run_to_waitin
     with (
         patch("orchestrator.core.run_human_input_service.snapshot_checkpoint_for_run", return_value=checkpoint),
         patch("orchestrator.core.run_human_input_service.send_tenant_discord_message", return_value=send_result),
+        patch("orchestrator.core.run_human_input_service.upsert_followup_context"),
     ):
         request = create_human_input_request(
             session=session,
@@ -93,8 +97,11 @@ def test_create_human_input_request_renders_structured_questions_in_discord_mess
         blocked_reason=None,
         updated_at=None,
     )
-    session.execute.return_value.scalar_one_or_none.return_value = None
-    session.get.side_effect = lambda model, key: workflow if key == "workflow-1" else None
+    workflow_query = MagicMock()
+    workflow_query.scalars.return_value.one_or_none.return_value = workflow
+    pending_query = MagicMock()
+    pending_query.scalar_one_or_none.return_value = None
+    session.execute.side_effect = [workflow_query, pending_query]
     checkpoint = SimpleNamespace(checkpoint_id="checkpoint-1")
     send_result = SimpleNamespace(
         sent=True,
@@ -107,6 +114,7 @@ def test_create_human_input_request_renders_structured_questions_in_discord_mess
     with (
         patch("orchestrator.core.run_human_input_service.snapshot_checkpoint_for_run", return_value=checkpoint),
         patch("orchestrator.core.run_human_input_service.send_tenant_discord_message", return_value=send_result) as send_mock,
+        patch("orchestrator.core.run_human_input_service.upsert_followup_context"),
     ):
         create_human_input_request(
             session=session,
@@ -177,7 +185,11 @@ def test_resume_workflow_from_human_input_answer_creates_resume_attempt_and_cons
         payload_json=ExecutionSnapshot.empty(trigger_context={"source": "manual"}).dump(),
     )
     resumed_run = SimpleNamespace(run_id="run-2")
-    session.execute.return_value.scalars.return_value.one_or_none.return_value = request
+    existing_resume_query = MagicMock()
+    existing_resume_query.scalars.return_value.all.return_value = []
+    lock_query = MagicMock()
+    lock_query.scalars.return_value.one_or_none.return_value = request
+    session.execute.side_effect = [lock_query, existing_resume_query]
     session.get.side_effect = lambda model, key: (
         source_run if key == "run-1" else checkpoint if key == "checkpoint-1" else None
     )
@@ -189,6 +201,7 @@ def test_resume_workflow_from_human_input_answer_creates_resume_attempt_and_cons
             "orchestrator.core.run_human_input_service.enqueue_attempt_for_workflow_uncommitted",
             return_value=enqueue_result,
         ) as enqueue_run_mock,
+        patch("orchestrator.core.run_human_input_service.close_followup_contexts"),
     ):
         answered = answer_human_input_request(
             session=session,
@@ -211,8 +224,99 @@ def test_resume_workflow_from_human_input_answer_creates_resume_attempt_and_cons
     assert bootstrap.entry_stage == "review"
     assert bootstrap.entry_checkpoint_id == "checkpoint-1"
     assert bootstrap.branch == "feature/GP-122"
+    snapshot = ExecutionSnapshot.require(bootstrap.plan, allow_empty=True)
+    assert snapshot.context.execution_context.get("human_input_request_id") == "request-1"
     assert request.status == "consumed"
     assert request.consumed_by_run_id == "run-2"
+
+
+def test_resume_workflow_from_human_input_answer_reuses_existing_resume_run() -> None:
+    session = MagicMock()
+    request = SimpleNamespace(
+        request_id="request-1",
+        workflow_id="workflow-1",
+        checkpoint_id="checkpoint-1",
+        source_run_id="run-1",
+        status="answered",
+        consumed_by_run_id=None,
+        tenant_id="example",
+    )
+    existing_resume_run = SimpleNamespace(run_id="run-2", attempt_number=2)
+    existing_run_snapshot = ExecutionSnapshot.empty()
+    existing_run_snapshot.context.execution_context["human_input_request_id"] = "request-1"
+    existing_resume_run.plan = existing_run_snapshot.dump()
+    lock_query = MagicMock()
+    lock_query.scalars.return_value.one_or_none.return_value = request
+    existing_resume_query = MagicMock()
+    existing_resume_query.scalars.return_value.all.return_value = [existing_resume_run]
+    session.execute.side_effect = [lock_query, existing_resume_query]
+
+    with patch(
+        "orchestrator.core.run_human_input_service.enqueue_attempt_for_workflow_uncommitted"
+    ) as enqueue_run_mock, patch("orchestrator.core.run_human_input_service.close_followup_contexts"):
+        result = resume_workflow_from_human_input_answer(
+            session=session,
+            settings=SimpleNamespace(secrets_encryption_key="secret-key"),
+            request=request,
+        )
+
+    assert result is existing_resume_run
+    assert request.status == "consumed"
+    assert request.consumed_by_run_id == "run-2"
+    enqueue_run_mock.assert_not_called()
+
+
+def test_resume_workflow_from_human_input_answer_rejects_unrelated_active_resume_run() -> None:
+    session = MagicMock()
+    request = SimpleNamespace(
+        request_id="request-1",
+        workflow_id="workflow-1",
+        checkpoint_id="checkpoint-1",
+        source_run_id="run-1",
+        status="answered",
+        consumed_by_run_id=None,
+        tenant_id="example",
+        source_stage="review",
+    )
+    source_run = SimpleNamespace(
+        run_id="run-1",
+        branch="feature/GP-122",
+        pr_url="https://github.com/example/repo/pull/123",
+    )
+    checkpoint = SimpleNamespace(
+        checkpoint_id="checkpoint-1",
+        payload_json=ExecutionSnapshot.empty(trigger_context={"source": "manual"}).dump(),
+    )
+    unrelated_snapshot = ExecutionSnapshot.empty()
+    unrelated_snapshot.context.execution_context["human_input_request_id"] = "other-request"
+    unrelated_active_run = SimpleNamespace(
+        run_id="run-unrelated",
+        plan=unrelated_snapshot.dump(),
+    )
+    lock_query = MagicMock()
+    lock_query.scalars.return_value.one_or_none.return_value = request
+    existing_resume_query = MagicMock()
+    existing_resume_query.scalars.return_value.all.return_value = []
+    session.execute.side_effect = [lock_query, existing_resume_query]
+    session.get.side_effect = lambda model, key: (
+        source_run if key == "run-1" else checkpoint if key == "checkpoint-1" else None
+    )
+    enqueue_result = SimpleNamespace(enqueued=False, reason="run_already_active", run=unrelated_active_run)
+
+    with patch(
+        "orchestrator.core.run_human_input_service.enqueue_attempt_for_workflow_uncommitted",
+        return_value=enqueue_result,
+    ):
+        try:
+            resume_workflow_from_human_input_answer(
+                session=session,
+                settings=SimpleNamespace(secrets_encryption_key="secret-key"),
+                request=request,
+            )
+        except ValueError as exc:
+            assert "unrelated to this human-input request" in str(exc)
+        else:
+            raise AssertionError("Expected ValueError for unrelated active resume run")
 
 
 def test_create_human_input_request_commits_before_dispatching_discord_message() -> None:
@@ -245,8 +349,11 @@ def test_create_human_input_request_commits_before_dispatching_discord_message()
         message_id="message-1",
         reason=None,
     )
-    session.execute.return_value.scalar_one_or_none.return_value = None
-    session.get.side_effect = lambda model, key: workflow if key == "workflow-1" else None
+    workflow_query = MagicMock()
+    workflow_query.scalars.return_value.one_or_none.return_value = workflow
+    pending_query = MagicMock()
+    pending_query.scalar_one_or_none.return_value = None
+    session.execute.side_effect = [workflow_query, pending_query]
     committed_before_send = {"value": False}
 
     def _commit() -> None:
@@ -260,6 +367,7 @@ def test_create_human_input_request_commits_before_dispatching_discord_message()
     with (
         patch("orchestrator.core.run_human_input_service.snapshot_checkpoint_for_run", return_value=checkpoint),
         patch("orchestrator.core.run_human_input_service.send_tenant_discord_message", side_effect=_send_side_effect),
+        patch("orchestrator.core.run_human_input_service.upsert_followup_context"),
     ):
         request = create_human_input_request(
             session=session,
@@ -313,11 +421,17 @@ def test_create_human_input_request_redelivers_existing_pending_request_without_
         message_id="message-1",
         reason=None,
     )
-    session.execute.return_value.scalar_one_or_none.return_value = existing_request
+    workflow = SimpleNamespace(workflow_id="workflow-1", status="waiting_for_input")
+    workflow_query = MagicMock()
+    workflow_query.scalars.return_value.one_or_none.return_value = workflow
+    pending_query = MagicMock()
+    pending_query.scalar_one_or_none.return_value = existing_request
+    session.execute.side_effect = [workflow_query, pending_query]
 
     with (
         patch("orchestrator.core.run_human_input_service.snapshot_checkpoint_for_run") as checkpoint_mock,
         patch("orchestrator.core.run_human_input_service.send_tenant_discord_message", return_value=send_result),
+        patch("orchestrator.core.run_human_input_service.upsert_followup_context"),
     ):
         request = create_human_input_request(
             session=session,

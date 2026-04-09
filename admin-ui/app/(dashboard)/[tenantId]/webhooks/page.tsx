@@ -144,15 +144,15 @@ export default function TenantWebhooksPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-semibold">Webhooks</h1>
-          <p className="text-sm text-muted-foreground">
-            Integration health and expected provider configuration.
-            {lastRefreshedAt ? ` Last refreshed ${new Date(lastRefreshedAt).toLocaleString()}.` : ""}
-          </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          {lastRefreshedAt ? (
+            <p className="text-sm text-muted-foreground">
+              Last refreshed {new Date(lastRefreshedAt).toLocaleString()}.
+            </p>
+          ) : null}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="ml-auto flex shrink-0 items-center gap-2">
           <Button variant="outline" size="sm" onClick={() => void refreshDiagnostics()} disabled={loading}>
             <RefreshCcw className={`mr-1.5 h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
             {loading ? "Refreshing" : "Refresh"}
@@ -197,7 +197,7 @@ export default function TenantWebhooksPage() {
           const ok = item.health?.ok;
           const Icon = ok ? CheckCircle2 : XCircle;
           return (
-            <div key={item.title} className="flex items-start gap-3 rounded-xl border px-4 py-3">
+            <div key={item.title} className="flex items-start gap-3 rounded-xl border bg-background px-4 py-3">
               <Icon className={`h-5 w-5 flex-shrink-0 mt-0.5 ${ok ? "text-success" : ok === undefined ? "text-muted-foreground" : "text-warning"}`} />
               <div>
                 <p className="font-medium text-sm">{item.title}</p>

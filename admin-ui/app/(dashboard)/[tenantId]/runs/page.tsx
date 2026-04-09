@@ -80,11 +80,6 @@ export default function TenantRunsPage() {
 
   return (
     <div className="space-y-4">
-      <div>
-        <h1 className="text-xl font-semibold">Pipeline</h1>
-        <p className="text-sm text-muted-foreground">All orchestration runs for this tenant.</p>
-      </div>
-
       <div className="overflow-hidden rounded-2xl border bg-background">
         <div className="p-5">
           <div className="overflow-x-auto -mx-1 px-1">
@@ -190,7 +185,7 @@ export default function TenantRunsPage() {
               <TableHead>Created</TableHead>
             </TableRow>
           </TableHeader>
-          <TableBody>
+          <TableBody className={cn(loading && "opacity-50 pointer-events-none transition-opacity")}>
             {runs.map((run) => (
               <TableRow
                 key={run.run_id}
@@ -260,7 +255,7 @@ export default function TenantRunsPage() {
 
         <div className="flex items-center justify-between border-t px-5 py-3">
           <span className="text-xs text-muted-foreground">
-            {totalLoaded !== null ? `${totalLoaded} run${totalLoaded !== 1 ? "s" : ""} on page ${page}` : ""}
+            {totalLoaded !== null ? `${totalLoaded} run${totalLoaded !== 1 ? "s" : ""}` : ""}
           </span>
           <div className="flex items-center gap-1">
             <Button
