@@ -89,6 +89,9 @@ export default async function HomePage() {
             <a href="#how-it-works" className="text-[#78d1ff]">
               How it works
             </a>
+            <Link href="/tutorials" className="transition-colors hover:text-white">
+              Tutorials
+            </Link>
             <a href="#runtimes" className="transition-colors hover:text-white">
               Runtimes
             </a>
@@ -348,6 +351,9 @@ export default async function HomePage() {
             <p className="text-[11px] font-bold uppercase tracking-[0.22em] text-white">Platform</p>
             <Link href="/register" className="block text-sm text-slate-500 transition-colors hover:text-white">
               Create workspace
+            </Link>
+            <Link href="/tutorials" className="block text-sm text-slate-500 transition-colors hover:text-white">
+              Tutorials
             </Link>
             <Link href="/privacy" className="block text-sm text-slate-500 transition-colors hover:text-white">
               Privacy policy
