@@ -127,12 +127,24 @@ def create_human_input_request(
     if not normalized_request_type:
         raise ValueError("Human input request_type is required")
 
+    workflow = (
+        session.execute(
+            select(WorkflowExecution)
+            .where(WorkflowExecution.workflow_id == run.workflow_id)
+            .with_for_update()
+        )
+        .scalars()
+        .one_or_none()
+    )
+    if workflow is None:
+        raise ValueError(f"Workflow for run {run.run_id} was not found")
     existing_request = session.execute(
         select(RunHumanInputRequest)
         .where(
             RunHumanInputRequest.workflow_id == run.workflow_id,
             RunHumanInputRequest.status == "pending",
         )
+        .with_for_update()
         .order_by(RunHumanInputRequest.created_at.desc())
         .limit(1)
     ).scalar_one_or_none()
@@ -196,13 +208,11 @@ def create_human_input_request(
     run.status = RUN_STATUS_WAITING_FOR_INPUT
     run.last_heartbeat_at = None
     run.worker_service_instance_id = None
-    workflow = session.get(WorkflowExecution, run.workflow_id)
-    if workflow is not None:
-        workflow.status = RUN_STATUS_WAITING_FOR_INPUT
-        workflow.active_run_id = run.run_id
-        workflow.latest_checkpoint_id = checkpoint.checkpoint_id
-        workflow.blocked_reason = None
-        workflow.updated_at = now
+    workflow.status = RUN_STATUS_WAITING_FOR_INPUT
+    workflow.active_run_id = run.run_id
+    workflow.latest_checkpoint_id = checkpoint.checkpoint_id
+    workflow.blocked_reason = None
+    workflow.updated_at = now
     session.add(request)
     session.commit()
     session.refresh(request)

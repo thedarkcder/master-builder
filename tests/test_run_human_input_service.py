@@ -34,8 +34,11 @@ def test_create_human_input_request_snapshots_checkpoint_and_moves_run_to_waitin
         blocked_reason=None,
         updated_at=None,
     )
-    session.execute.return_value.scalar_one_or_none.return_value = None
-    session.get.side_effect = lambda model, key: workflow if key == "workflow-1" else None
+    workflow_query = MagicMock()
+    workflow_query.scalars.return_value.one_or_none.return_value = workflow
+    pending_query = MagicMock()
+    pending_query.scalar_one_or_none.return_value = None
+    session.execute.side_effect = [workflow_query, pending_query]
     checkpoint = SimpleNamespace(checkpoint_id="checkpoint-1")
     send_result = SimpleNamespace(
         sent=True,
@@ -48,6 +51,7 @@ def test_create_human_input_request_snapshots_checkpoint_and_moves_run_to_waitin
     with (
         patch("orchestrator.core.run_human_input_service.snapshot_checkpoint_for_run", return_value=checkpoint),
         patch("orchestrator.core.run_human_input_service.send_tenant_discord_message", return_value=send_result),
+        patch("orchestrator.core.run_human_input_service.upsert_followup_context"),
     ):
         request = create_human_input_request(
             session=session,
@@ -93,8 +97,11 @@ def test_create_human_input_request_renders_structured_questions_in_discord_mess
         blocked_reason=None,
         updated_at=None,
     )
-    session.execute.return_value.scalar_one_or_none.return_value = None
-    session.get.side_effect = lambda model, key: workflow if key == "workflow-1" else None
+    workflow_query = MagicMock()
+    workflow_query.scalars.return_value.one_or_none.return_value = workflow
+    pending_query = MagicMock()
+    pending_query.scalar_one_or_none.return_value = None
+    session.execute.side_effect = [workflow_query, pending_query]
     checkpoint = SimpleNamespace(checkpoint_id="checkpoint-1")
     send_result = SimpleNamespace(
         sent=True,
@@ -107,6 +114,7 @@ def test_create_human_input_request_renders_structured_questions_in_discord_mess
     with (
         patch("orchestrator.core.run_human_input_service.snapshot_checkpoint_for_run", return_value=checkpoint),
         patch("orchestrator.core.run_human_input_service.send_tenant_discord_message", return_value=send_result) as send_mock,
+        patch("orchestrator.core.run_human_input_service.upsert_followup_context"),
     ):
         create_human_input_request(
             session=session,
@@ -283,8 +291,11 @@ def test_create_human_input_request_commits_before_dispatching_discord_message()
         message_id="message-1",
         reason=None,
     )
-    session.execute.return_value.scalar_one_or_none.return_value = None
-    session.get.side_effect = lambda model, key: workflow if key == "workflow-1" else None
+    workflow_query = MagicMock()
+    workflow_query.scalars.return_value.one_or_none.return_value = workflow
+    pending_query = MagicMock()
+    pending_query.scalar_one_or_none.return_value = None
+    session.execute.side_effect = [workflow_query, pending_query]
     committed_before_send = {"value": False}
 
     def _commit() -> None:
@@ -298,6 +309,7 @@ def test_create_human_input_request_commits_before_dispatching_discord_message()
     with (
         patch("orchestrator.core.run_human_input_service.snapshot_checkpoint_for_run", return_value=checkpoint),
         patch("orchestrator.core.run_human_input_service.send_tenant_discord_message", side_effect=_send_side_effect),
+        patch("orchestrator.core.run_human_input_service.upsert_followup_context"),
     ):
         request = create_human_input_request(
             session=session,
@@ -351,11 +363,17 @@ def test_create_human_input_request_redelivers_existing_pending_request_without_
         message_id="message-1",
         reason=None,
     )
-    session.execute.return_value.scalar_one_or_none.return_value = existing_request
+    workflow = SimpleNamespace(workflow_id="workflow-1", status="waiting_for_input")
+    workflow_query = MagicMock()
+    workflow_query.scalars.return_value.one_or_none.return_value = workflow
+    pending_query = MagicMock()
+    pending_query.scalar_one_or_none.return_value = existing_request
+    session.execute.side_effect = [workflow_query, pending_query]
 
     with (
         patch("orchestrator.core.run_human_input_service.snapshot_checkpoint_for_run") as checkpoint_mock,
         patch("orchestrator.core.run_human_input_service.send_tenant_discord_message", return_value=send_result),
+        patch("orchestrator.core.run_human_input_service.upsert_followup_context"),
     ):
         request = create_human_input_request(
             session=session,
