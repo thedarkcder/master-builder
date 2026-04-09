@@ -48,6 +48,7 @@ dev = [
   "pytest>=8.3.0",
   "pytest-cov>=5.0.0",
   "ruff>=0.6.0",
+  "vulture>=2.13",
 ]
 
 [tool.pytest.ini_options]

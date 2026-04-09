@@ -473,6 +473,18 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             msg=f"Reply transport compatibility shims should not have production references: {violations}",
         )
 
+    def test_workflow_core_modules_do_not_import_api_layer(self) -> None:
+        violations: list[str] = []
+        for module_path in sorted((ORCHESTRATOR_ROOT / "core" / "workflow").rglob("*.py")):
+            for module_name in _imported_modules(module_path):
+                if module_name.startswith("orchestrator.api"):
+                    violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{module_name}")
+        self.assertEqual(
+            violations,
+            [],
+            msg=f"Workflow core modules must not import API-layer modules: {violations}",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
