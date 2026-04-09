@@ -16,7 +16,7 @@ from orchestrator.core.codex_agents import (
     plan_discord_ask_intent_with_codex,
 )
 from orchestrator.core.runtime_invocation import AgentInvocationContext
-from orchestrator.core.codex_runtime import CodexRuntimeError, build_codex_runtime
+from orchestrator.core.codex_runtime import CodexRuntimeError
 from orchestrator.core.agent_runtime_resolver import build_runtime_for_selector
 from orchestrator.core.config import get_settings
 from orchestrator.core.pm_plugin_catalog import plugin_catalog_payload, tool_catalog_payload

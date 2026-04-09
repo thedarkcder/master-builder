@@ -64,7 +64,6 @@ def apply_decision_gate(
     tenant,
     settings,
     tenant_jira_oauth_context_fn,
-    evaluate_execution_readiness_fn=None,
     evaluate_worker_decision_fn=evaluate_worker_decision,
     send_discord_message_fn,
     send_jira_message_fn,
