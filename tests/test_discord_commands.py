@@ -22,7 +22,7 @@ from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.core.config import get_settings
 from orchestrator.core.decision_planner import DecisionPlannerQuestion, DecisionPlannerResult
 from orchestrator.core.decision_gate import DecisionGateResult
-from orchestrator.core.decision_types import ExecutionGateReason, ExecutionGateState
+from orchestrator.core.decision_types import ExecutionGateReason, ExecutionGateResolution, ExecutionGateState
 from orchestrator.core.decision_engine import DecisionEngineResult
 from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.pre_run_check import PreRunCheckResult
@@ -211,8 +211,7 @@ class DiscordCommandApiTests(unittest.TestCase):
             cycle_id=None,
             outbox_effect_ids=(),
             duplicate_event=False,
-            execution_gate_state=ExecutionGateState.ALLOW_EXECUTION,
-            execution_gate_reason=None,
+            execution_gate=ExecutionGateResolution(state=ExecutionGateState.ALLOW_EXECUTION),
         )
 
     def _missing_ready_decision_result(self) -> DecisionEngineResult:
@@ -233,11 +232,13 @@ class DiscordCommandApiTests(unittest.TestCase):
             cycle_id=None,
             outbox_effect_ids=(),
             duplicate_event=False,
-            execution_gate_state=ExecutionGateState.BLOCK_READY_LABEL,
-            execution_gate_reason=ExecutionGateReason(
-                reason_code="missing_ready_label",
-                guidance="Issue is missing the configured ready label.",
-                ready_label="agent:ready",
+            execution_gate=ExecutionGateResolution(
+                state=ExecutionGateState.BLOCK_READY_LABEL,
+                reason=ExecutionGateReason(
+                    reason_code="missing_ready_label",
+                    guidance="Issue is missing the configured ready label.",
+                    ready_label="agent:ready",
+                ),
             ),
         )
 

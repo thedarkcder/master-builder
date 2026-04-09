@@ -38,7 +38,6 @@ from orchestrator.core.decision_reply_service import (
 )
 from orchestrator.core.decision_planner import DecisionPlannerResult, plan_decision_questions
 from orchestrator.core.decision_state_repository import (
-    active_cycle as active_cycle_state,
     decision_gate_closed_cycle_id as decision_gate_closed_cycle_id_state,
     decision_gate_closed_permanently as decision_gate_closed_permanently_state,
     existing_case_for_issue as existing_case_for_issue_state,
@@ -726,7 +725,7 @@ def _build_decision_engine_result(
     outbox_effect_ids: tuple[str, ...],
     duplicate_event: bool,
 ) -> DecisionEngineResult:
-    execution_gate_state, execution_gate_reason = resolve_execution_gate_state(
+    execution_gate = resolve_execution_gate_state(
         decision=decision,
         classification=classification,
     )
@@ -741,8 +740,7 @@ def _build_decision_engine_result(
         cycle_id=cycle_id,
         outbox_effect_ids=outbox_effect_ids,
         duplicate_event=duplicate_event,
-        execution_gate_state=execution_gate_state,
-        execution_gate_reason=execution_gate_reason,
+        execution_gate=execution_gate,
     )
 
 

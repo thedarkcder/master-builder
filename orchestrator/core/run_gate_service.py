@@ -19,8 +19,8 @@ class RunGateBlock:
 
 
 def resolve_run_gate_block(*, decision_result: DecisionEngineResult) -> RunGateBlock | None:
-    gate_state = decision_result.execution_gate_state
-    gate_reason = decision_result.execution_gate_reason
+    gate_state = decision_result.execution_gate.state
+    gate_reason = decision_result.execution_gate.reason
     if gate_state == ExecutionGateState.ALLOW_EXECUTION:
         return None
     resolved_reason = _resolve_gate_reason(
