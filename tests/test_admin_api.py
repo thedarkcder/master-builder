@@ -204,6 +204,48 @@ class AdminApiTests(unittest.TestCase):
             )
             session.commit()
 
+    def _seed_runtime_binding_catalog(
+        self,
+        *,
+        persona_key: str = "runtime_persona",
+        agent_key: str = "runtime_agent",
+        runtime_role_key: str = "launch_strategy",
+        named_agent_key: str = "launch_strategy_primary",
+        selector_key: str = "team.launch.strategy",
+    ) -> None:
+        persona_response = self.client.post(
+            "/api/admin/platform-personas",
+            json={
+                "persona_key": persona_key,
+                "label": "Runtime Persona",
+                "description": "Test runtime persona.",
+                "default_display_name": "Riley",
+                "default_voice_id": "alloy",
+                "system_prompt_template": "prompts/runtime_persona_system.j2",
+                "user_prompt_template": "prompts/runtime_persona_user.j2",
+                "allowed_surfaces": ["team_run_execution", "discord_voice_room"],
+                "is_active": True,
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(persona_response.status_code, 201, persona_response.text)
+        agent_response = self.client.post(
+            "/api/admin/platform-agents",
+            json={
+                "agent_key": agent_key,
+                "label": "Runtime Agent",
+                "description": "Test runtime agent.",
+                "persona_key": persona_key,
+                "runtime_role_key": runtime_role_key,
+                "named_agent_key": named_agent_key,
+                "selector_key": selector_key,
+                "default_profile_name": "general_planning_default",
+                "is_active": True,
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(agent_response.status_code, 201, agent_response.text)
+
     def _seed_workflow_attempt(
         self,
         *,
@@ -264,6 +306,482 @@ class AdminApiTests(unittest.TestCase):
                     now=now,
                 )
             session.commit()
+
+    def _post_workflow_attempt(self, workflow_id: str, payload: dict):
+        with patch("orchestrator.core.runs.start_team_run_workflow_for_run"):
+            return self.client.post(
+                f"/api/admin/workflows/{workflow_id}/attempts",
+                json=payload,
+                auth=("admin", "secret"),
+            )
+
+    def test_platform_catalog_crud_publish_and_runtime_bindings_are_catalog_backed(self) -> None:
+        persona_response = self.client.post(
+            "/api/admin/platform-personas",
+            json={
+                "persona_key": "launch_strategist",
+                "label": "Launch Strategist",
+                "description": "Frames launch plans and priorities.",
+                "default_display_name": "Lana",
+                "default_voice_id": "marius",
+                "system_prompt_template": "prompts/launch_strategist_system.j2",
+                "user_prompt_template": "prompts/launch_strategist_user.j2",
+                "allowed_surfaces": ["team_run_execution", "discord_voice_room"],
+                "is_active": True,
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(persona_response.status_code, 201, persona_response.text)
+        persona = persona_response.json()
+
+        agent_response = self.client.post(
+            "/api/admin/platform-agents",
+            json={
+                "agent_key": "launch_strategy_agent",
+                "label": "Launch Strategy Agent",
+                "description": "Owns the strategy task for launch teams.",
+                "persona_key": "launch_strategist",
+                "runtime_role_key": "launch_strategy",
+                "named_agent_key": "launch_strategy_primary",
+                "selector_key": "team.launch.strategy",
+                "default_profile_name": "pm_conversation_default",
+                "is_active": True,
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(agent_response.status_code, 201, agent_response.text)
+        agent = agent_response.json()
+        self.assertEqual(agent["persona"]["persona_id"], persona["persona_id"])
+
+        template_response = self.client.post(
+            "/api/admin/platform-team-templates",
+            json={
+                "team_key": "launch_team",
+                "label": "Launch Team",
+                "description": "Cross-functional launch execution team.",
+                "is_active": True,
+                "roles": [
+                    {
+                        "role_key": "launch_strategy",
+                        "label": "Strategy",
+                        "description": "Sets launch direction.",
+                        "position": 1,
+                        "persona_key": "launch_strategist",
+                        "agent_key": "launch_strategy_agent",
+                    }
+                ],
+                "tasks": [
+                    {
+                        "task_key": "brief",
+                        "label": "Brief",
+                        "owner_role_key": "launch_strategy",
+                        "position": 1,
+                        "artifact_contract": {"produces": ["launch_brief"]},
+                        "approval_rule": {},
+                    },
+                    {
+                        "task_key": "research",
+                        "label": "Research",
+                        "owner_role_key": "launch_strategy",
+                        "position": 2,
+                        "artifact_contract": {"produces": ["research_notes"]},
+                        "approval_rule": {},
+                    },
+                    {
+                        "task_key": "message_map",
+                        "label": "Message Map",
+                        "owner_role_key": "launch_strategy",
+                        "position": 3,
+                        "artifact_contract": {"produces": ["message_map"]},
+                        "approval_rule": {},
+                    },
+                    {
+                        "task_key": "copy_draft",
+                        "label": "Copy Draft",
+                        "owner_role_key": "launch_strategy",
+                        "position": 4,
+                        "artifact_contract": {"produces": ["copy_draft"]},
+                        "approval_rule": {},
+                    },
+                    {
+                        "task_key": "launch_review",
+                        "label": "Launch Review",
+                        "owner_role_key": "launch_strategy",
+                        "position": 5,
+                        "artifact_contract": {"produces": ["launch_ready"]},
+                        "approval_rule": {"type": "manual"},
+                    },
+                ],
+                "edges": [
+                    {"from_task_key": "brief", "to_task_key": "research"},
+                    {"from_task_key": "research", "to_task_key": "message_map"},
+                    {"from_task_key": "message_map", "to_task_key": "copy_draft"},
+                    {"from_task_key": "copy_draft", "to_task_key": "launch_review"},
+                ],
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(template_response.status_code, 201, template_response.text)
+        template = template_response.json()
+        self.assertEqual([task["task_key"] for task in template["tasks"]], ["brief", "research", "message_map", "copy_draft", "launch_review"])
+
+        publish_response = self.client.post(
+            f"/api/admin/platform-team-templates/{template['template_id']}/publish",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(publish_response.status_code, 200, publish_response.text)
+        published = publish_response.json()
+        self.assertEqual(published["definition_version"], 2)
+        self.assertIsNotNone(published["published_at"])
+
+        bindings_response = self.client.get("/api/admin/platform-runtime-bindings", auth=("admin", "secret"))
+        self.assertEqual(bindings_response.status_code, 200, bindings_response.text)
+        bindings = bindings_response.json()
+        self.assertIn("launch_strategy", bindings["available_roles"])
+        self.assertIn("launch_strategy_primary", bindings["available_named_agents"])
+        self.assertIn("team.launch.strategy", bindings["available_selectors"])
+
+        runtimes_response = self.client.get("/api/admin/agent-runtimes", auth=("admin", "secret"))
+        self.assertEqual(runtimes_response.status_code, 200, runtimes_response.text)
+        runtimes = runtimes_response.json()
+        self.assertIn("launch_strategy", runtimes["available_roles"])
+        self.assertIn("launch_strategy_primary", runtimes["available_named_agents"])
+        self.assertIn("team.launch.strategy", runtimes["available_selectors"])
+        self.assertNotIn("pm", runtimes["available_roles"])
+        self.assertNotIn("voice_room_pm", runtimes["available_named_agents"])
+
+    def test_launch_team_run_snapshots_published_definition_and_stays_stable_after_catalog_edits(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201, create_tenant.text)
+
+        persona_response = self.client.post(
+            "/api/admin/platform-personas",
+            json={
+                "persona_key": "campaign_writer",
+                "label": "Campaign Writer",
+                "description": "Writes launch messaging.",
+                "default_display_name": "Cora",
+                "default_voice_id": "cosette",
+                "system_prompt_template": "prompts/campaign_writer_system.j2",
+                "user_prompt_template": "prompts/campaign_writer_user.j2",
+                "allowed_surfaces": ["team_run_execution"],
+                "is_active": True,
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(persona_response.status_code, 201, persona_response.text)
+
+        agent_response = self.client.post(
+            "/api/admin/platform-agents",
+            json={
+                "agent_key": "campaign_writer_agent",
+                "label": "Campaign Writer Agent",
+                "description": "Owns messaging tasks.",
+                "persona_key": "campaign_writer",
+                "runtime_role_key": "writer",
+                "named_agent_key": "campaign_writer_primary",
+                "selector_key": "team.launch.writer",
+                "default_profile_name": "workflow_dev_default",
+                "is_active": True,
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(agent_response.status_code, 201, agent_response.text)
+
+        template_response = self.client.post(
+            "/api/admin/platform-team-templates",
+            json={
+                "team_key": "campaign_team",
+                "label": "Campaign Team",
+                "description": "Creates and reviews launch messaging.",
+                "is_active": True,
+                "roles": [
+                    {
+                        "role_key": "writer",
+                        "label": "Writer",
+                        "description": "Writes campaign outputs.",
+                        "position": 1,
+                        "persona_key": "campaign_writer",
+                        "agent_key": "campaign_writer_agent",
+                    }
+                ],
+                "tasks": [
+                    {
+                        "task_key": "insight",
+                        "label": "Insight",
+                        "owner_role_key": "writer",
+                        "position": 1,
+                        "artifact_contract": {"produces": ["insight_note"]},
+                        "approval_rule": {},
+                    },
+                    {
+                        "task_key": "draft",
+                        "label": "Draft",
+                        "owner_role_key": "writer",
+                        "position": 2,
+                        "artifact_contract": {"produces": ["copy_draft"]},
+                        "approval_rule": {},
+                    },
+                ],
+                "edges": [{"from_task_key": "insight", "to_task_key": "draft"}],
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(template_response.status_code, 201, template_response.text)
+        template = template_response.json()
+
+        publish_response = self.client.post(
+            f"/api/admin/platform-team-templates/{template['template_id']}/publish",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(publish_response.status_code, 200, publish_response.text)
+        published = publish_response.json()
+
+        with patch("orchestrator.core.runs.start_team_run_workflow_for_run"):
+            launch_response = self.client.post(
+                f"/api/admin/platform-team-templates/{template['template_id']}/runs",
+                json={
+                    "tenant_id": "tenant-a",
+                    "project_id": "tenant-a-default",
+                    "issue_key": "TP-500",
+                    "issue_summary": "Launch campaign team run",
+                },
+                auth=("admin", "secret"),
+            )
+        self.assertEqual(launch_response.status_code, 201, launch_response.text)
+        launched = launch_response.json()
+        self.assertEqual(launched["team_run"]["team_key"], "campaign_team")
+        self.assertEqual(launched["team_run"]["definition_version"], published["definition_version"])
+        self.assertEqual(
+            [node["task_key"] for node in launched["team_run"]["nodes"]],
+            ["insight", "draft"],
+        )
+        self.assertEqual(
+            [node["status"] for node in launched["team_run"]["nodes"]],
+            ["ready", "pending"],
+        )
+
+        update_response = self.client.put(
+            f"/api/admin/platform-team-templates/{template['template_id']}",
+            json={
+                "label": "Campaign Team Updated",
+                "description": "Creates and reviews launch messaging.",
+                "is_active": True,
+                "roles": [
+                    {
+                        "role_key": "writer",
+                        "label": "Lead Writer",
+                        "description": "Writes campaign outputs.",
+                        "position": 1,
+                        "persona_key": "campaign_writer",
+                        "agent_key": "campaign_writer_agent",
+                    }
+                ],
+                "tasks": [
+                    {
+                        "task_key": "insight",
+                        "label": "Audience Insight",
+                        "owner_role_key": "writer",
+                        "position": 1,
+                        "artifact_contract": {"produces": ["insight_note"]},
+                        "approval_rule": {},
+                    },
+                    {
+                        "task_key": "draft",
+                        "label": "Draft",
+                        "owner_role_key": "writer",
+                        "position": 2,
+                        "artifact_contract": {"produces": ["copy_draft"]},
+                        "approval_rule": {},
+                    },
+                ],
+                "edges": [{"from_task_key": "insight", "to_task_key": "draft"}],
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(update_response.status_code, 200, update_response.text)
+
+        get_run_response = self.client.get(f"/api/admin/runs/{launched['run_id']}", auth=("admin", "secret"))
+        self.assertEqual(get_run_response.status_code, 200, get_run_response.text)
+        run_body = get_run_response.json()
+        self.assertEqual(run_body["team_run"]["team_label"], "Campaign Team")
+        self.assertEqual(run_body["team_run"]["nodes"][0]["label"], "Insight")
+
+    def test_team_run_task_completion_and_manual_approval_flow(self) -> None:
+        session_factory = create_session_factory(database_url=self.database_url)
+
+        persona_response = self.client.post(
+            "/api/admin/platform-personas",
+            json={
+                "persona_key": "launch_strategist",
+                "label": "Launch Strategist",
+                "description": "Owns campaign planning.",
+                "default_display_name": "Strategist",
+                "default_voice_id": None,
+                "system_prompt_template": "Plan the launch.",
+                "user_prompt_template": "Draft the launch plan.",
+                "allowed_surfaces": ["team_run_execution"],
+                "is_active": True,
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(persona_response.status_code, 201, persona_response.text)
+
+        agent_response = self.client.post(
+            "/api/admin/platform-agents",
+            json={
+                "agent_key": "launch_strategy_agent",
+                "label": "Launch Strategy Agent",
+                "description": "Runs launch tasks.",
+                "persona_key": "launch_strategist",
+                "runtime_role_key": "strategist",
+                "named_agent_key": "launch_strategy_agent",
+                "selector_key": "team.launch.strategist",
+                "default_profile_name": "pm_conversation_default",
+                "is_active": True,
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(agent_response.status_code, 201, agent_response.text)
+
+        template_response = self.client.post(
+            "/api/admin/platform-team-templates",
+            json={
+                "team_key": "campaign_team",
+                "label": "Campaign Team",
+                "description": "Creates launch messaging.",
+                "is_active": True,
+                "roles": [
+                    {
+                        "role_key": "strategist",
+                        "label": "Strategist",
+                        "description": "Owns launch planning.",
+                        "position": 1,
+                        "persona_key": "launch_strategist",
+                        "agent_key": "launch_strategy_agent",
+                    }
+                ],
+                "tasks": [
+                    {
+                        "task_key": "brief",
+                        "label": "Brief",
+                        "owner_role_key": "strategist",
+                        "position": 1,
+                        "artifact_contract": {"produces": ["launch_brief"]},
+                        "approval_rule": {},
+                    },
+                    {
+                        "task_key": "launch_review",
+                        "label": "Launch Review",
+                        "owner_role_key": "strategist",
+                        "position": 2,
+                        "artifact_contract": {"produces": ["launch_ready"]},
+                        "approval_rule": {"type": "manual"},
+                    },
+                ],
+                "edges": [{"from_task_key": "brief", "to_task_key": "launch_review"}],
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(template_response.status_code, 201, template_response.text)
+        template = template_response.json()
+
+        publish_response = self.client.post(
+            f"/api/admin/platform-team-templates/{template['template_id']}/publish",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(publish_response.status_code, 200, publish_response.text)
+
+        with patch("orchestrator.api.routes.admin_platform_catalog.complete_team_task_via_temporal") as complete_mock:
+            with patch("orchestrator.api.routes.admin_platform_catalog.submit_team_approval_via_temporal") as approve_mock:
+                from orchestrator.core.team_run_service import complete_team_task, submit_team_approval
+
+                def _complete_side_effect(*, settings, workflow_id, run_id, task_key, artifact_payload=None, summary=None):
+                    with session_factory() as session:
+                        run = complete_team_task(
+                            session=session,
+                            run_id=run_id,
+                            task_key=task_key,
+                            artifact_payload=artifact_payload,
+                            summary=summary,
+                        )
+                        team_run = ExecutionSnapshot.require(run.plan).context.execution_context["team_run"]
+                        return {
+                            "run_id": run_id,
+                            "task_key": task_key,
+                            "team_status": team_run["status"],
+                            "run_status": run.status,
+                        }
+
+                def _approve_side_effect(*, settings, workflow_id, run_id, task_key, decision, comment=None):
+                    with session_factory() as session:
+                        run = submit_team_approval(
+                            session=session,
+                            run_id=run_id,
+                            task_key=task_key,
+                            decision=decision,
+                            comment=comment,
+                        )
+                        team_run = ExecutionSnapshot.require(run.plan).context.execution_context["team_run"]
+                        return {
+                            "run_id": run_id,
+                            "task_key": task_key,
+                            "team_status": team_run["status"],
+                            "run_status": run.status,
+                        }
+
+                complete_mock.side_effect = _complete_side_effect
+                approve_mock.side_effect = _approve_side_effect
+
+                with patch("orchestrator.core.runs.start_team_run_workflow_for_run"):
+                    launch_response = self.client.post(
+                        f"/api/admin/platform-team-templates/{template['template_id']}/runs",
+                        json={
+                            "tenant_id": "tenant-a",
+                            "project_id": "tenant-a-default",
+                            "issue_key": "TP-777",
+                            "issue_summary": "Launch campaign team run",
+                        },
+                        auth=("admin", "secret"),
+                    )
+                self.assertEqual(launch_response.status_code, 201, launch_response.text)
+                launched = launch_response.json()
+
+                complete_brief = self.client.post(
+                    f"/api/admin/runs/{launched['run_id']}/team-tasks/brief/complete",
+                    json={"artifact_payload": {"brief": "approved"}, "summary": "Brief captured."},
+                    auth=("admin", "secret"),
+                )
+                self.assertEqual(complete_brief.status_code, 200, complete_brief.text)
+                completed_brief_body = complete_brief.json()
+                self.assertEqual(completed_brief_body["team_run"]["nodes"][0]["status"], "completed")
+                self.assertEqual(completed_brief_body["team_run"]["nodes"][1]["status"], "ready")
+
+                complete_review = self.client.post(
+                    f"/api/admin/runs/{launched['run_id']}/team-tasks/launch_review/complete",
+                    json={"artifact_payload": {"review": "ready"}, "summary": "Ready for approval."},
+                    auth=("admin", "secret"),
+                )
+                self.assertEqual(complete_review.status_code, 200, complete_review.text)
+                review_body = complete_review.json()
+                self.assertEqual(review_body["team_run"]["nodes"][1]["status"], "awaiting_approval")
+                self.assertEqual(review_body["team_run"]["approvals"][0]["status"], "pending")
+
+                approve_review = self.client.post(
+                    f"/api/admin/runs/{launched['run_id']}/team-tasks/launch_review/approvals",
+                    json={"decision": "approved", "comment": "Ship it."},
+                    auth=("admin", "secret"),
+                )
+                self.assertEqual(approve_review.status_code, 200, approve_review.text)
+                approved_body = approve_review.json()
+                self.assertEqual(approved_body["status"], "succeeded")
+                self.assertEqual(approved_body["team_run"]["status"], "succeeded")
+                self.assertEqual(
+                    [node["status"] for node in approved_body["team_run"]["nodes"]],
+                    ["completed", "completed"],
+                )
 
     def _persist_run(self, session, *, workflow_status: str | None = None, **run_kwargs) -> Run:
         run = make_run(**run_kwargs)
@@ -397,16 +915,13 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(body["role_routing"], {})
         self.assertEqual(body["name_routing"], {})
         self.assertEqual(body["selector_routing"], {})
-        self.assertIn("pm", body["available_roles"])
-        self.assertIn("voice_room_pm", body["available_named_agents"])
-        self.assertNotIn("discord.voice_entry_router", body["available_named_agents"])
-        self.assertIn("discord.voice_entry_router", body["available_selectors"])
-        self.assertIn("workflow.standup_voice_brief", body["available_selectors"])
-        self.assertIn("workflow.retro_voice_brief", body["available_selectors"])
+        self.assertEqual(body["available_roles"], [])
+        self.assertEqual(body["available_named_agents"], [])
+        self.assertEqual(body["available_selectors"], [])
         self.assertIn("pm_conversation_fast", body["available_profiles"])
-        self.assertEqual(body["effective_defaults"]["role_routing"]["pm"], "pm_conversation_default")
-        self.assertEqual(body["effective_defaults"]["name_routing"]["workflow_dev_default"], "engineering_execution_default")
-        self.assertEqual(body["effective_defaults"]["selector_routing"]["discord.voice_room_pm"], "pm_conversation")
+        self.assertEqual(body["effective_defaults"]["role_routing"], {})
+        self.assertEqual(body["effective_defaults"]["name_routing"], {})
+        self.assertEqual(body["effective_defaults"]["selector_routing"], {})
 
     def test_agent_runtime_tools_catalog_response(self) -> None:
         response = self.client.get("/api/admin/agent-runtime-tools", auth=("admin", "secret"))
@@ -520,55 +1035,39 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(response.json()["reasoning_effort"], "high")
 
     def test_agent_runtime_routes_upsert_and_reset(self) -> None:
+        self._seed_runtime_binding_catalog()
         put_response = self.client.put(
             "/api/admin/agent-runtimes",
             json={
-                "role_routing": {"pm": "pm_conversation_fast"},
-                "name_routing": {"workflow_review_default": "engineering_execution_deep"},
+                "role_routing": {"launch_strategy": "pm_conversation_fast"},
+                "name_routing": {"launch_strategy_primary": "engineering_execution_deep"},
                 "selector_routing": {
-                    "discord.voice_room_pm": "pm_conversation_fast",
-                    "workflow.standup_voice_brief": "general_planning_default",
-                    "workflow.retro_voice_brief": "general_planning_default",
+                    "team.launch.strategy": "general_planning_default",
                 },
             },
             auth=("admin", "secret"),
         )
         self.assertEqual(put_response.status_code, 200)
         body = put_response.json()
-        self.assertEqual(body["role_routing"]["pm"], "pm_conversation_fast")
-        self.assertEqual(body["name_routing"]["workflow_review_default"], "engineering_execution_deep")
-        self.assertEqual(body["selector_routing"]["discord.voice_room_pm"], "pm_conversation_fast")
-        self.assertEqual(body["selector_routing"]["workflow.standup_voice_brief"], "general_planning_default")
-        self.assertEqual(body["selector_routing"]["workflow.retro_voice_brief"], "general_planning_default")
+        self.assertEqual(body["role_routing"]["launch_strategy"], "pm_conversation_fast")
+        self.assertEqual(body["name_routing"]["launch_strategy_primary"], "engineering_execution_deep")
+        self.assertEqual(body["selector_routing"]["team.launch.strategy"], "general_planning_default")
 
         get_response = self.client.get("/api/admin/agent-runtimes", auth=("admin", "secret"))
         self.assertEqual(get_response.status_code, 200)
-        self.assertEqual(get_response.json()["role_routing"]["pm"], "pm_conversation_fast")
-        self.assertEqual(get_response.json()["selector_routing"]["discord.voice_room_pm"], "pm_conversation_fast")
         self.assertEqual(
-            get_response.json()["selector_routing"]["workflow.standup_voice_brief"],
-            "general_planning_default",
+            get_response.json()["role_routing"]["launch_strategy"],
+            "pm_conversation_fast",
         )
-        self.assertEqual(
-            get_response.json()["selector_routing"]["workflow.retro_voice_brief"],
-            "general_planning_default",
-        )
+        self.assertEqual(get_response.json()["selector_routing"]["team.launch.strategy"], "general_planning_default")
 
         session_factory = create_session_factory(self.database_url)
         with session_factory() as session:
             row = session.get(PlatformSetting, "agent_runtime_routing")
             self.assertIsNotNone(row)
-            self.assertEqual(row.value_json["role_routing"]["pm"], "pm_conversation_fast")
-            self.assertEqual(row.value_json["name_routing"]["workflow_review_default"], "engineering_execution_deep")
-            self.assertEqual(row.value_json["selector_routing"]["discord.voice_room_pm"], "pm_conversation_fast")
-            self.assertEqual(
-                row.value_json["selector_routing"]["workflow.standup_voice_brief"],
-                "general_planning_default",
-            )
-            self.assertEqual(
-                row.value_json["selector_routing"]["workflow.retro_voice_brief"],
-                "general_planning_default",
-            )
+            self.assertEqual(row.value_json["role_routing"]["launch_strategy"], "pm_conversation_fast")
+            self.assertEqual(row.value_json["name_routing"]["launch_strategy_primary"], "engineering_execution_deep")
+            self.assertEqual(row.value_json["selector_routing"]["team.launch.strategy"], "general_planning_default")
 
         reset_response = self.client.post("/api/admin/agent-runtimes/reset", auth=("admin", "secret"))
         self.assertEqual(reset_response.status_code, 200)
@@ -577,11 +1076,12 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(reset_response.json()["selector_routing"], {})
 
     def test_agent_runtime_routes_reject_unknown_role_and_profile(self) -> None:
+        self._seed_runtime_binding_catalog()
         response = self.client.put(
             "/api/admin/agent-runtimes",
             json={
                 "role_routing": {"unknown-role": "pm_conversation_fast"},
-                "name_routing": {"workflow_review_default": "missing-profile"},
+                "name_routing": {"launch_strategy_primary": "missing-profile"},
             },
             auth=("admin", "secret"),
         )
@@ -600,6 +1100,13 @@ class AdminApiTests(unittest.TestCase):
         self.assertIn("Unknown selector", response.text)
 
     def test_agent_runtime_routes_normalize_legacy_voice_router_selector(self) -> None:
+        self._seed_runtime_binding_catalog(
+            persona_key="voice_router_persona",
+            agent_key="voice_router_agent",
+            runtime_role_key="voice_router_role",
+            named_agent_key="voice_router_agent_primary",
+            selector_key="discord.voice_entry_router",
+        )
         response = self.client.put(
             "/api/admin/agent-runtimes",
             json={
@@ -1705,11 +2212,7 @@ class AdminApiTests(unittest.TestCase):
             pending_request_id="request-waiting-1",
         )
 
-        response = self.client.post(
-            "/api/admin/workflows/workflow-waiting-1/attempts",
-            json={"mode": "resume", "checkpoint_kind": "pm"},
-            auth=("admin", "secret"),
-        )
+        response = self._post_workflow_attempt("workflow-waiting-1", {"mode": "resume", "checkpoint_kind": "pm"})
         self.assertEqual(response.status_code, 201, response.text)
         body = response.json()
         self.assertEqual(body["workflow_id"], "workflow-waiting-1")
@@ -1748,10 +2251,9 @@ class AdminApiTests(unittest.TestCase):
             pending_request_id="request-waiting-restart-rejected-1",
         )
 
-        response = self.client.post(
-            "/api/admin/workflows/workflow-waiting-restart-rejected-1/attempts",
-            json={"mode": "restart", "checkpoint_kind": "pm"},
-            auth=("admin", "secret"),
+        response = self._post_workflow_attempt(
+            "workflow-waiting-restart-rejected-1",
+            {"mode": "restart", "checkpoint_kind": "pm"},
         )
         self.assertEqual(response.status_code, 409, response.text)
 
@@ -1772,11 +2274,7 @@ class AdminApiTests(unittest.TestCase):
             checkpoint_kind="execution",
         )
 
-        response = self.client.post(
-            "/api/admin/workflows/workflow-terminal-1/attempts",
-            json={"mode": "restart", "checkpoint_kind": "execution"},
-            auth=("admin", "secret"),
-        )
+        response = self._post_workflow_attempt("workflow-terminal-1", {"mode": "restart", "checkpoint_kind": "execution"})
         self.assertEqual(response.status_code, 201, response.text)
         body = response.json()
         self.assertNotEqual(body["workflow_id"], "workflow-terminal-1")
@@ -1821,11 +2319,7 @@ class AdminApiTests(unittest.TestCase):
             source_run.plan = snapshot.dump()
             session.commit()
 
-        response = self.client.post(
-            "/api/admin/workflows/workflow-terminal-fresh-1/attempts",
-            json={"mode": "fresh"},
-            auth=("admin", "secret"),
-        )
+        response = self._post_workflow_attempt("workflow-terminal-fresh-1", {"mode": "fresh"})
         self.assertEqual(response.status_code, 201, response.text)
         body = response.json()
         self.assertNotEqual(body["workflow_id"], "workflow-terminal-fresh-1")
@@ -1876,11 +2370,7 @@ class AdminApiTests(unittest.TestCase):
             checkpoint_kind="execution",
         )
 
-        response = self.client.post(
-            "/api/admin/workflows/workflow-blocked-fresh-1/attempts",
-            json={"mode": "fresh"},
-            auth=("admin", "secret"),
-        )
+        response = self._post_workflow_attempt("workflow-blocked-fresh-1", {"mode": "fresh"})
         self.assertEqual(response.status_code, 201, response.text)
         body = response.json()
         self.assertNotEqual(body["workflow_id"], "workflow-blocked-fresh-1")
@@ -1915,11 +2405,7 @@ class AdminApiTests(unittest.TestCase):
             checkpoint_kind="pm",
         )
 
-        response = self.client.post(
-            "/api/admin/workflows/workflow-terminal-fresh-invalid/attempts",
-            json={"mode": "fresh", "checkpoint_kind": "pm"},
-            auth=("admin", "secret"),
-        )
+        response = self._post_workflow_attempt("workflow-terminal-fresh-invalid", {"mode": "fresh", "checkpoint_kind": "pm"})
         self.assertEqual(response.status_code, 422, response.text)
 
     def test_cancel_active_run_from_admin(self) -> None:

@@ -7,6 +7,7 @@ from orchestrator.core.dashboard_links import admin_run_url
 from orchestrator.core.project_policy import resolve_effective_policy
 from orchestrator.core.runs import RUN_STATUS_WAITING_FOR_INPUT
 from orchestrator.core.run_logs import record_run_log_event
+from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.core.worker.finalization import CompletionTailExecutor, WorkflowFinalizer
 from orchestrator.core.worker_capabilities import (
     resolve_worker_capability_context,
@@ -45,6 +46,15 @@ def _emit_queue_wait_metric(*, session, run, project_id: str | None, agent_id: s
         ),
     )
     session.commit()
+
+
+def _is_team_run(run) -> bool:  # noqa: ANN001
+    if str(getattr(run, "entry_stage", "") or "").strip().lower() == "team":
+        return True
+    snapshot = ExecutionSnapshot.load(getattr(run, "plan", None))
+    if snapshot is None:
+        return False
+    return isinstance(snapshot.context.execution_context.get("team_run"), dict)
 
 
 def process_next_queued_run(
@@ -91,6 +101,198 @@ def process_next_queued_run(
     run_status_blocked: str,
     run_status_cancelled: str,
 ):  # noqa: ANN001
+    return _process_queued_run(
+        session=session,
+        runner=runner,
+        logger=logger,
+        settings_fn=settings_fn,
+        claim_selection_fn=lambda *, session, worker_service_instance_id, worker_capabilities: claim_next_queued_run_fn(
+            session,
+            queued_status=run_status_queued,
+            running_status=run_status_running,
+            failed_status=run_status_failed,
+            worker_service_instance_id=worker_service_instance_id,
+            worker_capabilities=worker_capabilities,
+        ),
+        apply_decision_gate_fn=apply_decision_gate_fn,
+        send_discord_message_fn=send_discord_message_fn,
+        send_jira_message_fn=send_jira_message_fn,
+        ask_reply_components_fn=ask_reply_components_fn,
+        resolve_project_for_run_fn=resolve_project_for_run_fn,
+        fail_missing_project_mapping_fn=fail_missing_project_mapping_fn,
+        block_archived_project_fn=block_archived_project_fn,
+        ensure_project_repository_checkout_fn=ensure_project_repository_checkout_fn,
+        fail_project_repository_checkout_fn=fail_project_repository_checkout_fn,
+        cleanup_run_workspaces_fn=cleanup_run_workspaces_fn,
+        build_run_heartbeat_controller_fn=build_run_heartbeat_controller_fn,
+        bind_run_project_fn=bind_run_project_fn,
+        workflow_request_for_run_fn=workflow_request_for_run_fn,
+        fail_guardrail_violation_fn=fail_guardrail_violation_fn,
+        tenant_jira_issue_url_fn=tenant_jira_issue_url_fn,
+        lock_acquired_update_fn=lock_acquired_update_fn,
+        plan_posted_update_fn=plan_posted_update_fn,
+        pr_opened_update_fn=pr_opened_update_fn,
+        run_failed_update_fn=run_failed_update_fn,
+        run_requeued_capability_update_fn=run_requeued_capability_update_fn,
+        run_requeued_stale_snapshot_update_fn=run_requeued_stale_snapshot_update_fn,
+        finalize_cancelled_run_fn=finalize_cancelled_run_fn,
+        finalize_workflow_result_fn=finalize_workflow_result_fn,
+        persist_stage_checkpoint_fn=persist_stage_checkpoint_fn,
+        requeue_workflow_result_for_capability_fn=requeue_workflow_result_for_capability_fn,
+        requeue_workflow_result_for_stale_snapshot_fn=requeue_workflow_result_for_stale_snapshot_fn,
+        check_run_snapshot_freshness_fn=check_run_snapshot_freshness_fn,
+        transition_issue_status_fn=transition_issue_status_fn,
+        emit_agent_event_fn=emit_agent_event_fn,
+        resolve_agent_id_fn=resolve_agent_id_fn,
+        resolve_worker_service_instance_id_fn=resolve_worker_service_instance_id_fn,
+        run_status_running=run_status_running,
+        run_status_failed=run_status_failed,
+        run_status_blocked=run_status_blocked,
+        run_status_cancelled=run_status_cancelled,
+    )
+
+
+def process_queued_run_by_id(
+    *,
+    session,
+    runner,
+    run_id: str,
+    logger,
+    settings_fn,
+    claim_queued_run_by_id_fn,
+    apply_decision_gate_fn,
+    send_discord_message_fn,
+    send_jira_message_fn,
+    ask_reply_components_fn,
+    resolve_project_for_run_fn,
+    fail_missing_project_mapping_fn,
+    block_archived_project_fn,
+    ensure_project_repository_checkout_fn,
+    fail_project_repository_checkout_fn,
+    cleanup_run_workspaces_fn,
+    build_run_heartbeat_controller_fn,
+    bind_run_project_fn,
+    workflow_request_for_run_fn,
+    fail_guardrail_violation_fn,
+    tenant_jira_issue_url_fn,
+    lock_acquired_update_fn,
+    plan_posted_update_fn,
+    pr_opened_update_fn,
+    run_failed_update_fn,
+    run_requeued_capability_update_fn,
+    run_requeued_stale_snapshot_update_fn,
+    finalize_cancelled_run_fn,
+    finalize_workflow_result_fn,
+    persist_stage_checkpoint_fn,
+    requeue_workflow_result_for_capability_fn,
+    requeue_workflow_result_for_stale_snapshot_fn,
+    check_run_snapshot_freshness_fn,
+    transition_issue_status_fn,
+    emit_agent_event_fn,
+    resolve_agent_id_fn,
+    resolve_worker_service_instance_id_fn,
+    run_status_queued: str,
+    run_status_running: str,
+    run_status_failed: str,
+    run_status_blocked: str,
+    run_status_cancelled: str,
+):  # noqa: ANN001
+    return _process_queued_run(
+        session=session,
+        runner=runner,
+        logger=logger,
+        settings_fn=settings_fn,
+        claim_selection_fn=lambda *, session, worker_service_instance_id, worker_capabilities: claim_queued_run_by_id_fn(
+            session,
+            run_id=run_id,
+            queued_status=run_status_queued,
+            running_status=run_status_running,
+            failed_status=run_status_failed,
+            worker_service_instance_id=worker_service_instance_id,
+            worker_capabilities=worker_capabilities,
+            allow_temporal_owned=True,
+        ),
+        apply_decision_gate_fn=apply_decision_gate_fn,
+        send_discord_message_fn=send_discord_message_fn,
+        send_jira_message_fn=send_jira_message_fn,
+        ask_reply_components_fn=ask_reply_components_fn,
+        resolve_project_for_run_fn=resolve_project_for_run_fn,
+        fail_missing_project_mapping_fn=fail_missing_project_mapping_fn,
+        block_archived_project_fn=block_archived_project_fn,
+        ensure_project_repository_checkout_fn=ensure_project_repository_checkout_fn,
+        fail_project_repository_checkout_fn=fail_project_repository_checkout_fn,
+        cleanup_run_workspaces_fn=cleanup_run_workspaces_fn,
+        build_run_heartbeat_controller_fn=build_run_heartbeat_controller_fn,
+        bind_run_project_fn=bind_run_project_fn,
+        workflow_request_for_run_fn=workflow_request_for_run_fn,
+        fail_guardrail_violation_fn=fail_guardrail_violation_fn,
+        tenant_jira_issue_url_fn=tenant_jira_issue_url_fn,
+        lock_acquired_update_fn=lock_acquired_update_fn,
+        plan_posted_update_fn=plan_posted_update_fn,
+        pr_opened_update_fn=pr_opened_update_fn,
+        run_failed_update_fn=run_failed_update_fn,
+        run_requeued_capability_update_fn=run_requeued_capability_update_fn,
+        run_requeued_stale_snapshot_update_fn=run_requeued_stale_snapshot_update_fn,
+        finalize_cancelled_run_fn=finalize_cancelled_run_fn,
+        finalize_workflow_result_fn=finalize_workflow_result_fn,
+        persist_stage_checkpoint_fn=persist_stage_checkpoint_fn,
+        requeue_workflow_result_for_capability_fn=requeue_workflow_result_for_capability_fn,
+        requeue_workflow_result_for_stale_snapshot_fn=requeue_workflow_result_for_stale_snapshot_fn,
+        check_run_snapshot_freshness_fn=check_run_snapshot_freshness_fn,
+        transition_issue_status_fn=transition_issue_status_fn,
+        emit_agent_event_fn=emit_agent_event_fn,
+        resolve_agent_id_fn=resolve_agent_id_fn,
+        resolve_worker_service_instance_id_fn=resolve_worker_service_instance_id_fn,
+        run_status_running=run_status_running,
+        run_status_failed=run_status_failed,
+        run_status_blocked=run_status_blocked,
+        run_status_cancelled=run_status_cancelled,
+    )
+
+
+def _process_queued_run(
+    *,
+    session,
+    runner,
+    logger,
+    settings_fn,
+    claim_selection_fn,
+    apply_decision_gate_fn,
+    send_discord_message_fn,
+    send_jira_message_fn,
+    ask_reply_components_fn,
+    resolve_project_for_run_fn,
+    fail_missing_project_mapping_fn,
+    block_archived_project_fn,
+    ensure_project_repository_checkout_fn,
+    fail_project_repository_checkout_fn,
+    cleanup_run_workspaces_fn,
+    build_run_heartbeat_controller_fn,
+    bind_run_project_fn,
+    workflow_request_for_run_fn,
+    fail_guardrail_violation_fn,
+    tenant_jira_issue_url_fn,
+    lock_acquired_update_fn,
+    plan_posted_update_fn,
+    pr_opened_update_fn,
+    run_failed_update_fn,
+    run_requeued_capability_update_fn,
+    run_requeued_stale_snapshot_update_fn,
+    finalize_cancelled_run_fn,
+    finalize_workflow_result_fn,
+    persist_stage_checkpoint_fn,
+    requeue_workflow_result_for_capability_fn,
+    requeue_workflow_result_for_stale_snapshot_fn,
+    check_run_snapshot_freshness_fn,
+    transition_issue_status_fn,
+    emit_agent_event_fn,
+    resolve_agent_id_fn,
+    resolve_worker_service_instance_id_fn,
+    run_status_running: str,
+    run_status_failed: str,
+    run_status_blocked: str,
+    run_status_cancelled: str,
+):  # noqa: ANN001
     settings = settings_fn()
     try:
         capability_context = resolve_worker_capability_context(
@@ -103,11 +305,8 @@ def process_next_queued_run(
     worker_workspace_key = resolve_worker_workspace_key(settings=settings)
     agent_id = resolve_agent_id_fn()
     worker_service_instance_id = resolve_worker_service_instance_id_fn()
-    selection = claim_next_queued_run_fn(
-        session,
-        queued_status=run_status_queued,
-        running_status=run_status_running,
-        failed_status=run_status_failed,
+    selection = claim_selection_fn(
+        session=session,
         worker_service_instance_id=worker_service_instance_id,
         worker_capabilities=set(capability_context.available),
     )
@@ -117,6 +316,13 @@ def process_next_queued_run(
         return None
     run = selection.run
     tenant = selection.tenant
+
+    if _is_team_run(run):
+        return fail_guardrail_violation_fn(
+            session,
+            run=run,
+            error="Team runs are Temporal-owned and cannot be processed by the legacy worker service.",
+        )
 
     emit_agent_event_fn(
         event_type="ISSUE_ASSIGNED",

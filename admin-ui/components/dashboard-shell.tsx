@@ -387,8 +387,9 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
     needsOnboarding &&
     pathname !== "/get-started" &&
     !pathname.startsWith("/tenants/new") &&
+    !pathname.startsWith("/platform-teams") &&
     !pathname.startsWith("/agent-runtimes") &&
-    !/^\/(?!tenants(?:\/|$)|runs(?:\/|$)|dashboard(?:\/|$)|status(?:\/|$)|secrets(?:\/|$)|agent-runtimes(?:\/|$)|login(?:\/|$)|register(?:\/|$)|invite(?:\/|$)|get-started(?:\/|$)|forgot-password(?:\/|$)|reset-password(?:\/|$)|api(?:\/|$))[^/]+\/settings(\/|$)/.test(pathname)
+    !/^\/(?!tenants(?:\/|$)|runs(?:\/|$)|dashboard(?:\/|$)|status(?:\/|$)|secrets(?:\/|$)|platform-teams(?:\/|$)|agent-runtimes(?:\/|$)|login(?:\/|$)|register(?:\/|$)|invite(?:\/|$)|get-started(?:\/|$)|forgot-password(?:\/|$)|reset-password(?:\/|$)|api(?:\/|$))[^/]+\/settings(\/|$)/.test(pathname)
   ) {
     return <main className="p-8 text-sm text-muted-foreground">Redirecting to onboarding...</main>;
   }
@@ -411,6 +412,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   const globalNavItems: NavItem[] = [
     { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
     { href: "/status", label: "Status", icon: Activity },
+    ...(isPlatformSuperAdmin ? [{ href: "/platform-teams", label: "Team catalog", icon: Users }] : []),
     ...(isPlatformSuperAdmin ? [{ href: "/agent-runtimes", label: "Agent runtimes", icon: Cpu }] : []),
     { href: "/tenants/select", label: "Tenants", icon: Building2 },
     { href: "/secrets", label: "Secrets", icon: KeyRound }

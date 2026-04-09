@@ -1,19 +1,12 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from uuid import uuid4
-
 from fastapi import HTTPException, status
 from sqlalchemy import desc, or_, select
 
+from orchestrator.core.runs import RunBootstrap, RunStateTransitionError, enqueue_run
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.core.workflow.transitions import ATTEMPT_ENTRY_MODES, attempt_creation_policy
 from orchestrator.storage.models import Project, Run, RunHumanInputRequest, WorkflowCheckpoint, WorkflowExecution
-from orchestrator.storage.run_queue_events import notify_run_enqueued
-
-
-def _now() -> datetime:
-    return datetime.now(timezone.utc)
 
 
 def _latest_checkpoint_for_kind(*, session, workflow_id: str, checkpoint_kind: str) -> WorkflowCheckpoint | None:  # noqa: ANN001
@@ -121,9 +114,15 @@ def _cancel_open_input_requests(*, session, workflow_id: str) -> None:  # noqa: 
         request.status = "cancelled"
 
 
-def _next_attempt_number(*, session, workflow_id: str) -> int:  # noqa: ANN001
-    existing_runs = _workflow_runs(session=session, workflow_id=workflow_id)
-    return (max((run.attempt_number for run in existing_runs), default=0) or 0) + 1
+def _resume_plan(*, source_run: Run | None, selected_checkpoint: WorkflowCheckpoint | None) -> dict[str, object]:
+    for candidate in (
+        getattr(source_run, "plan", None),
+        getattr(selected_checkpoint, "payload_json", None),
+    ):
+        snapshot = ExecutionSnapshot.load(candidate)
+        if snapshot is not None:
+            return snapshot.dump()
+    return ExecutionSnapshot.empty().dump()
 
 
 def list_workflows(
@@ -231,78 +230,44 @@ def create_workflow_attempt(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Project {project.project_id} is archived")
 
     same_workflow = creation_policy.reuse_workflow
+    if same_workflow:
+        _cancel_open_input_requests(session=session, workflow_id=workflow.workflow_id)
 
-    now = _now()
-    next_workflow = workflow
-    if not same_workflow:
-        next_workflow = WorkflowExecution(
-            workflow_id=str(uuid4()),
+    bootstrap = RunBootstrap(
+        plan=_fresh_start_plan(source_run=source_run) if normalized_mode == "fresh" else _resume_plan(
+            source_run=source_run,
+            selected_checkpoint=selected_checkpoint,
+        ),
+        branch=None if normalized_mode == "fresh" else workflow.branch,
+        pr_url=None if normalized_mode == "fresh" else workflow.pr_url,
+        workflow_id=workflow.workflow_id if same_workflow else None,
+        source_workflow_id=None if same_workflow else workflow.workflow_id,
+        parent_run_id=(
+            source_run.run_id
+            if normalized_mode == "fresh" and source_run is not None
+            else selected_checkpoint.run_id if selected_checkpoint is not None else None
+        ),
+        entry_mode=normalized_mode,
+        entry_stage=None if normalized_mode == "fresh" else selected_checkpoint.stage,
+        entry_checkpoint_id=None if normalized_mode == "fresh" else selected_checkpoint.checkpoint_id,
+    )
+    try:
+        enqueue_result = enqueue_run(
+            session,
             tenant_id=workflow.tenant_id,
             project_id=project.project_id,
             issue_key=workflow.issue_key,
             issue_summary=workflow.issue_summary,
             issue_description=workflow.issue_description,
             repo_url=workflow.repo_url,
-            branch=None if normalized_mode == "fresh" else workflow.branch,
-            pr_url=None if normalized_mode == "fresh" else workflow.pr_url,
             dedupe_scope=workflow.dedupe_scope,
-            status="queued",
-            last_error=None,
-            active_run_id=None,
-            latest_checkpoint_id=selected_checkpoint.checkpoint_id if selected_checkpoint is not None else None,
-            source_workflow_id=workflow.workflow_id,
-            source_run_id=(source_run.run_id if normalized_mode == "fresh" and source_run is not None else selected_checkpoint.run_id),
-            blocked_reason=None,
-            created_at=now,
-            started_at=None,
-            finished_at=None,
-            updated_at=now,
+            bootstrap=bootstrap,
         )
-        session.add(next_workflow)
-    else:
-        _cancel_open_input_requests(session=session, workflow_id=workflow.workflow_id)
-        next_workflow.status = "queued"
-        next_workflow.last_error = None
-        next_workflow.blocked_reason = None
-        next_workflow.finished_at = None
-        next_workflow.latest_checkpoint_id = selected_checkpoint.checkpoint_id if selected_checkpoint is not None else None
-        next_workflow.updated_at = now
-
-    next_run = Run(
-        run_id=str(uuid4()),
-        workflow_id=next_workflow.workflow_id,
-        tenant_id=next_workflow.tenant_id,
-        project_id=project.project_id,
-        issue_key=next_workflow.issue_key,
-        issue_summary=next_workflow.issue_summary,
-        issue_description=next_workflow.issue_description,
-        repo_url=next_workflow.repo_url,
-        branch=next_workflow.branch,
-        pr_url=next_workflow.pr_url,
-        attempt_number=1 if not same_workflow else _next_attempt_number(session=session, workflow_id=workflow.workflow_id),
-        parent_run_id=(source_run.run_id if normalized_mode == "fresh" and source_run is not None else selected_checkpoint.run_id if selected_checkpoint is not None else None),
-        entry_mode=normalized_mode,
-        entry_stage="orchestrated" if normalized_mode == "fresh" else selected_checkpoint.stage,
-        entry_checkpoint_id=None if normalized_mode == "fresh" else selected_checkpoint.checkpoint_id,
-        dedupe_scope=next_workflow.dedupe_scope,
-        status="queued",
-        last_error=None,
-        plan=_fresh_start_plan(source_run=source_run) if normalized_mode == "fresh" else dict(selected_checkpoint.payload_json or {}),
-        created_at=now,
-        started_at=None,
-        last_heartbeat_at=None,
-        worker_service_instance_id=None,
-        finished_at=None,
-    )
-    session.add(next_run)
-    next_workflow.active_run_id = next_run.run_id
-    notify_run_enqueued(
-        session,
-        tenant_id=next_workflow.tenant_id,
-        project_id=next_workflow.project_id,
-        run_id=next_run.run_id,
-        issue_key=next_workflow.issue_key,
-    )
-    session.commit()
-    session.refresh(next_run)
-    return run_to_schema_fn(next_run)
+    except RunStateTransitionError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    if not enqueue_result.enqueued:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Unable to create workflow attempt: {enqueue_result.reason}",
+        )
+    return run_to_schema_fn(enqueue_result.run)

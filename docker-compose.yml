@@ -4,6 +4,12 @@ x-extra_hosts_host_gateway: &extra_hosts_host_gateway
   extra_hosts:
     - "host.docker.internal:host-gateway"
 
+x-orchestrator-temporal-env: &orchestrator_temporal_env
+  ORCHESTRATOR_ORCHESTRATION_BACKEND: ${ORCHESTRATOR_ORCHESTRATION_BACKEND:-legacy}
+  ORCHESTRATOR_TEMPORAL_TARGET_HOST: ${ORCHESTRATOR_TEMPORAL_TARGET_HOST:-temporal:7233}
+  ORCHESTRATOR_TEMPORAL_NAMESPACE: ${ORCHESTRATOR_TEMPORAL_NAMESPACE:-default}
+  ORCHESTRATOR_TEMPORAL_TASK_QUEUE: ${ORCHESTRATOR_TEMPORAL_TASK_QUEUE:-master-builder}
+
 services:
   postgres:
     image: pgvector/pgvector:pg16
@@ -45,6 +51,54 @@ services:
       timeout: 5s
       retries: 20
 
+  temporal-postgres:
+    image: postgres:16-alpine
+    container_name: master-builder-temporal-postgres
+    profiles: ["temporal"]
+    environment:
+      POSTGRES_DB: ${TEMPORAL_POSTGRES_DB:-temporal}
+      POSTGRES_USER: ${TEMPORAL_POSTGRES_USER:-temporal}
+      POSTGRES_PASSWORD: ${TEMPORAL_POSTGRES_PASSWORD:-temporal}
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U ${TEMPORAL_POSTGRES_USER:-temporal} -d ${TEMPORAL_POSTGRES_DB:-temporal}
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - temporal-postgres-data:/var/lib/postgresql/data
+
+  temporal:
+    image: ${TEMPORAL_SERVER_IMAGE:-temporalio/auto-setup:latest}
+    container_name: master-builder-temporal
+    profiles: ["temporal"]
+    depends_on:
+      temporal-postgres:
+        condition: service_healthy
+    environment:
+      DB: postgres12
+      DB_PORT: 5432
+      POSTGRES_USER: ${TEMPORAL_POSTGRES_USER:-temporal}
+      POSTGRES_PWD: ${TEMPORAL_POSTGRES_PASSWORD:-temporal}
+      POSTGRES_SEEDS: temporal-postgres
+      DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/development-sql.yaml
+    ports:
+      - "7233:7233"
+
+  temporal-ui:
+    image: ${TEMPORAL_UI_IMAGE:-temporalio/ui:latest}
+    container_name: master-builder-temporal-ui
+    profiles: ["temporal"]
+    depends_on:
+      temporal:
+        condition: service_started
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_UI_PORT: 8080
+    ports:
+      - "8233:8080"
+
   api:
     <<: *extra_hosts_host_gateway
     build:
@@ -55,6 +109,7 @@ services:
         CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
     container_name: master-builder-api
     environment:
+      <<: *orchestrator_temporal_env
       ORCHESTRATOR_ADMIN_USERNAME: ${ORCHESTRATOR_ADMIN_USERNAME:-admin}
       ORCHESTRATOR_ADMIN_PASSWORD: ${ORCHESTRATOR_ADMIN_PASSWORD:?Set ORCHESTRATOR_ADMIN_PASSWORD}
       ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
@@ -135,6 +190,7 @@ services:
       redis:
         condition: service_healthy
     environment:
+      <<: *orchestrator_temporal_env
       ORCHESTRATOR_ADMIN_USERNAME: ${ORCHESTRATOR_ADMIN_USERNAME:-admin}
       ORCHESTRATOR_ADMIN_PASSWORD: ${ORCHESTRATOR_ADMIN_PASSWORD:?Set ORCHESTRATOR_ADMIN_PASSWORD}
       ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
@@ -183,6 +239,7 @@ services:
       postgres:
         condition: service_healthy
     environment:
+      <<: *orchestrator_temporal_env
       ORCHESTRATOR_ADMIN_USERNAME: ${ORCHESTRATOR_ADMIN_USERNAME:-admin}
       ORCHESTRATOR_ADMIN_PASSWORD: ${ORCHESTRATOR_ADMIN_PASSWORD:?Set ORCHESTRATOR_ADMIN_PASSWORD}
       ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
@@ -226,6 +283,49 @@ services:
       - ./.workdirs:/tmp/master-builder-project-repos
       - huggingface-cache:/root/.cache/huggingface
       - pocket-tts-cache:/root/.cache/pocket_tts
+
+  temporal-worker:
+    <<: *extra_hosts_host_gateway
+    build:
+      context: .
+      dockerfile: orchestrator/Dockerfile
+      target: app-runtime-base
+      args:
+        CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
+    container_name: master-builder-temporal-worker
+    profiles: ["temporal"]
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+      temporal:
+        condition: service_started
+    environment:
+      <<: *orchestrator_temporal_env
+      ORCHESTRATOR_ADMIN_USERNAME: ${ORCHESTRATOR_ADMIN_USERNAME:-admin}
+      ORCHESTRATOR_ADMIN_PASSWORD: ${ORCHESTRATOR_ADMIN_PASSWORD:?Set ORCHESTRATOR_ADMIN_PASSWORD}
+      ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
+      POSTGRES_URL: ${POSTGRES_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
+      ORCHESTRATOR_PUBLIC_API_BASE_URL: ${ORCHESTRATOR_PUBLIC_API_BASE_URL:-http://localhost:4000}
+      ORCHESTRATOR_ADMIN_UI_BASE_URL: ${ORCHESTRATOR_ADMIN_UI_BASE_URL:-http://localhost:4100}
+      ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET: ${ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET:?Set ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET}
+      ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET: ${ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET:?Set ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET}
+      ORCHESTRATOR_SECRETS_ENCRYPTION_KEY: ${ORCHESTRATOR_SECRETS_ENCRYPTION_KEY:?Set ORCHESTRATOR_SECRETS_ENCRYPTION_KEY}
+      ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR: /tmp/master-builder-project-repos
+    command:
+      - /bin/sh
+      - -ceu
+      - |
+        mkdir -p /root/.codex
+        cp -a /app/.codex/. /root/.codex/
+        if [ -f /app/AGENTS.md ]; then cp /app/AGENTS.md /root/AGENTS.md; fi
+        python -m orchestrator migrate
+        python -m orchestrator temporal-worker
+    volumes:
+      - codex-home:/root/.codex
+      - ./.workdirs:/tmp/master-builder-project-repos
 
 
   project-automation:
@@ -440,6 +540,7 @@ services:
 
 volumes:
   postgres-data:
+  temporal-postgres-data:
   tailscale-state:
   runner-data:
   codex-home:

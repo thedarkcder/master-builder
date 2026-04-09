@@ -35,6 +35,12 @@ def _coerce_positive_int(value: object, *, default: int) -> int:
     return max(1, parsed)
 
 
+def run_temporal_worker() -> int:
+    from orchestrator.temporal.worker import run_temporal_worker as temporal_worker_main
+
+    return int(temporal_worker_main())
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="master-builder orchestrator")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -44,6 +50,7 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("worker-webhooks", help="Run background webhook worker loop")
     subparsers.add_parser("worker-child-runs", help="Run one child issue-execution job")
     subparsers.add_parser("worker-child-webhooks", help="Run one child webhook job")
+    subparsers.add_parser("temporal-worker", help="Run Temporal workflow/activity worker")
     subparsers.add_parser("discord-gateway", help="Run Discord gateway leader loop")
     subparsers.add_parser("discord-live-voice", help="Run Discord live voice leader loop")
     subparsers.add_parser("knowledge-jira-sync", help="Run Jira knowledge sync leader loop")
@@ -195,7 +202,7 @@ def _handle_poll(*, tenant_filter: str) -> int:
             "tenant_filter": tenant_filter,
             "tenants": [_tenant_poll_snapshot(session, tenant) for tenant in tenants],
         }
-        print(json.dumps(payload))
+    print(json.dumps(payload))
     return 0
 
 
@@ -331,6 +338,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "worker-child-webhooks":
         return int(run_worker_child_once(mode="webhooks"))
+
+    if args.command == "temporal-worker":
+        return int(run_temporal_worker())
 
     if args.command == "discord-gateway":
         run_discord_gateway()

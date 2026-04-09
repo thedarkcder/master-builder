@@ -142,6 +142,12 @@ class CliEntrypointTests(unittest.TestCase):
         self.assertEqual(child_mock.call_args_list[0].kwargs, {"mode": "runs"})
         self.assertEqual(child_mock.call_args_list[1].kwargs, {"mode": "webhooks"})
 
+    def test_temporal_worker_command_invokes_runtime(self) -> None:
+        with patch("orchestrator.cli.run_temporal_worker", return_value=0) as worker_mock:
+            exit_code = cli_main(["temporal-worker"])
+        self.assertEqual(exit_code, 0)
+        worker_mock.assert_called_once_with()
+
     def test_discord_live_voice_command_invokes_runtime(self) -> None:
         with patch("orchestrator.cli.run_discord_live_voice") as voice_mock:
             exit_code = cli_main(["discord-live-voice"])

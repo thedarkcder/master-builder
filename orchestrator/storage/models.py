@@ -314,6 +314,152 @@ class PlatformSetting(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class PlatformPersona(Base):
+    __tablename__ = "platform_personas"
+    __table_args__ = (
+        UniqueConstraint("persona_key", name="uq_platform_personas_persona_key"),
+    )
+
+    persona_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    persona_key: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    label: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    default_display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    default_voice_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    system_prompt_template: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    user_prompt_template: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    allowed_surfaces: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class PlatformAgent(Base):
+    __tablename__ = "platform_agents"
+    __table_args__ = (
+        UniqueConstraint("agent_key", name="uq_platform_agents_agent_key"),
+        UniqueConstraint("named_agent_key", name="uq_platform_agents_named_agent_key"),
+        UniqueConstraint("selector_key", name="uq_platform_agents_selector_key"),
+    )
+
+    agent_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    agent_key: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    label: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    persona_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("platform_personas.persona_id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    runtime_role_key: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    named_agent_key: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    selector_key: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    default_profile_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class PlatformTeamTemplate(Base):
+    __tablename__ = "platform_team_templates"
+    __table_args__ = (
+        UniqueConstraint("team_key", name="uq_platform_team_templates_team_key"),
+    )
+
+    template_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    team_key: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    label: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    definition_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class PlatformTeamRole(Base):
+    __tablename__ = "platform_team_roles"
+    __table_args__ = (
+        UniqueConstraint("template_id", "role_key", name="uq_platform_team_roles_template_role"),
+        Index("ix_platform_team_roles_template_position", "template_id", "position"),
+    )
+
+    role_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    template_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("platform_team_templates.template_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    role_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    label: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    persona_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("platform_personas.persona_id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    agent_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("platform_agents.agent_id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class PlatformTeamTask(Base):
+    __tablename__ = "platform_team_tasks"
+    __table_args__ = (
+        UniqueConstraint("template_id", "task_key", name="uq_platform_team_tasks_template_task"),
+        Index("ix_platform_team_tasks_template_position", "template_id", "position"),
+    )
+
+    task_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    template_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("platform_team_templates.template_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    task_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    label: Mapped[str] = mapped_column(String(255), nullable=False)
+    owner_role_key: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    artifact_contract: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    approval_rule: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class PlatformTeamEdge(Base):
+    __tablename__ = "platform_team_edges"
+    __table_args__ = (
+        UniqueConstraint("template_id", "from_task_key", "to_task_key", name="uq_platform_team_edges_template_edge"),
+        Index("ix_platform_team_edges_template_from", "template_id", "from_task_key"),
+        Index("ix_platform_team_edges_template_to", "template_id", "to_task_key"),
+    )
+
+    edge_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    template_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("platform_team_templates.template_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    from_task_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    to_task_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class WorkflowExecution(Base):
     __tablename__ = "workflow_executions"
     __table_args__ = (

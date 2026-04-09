@@ -366,6 +366,7 @@ export function makeRun(overrides: Partial<RunRecord> = {}): RunRecord {
     created_at: "2026-03-27T16:50:00Z",
     started_at: "2026-03-27T16:50:10Z",
     finished_at: "2026-03-27T17:08:27Z",
+    team_run: null,
     plan: makeExecutionSnapshotPlan({
       stages: {
         pm: {

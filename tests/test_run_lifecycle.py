@@ -89,10 +89,14 @@ class RunLifecycleTests(unittest.TestCase):
             dedupe_scope=dedupe_scope,
         ).one_or_none()
 
+    def _enqueue_run_without_temporal_start(self, session, **kwargs):  # noqa: ANN001
+        with patch("orchestrator.core.runs.start_team_run_workflow_for_run"):
+            return enqueue_run(session, **kwargs)
+
     def test_enqueue_is_idempotent_for_active_issue(self) -> None:
         with self.session_factory() as session:
-            first = enqueue_run(session, tenant_id="tenant-runs", project_id=None, issue_key="TP-901")
-            second = enqueue_run(session, tenant_id="tenant-runs", project_id=None, issue_key="TP-901")
+            first = self._enqueue_run_without_temporal_start(session, tenant_id="tenant-runs", project_id=None, issue_key="TP-901")
+            second = self._enqueue_run_without_temporal_start(session, tenant_id="tenant-runs", project_id=None, issue_key="TP-901")
 
             self.assertTrue(first.enqueued)
             self.assertFalse(second.enqueued)
@@ -107,14 +111,14 @@ class RunLifecycleTests(unittest.TestCase):
 
     def test_enqueue_allows_parallel_pr_remediation_and_issue_execution(self) -> None:
         with self.session_factory() as session:
-            issue_run = enqueue_run(
+            issue_run = self._enqueue_run_without_temporal_start(
                 session,
                 tenant_id="tenant-runs",
                 project_id=None,
                 issue_key="TP-907",
                 dedupe_scope=RUN_DEDUPE_SCOPE_ISSUE_EXECUTION,
             )
-            remediation_run = enqueue_run(
+            remediation_run = self._enqueue_run_without_temporal_start(
                 session,
                 tenant_id="tenant-runs",
                 project_id=None,
@@ -138,14 +142,14 @@ class RunLifecycleTests(unittest.TestCase):
 
     def test_enqueue_deduplicates_delivery_identifier(self) -> None:
         with self.session_factory() as session:
-            first = enqueue_run(
+            first = self._enqueue_run_without_temporal_start(
                 session,
                 tenant_id="tenant-runs",
                 project_id=None,
                 issue_key="TP-902",
                 delivery_id="delivery-xyz",
             )
-            second = enqueue_run(
+            second = self._enqueue_run_without_temporal_start(
                 session,
                 tenant_id="tenant-runs",
                 project_id=None,
@@ -160,14 +164,14 @@ class RunLifecycleTests(unittest.TestCase):
 
     def test_enqueue_respects_tenant_concurrency_limit(self) -> None:
         with self.session_factory() as session:
-            first = enqueue_run(
+            first = self._enqueue_run_without_temporal_start(
                 session,
                 tenant_id="tenant-runs",
                 project_id=None,
                 issue_key="TP-910",
                 max_concurrent_runs=1,
             )
-            second = enqueue_run(
+            second = self._enqueue_run_without_temporal_start(
                 session,
                 tenant_id="tenant-runs",
                 project_id=None,
@@ -182,7 +186,7 @@ class RunLifecycleTests(unittest.TestCase):
 
     def test_running_to_success_updates_workflow_and_persists_timestamps(self) -> None:
         with self.session_factory() as session:
-            enqueue = enqueue_run(session, tenant_id="tenant-runs", project_id=None, issue_key="TP-903")
+            enqueue = self._enqueue_run_without_temporal_start(session, tenant_id="tenant-runs", project_id=None, issue_key="TP-903")
             running = mark_run_running(session, run_id=enqueue.run.run_id)
             self.assertEqual(running.status, "running")
             self.assertIsNotNone(running.started_at)
@@ -205,7 +209,7 @@ class RunLifecycleTests(unittest.TestCase):
 
     def test_failure_path_marks_blocked_without_finishing_workflow(self) -> None:
         with self.session_factory() as session:
-            enqueue = enqueue_run(session, tenant_id="tenant-runs", project_id=None, issue_key="TP-904")
+            enqueue = self._enqueue_run_without_temporal_start(session, tenant_id="tenant-runs", project_id=None, issue_key="TP-904")
             mark_run_running(session, run_id=enqueue.run.run_id)
             blocked = mark_run_terminal(
                 session,
@@ -226,7 +230,7 @@ class RunLifecycleTests(unittest.TestCase):
 
     def test_invalid_state_transition_is_rejected(self) -> None:
         with self.session_factory() as session:
-            enqueue = enqueue_run(session, tenant_id="tenant-runs", project_id=None, issue_key="TP-905")
+            enqueue = self._enqueue_run_without_temporal_start(session, tenant_id="tenant-runs", project_id=None, issue_key="TP-905")
             mark_run_terminal(
                 session,
                 run_id=enqueue.run.run_id,
@@ -238,17 +242,228 @@ class RunLifecycleTests(unittest.TestCase):
 
     def test_enqueue_creates_new_workflow_after_terminal_run(self) -> None:
         with self.session_factory() as session:
-            first = enqueue_run(session, tenant_id="tenant-runs", project_id=None, issue_key="TP-906")
+            first = self._enqueue_run_without_temporal_start(session, tenant_id="tenant-runs", project_id=None, issue_key="TP-906")
             mark_run_terminal(
                 session,
                 run_id=first.run.run_id,
                 terminal_status=RUN_STATUS_SUCCEEDED,
             )
 
-            second = enqueue_run(session, tenant_id="tenant-runs", project_id=None, issue_key="TP-906")
+            second = self._enqueue_run_without_temporal_start(session, tenant_id="tenant-runs", project_id=None, issue_key="TP-906")
             self.assertTrue(second.enqueued)
             self.assertNotEqual(second.run.run_id, first.run.run_id)
             self.assertNotEqual(second.run.workflow_id, first.run.workflow_id)
+
+    def test_enqueue_run_starts_temporal_team_workflow_for_issue_runs(self) -> None:
+        previous_backend = os.environ.get("ORCHESTRATOR_ORCHESTRATION_BACKEND")
+        try:
+            os.environ["ORCHESTRATOR_ORCHESTRATION_BACKEND"] = "temporal"
+            get_settings.cache_clear()
+            with self.session_factory() as session:
+                with patch("orchestrator.core.runs.start_team_run_workflow_for_run") as start_mock:
+                    result = enqueue_run(
+                        session,
+                        tenant_id="tenant-runs",
+                        project_id=None,
+                        issue_key="TP-912",
+                    )
+
+                self.assertTrue(result.enqueued)
+                start_mock.assert_called_once()
+                start_mock.assert_called_once_with(settings=get_settings(), run=result.run)
+                snapshot = ExecutionSnapshot.load(result.run.plan)
+                assert snapshot is not None
+                self.assertEqual(
+                    snapshot.context.execution_context.get("orchestration_backend"),
+                    "temporal",
+                )
+                self.assertIsInstance(snapshot.context.execution_context.get("team_run"), dict)
+        finally:
+            if previous_backend is None:
+                os.environ.pop("ORCHESTRATOR_ORCHESTRATION_BACKEND", None)
+            else:
+                os.environ["ORCHESTRATOR_ORCHESTRATION_BACKEND"] = previous_backend
+            get_settings.cache_clear()
+
+    def test_enqueue_team_run_starts_team_temporal_workflow_without_legacy_fallback(self) -> None:
+        previous_backend = os.environ.get("ORCHESTRATOR_ORCHESTRATION_BACKEND")
+        try:
+            os.environ["ORCHESTRATOR_ORCHESTRATION_BACKEND"] = "legacy"
+            get_settings.cache_clear()
+            snapshot = ExecutionSnapshot.empty()
+            snapshot.context.execution_context["team_run"] = {
+                "team_key": "campaign_team",
+                "team_label": "Campaign Team",
+                "definition_version": 1,
+                "nodes": [
+                    {
+                        "task_key": "brief",
+                        "label": "Brief",
+                        "owner_role_key": "strategist",
+                        "owner_persona_key": "launch_strategist",
+                        "owner_agent_key": "launch_strategy_agent",
+                        "status": "ready",
+                        "dependency_keys": [],
+                        "artifact_contract": {},
+                        "approval_rule": {},
+                    }
+                ],
+                "edges": [],
+                "artifacts": [],
+                "approvals": [],
+                "status": "queued",
+            }
+            with self.session_factory() as session:
+                with patch("orchestrator.core.runs.start_team_run_workflow_for_run") as start_team_mock:
+                    result = enqueue_run(
+                        session,
+                        tenant_id="tenant-runs",
+                        project_id=None,
+                        issue_key="TP-916",
+                        bootstrap=RunBootstrap(
+                            entry_mode="fresh",
+                            entry_stage="team",
+                            plan=snapshot.dump(),
+                        ),
+                    )
+
+                self.assertTrue(result.enqueued)
+                start_team_mock.assert_called_once_with(settings=get_settings(), run=result.run)
+                persisted = session.get(Run, result.run.run_id)
+                assert persisted is not None
+                run_snapshot = ExecutionSnapshot.load(persisted.plan)
+                assert run_snapshot is not None
+                self.assertEqual(run_snapshot.context.execution_context.get("orchestration_backend"), "temporal")
+        finally:
+            if previous_backend is None:
+                os.environ.pop("ORCHESTRATOR_ORCHESTRATION_BACKEND", None)
+            else:
+                os.environ["ORCHESTRATOR_ORCHESTRATION_BACKEND"] = previous_backend
+            get_settings.cache_clear()
+
+    def test_enqueue_run_marks_failed_when_temporal_start_fails(self) -> None:
+        previous_backend = os.environ.get("ORCHESTRATOR_ORCHESTRATION_BACKEND")
+        try:
+            os.environ["ORCHESTRATOR_ORCHESTRATION_BACKEND"] = "temporal"
+            get_settings.cache_clear()
+            with self.session_factory() as session:
+                with patch(
+                    "orchestrator.core.runs.start_team_run_workflow_for_run",
+                    side_effect=RuntimeError("temporal unavailable"),
+                ):
+                    result = enqueue_run(
+                        session,
+                        tenant_id="tenant-runs",
+                        project_id=None,
+                        issue_key="TP-913",
+                    )
+
+                self.assertTrue(result.enqueued)
+                session.refresh(result.run)
+                snapshot = ExecutionSnapshot.load(result.run.plan)
+                assert snapshot is not None
+                self.assertEqual(
+                    snapshot.context.execution_context.get("orchestration_backend"),
+                    "temporal",
+                )
+                self.assertEqual(result.run.status, "failed")
+                self.assertIn("Temporal team workflow start failed", str(result.run.last_error or ""))
+        finally:
+            if previous_backend is None:
+                os.environ.pop("ORCHESTRATOR_ORCHESTRATION_BACKEND", None)
+            else:
+                os.environ["ORCHESTRATOR_ORCHESTRATION_BACKEND"] = previous_backend
+            get_settings.cache_clear()
+
+    def test_enqueue_attempt_for_temporal_workflow_starts_temporal_for_each_attempt(self) -> None:
+        previous_backend = os.environ.get("ORCHESTRATOR_ORCHESTRATION_BACKEND")
+        try:
+            os.environ["ORCHESTRATOR_ORCHESTRATION_BACKEND"] = "temporal"
+            get_settings.cache_clear()
+            with self.session_factory() as session:
+                with patch("orchestrator.core.runs.start_team_run_workflow_for_run") as start_mock:
+                    first = enqueue_run(
+                        session,
+                        tenant_id="tenant-runs",
+                        project_id=None,
+                        issue_key="TP-914",
+                    )
+                    workflow = session.get(WorkflowExecution, first.run.workflow_id)
+                    assert workflow is not None
+                    workflow.status = "waiting_for_input"
+                    session.commit()
+                    attempted = enqueue_run(
+                        session,
+                        tenant_id="tenant-runs",
+                        project_id=None,
+                        issue_key="TP-914",
+                        bootstrap=RunBootstrap(
+                            workflow_id=first.run.workflow_id,
+                            parent_run_id=first.run.run_id,
+                            entry_mode="resume",
+                            entry_stage="review",
+                            plan=ExecutionSnapshot.empty().dump(),
+                        ),
+                    )
+
+                self.assertTrue(first.enqueued)
+                self.assertTrue(attempted.enqueued)
+                self.assertEqual(start_mock.call_count, 2)
+                self.assertEqual(attempted.run.workflow_id, first.run.workflow_id)
+        finally:
+            if previous_backend is None:
+                os.environ.pop("ORCHESTRATOR_ORCHESTRATION_BACKEND", None)
+            else:
+                os.environ["ORCHESTRATOR_ORCHESTRATION_BACKEND"] = previous_backend
+            get_settings.cache_clear()
+
+    def test_resume_attempt_for_temporal_workflow_keeps_temporal_ownership(self) -> None:
+        previous_backend = os.environ.get("ORCHESTRATOR_ORCHESTRATION_BACKEND")
+        try:
+            os.environ["ORCHESTRATOR_ORCHESTRATION_BACKEND"] = "temporal"
+            get_settings.cache_clear()
+            with self.session_factory() as session:
+                with patch("orchestrator.core.runs.start_team_run_workflow_for_run"):
+                    first = enqueue_run(
+                        session,
+                        tenant_id="tenant-runs",
+                        project_id=None,
+                        issue_key="TP-915",
+                    )
+
+                workflow = session.get(WorkflowExecution, first.run.workflow_id)
+                assert workflow is not None
+                workflow.status = "waiting_for_input"
+                session.commit()
+
+                with patch("orchestrator.core.runs.start_team_run_workflow_for_run"):
+                    resumed = enqueue_run(
+                        session,
+                        tenant_id="tenant-runs",
+                        project_id=None,
+                        issue_key="TP-915",
+                        bootstrap=RunBootstrap(
+                            workflow_id=first.run.workflow_id,
+                            parent_run_id=first.run.run_id,
+                            entry_mode="resume",
+                            entry_stage="review",
+                            plan=ExecutionSnapshot.empty().dump(),
+                        ),
+                    )
+
+                snapshot = ExecutionSnapshot.load(resumed.run.plan)
+                assert snapshot is not None
+                self.assertEqual(
+                    snapshot.context.execution_context.get("orchestration_backend"),
+                    "temporal",
+                )
+                self.assertIsInstance(snapshot.context.execution_context.get("team_run"), dict)
+        finally:
+            if previous_backend is None:
+                os.environ.pop("ORCHESTRATOR_ORCHESTRATION_BACKEND", None)
+            else:
+                os.environ["ORCHESTRATOR_ORCHESTRATION_BACKEND"] = previous_backend
+            get_settings.cache_clear()
 
     def test_enqueue_applies_bootstrap_before_queue_notification(self) -> None:
         observed: dict[str, object] = {}
@@ -267,7 +482,10 @@ class RunLifecycleTests(unittest.TestCase):
             observed["entry_checkpoint_id"] = staged_run.entry_checkpoint_id
 
         with self.session_factory() as session:
-            with patch("orchestrator.core.runs.notify_run_enqueued", side_effect=capture_notification):
+            with (
+                patch("orchestrator.core.runs.notify_run_enqueued", side_effect=capture_notification),
+                patch("orchestrator.core.runs.start_team_run_workflow_for_run"),
+            ):
                 result = enqueue_run(
                     session,
                     tenant_id="tenant-runs",
@@ -298,32 +516,19 @@ class RunLifecycleTests(unittest.TestCase):
         self.assertEqual(observed["entry_mode"], "resume")
         self.assertEqual(observed["entry_stage"], "dev")
         self.assertEqual(observed["entry_checkpoint_id"], "checkpoint-dev")
+        observed_plan = ExecutionSnapshot.require(observed["plan"])
         self.assertEqual(
-            observed["plan"],
+            observed_plan.context.trigger_context,
             {
-                "version": 1,
-                "context": {
-                    "trigger_context": {
-                        "source": "manual",
-                    },
-                    "execution_context": {
-                        "pre_check_outcome": "ready_for_agent",
-                    },
-                },
-                "workflow": {
-                    "outcome": None,
-                    "attempts": 0,
-                    "summary": [],
-                    "blocker_message": None,
-                    "requeue_target": None,
-                    "requeue_reason": None,
-                },
-                "events": {
-                    "stage_updates": [],
-                    "live_stage_updates": [],
-                    "stage_trace": [],
-                    "workstream_trace": [],
-                },
-                "stages": {},
+                "source": "manual",
             },
         )
+        self.assertEqual(
+            observed_plan.context.execution_context.get("pre_check_outcome"),
+            "ready_for_agent",
+        )
+        self.assertEqual(
+            observed_plan.context.execution_context.get("orchestration_backend"),
+            "temporal",
+        )
+        self.assertIsInstance(observed_plan.context.execution_context.get("team_run"), dict)

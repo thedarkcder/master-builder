@@ -15,6 +15,7 @@ from orchestrator.core.worker_capabilities import (
     required_worker_capability_for_run,
 )
 from orchestrator.core.worker.run_lifecycle import resolve_project_for_run, start_run
+from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.storage.models import Run, Tenant, TenantRunClaim
 
 logger = logging.getLogger(__name__)
@@ -87,7 +88,24 @@ def _candidate_selection_details(
     candidate: Run,
     failed_status: str,
     allowed_capabilities: set[WorkerCapability],
+    allow_temporal_owned: bool = False,
 ) -> QueueSelectionResult:
+    if _is_team_run(candidate):
+        logger.info(
+            "worker_skipping_team_run run_id=%s tenant_id=%s issue_key=%s",
+            candidate.run_id,
+            candidate.tenant_id,
+            candidate.issue_key,
+        )
+        return QueueSelectionResult()
+    if not allow_temporal_owned and _is_temporal_owned_run(candidate):
+        logger.info(
+            "worker_skipping_temporal_owned_run run_id=%s tenant_id=%s issue_key=%s",
+            candidate.run_id,
+            candidate.tenant_id,
+            candidate.issue_key,
+        )
+        return QueueSelectionResult()
     required_capability = required_worker_capability_for_run(candidate)
     if required_capability is not None and required_capability not in allowed_capabilities:
         logger.info(
@@ -120,6 +138,73 @@ def _candidate_selection_details(
         tenant=candidate_tenant,
         effective_policy=effective_policy,
     )
+
+
+def _run_orchestration_backend(run: Run) -> str:
+    snapshot = ExecutionSnapshot.load(run.plan)
+    if snapshot is None:
+        return "legacy"
+    normalized = str(snapshot.context.execution_context.get("orchestration_backend") or "").strip().lower()
+    return normalized or "legacy"
+
+
+def _is_temporal_owned_run(run: Run) -> bool:
+    return _run_orchestration_backend(run) == "temporal"
+
+
+def _is_team_run(run: Run) -> bool:
+    if str(run.entry_stage or "").strip().lower() == "team":
+        return True
+    snapshot = ExecutionSnapshot.load(run.plan)
+    if snapshot is None:
+        return False
+    return isinstance(snapshot.context.execution_context.get("team_run"), dict)
+
+
+def _claim_selection(
+    session: Session,
+    *,
+    selection: QueueSelectionResult,
+    running_status: str,
+    worker_service_instance_id: str | None,
+) -> QueueSelectionResult:
+    effective_policy = selection.effective_policy if isinstance(selection.effective_policy, dict) else {}
+    max_concurrent_runs = coerce_positive_int(effective_policy.get("max_concurrent_runs"), default=1)
+    _lock_tenant_run_claim(session, tenant_id=selection.tenant.tenant_id)
+    current_running = running_run_count(
+        session,
+        tenant_id=selection.tenant.tenant_id,
+        running_status=running_status,
+    )
+    if current_running >= max_concurrent_runs:
+        logger.info(
+            "worker_skipping_run_due_to_concurrency_limit tenant_id=%s issue_key=%s running=%s max=%s",
+            selection.tenant.tenant_id,
+            selection.run.issue_key,
+            current_running,
+            max_concurrent_runs,
+        )
+        session.rollback()
+        return QueueSelectionResult()
+
+    started_run = start_run(
+        session,
+        run=selection.run,
+        expected_status="queued",
+        worker_service_instance_id=worker_service_instance_id,
+    )
+    if started_run is None:
+        logger.info(
+            "worker_skipping_run_claim_conflict run_id=%s tenant_id=%s issue_key=%s",
+            selection.run.run_id,
+            selection.run.tenant_id,
+            selection.run.issue_key,
+        )
+        session.rollback()
+        return QueueSelectionResult()
+
+    selection.run = started_run
+    return selection
 
 
 def select_next_queued_run(
@@ -181,43 +266,51 @@ def claim_next_queued_run(
         if selection.run is None or selection.tenant is None:
             session.rollback()
             continue
-
-        effective_policy = selection.effective_policy if isinstance(selection.effective_policy, dict) else {}
-        max_concurrent_runs = coerce_positive_int(effective_policy.get("max_concurrent_runs"), default=1)
-        _lock_tenant_run_claim(session, tenant_id=selection.tenant.tenant_id)
-        current_running = running_run_count(
+        selection = _claim_selection(
             session,
-            tenant_id=selection.tenant.tenant_id,
+            selection=selection,
             running_status=running_status,
-        )
-        if current_running >= max_concurrent_runs:
-            logger.info(
-                "worker_skipping_run_due_to_concurrency_limit tenant_id=%s issue_key=%s running=%s max=%s",
-                selection.tenant.tenant_id,
-                selection.run.issue_key,
-                current_running,
-                max_concurrent_runs,
-            )
-            session.rollback()
-            continue
-
-        started_run = start_run(
-            session,
-            run=selection.run,
-            expected_status=queued_status,
             worker_service_instance_id=worker_service_instance_id,
         )
-        if started_run is None:
-            logger.info(
-                "worker_skipping_run_claim_conflict run_id=%s tenant_id=%s issue_key=%s",
-                selection.run.run_id,
-                selection.run.tenant_id,
-                selection.run.issue_key,
-            )
-            session.rollback()
-            continue
-
-        selection.run = started_run
-        return selection
+        if selection.run is not None:
+            return selection
 
     return QueueSelectionResult()
+
+
+def claim_queued_run_by_id(
+    session: Session,
+    *,
+    run_id: str,
+    queued_status: str,
+    running_status: str,
+    failed_status: str,
+    worker_service_instance_id: str | None,
+    worker_capabilities: set[WorkerCapability] | None = None,
+    allow_temporal_owned: bool = False,
+) -> QueueSelectionResult:
+    allowed_capabilities = parse_worker_capabilities(worker_capabilities or [])
+    candidate = _lock_queued_run_for_claim(session, run_id=run_id, queued_status=queued_status)
+    if candidate is None:
+        session.rollback()
+        return QueueSelectionResult()
+
+    selection = _candidate_selection_details(
+        session,
+        candidate=candidate,
+        failed_status=failed_status,
+        allowed_capabilities=allowed_capabilities,
+        allow_temporal_owned=allow_temporal_owned,
+    )
+    if selection.terminal_run is not None:
+        return selection
+    if selection.run is None or selection.tenant is None:
+        session.rollback()
+        return QueueSelectionResult()
+
+    return _claim_selection(
+        session,
+        selection=selection,
+        running_status=running_status,
+        worker_service_instance_id=worker_service_instance_id,
+    )

@@ -531,6 +531,7 @@ export type RunRecord = {
   started_at: string | null;
   finished_at: string | null;
   plan: Record<string, unknown> | null;
+  team_run: TeamRunRecord | null;
 };
 
 export type WorkflowRecord = {
@@ -874,6 +875,165 @@ export type AgentRuntimeRoutingRecord = {
   available_selectors: string[];
   available_profiles: Record<string, AgentExecutionProfileRecord>;
   effective_defaults: AgentRuntimeRoutingDefaultsRecord;
+};
+
+export type PlatformPersonaRecord = {
+  persona_id: string;
+  persona_key: string;
+  label: string;
+  description: string | null;
+  default_display_name: string | null;
+  default_voice_id: string | null;
+  system_prompt_template: string | null;
+  user_prompt_template: string | null;
+  allowed_surfaces: string[];
+  is_active: boolean;
+  version: number;
+  published_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type PlatformPersonaWritePayload = {
+  persona_key: string | null;
+  label: string;
+  description: string | null;
+  default_display_name: string | null;
+  default_voice_id: string | null;
+  system_prompt_template: string | null;
+  user_prompt_template: string | null;
+  allowed_surfaces: string[];
+  is_active: boolean;
+};
+
+export type PlatformAgentRecord = {
+  agent_id: string;
+  agent_key: string;
+  label: string;
+  description: string | null;
+  persona_key: string;
+  runtime_role_key: string | null;
+  named_agent_key: string | null;
+  selector_key: string | null;
+  default_profile_name: string | null;
+  is_active: boolean;
+  persona: PlatformPersonaRecord;
+  version: number;
+  published_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type PlatformAgentWritePayload = {
+  agent_key: string | null;
+  label: string;
+  description: string | null;
+  persona_key: string;
+  runtime_role_key: string | null;
+  named_agent_key: string | null;
+  selector_key: string | null;
+  default_profile_name: string | null;
+  is_active: boolean;
+};
+
+export type PlatformTeamRoleWritePayload = {
+  role_key: string;
+  label: string;
+  description: string | null;
+  position: number;
+  persona_key: string;
+  agent_key: string;
+};
+
+export type PlatformTeamTaskWritePayload = {
+  task_key: string;
+  label: string;
+  owner_role_key: string;
+  position: number;
+  artifact_contract: Record<string, unknown>;
+  approval_rule: Record<string, unknown>;
+};
+
+export type PlatformTeamEdgeWritePayload = {
+  from_task_key: string;
+  to_task_key: string;
+};
+
+export type PlatformTeamTemplateWritePayload = {
+  team_key: string | null;
+  label: string;
+  description: string | null;
+  is_active: boolean;
+  roles: PlatformTeamRoleWritePayload[];
+  tasks: PlatformTeamTaskWritePayload[];
+  edges: PlatformTeamEdgeWritePayload[];
+};
+
+export type PlatformTeamRoleRecord = {
+  role_id: string;
+  role_key: string;
+  label: string;
+  description: string | null;
+  position: number;
+  persona: PlatformPersonaRecord;
+  agent: PlatformAgentRecord;
+};
+
+export type PlatformTeamTaskRecord = PlatformTeamTaskWritePayload & {
+  task_id: string;
+};
+
+export type PlatformTeamEdgeRecord = PlatformTeamEdgeWritePayload & {
+  edge_id: string;
+};
+
+export type PlatformTeamTemplateRecord = {
+  template_id: string;
+  team_key: string;
+  team_label: string;
+  description: string | null;
+  is_active: boolean;
+  definition_version: number;
+  published_at: string | null;
+  roles: PlatformTeamRoleRecord[];
+  tasks: PlatformTeamTaskRecord[];
+  edges: PlatformTeamEdgeRecord[];
+  created_at: string;
+  updated_at: string;
+};
+
+export type PlatformRuntimeBindingsRecord = {
+  available_roles: string[];
+  available_named_agents: string[];
+  available_selectors: string[];
+};
+
+export type TeamRunNodeRecord = {
+  task_key: string;
+  label: string;
+  owner_role_key: string;
+  owner_persona_key: string | null;
+  owner_agent_key: string | null;
+  status: string;
+  dependency_keys: string[];
+  artifact_contract: Record<string, unknown>;
+  approval_rule: Record<string, unknown>;
+};
+
+export type TeamRunEdgeRecord = {
+  from_task_key: string;
+  to_task_key: string;
+};
+
+export type TeamRunRecord = {
+  team_key: string;
+  team_label: string;
+  definition_version: number;
+  nodes: TeamRunNodeRecord[];
+  edges: TeamRunEdgeRecord[];
+  artifacts: Record<string, unknown>[];
+  approvals: Record<string, unknown>[];
+  status: string;
 };
 
 export type DiscordAllowlistRequestRecord = {
@@ -2069,6 +2229,30 @@ export function getRun(credentials: Credentials, runId: string): Promise<RunReco
   return request<RunRecord>(credentials, `/api/admin/runs/${encodeURIComponent(runId)}`);
 }
 
+export function completeTeamTask(
+  credentials: Credentials,
+  runId: string,
+  taskKey: string,
+  payload: { artifact_payload?: Record<string, unknown>; summary?: string | null },
+): Promise<RunRecord> {
+  return request<RunRecord>(credentials, `/api/admin/runs/${encodeURIComponent(runId)}/team-tasks/${encodeURIComponent(taskKey)}/complete`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function submitTeamTaskApproval(
+  credentials: Credentials,
+  runId: string,
+  taskKey: string,
+  payload: { decision: "approved" | "rejected"; comment?: string | null },
+): Promise<RunRecord> {
+  return request<RunRecord>(credentials, `/api/admin/runs/${encodeURIComponent(runId)}/team-tasks/${encodeURIComponent(taskKey)}/approvals`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
 export function getWorkflow(credentials: Credentials, workflowId: string): Promise<WorkflowRecord> {
   return request<WorkflowRecord>(credentials, `/api/admin/workflows/${encodeURIComponent(workflowId)}`);
 }
@@ -2493,6 +2677,94 @@ export function listAgentRuntimeProfiles(credentials: Credentials): Promise<Agen
 
 export function listAgentRuntimeTools(credentials: Credentials): Promise<AgentRuntimeToolsRecord> {
   return request<AgentRuntimeToolsRecord>(credentials, "/api/admin/agent-runtime-tools");
+}
+
+export function listPlatformPersonas(credentials: Credentials): Promise<PlatformPersonaRecord[]> {
+  return request<PlatformPersonaRecord[]>(credentials, "/api/admin/platform-personas");
+}
+
+export function createPlatformPersona(
+  credentials: Credentials,
+  payload: PlatformPersonaWritePayload,
+): Promise<PlatformPersonaRecord> {
+  return request<PlatformPersonaRecord>(credentials, "/api/admin/platform-personas", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updatePlatformPersona(
+  credentials: Credentials,
+  personaId: string,
+  payload: PlatformPersonaWritePayload,
+): Promise<PlatformPersonaRecord> {
+  return request<PlatformPersonaRecord>(credentials, `/api/admin/platform-personas/${encodeURIComponent(personaId)}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function listPlatformAgents(credentials: Credentials): Promise<PlatformAgentRecord[]> {
+  return request<PlatformAgentRecord[]>(credentials, "/api/admin/platform-agents");
+}
+
+export function createPlatformAgent(
+  credentials: Credentials,
+  payload: PlatformAgentWritePayload,
+): Promise<PlatformAgentRecord> {
+  return request<PlatformAgentRecord>(credentials, "/api/admin/platform-agents", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updatePlatformAgent(
+  credentials: Credentials,
+  agentId: string,
+  payload: PlatformAgentWritePayload,
+): Promise<PlatformAgentRecord> {
+  return request<PlatformAgentRecord>(credentials, `/api/admin/platform-agents/${encodeURIComponent(agentId)}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function listPlatformTeamTemplates(credentials: Credentials): Promise<PlatformTeamTemplateRecord[]> {
+  return request<PlatformTeamTemplateRecord[]>(credentials, "/api/admin/platform-team-templates");
+}
+
+export function createPlatformTeamTemplate(
+  credentials: Credentials,
+  payload: PlatformTeamTemplateWritePayload,
+): Promise<PlatformTeamTemplateRecord> {
+  return request<PlatformTeamTemplateRecord>(credentials, "/api/admin/platform-team-templates", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updatePlatformTeamTemplate(
+  credentials: Credentials,
+  templateId: string,
+  payload: PlatformTeamTemplateWritePayload,
+): Promise<PlatformTeamTemplateRecord> {
+  return request<PlatformTeamTemplateRecord>(credentials, `/api/admin/platform-team-templates/${encodeURIComponent(templateId)}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function publishPlatformTeamTemplate(
+  credentials: Credentials,
+  templateId: string,
+): Promise<PlatformTeamTemplateRecord> {
+  return request<PlatformTeamTemplateRecord>(credentials, `/api/admin/platform-team-templates/${encodeURIComponent(templateId)}/publish`, {
+    method: "POST",
+  });
+}
+
+export function getPlatformRuntimeBindings(credentials: Credentials): Promise<PlatformRuntimeBindingsRecord> {
+  return request<PlatformRuntimeBindingsRecord>(credentials, "/api/admin/platform-runtime-bindings");
 }
 
 export function createAgentRuntimeProfile(

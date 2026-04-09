@@ -3,6 +3,7 @@ from __future__ import annotations
 from orchestrator.api.admin.project_normalization import normalize_project_discord_config
 from orchestrator.api.schemas import ProjectRead, RunRead, TenantRead, WorkflowRead
 from orchestrator.core.config import get_settings
+from orchestrator.core.platform_team_catalog_service import platform_team_catalog_service
 from orchestrator.core.project_policy import resolve_effective_policy
 from orchestrator.storage.models import Project, Run, Tenant, WorkflowExecution
 
@@ -48,6 +49,7 @@ def run_to_schema(run: Run) -> RunRead:
         pending_input_request_id=None,
         last_error=None if run.status == "succeeded" else run.last_error,
         plan=run.plan,
+        team_run=platform_team_catalog_service.extract_team_run_from_plan(plan=run.plan),
         created_at=run.created_at,
         started_at=run.started_at,
         finished_at=run.finished_at,

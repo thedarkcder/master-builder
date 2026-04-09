@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from orchestrator.api.dependencies import get_session
 from orchestrator.api.schemas import RunRead
+from orchestrator.core.platform_team_catalog_service import platform_team_catalog_service
 from orchestrator.core.security import require_admin
 from orchestrator.storage.models import Run
 
@@ -33,6 +34,7 @@ def _run_to_schema(run: Run) -> RunRead:
         pending_input_request_id=None,
         last_error=None if run.status == "succeeded" else run.last_error,
         plan=run.plan,
+        team_run=platform_team_catalog_service.extract_team_run_from_plan(plan=run.plan),
         created_at=run.created_at,
         started_at=run.started_at,
         finished_at=run.finished_at,

@@ -131,3 +131,7 @@
 2026-04-08
 
 - When the user says "fix the issue, don’t add a fallback", correct the source contract at the producer boundary and remove downstream fallback logic instead of preserving dual-path behavior.
+- When a missing third-party dependency blocks tests and the user wants the real package in the environment, do not paper over it with test-local stubs. Install the dependency in the active env or use a project venv, and keep test imports real.
+- When migrating orchestration to Temporal, keep one Temporal workflow as the single owner of a run. Do not split one run across separate Temporal workflows for execution and human-input resume unless the user explicitly asks for that decomposition.
+- When a user calls out missing acceptance criteria in a plan, stop and rewrite the plan with explicit ship/no-ship acceptance bullets before implementing. Do not treat a test list as a substitute for acceptance criteria.
+- When the user says they do not want dual-running between new orchestration and legacy workers, remove legacy ownership for that path entirely. Do not leave Temporal wrapping the old worker runner or keep a hidden fallback path alive.

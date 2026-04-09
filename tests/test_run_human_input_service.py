@@ -145,6 +145,8 @@ def test_create_human_input_request_renders_structured_questions_in_discord_mess
 
 def test_resume_workflow_from_human_input_answer_creates_resume_attempt_and_consumes_request() -> None:
     session = MagicMock()
+    snapshot = ExecutionSnapshot.empty(trigger_context={"source": "manual"})
+    snapshot.context.execution_context["team_run"] = {"team_key": "issue_workflow"}
     request = SimpleNamespace(
         request_id="request-1",
         workflow_id="workflow-1",
@@ -170,7 +172,7 @@ def test_resume_workflow_from_human_input_answer_creates_resume_attempt_and_cons
         repo_url="https://github.com/example/repo",
         branch="feature/GP-122",
         pr_url="https://github.com/example/repo/pull/123",
-        plan=ExecutionSnapshot.empty(trigger_context={"source": "manual"}).dump(),
+        plan=snapshot.dump(),
     )
     checkpoint = SimpleNamespace(
         checkpoint_id="checkpoint-1",
@@ -178,13 +180,15 @@ def test_resume_workflow_from_human_input_answer_creates_resume_attempt_and_cons
     )
     resumed_run = SimpleNamespace(run_id="run-2")
     session.get.side_effect = lambda model, key: (
-        source_run if key == "run-1" else checkpoint if key == "checkpoint-1" else None
+        source_run if key == "run-1" else resumed_run if key == "run-2" else checkpoint if key == "checkpoint-1" else None
     )
-    enqueue_result = SimpleNamespace(enqueued=True, reason=None, run=resumed_run)
 
     with (
         patch("orchestrator.core.run_human_input_service.encrypt_value", return_value="encrypted"),
-        patch("orchestrator.core.run_human_input_service.enqueue_run", return_value=enqueue_result) as enqueue_run_mock,
+        patch(
+            "orchestrator.core.run_human_input_service.resume_human_input_request_via_temporal",
+            return_value=SimpleNamespace(resumed_run_id="run-2"),
+        ) as temporal_resume_mock,
     ):
         answered = answer_human_input_request(
             session=session,
@@ -200,12 +204,132 @@ def test_resume_workflow_from_human_input_answer_creates_resume_attempt_and_cons
         )
 
     assert result is resumed_run
-    bootstrap = enqueue_run_mock.call_args.kwargs["bootstrap"]
-    assert bootstrap.workflow_id == "workflow-1"
-    assert bootstrap.parent_run_id == "run-1"
-    assert bootstrap.entry_mode == "resume"
-    assert bootstrap.entry_stage == "review"
-    assert bootstrap.entry_checkpoint_id == "checkpoint-1"
-    assert bootstrap.branch == "feature/GP-122"
-    assert request.status == "consumed"
-    assert request.consumed_by_run_id == "run-2"
+    temporal_resume_mock.assert_called_once_with(
+        settings=SimpleNamespace(secrets_encryption_key="secret-key"),
+        request=answered,
+    )
+
+
+def test_create_human_input_request_does_not_start_separate_temporal_workflow() -> None:
+    session = MagicMock()
+    tenant = SimpleNamespace(tenant_id="route25")
+    project = SimpleNamespace(project_id="route25-default")
+    settings = SimpleNamespace(orchestration_backend="temporal")
+    run = SimpleNamespace(
+        run_id="run-1",
+        workflow_id="workflow-1",
+        issue_key="GP-222",
+        status="running",
+        last_heartbeat_at="heartbeat",
+        worker_service_instance_id="worker-1",
+        plan=ExecutionSnapshot.empty(trigger_context={"source": "manual"}).dump(),
+    )
+    workflow = SimpleNamespace(
+        workflow_id="workflow-1",
+        status="running",
+        active_run_id="run-1",
+        latest_checkpoint_id=None,
+        blocked_reason=None,
+        updated_at=None,
+    )
+    session.execute.return_value.scalar_one_or_none.return_value = None
+    session.get.side_effect = lambda model, key: workflow if key == "workflow-1" else None
+    checkpoint = SimpleNamespace(checkpoint_id="checkpoint-1")
+    send_result = SimpleNamespace(
+        sent=True,
+        channel_id="channel-1",
+        thread_channel_id="thread-1",
+        message_id="message-1",
+        reason=None,
+    )
+
+    with (
+        patch("orchestrator.core.run_human_input_service.snapshot_checkpoint_for_run", return_value=checkpoint),
+        patch("orchestrator.core.run_human_input_service.send_tenant_discord_message", return_value=send_result),
+    ):
+        request = create_human_input_request(
+            session=session,
+            settings=settings,
+            tenant=tenant,
+            project=project,
+            run=run,
+            issue_key="GP-222",
+            source_stage="review",
+            request_type="verification_code",
+            prompt="Reply with the current code",
+        )
+
+    assert request.status == "pending"
+
+
+def test_resume_workflow_from_human_input_answer_delegates_to_temporal_when_enabled() -> None:
+    session = MagicMock()
+    settings = SimpleNamespace(orchestration_backend="temporal")
+    snapshot = ExecutionSnapshot.empty(trigger_context={"source": "manual"})
+    snapshot.context.execution_context["team_run"] = {"team_key": "issue_workflow"}
+    request = SimpleNamespace(
+        request_id="request-2",
+        workflow_id="workflow-1",
+        checkpoint_id="checkpoint-1",
+        source_run_id="run-1",
+        status="answered",
+        answered_at="now",
+        updated_at=None,
+        answer_encrypted="encrypted",
+        answer_source_ref="discord:message-2",
+        consumed_by_run_id="run-2",
+        tenant_id="route25",
+        source_stage="review",
+        expires_at=None,
+    )
+    source_run = SimpleNamespace(run_id="run-1", plan=snapshot.dump())
+    resumed_run = SimpleNamespace(run_id="run-2")
+    session.get.side_effect = lambda model, key: (
+        source_run if key == "run-1" else resumed_run if key == "run-2" else request if key == "request-2" else None
+    )
+
+    with patch(
+        "orchestrator.core.run_human_input_service.resume_human_input_request_via_temporal",
+        return_value=SimpleNamespace(resumed_run_id="run-2"),
+    ) as temporal_resume_mock:
+        result = resume_workflow_from_human_input_answer(
+            session=session,
+            settings=settings,
+            request=request,
+        )
+
+    assert result is resumed_run
+    temporal_resume_mock.assert_called_once_with(settings=settings, request=request)
+
+
+def test_resume_workflow_from_human_input_answer_rejects_legacy_runs() -> None:
+    session = MagicMock()
+    settings = SimpleNamespace(orchestration_backend="temporal")
+    request = SimpleNamespace(
+        request_id="request-3",
+        workflow_id="workflow-1",
+        checkpoint_id="checkpoint-1",
+        source_run_id="run-1",
+        status="answered",
+        answered_at="now",
+        updated_at=None,
+        answer_encrypted="encrypted",
+        answer_source_ref="discord:message-3",
+        consumed_by_run_id=None,
+        tenant_id="route25",
+        source_stage="review",
+        expires_at=None,
+    )
+    source_run = SimpleNamespace(run_id="run-1", plan=ExecutionSnapshot.empty(trigger_context={"source": "manual"}).dump())
+    session.get.side_effect = lambda model, key: source_run if key == "run-1" else None
+
+    try:
+        resume_workflow_from_human_input_answer(
+            session=session,
+            settings=settings,
+            request=request,
+        )
+    except ValueError as exc:
+        assert str(exc) == "Legacy workflow resume is no longer supported; historical workflows are read-only"
+    else:  # pragma: no cover - defensive
+        raise AssertionError("Expected legacy resume rejection")

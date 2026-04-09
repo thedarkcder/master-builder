@@ -932,6 +932,165 @@ class AgentRuntimeToolsRead(BaseModel):
     tools: list[AgentRuntimeToolRead] = Field(default_factory=list)
 
 
+class PlatformPersonaWrite(BaseModel):
+    persona_key: str
+    label: str
+    description: str | None = None
+    default_display_name: str | None = None
+    default_voice_id: str | None = None
+    system_prompt_template: str | None = None
+    user_prompt_template: str | None = None
+    allowed_surfaces: list[str] = Field(default_factory=list)
+    is_active: bool = True
+
+
+class PlatformPersonaRead(PlatformPersonaWrite):
+    persona_id: str
+    version: int
+    published_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class PlatformAgentWrite(BaseModel):
+    agent_key: str
+    label: str
+    description: str | None = None
+    persona_key: str
+    runtime_role_key: str | None = None
+    named_agent_key: str | None = None
+    selector_key: str | None = None
+    default_profile_name: str | None = None
+    is_active: bool = True
+
+
+class PlatformAgentRead(PlatformAgentWrite):
+    agent_id: str
+    persona: PlatformPersonaRead
+    version: int
+    published_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class PlatformTeamRoleWrite(BaseModel):
+    role_key: str
+    label: str
+    description: str | None = None
+    position: int = 1
+    persona_key: str
+    agent_key: str
+
+
+class PlatformTeamTaskWrite(BaseModel):
+    task_key: str
+    label: str
+    owner_role_key: str
+    position: int = 1
+    artifact_contract: dict = Field(default_factory=dict)
+    approval_rule: dict = Field(default_factory=dict)
+
+
+class PlatformTeamEdgeWrite(BaseModel):
+    from_task_key: str
+    to_task_key: str
+
+
+class PlatformTeamTemplateWrite(BaseModel):
+    team_key: str | None = None
+    label: str
+    description: str | None = None
+    is_active: bool = True
+    roles: list[PlatformTeamRoleWrite] = Field(default_factory=list)
+    tasks: list[PlatformTeamTaskWrite] = Field(default_factory=list)
+    edges: list[PlatformTeamEdgeWrite] = Field(default_factory=list)
+
+
+class PlatformTeamRoleRead(BaseModel):
+    role_id: str
+    role_key: str
+    label: str
+    description: str | None = None
+    position: int
+    persona: PlatformPersonaRead
+    agent: PlatformAgentRead
+
+
+class PlatformTeamTaskRead(PlatformTeamTaskWrite):
+    task_id: str
+
+
+class PlatformTeamEdgeRead(PlatformTeamEdgeWrite):
+    edge_id: str
+
+
+class PlatformTeamTemplateRead(BaseModel):
+    template_id: str
+    team_key: str
+    team_label: str
+    description: str | None = None
+    is_active: bool = True
+    definition_version: int
+    published_at: datetime | None = None
+    roles: list[PlatformTeamRoleRead] = Field(default_factory=list)
+    tasks: list[PlatformTeamTaskRead] = Field(default_factory=list)
+    edges: list[PlatformTeamEdgeRead] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
+
+
+class PlatformRuntimeBindingsRead(BaseModel):
+    available_roles: list[str] = Field(default_factory=list)
+    available_named_agents: list[str] = Field(default_factory=list)
+    available_selectors: list[str] = Field(default_factory=list)
+
+
+class TeamRunNodeRead(BaseModel):
+    task_key: str
+    label: str
+    owner_role_key: str
+    owner_persona_key: str | None = None
+    owner_agent_key: str | None = None
+    status: str
+    dependency_keys: list[str] = Field(default_factory=list)
+    artifact_contract: dict = Field(default_factory=dict)
+    approval_rule: dict = Field(default_factory=dict)
+
+
+class TeamRunEdgeRead(BaseModel):
+    from_task_key: str
+    to_task_key: str
+
+
+class TeamRunRead(BaseModel):
+    team_key: str
+    team_label: str
+    definition_version: int
+    nodes: list[TeamRunNodeRead] = Field(default_factory=list)
+    edges: list[TeamRunEdgeRead] = Field(default_factory=list)
+    artifacts: list[dict] = Field(default_factory=list)
+    approvals: list[dict] = Field(default_factory=list)
+    status: str
+
+
+class PlatformTeamRunCreateRequest(BaseModel):
+    tenant_id: str
+    project_id: str | None = None
+    issue_key: str
+    issue_summary: str | None = None
+    issue_description: str | None = None
+
+
+class TeamTaskCompleteRequest(BaseModel):
+    artifact_payload: dict = Field(default_factory=dict)
+    summary: str | None = None
+
+
+class TeamApprovalRequest(BaseModel):
+    decision: str = Field(pattern="^(approved|rejected)$")
+    comment: str | None = None
+
+
 class RunRead(BaseModel):
     run_id: str
     workflow_id: str
@@ -953,6 +1112,7 @@ class RunRead(BaseModel):
     pending_input_request_id: str | None = None
     last_error: str | None
     plan: dict | None
+    team_run: TeamRunRead | None = None
     created_at: datetime
     started_at: datetime | None
     finished_at: datetime | None

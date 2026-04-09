@@ -13,6 +13,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { TokenStackedBarChart } from "@/components/charts";
 import {
   cancelRun,
+  completeTeamTask,
   createWorkflowAttempt,
   getRun,
   getWorkflow,
@@ -20,6 +21,7 @@ import {
   listRunEvents,
   listRunLogs,
   streamRunEvents,
+  submitTeamTaskApproval,
   type RunEventRecord,
   type RunLogEventRecord,
   type RunRecord,
@@ -66,6 +68,14 @@ type StageProgressEntry = {
   tileDetail: string;
   detail: string;
   sortKey: number;
+};
+
+type TeamTaskProgressStatus = "not_started" | "running" | "completed" | "blocked";
+
+type TeamTaskProgressEntry = {
+  status: TeamTaskProgressStatus;
+  tileDetail: string;
+  detail: string;
 };
 
 type TimelineSegment = {
@@ -413,6 +423,46 @@ function parseRunLogChatText(entry: RunLogEventRecord): Pick<ChatTimelineEntry, 
   return null;
 }
 
+function normalizeTeamTaskStatus(status: string | null | undefined): TeamTaskProgressStatus {
+  const normalized = String(status ?? "").trim().toLowerCase();
+  if (normalized === "completed" || normalized === "succeeded" || normalized === "approved") {
+    return "completed";
+  }
+  if (normalized === "running" || normalized === "in_progress" || normalized === "active") {
+    return "running";
+  }
+  if (normalized === "blocked" || normalized === "failed" || normalized === "awaiting_approval") {
+    return "blocked";
+  }
+  return "not_started";
+}
+
+function teamTaskStatusColor(status: TeamTaskProgressStatus): string {
+  switch (status) {
+    case "completed":
+      return "#22c55e";
+    case "running":
+      return "#0ea5e9";
+    case "blocked":
+      return "#ef4444";
+    default:
+      return "#94a3b8";
+  }
+}
+
+function teamTaskStatusLabel(status: TeamTaskProgressStatus): string {
+  switch (status) {
+    case "completed":
+      return "completed";
+    case "running":
+      return "running";
+    case "blocked":
+      return "blocked";
+    default:
+      return "pending";
+  }
+}
+
 export default function RunDetailPage() {
   const params = useParams<{ runId: string }>();
   const pathname = usePathname();
@@ -435,7 +485,10 @@ export default function RunDetailPage() {
   const [logStreamFilter, setLogStreamFilter] = useState("all");
   const [loadingOlderLogs, setLoadingOlderLogs] = useState(false);
   const [hasMoreLogs, setHasMoreLogs] = useState(false);
+  const [teamActionKey, setTeamActionKey] = useState<string | null>(null);
   const projectContextId = routeContext.projectId ?? "";
+  const teamRun = run?.team_run ?? null;
+  const isTeamRun = teamRun !== null;
   const activePanel = routeContext.panel;
   const setActivePanel = useCallback((nextPanel: RunPanelTab) => {
     router.push(
@@ -609,6 +662,44 @@ export default function RunDetailPage() {
     }
   }
 
+  async function handleCompleteTeamTask(taskKey: string) {
+    if (!credentials || !run) {
+      return;
+    }
+    setTeamActionKey(`complete:${taskKey}`);
+    try {
+      const updated = await completeTeamTask(credentials, run.run_id, taskKey, {
+        artifact_payload: {},
+        summary: null,
+      });
+      setRun(updated);
+      setStatusLine("");
+    } catch (error) {
+      setStatusLine(`Failed to complete team task: ${(error as Error).message}`);
+    } finally {
+      setTeamActionKey(null);
+    }
+  }
+
+  async function handleApproveTeamTask(taskKey: string, decision: "approved" | "rejected") {
+    if (!credentials || !run) {
+      return;
+    }
+    setTeamActionKey(`approval:${taskKey}:${decision}`);
+    try {
+      const updated = await submitTeamTaskApproval(credentials, run.run_id, taskKey, {
+        decision,
+        comment: null,
+      });
+      setRun(updated);
+      setStatusLine("");
+    } catch (error) {
+      setStatusLine(`Failed to submit team approval: ${(error as Error).message}`);
+    } finally {
+      setTeamActionKey(null);
+    }
+  }
+
   const isRerunnable = Boolean(run);
   const isActiveRun = run?.status === "queued" || run?.status === "running";
   const liveStageUpdates = useMemo(() => {
@@ -629,13 +720,17 @@ export default function RunDetailPage() {
   const filteredLogs = useMemo(
     () =>
       logs.filter((entry) => {
+        const normalizedAgentId = String(entry.agent_id ?? "").trim();
         const agentMatch =
-          logAgentFilter === "all" || entry.stage === selectedAgentStage(logAgentFilter);
+          logAgentFilter === "all" ||
+          (isTeamRun
+            ? normalizedAgentId === logAgentFilter || entry.stage === logAgentFilter
+            : entry.stage === selectedAgentStage(logAgentFilter));
         const stageMatch = logStageFilter === "all" || entry.stage === logStageFilter;
         const streamMatch = logStreamFilter === "all" || entry.stream === logStreamFilter;
         return agentMatch && stageMatch && streamMatch;
       }),
-    [logs, logAgentFilter, logStageFilter, logStreamFilter]
+    [isTeamRun, logs, logAgentFilter, logStageFilter, logStreamFilter]
   );
   const tokenTimelineChartData = useMemo(
     () =>
@@ -1038,6 +1133,50 @@ export default function RunDetailPage() {
       }
     ];
   }, [orchestrationTrace.workstreamEvents, run?.plan, stageCheckpoints, workflowDiagnostics?.history]);
+  const teamTaskProgress = useMemo(() => {
+    const progress = new Map<string, TeamTaskProgressEntry>();
+    if (!teamRun) {
+      return progress;
+    }
+    for (const node of teamRun.nodes) {
+      const normalized = normalizeTeamTaskStatus(node.status);
+      progress.set(node.task_key, {
+        status: normalized,
+        tileDetail: teamTaskStatusLabel(normalized),
+        detail: teamTaskStatusLabel(normalized),
+      });
+    }
+    return progress;
+  }, [teamRun]);
+  const teamAgentOutcomes = useMemo(() => {
+    if (!teamRun) {
+      return [];
+    }
+    return teamRun.nodes.map((node) => {
+      const producedArtifacts = toStringList(node.artifact_contract?.["produces"]);
+      const consumedArtifacts = toStringList(node.artifact_contract?.["consumes"]);
+      const dependencies = node.dependency_keys.length > 0 ? node.dependency_keys.join(", ") : "none";
+      const approvalMode = String(node.approval_rule?.["type"] ?? "").trim();
+      const items = [
+        `Role: ${node.owner_role_key}`,
+        node.owner_persona_key ? `Persona: ${node.owner_persona_key}` : "",
+        node.owner_agent_key ? `Agent: ${node.owner_agent_key}` : "",
+        `Depends on: ${dependencies}`,
+        producedArtifacts.length > 0 ? `Produces: ${producedArtifacts.join(", ")}` : "",
+        consumedArtifacts.length > 0 ? `Consumes: ${consumedArtifacts.join(", ")}` : "",
+        approvalMode ? `Approval: ${approvalMode}` : "",
+      ].filter((item) => item.length > 0);
+      return {
+        key: node.task_key,
+        label: node.label,
+        status: teamTaskProgress.get(node.task_key)?.detail ?? teamTaskStatusLabel(normalizeTeamTaskStatus(node.status)),
+        ownerRoleKey: node.owner_role_key,
+        ownerPersonaKey: node.owner_persona_key,
+        ownerAgentKey: node.owner_agent_key,
+        items,
+      };
+    });
+  }, [teamRun, teamTaskProgress]);
   const stageLiveSnapshots = useMemo(() => {
     const snapshots = new Map<AgentStage, { recordedAt: string; text: string }>();
     const validStages = new Set<AgentStage>(["pm", "dev", "test", "review"]);
@@ -1147,6 +1286,53 @@ export default function RunDetailPage() {
     }
     return stages;
   }, [invocationSessionRows, isActiveRun, stageCheckpoints]);
+  const teamSummary = useMemo(() => {
+    if (!teamRun) {
+      return null;
+    }
+    const completed = teamRun.nodes.filter((node) => normalizeTeamTaskStatus(node.status) === "completed").length;
+    const running = teamRun.nodes.filter((node) => normalizeTeamTaskStatus(node.status) === "running").length;
+    const blocked = teamRun.nodes.filter((node) => normalizeTeamTaskStatus(node.status) === "blocked").length;
+    return {
+      completed,
+      running,
+      blocked,
+      pending: Math.max(0, teamRun.nodes.length - completed - running - blocked),
+    };
+  }, [teamRun]);
+  const logAgentOptions = useMemo(() => {
+    if (!teamRun) {
+      return [["all", "All agents"], ["pm", "pm"], ["dev", "dev"], ["tester", "tester"], ["review", "review"]] as Array<[string, string]>;
+    }
+    const options = teamRun.nodes
+      .map((node) => node.owner_agent_key)
+      .filter((value): value is string => Boolean(value && value.trim()))
+      .filter((value, index, values) => values.indexOf(value) === index)
+      .sort()
+      .map((value) => [value, value] as [string, string]);
+    return [["all", "All agents"], ...options];
+  }, [teamRun]);
+  const logStageOptions = useMemo(() => {
+    if (!teamRun) {
+      return [
+        ["all", "All stages"],
+        ["pm", "pm"],
+        ["dev", "dev"],
+        ["test", "test"],
+        ["review", "review"],
+        ["orchestrated_run", "orchestrated_run"],
+      ] as Array<[string, string]>;
+    }
+    const options = Array.from(
+      new Set([
+        ...teamRun.nodes.map((node) => node.task_key),
+        ...logs.map((entry) => String(entry.stage ?? "").trim()).filter((value) => value.length > 0),
+      ]),
+    )
+      .sort()
+      .map((value) => [value, value] as [string, string]);
+    return [["all", "All tasks"], ...options];
+  }, [logs, teamRun]);
   const runTimeline = useMemo(() => {
     if (!run) {
       return null;
@@ -1507,46 +1693,101 @@ export default function RunDetailPage() {
       {run ? (
         <>
           {/* Pipeline stage bar */}
-          <div className="mb-6 mt-1 flex items-center gap-2 overflow-x-auto">
-            {(["pm", "dev", "test", "review"] as AgentStage[]).map((stage, idx) => {
-              const progress = stageProgress[stage];
-              const isRunning = progress.status === "running";
-              const isDone = progress.status === "completed";
-              const isInterrupted = progress.status === "interrupted";
-              const statusDot = isRunning
-                ? <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-warning" />
-                : isDone
-                  ? <span className="inline-block h-2 w-2 rounded-full bg-success" />
-                  : isInterrupted
-                    ? <span className="inline-block h-2 w-2 rounded-full bg-destructive" />
-                    : <span className="inline-block h-2 w-2 rounded-full border border-muted-foreground/40 bg-muted" />;
-              return (
-                <div key={stage} className="flex items-center gap-2">
-                  <div
-                    data-testid={`run-stage-${stage}`}
-                    data-stage-status={progress.status}
-                    className="flex flex-col items-center gap-1 rounded-lg border px-3 py-2 text-xs"
-                    style={{
-                      borderColor: isInterrupted ? "rgb(239 68 68 / 0.35)" : isDone || isRunning ? stageColor(stage) + "60" : undefined,
-                      backgroundColor: isInterrupted ? "rgb(239 68 68 / 0.08)" : isDone || isRunning ? stageColor(stage) + "10" : undefined,
-                    }}
-                  >
-                    <div className="flex items-center gap-1.5">
-                      {statusDot}
-                      <span
-                        className="font-semibold uppercase tracking-wide"
-                        style={{ color: isInterrupted ? "rgb(220 38 38)" : isDone || isRunning ? stageColor(stage) : undefined }}
+          {teamRun ? (
+            <div className="mb-6 mt-1 space-y-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-sm font-semibold text-foreground">{teamRun.team_label}</span>
+                <span className="rounded-full border px-2 py-0.5 text-[11px] text-muted-foreground">
+                  v{teamRun.definition_version}
+                </span>
+                <span className="rounded-full border px-2 py-0.5 text-[11px] text-muted-foreground">
+                  {teamRun.status}
+                </span>
+              </div>
+              <div className="flex items-center gap-2 overflow-x-auto">
+                {teamRun.nodes.map((node, idx) => {
+                  const progress = teamTaskProgress.get(node.task_key) ?? {
+                    status: "not_started" as TeamTaskProgressStatus,
+                    tileDetail: "pending",
+                    detail: "pending",
+                  };
+                  const isRunning = progress.status === "running";
+                  const isDone = progress.status === "completed";
+                  const isBlocked = progress.status === "blocked";
+                  const color = teamTaskStatusColor(progress.status);
+                  const statusDot = isRunning
+                    ? <span className="inline-block h-2 w-2 animate-pulse rounded-full" style={{ backgroundColor: color }} />
+                    : isDone || isBlocked
+                      ? <span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: color }} />
+                      : <span className="inline-block h-2 w-2 rounded-full border border-muted-foreground/40 bg-muted" />;
+                  return (
+                    <div key={node.task_key} className="flex items-center gap-2">
+                      <div
+                        data-testid={`team-run-node-${node.task_key}`}
+                        className="flex min-w-[10rem] flex-col gap-1 rounded-lg border px-3 py-2 text-xs"
+                        style={{
+                          borderColor: isDone || isRunning || isBlocked ? `${color}60` : undefined,
+                          backgroundColor: isDone || isRunning || isBlocked ? `${color}10` : undefined,
+                        }}
                       >
-                        {stage}
-                      </span>
+                        <div className="flex items-center gap-1.5">
+                          {statusDot}
+                          <span className="font-semibold">{node.label}</span>
+                        </div>
+                        <span className="text-[10px] text-muted-foreground">{progress.tileDetail}</span>
+                        <span className="text-[10px] text-muted-foreground">
+                          {node.owner_role_key}
+                          {node.owner_persona_key ? ` · ${node.owner_persona_key}` : ""}
+                        </span>
+                      </div>
+                      {idx < teamRun.nodes.length - 1 ? <span className="text-muted-foreground/40">→</span> : null}
                     </div>
-                    <span data-testid={`run-stage-${stage}-detail`} className="text-[10px] text-muted-foreground">{progress.tileDetail}</span>
+                  );
+                })}
+              </div>
+            </div>
+          ) : (
+            <div className="mb-6 mt-1 flex items-center gap-2 overflow-x-auto">
+              {(["pm", "dev", "test", "review"] as AgentStage[]).map((stage, idx) => {
+                const progress = stageProgress[stage];
+                const isRunning = progress.status === "running";
+                const isDone = progress.status === "completed";
+                const isInterrupted = progress.status === "interrupted";
+                const statusDot = isRunning
+                  ? <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-warning" />
+                  : isDone
+                    ? <span className="inline-block h-2 w-2 rounded-full bg-success" />
+                    : isInterrupted
+                      ? <span className="inline-block h-2 w-2 rounded-full bg-destructive" />
+                      : <span className="inline-block h-2 w-2 rounded-full border border-muted-foreground/40 bg-muted" />;
+                return (
+                  <div key={stage} className="flex items-center gap-2">
+                    <div
+                      data-testid={`run-stage-${stage}`}
+                      data-stage-status={progress.status}
+                      className="flex flex-col items-center gap-1 rounded-lg border px-3 py-2 text-xs"
+                      style={{
+                        borderColor: isInterrupted ? "rgb(239 68 68 / 0.35)" : isDone || isRunning ? stageColor(stage) + "60" : undefined,
+                        backgroundColor: isInterrupted ? "rgb(239 68 68 / 0.08)" : isDone || isRunning ? stageColor(stage) + "10" : undefined,
+                      }}
+                    >
+                      <div className="flex items-center gap-1.5">
+                        {statusDot}
+                        <span
+                          className="font-semibold uppercase tracking-wide"
+                          style={{ color: isInterrupted ? "rgb(220 38 38)" : isDone || isRunning ? stageColor(stage) : undefined }}
+                        >
+                          {stage}
+                        </span>
+                      </div>
+                      <span data-testid={`run-stage-${stage}-detail`} className="text-[10px] text-muted-foreground">{progress.tileDetail}</span>
+                    </div>
+                    {idx < 3 ? <span className="text-muted-foreground/40">→</span> : null}
                   </div>
-                  {idx < 3 ? <span className="text-muted-foreground/40">→</span> : null}
-                </div>
-              );
-            })}
-          </div>
+                );
+              })}
+            </div>
+          )}
 
           {/* Tab bar — underline style */}
           <div className="mb-6 border-b overflow-x-auto">
@@ -1572,47 +1813,113 @@ export default function RunDetailPage() {
           {/* Agents panel */}
           {activePanel === "agents" ? (
             <div className="space-y-3">
-              {agentOutcomes.map((outcome) => (
-                <Card key={outcome.stage}>
-                  <CardHeader className="pb-2 pt-4">
-                    <div className="flex items-center gap-2">
-                      <div
-                        className="h-2.5 w-2.5 rounded-full"
-                        style={{ backgroundColor: stageColor(outcome.stage) }}
-                      />
-                      <CardTitle className="text-sm font-semibold uppercase tracking-wide">
-                        {outcome.label}
-                      </CardTitle>
-                      <span className="ml-auto text-xs text-muted-foreground">
-                        {stageProgress[outcome.stage as AgentStage]?.detail ?? "not started"}
-                      </span>
-                    </div>
-                  </CardHeader>
-                  <CardContent className="text-xs">
-                    {outcome.items.length === 0 && !stageLiveSnapshots.get(outcome.stage as AgentStage) ? (
-                      <p className="text-muted-foreground">{outcome.emptyText}</p>
-                    ) : (
-                      <div className="space-y-1">
-                        {outcome.items.map((item, idx) => (
-                          <p key={`${outcome.stage}-item-${idx}`} className="whitespace-pre-wrap">
-                            {item}
-                          </p>
-                        ))}
-                        {outcome.items.length === 0 && stageLiveSnapshots.get(outcome.stage as AgentStage) ? (
-                          <p className="whitespace-pre-wrap text-muted-foreground">
-                            Live snapshot ({new Date(stageLiveSnapshots.get(outcome.stage as AgentStage)!.recordedAt).toLocaleTimeString()}): {stageLiveSnapshots.get(outcome.stage as AgentStage)!.text}
+              {teamRun
+                ? teamAgentOutcomes.map((outcome) => {
+                    const progress = teamTaskProgress.get(outcome.key) ?? {
+                      status: "not_started" as TeamTaskProgressStatus,
+                      tileDetail: "pending",
+                      detail: "pending",
+                    };
+                    return (
+                      <Card key={outcome.key}>
+                        <CardHeader className="pb-2 pt-4">
+                          <div className="flex items-center gap-2">
+                            <div
+                              className="h-2.5 w-2.5 rounded-full"
+                              style={{ backgroundColor: teamTaskStatusColor(progress.status) }}
+                            />
+                            <CardTitle className="text-sm font-semibold tracking-wide">
+                              {outcome.label}
+                            </CardTitle>
+                            <span className="text-xs text-muted-foreground">{outcome.ownerRoleKey}</span>
+                            <span className="ml-auto text-xs text-muted-foreground">{outcome.status}</span>
+                          </div>
+                        </CardHeader>
+                      <CardContent className="space-y-1 text-xs">
+                          {outcome.items.map((item, idx) => (
+                            <p key={`${outcome.key}-item-${idx}`} className="whitespace-pre-wrap">
+                              {item}
+                            </p>
+                          ))}
+                          <div className="flex flex-wrap gap-2 pt-2">
+                            {(teamRun.nodes.find((node) => node.task_key === outcome.key)?.status === "ready") ? (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-7 text-xs"
+                                onClick={() => void handleCompleteTeamTask(outcome.key)}
+                                disabled={teamActionKey === `complete:${outcome.key}`}
+                              >
+                                {teamActionKey === `complete:${outcome.key}` ? "Completing..." : "Complete task"}
+                              </Button>
+                            ) : null}
+                            {(teamRun.nodes.find((node) => node.task_key === outcome.key)?.status === "awaiting_approval") ? (
+                              <>
+                                <Button
+                                  size="sm"
+                                  className="h-7 text-xs"
+                                  onClick={() => void handleApproveTeamTask(outcome.key, "approved")}
+                                  disabled={teamActionKey === `approval:${outcome.key}:approved` || teamActionKey === `approval:${outcome.key}:rejected`}
+                                >
+                                  {teamActionKey === `approval:${outcome.key}:approved` ? "Approving..." : "Approve"}
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-7 text-xs"
+                                  onClick={() => void handleApproveTeamTask(outcome.key, "rejected")}
+                                  disabled={teamActionKey === `approval:${outcome.key}:approved` || teamActionKey === `approval:${outcome.key}:rejected`}
+                                >
+                                  {teamActionKey === `approval:${outcome.key}:rejected` ? "Rejecting..." : "Reject"}
+                                </Button>
+                              </>
+                            ) : null}
+                          </div>
+                        </CardContent>
+                      </Card>
+                    );
+                  })
+                : agentOutcomes.map((outcome) => (
+                    <Card key={outcome.stage}>
+                      <CardHeader className="pb-2 pt-4">
+                        <div className="flex items-center gap-2">
+                          <div
+                            className="h-2.5 w-2.5 rounded-full"
+                            style={{ backgroundColor: stageColor(outcome.stage) }}
+                          />
+                          <CardTitle className="text-sm font-semibold uppercase tracking-wide">
+                            {outcome.label}
+                          </CardTitle>
+                          <span className="ml-auto text-xs text-muted-foreground">
+                            {stageProgress[outcome.stage as AgentStage]?.detail ?? "not started"}
+                          </span>
+                        </div>
+                      </CardHeader>
+                      <CardContent className="text-xs">
+                        {outcome.items.length === 0 && !stageLiveSnapshots.get(outcome.stage as AgentStage) ? (
+                          <p className="text-muted-foreground">{outcome.emptyText}</p>
+                        ) : (
+                          <div className="space-y-1">
+                            {outcome.items.map((item, idx) => (
+                              <p key={`${outcome.stage}-item-${idx}`} className="whitespace-pre-wrap">
+                                {item}
+                              </p>
+                            ))}
+                            {outcome.items.length === 0 && stageLiveSnapshots.get(outcome.stage as AgentStage) ? (
+                              <p className="whitespace-pre-wrap text-muted-foreground">
+                                Live snapshot ({new Date(stageLiveSnapshots.get(outcome.stage as AgentStage)!.recordedAt).toLocaleTimeString()}): {stageLiveSnapshots.get(outcome.stage as AgentStage)!.text}
+                              </p>
+                            ) : null}
+                          </div>
+                        )}
+                        {outcome.feedback ? (
+                          <p className="mt-2 rounded border border-warning/30 bg-warning/10 p-2 text-warning-foreground">
+                            Feedback: {outcome.feedback}
                           </p>
                         ) : null}
-                      </div>
-                    )}
-                    {outcome.feedback ? (
-                      <p className="mt-2 rounded border border-warning/30 bg-warning/10 p-2 text-warning-foreground">
-                        Feedback: {outcome.feedback}
-                      </p>
-                    ) : null}
-                  </CardContent>
-                </Card>
-              ))}
+                      </CardContent>
+                    </Card>
+                  ))}
             </div>
           ) : null}
 
@@ -1761,6 +2068,58 @@ export default function RunDetailPage() {
           {/* Overview panel — run timeline + chat */}
           {activePanel === "overview" ? (
             <div className="space-y-4">
+              {teamRun && teamSummary ? (
+                <Card>
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-sm">{teamRun.team_label} Overview</CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    <div className="grid gap-3 sm:grid-cols-4">
+                      {[
+                        { label: "Completed", value: String(teamSummary.completed) },
+                        { label: "Running", value: String(teamSummary.running) },
+                        { label: "Pending", value: String(teamSummary.pending) },
+                        { label: "Blocked", value: String(teamSummary.blocked) },
+                      ].map((item) => (
+                        <div key={item.label} className="rounded-lg border p-3 text-xs">
+                          <p className="text-muted-foreground">{item.label}</p>
+                          <p className="mt-0.5 font-semibold">{item.value}</p>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="grid gap-3 lg:grid-cols-[1.6fr,1fr]">
+                      <div className="rounded-lg border p-3 text-xs">
+                        <p className="mb-2 font-medium text-foreground">Task graph</p>
+                        <div className="space-y-2">
+                          {teamRun.nodes.map((node) => (
+                            <div key={node.task_key} className="flex items-start justify-between gap-3 rounded-md border bg-muted/20 px-3 py-2">
+                              <div className="min-w-0">
+                                <p className="font-medium">{node.label}</p>
+                                <p className="text-muted-foreground">
+                                  {node.owner_role_key}
+                                  {node.owner_agent_key ? ` · ${node.owner_agent_key}` : ""}
+                                </p>
+                              </div>
+                              <span className="text-muted-foreground">
+                                {node.dependency_keys.length > 0 ? node.dependency_keys.join(", ") : "root"}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="rounded-lg border p-3 text-xs">
+                        <p className="mb-2 font-medium text-foreground">Coordination state</p>
+                        <div className="space-y-2 text-muted-foreground">
+                          <p>Artifacts: {teamRun.artifacts.length}</p>
+                          <p>Approvals: {teamRun.approvals.length}</p>
+                          <p>Edges: {teamRun.edges.length}</p>
+                          <p>Status: {teamRun.status}</p>
+                        </div>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              ) : null}
               {/* Gantt timeline */}
               {runTimeline ? (
                 <Card>
@@ -1957,8 +2316,8 @@ export default function RunDetailPage() {
                         {loadingOlderLogs ? "Loading..." : hasMoreLogs ? "Load older" : "All loaded"}
                       </Button>
                       {[
-                        { label: "Agent", value: logAgentFilter, onChange: setLogAgentFilter, options: [["all", "All agents"], ["pm", "pm"], ["dev", "dev"], ["tester", "tester"], ["review", "review"]] },
-                        { label: "Stage", value: logStageFilter, onChange: setLogStageFilter, options: [["all", "All stages"], ["pm", "pm"], ["dev", "dev"], ["test", "test"], ["review", "review"], ["orchestrated_run", "orchestrated_run"]] },
+                        { label: "Agent", value: logAgentFilter, onChange: setLogAgentFilter, options: logAgentOptions },
+                        { label: "Stage", value: logStageFilter, onChange: setLogStageFilter, options: logStageOptions },
                         { label: "Stream", value: logStreamFilter, onChange: setLogStreamFilter, options: [["all", "All"], ["stdout", "stdout"], ["stderr", "stderr"]] }
                       ].map((filter) => (
                         <select key={filter.label} className="h-7 rounded border border-input bg-background px-2 text-xs" value={filter.value} onChange={(e) => filter.onChange(e.target.value)}>

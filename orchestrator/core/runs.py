@@ -2,16 +2,22 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import logging
 from uuid import uuid4
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from orchestrator.core.config import get_settings
+from orchestrator.core.platform_team_catalog_service import platform_team_catalog_service
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.core.workflow.transitions import ACTIVE_WORKFLOW_STATUSES as WORKFLOW_ACTIVE_STATUSES, is_workflow_terminal
+from orchestrator.temporal.team_run_orchestration import start_team_run_workflow_for_run
 from orchestrator.storage.models import Run, WebhookDelivery, WorkflowExecution
 from orchestrator.storage.run_queue_events import notify_run_enqueued
+
+logger = logging.getLogger(__name__)
 
 RUN_DEDUPE_SCOPE_ISSUE_EXECUTION = "issue_execution"
 RUN_DEDUPE_SCOPE_PR_REMEDIATION = "pr_remediation"
@@ -59,6 +65,7 @@ class RunBootstrap:
     branch: str | None = None
     pr_url: str | None = None
     workflow_id: str | None = None
+    source_workflow_id: str | None = None
     parent_run_id: str | None = None
     entry_mode: str = "fresh"
     entry_stage: str | None = None
@@ -175,6 +182,7 @@ def _build_initial_plan(
     *,
     bootstrap: RunBootstrap | None,
     normalized_precheck_outcome: str | None,
+    orchestration_backend: str | None = None,
 ) -> dict[str, object] | None:
     snapshot: ExecutionSnapshot
     if bootstrap is not None and bootstrap.plan is not None:
@@ -185,7 +193,86 @@ def _build_initial_plan(
         snapshot = ExecutionSnapshot.empty()
     if normalized_precheck_outcome is not None:
         snapshot.context.execution_context["pre_check_outcome"] = normalized_precheck_outcome
+    if not isinstance(snapshot.context.execution_context.get("team_run"), dict):
+        snapshot.context.execution_context["team_run"] = platform_team_catalog_service.build_issue_workflow_team_run_snapshot(
+            snapshot=snapshot,
+            entry_mode=(bootstrap.entry_mode if bootstrap is not None else "fresh"),
+            entry_stage=(bootstrap.entry_stage if bootstrap is not None else None),
+            max_loops=None,
+        )
+    normalized_backend = "temporal"
+    snapshot.context.execution_context["orchestration_backend"] = normalized_backend
     return snapshot.dump()
+
+
+def _current_orchestration_backend() -> str:
+    normalized = str(get_settings().orchestration_backend or "").strip().lower()
+    return normalized or "temporal"
+
+
+def _temporal_required_for_run(*, bootstrap: RunBootstrap | None = None, run: Run | None = None) -> bool:
+    if bootstrap is not None and isinstance(bootstrap.plan, dict):
+        snapshot = ExecutionSnapshot.load(bootstrap.plan)
+        if snapshot is not None and isinstance(snapshot.context.execution_context.get("team_run"), dict):
+            return True
+    if run is not None:
+        snapshot = ExecutionSnapshot.load(run.plan)
+        if snapshot is not None and isinstance(snapshot.context.execution_context.get("team_run"), dict):
+            return True
+    entry_stage = ""
+    if bootstrap is not None:
+        entry_stage = str(bootstrap.entry_stage or "").strip().lower()
+    elif run is not None:
+        entry_stage = str(run.entry_stage or "").strip().lower()
+    return entry_stage == "team"
+
+
+def _set_run_orchestration_backend(*, run: Run, backend: str) -> None:
+    snapshot = ExecutionSnapshot.load(run.plan)
+    if snapshot is None:
+        snapshot = ExecutionSnapshot.empty()
+    snapshot.context.execution_context["orchestration_backend"] = str(backend or "").strip().lower() or "legacy"
+    run.plan = snapshot.dump()
+
+
+def _run_orchestration_backend(run: Run | None) -> str | None:
+    if run is None:
+        return None
+    snapshot = ExecutionSnapshot.load(run.plan)
+    if snapshot is None:
+        return None
+    normalized = str(snapshot.context.execution_context.get("orchestration_backend") or "").strip().lower()
+    return normalized or None
+
+
+def _workflow_orchestration_backend(session: Session, workflow: WorkflowExecution) -> str:
+    workflow_run = _run_for_workflow(session, workflow)
+    inherited = _run_orchestration_backend(workflow_run)
+    if inherited:
+        return inherited
+    return _current_orchestration_backend()
+
+
+def _maybe_start_temporal_run_workflow(*, session: Session, run: Run) -> None:
+    settings = get_settings()
+    temporal_required = _temporal_required_for_run(run=run)
+    if not temporal_required:
+        return
+    try:
+        start_team_run_workflow_for_run(settings=settings, run=run)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception(
+            "temporal_team_run_workflow_start_failed run_id=%s workflow_id=%s error=%s",
+            run.run_id,
+            run.workflow_id,
+            exc,
+        )
+        mark_run_terminal(
+            session,
+            run_id=str(run.run_id),
+            terminal_status=RUN_STATUS_FAILED,
+            last_error=f"Temporal team workflow start failed: {exc}",
+        )
 
 
 def _next_attempt_number(session: Session, workflow_id: str) -> int:
@@ -276,6 +363,7 @@ def enqueue_run(
     initial_plan = _build_initial_plan(
         bootstrap=bootstrap,
         normalized_precheck_outcome=normalized_precheck_outcome,
+        orchestration_backend="temporal" if _temporal_required_for_run(bootstrap=bootstrap) else _current_orchestration_backend(),
     )
     workflow_id = str(uuid4())
     run_id = str(uuid4())
@@ -294,7 +382,7 @@ def enqueue_run(
         last_error=None,
         active_run_id=run_id,
         latest_checkpoint_id=bootstrap.entry_checkpoint_id if bootstrap is not None else None,
-        source_workflow_id=None,
+        source_workflow_id=bootstrap.source_workflow_id if bootstrap is not None else None,
         source_run_id=bootstrap.parent_run_id if bootstrap is not None else None,
         blocked_reason=None,
         created_at=now,
@@ -388,6 +476,7 @@ def enqueue_run(
                 )
         raise RunStateTransitionError("Failed to enqueue run due to unknown integrity conflict")
     session.refresh(run)
+    _maybe_start_temporal_run_workflow(session=session, run=run)
     return EnqueueRunResult(enqueued=True, reason=None, run=run)
 
 
@@ -427,7 +516,11 @@ def enqueue_attempt_for_workflow(
         entry_stage=_resolve_entry_stage(bootstrap=bootstrap),
         entry_checkpoint_id=bootstrap.entry_checkpoint_id,
         dedupe_scope=workflow.dedupe_scope,
-        plan=dict(bootstrap.plan) if isinstance(bootstrap.plan, dict) else None,
+        plan=_build_initial_plan(
+            bootstrap=bootstrap,
+            normalized_precheck_outcome=None,
+            orchestration_backend="temporal" if _temporal_required_for_run(bootstrap=bootstrap) else _workflow_orchestration_backend(session, workflow),
+        ),
         status=RUN_STATUS_QUEUED,
         last_error=None,
         created_at=now,
@@ -452,6 +545,7 @@ def enqueue_attempt_for_workflow(
     )
     session.commit()
     session.refresh(run)
+    _maybe_start_temporal_run_workflow(session=session, run=run)
     return EnqueueRunResult(enqueued=True, reason=None, run=run)
 
 

@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
@@ -14,21 +13,21 @@ from orchestrator.core.followup_context_service import (
     upsert_followup_context,
 )
 from orchestrator.core.discord.notifications import send_tenant_discord_message
-from orchestrator.core.runs import RUN_STATUS_BLOCKED, RUN_STATUS_WAITING_FOR_INPUT, RunBootstrap, enqueue_run
+from orchestrator.core.runs import RUN_STATUS_BLOCKED, RUN_STATUS_WAITING_FOR_INPUT
 from orchestrator.core.secrets import decrypt_value, encrypt_value
 from orchestrator.core.workflow.checkpoints import (
     checkpoint_kind_for_stage,
     checkpoint_payload_for_plan,
-    normalize_checkpoint_stage,
     snapshot_checkpoint_for_run,
 )
-from orchestrator.storage.models import Project, Run, RunHumanInputRequest, Tenant, WorkflowCheckpoint, WorkflowExecution
+from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
+from orchestrator.temporal.human_input_orchestration import resume_human_input_request_via_temporal
+from orchestrator.storage.models import Project, Run, RunHumanInputRequest, Tenant, WorkflowExecution
 
 INPUT_STATUS_PENDING = "pending"
 INPUT_STATUS_ANSWERED = "answered"
 INPUT_STATUS_CONSUMED = "consumed"
 INPUT_STATUS_EXPIRED = "expired"
-
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
@@ -386,49 +385,26 @@ def resume_workflow_from_human_input_answer(
         existing_run = session.get(Run, request.consumed_by_run_id)
         if existing_run is not None:
             return existing_run
-    if request.status != INPUT_STATUS_ANSWERED:
-        raise ValueError("Human input request is not answered")
+
     source_run = session.get(Run, request.source_run_id)
-    if source_run is None:
-        raise ValueError("Source run for human input request was not found")
-    checkpoint = session.get(WorkflowCheckpoint, request.checkpoint_id)
-    if checkpoint is None:
-        raise ValueError("Checkpoint for human input request was not found")
-
-    enqueue_result = enqueue_run(
-        session,
-        tenant_id=source_run.tenant_id,
-        project_id=source_run.project_id,
-        issue_key=source_run.issue_key,
-        issue_summary=source_run.issue_summary,
-        issue_description=source_run.issue_description,
-        repo_url=source_run.repo_url,
-        delivery_id=None,
-        bootstrap=RunBootstrap(
-            workflow_id=request.workflow_id,
-            parent_run_id=request.source_run_id,
-            entry_mode="resume",
-            entry_stage=normalize_checkpoint_stage(request.source_stage),
-            entry_checkpoint_id=request.checkpoint_id,
-            plan=dict(checkpoint.payload_json or {}),
-            branch=source_run.branch,
-            pr_url=source_run.pr_url,
-        ),
+    source_snapshot = ExecutionSnapshot.load(getattr(source_run, "plan", None)) if source_run is not None else None
+    temporal_owned_run = (
+        source_snapshot is not None
+        and isinstance(source_snapshot.context.execution_context.get("team_run"), dict)
     )
-    if not enqueue_result.enqueued:
-        raise ValueError(f"Unable to enqueue resumed run: {enqueue_result.reason}")
+    if not temporal_owned_run:
+        raise ValueError("Legacy workflow resume is no longer supported; historical workflows are read-only")
 
-    request.status = INPUT_STATUS_CONSUMED
-    request.consumed_by_run_id = enqueue_result.run.run_id
-    request.updated_at = _now()
-    close_followup_contexts(
-        session=session,
-        tenant_id=request.tenant_id,
-        context_type=FOLLOWUP_CONTEXT_HUMAN_INPUT,
-        request_id=request.request_id,
-        status=CLOSED_FOLLOWUP_CONTEXT_STATUS,
-    )
-    session.commit()
-    session.refresh(enqueue_result.run)
-    session.refresh(request)
-    return enqueue_result.run
+    resume_result = resume_human_input_request_via_temporal(settings=settings, request=request)
+    session.expire_all()
+    resumed_run_id = str(resume_result.resumed_run_id or request.consumed_by_run_id or "").strip()
+    if resumed_run_id:
+        resumed_run = session.get(Run, resumed_run_id)
+        if resumed_run is not None:
+            return resumed_run
+    refreshed_request = session.get(RunHumanInputRequest, request.request_id)
+    if refreshed_request is not None and refreshed_request.consumed_by_run_id:
+        resumed_run = session.get(Run, refreshed_request.consumed_by_run_id)
+        if resumed_run is not None:
+            return resumed_run
+    raise ValueError("Temporal workflow did not produce a resumed run")

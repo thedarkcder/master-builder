@@ -5,6 +5,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from orchestrator.core.worker.queue_selector import (
+    claim_queued_run_by_id,
     claim_next_queued_run,
     coerce_positive_int,
     select_next_queued_run,
@@ -240,6 +241,226 @@ class WorkerQueueSelectorTests(unittest.TestCase):
             self.assertIsNotNone(result.run)
             self.assertEqual(result.run.run_id, "run-race-queued")
             self.assertEqual(result.run.status, "running")
+
+    def test_claim_next_queued_run_skips_temporal_owned_run(self) -> None:
+        now = datetime.now(timezone.utc)
+        snapshot = ExecutionSnapshot.empty()
+        snapshot.context.execution_context["orchestration_backend"] = "temporal"
+        with self.session_factory() as session:
+            session.add(
+                Tenant(
+                    tenant_id="tenant-temporal",
+                    name="Tenant Temporal",
+                    is_enabled=True,
+                    jira_config={},
+                    github_config={},
+                    repos_config={"github_repository": "https://github.com/example/temporal"},
+                    policy_config={"max_concurrent_runs": 1},
+                    discord_config=None,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            _add_run(
+                session,
+                now=now,
+                run_id="run-temporal-owned",
+                tenant_id="tenant-temporal",
+                issue_key="MAB-905",
+                issue_summary="Temporal owned",
+                issue_description="queued",
+                repo_url="https://github.com/example/temporal",
+                branch=None,
+                pr_url=None,
+                status="queued",
+                plan=snapshot.dump(),
+                started_at=None,
+                finished_at=None,
+            )
+            session.commit()
+
+            result = claim_next_queued_run(
+                session,
+                queued_status="queued",
+                running_status="running",
+                failed_status="failed",
+                worker_service_instance_id="node-a:1234",
+            )
+
+            self.assertIsNone(result.run)
+            self.assertIsNone(result.tenant)
+            self.assertIsNone(result.terminal_run)
+
+    def test_claim_queued_run_by_id_can_claim_temporal_owned_run(self) -> None:
+        now = datetime.now(timezone.utc)
+        snapshot = ExecutionSnapshot.empty()
+        snapshot.context.execution_context["orchestration_backend"] = "temporal"
+        with self.session_factory() as session:
+            session.add(
+                Tenant(
+                    tenant_id="tenant-temporal-direct",
+                    name="Tenant Temporal Direct",
+                    is_enabled=True,
+                    jira_config={},
+                    github_config={},
+                    repos_config={"github_repository": "https://github.com/example/temporal-direct"},
+                    policy_config={"max_concurrent_runs": 1},
+                    discord_config=None,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            _add_run(
+                session,
+                now=now,
+                run_id="run-temporal-direct",
+                tenant_id="tenant-temporal-direct",
+                issue_key="MAB-906",
+                issue_summary="Temporal direct",
+                issue_description="queued",
+                repo_url="https://github.com/example/temporal-direct",
+                branch=None,
+                pr_url=None,
+                status="queued",
+                plan=snapshot.dump(),
+                started_at=None,
+                finished_at=None,
+            )
+            session.commit()
+
+            result = claim_queued_run_by_id(
+                session,
+                run_id="run-temporal-direct",
+                queued_status="queued",
+                running_status="running",
+                failed_status="failed",
+                worker_service_instance_id="node-a:1234",
+                allow_temporal_owned=True,
+            )
+
+            self.assertIsNotNone(result.run)
+            self.assertEqual(result.run.run_id, "run-temporal-direct")
+            self.assertEqual(result.run.status, "running")
+
+    def test_claim_next_queued_run_skips_team_run_even_without_temporal_backend(self) -> None:
+        now = datetime.now(timezone.utc)
+        snapshot = ExecutionSnapshot.empty()
+        snapshot.context.execution_context["team_run"] = {
+            "team_key": "campaign_team",
+            "team_label": "Campaign Team",
+            "definition_version": 1,
+            "nodes": [],
+            "edges": [],
+            "artifacts": [],
+            "approvals": [],
+            "status": "queued",
+        }
+        with self.session_factory() as session:
+            session.add(
+                Tenant(
+                    tenant_id="tenant-team-run",
+                    name="Tenant Team Run",
+                    is_enabled=True,
+                    jira_config={},
+                    github_config={},
+                    repos_config={"github_repository": "https://github.com/example/team-run"},
+                    policy_config={"max_concurrent_runs": 1},
+                    discord_config=None,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            _add_run(
+                session,
+                now=now,
+                run_id="run-team-owned",
+                tenant_id="tenant-team-run",
+                issue_key="MAB-907",
+                issue_summary="Team run",
+                issue_description="queued",
+                repo_url="https://github.com/example/team-run",
+                branch=None,
+                pr_url=None,
+                status="queued",
+                entry_stage="team",
+                plan=snapshot.dump(),
+                started_at=None,
+                finished_at=None,
+            )
+            session.commit()
+
+            result = claim_next_queued_run(
+                session,
+                queued_status="queued",
+                running_status="running",
+                failed_status="failed",
+                worker_service_instance_id="node-a:1234",
+            )
+
+            self.assertIsNone(result.run)
+            self.assertIsNone(result.tenant)
+            self.assertIsNone(result.terminal_run)
+
+    def test_claim_queued_run_by_id_does_not_claim_team_run(self) -> None:
+        now = datetime.now(timezone.utc)
+        snapshot = ExecutionSnapshot.empty()
+        snapshot.context.execution_context["team_run"] = {
+            "team_key": "campaign_team",
+            "team_label": "Campaign Team",
+            "definition_version": 1,
+            "nodes": [],
+            "edges": [],
+            "artifacts": [],
+            "approvals": [],
+            "status": "queued",
+        }
+        with self.session_factory() as session:
+            session.add(
+                Tenant(
+                    tenant_id="tenant-team-direct",
+                    name="Tenant Team Direct",
+                    is_enabled=True,
+                    jira_config={},
+                    github_config={},
+                    repos_config={"github_repository": "https://github.com/example/team-direct"},
+                    policy_config={"max_concurrent_runs": 1},
+                    discord_config=None,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            _add_run(
+                session,
+                now=now,
+                run_id="run-team-direct",
+                tenant_id="tenant-team-direct",
+                issue_key="MAB-908",
+                issue_summary="Team direct",
+                issue_description="queued",
+                repo_url="https://github.com/example/team-direct",
+                branch=None,
+                pr_url=None,
+                status="queued",
+                entry_stage="team",
+                plan=snapshot.dump(),
+                started_at=None,
+                finished_at=None,
+            )
+            session.commit()
+
+            result = claim_queued_run_by_id(
+                session,
+                run_id="run-team-direct",
+                queued_status="queued",
+                running_status="running",
+                failed_status="failed",
+                worker_service_instance_id="node-a:1234",
+                allow_temporal_owned=True,
+            )
+
+            self.assertIsNone(result.run)
+            self.assertIsNone(result.tenant)
+            self.assertIsNone(result.terminal_run)
 
     def test_select_next_queued_run_applies_project_overrides_when_project_id_unset(self) -> None:
         now = datetime.now(timezone.utc)

@@ -24,9 +24,6 @@ from orchestrator.core.agent_execution_profiles import (
     default_agent_role_routing,
     default_execution_profiles,
     default_execution_profile_routing,
-    list_known_execution_selectors,
-    list_known_agent_names,
-    list_known_agent_roles,
     normalize_execution_profile_routing,
     normalize_agent_routing,
     normalize_execution_profiles,
@@ -34,6 +31,7 @@ from orchestrator.core.agent_execution_profiles import (
     runtime_kind_supports_api_key,
     runtime_kind_supports_reasoning_effort,
 )
+from orchestrator.core.platform_team_catalog_service import platform_team_catalog_service
 from orchestrator.core.config import get_settings
 from orchestrator.core.platform_settings_service import (
     SETTING_KEY_AGENT_RUNTIME_PROFILES,
@@ -197,14 +195,16 @@ def _available_profiles(*, session: Session) -> dict[str, AgentExecutionProfileR
 
 def _validate_routing_payload(
     *,
+    session: Session,
     role_routing: dict[str, str],
     name_routing: dict[str, str],
     selector_routing: dict[str, str],
     available_profiles: dict[str, AgentExecutionProfileRead],
 ) -> None:
-    known_roles = set(list_known_agent_roles())
-    known_names = set(list_known_agent_names())
-    known_selectors = set(list_known_execution_selectors())
+    bindings = _runtime_bindings(session=session)
+    known_roles = set(bindings["available_roles"])
+    known_names = set(bindings["available_named_agents"])
+    known_selectors = set(bindings["available_selectors"])
     known_profiles = set(available_profiles.keys())
 
     for role, profile_name in role_routing.items():
@@ -292,20 +292,28 @@ def _validate_profile_write(
 
 def _build_routing_response(*, session: Session) -> AgentRuntimeRoutingRead:
     role_routing, name_routing, selector_routing = _current_routing(session=session)
+    bindings = _runtime_bindings(session=session)
+    available_roles = set(bindings["available_roles"])
+    available_named_agents = set(bindings["available_named_agents"])
+    available_selectors = set(bindings["available_selectors"])
     return AgentRuntimeRoutingRead(
         role_routing=role_routing,
         name_routing=name_routing,
         selector_routing=selector_routing,
-        available_roles=list_known_agent_roles(),
-        available_named_agents=list_known_agent_names(),
-        available_selectors=list_known_execution_selectors(),
+        available_roles=sorted(available_roles),
+        available_named_agents=sorted(available_named_agents),
+        available_selectors=sorted(available_selectors),
         available_profiles=_available_profiles(session=session),
         effective_defaults=AgentRuntimeRoutingDefaultsRead(
-            role_routing=default_agent_role_routing(),
-            name_routing=default_agent_name_routing(),
-            selector_routing=default_execution_profile_routing(),
+            role_routing={key: value for key, value in default_agent_role_routing().items() if key in available_roles},
+            name_routing={key: value for key, value in default_agent_name_routing().items() if key in available_named_agents},
+            selector_routing={key: value for key, value in default_execution_profile_routing().items() if key in available_selectors},
         ),
     )
+
+
+def _runtime_bindings(*, session: Session) -> dict[str, list[str]]:
+    return platform_team_catalog_service.list_runtime_bindings(session=session)
 
 
 @router.get("/agent-runtimes", response_model=AgentRuntimeRoutingRead)
@@ -327,6 +335,7 @@ def put_agent_runtimes(
     name_routing = normalize_agent_routing(payload.name_routing)
     selector_routing = _canonicalize_selector_routing(normalize_execution_profile_routing(payload.selector_routing))
     _validate_routing_payload(
+        session=session,
         role_routing=role_routing,
         name_routing=name_routing,
         selector_routing=selector_routing,

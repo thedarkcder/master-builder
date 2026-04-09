@@ -25,6 +25,7 @@ from orchestrator.api.routes.admin_github import router as admin_github_router
 from orchestrator.api.routes.admin_jira import router as admin_jira_router
 from orchestrator.api.routes.admin_knowledge import router as admin_knowledge_router
 from orchestrator.api.routes.admin_observability import router as admin_observability_router
+from orchestrator.api.routes.admin_platform_catalog import router as admin_platform_catalog_router
 from orchestrator.api.routes.admin_ready import router as admin_ready_router
 from orchestrator.api.routes.admin_release import router as admin_release_router
 from orchestrator.api.routes.admin_runs import router as admin_runs_router
@@ -208,6 +209,7 @@ def create_app() -> FastAPI:
 
     app.include_router(admin_knowledge_router)
     app.include_router(admin_observability_router)
+    app.include_router(admin_platform_catalog_router)
     app.include_router(admin_runs_router)
     app.include_router(admin_tenants_router)
     app.include_router(admin_auth_router)
