@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import Enum
 from typing import Literal
@@ -122,6 +122,12 @@ class ExecutionGateReason:
 
 
 @dataclass(frozen=True)
+class ExecutionGateResolution:
+    state: ExecutionGateState
+    reason: ExecutionGateReason | None = None
+
+
+@dataclass(frozen=True)
 class DecisionEventInput:
     source: DecisionSource
     event_type: str
@@ -145,19 +151,28 @@ class DecisionEngineResult:
     cycle_id: str | None
     outbox_effect_ids: tuple[str, ...]
     duplicate_event: bool
-    execution_gate_state: ExecutionGateState = ExecutionGateState.ALLOW_EXECUTION
-    execution_gate_reason: ExecutionGateReason | None = None
+    execution_gate: ExecutionGateResolution = field(
+        default_factory=lambda: ExecutionGateResolution(state=ExecutionGateState.ALLOW_EXECUTION)
+    )
+
+    @property
+    def execution_gate_state(self) -> ExecutionGateState:
+        return self.execution_gate.state
+
+    @property
+    def execution_gate_reason(self) -> ExecutionGateReason | None:
+        return self.execution_gate.reason
 
 
 def resolve_execution_gate_state(
     *,
     decision: IngressDecision,
     classification: str,
-) -> tuple[ExecutionGateState, ExecutionGateReason | None]:
+) -> ExecutionGateResolution:
     if decision.policy_error or decision.pre_check is None:
-        return (
-            ExecutionGateState.POLICY_ERROR,
-            ExecutionGateReason(
+        return ExecutionGateResolution(
+            state=ExecutionGateState.POLICY_ERROR,
+            reason=ExecutionGateReason(
                 reason_code="policy_eval_failed",
                 guidance=enqueue_reason_guidance("policy_eval_failed"),
                 detail=str(decision.policy_error or "").strip() or None,
@@ -172,9 +187,9 @@ def resolve_execution_gate_state(
             if ready_label
             else enqueue_reason_guidance("missing_ready_label")
         )
-        return (
-            ExecutionGateState.BLOCK_READY_LABEL,
-            ExecutionGateReason(
+        return ExecutionGateResolution(
+            state=ExecutionGateState.BLOCK_READY_LABEL,
+            reason=ExecutionGateReason(
                 reason_code="missing_ready_label",
                 guidance=guidance,
                 ready_label=ready_label,
@@ -183,13 +198,13 @@ def resolve_execution_gate_state(
 
     if block_reason in {"decision_gate_required", "gtd_required", "execution_blocked"} or classification in {"decision_gate", "gtd", "both"}:
         detail = str(getattr(decision.pre_check, "decision_gate_reason", "") or "").strip() or None
-        return (
-            ExecutionGateState.BLOCK_DECISION,
-            ExecutionGateReason(
+        return ExecutionGateResolution(
+            state=ExecutionGateState.BLOCK_DECISION,
+            reason=ExecutionGateReason(
                 reason_code=block_reason or "decision_gate_required",
                 guidance=enqueue_reason_guidance(block_reason or "decision_gate_required"),
                 detail=detail,
             ),
         )
 
-    return (ExecutionGateState.ALLOW_EXECUTION, None)
+    return ExecutionGateResolution(state=ExecutionGateState.ALLOW_EXECUTION)
