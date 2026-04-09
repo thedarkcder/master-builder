@@ -117,7 +117,7 @@ def infer_required_worker_capability(
     label_parse = parse_worker_capability_labels(normalized_labels)
     if label_parse.selected_capability is not None:
         return label_parse.selected_capability.value
-    return DEFAULT_WORKER_CAPABILITY.value
+    return ""
 
 
 def required_worker_capability_for_run(run) -> WorkerCapability | None:  # noqa: ANN001

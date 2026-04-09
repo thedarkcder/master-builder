@@ -1,11 +1,26 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from orchestrator.core.runtime_invocation import AgentInvocationContext, invoke_runtime_json
 from orchestrator.core.codex_runtime import CodexRuntime, CodexRuntimeError
 from orchestrator.core.prompt_templates import render_prompt
+
+
+_CANONICAL_SLOT_KEYS = {
+    "objective",
+    "scope",
+    "acceptance_criteria",
+    "how_to_test",
+    "nfr_intent",
+    "reliability_security_constraints",
+    "out_of_scope",
+    "rollout_constraints",
+    "decision_owner",
+    "dependencies_and_risks",
+}
 
 
 def precheck_classification(pre_check: object) -> str:
@@ -26,34 +41,10 @@ def precheck_classification(pre_check: object) -> str:
 
 def _normalize_slot_name(raw_value: str) -> str:
     normalized = str(raw_value or "").strip().lower()
-    normalized = normalized.replace("-", " ").replace("_", " ")
-    canonical = {
-        "objective": "objective",
-        "scope": "scope",
-        "acceptance criteria": "acceptance_criteria",
-        "acceptance": "acceptance_criteria",
-        "how to test": "how_to_test",
-        "test plan": "how_to_test",
-        "nfr intent": "nfr_intent",
-        "nfr": "nfr_intent",
-        "mvp vs scale-ready": "nfr_intent",
-        "reliability/security constraints": "reliability_security_constraints",
-        "reliability constraints": "reliability_security_constraints",
-        "security constraints": "reliability_security_constraints",
-        "out of scope": "out_of_scope",
-        "rollout constraints": "rollout_constraints",
-        "migration constraints": "rollout_constraints",
-        "decision owner": "decision_owner",
-        "dependencies / risks": "dependencies_and_risks",
-        "dependencies and risks": "dependencies_and_risks",
-        "risks": "dependencies_and_risks",
-    }
-    if normalized in canonical:
-        return canonical[normalized]
-    for key, value in canonical.items():
-        if key in normalized:
-            return value
-    return normalized.replace(" ", "_")
+    if not normalized:
+        return ""
+    normalized = re.sub(r"[^a-z0-9]+", "_", normalized).strip("_")
+    return normalized if normalized in _CANONICAL_SLOT_KEYS else ""
 
 
 def precheck_missing_slots(pre_check: object) -> list[str]:
