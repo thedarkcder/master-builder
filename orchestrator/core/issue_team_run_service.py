@@ -17,6 +17,13 @@ from orchestrator.core.runs import (
     RUN_STATUS_WAITING_FOR_INPUT,
     RunStateTransitionError,
 )
+from orchestrator.core.team_run_state import (
+    get_team_run_runtime_state,
+    set_team_run_node_status,
+    set_team_run_runtime_state,
+    team_run_node,
+    team_run_nodes,
+)
 from orchestrator.core.run_human_input_service import (
     INPUT_STATUS_ANSWERED,
     INPUT_STATUS_CONSUMED,
@@ -72,26 +79,6 @@ def _now_iso() -> str:
     return _now().isoformat()
 
 
-def _runtime_state(team_run: dict[str, Any]) -> dict[str, Any]:
-    raw = team_run.get("runtime_state")
-    return deepcopy(raw) if isinstance(raw, dict) else {}
-
-
-def _save_runtime_state(team_run: dict[str, Any], runtime_state: dict[str, Any]) -> None:
-    team_run["runtime_state"] = deepcopy(runtime_state)
-
-
-def _nodes(team_run: dict[str, Any]) -> list[dict[str, Any]]:
-    return [node for node in team_run.get("nodes", []) if isinstance(node, dict)]
-
-
-def _node(team_run: dict[str, Any], task_key: str) -> dict[str, Any]:
-    for node in _nodes(team_run):
-        if str(node.get("task_key") or "").strip() == task_key:
-            return node
-    raise RunStateTransitionError(f"Team task not found: {task_key}")
-
-
 def _stage_for_executor_kind(executor_kind: str) -> str:
     normalized = str(executor_kind or "").strip().lower()
     stage = EXECUTOR_KIND_TO_STAGE.get(normalized)
@@ -102,19 +89,10 @@ def _stage_for_executor_kind(executor_kind: str) -> str:
 
 def _task_key_for_executor_kind(team_run: dict[str, Any], executor_kind: str) -> str:
     normalized = str(executor_kind or "").strip().lower()
-    for node in _nodes(team_run):
+    for node in team_run_nodes(team_run):
         if str(node.get("executor_kind") or "").strip().lower() == normalized:
             return str(node.get("task_key") or "").strip()
     raise RunStateTransitionError(f"Team task not found for executor: {executor_kind}")
-
-
-def _set_node_status(team_run: dict[str, Any], task_key: str, status: str, *, attempt: int | None = None, summary: str | None = None) -> None:
-    node = _node(team_run, task_key)
-    node["status"] = status
-    if attempt is not None:
-        node["attempt"] = int(attempt)
-    if summary is not None:
-        node["summary"] = summary
 
 
 def _append_artifact(team_run: dict[str, Any], *, task_key: str, artifact_type: str, payload: dict[str, Any], summary: str | None, attempt: int) -> None:
@@ -292,7 +270,7 @@ def execute_issue_workflow_task(
     team_run: dict[str, Any],
     task_key: str,
 ) -> IssueTeamTaskExecution:
-    runtime_state = _runtime_state(team_run)
+    runtime_state = get_team_run_runtime_state(team_run)
     runtime_state.setdefault("attempt", 1)
     runtime_state.setdefault("max_attempts", 1)
     runtime_state.setdefault("next_feedback", None)
@@ -311,7 +289,7 @@ def execute_issue_workflow_task(
     runtime_state["max_attempts"] = max(1, int(runtime_state.get("max_attempts") or 1), configured_max_attempts)
     attempt = max(1, int(runtime_state.get("attempt") or 1))
     max_attempts = max(1, int(runtime_state.get("max_attempts") or 1))
-    executor_kind = str(_node(team_run, task_key).get("executor_kind") or "").strip().lower()
+    executor_kind = str(team_run_node(team_run, task_key).get("executor_kind") or "").strip().lower()
     stage = _stage_for_executor_kind(executor_kind)
     pm_task_key = _task_key_for_executor_kind(team_run, PM_EXECUTOR_KIND)
     dev_task_key = _task_key_for_executor_kind(team_run, DEV_EXECUTOR_KIND)
@@ -348,10 +326,10 @@ def execute_issue_workflow_task(
         runtime_state["test_guidance"] = list(request.suggested_test_commands or runtime_state.get("test_guidance") or [])
         if plan.outcome == "continue":
             mismatch_message = _capability_mismatch_message(request=request, plan=plan)
-            _set_node_status(team_run, pm_task_key, "completed", attempt=1, summary=_pm_summary(plan))
+            set_team_run_node_status(team_run, pm_task_key, "completed", attempt=1, summary=_pm_summary(plan))
             if mismatch_message is not None:
                 _append_history(runtime_state, stage="pm", attempt=1, event=mismatch_message)
-                _save_runtime_state(team_run, runtime_state)
+                set_team_run_runtime_state(team_run, runtime_state)
                 team_run["status"] = RUN_STATUS_BLOCKED
                 snapshot.workflow.outcome = RUN_STATUS_BLOCKED
                 snapshot.workflow.attempts = 1
@@ -363,8 +341,8 @@ def execute_issue_workflow_task(
                     workflow_status=RUN_STATUS_BLOCKED,
                     last_error=mismatch_message,
                 )
-            _set_node_status(team_run, dev_task_key, "ready", attempt=1)
-            _save_runtime_state(team_run, runtime_state)
+            set_team_run_node_status(team_run, dev_task_key, "ready", attempt=1)
+            set_team_run_runtime_state(team_run, runtime_state)
             snapshot.workflow.outcome = None
             snapshot.workflow.attempts = 1
             return IssueTeamTaskExecution(
@@ -373,9 +351,9 @@ def execute_issue_workflow_task(
                 run_status=RUN_STATUS_RUNNING,
                 workflow_status=RUN_STATUS_RUNNING,
             )
-        _set_node_status(team_run, pm_task_key, _checkpoint_status_for_outcome(plan.outcome), attempt=1, summary=summary)
+        set_team_run_node_status(team_run, pm_task_key, _checkpoint_status_for_outcome(plan.outcome), attempt=1, summary=summary)
         _append_history(runtime_state, stage="pm", attempt=1, event=summary)
-        _save_runtime_state(team_run, runtime_state)
+        set_team_run_runtime_state(team_run, runtime_state)
         outcome = _workflow_outcome_for_stage_outcome(plan.outcome)
         snapshot.workflow.outcome = outcome
         snapshot.workflow.attempts = 1
@@ -410,15 +388,15 @@ def execute_issue_workflow_task(
         runtime_state["dev_rationale"] = list(dev_result.change_summary)
         if dev_result.outcome == "continue":
             runtime_state["next_feedback"] = None
-            _set_node_status(team_run, dev_task_key, "completed", attempt=attempt, summary=summary)
-            _set_node_status(team_run, test_task_key, "ready", attempt=attempt)
-            _save_runtime_state(team_run, runtime_state)
+            set_team_run_node_status(team_run, dev_task_key, "completed", attempt=attempt, summary=summary)
+            set_team_run_node_status(team_run, test_task_key, "ready", attempt=attempt)
+            set_team_run_runtime_state(team_run, runtime_state)
             snapshot.workflow.outcome = None
             snapshot.workflow.attempts = attempt
             return IssueTeamTaskExecution(task_key=task_key, team_run=team_run, run_status=RUN_STATUS_RUNNING, workflow_status=RUN_STATUS_RUNNING)
-        _set_node_status(team_run, dev_task_key, _checkpoint_status_for_outcome(dev_result.outcome), attempt=attempt, summary=summary)
+        set_team_run_node_status(team_run, dev_task_key, _checkpoint_status_for_outcome(dev_result.outcome), attempt=attempt, summary=summary)
         _append_history(runtime_state, stage="dev", attempt=attempt, event=summary)
-        _save_runtime_state(team_run, runtime_state)
+        set_team_run_runtime_state(team_run, runtime_state)
         outcome = _workflow_outcome_for_stage_outcome(dev_result.outcome)
         snapshot.workflow.outcome = outcome
         snapshot.workflow.attempts = attempt
@@ -452,9 +430,9 @@ def execute_issue_workflow_task(
         _replace_stage_trace_entry(runtime_state, stage="test", attempt=attempt, status=_checkpoint_status_for_outcome(test_result.outcome), summary=summary)
         runtime_state["test_guidance"] = list(test_result.guidance or runtime_state.get("test_guidance") or [])
         if test_result.outcome == "continue":
-            _set_node_status(team_run, test_task_key, "completed", attempt=attempt, summary=summary)
-            _set_node_status(team_run, review_task_key, "ready", attempt=attempt)
-            _save_runtime_state(team_run, runtime_state)
+            set_team_run_node_status(team_run, test_task_key, "completed", attempt=attempt, summary=summary)
+            set_team_run_node_status(team_run, review_task_key, "ready", attempt=attempt)
+            set_team_run_runtime_state(team_run, runtime_state)
             snapshot.workflow.outcome = None
             snapshot.workflow.attempts = attempt
             return IssueTeamTaskExecution(task_key=task_key, team_run=team_run, run_status=RUN_STATUS_RUNNING, workflow_status=RUN_STATUS_RUNNING)
@@ -462,16 +440,16 @@ def execute_issue_workflow_task(
             runtime_state["next_feedback"] = summary
             runtime_state["attempt"] = attempt + 1
             _append_history(runtime_state, stage="test", attempt=attempt, event=summary)
-            _set_node_status(team_run, dev_task_key, "ready", attempt=attempt + 1)
-            _set_node_status(team_run, test_task_key, "pending", attempt=attempt + 1, summary=None)
-            _set_node_status(team_run, review_task_key, "pending", attempt=attempt + 1, summary=None)
-            _save_runtime_state(team_run, runtime_state)
+            set_team_run_node_status(team_run, dev_task_key, "ready", attempt=attempt + 1)
+            set_team_run_node_status(team_run, test_task_key, "pending", attempt=attempt + 1, summary=None)
+            set_team_run_node_status(team_run, review_task_key, "pending", attempt=attempt + 1, summary=None)
+            set_team_run_runtime_state(team_run, runtime_state)
             snapshot.workflow.outcome = None
             snapshot.workflow.attempts = attempt
             return IssueTeamTaskExecution(task_key=task_key, team_run=team_run, run_status=RUN_STATUS_RUNNING, workflow_status=RUN_STATUS_RUNNING)
-        _set_node_status(team_run, test_task_key, _checkpoint_status_for_outcome(test_result.outcome), attempt=attempt, summary=summary)
+        set_team_run_node_status(team_run, test_task_key, _checkpoint_status_for_outcome(test_result.outcome), attempt=attempt, summary=summary)
         _append_history(runtime_state, stage="test", attempt=attempt, event=summary)
-        _save_runtime_state(team_run, runtime_state)
+        set_team_run_runtime_state(team_run, runtime_state)
         outcome = "failed" if test_result.outcome == "failed" else _workflow_outcome_for_stage_outcome(test_result.outcome)
         snapshot.workflow.outcome = outcome
         snapshot.workflow.attempts = attempt
@@ -508,8 +486,8 @@ def execute_issue_workflow_task(
         snapshot.workflow.attempts = attempt
         snapshot.workflow.summary = list(review_result.summary or dev_result.change_summary or ["Workflow completed"])
         snapshot.workflow.blocker_message = None
-        _set_node_status(team_run, review_task_key, "completed", attempt=attempt, summary=summary)
-        _save_runtime_state(team_run, runtime_state)
+        set_team_run_node_status(team_run, review_task_key, "completed", attempt=attempt, summary=summary)
+        set_team_run_runtime_state(team_run, runtime_state)
         return IssueTeamTaskExecution(
             task_key=task_key,
             team_run=team_run,
@@ -520,16 +498,16 @@ def execute_issue_workflow_task(
         runtime_state["next_feedback"] = summary
         runtime_state["attempt"] = attempt + 1
         _append_history(runtime_state, stage="review", attempt=attempt, event=summary)
-        _set_node_status(team_run, dev_task_key, "ready", attempt=attempt + 1)
-        _set_node_status(team_run, test_task_key, "pending", attempt=attempt + 1, summary=None)
-        _set_node_status(team_run, review_task_key, "pending", attempt=attempt + 1, summary=None)
-        _save_runtime_state(team_run, runtime_state)
+        set_team_run_node_status(team_run, dev_task_key, "ready", attempt=attempt + 1)
+        set_team_run_node_status(team_run, test_task_key, "pending", attempt=attempt + 1, summary=None)
+        set_team_run_node_status(team_run, review_task_key, "pending", attempt=attempt + 1, summary=None)
+        set_team_run_runtime_state(team_run, runtime_state)
         snapshot.workflow.outcome = None
         snapshot.workflow.attempts = attempt
         return IssueTeamTaskExecution(task_key=task_key, team_run=team_run, run_status=RUN_STATUS_RUNNING, workflow_status=RUN_STATUS_RUNNING)
-    _set_node_status(team_run, review_task_key, _checkpoint_status_for_outcome(review_result.outcome), attempt=attempt, summary=summary)
+    set_team_run_node_status(team_run, review_task_key, _checkpoint_status_for_outcome(review_result.outcome), attempt=attempt, summary=summary)
     _append_history(runtime_state, stage="review", attempt=attempt, event=summary)
-    _save_runtime_state(team_run, runtime_state)
+    set_team_run_runtime_state(team_run, runtime_state)
     outcome = "failed" if review_result.outcome == "failed" else _workflow_outcome_for_stage_outcome(review_result.outcome)
     snapshot.workflow.outcome = outcome
     snapshot.workflow.attempts = attempt
@@ -576,9 +554,9 @@ def resume_issue_workflow_human_input(
     normalized_stage = str(request.source_stage or "").strip().lower() or "pm"
     executor_kind = STAGE_TO_EXECUTOR_KIND.get(normalized_stage, PM_EXECUTOR_KIND)
     task_key = _task_key_for_executor_kind(team_run, executor_kind)
-    _set_node_status(team_run, task_key, "ready")
-    runtime_state = _runtime_state(team_run)
-    _save_runtime_state(team_run, runtime_state)
+    set_team_run_node_status(team_run, task_key, "ready")
+    runtime_state = get_team_run_runtime_state(team_run)
+    set_team_run_runtime_state(team_run, runtime_state)
     snapshot.workflow.outcome = None
     snapshot.workflow.blocker_message = None
     return IssueTeamTaskExecution(

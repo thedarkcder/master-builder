@@ -135,3 +135,7 @@
 - When migrating orchestration to Temporal, keep one Temporal workflow as the single owner of a run. Do not split one run across separate Temporal workflows for execution and human-input resume unless the user explicitly asks for that decomposition.
 - When a user calls out missing acceptance criteria in a plan, stop and rewrite the plan with explicit ship/no-ship acceptance bullets before implementing. Do not treat a test list as a substitute for acceptance criteria.
 - When the user says they do not want dual-running between new orchestration and legacy workers, remove legacy ownership for that path entirely. Do not leave Temporal wrapping the old worker runner or keep a hidden fallback path alive.
+
+2026-04-09
+
+- When the user asks to fix all architecture findings in one pass, include contract-level tests for each seam and run the broad affected suite before closing; targeted green tests are not enough if neighboring lifecycle contracts can still regress.

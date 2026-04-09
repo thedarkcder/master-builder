@@ -304,3 +304,27 @@ test("renders a dynamic team run without the fixed PM DEV TEST REVIEW stage bar"
   await expect(page.getByText("campaign_writer_agent")).toHaveCount(2);
   await expect(page.getByText("launch_review_agent")).toBeVisible();
 });
+
+test("renders stage updates from execution snapshot events", async ({ page }) => {
+  const run = makeRun({
+    status: "running",
+    last_error: null,
+    finished_at: null,
+    plan: makeExecutionSnapshotPlan({
+      stage_updates: [
+        {
+          stage: "message_map",
+          jira_message: "Draft message map completed.",
+        },
+      ],
+    }),
+  });
+
+  await seedAdminSession(page);
+  await mockRunDetailApis(page, { run, logs: [] });
+
+  await page.goto(`/runs/${run.run_id}`);
+
+  await expect(page.getByText("Loading run details...")).toHaveCount(0, { timeout: 15000 });
+  await expect(page.getByText("Stage update: message_map. Draft message map completed.")).toBeVisible();
+});

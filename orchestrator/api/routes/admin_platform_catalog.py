@@ -75,9 +75,9 @@ def _agent_to_schema(*, session: Session, agent) -> PlatformAgentRead:  # noqa: 
 
 
 def _template_to_schema(*, session: Session, template) -> PlatformTeamTemplateRead:  # noqa: ANN001
-    roles = platform_team_catalog_service._role_rows(session=session, template_id=template.template_id)
-    tasks = platform_team_catalog_service._task_rows(session=session, template_id=template.template_id)
-    edges = platform_team_catalog_service._edge_rows(session=session, template_id=template.template_id)
+    roles = platform_team_catalog_service.list_team_roles(session=session, template_id=template.template_id)
+    tasks = platform_team_catalog_service.list_team_tasks(session=session, template_id=template.template_id)
+    edges = platform_team_catalog_service.list_team_edges(session=session, template_id=template.template_id)
     role_reads = []
     for role in roles:
         persona = platform_team_catalog_service.get_persona(session=session, persona_id=role.persona_id)

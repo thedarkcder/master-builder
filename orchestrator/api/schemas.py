@@ -1053,6 +1053,8 @@ class TeamRunNodeRead(BaseModel):
     owner_persona_key: str | None = None
     owner_agent_key: str | None = None
     status: str
+    summary: str | None = None
+    attempt: int | None = None
     dependency_keys: list[str] = Field(default_factory=list)
     executor_kind: str | None = None
     artifact_contract: dict = Field(default_factory=dict)
@@ -1073,6 +1075,7 @@ class TeamRunRead(BaseModel):
     artifacts: list[dict] = Field(default_factory=list)
     approvals: list[dict] = Field(default_factory=list)
     status: str
+    runtime_state: dict = Field(default_factory=dict)
 
 
 class PlatformTeamRunCreateRequest(BaseModel):

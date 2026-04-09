@@ -17,11 +17,15 @@ from orchestrator.core.issue_team_run_service import (
 from orchestrator.core.platform_team_catalog_service import platform_team_catalog_service
 from orchestrator.core.runs import (
     RUN_STATUS_BLOCKED,
-    RUN_STATUS_FAILED,
     RUN_STATUS_RUNNING,
     RUN_STATUS_SUCCEEDED,
-    RUN_STATUS_WAITING_FOR_INPUT,
     RunStateTransitionError,
+)
+from orchestrator.core.team_run_state import (
+    derive_team_run_status,
+    first_ready_auto_team_task,
+    promote_ready_team_run_nodes,
+    team_run_node,
 )
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.storage.models import Run, WorkflowExecution
@@ -84,17 +88,6 @@ def _persist_team_run(
     return run
 
 
-def _nodes(team_run: dict[str, Any]) -> list[dict[str, Any]]:
-    return [node for node in team_run.get("nodes", []) if isinstance(node, dict)]
-
-
-def _node_index(team_run: dict[str, Any], task_key: str) -> int:
-    for index, node in enumerate(_nodes(team_run)):
-        if str(node.get("task_key") or "").strip() == task_key:
-            return index
-    raise RunStateTransitionError(f"Team task not found: {task_key}")
-
-
 def _find_approval(team_run: dict[str, Any], task_key: str) -> dict[str, Any] | None:
     for approval in team_run.get("approvals", []):
         if not isinstance(approval, dict):
@@ -104,53 +97,10 @@ def _find_approval(team_run: dict[str, Any], task_key: str) -> dict[str, Any] | 
     return None
 
 
-def _dependencies_complete(team_run: dict[str, Any], task_key: str) -> bool:
-    status_by_task = {
-        str(node.get("task_key") or "").strip(): str(node.get("status") or "").strip().lower()
-        for node in _nodes(team_run)
-    }
-    node = _nodes(team_run)[_node_index(team_run, task_key)]
-    for dependency_key in node.get("dependency_keys", []):
-        if status_by_task.get(str(dependency_key or "").strip()) != "completed":
-            return False
-    return True
-
-
-def _promote_ready_nodes(team_run: dict[str, Any]) -> None:
-    for node in _nodes(team_run):
-        status = str(node.get("status") or "").strip().lower()
-        if status != "pending":
-            continue
-        if _dependencies_complete(team_run, str(node.get("task_key") or "").strip()):
-            node["status"] = "ready"
-
-
-def _derive_run_status(team_run: dict[str, Any]) -> tuple[str, str, str | None]:
-    statuses = {str(node.get("status") or "").strip().lower() for node in _nodes(team_run)}
-    if "blocked" in statuses:
-        return RUN_STATUS_BLOCKED, RUN_STATUS_BLOCKED, "Team run blocked by task or approval rejection"
-    if "waiting_for_input" in statuses:
-        return RUN_STATUS_WAITING_FOR_INPUT, RUN_STATUS_WAITING_FOR_INPUT, None
-    if "failed" in statuses:
-        return RUN_STATUS_FAILED, RUN_STATUS_FAILED, "Team run failed"
-    if statuses and statuses.issubset({"completed"}):
-        return RUN_STATUS_SUCCEEDED, RUN_STATUS_SUCCEEDED, None
-    return RUN_STATUS_RUNNING, RUN_STATUS_RUNNING, None
-
-
-def _first_ready_auto_task(team_run: dict[str, Any]) -> dict[str, Any] | None:
-    for node in _nodes(team_run):
-        if str(node.get("status") or "").strip().lower() != "ready":
-            continue
-        if str(node.get("executor_kind") or "").strip():
-            return node
-    return None
-
-
 def initialize_team_run(*, session: Session, run_id: str) -> Run:
     run, workflow, snapshot, team_run = _load_run_bundle(session=session, run_id=run_id)
     team_run["status"] = RUN_STATUS_RUNNING
-    _promote_ready_nodes(team_run)
+    promote_ready_team_run_nodes(team_run)
     return _persist_team_run(
         session=session,
         run=run,
@@ -164,7 +114,7 @@ def initialize_team_run(*, session: Session, run_id: str) -> Run:
 
 def execute_next_ready_team_task(*, session: Session, run_id: str) -> tuple[Run, str | None]:
     run, workflow, snapshot, team_run = _load_run_bundle(session=session, run_id=run_id)
-    node = _first_ready_auto_task(team_run)
+    node = first_ready_auto_team_task(team_run)
     if node is None:
         return run, None
     task_key = str(node.get("task_key") or "").strip()
@@ -205,8 +155,7 @@ def complete_team_task(
     summary: str | None = None,
 ) -> Run:
     run, workflow, snapshot, team_run = _load_run_bundle(session=session, run_id=run_id)
-    task_index = _node_index(team_run, task_key)
-    node = _nodes(team_run)[task_index]
+    node = team_run_node(team_run, task_key)
     current_status = str(node.get("status") or "").strip().lower()
     if current_status not in {"ready", "running"}:
         raise RunStateTransitionError(f"Task {task_key} is not ready to complete")
@@ -257,8 +206,8 @@ def complete_team_task(
             workflow_status=RUN_STATUS_RUNNING,
         )
     node["status"] = "completed"
-    _promote_ready_nodes(team_run)
-    run_status, workflow_status, last_error = _derive_run_status(team_run)
+    promote_ready_team_run_nodes(team_run)
+    run_status, workflow_status, last_error = derive_team_run_status(team_run)
     team_run["status"] = run_status
     return _persist_team_run(
         session=session,
@@ -281,8 +230,7 @@ def submit_team_approval(
     comment: str | None = None,
 ) -> Run:
     run, workflow, snapshot, team_run = _load_run_bundle(session=session, run_id=run_id)
-    task_index = _node_index(team_run, task_key)
-    node = _nodes(team_run)[task_index]
+    node = team_run_node(team_run, task_key)
     if str(node.get("status") or "").strip().lower() != "awaiting_approval":
         raise RunStateTransitionError(f"Task {task_key} is not awaiting approval")
     approval = _find_approval(team_run, task_key)
@@ -297,8 +245,8 @@ def submit_team_approval(
     if normalized_decision == "approved":
         approval["status"] = "approved"
         node["status"] = "completed"
-        _promote_ready_nodes(team_run)
-        run_status, workflow_status, last_error = _derive_run_status(team_run)
+        promote_ready_team_run_nodes(team_run)
+        run_status, workflow_status, last_error = derive_team_run_status(team_run)
         team_run["status"] = run_status
         return _persist_team_run(
             session=session,

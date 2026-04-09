@@ -8,6 +8,19 @@ from uuid import uuid4
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from orchestrator.core.platform_issue_workflow_catalog import (
+    BUILTIN_ISSUE_AGENTS,
+    BUILTIN_ISSUE_PERSONAS,
+    ISSUE_WORKFLOW_DEV_EXECUTOR_KIND,
+    ISSUE_WORKFLOW_PM_EXECUTOR_KIND,
+    ISSUE_WORKFLOW_REVIEW_EXECUTOR_KIND,
+    ISSUE_WORKFLOW_STAGE_TO_EXECUTOR_KIND,
+    ISSUE_WORKFLOW_TEAM_KEY,
+    ISSUE_WORKFLOW_TEAM_LABEL,
+    ISSUE_WORKFLOW_TEST_EXECUTOR_KIND,
+    issue_workflow_template_payload,
+)
+from orchestrator.core.platform_team_template_compiler import compile_platform_team_template
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot, ExecutionStageRecord
 from orchestrator.storage.models import (
     PlatformAgent,
@@ -17,20 +30,6 @@ from orchestrator.storage.models import (
     PlatformTeamTask,
     PlatformTeamTemplate,
 )
-
-ISSUE_WORKFLOW_TEAM_KEY = "issue_workflow"
-ISSUE_WORKFLOW_TEAM_LABEL = "Engineering Workflow"
-ISSUE_WORKFLOW_PM_EXECUTOR_KIND = "workflow.pm"
-ISSUE_WORKFLOW_DEV_EXECUTOR_KIND = "workflow.dev"
-ISSUE_WORKFLOW_TEST_EXECUTOR_KIND = "workflow.test"
-ISSUE_WORKFLOW_REVIEW_EXECUTOR_KIND = "workflow.review"
-ISSUE_WORKFLOW_STAGE_TO_EXECUTOR_KIND = {
-    "pm": ISSUE_WORKFLOW_PM_EXECUTOR_KIND,
-    "dev": ISSUE_WORKFLOW_DEV_EXECUTOR_KIND,
-    "test": ISSUE_WORKFLOW_TEST_EXECUTOR_KIND,
-    "review": ISSUE_WORKFLOW_REVIEW_EXECUTOR_KIND,
-}
-
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
@@ -283,6 +282,15 @@ class PlatformTeamCatalogService:
     def list_team_templates(self, *, session: Session) -> list[PlatformTeamTemplate]:
         return session.execute(select(PlatformTeamTemplate).order_by(PlatformTeamTemplate.team_key.asc())).scalars().all()
 
+    def list_team_roles(self, *, session: Session, template_id: str) -> list[PlatformTeamRole]:
+        return self._role_rows(session=session, template_id=template_id)
+
+    def list_team_tasks(self, *, session: Session, template_id: str) -> list[PlatformTeamTask]:
+        return self._task_rows(session=session, template_id=template_id)
+
+    def list_team_edges(self, *, session: Session, template_id: str) -> list[PlatformTeamEdge]:
+        return self._edge_rows(session=session, template_id=template_id)
+
     def get_team_template(self, *, session: Session, template_id: str) -> PlatformTeamTemplate | None:
         return session.get(PlatformTeamTemplate, str(template_id or "").strip())
 
@@ -347,25 +355,21 @@ class PlatformTeamCatalogService:
         session.query(PlatformTeamRole).filter(PlatformTeamRole.template_id == template.template_id).delete()
         session.flush()
 
+        compiled = compile_platform_team_template(payload)
         now = _now()
-        role_keys: set[str] = set()
-        for raw_role in payload.get("roles") or []:
-            role_key = _clean_key(raw_role.get("role_key"), field_name="role_key")
-            if role_key in role_keys:
-                raise ValueError(f"Duplicate role_key: {role_key}")
-            role_keys.add(role_key)
-            persona = self.get_persona_by_key(session=session, persona_key=_clean_key(raw_role.get("persona_key"), field_name="persona_key"))
-            agent = self.get_agent_by_key(session=session, agent_key=_clean_key(raw_role.get("agent_key"), field_name="agent_key"))
+        for role in compiled.roles:
+            persona = self.get_persona_by_key(session=session, persona_key=role.persona_key)
+            agent = self.get_agent_by_key(session=session, agent_key=role.agent_key)
             if persona is None or agent is None:
-                raise ValueError(f"Role {role_key} references a missing persona or agent")
+                raise ValueError(f"Role {role.role_key} references a missing persona or agent")
             session.add(
                 PlatformTeamRole(
                     role_id=uuid4().hex,
                     template_id=template.template_id,
-                    role_key=role_key,
-                    label=_clean_key(raw_role.get("label"), field_name="label"),
-                    description=_clean_text(raw_role.get("description")),
-                    position=max(1, int(raw_role.get("position") or 1)),
+                    role_key=role.role_key,
+                    label=role.label,
+                    description=role.description,
+                    position=role.position,
                     persona_id=persona.persona_id,
                     agent_id=agent.agent_id,
                     created_at=now,
@@ -373,42 +377,30 @@ class PlatformTeamCatalogService:
                 )
             )
 
-        task_keys: set[str] = set()
-        for raw_task in payload.get("tasks") or []:
-            task_key = _clean_key(raw_task.get("task_key"), field_name="task_key")
-            if task_key in task_keys:
-                raise ValueError(f"Duplicate task_key: {task_key}")
-            owner_role_key = _clean_key(raw_task.get("owner_role_key"), field_name="owner_role_key")
-            if owner_role_key not in role_keys:
-                raise ValueError(f"Task {task_key} references unknown role: {owner_role_key}")
-            task_keys.add(task_key)
+        for task in compiled.tasks:
             session.add(
                 PlatformTeamTask(
                     task_id=uuid4().hex,
                     template_id=template.template_id,
-                    task_key=task_key,
-                    label=_clean_key(raw_task.get("label"), field_name="label"),
-                    owner_role_key=owner_role_key,
-                    position=max(1, int(raw_task.get("position") or 1)),
-                    executor_kind=_clean_text(raw_task.get("executor_kind")),
-                    artifact_contract=dict(raw_task.get("artifact_contract") or {}),
-                    approval_rule=dict(raw_task.get("approval_rule") or {}),
+                    task_key=task.task_key,
+                    label=task.label,
+                    owner_role_key=task.owner_role_key,
+                    position=task.position,
+                    executor_kind=task.executor_kind,
+                    artifact_contract=task.artifact_contract,
+                    approval_rule=task.approval_rule,
                     created_at=now,
                     updated_at=now,
                 )
             )
 
-        for raw_edge in payload.get("edges") or []:
-            from_task_key = _clean_key(raw_edge.get("from_task_key"), field_name="from_task_key")
-            to_task_key = _clean_key(raw_edge.get("to_task_key"), field_name="to_task_key")
-            if from_task_key not in task_keys or to_task_key not in task_keys:
-                raise ValueError("Edges must reference existing task keys")
+        for edge in compiled.edges:
             session.add(
                 PlatformTeamEdge(
                     edge_id=uuid4().hex,
                     template_id=template.template_id,
-                    from_task_key=from_task_key,
-                    to_task_key=to_task_key,
+                    from_task_key=edge.from_task_key,
+                    to_task_key=edge.to_task_key,
                     created_at=now,
                 )
             )
@@ -509,50 +501,27 @@ class PlatformTeamCatalogService:
         return agent
 
     def ensure_issue_workflow_template(self, *, session: Session) -> PlatformTeamTemplate:
-        pm_persona = self._ensure_builtin_issue_persona(session=session, persona_key="pm", label="PM")
-        dev_persona = self._ensure_builtin_issue_persona(session=session, persona_key="engineering", label="Engineering")
-        test_persona = self._ensure_builtin_issue_persona(session=session, persona_key="test", label="Test")
-        review_persona = self._ensure_builtin_issue_persona(session=session, persona_key="review", label="Review")
-        self._ensure_builtin_issue_agent(
-            session=session,
-            agent_key="pm_primary",
-            label="PM Primary",
-            persona=pm_persona,
-            runtime_role_key="pm",
-            named_agent_key="pm_primary",
-            selector_key="workflow.pm",
-            default_profile_name="general_planning_default",
-        )
-        self._ensure_builtin_issue_agent(
-            session=session,
-            agent_key="workflow_dev_default",
-            label="Workflow Dev",
-            persona=dev_persona,
-            runtime_role_key="engineering",
-            named_agent_key="workflow_dev_default",
-            selector_key="workflow.dev",
-            default_profile_name="general_implementation_default",
-        )
-        self._ensure_builtin_issue_agent(
-            session=session,
-            agent_key="workflow_test_default",
-            label="Workflow Test",
-            persona=test_persona,
-            runtime_role_key="test",
-            named_agent_key="workflow_test_default",
-            selector_key="workflow.test",
-            default_profile_name="general_validation_default",
-        )
-        self._ensure_builtin_issue_agent(
-            session=session,
-            agent_key="workflow_review_default",
-            label="Workflow Review",
-            persona=review_persona,
-            runtime_role_key="review",
-            named_agent_key="workflow_review_default",
-            selector_key="workflow.review",
-            default_profile_name="general_review_default",
-        )
+        personas_by_key: dict[str, PlatformPersona] = {}
+        for persona_definition in BUILTIN_ISSUE_PERSONAS:
+            personas_by_key[persona_definition.persona_key] = self._ensure_builtin_issue_persona(
+                session=session,
+                persona_key=persona_definition.persona_key,
+                label=persona_definition.label,
+            )
+        for agent_definition in BUILTIN_ISSUE_AGENTS:
+            persona = personas_by_key.get(agent_definition.persona_key)
+            if persona is None:
+                raise ValueError(f"Built-in issue agent references unknown persona: {agent_definition.persona_key}")
+            self._ensure_builtin_issue_agent(
+                session=session,
+                agent_key=agent_definition.agent_key,
+                label=agent_definition.label,
+                persona=persona,
+                runtime_role_key=agent_definition.runtime_role_key,
+                named_agent_key=agent_definition.named_agent_key,
+                selector_key=agent_definition.selector_key,
+                default_profile_name=agent_definition.default_profile_name,
+            )
         template = self.get_team_template_by_key(session=session, team_key=ISSUE_WORKFLOW_TEAM_KEY)
         now = _now()
         if template is None:
@@ -569,57 +538,7 @@ class PlatformTeamCatalogService:
             )
             session.add(template)
             session.flush()
-        template_payload = {
-            "roles": [
-                {"role_key": "pm", "label": "PM", "position": 1, "persona_key": "pm", "agent_key": "pm_primary"},
-                {"role_key": "engineering", "label": "DEV", "position": 2, "persona_key": "engineering", "agent_key": "workflow_dev_default"},
-                {"role_key": "test", "label": "TEST", "position": 3, "persona_key": "test", "agent_key": "workflow_test_default"},
-                {"role_key": "review", "label": "REVIEW", "position": 4, "persona_key": "review", "agent_key": "workflow_review_default"},
-            ],
-            "tasks": [
-                {
-                    "task_key": "pm",
-                    "label": "PM",
-                    "owner_role_key": "pm",
-                    "position": 1,
-                    "executor_kind": ISSUE_WORKFLOW_PM_EXECUTOR_KIND,
-                    "artifact_contract": {"produces": ["pm_plan"]},
-                    "approval_rule": {},
-                },
-                {
-                    "task_key": "dev",
-                    "label": "DEV",
-                    "owner_role_key": "engineering",
-                    "position": 2,
-                    "executor_kind": ISSUE_WORKFLOW_DEV_EXECUTOR_KIND,
-                    "artifact_contract": {"produces": ["dev_result"]},
-                    "approval_rule": {},
-                },
-                {
-                    "task_key": "test",
-                    "label": "TEST",
-                    "owner_role_key": "test",
-                    "position": 3,
-                    "executor_kind": ISSUE_WORKFLOW_TEST_EXECUTOR_KIND,
-                    "artifact_contract": {"produces": ["test_result"]},
-                    "approval_rule": {},
-                },
-                {
-                    "task_key": "review",
-                    "label": "REVIEW",
-                    "owner_role_key": "review",
-                    "position": 4,
-                    "executor_kind": ISSUE_WORKFLOW_REVIEW_EXECUTOR_KIND,
-                    "artifact_contract": {"produces": ["review_result"]},
-                    "approval_rule": {},
-                },
-            ],
-            "edges": [
-                {"from_task_key": "pm", "to_task_key": "dev"},
-                {"from_task_key": "dev", "to_task_key": "test"},
-                {"from_task_key": "test", "to_task_key": "review"},
-            ],
-        }
+        template_payload = issue_workflow_template_payload()
         existing_tasks = self._task_rows(session=session, template_id=template.template_id)
         needs_sync = len(existing_tasks) != 4 or any(
             str(task.executor_kind or "").strip().lower()

@@ -30,17 +30,30 @@ import {
   type TokenTimelineRecord
 } from "@/lib/api";
 import { buildRunDetailPath, resolveRunRouteContext } from "@/lib/dashboard-paths";
-
-type InvocationTelemetry = {
-  event_kind: string;
-  status?: string;
-  duration_ms?: number;
-  resumed_session?: boolean;
-  codex_session_id?: string;
-  queue_wait_ms?: number;
-  created_at?: string;
-  started_at?: string;
-};
+import {
+  dedupeRunLogs,
+  formatDuration,
+  formatTokenCount,
+  isAbortLikeError,
+  isRecord,
+  normalizeTeamTaskStatus,
+  parseExecutionContext,
+  parseRunLogChatText,
+  parseStageArtifact,
+  parseStageCheckpoints,
+  parseStageUpdateEvents,
+  parseTelemetryPayload,
+  parseWorkflowDiagnostics,
+  stageColor,
+  stageDisplayLabel,
+  stageFromCommand,
+  statusFromLifecycleEvent,
+  teamTaskStatusColor,
+  teamTaskStatusLabel,
+  toStringList,
+  type StageCheckpointEntry,
+  type TeamTaskProgressStatus,
+} from "@/lib/run-detail-view-model";
 
 type InvocationSessionRow = {
   key: string;
@@ -55,12 +68,6 @@ type InvocationSessionRow = {
   codexSessionId: string | null;
 };
 
-type StageCheckpointEntry = {
-  status: string;
-  completedAt: string | null;
-  summary: string;
-};
-
 type StageProgressStatus = "not_started" | "running" | "completed" | "interrupted";
 
 type StageProgressEntry = {
@@ -69,8 +76,6 @@ type StageProgressEntry = {
   detail: string;
   sortKey: number;
 };
-
-type TeamTaskProgressStatus = "not_started" | "running" | "completed" | "blocked";
 
 type TeamTaskProgressEntry = {
   status: TeamTaskProgressStatus;
@@ -110,12 +115,6 @@ type OrchestrationWorkstreamTraceEntry = {
   branch: string | null;
 };
 
-type WorkflowDiagnosticsHistoryEntry = {
-  stage: string;
-  attempt: string;
-  event: string;
-};
-
 type ChatTimelineEntry = {
   key: string;
   recordedAt: string;
@@ -142,326 +141,6 @@ const PANEL_TABS: { id: RunPanelTab; label: string }[] = [
   { id: "diagnostics", label: "Diagnostics" },
   { id: "cost", label: "Cost" }
 ];
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
-function toStringList(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value.map((item) => String(item ?? "").trim()).filter((item) => item.length > 0);
-}
-
-function isAbortLikeError(error: unknown): boolean {
-  const message = (error as Error)?.message?.toLowerCase() ?? "";
-  return message.includes("aborted");
-}
-
-function statusFromLifecycleEvent(eventType: string): RunRecord["status"] | null {
-  if (eventType === "TASK_COMPLETED") {
-    return "succeeded";
-  }
-  if (eventType === "RUN_FAILED" || eventType === "TASK_FAILED") {
-    return "failed";
-  }
-  return null;
-}
-
-// statusBadge is superseded by StatusBadge component; kept to avoid cascade changes in unchanged code paths.
-function statusBadge(_status: string) {
-  return null;
-}
-
-function parseTelemetryPayload(message: string): InvocationTelemetry | null {
-  try {
-    const payload = JSON.parse(message) as InvocationTelemetry;
-    if (typeof payload !== "object" || payload === null) {
-      return null;
-    }
-    const eventKind = String(payload.event_kind ?? "").trim();
-    if (!eventKind) {
-      return null;
-    }
-    return payload;
-  } catch {
-    return null;
-  }
-}
-
-function parseStageCheckpoints(plan: Record<string, unknown> | null | undefined): Partial<Record<AgentStage, StageCheckpointEntry>> {
-  if (!isRecord(plan)) {
-    return {};
-  }
-  const stagesRaw = isRecord(plan["stages"]) ? plan["stages"] : null;
-  if (!stagesRaw) {
-    return {};
-  }
-  const parsed: Partial<Record<AgentStage, StageCheckpointEntry>> = {};
-  for (const stage of ["pm", "dev", "test", "review"] as AgentStage[]) {
-    const item = stagesRaw[stage];
-    if (!isRecord(item)) {
-      continue;
-    }
-    parsed[stage] = {
-      status: String(item["status"] ?? "").trim().toLowerCase() || "completed",
-      completedAt: String(item["completed_at"] ?? "").trim() || null,
-      summary: String(item["summary"] ?? "").trim(),
-    };
-  }
-  return parsed;
-}
-
-function parseExecutionContext(plan: Record<string, unknown> | null | undefined): Record<string, string> {
-  if (!isRecord(plan)) {
-    return {};
-  }
-  const raw =
-    (isRecord(plan["context"]) && isRecord(plan["context"]["execution_context"]))
-      ? plan["context"]["execution_context"]
-      : null;
-  if (!isRecord(raw)) {
-    return {};
-  }
-  const parsed: Record<string, string> = {};
-  for (const key of [
-    "execution_repo_dir",
-    "workspace_key",
-    "execution_branch",
-    "integration_branch",
-    "base_branch",
-    "start_point_ref",
-    "start_point_sha",
-  ]) {
-    const value = String(raw[key] ?? "").trim();
-    if (value) {
-      parsed[key] = value;
-    }
-  }
-  return parsed;
-}
-
-function parseStageArtifact(
-  plan: Record<string, unknown> | null | undefined,
-  stage: AgentStage,
-): Record<string, unknown> | null {
-  if (!isRecord(plan)) {
-    return null;
-  }
-  const stagesRaw = isRecord(plan["stages"]) ? plan["stages"] : null;
-  if (!stagesRaw) {
-    return null;
-  }
-  const stageRaw = stagesRaw[stage];
-  if (!isRecord(stageRaw)) {
-    return null;
-  }
-  return isRecord(stageRaw["artifact"]) ? stageRaw["artifact"] : null;
-}
-
-function stageFromCommand(command: string | null | undefined): string {
-  const value = String(command ?? "").trim();
-  if (!value) {
-    return "unknown";
-  }
-  const idx = value.lastIndexOf(".");
-  if (idx < 0 || idx === value.length - 1) {
-    return value;
-  }
-  return value.slice(idx + 1);
-}
-
-function formatDuration(durationMs: number): string {
-  const normalized = Math.max(0, Math.floor(durationMs));
-  const totalSeconds = Math.floor(normalized / 1000);
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-  if (hours > 0) {
-    return `${hours}h ${minutes}m ${seconds}s`;
-  }
-  if (minutes > 0) {
-    return `${minutes}m ${seconds}s`;
-  }
-  return `${seconds}s`;
-}
-
-function formatTokenCount(value: number): string {
-  const normalized = Math.max(0, Math.floor(value));
-  if (normalized >= 1000_000) {
-    return `${(normalized / 1000_000).toFixed(2)}m`;
-  }
-  if (normalized >= 1000) {
-    return `${(normalized / 1000).toFixed(1)}k`;
-  }
-  return String(normalized);
-}
-
-function stageColor(stage: string): string {
-  switch (stage) {
-    case "queue_wait":
-      return "#94a3b8";
-    case "pm":
-      return "#0ea5e9";
-    case "dev":
-      return "#22c55e";
-    case "test":
-      return "#f59e0b";
-    case "review":
-      return "#ef4444";
-    case "orchestrated_run":
-      return "#8b5cf6";
-    default:
-      return "#64748b";
-  }
-}
-
-function stageDisplayLabel(stage: string): string {
-  if (stage === "pm" || stage === "dev" || stage === "test" || stage === "review") {
-    return stage.toUpperCase();
-  }
-  if (stage === "orchestrated_run") {
-    return "ORCHESTRATED RUN";
-  }
-  return stage;
-}
-
-function normalizeInlineText(value: string): string {
-  return value.replace(/\s+/g, " ").trim();
-}
-
-function logEntryIdentity(entry: RunLogEventRecord): string {
-  return [
-    entry.recorded_at,
-    entry.stage,
-    entry.stream,
-    String(entry.invocation_id ?? "").trim(),
-    String(entry.command ?? "").trim(),
-    entry.message
-  ].join("::");
-}
-
-function dedupeRunLogs(entries: RunLogEventRecord[]): RunLogEventRecord[] {
-  const seen = new Set<string>();
-  const ordered: RunLogEventRecord[] = [];
-  for (const entry of entries) {
-    const key = logEntryIdentity(entry);
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    ordered.push(entry);
-  }
-  return ordered;
-}
-
-function parseRunLogChatText(entry: RunLogEventRecord): Pick<ChatTimelineEntry, "speaker" | "text" | "kind"> | null {
-  const raw = String(entry.message ?? "");
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return null;
-  }
-  if (entry.stream === "stderr") {
-    const lowered = trimmed.toLowerCase();
-    if (
-      lowered.includes("error") ||
-      lowered.includes("failed") ||
-      lowered.includes("fatal") ||
-      lowered.includes("exception")
-    ) {
-      return { speaker: "runtime", text: trimmed, kind: "error" };
-    }
-  }
-
-  let parsed: unknown = null;
-  try {
-    parsed = JSON.parse(trimmed);
-  } catch {
-    parsed = null;
-  }
-  if (!isRecord(parsed)) {
-    return null;
-  }
-
-  const eventType = String(parsed.type ?? "").trim().toLowerCase();
-  if (eventType === "turn.started") {
-    return { speaker: "codex", text: "Turn started", kind: "status" };
-  }
-  if (eventType === "turn.completed") {
-    const usage = isRecord(parsed.usage) ? parsed.usage : null;
-    const inputTokens = usage ? String(usage.input_tokens ?? "").trim() : "";
-    const outputTokens = usage ? String(usage.output_tokens ?? "").trim() : "";
-    const usageSuffix = inputTokens || outputTokens ? ` (in: ${inputTokens || "?"}, out: ${outputTokens || "?"})` : "";
-    return { speaker: "codex", text: `Turn completed${usageSuffix}`, kind: "status" };
-  }
-
-  const item = isRecord(parsed.item) ? parsed.item : null;
-  if (eventType === "item.completed" && item) {
-    const itemType = String(item.type ?? "").trim().toLowerCase();
-    if (itemType === "agent_message") {
-      return { speaker: "codex", text: String(item.text ?? "").trim(), kind: "message" };
-    }
-    if (itemType === "reasoning") {
-      return { speaker: "codex", text: String(item.text ?? "").trim(), kind: "reasoning" };
-    }
-    if (itemType === "command_execution") {
-      const status = String(item.status ?? "").trim().toLowerCase();
-      const exitCode = item.exit_code;
-      if (status === "failed" || (typeof exitCode === "number" && exitCode !== 0)) {
-        const command = normalizeInlineText(String(item.command ?? ""));
-        const output = normalizeInlineText(String(item.aggregated_output ?? ""));
-        return {
-          speaker: "command",
-          text: `Command failed${typeof exitCode === "number" ? ` (exit ${exitCode})` : ""}: ${command}${output ? ` | ${output}` : ""}`,
-          kind: "error"
-        };
-      }
-    }
-  }
-
-  return null;
-}
-
-function normalizeTeamTaskStatus(status: string | null | undefined): TeamTaskProgressStatus {
-  const normalized = String(status ?? "").trim().toLowerCase();
-  if (normalized === "completed" || normalized === "succeeded" || normalized === "approved") {
-    return "completed";
-  }
-  if (normalized === "running" || normalized === "in_progress" || normalized === "active") {
-    return "running";
-  }
-  if (normalized === "blocked" || normalized === "failed" || normalized === "awaiting_approval") {
-    return "blocked";
-  }
-  return "not_started";
-}
-
-function teamTaskStatusColor(status: TeamTaskProgressStatus): string {
-  switch (status) {
-    case "completed":
-      return "#22c55e";
-    case "running":
-      return "#0ea5e9";
-    case "blocked":
-      return "#ef4444";
-    default:
-      return "#94a3b8";
-  }
-}
-
-function teamTaskStatusLabel(status: TeamTaskProgressStatus): string {
-  switch (status) {
-    case "completed":
-      return "completed";
-    case "running":
-      return "running";
-    case "blocked":
-      return "blocked";
-    default:
-      return "pending";
-  }
-}
 
 export default function RunDetailPage() {
   const params = useParams<{ runId: string }>();
@@ -572,12 +251,11 @@ export default function RunDetailPage() {
         if ((event as { event_kind?: string }).event_kind === "run_log" || "message" in event) {
           const logEvent = event as RunLogEventRecord;
           setLogs((prev) => {
-            const nextKey = logEntryIdentity(logEvent);
-            if (prev.some((entry) => logEntryIdentity(entry) === nextKey)) {
+            const deduped = dedupeRunLogs([...prev, logEvent]).slice(-800);
+            if (deduped.length === prev.length) {
               return prev;
             }
-            const next = [...prev, logEvent];
-            return dedupeRunLogs(next).slice(-800);
+            return deduped;
           });
         } else {
           const lifecycleEvent = event as RunEventRecord;
@@ -1009,33 +687,7 @@ export default function RunDetailPage() {
       setRerunBusy(false);
     }
   }
-  const workflowDiagnostics = useMemo(() => {
-    if (!isRecord(run?.plan)) {
-      return null;
-    }
-    const diagnosticsRaw = run.plan["diagnostics"];
-    if (!isRecord(diagnosticsRaw)) {
-      return null;
-    }
-    const historyRaw = Array.isArray(diagnosticsRaw["history"]) ? diagnosticsRaw["history"] : [];
-    const history: WorkflowDiagnosticsHistoryEntry[] = historyRaw
-      .map((entry) => {
-        if (!isRecord(entry)) {
-          return null;
-        }
-        return {
-          stage: String(entry["stage"] ?? "").trim(),
-          attempt: String(entry["attempt"] ?? "").trim(),
-          event: String(entry["event"] ?? "").trim()
-        };
-      })
-      .filter((entry): entry is WorkflowDiagnosticsHistoryEntry => Boolean(entry && entry.event));
-    return {
-      stage: String(diagnosticsRaw["stage"] ?? "").trim(),
-      message: String(diagnosticsRaw["message"] ?? "").trim(),
-      history
-    };
-  }, [run?.plan]);
+  const workflowDiagnostics = useMemo(() => parseWorkflowDiagnostics(run), [run]);
   const terminalFailureMessage = useMemo(() => {
     // `run.last_error` is the authoritative terminal error persisted by the worker.
     const fromRun = String(run?.last_error ?? "").trim();
@@ -1419,7 +1071,7 @@ export default function RunDetailPage() {
     };
   }, [invocationSessionRows, isActiveRun, logs, run]);
   const chatTimelineEntries = useMemo(() => {
-    const stageUpdates = isRecord(run?.plan) && Array.isArray(run.plan["stage_updates"]) ? run.plan["stage_updates"] : [];
+    const stageUpdates = parseStageUpdateEvents(run);
     const stageUpdateEntries: ChatTimelineEntry[] = stageUpdates
       .map((entry, idx): ChatTimelineEntry | null => {
         if (!isRecord(entry)) {

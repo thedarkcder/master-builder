@@ -292,6 +292,16 @@ def _resolve_entry_stage(*, bootstrap: RunBootstrap | None) -> str:
     return "orchestrated"
 
 
+def _allows_fresh_retry_with_new_workflow(*, bootstrap: RunBootstrap | None, active_workflow: WorkflowExecution) -> bool:
+    if bootstrap is None:
+        return False
+    entry_mode = str(bootstrap.entry_mode or "").strip().lower()
+    source_workflow_id = str(bootstrap.source_workflow_id or "").strip()
+    if entry_mode != "fresh" or not source_workflow_id:
+        return False
+    return source_workflow_id == str(active_workflow.workflow_id or "").strip()
+
+
 def enqueue_run(
     session: Session,
     *,
@@ -336,7 +346,10 @@ def enqueue_run(
         issue_key=issue_key,
         dedupe_scope=normalized_dedupe_scope,
     )
-    if active_workflow is not None:
+    if active_workflow is not None and not _allows_fresh_retry_with_new_workflow(
+        bootstrap=bootstrap,
+        active_workflow=active_workflow,
+    ):
         active_run = _run_for_workflow(session, active_workflow)
         if active_run is None:
             raise RunStateTransitionError(

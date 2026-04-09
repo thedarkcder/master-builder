@@ -1015,7 +1015,10 @@ export type TeamRunNodeRecord = {
   owner_persona_key: string | null;
   owner_agent_key: string | null;
   status: string;
+  summary?: string | null;
+  attempt?: number | null;
   dependency_keys: string[];
+  executor_kind?: string | null;
   artifact_contract: Record<string, unknown>;
   approval_rule: Record<string, unknown>;
 };
@@ -1034,6 +1037,7 @@ export type TeamRunRecord = {
   artifacts: Record<string, unknown>[];
   approvals: Record<string, unknown>[];
   status: string;
+  runtime_state?: Record<string, unknown>;
 };
 
 export type DiscordAllowlistRequestRecord = {
