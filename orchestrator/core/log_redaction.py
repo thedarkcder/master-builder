@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import re
 
-from logguard import load_sensitive_keys
+try:
+    from logguard import load_sensitive_keys
+except ModuleNotFoundError:  # pragma: no cover - optional dependency in local/test environments
+    def load_sensitive_keys() -> tuple[re.Pattern[str], ...]:
+        return ()
 
 _REDACTED = "[REDACTED]"
 _SENSITIVE_VALUE_NAMES = r"token|secret|password|api[_-]?key|private[_-]?key|client[_-]?secret|access[_-]?key"

@@ -190,10 +190,10 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             agents.test(request, plan, dev, 1)
 
         allowed_tools = json.loads(str(captured["allowed_tools_json"]))
-        runtime_tool = next(item for item in allowed_tools if item["tool_name"] == "project.get_runtime_values")
+        runtime_tool = next(item for item in allowed_tools if item["tool_name"] == "project.check_runtime_bindings")
         self.assertEqual(runtime_tool["category"], "project")
-        self.assertIn("project-configured runtime values by key", runtime_tool["description"])
-        self.assertIn("source of truth", runtime_tool["description"])
+        self.assertIn("explicitly named project bindings", runtime_tool["description"])
+        self.assertIn("never returns the underlying values", runtime_tool["description"])
 
     def test_stage_prompts_include_answered_human_inputs(self) -> None:
         runtime = CodexRuntime(

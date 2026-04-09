@@ -223,6 +223,57 @@ export type ProjectAutomationsRecord = {
   automations: ProjectAutomationRecord[];
 };
 
+export type ProjectInstallRecord = {
+  install_id: string;
+  tenant_id: string;
+  project_id: string;
+  kind: string;
+  label: string;
+  enabled: boolean;
+  config: Record<string, unknown>;
+  binding_names: string[];
+  created_at: string;
+  updated_at: string;
+};
+
+export type ProjectInstallsRecord = {
+  installs: ProjectInstallRecord[];
+};
+
+export type ProjectInstallPayload = {
+  kind: string;
+  label: string;
+  enabled: boolean;
+  config: Record<string, unknown>;
+  binding_names: string[];
+};
+
+export type ProjectInstallRequestRecord = {
+  request_id: string;
+  tenant_id: string;
+  project_id: string;
+  workflow_id: string | null;
+  run_id: string | null;
+  issue_key: string;
+  kind: string;
+  label: string;
+  reason: string;
+  suggested_config: Record<string, unknown>;
+  required_bindings: string[];
+  status: string;
+  request_kind: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ProjectInstallRequestsRecord = {
+  requests: ProjectInstallRequestRecord[];
+};
+
+export type ProjectInstallRequestUpdatePayload = {
+  status: string;
+};
+
 export type ProjectCreatePayload = {
   name: string;
   github_repository: string;
@@ -1771,6 +1822,93 @@ export function runProjectAutomationNow(
     `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/automations/${encodeURIComponent(kind)}/run-now`,
     {
       method: "POST"
+    }
+  );
+}
+
+export function getProjectInstalls(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string
+): Promise<ProjectInstallsRecord> {
+  return request<ProjectInstallsRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/installs`
+  );
+}
+
+export function createProjectInstall(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  payload: ProjectInstallPayload
+): Promise<ProjectInstallRecord> {
+  return request<ProjectInstallRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/installs`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }
+  );
+}
+
+export function updateProjectInstall(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  installId: string,
+  payload: ProjectInstallPayload
+): Promise<ProjectInstallRecord> {
+  return request<ProjectInstallRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/installs/${encodeURIComponent(installId)}`,
+    {
+      method: "PUT",
+      body: JSON.stringify(payload)
+    }
+  );
+}
+
+export function deleteProjectInstall(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  installId: string
+): Promise<void> {
+  return request<void>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/installs/${encodeURIComponent(installId)}`,
+    {
+      method: "DELETE"
+    }
+  );
+}
+
+export function getProjectInstallRequests(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string
+): Promise<ProjectInstallRequestsRecord> {
+  return request<ProjectInstallRequestsRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/install-requests`
+  );
+}
+
+export function updateProjectInstallRequest(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  requestId: string,
+  payload: ProjectInstallRequestUpdatePayload
+): Promise<ProjectInstallRequestRecord> {
+  return request<ProjectInstallRequestRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/install-requests/${encodeURIComponent(requestId)}`,
+    {
+      method: "PUT",
+      body: JSON.stringify(payload)
     }
   );
 }

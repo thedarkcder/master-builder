@@ -466,6 +466,57 @@ class ProjectRead(BaseModel):
     updated_at: datetime
 
 
+class ProjectInstallWrite(BaseModel):
+    kind: str = Field(min_length=1)
+    label: str = Field(min_length=1)
+    enabled: bool = True
+    config: dict = Field(default_factory=dict)
+    binding_names: list[str] = Field(default_factory=list)
+
+
+class ProjectInstallRead(BaseModel):
+    install_id: str
+    tenant_id: str
+    project_id: str
+    kind: str
+    label: str
+    enabled: bool
+    config: dict = Field(default_factory=dict)
+    binding_names: list[str] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
+
+
+class ProjectInstallsRead(BaseModel):
+    installs: list[ProjectInstallRead] = Field(default_factory=list)
+
+
+class ProjectInstallRequestRead(BaseModel):
+    request_id: str
+    tenant_id: str
+    project_id: str
+    workflow_id: str | None = None
+    run_id: str | None = None
+    issue_key: str
+    kind: str
+    label: str
+    reason: str
+    suggested_config: dict = Field(default_factory=dict)
+    required_bindings: list[str] = Field(default_factory=list)
+    status: str
+    request_kind: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class ProjectInstallRequestsRead(BaseModel):
+    requests: list[ProjectInstallRequestRead] = Field(default_factory=list)
+
+
+class ProjectInstallRequestUpdate(BaseModel):
+    status: str = Field(min_length=1)
+
+
 class ProjectAutomationWrite(BaseModel):
     kind: str = Field(min_length=1)
     enabled: bool = True
@@ -1157,6 +1208,42 @@ class PlatformServiceStatusRead(BaseModel):
 
 class PlatformStatusRead(BaseModel):
     services: list[PlatformServiceStatusRead] = Field(default_factory=list)
+
+
+class WebhookQueueJobRead(BaseModel):
+    job_id: str
+    transport: str
+    tenant_id: str | None = None
+    project_id: str | None = None
+    subject_key: str
+    dedupe_key: str | None = None
+    request_id: str
+    event_type: str | None = None
+    status: str
+    owner_id: str | None = None
+    lease_expires_at: datetime | None = None
+    available_at: datetime
+    attempt_count: int
+    last_error: str | None = None
+    created_at: datetime
+    updated_at: datetime
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+
+
+class WebhookQueueSummaryRead(BaseModel):
+    pending_count: int
+    processing_count: int
+    failed_count: int
+    done_count: int
+
+
+class WebhookQueueJobPageRead(BaseModel):
+    items: list[WebhookQueueJobRead] = Field(default_factory=list)
+    total: int
+    limit: int
+    offset: int
+    summary: WebhookQueueSummaryRead
 
 
 class TenantObservabilityRead(BaseModel):

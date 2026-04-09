@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from orchestrator.api.admin.agent_activity_service import list_agent_activity as list_agent_activity_impl
@@ -11,6 +11,7 @@ from orchestrator.api.admin.observability_service import (
     tenant_observability as tenant_observability_impl,
 )
 from orchestrator.api.admin.platform_status_service import platform_status as platform_status_impl
+from orchestrator.api.admin.webhook_queue_service import list_webhook_queue_jobs as list_webhook_queue_jobs_impl
 from orchestrator.api.admin.project_metrics_service import (
     project_execution_metrics as project_execution_metrics_impl,
 )
@@ -26,10 +27,16 @@ from orchestrator.api.schemas import (
     ProjectObservabilityRead,
     TenantHealthRead,
     TenantObservabilityRead,
+    WebhookQueueJobPageRead,
 )
 from orchestrator.core.knowledge_jira_sync_runtime import get_knowledge_jira_sync_runtime_status
 from orchestrator.core.config import get_settings
-from orchestrator.core.security import require_admin
+from orchestrator.core.security import (
+    AuthenticatedPrincipal,
+    require_admin,
+    require_authenticated_principal,
+    require_tenant_workspace_access,
+)
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -100,6 +107,44 @@ def platform_observability(
     session: Session = Depends(get_session),
 ) -> PlatformObservabilityRead:
     return platform_observability_impl(session=session)
+
+
+@router.get("/observability/webhook-jobs", response_model=WebhookQueueJobPageRead)
+def list_webhook_queue_jobs(
+    status_filter: str | None = Query(default=None, alias="status"),
+    transport: str | None = Query(default=None),
+    tenant_id: str | None = Query(default=None),
+    project_id: str | None = Query(default=None),
+    subject_key: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> WebhookQueueJobPageRead:
+    normalized_tenant_id = str(tenant_id or "").strip()
+    normalized_project_id = str(project_id or "").strip()
+    if not normalized_tenant_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="tenant_id is required",
+        )
+    if not normalized_project_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="project_id is required",
+        )
+    if not principal.is_platform_super_admin:
+        require_tenant_workspace_access(principal=principal, tenant_id=normalized_tenant_id)
+    return list_webhook_queue_jobs_impl(
+        session=session,
+        status_filter=status_filter,
+        transport=transport,
+        tenant_id=normalized_tenant_id,
+        project_id=normalized_project_id,
+        subject_key=subject_key,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.get("/status", response_model=PlatformStatusRead)
