@@ -41,6 +41,7 @@ class Tenant(Base):
     discord_config: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     experience_config: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     setup_state: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    deployment_plane_config: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -214,7 +215,125 @@ class Project(Base):
     environment: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     secret_refs: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     discord_config: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    deployment_config: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     is_archived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ProjectApp(Base):
+    __tablename__ = "project_apps"
+    __table_args__ = (
+        UniqueConstraint("project_id", "source_path", name="uq_project_apps_project_source_path"),
+        UniqueConstraint("project_id", "slug", name="uq_project_apps_project_slug"),
+        Index("ix_project_apps_tenant_project_created_at", "tenant_id", "project_id", "created_at"),
+        Index("ix_project_apps_project_status", "project_id", "status"),
+        Index("ix_project_apps_tenant_status", "tenant_id", "status"),
+    )
+
+    app_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey("tenants.tenant_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    project_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey("projects.project_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    slug: Mapped[str] = mapped_column(String(255), nullable=False)
+    source_path: Mapped[str] = mapped_column(String(512), nullable=False)
+    detection_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    detected_runtime: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    detected_language: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    analysis_source: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    build_strategy: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    exposed_port: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    healthcheck: Mapped[str | None] = mapped_column(Text, nullable=True)
+    start_command: Mapped[str | None] = mapped_column(Text, nullable=True)
+    env_schema_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    secret_schema_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    deployment_config: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="draft", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ProjectAppAnalysisRun(Base):
+    __tablename__ = "project_app_analysis_runs"
+    __table_args__ = (
+        Index("ix_project_app_analysis_runs_tenant_project_created_at", "tenant_id", "project_id", "created_at"),
+        Index("ix_project_app_analysis_runs_project_status", "project_id", "status"),
+        Index("ix_project_app_analysis_runs_tenant_status", "tenant_id", "status"),
+    )
+
+    run_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey("tenants.tenant_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    project_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey("projects.project_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued", index=True)
+    planner_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    request_payload: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    result_payload: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ProjectDeploymentRelease(Base):
+    __tablename__ = "project_deployment_releases"
+    __table_args__ = (
+        Index("ix_project_deployment_releases_tenant_project_created_at", "tenant_id", "project_id", "created_at"),
+        Index("ix_project_deployment_releases_project_status", "project_id", "status"),
+    )
+
+    release_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey("tenants.tenant_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    project_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey("projects.project_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    app_id: Mapped[str | None] = mapped_column(
+        String(128),
+        ForeignKey("project_apps.app_id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued", index=True)
+    environment_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    source_strategy: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    git_ref: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    commit_sha: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    requested_by_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    deployment_snapshot: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    provider_context: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 

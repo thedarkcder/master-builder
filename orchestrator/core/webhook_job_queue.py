@@ -20,6 +20,8 @@ WEBHOOK_TRANSPORT_GITHUB = "github_webhook"
 WEBHOOK_TRANSPORT_DISCORD_COMMAND = "discord_webhook"
 WEBHOOK_TRANSPORT_DISCORD_INTERACTION = "discord_interaction"
 WEBHOOK_TRANSPORT_PROJECT_AUTOMATION = "project_automation"
+WEBHOOK_TRANSPORT_COOLIFY_DEPLOYMENT = "coolify_deployment_webhook"
+WEBHOOK_TRANSPORT_PROJECT_APP_ANALYSIS = "project_app_analysis"
 
 _LEASE_DURATION = timedelta(minutes=5)
 

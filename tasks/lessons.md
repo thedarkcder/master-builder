@@ -131,3 +131,13 @@
 2026-04-08
 
 - When the user says "fix the issue, don’t add a fallback", correct the source contract at the producer boundary and remove downstream fallback logic instead of preserving dual-path behavior.
+- For human-in-the-loop workflows, persist pause/resume state first and only then execute external side effects (Discord send, enqueue visibility). Resume must be one transaction that consumes the answered request and creates the resumed attempt together, or duplicate resumes will occur after crashes.
+- OAuth install callbacks must treat provider cancel/error responses as first-class outcomes. Do not require success-only query params like `guild_id` in the route signature or cancellation will return framework 422s instead of a user-facing redirect state.
+- Setup wizard steps must avoid mixing unrelated concerns (for example bot install and invite policy). Keep each step scoped to one decision and move secondary configuration to a dedicated later surface.
+- When the user asks for a new wizard step, implement the concrete step and wiring (state, API calls, navigation), not explanatory placeholder copy.
+- For step-based app routes, never hardcode allowed step keys in route guards. Derive them from the canonical step registry (`STEP_ORDER`) so newly added steps cannot 404.
+
+2026-04-09
+
+- When a worker parent decides whether to spawn child processors, never use a looser "any queued row exists" check than the child uses to claim work. Share one typed claimability contract between the supervisor preflight and the claim path or the runtime will churn, misreport idleness, and hide the real blocker.
+- When the user explicitly asks for subagent-heavy execution and says to complete without frequent check-ins, keep work parallelized end-to-end, avoid pausing after partial slices, and always finish with full verification evidence before reporting completion.

@@ -8,6 +8,9 @@ import {
 import type {
   ProjectAutomationExecutionRecord,
   ProjectAutomationRecord,
+  ProjectAppAnalysisRunRecord,
+  ProjectAppDeploymentConfigRecord,
+  ProjectAppRecord,
   ProjectRecord,
   RunEventRecord,
   RunLogEventRecord,
@@ -297,6 +300,74 @@ export function makeProject(overrides: Partial<ProjectRecord> = {}): ProjectReco
     is_archived: false,
     created_at: "2026-03-27T16:00:00Z",
     updated_at: "2026-03-27T16:00:00Z",
+    ...overrides,
+  };
+}
+
+export function makeProjectAppRecord(overrides: Partial<ProjectAppRecord> = {}): ProjectAppRecord {
+  return {
+    app_id: "app-1",
+    tenant_id: "example",
+    project_id: "example-default",
+    name: "Route 25 App",
+    slug: "route-25-app",
+    source_path: "apps/route-25-app",
+    detection_confidence: 0.87,
+    detected_runtime: "node",
+    detected_language: "typescript",
+    analysis_source: "analysis",
+    build_strategy: "dockerfile",
+    exposed_port: 3000,
+    healthcheck: null,
+    start_command: "npm start",
+    env_schema_json: null,
+    secret_schema_json: null,
+    status: "ready",
+    last_release_status: null,
+    last_release_id: null,
+    last_error: null,
+    created_at: "2026-03-27T16:00:00Z",
+    updated_at: "2026-03-27T16:00:00Z",
+    ...overrides,
+  };
+}
+
+export function makeProjectAppAnalysisRun(
+  overrides: Partial<ProjectAppAnalysisRunRecord> = {},
+): ProjectAppAnalysisRunRecord {
+  return {
+    analysis_run_id: "analysis-1",
+    tenant_id: "example",
+    project_id: "example-default",
+    status: "completed",
+    raw_result: null,
+    last_error: null,
+    requested_by_user_id: null,
+    created_at: "2026-03-27T16:10:00Z",
+    started_at: "2026-03-27T16:10:01Z",
+    completed_at: "2026-03-27T16:10:20Z",
+    updated_at: "2026-03-27T16:10:20Z",
+    ...overrides,
+  };
+}
+
+export function makeProjectAppDeploymentConfig(
+  overrides: Partial<ProjectAppDeploymentConfigRecord> = {},
+): ProjectAppDeploymentConfigRecord {
+  return {
+    app_id: "app-1",
+    enabled: true,
+    environment_name: "production",
+    source_strategy: "dockerfile",
+    domains: [],
+    resources: [],
+    backup_policies: [],
+    build_strategy: "dockerfile",
+    exposed_port: 3000,
+    healthcheck: null,
+    start_command: "npm start",
+    env_schema_json: null,
+    secret_schema_json: null,
     ...overrides,
   };
 }

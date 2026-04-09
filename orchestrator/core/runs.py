@@ -397,6 +397,35 @@ def enqueue_attempt_for_workflow(
     workflow_id: str,
     bootstrap: RunBootstrap,
 ) -> EnqueueRunResult:
+    return _enqueue_attempt_for_workflow(
+        session,
+        workflow_id=workflow_id,
+        bootstrap=bootstrap,
+        commit=True,
+    )
+
+
+def enqueue_attempt_for_workflow_uncommitted(
+    session: Session,
+    *,
+    workflow_id: str,
+    bootstrap: RunBootstrap,
+) -> EnqueueRunResult:
+    return _enqueue_attempt_for_workflow(
+        session,
+        workflow_id=workflow_id,
+        bootstrap=bootstrap,
+        commit=False,
+    )
+
+
+def _enqueue_attempt_for_workflow(
+    session: Session,
+    *,
+    workflow_id: str,
+    bootstrap: RunBootstrap,
+    commit: bool,
+) -> EnqueueRunResult:
     workflow = session.get(WorkflowExecution, workflow_id)
     if workflow is None:
         raise RunStateTransitionError(f"Workflow not found: {workflow_id}")
@@ -450,8 +479,11 @@ def enqueue_attempt_for_workflow(
         run_id=run.run_id,
         issue_key=workflow.issue_key,
     )
-    session.commit()
-    session.refresh(run)
+    if commit:
+        session.commit()
+        session.refresh(run)
+    else:
+        session.flush()
     return EnqueueRunResult(enqueued=True, reason=None, run=run)
 
 

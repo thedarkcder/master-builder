@@ -11,8 +11,7 @@ from orchestrator.api.admin.config_helpers import (
 from orchestrator.api.admin.route_helpers import (
     admin_project_service,
     allocate_tenant_id,
-    ensure_default_project_for_tenant,
-    sync_tenant_jira_project_keys,
+    reconcile_tenant_projects,
     with_managed_github_refs,
     with_preserved_jira_system_fields,
 )
@@ -23,8 +22,10 @@ from orchestrator.api.admin.project_normalization import (
 from orchestrator.api.admin.tenant_crud import (
     create_tenant as create_tenant_impl,
     delete_tenant as delete_tenant_impl,
+    get_tenant_deployment_plane as get_tenant_deployment_plane_impl,
     get_tenant_or_404 as get_tenant_or_404_impl,
     set_tenant_archive_state as set_tenant_archive_state_impl,
+    update_tenant_deployment_plane as update_tenant_deployment_plane_impl,
     update_tenant as update_tenant_impl,
 )
 from orchestrator.api.admin.tenant_project_routes_service import (
@@ -48,9 +49,28 @@ from orchestrator.api.schemas import (
     ProjectAutomationRead,
     ProjectAutomationsRead,
     ProjectAutomationsWrite,
+    ProjectAppAnalysisRunRead,
+    ProjectAppAnalysisRunStart,
+    ProjectAppCreate,
+    ProjectAppRead,
+    ProjectAppUpdate,
+    TenantDeploymentsOverviewRead,
     ProjectRead,
     ProjectUpdate,
+    ProjectDeploymentConfigRead,
+    ProjectDeploymentConfigWrite,
+    ProjectDeploymentBackupApplyRequest,
+    ProjectDeploymentBackupRestoreRequest,
+    ProjectDeploymentBackupTriggerRequest,
+    ProjectDeploymentDomainApplyRequest,
+    ProjectDeploymentReleaseCreate,
+    ProjectDeploymentReleaseRead,
+    ProjectDeploymentReleaseStatusUpdate,
+    ProjectDeploymentOperationRead,
+    ProjectDeploymentResourceApplyRequest,
     TenantDeliverySummaryRead,
+    TenantDeploymentPlaneRead,
+    TenantDeploymentPlaneWrite,
     TenantDiscordIdentityRead,
     TenantDiscordInviteRead,
     TenantDiscordLinkStartRead,
@@ -74,6 +94,7 @@ from orchestrator.core.discord.oauth import (
     discord_oauth_is_configured,
     issue_discord_oauth_state,
 )
+from orchestrator.core.discord.oauth_config import resolve_discord_oauth_config
 from orchestrator.core.email_delivery import EmailDeliveryError
 from orchestrator.core.invites import email_delivery
 from orchestrator.core.platform_secret_service import (
@@ -282,8 +303,7 @@ def create_tenant(
         with_preserved_jira_system_fields_fn=with_preserved_jira_system_fields,
         with_managed_github_refs_fn=with_managed_github_refs,
         with_preserved_discord_system_fields_fn=with_preserved_discord_system_fields,
-        ensure_default_project_for_tenant_fn=ensure_default_project_for_tenant,
-        sync_tenant_jira_project_keys_fn=sync_tenant_jira_project_keys,
+        reconcile_tenant_projects_fn=reconcile_tenant_projects,
         tenant_to_schema_fn=tenant_to_schema,
     )
 
@@ -320,10 +340,28 @@ def update_tenant(
         with_preserved_jira_system_fields_fn=with_preserved_jira_system_fields,
         with_managed_github_refs_fn=with_managed_github_refs,
         with_preserved_discord_system_fields_fn=with_preserved_discord_system_fields,
-        ensure_default_project_for_tenant_fn=ensure_default_project_for_tenant,
-        sync_tenant_jira_project_keys_fn=sync_tenant_jira_project_keys,
+        reconcile_tenant_projects_fn=reconcile_tenant_projects,
         tenant_to_schema_fn=tenant_to_schema,
     )
+
+
+@router.get("/tenants/{tenant_id}/deployment-plane", response_model=TenantDeploymentPlaneRead)
+def get_tenant_deployment_plane(
+    tenant_id: str,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> TenantDeploymentPlaneRead:
+    return get_tenant_deployment_plane_impl(session=session, tenant_id=tenant_id)
+
+
+@router.put("/tenants/{tenant_id}/deployment-plane", response_model=TenantDeploymentPlaneRead)
+def update_tenant_deployment_plane(
+    tenant_id: str,
+    payload: TenantDeploymentPlaneWrite,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> TenantDeploymentPlaneRead:
+    return update_tenant_deployment_plane_impl(session=session, tenant_id=tenant_id, payload=payload)
 
 
 @router.post("/tenants/{tenant_id}/invites", response_model=TenantInviteRead, status_code=status.HTTP_201_CREATED)
@@ -592,7 +630,9 @@ def get_tenant_discord_identity(
     session: Session = Depends(get_session),
 ) -> TenantDiscordIdentityRead:
     membership = require_tenant_membership(principal=principal, tenant_id=tenant_id)
-    oauth_configured = discord_oauth_is_configured(settings=get_settings())
+    settings = get_settings()
+    oauth_config = resolve_discord_oauth_config(session=session, settings=settings)
+    oauth_configured = discord_oauth_is_configured(config=oauth_config)
     if principal.user_id is None or membership is None:
         return TenantDiscordIdentityRead(linked=False, oauth_configured=oauth_configured)
     identity = get_discord_identity(session=session, user_id=principal.user_id)
@@ -620,6 +660,7 @@ def start_tenant_discord_link(
     if principal.user_id is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tenant user context required")
     settings = get_settings()
+    oauth_config = resolve_discord_oauth_config(session=session, settings=settings)
     state = issue_discord_oauth_state(
         settings=settings,
         tenant_id=tenant_id,
@@ -627,7 +668,7 @@ def start_tenant_discord_link(
         redirect_to=redirect_to,
     )
     try:
-        authorize_url = build_discord_oauth_authorize_url(settings=settings, state=state)
+        authorize_url = build_discord_oauth_authorize_url(config=oauth_config, state=state)
     except DiscordOAuthError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     return TenantDiscordLinkStartRead(authorize_url=authorize_url)
@@ -835,6 +876,608 @@ def update_project(
         payload=payload,
         admin_project_service_factory=admin_project_service,
     )  # type: ignore[return-value]
+
+
+@router.get("/tenants/{tenant_id}/projects/{project_id}/apps", response_model=list[ProjectAppRead])
+def list_project_apps(
+    tenant_id: str,
+    project_id: str,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> list[ProjectAppRead]:
+    require_tenant_membership(principal=principal, tenant_id=tenant_id)
+    return admin_project_service().list_project_apps(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+    )  # type: ignore[return-value]
+
+
+@router.post("/tenants/{tenant_id}/projects/{project_id}/apps", response_model=ProjectAppRead, status_code=status.HTTP_201_CREATED)
+def create_project_app(
+    tenant_id: str,
+    project_id: str,
+    payload: ProjectAppCreate,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> ProjectAppRead:
+    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    return admin_project_service().create_project_app(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        payload=payload,
+    )  # type: ignore[return-value]
+
+
+@router.post(
+    "/tenants/{tenant_id}/projects/{project_id}/apps/analyze",
+    response_model=ProjectAppAnalysisRunRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def start_project_app_analysis(
+    tenant_id: str,
+    project_id: str,
+    payload: ProjectAppAnalysisRunStart,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> ProjectAppAnalysisRunRead:
+    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    return admin_project_service().start_project_app_analysis_run(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        payload=payload,
+        requested_by_user_id=principal.user_id,
+    )  # type: ignore[return-value]
+
+
+@router.get(
+    "/tenants/{tenant_id}/projects/{project_id}/apps/analysis-runs",
+    response_model=list[ProjectAppAnalysisRunRead],
+)
+def list_project_app_analysis_runs(
+    tenant_id: str,
+    project_id: str,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> list[ProjectAppAnalysisRunRead]:
+    require_tenant_membership(principal=principal, tenant_id=tenant_id)
+    return admin_project_service().list_project_app_analysis_runs(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+    )  # type: ignore[return-value]
+
+
+@router.get(
+    "/tenants/{tenant_id}/projects/{project_id}/apps/analysis-runs/{run_id}",
+    response_model=ProjectAppAnalysisRunRead,
+)
+def get_project_app_analysis_run(
+    tenant_id: str,
+    project_id: str,
+    run_id: str,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> ProjectAppAnalysisRunRead:
+    require_tenant_membership(principal=principal, tenant_id=tenant_id)
+    return admin_project_service().get_project_app_analysis_run(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        run_id=run_id,
+    )  # type: ignore[return-value]
+
+
+@router.get("/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}", response_model=ProjectAppRead)
+def get_project_app(
+    tenant_id: str,
+    project_id: str,
+    app_id: str,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> ProjectAppRead:
+    require_tenant_membership(principal=principal, tenant_id=tenant_id)
+    return admin_project_service().get_project_app(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        app_id=app_id,
+    )  # type: ignore[return-value]
+
+
+@router.patch("/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}", response_model=ProjectAppRead)
+@router.put("/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}", response_model=ProjectAppRead)
+def update_project_app(
+    tenant_id: str,
+    project_id: str,
+    app_id: str,
+    payload: ProjectAppUpdate,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> ProjectAppRead:
+    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    return admin_project_service().update_project_app(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        app_id=app_id,
+        payload=payload,
+    )  # type: ignore[return-value]
+
+
+@router.get(
+    "/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-config",
+    response_model=ProjectDeploymentConfigRead,
+)
+def get_project_app_deployment_config(
+    tenant_id: str,
+    project_id: str,
+    app_id: str,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> ProjectDeploymentConfigRead:
+    require_tenant_membership(principal=principal, tenant_id=tenant_id)
+    return admin_project_service().get_project_app_deployment_config(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        app_id=app_id,
+    )  # type: ignore[return-value]
+
+
+@router.put(
+    "/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-config",
+    response_model=ProjectDeploymentConfigRead,
+)
+def update_project_app_deployment_config(
+    tenant_id: str,
+    project_id: str,
+    app_id: str,
+    payload: ProjectDeploymentConfigWrite,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> ProjectDeploymentConfigRead:
+    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    return admin_project_service().update_project_app_deployment_config(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        app_id=app_id,
+        payload=payload,
+    )  # type: ignore[return-value]
+
+
+@router.get(
+    "/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-releases",
+    response_model=list[ProjectDeploymentReleaseRead],
+)
+def list_project_app_deployment_releases(
+    tenant_id: str,
+    project_id: str,
+    app_id: str,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> list[ProjectDeploymentReleaseRead]:
+    require_tenant_membership(principal=principal, tenant_id=tenant_id)
+    return admin_project_service().list_project_app_deployment_releases(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        app_id=app_id,
+    )  # type: ignore[return-value]
+
+
+@router.post(
+    "/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-releases",
+    response_model=ProjectDeploymentReleaseRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_project_app_deployment_release(
+    tenant_id: str,
+    project_id: str,
+    app_id: str,
+    payload: ProjectDeploymentReleaseCreate,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> ProjectDeploymentReleaseRead:
+    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    return admin_project_service().create_project_app_deployment_release(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        app_id=app_id,
+        payload=payload,
+        requested_by_user_id=principal.user_id,
+    )  # type: ignore[return-value]
+
+
+@router.get(
+    "/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-releases/{release_id}",
+    response_model=ProjectDeploymentReleaseRead,
+)
+def get_project_app_deployment_release(
+    tenant_id: str,
+    project_id: str,
+    app_id: str,
+    release_id: str,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> ProjectDeploymentReleaseRead:
+    require_tenant_membership(principal=principal, tenant_id=tenant_id)
+    return admin_project_service().get_project_app_deployment_release(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        app_id=app_id,
+        release_id=release_id,
+    )  # type: ignore[return-value]
+
+
+@router.patch(
+    "/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-releases/{release_id}/status",
+    response_model=ProjectDeploymentReleaseRead,
+)
+def update_project_app_deployment_release_status(
+    tenant_id: str,
+    project_id: str,
+    app_id: str,
+    release_id: str,
+    payload: ProjectDeploymentReleaseStatusUpdate,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> ProjectDeploymentReleaseRead:
+    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    return admin_project_service().update_project_app_deployment_release_status(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        app_id=app_id,
+        release_id=release_id,
+        payload=payload,
+    )  # type: ignore[return-value]
+
+
+@router.post(
+    "/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-resources/apply",
+    response_model=ProjectDeploymentOperationRead,
+)
+def apply_project_app_deployment_resources(
+    tenant_id: str,
+    project_id: str,
+    app_id: str,
+    payload: ProjectDeploymentResourceApplyRequest,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> ProjectDeploymentOperationRead:
+    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    return admin_project_service().apply_project_app_deployment_resources(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        app_id=app_id,
+        payload=payload,
+    )
+
+
+@router.post(
+    "/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-domains/apply",
+    response_model=ProjectDeploymentOperationRead,
+)
+def apply_project_app_deployment_domains(
+    tenant_id: str,
+    project_id: str,
+    app_id: str,
+    payload: ProjectDeploymentDomainApplyRequest,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> ProjectDeploymentOperationRead:
+    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    return admin_project_service().apply_project_app_deployment_domains(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        app_id=app_id,
+        payload=payload,
+    )
+
+
+@router.post(
+    "/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-backups/apply",
+    response_model=ProjectDeploymentOperationRead,
+)
+def apply_project_app_deployment_backups(
+    tenant_id: str,
+    project_id: str,
+    app_id: str,
+    payload: ProjectDeploymentBackupApplyRequest,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> ProjectDeploymentOperationRead:
+    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    return admin_project_service().apply_project_app_deployment_backups(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        app_id=app_id,
+        payload=payload,
+    )
+
+
+@router.post(
+    "/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-backups/trigger",
+    response_model=ProjectDeploymentOperationRead,
+)
+@router.post(
+    "/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-backups/request",
+    response_model=ProjectDeploymentOperationRead,
+)
+def trigger_project_app_deployment_backups(
+    tenant_id: str,
+    project_id: str,
+    app_id: str,
+    payload: ProjectDeploymentBackupTriggerRequest,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> ProjectDeploymentOperationRead:
+    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    return admin_project_service().trigger_project_app_deployment_backups(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        app_id=app_id,
+        payload=payload,
+    )
+
+
+@router.post(
+    "/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-backups/restore",
+    response_model=ProjectDeploymentOperationRead,
+)
+def restore_project_app_deployment_backup(
+    tenant_id: str,
+    project_id: str,
+    app_id: str,
+    payload: ProjectDeploymentBackupRestoreRequest,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> ProjectDeploymentOperationRead:
+    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    return admin_project_service().restore_project_app_deployment_backup(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        app_id=app_id,
+        payload=payload,
+    )
+
+
+@router.get("/tenants/{tenant_id}/deployments/overview", response_model=TenantDeploymentsOverviewRead)
+def get_tenant_deployments_overview(
+    tenant_id: str,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> TenantDeploymentsOverviewRead:
+    require_tenant_membership(principal=principal, tenant_id=tenant_id)
+    return admin_project_service().get_tenant_deployments_overview(
+        session=session,
+        tenant_id=tenant_id,
+    )  # type: ignore[return-value]
+
+
+@router.get("/tenants/{tenant_id}/projects/{project_id}/deployment-config", response_model=ProjectDeploymentConfigRead)
+def get_project_deployment_config(
+    tenant_id: str,
+    project_id: str,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> ProjectDeploymentConfigRead:
+    require_tenant_membership(principal=principal, tenant_id=tenant_id)
+    return admin_project_service().get_project_deployment_config(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+    )  # type: ignore[return-value]
+
+
+@router.put("/tenants/{tenant_id}/projects/{project_id}/deployment-config", response_model=ProjectDeploymentConfigRead)
+def update_project_deployment_config(
+    tenant_id: str,
+    project_id: str,
+    payload: ProjectDeploymentConfigWrite,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> ProjectDeploymentConfigRead:
+    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    return admin_project_service().update_project_deployment_config(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        payload=payload,
+    )  # type: ignore[return-value]
+
+
+@router.get(
+    "/tenants/{tenant_id}/projects/{project_id}/deployment-releases",
+    response_model=list[ProjectDeploymentReleaseRead],
+)
+def list_project_deployment_releases(
+    tenant_id: str,
+    project_id: str,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> list[ProjectDeploymentReleaseRead]:
+    require_tenant_membership(principal=principal, tenant_id=tenant_id)
+    return admin_project_service().list_project_deployment_releases(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+    )  # type: ignore[return-value]
+
+
+@router.post(
+    "/tenants/{tenant_id}/projects/{project_id}/deployment-releases",
+    response_model=ProjectDeploymentReleaseRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_project_deployment_release(
+    tenant_id: str,
+    project_id: str,
+    payload: ProjectDeploymentReleaseCreate,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> ProjectDeploymentReleaseRead:
+    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    return admin_project_service().create_project_deployment_release(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        payload=payload,
+        requested_by_user_id=principal.user_id,
+    )  # type: ignore[return-value]
+
+
+@router.get(
+    "/tenants/{tenant_id}/projects/{project_id}/deployment-releases/{release_id}",
+    response_model=ProjectDeploymentReleaseRead,
+)
+def get_project_deployment_release(
+    tenant_id: str,
+    project_id: str,
+    release_id: str,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> ProjectDeploymentReleaseRead:
+    require_tenant_membership(principal=principal, tenant_id=tenant_id)
+    return admin_project_service().get_project_deployment_release(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        release_id=release_id,
+    )  # type: ignore[return-value]
+
+
+@router.patch(
+    "/tenants/{tenant_id}/projects/{project_id}/deployment-releases/{release_id}/status",
+    response_model=ProjectDeploymentReleaseRead,
+)
+def update_project_deployment_release_status(
+    tenant_id: str,
+    project_id: str,
+    release_id: str,
+    payload: ProjectDeploymentReleaseStatusUpdate,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> ProjectDeploymentReleaseRead:
+    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    return admin_project_service().update_project_deployment_release_status(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        release_id=release_id,
+        payload=payload,
+    )  # type: ignore[return-value]
+
+
+@router.post(
+    "/tenants/{tenant_id}/projects/{project_id}/deployment-resources/apply",
+    response_model=ProjectDeploymentOperationRead,
+)
+def apply_project_deployment_resources(
+    tenant_id: str,
+    project_id: str,
+    payload: ProjectDeploymentResourceApplyRequest,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> ProjectDeploymentOperationRead:
+    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    return admin_project_service().apply_project_deployment_resources(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        payload=payload,
+    )
+
+
+@router.post(
+    "/tenants/{tenant_id}/projects/{project_id}/deployment-domains/apply",
+    response_model=ProjectDeploymentOperationRead,
+)
+def apply_project_deployment_domains(
+    tenant_id: str,
+    project_id: str,
+    payload: ProjectDeploymentDomainApplyRequest,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> ProjectDeploymentOperationRead:
+    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    return admin_project_service().apply_project_deployment_domains(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        payload=payload,
+    )
+
+
+@router.post(
+    "/tenants/{tenant_id}/projects/{project_id}/deployment-backups/apply",
+    response_model=ProjectDeploymentOperationRead,
+)
+def apply_project_deployment_backups(
+    tenant_id: str,
+    project_id: str,
+    payload: ProjectDeploymentBackupApplyRequest,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> ProjectDeploymentOperationRead:
+    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    return admin_project_service().apply_project_deployment_backups(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        payload=payload,
+    )
+
+
+@router.post(
+    "/tenants/{tenant_id}/projects/{project_id}/deployment-backups/trigger",
+    response_model=ProjectDeploymentOperationRead,
+)
+def trigger_project_deployment_backups(
+    tenant_id: str,
+    project_id: str,
+    payload: ProjectDeploymentBackupTriggerRequest,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> ProjectDeploymentOperationRead:
+    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    return admin_project_service().trigger_project_deployment_backups(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        payload=payload,
+    )
+
+
+@router.post(
+    "/tenants/{tenant_id}/projects/{project_id}/deployment-backups/restore",
+    response_model=ProjectDeploymentOperationRead,
+)
+def restore_project_deployment_backup(
+    tenant_id: str,
+    project_id: str,
+    payload: ProjectDeploymentBackupRestoreRequest,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> ProjectDeploymentOperationRead:
+    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    return admin_project_service().restore_project_deployment_backup(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        payload=payload,
+    )
 
 
 def _get_project_for_tenant_or_404(*, session: Session, tenant_id: str, project_id: str) -> Project:
