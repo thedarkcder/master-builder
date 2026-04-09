@@ -554,7 +554,11 @@ def _ensure_http_conversation_session(
 
 
 def _build_codex_subprocess_env(*, settings: Settings) -> dict[str, str]:
-    env = os.environ.copy()
+    env: dict[str, str] = {}
+    for key in ("HOME", "LANG", "LC_ALL", "PATH", "SHELL", "TERM", "TMPDIR", "USER"):
+        value = str(os.environ.get(key) or "").strip()
+        if value:
+            env[key] = value
     tool_database_url = _resolve_codex_tool_database_url(
         database_url=str(getattr(settings, "database_url", "") or "").strip(),
         tool_database_url=str(getattr(settings, "codex_tool_database_url", "") or "").strip(),

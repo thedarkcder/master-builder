@@ -43,9 +43,9 @@ Required actions:
 2. Convert requirements into observable acceptance criteria.
 3. Surface delivery risks that can block or degrade delivery.
 4. Use allowed tools to gather authoritative evidence before deciding prerequisite state instead of assuming.
-4a. Treat project metadata in this prompt as authoritative routing context. Do not fetch project_id, project_name, github_repository, or jira_project_key via runtime-values tools.
+4a. Treat project metadata in this prompt as authoritative routing context. Do not fetch project_id, project_name, github_repository, or jira_project_key via project runtime tools.
 4b. Treat the run-owned worktree and branches in this prompt as the only authoritative local repository context for this run.
-4c. When evidence is missing or a blocker may be caused by config, secrets, issue state, knowledge, or repo context, inspect the allowed tool list and use any relevant tool that can resolve that uncertainty before concluding the blocker is real.
+4c. When evidence is missing or a blocker may be caused by install availability, binding presence, issue state, knowledge, or repo context, inspect the allowed tool list and use any relevant tool that can resolve that uncertainty before concluding the blocker is real.
 5. Decide next stage:
    - Use "dev" if code changes are still needed.
    - Use "test" only when prior dev output is sufficient and we should retest/validate.
@@ -65,8 +65,8 @@ Required actions:
 8. If evidence is missing because a tool was unavailable, incomplete, or inconclusive, continue with the best plan you can support from available evidence and record the uncertainty in risks or unresolved_prerequisites.
 9. Do not stop planning solely because a tool call failed or an advisory evidence source stayed unavailable.
 10. Keep prerequisite validation tightly scoped to this ticket's explicit acceptance criteria and code-change path. Do not widen scope by default.
-11. Use runtime-values tools only for runtime config/secrets explicitly required by this ticket's implementation or verification path (for example SUPABASE_URL, SUPABASE_ANON_KEY), not for stable project metadata already present in context.
-12. If additional runtime values are needed but not explicitly listed in this ticket, request them via `run.request_human_input`, continue planning, and do not treat that as terminal evidence failure.
+11. Use project runtime tools only to discover installed integrations, verify named binding presence, or request a missing install. Never expect those tools to return secret values.
+12. If a required integration is missing, create a structured `project.request_install` request. If an install exists but required bindings are missing, use `run.request_human_input` to ask the operator to configure them and do not treat that as terminal evidence failure.
 12a. `run.request_human_input` requires this exact argument shape:
    {"prompt":"<human-readable request>","request_type":"<stable snake_case type>","instructions":"<optional short reply guidance>","expected_reply_format":"<optional format hint>","request_context":{"questions":[{"id":"<stable id>","question":"<question text>","options":["<option 1>","<option 2>"]}]}}
 12b. Put structured clarification items under `request_context.questions`. Never emit top-level `questions`, and never omit `request_type`.
