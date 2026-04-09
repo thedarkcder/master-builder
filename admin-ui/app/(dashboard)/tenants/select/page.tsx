@@ -7,6 +7,7 @@ import { Archive, ChevronRight, Plus, Zap } from "lucide-react";
 
 import { useAuth } from "@/components/auth-provider";
 import { canAccessPlatformAdmin, getDefaultAuthenticatedRoute, getTenantDashboardRoute } from "@/lib/auth-routing";
+import { readLastWorkspaceTenantIdFromBrowser } from "@/lib/workspace-preference";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { listTenants, type TenantRecord } from "@/lib/api";
@@ -95,7 +96,8 @@ export default function SelectTenantPage() {
 
   useEffect(() => {
     if (ready && principal && !canAccessPlatformAdmin(principal) && !needsOnboarding) {
-      router.replace(getDefaultAuthenticatedRoute(principal));
+      const preferredTenantId = readLastWorkspaceTenantIdFromBrowser();
+      router.replace(getDefaultAuthenticatedRoute(principal, { preferredTenantId }));
       return;
     }
   }, [needsOnboarding, principal, ready, router]);

@@ -34,6 +34,7 @@ import {
   getTenantWorkspaceRoute,
 } from "@/lib/auth-routing";
 import { resolveRunRouteContext } from "@/lib/dashboard-paths";
+import { persistLastWorkspaceTenantId } from "@/lib/workspace-preference";
 import {
   Sidebar,
   SidebarContent,
@@ -347,6 +348,14 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
       .catch(() => { if (!cancelled) setTenant(null); });
     return () => { cancelled = true; };
   }, [credentials, isWizardRoute, tenantId]);
+
+  const decodedTenantIdForPersist = tenantId ? decodeURIComponent(tenantId) : null;
+  useEffect(() => {
+    if (!decodedTenantIdForPersist || isWizardRoute) {
+      return;
+    }
+    persistLastWorkspaceTenantId(decodedTenantIdForPersist);
+  }, [decodedTenantIdForPersist, isWizardRoute]);
 
   useEffect(() => {
     if (!credentials || !tenantId || isWizardRoute) {

@@ -6,7 +6,6 @@ import { useParams } from "next/navigation";
 import { AlertCircle, CheckCircle2, Clock3, GitPullRequest } from "lucide-react";
 
 import { useAuth } from "@/components/auth-provider";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { getTenantDeliverySummary, type DeliverySummaryRecord } from "@/lib/api";
 
@@ -54,61 +53,42 @@ export default function BusinessAnalyticsPage() {
   return (
     <div className="space-y-6">
       {errorMessage ? (
-        <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{errorMessage}</div>
+        <div className="rounded-xl border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800">{errorMessage}</div>
       ) : null}
 
       {summary ? (
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm text-muted-foreground">Completed</CardTitle>
-            </CardHeader>
-            <CardContent className="flex items-end justify-between">
-              <span className="text-3xl font-semibold">{summary.completed_count}</span>
-              <CheckCircle2 className="h-5 w-5 text-emerald-500" />
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm text-muted-foreground">In Review</CardTitle>
-            </CardHeader>
-            <CardContent className="flex items-end justify-between">
-              <span className="text-3xl font-semibold">{summary.in_review_count}</span>
-              <GitPullRequest className="h-5 w-5 text-sky-500" />
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm text-muted-foreground">Blocked</CardTitle>
-            </CardHeader>
-            <CardContent className="flex items-end justify-between">
-              <span className="text-3xl font-semibold">{summary.blocked_count}</span>
-              <AlertCircle className="h-5 w-5 text-amber-500" />
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm text-muted-foreground">Cycle Time</CardTitle>
-            </CardHeader>
-            <CardContent className="flex items-end justify-between">
-              <div>
-                <p className="text-3xl font-semibold">{summary.median_cycle_time_hours ?? "0"}h</p>
-                <p className="text-xs text-muted-foreground">Median completion time</p>
+          {[
+            { label: "Completed", value: summary.completed_count, icon: <CheckCircle2 className="h-5 w-5 text-emerald-500" /> },
+            { label: "In Review", value: summary.in_review_count, icon: <GitPullRequest className="h-5 w-5 text-sky-500" /> },
+            { label: "Blocked", value: summary.blocked_count, icon: <AlertCircle className="h-5 w-5 text-amber-500" /> },
+            {
+              label: "Cycle Time",
+              value: `${summary.median_cycle_time_hours ?? "0"}h`,
+              sub: "Median completion time",
+              icon: <Clock3 className="h-5 w-5 text-violet-500" />
+            },
+          ].map((item) => (
+            <div key={item.label} className="rounded-xl border px-4 py-3">
+              <div className="flex items-start justify-between">
+                <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">{item.label}</p>
+                {item.icon}
               </div>
-              <Clock3 className="h-5 w-5 text-violet-500" />
-            </CardContent>
-          </Card>
+              <p className="mt-1 text-3xl font-semibold">{item.value}</p>
+              {"sub" in item && item.sub ? <p className="mt-0.5 text-xs text-muted-foreground">{item.sub}</p> : null}
+            </div>
+          ))}
         </div>
       ) : null}
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Recent delivery timeline</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
+      <div className="overflow-hidden rounded-2xl border bg-background">
+        <div className="p-6">
+          <h2 className="text-base font-semibold">Recent delivery timeline</h2>
+        </div>
+        <div className="divide-y">
           {data?.timeline.length ? (
             data.timeline.map((item) => (
-              <div key={item.run_id} className="rounded-xl border px-4 py-3">
+              <div key={item.run_id} className="px-6 py-4">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <p className="text-sm font-medium">{item.issue_key}</p>
@@ -129,10 +109,10 @@ export default function BusinessAnalyticsPage() {
               </div>
             ))
           ) : (
-            <p className="text-sm text-muted-foreground">No completed work has been recorded for this tenant yet.</p>
+            <div className="px-6 pb-6 text-sm text-muted-foreground">No completed work has been recorded for this tenant yet.</div>
           )}
-        </CardContent>
-      </Card>
+        </div>
+      </div>
     </div>
   );
 }

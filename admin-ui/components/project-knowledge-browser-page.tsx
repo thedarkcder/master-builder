@@ -7,7 +7,7 @@ import { useAuth } from "@/components/auth-provider";
 import { ProjectKnowledgeAddSection } from "@/components/project-knowledge-add-section";
 import { ProjectKnowledgeSourcesSection } from "@/components/project-knowledge-sources-section";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
@@ -352,12 +352,12 @@ export function ProjectKnowledgeBrowserPage({
         </div>
       </div>
 
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle>Knowledge Analytics</CardTitle>
-          <CardDescription>Project-wide stats and hourly sync state.</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
+      <div className="overflow-hidden rounded-2xl border bg-background">
+        <div className="p-6 pb-3">
+          <h2 className="text-base font-semibold">Knowledge Analytics</h2>
+          <p className="mt-1 text-sm text-muted-foreground">Project-wide stats and hourly sync state.</p>
+        </div>
+        <div className="space-y-3 p-6 pt-0">
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
             <div className="rounded-md border p-3">
               <p className="text-xs uppercase tracking-wide text-muted-foreground">Assets</p>
@@ -397,8 +397,8 @@ export function ProjectKnowledgeBrowserPage({
               {`${stats?.approved_facts ?? 0} approved · ${stats?.pending_review_facts ?? 0} pending review · ${stats?.superseded_facts ?? 0} superseded`}
             </p>
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
 
       {activeView === "add" ? (
         <ProjectKnowledgeAddSection
@@ -417,12 +417,12 @@ export function ProjectKnowledgeBrowserPage({
       ) : null}
 
       {activeView === "browse" ? (
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle>Asset Browser</CardTitle>
-          <CardDescription>Filter, page, and inspect all project knowledge assets.</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
+      <div className="overflow-hidden rounded-2xl border bg-background">
+        <div className="p-6 pb-3">
+          <h2 className="text-base font-semibold">Asset Browser</h2>
+          <p className="mt-1 text-sm text-muted-foreground">Filter, page, and inspect all project knowledge assets.</p>
+        </div>
+        <div className="space-y-4 p-6 pt-0">
           <div className="rounded-md border p-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
@@ -636,8 +636,8 @@ export function ProjectKnowledgeBrowserPage({
               </Button>
             </div>
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
       ) : null}
 
       {activeView === "browse" && selectedAssetId ? (

@@ -104,12 +104,17 @@ def process_next_queued_run(session: Session, runner: WorkflowRunner) -> Run | N
 def process_next_webhook_job_with_dependencies(
     *,
     session_factory: sessionmaker[Session],
+    owner_id: str | None = None,
 ) -> object | None:
+    settings = get_settings()
+    resolved_owner_id = str(owner_id or "").strip() or (
+        f"worker:{worker_service_instance_id_for_mode(settings=settings, mode='webhooks')}"
+    )
     with session_factory() as session:
         return process_next_webhook_job(
             session=session,
-            settings=get_settings(),
-            owner_id=f"worker:{worker_service_instance_id_for_mode(settings=get_settings(), mode='webhooks')}",
+            settings=settings,
+            owner_id=resolved_owner_id,
         )
 
 

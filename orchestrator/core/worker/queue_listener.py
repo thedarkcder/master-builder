@@ -86,15 +86,18 @@ async def wait_for_wake_or_stop(
     *,
     wake_event: asyncio.Event,
     stop_event: asyncio.Event,
-) -> None:
+    timeout_seconds: float | None = None,
+) -> bool:
     if wake_event.is_set() or stop_event.is_set():
-        return
+        return False
     wake_task = asyncio.create_task(wake_event.wait())
     stop_task = asyncio.create_task(stop_event.wait())
     done, pending = await asyncio.wait(
         {wake_task, stop_task},
         return_when=asyncio.FIRST_COMPLETED,
+        timeout=timeout_seconds,
     )
+    timed_out = len(done) == 0
     for task in pending:
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
@@ -102,3 +105,4 @@ async def wait_for_wake_or_stop(
     for task in done:
         with contextlib.suppress(asyncio.CancelledError):
             task.result()
+    return timed_out

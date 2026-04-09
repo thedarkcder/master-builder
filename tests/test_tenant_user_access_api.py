@@ -13,7 +13,7 @@ from orchestrator.core.config import get_settings
 from orchestrator.core.email_delivery import EmailDeliveryError
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
-from orchestrator.storage.models import Project, Run, Tenant, WorkflowCheckpoint, WorkflowExecution
+from orchestrator.storage.models import Project, Run, Tenant, WebhookJob, WorkflowCheckpoint, WorkflowExecution
 from tests.workflow_test_support import add_run_with_workflow, add_workflow_attempt, make_run
 
 
@@ -252,6 +252,80 @@ class TenantUserAccessApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()[0]["run_id"], "tenant-user-visible-run")
+
+    def test_tenant_user_can_list_webhook_jobs_for_project_scope(self) -> None:
+        registration = self._register()
+        token = self._login()
+        tenant_id = registration["tenant"]["tenant_id"]
+        default_project_id = f"{tenant_id}-default"
+        now = datetime.now(timezone.utc)
+
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            session.add_all(
+                [
+                    WebhookJob(
+                        job_id="tenant-webhook-job-1",
+                        transport="github_webhook",
+                        tenant_id=tenant_id,
+                        project_id=default_project_id,
+                        subject_key=f"github_pr:{tenant_id}:repo:11",
+                        dedupe_key="webhook-delivery-1",
+                        request_id="req-1",
+                        event_type="pull_request",
+                        status="pending",
+                        owner_id=None,
+                        lease_expires_at=None,
+                        available_at=now,
+                        attempt_count=0,
+                        last_error=None,
+                        payload_json={},
+                        context_json={},
+                        created_at=now,
+                        updated_at=now,
+                        started_at=None,
+                        completed_at=None,
+                    ),
+                    WebhookJob(
+                        job_id="tenant-webhook-job-2",
+                        transport="jira_webhook",
+                        tenant_id=tenant_id,
+                        project_id=f"{tenant_id}-other",
+                        subject_key=f"jira:{tenant_id}:TP-222",
+                        dedupe_key="webhook-delivery-2",
+                        request_id="req-2",
+                        event_type="jira:issue_updated",
+                        status="failed",
+                        owner_id=None,
+                        lease_expires_at=None,
+                        available_at=now,
+                        attempt_count=1,
+                        last_error="boom",
+                        payload_json={},
+                        context_json={},
+                        created_at=now,
+                        updated_at=now,
+                        started_at=now,
+                        completed_at=now,
+                    ),
+                ]
+            )
+            session.commit()
+
+        response = self.client.get(
+            (
+                f"/api/admin/observability/webhook-jobs?tenant_id={tenant_id}"
+                f"&project_id={default_project_id}&limit=25&offset=0"
+            ),
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertEqual(payload["total"], 1)
+        self.assertEqual(payload["items"][0]["job_id"], "tenant-webhook-job-1")
+        self.assertEqual(payload["summary"]["pending_count"], 1)
+        self.assertEqual(payload["summary"]["failed_count"], 0)
 
     def test_tenant_user_can_list_and_get_workflows_for_their_workspace(self) -> None:
         registration = self._register()
@@ -911,6 +985,105 @@ class TenantUserAccessApiTests(unittest.TestCase):
         discord_config = tenant_response.json()["discord"]
         self.assertEqual(discord_config["guild_id"], "987654321")
         self.assertIsNotNone(discord_config["installed_at"])
+
+    def test_discord_install_callback_reconciles_default_project_channel_when_setup_is_ready(self) -> None:
+        registration = self._register()
+        token = self._login()
+        tenant_id = registration["tenant"]["tenant_id"]
+
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            tenant = session.get(Tenant, tenant_id)
+            self.assertIsNotNone(tenant)
+            assert tenant is not None
+            tenant.jira_config = {
+                "project_keys": ["TP"],
+                "connection_id": "conn-1",
+            }
+            tenant.repos_config = {
+                "allowlist": ["https://github.com/example/repo"],
+                "mapping_rules_by_project_key": {"TP": "https://github.com/example/repo"},
+                "mapping_rules_by_component": {},
+                "fallback_repo": None,
+                "github_repository": "https://github.com/example/repo",
+            }
+            tenant.updated_at = datetime.now(timezone.utc)
+            session.commit()
+
+        start_response = self.client.post(
+            f"/api/admin/tenants/{tenant_id}/discord/install/start?return_to=wizard",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        self.assertEqual(start_response.status_code, 200, start_response.text)
+        state_token = parse_qs(urlparse(start_response.json()["install_url"]).query)["state"][0]
+
+        with patch(
+            "orchestrator.api.admin.route_helpers.resolve_project_discord_channel_binding",
+            return_value={"channel_id": "discord-channel-123"},
+        ) as resolve_channel_mock:
+            callback_response = self.client.get(
+                f"/api/admin/discord/install/callback?state={state_token}&guild_id=987654321&code=oauth-code",
+                follow_redirects=False,
+            )
+        self.assertEqual(callback_response.status_code, 302, callback_response.text)
+        resolve_channel_mock.assert_called_once()
+
+        with session_factory() as session:
+            project = session.get(Project, f"{tenant_id}-default")
+            self.assertIsNotNone(project)
+            assert project is not None
+            self.assertEqual(project.github_repository, "https://github.com/example/repo")
+            self.assertEqual(project.jira_project_key, "TP")
+            self.assertEqual(project.discord_config["channel_id"], "discord-channel-123")
+
+    def test_discord_install_callback_handles_access_denied_without_422(self) -> None:
+        registration = self._register()
+        token = self._login()
+        tenant_id = registration["tenant"]["tenant_id"]
+
+        start_response = self.client.post(
+            f"/api/admin/tenants/{tenant_id}/discord/install/start?return_to=wizard",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        self.assertEqual(start_response.status_code, 200, start_response.text)
+        state_token = parse_qs(urlparse(start_response.json()["install_url"]).query)["state"][0]
+
+        callback_response = self.client.get(
+            (
+                "/api/admin/discord/install/callback"
+                f"?state={state_token}&error=access_denied&error_description=The+resource+owner+rejected+the+request"
+            ),
+            follow_redirects=False,
+        )
+        self.assertEqual(callback_response.status_code, 302, callback_response.text)
+        redirect_query = parse_qs(urlparse(callback_response.headers["location"]).query)
+        self.assertEqual(redirect_query["discord_install"], ["cancelled"])
+        self.assertEqual(redirect_query["tenant_id"], [tenant_id])
+        self.assertEqual(redirect_query["discord_error"], ["access_denied"])
+
+    def test_discord_install_uses_platform_secret_client_id_when_env_missing(self) -> None:
+        registration = self._register()
+        token = self._login()
+        tenant_id = registration["tenant"]["tenant_id"]
+
+        os.environ["ORCHESTRATOR_DISCORD_OAUTH_CLIENT_ID"] = ""
+        get_settings.cache_clear()
+
+        put_response = self.client.put(
+            "/api/admin/secrets/platform%2FDISCORD_OAUTH_CLIENT_ID",
+            json={"value": "platform-discord-client-id"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(put_response.status_code, 200, put_response.text)
+
+        start_response = self.client.post(
+            f"/api/admin/tenants/{tenant_id}/discord/install/start?return_to=wizard",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        self.assertEqual(start_response.status_code, 200, start_response.text)
+        payload = start_response.json()
+        query = parse_qs(urlparse(payload["install_url"]).query)
+        self.assertEqual(query["client_id"], ["platform-discord-client-id"])
 
     def test_discord_identity_reports_oauth_unconfigured_when_redirect_missing(self) -> None:
         registration = self._register()
