@@ -3,12 +3,11 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, usePathname, useRouter } from "next/navigation";
-import { ArrowLeft } from "lucide-react";
+import { AlertCircle, ArrowLeft, Brain, ChevronRight, FileCode, MessageSquare, Terminal, Wrench } from "lucide-react";
 
 import { useAuth } from "@/components/auth-provider";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { TokenStackedBarChart } from "@/components/charts";
 import {
@@ -113,7 +112,14 @@ type ChatTimelineEntry = {
   attempt: number | null;
   speaker: string;
   text: string;
-  kind: "message" | "reasoning" | "status" | "error";
+  kind: "message" | "reasoning" | "status" | "error" | "command" | "file_edit" | "tool_call";
+  meta?: {
+    command?: string;
+    exitCode?: number;
+    output?: string;
+    filePath?: string;
+    language?: string;
+  };
 };
 type RunPanelTab = "overview" | "agents" | "diagnostics" | "cost";
 type AgentStage = "pm" | "dev" | "test" | "review";
@@ -159,10 +165,6 @@ function statusFromLifecycleEvent(eventType: string): RunRecord["status"] | null
   return null;
 }
 
-// statusBadge is superseded by StatusBadge component; kept to avoid cascade changes in unchanged code paths.
-function statusBadge(_status: string) {
-  return null;
-}
 
 function parseTelemetryPayload(message: string): InvocationTelemetry | null {
   try {
@@ -346,7 +348,28 @@ function dedupeRunLogs(entries: RunLogEventRecord[]): RunLogEventRecord[] {
   return ordered;
 }
 
-function parseRunLogChatText(entry: RunLogEventRecord): Pick<ChatTimelineEntry, "speaker" | "text" | "kind"> | null {
+type ParsedChatEntry = Pick<ChatTimelineEntry, "speaker" | "text" | "kind"> & { meta?: ChatTimelineEntry["meta"] };
+
+function tryParseToolRequest(text: string): ParsedChatEntry | null {
+  if (!text.startsWith("{")) return null;
+  let inner: unknown = null;
+  try { inner = JSON.parse(text); } catch { return null; }
+  if (!isRecord(inner)) return null;
+  const t = String(inner.type ?? "").trim().toLowerCase();
+  if (t === "tool_request" || t === "tool_call" || t === "function_call") {
+    const toolName = String(inner.tool_name ?? inner.name ?? inner.function_name ?? "tool").trim();
+    const reason = String(inner.reason ?? "").trim();
+    return {
+      speaker: "codex",
+      text: toolName,
+      kind: "tool_call",
+      meta: { output: reason || undefined }
+    };
+  }
+  return null;
+}
+
+function parseRunLogChatText(entry: RunLogEventRecord): ParsedChatEntry | null {
   const raw = String(entry.message ?? "");
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -386,31 +409,208 @@ function parseRunLogChatText(entry: RunLogEventRecord): Pick<ChatTimelineEntry, 
     return { speaker: "codex", text: `Turn completed${usageSuffix}`, kind: "status" };
   }
 
+  if (eventType === "tool_request" || eventType === "tool_call" || eventType === "function_call") {
+    const toolName = String(parsed.tool_name ?? parsed.name ?? parsed.function_name ?? "tool").trim();
+    const reason = String(parsed.reason ?? "").trim();
+    return {
+      speaker: "codex",
+      text: toolName,
+      kind: "tool_call",
+      meta: { output: reason || undefined }
+    };
+  }
+
   const item = isRecord(parsed.item) ? parsed.item : null;
   if (eventType === "item.completed" && item) {
     const itemType = String(item.type ?? "").trim().toLowerCase();
+
     if (itemType === "agent_message") {
-      return { speaker: "codex", text: String(item.text ?? "").trim(), kind: "message" };
+      const msgText = String(item.text ?? "").trim();
+      const innerObj = tryParseToolRequest(msgText);
+      if (innerObj) return innerObj;
+      return { speaker: "codex", text: msgText, kind: "message" };
     }
+
     if (itemType === "reasoning") {
       return { speaker: "codex", text: String(item.text ?? "").trim(), kind: "reasoning" };
     }
+
     if (itemType === "command_execution") {
       const status = String(item.status ?? "").trim().toLowerCase();
-      const exitCode = item.exit_code;
-      if (status === "failed" || (typeof exitCode === "number" && exitCode !== 0)) {
-        const command = normalizeInlineText(String(item.command ?? ""));
-        const output = normalizeInlineText(String(item.aggregated_output ?? ""));
+      const exitCode = typeof item.exit_code === "number" ? item.exit_code : null;
+      const command = normalizeInlineText(String(item.command ?? ""));
+      const output = String(item.aggregated_output ?? "").trim();
+      const isFailed = status === "failed" || (exitCode !== null && exitCode !== 0);
+
+      if (isFailed) {
         return {
-          speaker: "command",
-          text: `Command failed${typeof exitCode === "number" ? ` (exit ${exitCode})` : ""}: ${command}${output ? ` | ${output}` : ""}`,
-          kind: "error"
+          speaker: "terminal",
+          text: `Command failed${exitCode !== null ? ` (exit ${exitCode})` : ""}: ${command}`,
+          kind: "error",
+          meta: { command, exitCode: exitCode ?? undefined, output: output || undefined }
         };
       }
+      return {
+        speaker: "terminal",
+        text: command,
+        kind: "command",
+        meta: { command, exitCode: exitCode ?? 0, output: output || undefined }
+      };
+    }
+
+    if (itemType === "file_edit" || itemType === "file_create" || itemType === "file_write") {
+      const filePath = String(item.file_path ?? item.path ?? "").trim();
+      const language = filePath.split(".").pop() ?? "";
+      const content = String(item.content ?? item.diff ?? item.text ?? "").trim();
+      return {
+        speaker: "codex",
+        text: `${itemType === "file_create" || itemType === "file_write" ? "Created" : "Edited"} ${filePath || "file"}`,
+        kind: "file_edit",
+        meta: { filePath, language, output: content || undefined }
+      };
+    }
+
+    if (itemType === "tool_call" || itemType === "function_call" || itemType === "mcp_call") {
+      const toolName = String(item.name ?? item.tool_name ?? item.function_name ?? "tool").trim();
+      const result = String(item.output ?? item.result ?? "").trim();
+      return {
+        speaker: "codex",
+        text: toolName,
+        kind: "tool_call",
+        meta: { output: result || undefined }
+      };
+    }
+
+    if (itemType) {
+      const fallbackText = String(item.text ?? "").trim();
+      const innerObj = tryParseToolRequest(fallbackText);
+      if (innerObj) return innerObj;
+      return {
+        speaker: "codex",
+        text: `${itemType}${fallbackText ? `: ${normalizeInlineText(fallbackText).slice(0, 200)}` : ""}`,
+        kind: "status"
+      };
     }
   }
 
   return null;
+}
+
+function relativeTime(iso: string): string {
+  const ms = Date.now() - new Date(iso).getTime();
+  if (ms < 0) return "just now";
+  const sec = Math.floor(ms / 1000);
+  if (sec < 60) return `${sec}s ago`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const d = Math.floor(hr / 24);
+  return `${d}d ago`;
+}
+
+const MAX_OUTPUT_PREVIEW = 600;
+
+const TIMELINE_ICON: Record<ChatTimelineEntry["kind"], { icon: React.ReactNode; color: string }> = {
+  message:   { icon: <MessageSquare className="h-3.5 w-3.5" />, color: "text-blue-500" },
+  reasoning: { icon: <Brain className="h-3.5 w-3.5" />,          color: "text-violet-500" },
+  status:    { icon: <ChevronRight className="h-3.5 w-3.5" />,   color: "text-muted-foreground" },
+  error:     { icon: <AlertCircle className="h-3.5 w-3.5" />,    color: "text-red-500" },
+  command:   { icon: <Terminal className="h-3.5 w-3.5" />,       color: "text-amber-500" },
+  file_edit: { icon: <FileCode className="h-3.5 w-3.5" />,      color: "text-emerald-500" },
+  tool_call: { icon: <Wrench className="h-3.5 w-3.5" />,        color: "text-orange-500" },
+};
+
+function TimelineRow({
+  entry,
+  stageDisplayLabelFn,
+  isLast,
+}: {
+  entry: ChatTimelineEntry;
+  stageDisplayLabelFn: (stage: string) => string;
+  isLast: boolean;
+}) {
+  const { icon, color } = TIMELINE_ICON[entry.kind] ?? TIMELINE_ICON.message;
+  const stageLbl = stageDisplayLabelFn(entry.stage);
+  const ts = relativeTime(entry.recordedAt);
+  const fullTs = new Date(entry.recordedAt).toLocaleString();
+  const attempt = entry.attempt !== null ? ` #${entry.attempt}` : "";
+
+  return (
+    <li className="group relative flex gap-3 pb-4 last:pb-0">
+      {/* vertical connector line */}
+      {!isLast && (
+        <div className="absolute left-[13px] top-6 bottom-0 w-px bg-border" />
+      )}
+
+      {/* dot / icon */}
+      <div className={`relative z-10 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border bg-background ${color}`}>
+        {icon}
+      </div>
+
+      {/* content */}
+      <div className="min-w-0 flex-1 pt-0.5">
+        {/* header */}
+        <div className="flex items-baseline gap-1.5 text-xs">
+          <span className="font-medium text-foreground">
+            {entry.kind === "status" ? entry.text : entry.kind === "command" ? "Ran command" : entry.kind === "file_edit" ? "Edited file" : entry.kind === "tool_call" ? `Called ${entry.text}` : entry.kind === "reasoning" ? "Thinking" : entry.kind === "error" ? "Error" : stageLbl}
+          </span>
+          <span className="text-[10px] text-muted-foreground">{stageLbl}{attempt}</span>
+          <span className="ml-auto shrink-0 text-[10px] text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" title={fullTs}>{ts}</span>
+        </div>
+
+        {/* body per kind */}
+        {entry.kind === "status" ? null : entry.kind === "reasoning" ? (
+          <details className="mt-1 text-xs text-muted-foreground">
+            <summary className="cursor-pointer select-none hover:text-foreground">Show reasoning</summary>
+            <p className="mt-1.5 whitespace-pre-wrap italic leading-relaxed">{entry.text}</p>
+          </details>
+        ) : entry.kind === "command" ? (
+          <div className="mt-1">
+            <div className="inline-flex items-center gap-1.5 rounded-md bg-zinc-950 px-2.5 py-1 text-[11px] text-zinc-200">
+              <code>{entry.meta?.command ?? entry.text}</code>
+              {entry.meta?.exitCode != null && (
+                <span className={`ml-1 rounded px-1 py-px text-[9px] font-medium ${entry.meta.exitCode === 0 ? "bg-emerald-900/50 text-emerald-300" : "bg-red-900/50 text-red-300"}`}>
+                  {entry.meta.exitCode}
+                </span>
+              )}
+            </div>
+            {entry.meta?.output ? (
+              <details className="mt-1.5 text-xs text-muted-foreground">
+                <summary className="cursor-pointer select-none hover:text-foreground">Output</summary>
+                <pre className="mt-1 max-h-40 overflow-auto rounded-md bg-muted/50 px-2.5 py-2 text-[10px] leading-relaxed">
+                  {entry.meta.output.slice(0, MAX_OUTPUT_PREVIEW)}{entry.meta.output.length > MAX_OUTPUT_PREVIEW ? "\n…" : ""}
+                </pre>
+              </details>
+            ) : null}
+          </div>
+        ) : entry.kind === "file_edit" ? (
+          <div className="mt-1">
+            <code className="text-xs font-medium">{entry.meta?.filePath || "file"}</code>
+            {entry.text && <span className="ml-1.5 text-xs text-muted-foreground">{entry.text}</span>}
+            {entry.meta?.output ? (
+              <details className="mt-1.5 text-xs text-muted-foreground">
+                <summary className="cursor-pointer select-none hover:text-foreground">Diff</summary>
+                <pre className="mt-1 max-h-40 overflow-auto rounded-md bg-muted/50 px-2.5 py-2 text-[10px] leading-relaxed">
+                  {entry.meta.output.slice(0, MAX_OUTPUT_PREVIEW)}{entry.meta.output.length > MAX_OUTPUT_PREVIEW ? "\n…" : ""}
+                </pre>
+              </details>
+            ) : null}
+          </div>
+        ) : entry.kind === "tool_call" ? (
+          <div className="mt-1 text-xs">
+            {entry.meta?.output ? (
+              <span className="text-muted-foreground">{entry.meta.output.slice(0, 160)}{entry.meta.output.length > 160 ? "…" : ""}</span>
+            ) : null}
+          </div>
+        ) : entry.kind === "error" ? (
+          <p className="mt-1 whitespace-pre-wrap text-xs leading-relaxed text-destructive">{entry.text}</p>
+        ) : (
+          <p className="mt-1 whitespace-pre-wrap text-xs leading-relaxed">{entry.text}</p>
+        )}
+      </div>
+    </li>
+  );
 }
 
 export default function RunDetailPage() {
@@ -1272,7 +1472,8 @@ export default function RunDetailPage() {
           attempt: entry.attempt,
           speaker: parsed.speaker,
           text: parsed.text,
-          kind: parsed.kind
+          kind: parsed.kind,
+          ...(parsed.meta ? { meta: parsed.meta } : {})
         } satisfies ChatTimelineEntry;
       })
       .filter((entry): entry is ChatTimelineEntry => entry !== null);
@@ -1349,9 +1550,9 @@ export default function RunDetailPage() {
   }, [activePanel, chatAutoScroll, visibleChatTimelineEntries.length]);
 
   return (
-    <div className="space-y-0">
+    <div className="space-y-6">
       {/* Page header — metadata strip */}
-      <div className="mb-6 space-y-3">
+      <div className="space-y-3">
         {/* Row 1: status + id + chips; actions wrap on narrow screens */}
         <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
           <div className="flex min-w-0 flex-wrap items-center gap-2">
@@ -1470,18 +1671,18 @@ export default function RunDetailPage() {
       </div>
 
       {statusLine || (run && (run.status === "failed" || run.status === "blocked") && terminalFailureMessage) ? (
-        <div className="mb-8 space-y-4">
+        <div className="space-y-4">
           {statusLine ? (
             <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-5 py-4 text-sm leading-relaxed text-destructive">
               {statusLine}
             </div>
           ) : null}
           {run && (run.status === "failed" || run.status === "blocked") && terminalFailureMessage ? (
-            <Card className="border-destructive/40 bg-destructive/5 shadow-sm">
-              <CardHeader className="space-y-1 px-5 pb-3 pt-5 sm:px-6 sm:pt-6">
-                <CardTitle className="text-base font-semibold text-destructive">Failure Reason</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3 px-5 pb-5 text-xs sm:px-6 sm:pb-6">
+            <div className="overflow-hidden rounded-2xl border border-destructive/30 bg-destructive/5">
+              <div className="px-5 pt-5 sm:px-6 sm:pt-6">
+                <h2 className="text-base font-semibold text-destructive">Failure Reason</h2>
+              </div>
+              <div className="space-y-3 px-5 pb-5 text-xs sm:px-6 sm:pb-6">
                 <p className="break-words whitespace-pre-wrap text-destructive">{terminalFailureMessage}</p>
                 {secondaryFailureDetail ? (
                   <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-destructive sm:p-4">
@@ -1498,8 +1699,8 @@ export default function RunDetailPage() {
                     ))}
                   </ul>
                 ) : null}
-              </CardContent>
-            </Card>
+              </div>
+            </div>
           ) : null}
         </div>
       ) : null}
@@ -1507,7 +1708,7 @@ export default function RunDetailPage() {
       {run ? (
         <>
           {/* Pipeline stage bar */}
-          <div className="mb-6 mt-1 flex items-center gap-2 overflow-x-auto">
+          <div className="flex items-center gap-2 overflow-x-auto">
             {(["pm", "dev", "test", "review"] as AgentStage[]).map((stage, idx) => {
               const progress = stageProgress[stage];
               const isRunning = progress.status === "running";
@@ -1549,7 +1750,7 @@ export default function RunDetailPage() {
           </div>
 
           {/* Tab bar — underline style */}
-          <div className="mb-6 border-b overflow-x-auto">
+          <div className="border-b overflow-x-auto">
             <nav className="-mb-px flex min-w-max gap-0" aria-label="Run detail panels">
               {PANEL_TABS.map((tab) => (
                 <button
@@ -1571,24 +1772,22 @@ export default function RunDetailPage() {
 
           {/* Agents panel */}
           {activePanel === "agents" ? (
-            <div className="space-y-3">
+            <div className="overflow-hidden rounded-2xl border bg-background divide-y">
               {agentOutcomes.map((outcome) => (
-                <Card key={outcome.stage}>
-                  <CardHeader className="pb-2 pt-4">
-                    <div className="flex items-center gap-2">
-                      <div
-                        className="h-2.5 w-2.5 rounded-full"
-                        style={{ backgroundColor: stageColor(outcome.stage) }}
-                      />
-                      <CardTitle className="text-sm font-semibold uppercase tracking-wide">
-                        {outcome.label}
-                      </CardTitle>
-                      <span className="ml-auto text-xs text-muted-foreground">
-                        {stageProgress[outcome.stage as AgentStage]?.detail ?? "not started"}
-                      </span>
-                    </div>
-                  </CardHeader>
-                  <CardContent className="text-xs">
+                <div key={outcome.stage} className="px-5 py-4">
+                  <div className="flex items-center gap-2">
+                    <div
+                      className="h-2.5 w-2.5 rounded-full"
+                      style={{ backgroundColor: stageColor(outcome.stage) }}
+                    />
+                    <h2 className="text-sm font-semibold uppercase tracking-wide">
+                      {outcome.label}
+                    </h2>
+                    <span className="ml-auto text-xs text-muted-foreground">
+                      {stageProgress[outcome.stage as AgentStage]?.detail ?? "not started"}
+                    </span>
+                  </div>
+                  <div className="mt-2 text-xs">
                     {outcome.items.length === 0 && !stageLiveSnapshots.get(outcome.stage as AgentStage) ? (
                       <p className="text-muted-foreground">{outcome.emptyText}</p>
                     ) : (
@@ -1610,8 +1809,8 @@ export default function RunDetailPage() {
                         Feedback: {outcome.feedback}
                       </p>
                     ) : null}
-                  </CardContent>
-                </Card>
+                  </div>
+                </div>
               ))}
             </div>
           ) : null}
@@ -1639,15 +1838,13 @@ export default function RunDetailPage() {
                         { label: "P95 Runtime", value: formatDuration(tokenTimeline.totals.p95_runtime_ms) },
                         { label: "Turns", value: String(tokenTimeline.turns.length) }
                       ].map((kpi) => (
-                        <Card key={kpi.label}>
-                          <CardContent className="p-4">
-                            <p className="text-xs text-muted-foreground uppercase tracking-wide">{kpi.label}</p>
-                            <p className="mt-1 text-2xl font-bold">{kpi.value}</p>
-                          </CardContent>
-                        </Card>
+                        <div key={kpi.label} className="rounded-xl border bg-background p-4">
+                          <p className="text-xs text-muted-foreground uppercase tracking-wide">{kpi.label}</p>
+                          <p className="mt-1 text-2xl font-bold">{kpi.value}</p>
+                        </div>
                       ))}
                     </div>
-                    <div className="min-w-0 overflow-x-auto rounded-md border bg-muted/20 p-3">
+                    <div className="min-w-0 overflow-x-auto rounded-2xl border bg-background p-5">
                       <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Token lane by turn</p>
                       <TokenStackedBarChart
                         data={tokenTimelineChartData}
@@ -1674,7 +1871,7 @@ export default function RunDetailPage() {
                         ]}
                       />
                     </div>
-                    <div className="rounded-md border bg-muted/20 p-3">
+                    <div className="rounded-2xl border bg-background p-5">
                       <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
                         Per-turn token breakdown
                       </p>
@@ -1763,11 +1960,11 @@ export default function RunDetailPage() {
             <div className="space-y-4">
               {/* Gantt timeline */}
               {runTimeline ? (
-                <Card>
-                  <CardHeader className="pb-3">
-                    <CardTitle className="text-sm">Run Timeline</CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-3">
+                <div className="overflow-hidden rounded-2xl border bg-background">
+                  <div className="px-5 pt-5">
+                    <h2 className="text-sm font-semibold">Run Timeline</h2>
+                  </div>
+                  <div className="space-y-3 p-5">
                     <div className="grid gap-3 sm:grid-cols-4">
                       {[
                         { label: "Total", value: formatDuration(runTimeline.totalMs) },
@@ -1775,7 +1972,7 @@ export default function RunDetailPage() {
                         { label: "Stage runtime", value: formatDuration(runTimeline.stageMs) },
                         { label: "Resumed", value: String(runTimeline.resumedCount) }
                       ].map((item) => (
-                        <div key={item.label} className="rounded-lg border p-3 text-xs">
+                        <div key={item.label} className="rounded-xl border bg-background p-3 text-xs">
                           <p className="text-muted-foreground">{item.label}</p>
                           <p className="mt-0.5 font-semibold">{item.value}</p>
                         </div>
@@ -1797,88 +1994,45 @@ export default function RunDetailPage() {
                         );
                       })}
                     </div>
-                  </CardContent>
-                </Card>
+                  </div>
+                </div>
               ) : null}
 
               {/* Chat timeline */}
-              <Card>
-                <CardHeader className="pb-3">
-                  <div className="flex items-center justify-between">
-                    <CardTitle className="text-sm">Activity Timeline</CardTitle>
-                    <div className="flex gap-1.5">
-                      {hasOlderChatMessages ? (
-                        <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => { setChatVisibleCount((c) => Math.min(c + CHAT_PAGE_SIZE, chatTimelineEntries.length)); setChatAutoScroll(false); }}>
-                          Load older
-                        </Button>
-                      ) : null}
-                      {!chatAutoScroll ? (
-                        <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => { setChatVisibleCount(CHAT_PAGE_SIZE); setChatAutoScroll(true); }}>
-                          Latest
-                        </Button>
-                      ) : null}
-                    </div>
+              <div className="flex flex-col overflow-hidden rounded-2xl border bg-background">
+                <div className="sticky top-0 z-10 flex items-center justify-between border-b bg-background px-5 py-3">
+                  <h2 className="text-sm font-semibold">Activity Timeline</h2>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] text-muted-foreground">{chatTimelineEntries.length} messages</span>
+                    {hasOlderChatMessages ? (
+                      <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => { setChatVisibleCount((c) => Math.min(c + CHAT_PAGE_SIZE, chatTimelineEntries.length)); setChatAutoScroll(false); }}>
+                        Load older
+                      </Button>
+                    ) : null}
+                    {!chatAutoScroll ? (
+                      <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => { setChatVisibleCount(CHAT_PAGE_SIZE); setChatAutoScroll(true); }}>
+                        Latest
+                      </Button>
+                    ) : null}
                   </div>
-                </CardHeader>
-                <CardContent>
+                </div>
+                <div className="flex-1 px-5 py-4">
                   {chatTimelineEntries.length === 0 ? (
-                    <p className="text-sm text-muted-foreground">No messages captured yet.</p>
+                    <p className="py-8 text-center text-sm text-muted-foreground">No messages captured yet.</p>
                   ) : (
-                    <ul ref={chatListRef} className="max-h-[480px] space-y-1.5 overflow-y-auto pr-1 text-xs">
-                      {visibleChatTimelineEntries.map((entry) => {
-                        if (entry.kind === "status") {
-                          return (
-                            <li key={entry.key} className="flex items-center gap-2 py-1">
-                              <div className="h-px flex-1 bg-border" />
-                              <span className="max-w-[min(100%,56rem)] whitespace-normal break-words rounded-xl border px-2 py-1 text-center text-[10px] text-muted-foreground">
-                                {stageDisplayLabel(entry.stage)}{entry.attempt !== null ? ` #${entry.attempt}` : ""} — {entry.text}
-                              </span>
-                              <div className="h-px flex-1 bg-border" />
-                            </li>
-                          );
-                        }
-                        if (entry.kind === "error") {
-                          return (
-                            <li
-                              key={entry.key}
-                              className="rounded-lg border-l-2 border-destructive bg-destructive/5 p-3 sm:p-4"
-                            >
-                              <p className="mb-2 text-[10px] text-muted-foreground">
-                                {new Date(entry.recordedAt).toLocaleString()} · {stageDisplayLabel(entry.stage)} · {entry.speaker}
-                              </p>
-                              <p className="break-words whitespace-pre-wrap text-destructive">{entry.text}</p>
-                            </li>
-                          );
-                        }
-                        if (entry.kind === "reasoning") {
-                          return (
-                            <li key={entry.key}>
-                              <details className="rounded-lg border bg-muted/30 p-2 text-[10px] text-muted-foreground">
-                                <summary className="cursor-pointer font-medium">
-                                  {stageDisplayLabel(entry.stage)} reasoning · {new Date(entry.recordedAt).toLocaleTimeString()}
-                                </summary>
-                                <p className="mt-1.5 whitespace-pre-wrap italic">{entry.text}</p>
-                              </details>
-                            </li>
-                          );
-                        }
-                        return (
-                          <li
-                            key={entry.key}
-                            className="rounded-lg bg-primary/5 p-2.5"
-                            style={{ borderLeft: `2px solid ${stageColor(entry.stage)}` }}
-                          >
-                            <p className="mb-1 text-[10px] text-muted-foreground">
-                              {new Date(entry.recordedAt).toLocaleString()} · {stageDisplayLabel(entry.stage)}{entry.attempt !== null ? ` #${entry.attempt}` : ""} · {entry.speaker}
-                            </p>
-                            <p className="whitespace-pre-wrap">{entry.text}</p>
-                          </li>
-                        );
-                      })}
+                    <ul ref={chatListRef} className="max-h-[560px] overflow-y-auto pr-1 text-xs">
+                      {visibleChatTimelineEntries.map((entry, idx) => (
+                        <TimelineRow
+                          key={entry.key}
+                          entry={entry}
+                          stageDisplayLabelFn={stageDisplayLabel}
+                          isLast={idx === visibleChatTimelineEntries.length - 1}
+                        />
+                      ))}
                     </ul>
                   )}
-                </CardContent>
-              </Card>
+                </div>
+              </div>
             </div>
           ) : null}
 
@@ -1887,71 +2041,67 @@ export default function RunDetailPage() {
             <div className="space-y-4">
               {/* Terminal diagnostics */}
               {workflowDiagnostics || terminalFailureMessage ? (
-                <Card>
-                  <CardHeader className="pb-2">
-                    <CardTitle className="text-sm">Terminal Diagnostics</CardTitle>
-                  </CardHeader>
-                  <CardContent className="text-xs space-y-1">
+                <div className="overflow-hidden rounded-2xl border border-destructive/30 bg-destructive/5">
+                  <div className="px-5 pt-5">
+                    <h2 className="text-sm font-semibold text-destructive">Terminal Diagnostics</h2>
+                  </div>
+                  <div className="space-y-1 px-5 pb-5 text-xs">
                     <p><span className="font-medium">Stage:</span> {workflowDiagnostics?.stage || "unknown"}</p>
                     <p><span className="font-medium">Message:</span> {terminalFailureMessage || "No diagnostics message."}</p>
-                  </CardContent>
-                </Card>
+                  </div>
+                </div>
               ) : null}
 
-              {/* Session timeline */}
-              <Card>
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-sm">Codex Session Timeline</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  {invocationSessionRows.length === 0 ? (
-                    <p className="text-xs text-muted-foreground">No stage invocation telemetry captured yet.</p>
-                  ) : (
-                    <ul className="max-h-[280px] space-y-2 overflow-y-auto pr-1 text-xs">
-                      {invocationSessionRows.map((row) => (
-                        <li key={row.key} className="rounded-lg border p-2.5">
-                          <div className="flex items-center gap-2 mb-1">
-                            <span className="font-semibold uppercase" style={{ color: stageColor(row.stage) }}>{row.stage}</span>
-                            {row.attempt !== null ? <span className="text-muted-foreground">#{row.attempt}</span> : null}
-                            <span className="rounded-full border px-1.5 py-0.5 text-[10px]">{row.resumedSession === null ? "unknown" : row.resumedSession ? "resumed" : "new"}</span>
-                            {row.status ? <span className="text-muted-foreground">{row.status}</span> : null}
-                            {row.durationMs !== null ? <span className="ml-auto text-muted-foreground">{formatDuration(row.durationMs)}</span> : null}
-                          </div>
-                          <p className="text-muted-foreground">start: {row.startedAt ? new Date(row.startedAt).toLocaleString() : "n/a"} · finish: {row.finishedAt ? new Date(row.finishedAt).toLocaleString() : "n/a"}</p>
-                          {row.codexSessionId ? <p className="break-all text-muted-foreground">session: {row.codexSessionId}</p> : null}
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </CardContent>
-              </Card>
+              <div className="overflow-hidden rounded-2xl border bg-background divide-y">
+                {/* Session timeline */}
+                <div className="px-5 py-5">
+                  <h2 className="text-sm font-semibold">Codex Session Timeline</h2>
+                  <div className="mt-3">
+                    {invocationSessionRows.length === 0 ? (
+                      <p className="text-xs text-muted-foreground">No stage invocation telemetry captured yet.</p>
+                    ) : (
+                      <ul className="max-h-[280px] space-y-2 overflow-y-auto pr-1 text-xs">
+                        {invocationSessionRows.map((row) => (
+                          <li key={row.key} className="rounded-lg border bg-background p-2.5">
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className="font-semibold uppercase" style={{ color: stageColor(row.stage) }}>{row.stage}</span>
+                              {row.attempt !== null ? <span className="text-muted-foreground">#{row.attempt}</span> : null}
+                              <span className="rounded-full border px-1.5 py-0.5 text-[10px]">{row.resumedSession === null ? "unknown" : row.resumedSession ? "resumed" : "new"}</span>
+                              {row.status ? <span className="text-muted-foreground">{row.status}</span> : null}
+                              {row.durationMs !== null ? <span className="ml-auto text-muted-foreground">{formatDuration(row.durationMs)}</span> : null}
+                            </div>
+                            <p className="text-muted-foreground">start: {row.startedAt ? new Date(row.startedAt).toLocaleString() : "n/a"} · finish: {row.finishedAt ? new Date(row.finishedAt).toLocaleString() : "n/a"}</p>
+                            {row.codexSessionId ? <p className="break-all text-muted-foreground">session: {row.codexSessionId}</p> : null}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                </div>
 
-              {/* Agent events */}
-              <Card>
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-sm">Agent Events</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  {events.length === 0 ? (
-                    <p className="text-xs text-muted-foreground">No agent events captured yet.</p>
-                  ) : (
-                    <ul className="max-h-[260px] space-y-2 overflow-y-auto pr-1 text-xs">
-                      {events.map((event, idx) => (
-                        <li key={`${event.agent_id}-${event.recorded_at}-${idx}`} className="rounded-lg border p-2.5">
-                          <p><span className="font-medium">{event.event_type}</span> by {event.agent_id}</p>
-                          <p className="text-muted-foreground">{new Date(event.recorded_at).toLocaleString()}</p>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </CardContent>
-              </Card>
+                {/* Agent events */}
+                <div className="px-5 py-5">
+                  <h2 className="text-sm font-semibold">Agent Events</h2>
+                  <div className="mt-3">
+                    {events.length === 0 ? (
+                      <p className="text-xs text-muted-foreground">No agent events captured yet.</p>
+                    ) : (
+                      <ul className="max-h-[260px] space-y-2 overflow-y-auto pr-1 text-xs">
+                        {events.map((event, idx) => (
+                          <li key={`${event.agent_id}-${event.recorded_at}-${idx}`} className="rounded-lg border bg-background p-2.5">
+                            <p><span className="font-medium">{event.event_type}</span> by {event.agent_id}</p>
+                            <p className="text-muted-foreground">{new Date(event.recorded_at).toLocaleString()}</p>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                </div>
 
-              {/* Raw logs */}
-              <Card>
-                <CardHeader className="pb-2">
+                {/* Raw logs */}
+                <div className="px-5 py-5">
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <CardTitle className="text-sm">Raw Agent Logs</CardTitle>
+                    <h2 className="text-sm font-semibold">Raw Agent Logs</h2>
                     <div className="flex items-center gap-1.5 text-xs">
                       <Button variant="outline" size="sm" className="h-7" onClick={() => void handleLoadOlderLogs()} disabled={loadingOlderLogs || !hasMoreLogs || logs.length === 0}>
                         {loadingOlderLogs ? "Loading..." : hasMoreLogs ? "Load older" : "All loaded"}
@@ -1967,38 +2117,36 @@ export default function RunDetailPage() {
                       ))}
                     </div>
                   </div>
-                </CardHeader>
-                <CardContent>
-                  {logs.length === 0 ? (
-                    <p className="text-xs text-muted-foreground">No logs captured yet.</p>
-                  ) : filteredLogs.length === 0 ? (
-                    <p className="text-xs text-muted-foreground">No log lines match current filters.</p>
-                  ) : (
-                    <ul className="max-h-[320px] space-y-2 overflow-y-auto pr-1 text-xs">
-                      {filteredLogs.map((entry, idx) => (
-                        <li key={`${entry.recorded_at}-${idx}`} className="rounded-lg border p-2.5" style={{ borderLeft: `2px solid ${stageColor(entry.stage)}` }}>
-                          <p className="mb-0.5 text-muted-foreground">
-                            <span className="font-medium text-foreground">{entry.agent_id}</span> · {entry.stage}{entry.attempt !== null ? ` #${entry.attempt}` : ""} [{entry.stream}] · {new Date(entry.recorded_at).toLocaleString()}
-                          </p>
-                          <p className="whitespace-pre-wrap">{entry.message}</p>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </CardContent>
-              </Card>
+                  <div className="mt-3">
+                    {logs.length === 0 ? (
+                      <p className="text-xs text-muted-foreground">No logs captured yet.</p>
+                    ) : filteredLogs.length === 0 ? (
+                      <p className="text-xs text-muted-foreground">No log lines match current filters.</p>
+                    ) : (
+                      <ul className="max-h-[320px] space-y-2 overflow-y-auto pr-1 text-xs">
+                        {filteredLogs.map((entry, idx) => (
+                          <li key={`${entry.recorded_at}-${idx}`} className="rounded-lg border bg-background p-2.5" style={{ borderLeft: `2px solid ${stageColor(entry.stage)}` }}>
+                            <p className="mb-0.5 text-muted-foreground">
+                              <span className="font-medium text-foreground">{entry.agent_id}</span> · {entry.stage}{entry.attempt !== null ? ` #${entry.attempt}` : ""} [{entry.stream}] · {new Date(entry.recorded_at).toLocaleString()}
+                            </p>
+                            <p className="whitespace-pre-wrap">{entry.message}</p>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                </div>
 
-              {/* Plan JSON */}
-              <Card>
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-sm">Plan JSON</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <pre className="max-h-[360px] overflow-auto rounded-lg bg-muted/50 p-3 text-xs whitespace-pre-wrap">
-                    {run.plan ? JSON.stringify(run.plan, null, 2) : "No plan captured for this run."}
-                  </pre>
-                </CardContent>
-              </Card>
+                {/* Plan JSON */}
+                <div className="px-5 py-5">
+                  <h2 className="text-sm font-semibold">Plan JSON</h2>
+                  <div className="mt-3">
+                    <pre className="max-h-[360px] overflow-auto rounded-lg bg-muted/50 p-3 text-xs whitespace-pre-wrap">
+                      {run.plan ? JSON.stringify(run.plan, null, 2) : "No plan captured for this run."}
+                    </pre>
+                  </div>
+                </div>
+              </div>
             </div>
           ) : null}
         </>

@@ -6,8 +6,13 @@ import { Activity, Bot, RefreshCw, Workflow } from "lucide-react";
 import { useAuth } from "@/components/auth-provider";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { getPlatformStatus, type PlatformServiceInstanceRecord, type PlatformServiceStatusRecord } from "@/lib/api";
+import {
+  getPlatformStatus,
+  type PlatformServiceInstanceRecord,
+  type PlatformServiceStatusRecord,
+} from "@/lib/api";
 import { canAccessPlatformAdmin, getDefaultAuthenticatedRoute } from "@/lib/auth-routing";
+import { readLastWorkspaceTenantIdFromBrowser } from "@/lib/workspace-preference";
 import { cn } from "@/lib/utils";
 
 const serviceIcons = {
@@ -139,8 +144,8 @@ function ServiceRow({ service }: { service: PlatformServiceStatusRecord }) {
         <p className="text-xs text-muted-foreground">{formatTimestamp(service.updated_at)}</p>
       </div>
       {hasInstances ? (
-        <div className="space-y-3 rounded-xl border bg-muted/10 p-4">
-          <p className="text-xs font-medium uppercase tracking-[0.2em] text-muted-foreground">
+        <div className="space-y-3 rounded-xl bg-muted/10 p-4">
+          <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
             {service.service_id === "workers" ? "Worker instances" : "Service instances"}
           </p>
           <div className="grid gap-3 md:grid-cols-2">
@@ -176,8 +181,8 @@ export default function PlatformStatusPage() {
     setLoading(true);
     setErrorMessage(null);
     try {
-      const payload = await getPlatformStatus(credentials);
-      setServices(payload.services);
+      const statusPayload = await getPlatformStatus(credentials);
+      setServices(statusPayload.services);
     } catch (error) {
       setErrorMessage(`Failed to load platform status: ${(error as Error).message}`);
     } finally {
@@ -190,7 +195,8 @@ export default function PlatformStatusPage() {
       return;
     }
     if (!canAccessPlatformAdmin(principal)) {
-      window.location.replace(getDefaultAuthenticatedRoute(principal));
+      const preferredTenantId = readLastWorkspaceTenantIdFromBrowser();
+      window.location.replace(getDefaultAuthenticatedRoute(principal, { preferredTenantId }));
       return;
     }
     if (credentials) {
@@ -208,13 +214,7 @@ export default function PlatformStatusPage() {
 
   return (
     <div className="mx-auto w-full max-w-5xl space-y-6">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div className="space-y-1">
-          <h1 className="text-3xl font-semibold tracking-tight">Platform status</h1>
-          <p className="text-sm text-muted-foreground">
-            Health of the hosted Master Builder services and worker capability lanes.
-          </p>
-        </div>
+      <div className="flex flex-wrap items-center justify-end gap-3">
         <Button variant="outline" size="sm" onClick={() => void loadStatus()} disabled={loading}>
           <RefreshCw className={cn("mr-1.5 h-3.5 w-3.5", loading && "animate-spin")} />
           Refresh
@@ -229,14 +229,14 @@ export default function PlatformStatusPage() {
           { label: "Unavailable", value: counts.unavailable },
         ].map((item) => (
           <div key={item.label} className="border-b pb-3">
-            <p className="text-xs font-medium uppercase tracking-[0.2em] text-muted-foreground">{item.label}</p>
+            <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">{item.label}</p>
             <p className="mt-2 text-2xl font-semibold">{item.value}</p>
           </div>
         ))}
       </div>
 
       {errorMessage ? (
-        <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-5 py-4 text-sm text-destructive">
+        <div className="rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
           {errorMessage}
         </div>
       ) : null}
@@ -244,9 +244,6 @@ export default function PlatformStatusPage() {
       <section className="overflow-hidden rounded-2xl border bg-background">
         <div className="border-b px-6 py-4">
           <h2 className="text-base font-semibold">Hosted services</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            This page tracks product-facing services only. Internal infrastructure is excluded.
-          </p>
         </div>
 
         {loading ? (
@@ -263,6 +260,7 @@ export default function PlatformStatusPage() {
           </div>
         )}
       </section>
+
     </div>
   );
 }

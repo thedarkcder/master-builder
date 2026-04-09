@@ -647,6 +647,45 @@ class OrchestratedRunRunnerTests(unittest.TestCase):
         self.assertEqual(stage_agents.test_calls, 0)
         self.assertEqual(stage_agents.review_calls, 1)
 
+    def test_resume_from_test_uses_persisted_dev_result_and_restarts_at_test(self) -> None:
+        stage_agents = _StubStageAgents(
+            plan=PmPlan(plan_steps=["unused"], acceptance_criteria=["unused"], risks=[]),
+            dev_results=[],
+            test_results=[TestResult(outcome="continue", guidance=["pytest -q"], feedback=None)],
+            review_results=[
+                ReviewResult(
+                    outcome="continue",
+                    summary=["Approved after fresh test run"],
+                    feedback=None,
+                    pr_url="https://example/pull/10",
+                )
+            ],
+        )
+
+        result = self._executor(stage_agents).execute(
+            replace(
+                self._request(),
+                entry_mode="resume",
+                entry_stage="test",
+                checkpoint_kind="execution",
+                checkpoint_session_id="test-session-123",
+                checkpoint_payload=self._resume_payload(
+                    plan=PmPlan(plan_steps=["plan"], acceptance_criteria=["ac1"], risks=[]),
+                    dev_result=DevResult(
+                        outcome="continue",
+                        change_summary=["Restored entitlement sync"],
+                        pr_url="https://example/pull/10",
+                    ),
+                ),
+            ),
+        )
+
+        self.assertEqual(result.outcome, "success")
+        self.assertEqual(stage_agents.pm_calls, 0)
+        self.assertEqual(stage_agents.dev_calls, 0)
+        self.assertEqual(stage_agents.test_calls, 1)
+        self.assertEqual(stage_agents.review_calls, 1)
+
     def test_review_resume_invalid_artifacts_do_not_mark_dev_and_test_completed(self) -> None:
         stage_agents = _StubStageAgents(
             plan=PmPlan(plan_steps=["unused"], acceptance_criteria=["unused"], risks=[]),

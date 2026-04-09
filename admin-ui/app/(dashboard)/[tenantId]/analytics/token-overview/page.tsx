@@ -6,7 +6,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { StatusBadge } from "@/components/ui/status-badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { TokenLineChart, TokenScatterChart, TokenStackedBarChart, formatMetricValue } from "@/components/charts";
@@ -34,10 +33,6 @@ type TokenOverviewStatus = {
   only_retried: boolean;
   only_with_test_stage: boolean;
 };
-
-function statusBadge(_status: string) {
-  return null;
-}
 
 function toIsoDate(value: string): string {
   if (!value) {
@@ -120,6 +115,7 @@ export default function TenantTokenOverviewPage() {
   const [overview, setOverview] = useState<TokenOverviewRecord | null>(null);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState<10 | 20 | 50>(20);
+  const [alertsPage, setAlertsPage] = useState(1);
   const [filters, setFilters] = useState<TokenOverviewStatus>({
     project_id: "",
     issue_keys: [],
@@ -284,7 +280,7 @@ export default function TenantTokenOverviewPage() {
   return (
     <div className="space-y-6">
       {/* Collapsible filter panel */}
-      <details className="group rounded-lg border bg-card" open>
+      <details className="group rounded-lg border bg-background" open>
         <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-sm font-medium">
           <span>Filters</span>
           <span className="text-xs text-muted-foreground group-open:hidden">Show</span>
@@ -397,60 +393,46 @@ export default function TenantTokenOverviewPage() {
         </div>
       </details>
 
-      {/* KPI cards */}
+      {/* KPI grid */}
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <Card>
-          <CardContent className="p-4">
-            <p className="text-xs uppercase text-muted-foreground">Total Input</p>
-            <p className="mt-1 text-2xl font-bold">{formatMetricValue(overview?.kpis.total_input ?? 0)}</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <p className="text-xs uppercase text-muted-foreground">Uncached Input</p>
-            <p className="mt-1 text-2xl font-bold">{formatMetricValue(overview?.kpis.total_uncached_input ?? 0)}</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <p className="text-xs uppercase text-muted-foreground">Output</p>
-            <p className="mt-1 text-2xl font-bold">{formatMetricValue(overview?.kpis.total_output ?? 0)}</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <p className="text-xs uppercase text-muted-foreground">Cache Ratio</p>
-            <p className="mt-1 text-2xl font-bold">{((overview?.kpis.cache_ratio ?? 0) * 100).toFixed(1)}%</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <p className="text-xs uppercase text-muted-foreground">Avg I/O / Run</p>
-            <p className="mt-1 text-2xl font-bold">{formatMetricValue(overview?.kpis.avg_io_per_run ?? 0)}</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <p className="text-xs uppercase text-muted-foreground">P95 I/O / Run</p>
-            <p className="mt-1 text-2xl font-bold">{formatMetricValue(overview?.kpis.p95_io_per_run ?? 0)}</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <p className="text-xs uppercase text-muted-foreground">Retest Waste Score</p>
-            <p className="mt-1 text-2xl font-bold">{((overview?.kpis.retest_waste_score ?? 0) * 100).toFixed(1)}%</p>
-          </CardContent>
-        </Card>
+        <div className="rounded-xl border bg-background px-4 py-3">
+          <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Total Input</p>
+          <p className="mt-1 text-2xl font-bold">{formatMetricValue(overview?.kpis.total_input ?? 0)}</p>
+        </div>
+        <div className="rounded-xl border bg-background px-4 py-3">
+          <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Uncached Input</p>
+          <p className="mt-1 text-2xl font-bold">{formatMetricValue(overview?.kpis.total_uncached_input ?? 0)}</p>
+        </div>
+        <div className="rounded-xl border bg-background px-4 py-3">
+          <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Output</p>
+          <p className="mt-1 text-2xl font-bold">{formatMetricValue(overview?.kpis.total_output ?? 0)}</p>
+        </div>
+        <div className="rounded-xl border bg-background px-4 py-3">
+          <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Cache Ratio</p>
+          <p className="mt-1 text-2xl font-bold">{((overview?.kpis.cache_ratio ?? 0) * 100).toFixed(1)}%</p>
+        </div>
+        <div className="rounded-xl border bg-background px-4 py-3">
+          <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Avg I/O / Run</p>
+          <p className="mt-1 text-2xl font-bold">{formatMetricValue(overview?.kpis.avg_io_per_run ?? 0)}</p>
+        </div>
+        <div className="rounded-xl border bg-background px-4 py-3">
+          <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">P95 I/O / Run</p>
+          <p className="mt-1 text-2xl font-bold">{formatMetricValue(overview?.kpis.p95_io_per_run ?? 0)}</p>
+        </div>
+        <div className="rounded-xl border bg-background px-4 py-3">
+          <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Retest Waste Score</p>
+          <p className="mt-1 text-2xl font-bold">{((overview?.kpis.retest_waste_score ?? 0) * 100).toFixed(1)}%</p>
+        </div>
       </div>
         {!overview ? (
           <p className="text-sm text-muted-foreground">{statusLine}</p>
         ) : (
           <>
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base">Totals and deltas by day</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
+            <section className="overflow-hidden rounded-2xl border bg-background">
+              <div className="px-6 pt-6">
+                <h2 className="text-base font-semibold">Totals and deltas by day</h2>
+              </div>
+              <div className="space-y-4 p-6">
                 <TokenLineChart
                   data={trendSeries}
                   xAxisKey="day"
@@ -469,14 +451,13 @@ export default function TenantTokenOverviewPage() {
                     { key: "output", label: "Output", color: "#ef4444", stackId: "output" },
                   ]}
                 />
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base">Runtime vs delta input</CardTitle>
-                <CardDescription>Scatter of day-level input growth against average turn runtime.</CardDescription>
-              </CardHeader>
-              <CardContent>
+              </div>
+            </section>
+            <section className="overflow-hidden rounded-2xl border bg-background">
+              <div className="px-6 pt-6">
+                <h2 className="text-base font-semibold">Runtime vs delta input</h2>
+              </div>
+              <div className="p-6">
                 <TokenScatterChart
                   data={trendSeries.filter(
                     (point) =>
@@ -487,14 +468,13 @@ export default function TenantTokenOverviewPage() {
                   yAxisKey="delta_input"
                   pointLabel="Token Δ"
                 />
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader className="pb-3">
-                <CardTitle className="text-sm">Top Costly Runs</CardTitle>
-              </CardHeader>
-              <CardContent className="p-0">
-                <div className="overflow-x-auto">
+              </div>
+            </section>
+            <section className="overflow-hidden rounded-2xl border bg-background">
+              <div className="px-6 pt-5 pb-3">
+                <h2 className="text-base font-semibold">Top Costly Runs</h2>
+              </div>
+              <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -542,34 +522,63 @@ export default function TenantTokenOverviewPage() {
                   </TableBody>
                 </Table>
               </div>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader className="pb-3">
-                <CardTitle className="text-sm">Alerts</CardTitle>
-              </CardHeader>
-              <CardContent>
-                {overview.alerts.length === 0 ? (
+            </section>
+            <section className="overflow-hidden rounded-2xl border bg-background">
+              <div className="flex items-center justify-between px-6 pt-5 pb-3">
+                <h2 className="text-base font-semibold">Alerts</h2>
+                {overview.alerts.length > 0 ? (
+                  <span className="text-xs text-muted-foreground">{overview.alerts.length} total</span>
+                ) : null}
+              </div>
+              {overview.alerts.length === 0 ? (
+                <div className="px-6 pb-6">
                   <p className="text-sm text-muted-foreground">No alerts for current filters.</p>
-                ) : (
-                  <ul className="space-y-1.5">
-                    {overview.alerts.map((alert, idx) => (
-                      <li key={`${alert.rule}-${alert.run_id}-${idx}`} className="rounded-lg border border-warning/30 bg-warning/10 p-3 text-sm">
-                        <p className="font-medium">
-                          <span className="text-muted-foreground">[{alert.rule}]</span> {alert.message}
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          run {alert.run_id}
-                          {alert.turn_id ? ` · turn ${alert.turn_id}` : ""}
-                          {alert.stage ? ` · ${alert.stage}` : ""}
-                          {alert.attempt !== null ? ` · attempt ${alert.attempt}` : ""}
-                        </p>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </CardContent>
-            </Card>
+                </div>
+              ) : (
+                <>
+                  <div className="divide-y">
+                    {overview.alerts
+                      .slice((alertsPage - 1) * 10, alertsPage * 10)
+                      .map((alert, idx) => (
+                        <div key={`${alert.rule}-${alert.run_id}-${idx}`} className="px-6 py-3 text-sm">
+                          <p className="font-medium">
+                            <span className="text-muted-foreground">[{alert.rule}]</span> {alert.message}
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            run {alert.run_id}
+                            {alert.turn_id ? ` · turn ${alert.turn_id}` : ""}
+                            {alert.stage ? ` · ${alert.stage}` : ""}
+                            {alert.attempt !== null ? ` · attempt ${alert.attempt}` : ""}
+                          </p>
+                        </div>
+                      ))}
+                  </div>
+                  {overview.alerts.length > 10 ? (
+                    <div className="flex items-center justify-end gap-2 border-t px-6 py-3">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setAlertsPage((p) => Math.max(1, p - 1))}
+                        disabled={alertsPage <= 1}
+                      >
+                        ← Prev
+                      </Button>
+                      <span className="text-xs text-muted-foreground">
+                        Page {alertsPage} of {Math.ceil(overview.alerts.length / 10)}
+                      </span>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setAlertsPage((p) => Math.min(Math.ceil(overview.alerts.length / 10), p + 1))}
+                        disabled={alertsPage >= Math.ceil(overview.alerts.length / 10)}
+                      >
+                        Next →
+                      </Button>
+                    </div>
+                  ) : null}
+                </>
+              )}
+            </section>
           </>
         )}
         <div className="flex items-center justify-between gap-2 text-sm text-muted-foreground">

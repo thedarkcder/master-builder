@@ -8,7 +8,6 @@ import { Archive, CheckCircle2, ChevronRight, FolderKanban, Plus, RefreshCw } fr
 import { useAuth } from "@/components/auth-provider";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { listProjects, type ProjectRecord } from "@/lib/api";
 import { canManageProjects } from "@/lib/auth-routing";
 
@@ -71,76 +70,45 @@ export function TenantProjectsPage() {
 
   return (
     <div className="space-y-6">
-      {/* Page header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-semibold">Projects</h1>
-          <p className="text-sm text-muted-foreground">Manage projects linked to GitHub and Jira.</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={() => void loadDashboard()} disabled={busy}>
-            <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${busy ? "animate-spin" : ""}`} />
-            Refresh
+      <div className="flex items-center justify-end gap-2">
+        <Button variant="outline" size="sm" onClick={() => void loadDashboard()} disabled={busy}>
+          <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${busy ? "animate-spin" : ""}`} />
+          Refresh
+        </Button>
+        {allowProjectManagement ? (
+          <Button asChild size="sm">
+            <Link href={`/${encodeURIComponent(params.tenantId)}/projects/new`}>
+              <Plus className="mr-1.5 h-3.5 w-3.5" />
+              Add project
+            </Link>
           </Button>
-          {allowProjectManagement ? (
-            <Button asChild size="sm">
-              <Link href={`/${encodeURIComponent(params.tenantId)}/projects/new`}>
-                <Plus className="mr-1.5 h-3.5 w-3.5" />
-                Add project
-              </Link>
-            </Button>
-          ) : null}
-        </div>
+        ) : null}
       </div>
 
       {statusLine ? (
-        <p className="rounded-lg border bg-muted/40 px-4 py-2.5 text-sm text-muted-foreground">{statusLine}</p>
+        <div className="rounded-xl border bg-muted/30 px-4 py-3 text-sm text-muted-foreground">{statusLine}</div>
       ) : null}
 
-      {/* KPI cards */}
       <div className="grid gap-4 sm:grid-cols-3">
-        <Card>
-          <CardHeader className="flex flex-row items-start justify-between space-y-0 pb-2">
-            <p className="text-sm font-medium text-muted-foreground">Total</p>
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10">
-              <FolderKanban className="h-4 w-4 text-primary" />
+        {[
+          { label: "Total", value: projects.length, sub: "All projects", icon: <FolderKanban className="h-4 w-4 text-primary" />, iconBg: "bg-primary/10" },
+          { label: "Active", value: activeProjects.length, sub: "Currently active", icon: <CheckCircle2 className="h-4 w-4 text-success" />, iconBg: "bg-success/10" },
+          { label: "Archived", value: archivedProjects.length, sub: "No longer active", icon: <Archive className="h-4 w-4 text-muted-foreground" />, iconBg: "bg-muted" },
+        ].map((item) => (
+          <div key={item.label} className="rounded-xl border bg-background px-4 py-3">
+            <div className="flex items-start justify-between">
+              <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">{item.label}</p>
+              <div className={`flex h-8 w-8 items-center justify-center rounded-lg ${item.iconBg}`}>{item.icon}</div>
             </div>
-          </CardHeader>
-          <CardContent>
-            <p className="text-2xl font-bold">{projects.length}</p>
-            <p className="mt-1 text-xs text-muted-foreground">All projects</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="flex flex-row items-start justify-between space-y-0 pb-2">
-            <p className="text-sm font-medium text-muted-foreground">Active</p>
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-success/10">
-              <CheckCircle2 className="h-4 w-4 text-success" />
-            </div>
-          </CardHeader>
-          <CardContent>
-            <p className="text-2xl font-bold">{activeProjects.length}</p>
-            <p className="mt-1 text-xs text-muted-foreground">Currently active</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="flex flex-row items-start justify-between space-y-0 pb-2">
-            <p className="text-sm font-medium text-muted-foreground">Archived</p>
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-muted">
-              <Archive className="h-4 w-4 text-muted-foreground" />
-            </div>
-          </CardHeader>
-          <CardContent>
-            <p className="text-2xl font-bold">{archivedProjects.length}</p>
-            <p className="mt-1 text-xs text-muted-foreground">No longer active</p>
-          </CardContent>
-        </Card>
+            <p className="mt-1 text-2xl font-bold">{item.value}</p>
+            <p className="mt-1 text-xs text-muted-foreground">{item.sub}</p>
+          </div>
+        ))}
       </div>
 
-      {/* Project list */}
       {activeProjects.length === 0 ? (
-        <Card>
-          <CardContent className="flex flex-col items-center justify-center py-12 text-center">
+        <div className="overflow-hidden rounded-2xl border bg-background">
+          <div className="flex flex-col items-center justify-center py-12 text-center">
             <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted mb-4">
               <FolderKanban className="h-6 w-6 text-muted-foreground" />
             </div>
@@ -154,25 +122,22 @@ export function TenantProjectsPage() {
                 </Link>
               </Button>
             ) : null}
-          </CardContent>
-        </Card>
+          </div>
+        </div>
       ) : (
-        <div className="overflow-hidden rounded-xl border bg-card shadow-sm">
+        <div className="overflow-hidden rounded-2xl border bg-background">
           <ul className="divide-y">
             {activeProjects.map((project) => (
               <li key={project.project_id}>
                 <Link
                   href={`/${encodeURIComponent(params.tenantId)}/projects/${encodeURIComponent(project.project_id)}`}
-                  className="flex items-center gap-3 px-4 py-3.5 transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:bg-muted/50"
+                  className="flex items-center gap-3 px-5 py-3.5 transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:bg-muted/50"
                 >
-                  {/* Avatar */}
                   <div
                     className={`flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg text-xs font-bold text-white ${projectAvatarColor(project.project_id)}`}
                   >
                     {projectInitials(project.name)}
                   </div>
-
-                  {/* Info */}
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
                       <p className="truncate font-medium text-sm">{project.name}</p>
@@ -191,7 +156,6 @@ export function TenantProjectsPage() {
                       ) : null}
                     </div>
                   </div>
-
                   <ChevronRight className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
                 </Link>
               </li>

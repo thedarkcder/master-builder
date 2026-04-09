@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
@@ -231,21 +231,18 @@ export function ProjectKnowledgeSourcesSection({
 
   return (
     <div className="space-y-6">
-      <Card>
-        <CardHeader className="pb-3">
+      <div className="overflow-hidden rounded-2xl border bg-background">
+        <div className="p-6 pb-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <CardTitle>Managed Sources</CardTitle>
-              <CardDescription>
-                Configure the upstream knowledge connectors for this project. The semantic layer stays source-agnostic.
-              </CardDescription>
+              <h2 className="text-base font-semibold">Managed Sources</h2>
             </div>
             <Button variant="outline" size="sm" onClick={() => void loadSources()} disabled={!credentials || loading}>
               {loading ? "Refreshing..." : "Refresh"}
             </Button>
           </div>
-        </CardHeader>
-        <CardContent className="space-y-3">
+        </div>
+        <div className="space-y-3 p-6 pt-0">
           <div className="rounded-md border p-3 text-sm text-muted-foreground">
             <p>
               <span className="font-medium text-foreground">Configured connectors:</span>{" "}
@@ -337,17 +334,14 @@ export function ProjectKnowledgeSourcesSection({
               </TableBody>
             </Table>
           )}
-        </CardContent>
-      </Card>
+        </div>
+      </div>
 
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle>Add Source</CardTitle>
-          <CardDescription>
-            Add Jira, Google Drive, or Discord as a project knowledge source.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
+      <div className="overflow-hidden rounded-2xl border bg-background">
+        <div className="p-6 pb-3">
+          <h2 className="text-base font-semibold">Add Source</h2>
+        </div>
+        <div className="space-y-4 p-6 pt-0">
           <div className="flex flex-wrap gap-2">
             {(["jira", "google_drive", "discord"] as const).map((value) => (
               <Button
@@ -419,8 +413,8 @@ export function ProjectKnowledgeSourcesSection({
               {saving ? "Adding..." : "Add source"}
             </Button>
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
 
       {statusLine ? <p className="rounded-md border px-3 py-2 text-sm text-muted-foreground">{statusLine}</p> : null}
     </div>

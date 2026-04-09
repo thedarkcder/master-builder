@@ -46,7 +46,7 @@ from orchestrator.storage.models import (
     TenantUser,
     TenantUserCredential,
     TenantUserDiscordIdentity,
-    WorkflowCheckpoint,
+    WebhookJob,
     WorkflowExecution,
     WorkerRuntimeState,
 )
@@ -1793,6 +1793,74 @@ class AdminApiTests(unittest.TestCase):
             self.assertEqual(workflow.source_workflow_id, "workflow-terminal-1")
             self.assertEqual(workflow.source_run_id, "run-terminal-1")
             self.assertEqual(workflow.status, "queued")
+
+    def test_create_workflow_attempt_repairs_stale_active_status_before_policy_check(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201)
+
+        self._seed_workflow_attempt(
+            workflow_id="workflow-stale-active-1",
+            run_id="run-stale-active-1",
+            issue_key="TP-1001B",
+            issue_summary="Stale active workflow",
+            workflow_status="queued",
+            run_status="failed",
+            checkpoint_id="checkpoint-stale-active-1",
+            checkpoint_kind="execution",
+        )
+
+        response = self.client.post(
+            "/api/admin/workflows/workflow-stale-active-1/attempts",
+            json={"mode": "restart", "checkpoint_kind": "execution"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 201, response.text)
+        body = response.json()
+        self.assertNotEqual(body["workflow_id"], "workflow-stale-active-1")
+        self.assertEqual(body["entry_mode"], "restart")
+        self.assertEqual(body["entry_stage"], "test")
+
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            stale = session.get(WorkflowExecution, "workflow-stale-active-1")
+            self.assertIsNotNone(stale)
+            assert stale is not None
+            self.assertEqual(stale.status, "failed")
+
+    def test_create_workflow_attempt_returns_conflict_when_scope_already_has_active_workflow(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201)
+
+        self._seed_workflow_attempt(
+            workflow_id="workflow-terminal-conflict-1",
+            run_id="run-terminal-conflict-1",
+            issue_key="TP-1001C",
+            issue_summary="Terminal workflow with active-scope conflict",
+            workflow_status="failed",
+            run_status="failed",
+            checkpoint_id="checkpoint-terminal-conflict-1",
+            checkpoint_kind="execution",
+        )
+        self._seed_workflow_attempt(
+            workflow_id="workflow-active-conflict-1",
+            run_id="run-active-conflict-1",
+            issue_key="TP-1001C",
+            issue_summary="Active workflow occupying dedupe scope",
+            workflow_status="queued",
+            run_status="queued",
+        )
+
+        response = self.client.post(
+            "/api/admin/workflows/workflow-terminal-conflict-1/attempts",
+            json={"mode": "restart", "checkpoint_kind": "execution"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertIn("already exists for this issue and dedupe scope", response.json()["detail"])
 
     def test_create_fresh_workflow_attempt_from_terminal_workflow_starts_without_checkpoint(self) -> None:
         payload = self._tenant_payload()
@@ -4535,6 +4603,135 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(instances_by_id["worker-1"]["active_run_count"], 1)
         self.assertEqual(instances_by_id["worker-2"]["status"], "idle")
         self.assertEqual(instances_by_id["worker-2"]["capabilities"], ["macOS"])
+
+    def test_admin_webhook_queue_endpoint_lists_rows_with_summary(self) -> None:
+        session_factory = create_session_factory(self.database_url)
+        now = datetime.now(timezone.utc)
+        with session_factory() as session:
+            session.add(
+                Tenant(
+                    tenant_id="route25",
+                    name="Route25",
+                    is_enabled=True,
+                    jira_config={},
+                    github_config={},
+                    repos_config={},
+                    policy_config={},
+                    discord_config={},
+                    experience_config={},
+                    setup_state={},
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.add(
+                Project(
+                    project_id="route25-default",
+                    tenant_id="route25",
+                    name="Route25 Default",
+                    github_repository="github.com/example/route25",
+                    jira_project_key="GP",
+                    policy_overrides={},
+                    environment={},
+                    secret_refs={},
+                    discord_config={},
+                    is_archived=False,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.add_all(
+                [
+                    WebhookJob(
+                        job_id="job-pending-1",
+                        transport="github_webhook",
+                        tenant_id="route25",
+                        project_id="route25-default",
+                        subject_key="github_pr:route25:repo:26",
+                        dedupe_key="delivery-1",
+                        request_id="request-1",
+                        event_type="pull_request",
+                        status="pending",
+                        owner_id=None,
+                        lease_expires_at=None,
+                        available_at=now - timedelta(seconds=10),
+                        attempt_count=0,
+                        last_error=None,
+                        payload_json={},
+                        context_json={},
+                        created_at=now - timedelta(minutes=3),
+                        updated_at=now - timedelta(minutes=3),
+                        started_at=None,
+                        completed_at=None,
+                    ),
+                    WebhookJob(
+                        job_id="job-processing-1",
+                        transport="github_webhook",
+                        tenant_id="route25",
+                        project_id="route25-default",
+                        subject_key="github_pr:route25:repo:26",
+                        dedupe_key="delivery-2",
+                        request_id="request-2",
+                        event_type="pull_request_review",
+                        status="processing",
+                        owner_id="worker:route25:webhooks:child:1",
+                        lease_expires_at=now + timedelta(minutes=2),
+                        available_at=now - timedelta(seconds=5),
+                        attempt_count=1,
+                        last_error=None,
+                        payload_json={},
+                        context_json={},
+                        created_at=now - timedelta(minutes=2),
+                        updated_at=now - timedelta(minutes=1),
+                        started_at=now - timedelta(minutes=1),
+                        completed_at=None,
+                    ),
+                    WebhookJob(
+                        job_id="job-failed-1",
+                        transport="jira_webhook",
+                        tenant_id="route25",
+                        project_id="route25-default",
+                        subject_key="jira:route25:GP-186",
+                        dedupe_key="delivery-3",
+                        request_id="request-3",
+                        event_type="jira:issue_updated",
+                        status="failed",
+                        owner_id=None,
+                        lease_expires_at=None,
+                        available_at=now - timedelta(seconds=20),
+                        attempt_count=2,
+                        last_error="github token missing",
+                        payload_json={},
+                        context_json={},
+                        created_at=now - timedelta(minutes=4),
+                        updated_at=now - timedelta(minutes=1),
+                        started_at=now - timedelta(minutes=3),
+                        completed_at=now - timedelta(minutes=1),
+                    ),
+                ]
+            )
+            session.commit()
+
+        response = self.client.get(
+            "/api/admin/observability/webhook-jobs?tenant_id=route25&project_id=route25-default&status=pending&limit=10&offset=0",
+            auth=("admin", "secret"),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["total"], 1)
+        self.assertEqual(payload["summary"]["pending_count"], 1)
+        self.assertEqual(payload["summary"]["processing_count"], 1)
+        self.assertEqual(payload["summary"]["failed_count"], 1)
+        self.assertEqual(payload["items"][0]["job_id"], "job-pending-1")
+        self.assertEqual(payload["items"][0]["status"], "pending")
+
+        missing_project_response = self.client.get(
+            "/api/admin/observability/webhook-jobs?tenant_id=route25&status=pending&limit=10&offset=0",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(missing_project_response.status_code, 400)
+        self.assertIn("project_id is required", missing_project_response.json()["detail"])
 
     def test_platform_status_dedupes_legacy_worker_runtime_rows_by_agent_and_mode(self) -> None:
         now = datetime.now(timezone.utc)
