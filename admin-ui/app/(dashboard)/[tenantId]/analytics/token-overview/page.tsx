@@ -6,7 +6,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { StatusBadge } from "@/components/ui/status-badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { TokenLineChart, TokenScatterChart, TokenStackedBarChart, formatMetricValue } from "@/components/charts";
@@ -34,10 +33,6 @@ type TokenOverviewStatus = {
   only_retried: boolean;
   only_with_test_stage: boolean;
 };
-
-function statusBadge(_status: string) {
-  return null;
-}
 
 function toIsoDate(value: string): string {
   if (!value) {
@@ -397,60 +392,46 @@ export default function TenantTokenOverviewPage() {
         </div>
       </details>
 
-      {/* KPI cards */}
+      {/* KPI grid */}
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <Card>
-          <CardContent className="p-4">
-            <p className="text-xs uppercase text-muted-foreground">Total Input</p>
-            <p className="mt-1 text-2xl font-bold">{formatMetricValue(overview?.kpis.total_input ?? 0)}</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <p className="text-xs uppercase text-muted-foreground">Uncached Input</p>
-            <p className="mt-1 text-2xl font-bold">{formatMetricValue(overview?.kpis.total_uncached_input ?? 0)}</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <p className="text-xs uppercase text-muted-foreground">Output</p>
-            <p className="mt-1 text-2xl font-bold">{formatMetricValue(overview?.kpis.total_output ?? 0)}</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <p className="text-xs uppercase text-muted-foreground">Cache Ratio</p>
-            <p className="mt-1 text-2xl font-bold">{((overview?.kpis.cache_ratio ?? 0) * 100).toFixed(1)}%</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <p className="text-xs uppercase text-muted-foreground">Avg I/O / Run</p>
-            <p className="mt-1 text-2xl font-bold">{formatMetricValue(overview?.kpis.avg_io_per_run ?? 0)}</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <p className="text-xs uppercase text-muted-foreground">P95 I/O / Run</p>
-            <p className="mt-1 text-2xl font-bold">{formatMetricValue(overview?.kpis.p95_io_per_run ?? 0)}</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <p className="text-xs uppercase text-muted-foreground">Retest Waste Score</p>
-            <p className="mt-1 text-2xl font-bold">{((overview?.kpis.retest_waste_score ?? 0) * 100).toFixed(1)}%</p>
-          </CardContent>
-        </Card>
+        <div className="rounded-xl border px-4 py-3">
+          <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Total Input</p>
+          <p className="mt-1 text-2xl font-bold">{formatMetricValue(overview?.kpis.total_input ?? 0)}</p>
+        </div>
+        <div className="rounded-xl border px-4 py-3">
+          <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Uncached Input</p>
+          <p className="mt-1 text-2xl font-bold">{formatMetricValue(overview?.kpis.total_uncached_input ?? 0)}</p>
+        </div>
+        <div className="rounded-xl border px-4 py-3">
+          <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Output</p>
+          <p className="mt-1 text-2xl font-bold">{formatMetricValue(overview?.kpis.total_output ?? 0)}</p>
+        </div>
+        <div className="rounded-xl border px-4 py-3">
+          <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Cache Ratio</p>
+          <p className="mt-1 text-2xl font-bold">{((overview?.kpis.cache_ratio ?? 0) * 100).toFixed(1)}%</p>
+        </div>
+        <div className="rounded-xl border px-4 py-3">
+          <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Avg I/O / Run</p>
+          <p className="mt-1 text-2xl font-bold">{formatMetricValue(overview?.kpis.avg_io_per_run ?? 0)}</p>
+        </div>
+        <div className="rounded-xl border px-4 py-3">
+          <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">P95 I/O / Run</p>
+          <p className="mt-1 text-2xl font-bold">{formatMetricValue(overview?.kpis.p95_io_per_run ?? 0)}</p>
+        </div>
+        <div className="rounded-xl border px-4 py-3">
+          <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Retest Waste Score</p>
+          <p className="mt-1 text-2xl font-bold">{((overview?.kpis.retest_waste_score ?? 0) * 100).toFixed(1)}%</p>
+        </div>
       </div>
         {!overview ? (
           <p className="text-sm text-muted-foreground">{statusLine}</p>
         ) : (
           <>
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base">Totals and deltas by day</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
+            <section className="overflow-hidden rounded-2xl border bg-background">
+              <div className="px-6 pt-6">
+                <h2 className="text-base font-semibold">Totals and deltas by day</h2>
+              </div>
+              <div className="space-y-4 p-6">
                 <TokenLineChart
                   data={trendSeries}
                   xAxisKey="day"
@@ -469,14 +450,14 @@ export default function TenantTokenOverviewPage() {
                     { key: "output", label: "Output", color: "#ef4444", stackId: "output" },
                   ]}
                 />
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base">Runtime vs delta input</CardTitle>
-                <CardDescription>Scatter of day-level input growth against average turn runtime.</CardDescription>
-              </CardHeader>
-              <CardContent>
+              </div>
+            </section>
+            <section className="overflow-hidden rounded-2xl border bg-background">
+              <div className="px-6 pt-6">
+                <h2 className="text-base font-semibold">Runtime vs delta input</h2>
+                <p className="mt-1 text-sm text-muted-foreground">Scatter of day-level input growth against average turn runtime.</p>
+              </div>
+              <div className="p-6">
                 <TokenScatterChart
                   data={trendSeries.filter(
                     (point) =>
@@ -487,14 +468,13 @@ export default function TenantTokenOverviewPage() {
                   yAxisKey="delta_input"
                   pointLabel="Token Δ"
                 />
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader className="pb-3">
-                <CardTitle className="text-sm">Top Costly Runs</CardTitle>
-              </CardHeader>
-              <CardContent className="p-0">
-                <div className="overflow-x-auto">
+              </div>
+            </section>
+            <section className="overflow-hidden rounded-2xl border bg-background">
+              <div className="px-6 pt-5 pb-3">
+                <h2 className="text-base font-semibold">Top Costly Runs</h2>
+              </div>
+              <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -542,19 +522,18 @@ export default function TenantTokenOverviewPage() {
                   </TableBody>
                 </Table>
               </div>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader className="pb-3">
-                <CardTitle className="text-sm">Alerts</CardTitle>
-              </CardHeader>
-              <CardContent>
+            </section>
+            <section className="overflow-hidden rounded-2xl border bg-background">
+              <div className="px-6 pt-5 pb-3">
+                <h2 className="text-base font-semibold">Alerts</h2>
+              </div>
+              <div className="px-6 pb-6">
                 {overview.alerts.length === 0 ? (
                   <p className="text-sm text-muted-foreground">No alerts for current filters.</p>
                 ) : (
                   <ul className="space-y-1.5">
                     {overview.alerts.map((alert, idx) => (
-                      <li key={`${alert.rule}-${alert.run_id}-${idx}`} className="rounded-lg border border-warning/30 bg-warning/10 p-3 text-sm">
+                      <li key={`${alert.rule}-${alert.run_id}-${idx}`} className="rounded-xl border border-warning/30 bg-warning/10 px-4 py-3 text-sm">
                         <p className="font-medium">
                           <span className="text-muted-foreground">[{alert.rule}]</span> {alert.message}
                         </p>
@@ -568,8 +547,8 @@ export default function TenantTokenOverviewPage() {
                     ))}
                   </ul>
                 )}
-              </CardContent>
-            </Card>
+              </div>
+            </section>
           </>
         )}
         <div className="flex items-center justify-between gap-2 text-sm text-muted-foreground">

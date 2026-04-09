@@ -513,6 +513,42 @@ export type PlatformStatusRecord = {
   services: PlatformServiceStatusRecord[];
 };
 
+export type WebhookQueueJobRecord = {
+  job_id: string;
+  transport: string;
+  tenant_id: string | null;
+  project_id: string | null;
+  subject_key: string;
+  dedupe_key: string | null;
+  request_id: string;
+  event_type: string | null;
+  status: "pending" | "processing" | "failed" | "done" | string;
+  owner_id: string | null;
+  lease_expires_at: string | null;
+  available_at: string;
+  attempt_count: number;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+};
+
+export type WebhookQueueSummaryRecord = {
+  pending_count: number;
+  processing_count: number;
+  failed_count: number;
+  done_count: number;
+};
+
+export type WebhookQueueJobPageRecord = {
+  items: WebhookQueueJobRecord[];
+  total: number;
+  limit: number;
+  offset: number;
+  summary: WebhookQueueSummaryRecord;
+};
+
 export type JiraWebhookActionResult = {
   ok: boolean;
   action: string;
@@ -2155,6 +2191,40 @@ export function getKnowledgeJiraSyncRuntimeStatus(
 
 export function getPlatformStatus(credentials: Credentials): Promise<PlatformStatusRecord> {
   return request<PlatformStatusRecord>(credentials, "/api/admin/status");
+}
+
+export function listWebhookQueueJobs(
+  credentials: Credentials,
+  params: {
+    tenantId: string;
+    projectId: string;
+    status?: string;
+    transport?: string;
+    subjectKey?: string;
+    limit?: number;
+    offset?: number;
+  }
+): Promise<WebhookQueueJobPageRecord> {
+  const query = new URLSearchParams();
+  if (params?.status) {
+    query.set("status", params.status);
+  }
+  if (params?.transport) {
+    query.set("transport", params.transport);
+  }
+  query.set("tenant_id", params.tenantId);
+  query.set("project_id", params.projectId);
+  if (params?.subjectKey) {
+    query.set("subject_key", params.subjectKey);
+  }
+  if (typeof params?.limit === "number") {
+    query.set("limit", String(params.limit));
+  }
+  if (typeof params?.offset === "number") {
+    query.set("offset", String(params.offset));
+  }
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return request<WebhookQueueJobPageRecord>(credentials, `/api/admin/observability/webhook-jobs${suffix}`);
 }
 
 export function listRuns(

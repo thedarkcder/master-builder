@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { TokenRadarChart, TokenScatterChart, TokenStackedBarChart, formatMetricValue } from "@/components/charts";
@@ -559,12 +558,12 @@ export default function TenantStageDiagnosticsPage() {
         </div>
       </details>
 
-      <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Cross-project stage compare</CardTitle>
-            <CardDescription>Radar profile for stage metrics across selected projects.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3">
+      <section className="overflow-hidden rounded-2xl border bg-background">
+          <div className="p-6 pb-0">
+            <h2 className="text-base font-semibold">Cross-project stage compare</h2>
+            <p className="mt-1 text-sm text-muted-foreground">Radar profile for stage metrics across selected projects.</p>
+          </div>
+          <div className="p-6 space-y-3">
             <div className="grid gap-2 md:grid-cols-3">
               <label className="text-sm">
                 <span className="mb-1 block">Projects (2+)</span>
@@ -666,8 +665,8 @@ export default function TenantStageDiagnosticsPage() {
                 <p className="text-sm text-muted-foreground">{compareStatusLine}</p>
               </>
             )}
-          </CardContent>
-        </Card>
+          </div>
+        </section>
         <div className="flex flex-wrap items-center gap-2">
           <Button onClick={() => void load()} disabled={busy}>
             {busy ? "Loading..." : "Refresh"}
@@ -717,28 +716,28 @@ export default function TenantStageDiagnosticsPage() {
               {results.stages.map((stage) => (
                 <div
                   key={stage.stage}
-                  className="rounded border bg-muted/20 p-2"
+                  className="rounded-xl border px-4 py-3"
                   style={{ borderLeft: `3px solid ${stageColor(stage.stage)}` }}
                 >
                   <p className="text-sm font-semibold uppercase">{stage.stage}</p>
-                  <p className="text-xs text-muted-foreground">Avg Δ Input: {formatNumber(stage.avg_delta)}</p>
-                  <p className="text-xs text-muted-foreground">Avg Δ Uncached: {formatNumber(stage.avg_uncached_delta)}</p>
-                  <p className="text-xs text-muted-foreground">Retry Impact: {stage.retry_impact_index.toFixed(2)}</p>
-                  <p className="text-xs text-muted-foreground">Runs: {stage.run_count}</p>
+                  <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Avg Δ Input: {formatNumber(stage.avg_delta)}</p>
+                  <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Avg Δ Uncached: {formatNumber(stage.avg_uncached_delta)}</p>
+                  <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Retry Impact: {stage.retry_impact_index.toFixed(2)}</p>
+                  <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Runs: {stage.run_count}</p>
                 </div>
               ))}
               {results.stages.length === 0 ? (
-                <div className="rounded border bg-muted/20 p-2">
+                <div className="rounded-xl border px-4 py-3">
                   <p className="text-sm text-muted-foreground">No stage diagnostics available for current filters.</p>
                 </div>
               ) : null}
             </div>
-            <div className="rounded border bg-muted/20 p-2 text-sm">
+            <div className="rounded-xl border px-4 py-3 text-sm">
               <span className="text-muted-foreground">Retest waste score:</span>{" "}
               <span className="font-semibold">{(results.retest_waste_score * 100).toFixed(1)}%</span>
             </div>
-            <div className="rounded-md border bg-muted/20 p-3">
-              <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            <div className="rounded-xl border px-4 py-3">
+              <p className="mb-2 text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
                 Stage x attempt heatmap (avg delta input)
               </p>
               {results.heatmap.length === 0 ? (
@@ -776,12 +775,12 @@ export default function TenantStageDiagnosticsPage() {
                 </div>
               )}
             </div>
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base">Per-ticket stage usage</CardTitle>
-                <CardDescription>Token I/O split by stage for each issue key in current filters.</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-3">
+            <section className="overflow-hidden rounded-2xl border bg-background">
+              <div className="p-6 pb-0">
+                <h2 className="text-base font-semibold">Per-ticket stage usage</h2>
+                <p className="mt-1 text-sm text-muted-foreground">Token I/O split by stage for each issue key in current filters.</p>
+              </div>
+              <div className="p-6 space-y-3">
                 <TokenStackedBarChart
                   data={issueStageChartData.slice(0, 20)}
                   xAxisKey="issue_key"
@@ -830,10 +829,10 @@ export default function TenantStageDiagnosticsPage() {
                     </TableBody>
                   </Table>
                 </div>
-              </CardContent>
-            </Card>
-            <div className="rounded-md border bg-muted/20 p-3">
-              <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Heavy command signatures</p>
+              </div>
+            </section>
+            <div className="rounded-xl border px-4 py-3">
+              <p className="mb-2 text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Heavy command signatures</p>
               <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
@@ -866,12 +865,12 @@ export default function TenantStageDiagnosticsPage() {
                 </Table>
               </div>
             </div>
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base">Runtime vs token delta</CardTitle>
-                <CardDescription>Scatter point = one token-turn row.</CardDescription>
-              </CardHeader>
-              <CardContent>
+            <section className="overflow-hidden rounded-2xl border bg-background">
+              <div className="p-6 pb-0">
+                <h2 className="text-base font-semibold">Runtime vs token delta</h2>
+                <p className="mt-1 text-sm text-muted-foreground">Scatter point = one token-turn row.</p>
+              </div>
+              <div className="p-6">
                 {scatterData.length === 0 ? (
                   <p className="text-sm text-muted-foreground">No runtime/token scatter data found.</p>
                 ) : (
@@ -882,8 +881,8 @@ export default function TenantStageDiagnosticsPage() {
                     pointLabel="Token Δ"
                   />
                 )}
-              </CardContent>
-            </Card>
+              </div>
+            </section>
             <div className="flex items-center justify-between gap-2">
               <p className="text-sm text-muted-foreground">{statusLine}</p>
               <div className="flex items-center gap-2">

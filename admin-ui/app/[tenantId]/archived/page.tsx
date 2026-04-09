@@ -4,7 +4,7 @@ import { Suspense } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+
 
 export default function ArchivedWorkspacePage() {
   return (
@@ -44,14 +44,14 @@ function ArchivedWorkspacePageInner() {
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-6 py-12">
-      <Card className="w-full max-w-xl border shadow-sm">
-        <CardHeader className="space-y-2">
-          <CardTitle>Workspace archived</CardTitle>
-          <CardDescription>
+      <div className="w-full max-w-xl overflow-hidden rounded-2xl border bg-background shadow-sm">
+        <div className="space-y-2 p-6 pb-3">
+          <h2 className="text-base font-semibold">Workspace archived</h2>
+          <p className="text-sm text-muted-foreground">
             {tenantId} has been archived and removed from the active workspace list.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-6">
+          </p>
+        </div>
+        <div className="space-y-6 p-6 pt-0">
           <p className="text-sm text-muted-foreground">
             Archived workspaces stay available for review and unarchive actions, but they no longer open the active
             dashboard.
@@ -60,8 +60,8 @@ function ArchivedWorkspacePageInner() {
             <p className="text-sm text-muted-foreground">This workspace is scheduled for permanent deletion on {purgeDate}.</p>
           ) : null}
           <Button onClick={() => router.push(href)}>{buttonLabel}</Button>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
     </div>
   );
 }

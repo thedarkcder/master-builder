@@ -3,7 +3,7 @@
 import { useCallback, useRef, useState, type ChangeEvent } from "react";
 
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+
 import { createProjectKnowledgeAsset, type Credentials } from "@/lib/api";
 
 type ProjectKnowledgeAddSectionProps = {
@@ -96,14 +96,14 @@ export function ProjectKnowledgeAddSection({
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Add Knowledge</CardTitle>
-        <CardDescription>
+    <div className="overflow-hidden rounded-2xl border bg-background">
+      <div className="p-6">
+        <h2 className="text-base font-semibold">Add Knowledge</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
           Upload files directly into the project knowledge store. Managed connectors and sync controls live in the Sources tab.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
+        </p>
+      </div>
+      <div className="space-y-4 p-6 pt-0">
         <div className="rounded-md border p-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
@@ -129,7 +129,7 @@ export function ProjectKnowledgeAddSection({
         </div>
 
         {statusLine ? <p className="rounded-md border px-3 py-2 text-sm text-muted-foreground">{statusLine}</p> : null}
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 }

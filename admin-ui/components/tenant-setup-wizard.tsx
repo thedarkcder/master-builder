@@ -5,6 +5,7 @@ import { ArrowLeft, ArrowRight, Sparkles } from "lucide-react";
 import { BasicsStep } from "@/components/tenant-setup/steps/basics-step";
 import { DiscordStep } from "@/components/tenant-setup/steps/discord-step";
 import { GitHubStep } from "@/components/tenant-setup/steps/github-step";
+import { InviteUsersStep } from "@/components/tenant-setup/steps/invite-users-step";
 import { JiraStep } from "@/components/tenant-setup/steps/jira-step";
 import { ReposStep } from "@/components/tenant-setup/steps/repos-step";
 import { ReviewStep } from "@/components/tenant-setup/steps/review-step";
@@ -40,6 +41,14 @@ export function TenantSetupWizard({ stepKey }: { stepKey: WizardStepKey }) {
     setSelectedRepoUrl,
     installationRepos,
     jiraProjects,
+    inviteEmail,
+    setInviteEmail,
+    inviteFullName,
+    setInviteFullName,
+    inviteRole,
+    setInviteRole,
+    sendingInvite,
+    recentInvites,
     stepIndex,
     selectedProjectKeys,
     nextStep,
@@ -49,8 +58,9 @@ export function TenantSetupWizard({ stepKey }: { stepKey: WizardStepKey }) {
     toggleJiraProject,
     startGitHubInstallFlow,
     startDiscordInstallFlow,
+    sendWorkspaceInvite,
     loadInstallationRepositories,
-    saveTenant
+    saveTenantAndOpenWorkspace
   } = useTenantSetupController(stepKey);
 
   const tenantIdPreview = createdTenantId || previewTenantId(values.name);
@@ -134,37 +144,7 @@ export function TenantSetupWizard({ stepKey }: { stepKey: WizardStepKey }) {
                   tenantIdPreview={tenantIdPreview}
                   guildId={values.discord.guild_id}
                   installedAt={values.discord.installed_at}
-                  onboardingChannelId={values.discord.onboarding_channel_id}
-                  inviteExpirySeconds={values.discord.onboarding_invite_expires_in_seconds}
-                  inviteMaxUses={values.discord.onboarding_invite_max_uses}
                   onStartInstall={() => void startDiscordInstallFlow()}
-                  onOnboardingChannelChange={(value) =>
-                    setValues((prev) => ({
-                      ...prev,
-                      discordEnabled: true,
-                      discord: { ...prev.discord, onboarding_channel_id: value || null }
-                    }))
-                  }
-                  onInviteExpiryChange={(value) =>
-                    setValues((prev) => ({
-                      ...prev,
-                      discordEnabled: true,
-                      discord: {
-                        ...prev.discord,
-                        onboarding_invite_expires_in_seconds: value.trim() ? Number(value) : null
-                      }
-                    }))
-                  }
-                  onInviteMaxUsesChange={(value) =>
-                    setValues((prev) => ({
-                      ...prev,
-                      discordEnabled: true,
-                      discord: {
-                        ...prev.discord,
-                        onboarding_invite_max_uses: value.trim() ? Number(value) : null
-                      }
-                    }))
-                  }
                 />
               ) : null}
 
@@ -181,6 +161,22 @@ export function TenantSetupWizard({ stepKey }: { stepKey: WizardStepKey }) {
                 />
               ) : null}
 
+              {stepKey === "invite" ? (
+                <InviteUsersStep
+                  createdTenantId={createdTenantId}
+                  tenantIdPreview={tenantIdPreview}
+                  inviteEmail={inviteEmail}
+                  inviteFullName={inviteFullName}
+                  inviteRole={inviteRole}
+                  sendingInvite={sendingInvite}
+                  recentInvites={recentInvites}
+                  onInviteEmailChange={(value) => setInviteEmail(value)}
+                  onInviteFullNameChange={(value) => setInviteFullName(value)}
+                  onInviteRoleChange={(value) => setInviteRole(value)}
+                  onSendInvite={() => void sendWorkspaceInvite()}
+                />
+              ) : null}
+
               {stepKey === "review" ? (
                 <ReviewStep
                   tenantDisplayId={tenantIdPreview}
@@ -190,7 +186,7 @@ export function TenantSetupWizard({ stepKey }: { stepKey: WizardStepKey }) {
                   githubInstallationId={values.github.installation_id}
                   repositoryUrl={textFields.githubRepositoryText}
                   saving={saving}
-                  onSave={() => void saveTenant()}
+                  onSave={() => void saveTenantAndOpenWorkspace()}
                 />
               ) : null}
             </div>
