@@ -443,6 +443,67 @@ class WorkflowRequestServiceTests(unittest.TestCase):
                 ["restore auth flow"],
             )
 
+    def test_build_workflow_request_drops_unsupported_resume_checkpoint_payload(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            tenant, run, effective_policy, settings = self._base_inputs(tmp_dir)
+            run.entry_mode = "resume"
+            run.entry_stage = "dev"
+            run.entry_checkpoint_id = "checkpoint-1"
+            project = SimpleNamespace(
+                project_id="project-1",
+                name="Project",
+                github_repository="https://github.com/example/repo",
+                jira_project_key="TP",
+                environment={},
+            )
+            checkout_dir = (
+                Path(tmp_dir)
+                / "tenant-1"
+                / "project-1"
+                / "runs"
+                / "run-1"
+                / "workspaces"
+                / "worker-a"
+                / "repo"
+            )
+            checkout_dir.mkdir(parents=True, exist_ok=True)
+            with (
+                patch(
+                    "orchestrator.core.worker.workflow_request_service.ensure_run_worktree",
+                    return_value=(checkout_dir, "run/tp-1/run-1"),
+                ),
+                patch(
+                    "orchestrator.core.worker.workflow_request_service.read_run_worktree_metadata",
+                    return_value={"start_point_ref": "origin/main", "start_point_sha": "abc123"},
+                ),
+                patch(
+                    "orchestrator.core.worker.workflow_request_service.validate_run_worktree",
+                    return_value=None,
+                ),
+                patch(
+                    "orchestrator.core.worker.workflow_request_service._entry_checkpoint",
+                    return_value=SimpleNamespace(
+                        checkpoint_id="checkpoint-1",
+                        checkpoint_kind="execution",
+                        payload_json={"version": 999, "context": {}, "workflow": {}, "events": {}, "stages": {}},
+                        codex_session_id="dev-session-123",
+                    ),
+                ),
+            ):
+                request = build_workflow_request_for_run(
+                    session=self._session_with_no_human_inputs(),
+                    tenant=tenant,
+                    run=run,
+                    project=project,
+                    effective_policy=effective_policy,
+                    settings=settings,
+                )
+
+            self.assertEqual(request.entry_mode, "resume")
+            self.assertEqual(request.entry_stage, "dev")
+            self.assertEqual(request.checkpoint_id, "checkpoint-1")
+            self.assertIsNone(request.checkpoint_payload)
+
     def test_build_workflow_request_prefers_remediation_trigger_branch_and_base(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             tenant, run, effective_policy, settings = self._base_inputs(tmp_dir)

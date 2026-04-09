@@ -5,7 +5,6 @@ import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { TokenStackedBarChart } from "@/components/charts";
 import { compareRunsTokens, listProjects, listRuns, type ProjectRecord, type RunRecord, type TokenCompareRecord } from "@/lib/api";
@@ -356,8 +355,8 @@ export default function TenantTokenComparePage() {
           <>
             <div className="grid gap-3 md:grid-cols-2">
               {results.runs.map((run) => (
-                <Card key={run.run_id}>
-                  <CardContent className="p-4">
+                <div key={run.run_id} className="overflow-hidden rounded-2xl border bg-background">
+                  <div className="p-4">
                     <p className="mb-1 text-xs font-semibold break-all text-muted-foreground">Run</p>
                     <p className="mb-2 font-medium text-sm break-all">{run.run_id}</p>
                     <p className="mb-3 text-xs text-muted-foreground">{run.issue_key} · {run.status}</p>
@@ -369,19 +368,20 @@ export default function TenantTokenComparePage() {
                         ["Total I/O", formatNumber(run.totals.total_io)],
                         ["Cache Ratio", `${(run.totals.cache_ratio * 100).toFixed(1)}%`]
                       ].map(([label, value]) => (
-                        <div key={label} className="rounded border p-2">
-                          <p className="text-muted-foreground">{label}</p>
+                        <div key={label} className="rounded-xl border px-4 py-3">
+                          <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">{label}</p>
                           <p className="font-semibold">{value}</p>
                         </div>
                       ))}
                     </div>
-                  </CardContent>
-                </Card>
+                  </div>
+                </div>
               ))}
             </div>
-            <Card>
-              <CardHeader className="pb-3"><CardTitle className="text-sm">Per-stage Totals</CardTitle></CardHeader>
-              <CardContent className="p-0">
+            <div className="overflow-hidden rounded-2xl border bg-background">
+              <div className="px-6 pt-6 pb-3">
+                <h2 className="text-base font-semibold">Per-stage Totals</h2>
+              </div>
               <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
@@ -417,11 +417,12 @@ export default function TenantTokenComparePage() {
                   </TableBody>
                 </Table>
               </div>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader className="pb-3"><CardTitle className="text-sm">Delta Waterfall</CardTitle></CardHeader>
-              <CardContent>
+            </div>
+            <div className="overflow-hidden rounded-2xl border bg-background">
+              <div className="px-6 pt-6 pb-3">
+                <h2 className="text-base font-semibold">Delta Waterfall</h2>
+              </div>
+              <div className="p-6 pt-0">
               {results.waterfall.length === 0 ? (
                 <p className="text-sm text-muted-foreground">No turn data in selected runs.</p>
               ) : (
@@ -467,8 +468,8 @@ export default function TenantTokenComparePage() {
                   </div>
                 </div>
               )}
-              </CardContent>
-            </Card>
+              </div>
+            </div>
           </>
         )}
         {statusLine ? <p className="text-sm text-muted-foreground">{statusLine}</p> : null}

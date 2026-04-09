@@ -107,6 +107,17 @@ def test_apply_decision_gate_marks_failed_on_configuration_error() -> None:
     session = _Session()
     run = _run()
     tenant = SimpleNamespace(tenant_id="tenant-1")
+    captured: dict[str, object] = {}
+
+    def _mark_terminal(*, session, run_id: str, terminal_status: str, last_error: str | None = None):  # noqa: ANN001
+        _ = session
+        captured["run_id"] = run_id
+        captured["terminal_status"] = terminal_status
+        captured["last_error"] = last_error
+        run.status = terminal_status
+        run.last_error = last_error
+        run.finished_at = datetime.now()
+        return run
 
     with patch("orchestrator.core.worker.decision_gate.resolve_project_for_run", return_value=None):
         terminal, meta = apply_decision_gate(
@@ -120,10 +131,13 @@ def test_apply_decision_gate_marks_failed_on_configuration_error() -> None:
             ask_reply_components_fn=lambda: [],
             blocked_status="blocked",
             failed_status="failed",
+            mark_run_terminal_fn=_mark_terminal,
         )
 
     assert terminal is run
     assert meta is None
+    assert captured["run_id"] == "run-1"
+    assert captured["terminal_status"] == "failed"
     assert run.status == "failed"
     assert "Execution readiness check failed" in (run.last_error or "")
     assert isinstance(run.finished_at, datetime)

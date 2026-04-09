@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from orchestrator.core.communications.enqueue_reason_contract import enqueue_reason_guidance
@@ -33,7 +32,9 @@ def apply_decision_gate(
     ask_reply_components_fn,
     blocked_status: str,
     failed_status: str,
+    mark_run_terminal_fn=None,
 ) -> tuple[object | None, dict | None]:
+    terminalizer = mark_run_terminal if mark_run_terminal_fn is None else mark_run_terminal_fn
     project = resolve_project_for_run(session, run=run)
     try:
         oauth = tenant_jira_oauth_context_fn(session=session, tenant=tenant, settings=settings)
@@ -62,12 +63,14 @@ def apply_decision_gate(
             ready_label=(tenant.jira_config or {}).get("ready_label"),
         )
     except Exception as exc:  # noqa: BLE001
-        run.status = failed_status
-        run.last_error = f"Execution readiness check failed: {exc}"
-        run.finished_at = datetime.now(timezone.utc)
-        session.commit()
-        session.refresh(run)
-        return run, None
+        error_text = f"Execution readiness check failed: {exc}"
+        terminal_run = terminalizer(
+            session=session,
+            run_id=run.run_id,
+            terminal_status=failed_status,
+            last_error=error_text,
+        )
+        return terminal_run, None
 
     if str(pre_check.outcome or "").strip() != "missing_ready_label":
         return None, None
@@ -113,8 +116,8 @@ def apply_decision_gate(
         getattr(pre_check, "outcome", None) if pre_check is not None else None
     )
     run.plan = snapshot.dump()
-    terminal_run = mark_run_terminal(
-        session,
+    terminal_run = terminalizer(
+        session=session,
         run_id=run.run_id,
         terminal_status=blocked_status,
         last_error=reason,

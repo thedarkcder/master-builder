@@ -8,7 +8,6 @@ import { useAuth } from "@/components/auth-provider";
 import { CodexModelSelect } from "@/components/codex-model-select";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
@@ -32,6 +31,7 @@ import {
   type CodexModelCatalogRecord,
 } from "@/lib/api";
 import { canAccessPlatformAdmin, getDefaultAuthenticatedRoute } from "@/lib/auth-routing";
+import { readLastWorkspaceTenantIdFromBrowser } from "@/lib/workspace-preference";
 
 type RuntimeTab = "routing" | "profiles" | "tools";
 
@@ -367,7 +367,8 @@ export default function AgentRuntimesPage() {
       return;
     }
     if (!canAccessPlatformAdmin(principal)) {
-      window.location.replace(getDefaultAuthenticatedRoute(principal));
+      const preferredTenantId = readLastWorkspaceTenantIdFromBrowser();
+      window.location.replace(getDefaultAuthenticatedRoute(principal, { preferredTenantId }));
       return;
     }
     if (credentials) {
@@ -426,15 +427,15 @@ export default function AgentRuntimesPage() {
             <p className="rounded-lg border bg-muted/40 px-4 py-2.5 text-sm text-muted-foreground">{routingStatusLine}</p>
           ) : null}
 
-          <Card>
-            <CardHeader className="pb-3">
+          <div className="overflow-hidden rounded-2xl border bg-background">
+            <div className="p-6 pb-3">
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-3">
                   <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10">
                     <Bot className="h-5 w-5 text-primary" />
                   </div>
                   <div>
-                    <CardTitle className="text-base">Runtime routing</CardTitle>
+                    <h2 className="text-base font-semibold">Runtime routing</h2>
                     <p className="text-sm text-muted-foreground">
                       Named-agent overrides win over role defaults. Leave a row blank to inherit.
                     </p>
@@ -462,14 +463,13 @@ export default function AgentRuntimesPage() {
                   </Button>
                 </div>
               </div>
-            </CardHeader>
-          </Card>
+            </div>
+          </div>
 
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base">Execution selectors</CardTitle>
-            </CardHeader>
-            <CardContent className="p-0">
+          <div className="overflow-hidden rounded-2xl border bg-background">
+            <div className="px-6 pt-6 pb-3">
+              <h2 className="text-base font-semibold">Execution selectors</h2>
+            </div>
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -512,14 +512,12 @@ export default function AgentRuntimesPage() {
                   })}
                 </TableBody>
               </Table>
-            </CardContent>
-          </Card>
+          </div>
 
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base">Role defaults</CardTitle>
-            </CardHeader>
-            <CardContent className="p-0">
+          <div className="overflow-hidden rounded-2xl border bg-background">
+            <div className="px-6 pt-6 pb-3">
+              <h2 className="text-base font-semibold">Role defaults</h2>
+            </div>
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -562,14 +560,12 @@ export default function AgentRuntimesPage() {
                   })}
                 </TableBody>
               </Table>
-            </CardContent>
-          </Card>
+          </div>
 
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base">Named-agent overrides</CardTitle>
-            </CardHeader>
-            <CardContent className="p-0">
+          <div className="overflow-hidden rounded-2xl border bg-background">
+            <div className="px-6 pt-6 pb-3">
+              <h2 className="text-base font-semibold">Named-agent overrides</h2>
+            </div>
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -612,17 +608,16 @@ export default function AgentRuntimesPage() {
                   })}
                 </TableBody>
               </Table>
-            </CardContent>
-          </Card>
+          </div>
         </div>
       ) : activeTab === "profiles" ? (
         <div className="grid gap-6 lg:grid-cols-[1.4fr,1fr]">
-          <Card>
-            <CardHeader className="pb-3">
+          <div className="overflow-hidden rounded-2xl border bg-background">
+            <div className="p-6 pb-3">
               <div className="flex items-center justify-between gap-2">
                 <div>
-                  <CardTitle className="text-base">Profiles</CardTitle>
-                  <p className="text-sm text-muted-foreground">
+                  <h2 className="text-base font-semibold">Profiles</h2>
+                  <p className="mt-1 text-sm text-muted-foreground">
                     Built-ins can be edited and reset. Custom profiles can be created and deleted.
                   </p>
                 </div>
@@ -639,13 +634,13 @@ export default function AgentRuntimesPage() {
                   New profile
                 </Button>
               </div>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {profilesStatusLine ? (
+            </div>
+            {profilesStatusLine ? (
+              <div className="px-6 pb-4">
                 <p className="rounded-lg border bg-muted/40 px-4 py-2.5 text-sm text-muted-foreground">{profilesStatusLine}</p>
-              ) : null}
-              <div className="rounded-md border">
-                <Table>
+              </div>
+            ) : null}
+            <Table>
                   <TableHeader>
                     <TableRow>
                       <TableHead>Profile</TableHead>
@@ -682,25 +677,21 @@ export default function AgentRuntimesPage() {
                       );
                     })}
                   </TableBody>
-                </Table>
-              </div>
-            </CardContent>
-          </Card>
+            </Table>
+          </div>
 
-          <Card>
-            <CardHeader className="pb-3">
-              <div className="flex items-center justify-between gap-2">
-                <div>
-                  <CardTitle className="text-base">{editingProfileName ? `Edit ${editingProfileName}` : "Create profile"}</CardTitle>
-                  <p className="text-sm text-muted-foreground">
-                    Secret refs should point to Platform Secrets. Tenant and project model pickers will follow the engineering execution runtime.
-                  </p>
-                </div>
+          <div className="overflow-hidden rounded-2xl border bg-background">
+            <div className="p-6 pb-3">
+              <div>
+                <h2 className="text-base font-semibold">{editingProfileName ? `Edit ${editingProfileName}` : "Create profile"}</h2>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Secret refs should point to Platform Secrets. Tenant and project model pickers will follow the engineering execution runtime.
+                </p>
               </div>
-            </CardHeader>
-            <CardContent className="space-y-4">
+            </div>
+            <div className="space-y-4 px-6 pb-6">
               <div className="space-y-2">
-                <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Profile name</label>
+                <label className="text-sm font-medium">Profile name</label>
                 <Input
                   aria-label="Profile name"
                   value={draft.profile_name}
@@ -711,7 +702,7 @@ export default function AgentRuntimesPage() {
               </div>
 
               <div className="space-y-2">
-                <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Runtime</label>
+                <label className="text-sm font-medium">Runtime</label>
                 <select
                   aria-label="Runtime"
                   className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
@@ -733,7 +724,7 @@ export default function AgentRuntimesPage() {
 
               {currentTransportIsCli ? (
                 <div className="space-y-2">
-                  <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">CLI command</label>
+                  <label className="text-sm font-medium">CLI command</label>
                   <Input
                     aria-label="CLI command"
                     value={draft.cli_command}
@@ -745,7 +736,7 @@ export default function AgentRuntimesPage() {
 
               {currentTransportNeedsBaseUrl || runtimeKind === "openai" || runtimeKind === "claude" ? (
                 <div className="space-y-2">
-                  <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Base URL</label>
+                  <label className="text-sm font-medium">Base URL</label>
                   <Input
                     aria-label="Base URL"
                     value={draft.base_url ?? ""}
@@ -763,7 +754,7 @@ export default function AgentRuntimesPage() {
 
               {currentTransportAllowsApiKey ? (
                 <div className="space-y-2">
-                  <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">API key secret ref</label>
+                  <label className="text-sm font-medium">API key secret ref</label>
                   <Input
                     aria-label="API key secret ref"
                     value={draft.api_key_secret_ref ?? ""}
@@ -774,7 +765,7 @@ export default function AgentRuntimesPage() {
               ) : null}
 
               <div className="space-y-2">
-                <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Model</label>
+                <label className="text-sm font-medium">Model</label>
                 <CodexModelSelect
                   ariaLabel="Model"
                   editorSurfaceKey={editingProfileName ?? "__create_profile__"}
@@ -788,7 +779,7 @@ export default function AgentRuntimesPage() {
               </div>
 
               <div className="space-y-2">
-                <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Fallback profile</label>
+                <label className="text-sm font-medium">Fallback profile</label>
                 <select
                   aria-label="Fallback profile"
                   className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
@@ -807,7 +798,7 @@ export default function AgentRuntimesPage() {
               </div>
 
               <div className="space-y-2">
-                <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Reasoning mode</label>
+                <label className="text-sm font-medium">Reasoning mode</label>
                 <select
                   aria-label="Reasoning mode"
                   className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
@@ -872,8 +863,8 @@ export default function AgentRuntimesPage() {
                   </Button>
                 ) : null}
               </div>
-            </CardContent>
-          </Card>
+            </div>
+          </div>
         </div>
       ) : (
         <div className="space-y-6">
@@ -881,19 +872,19 @@ export default function AgentRuntimesPage() {
             <p className="rounded-lg border bg-muted/40 px-4 py-2.5 text-sm text-muted-foreground">{toolsStatusLine}</p>
           ) : null}
 
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base">Implemented tools</CardTitle>
-              <p className="text-sm text-muted-foreground">
+          <div className="overflow-hidden rounded-2xl border bg-background">
+            <div className="px-6 pt-6 pb-3">
+              <h2 className="text-base font-semibold">Implemented tools</h2>
+              <p className="mt-1 text-sm text-muted-foreground">
                 Read-only list of the governed tools available in the runtime bridge and the workflow stages that can call them.
               </p>
-            </CardHeader>
-            <CardContent className="space-y-4">
+            </div>
+            <div className="px-6 pb-4">
               <p className="text-xs text-muted-foreground">
                 {tools.length} tools across {(toolsResponse?.available_stages ?? []).length} stages.
               </p>
-              <div className="rounded-md border">
-                <Table>
+            </div>
+            <Table>
                   <TableHeader>
                     <TableRow>
                       <TableHead>Tool</TableHead>
@@ -912,10 +903,8 @@ export default function AgentRuntimesPage() {
                       </TableRow>
                     ))}
                   </TableBody>
-                </Table>
-              </div>
-            </CardContent>
-          </Card>
+            </Table>
+          </div>
         </div>
       )}
     </div>

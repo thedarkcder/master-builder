@@ -6,8 +6,13 @@ import { Activity, Bot, RefreshCw, Workflow } from "lucide-react";
 import { useAuth } from "@/components/auth-provider";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { getPlatformStatus, type PlatformServiceInstanceRecord, type PlatformServiceStatusRecord } from "@/lib/api";
+import {
+  getPlatformStatus,
+  type PlatformServiceInstanceRecord,
+  type PlatformServiceStatusRecord,
+} from "@/lib/api";
 import { canAccessPlatformAdmin, getDefaultAuthenticatedRoute } from "@/lib/auth-routing";
+import { readLastWorkspaceTenantIdFromBrowser } from "@/lib/workspace-preference";
 import { cn } from "@/lib/utils";
 
 const serviceIcons = {
@@ -139,8 +144,8 @@ function ServiceRow({ service }: { service: PlatformServiceStatusRecord }) {
         <p className="text-xs text-muted-foreground">{formatTimestamp(service.updated_at)}</p>
       </div>
       {hasInstances ? (
-        <div className="space-y-3 rounded-xl border bg-muted/10 p-4">
-          <p className="text-xs font-medium uppercase tracking-[0.2em] text-muted-foreground">
+        <div className="space-y-3 rounded-xl bg-muted/10 p-4">
+          <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
             {service.service_id === "workers" ? "Worker instances" : "Service instances"}
           </p>
           <div className="grid gap-3 md:grid-cols-2">
@@ -176,8 +181,8 @@ export default function PlatformStatusPage() {
     setLoading(true);
     setErrorMessage(null);
     try {
-      const payload = await getPlatformStatus(credentials);
-      setServices(payload.services);
+      const statusPayload = await getPlatformStatus(credentials);
+      setServices(statusPayload.services);
     } catch (error) {
       setErrorMessage(`Failed to load platform status: ${(error as Error).message}`);
     } finally {
@@ -190,7 +195,8 @@ export default function PlatformStatusPage() {
       return;
     }
     if (!canAccessPlatformAdmin(principal)) {
-      window.location.replace(getDefaultAuthenticatedRoute(principal));
+      const preferredTenantId = readLastWorkspaceTenantIdFromBrowser();
+      window.location.replace(getDefaultAuthenticatedRoute(principal, { preferredTenantId }));
       return;
     }
     if (credentials) {
@@ -229,14 +235,14 @@ export default function PlatformStatusPage() {
           { label: "Unavailable", value: counts.unavailable },
         ].map((item) => (
           <div key={item.label} className="border-b pb-3">
-            <p className="text-xs font-medium uppercase tracking-[0.2em] text-muted-foreground">{item.label}</p>
+            <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">{item.label}</p>
             <p className="mt-2 text-2xl font-semibold">{item.value}</p>
           </div>
         ))}
       </div>
 
       {errorMessage ? (
-        <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-5 py-4 text-sm text-destructive">
+        <div className="rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
           {errorMessage}
         </div>
       ) : null}
@@ -263,6 +269,7 @@ export default function PlatformStatusPage() {
           </div>
         )}
       </section>
+
     </div>
   );
 }

@@ -68,7 +68,15 @@ def build_workflow_request_for_run(
     checkpoint = _entry_checkpoint(session=session, run=run)
     checkpoint_payload = dict(checkpoint.payload_json) if checkpoint is not None else None
     if checkpoint_payload is not None and ExecutionSnapshot.load(checkpoint_payload) is None:
-        raise ValueError("Unsupported execution snapshot version/shape in resume checkpoint payload")
+        logger.warning(
+            "Resume checkpoint payload is not a supported execution snapshot shape; "
+            "executor will handle resume failure safely "
+            "(workflow_id=%s, run_id=%s, checkpoint_id=%s)",
+            run.workflow_id,
+            run.run_id,
+            checkpoint.checkpoint_id if checkpoint is not None else None,
+        )
+        checkpoint_payload = None
     project_environment = getattr(project, "environment", {}) if project is not None else {}
     default_branch = project_environment.get("default_branch") if isinstance(project_environment, dict) else None
     remediation_base_branch = _extract_remediation_base_ref(parsed_trigger_context)

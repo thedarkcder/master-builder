@@ -21,6 +21,7 @@ from orchestrator.storage.db import create_session_factory, reset_db_engine_cach
 from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import Project, Run, Tenant, WebhookJob
 from orchestrator.core.communications import DiscordChannelMessageWithAttachmentAction
+from orchestrator.core.communications import IngressResult
 from tests.workflow_test_support import add_run_with_workflow, make_run
 
 
@@ -149,6 +150,30 @@ class WorkerWebhookJobServiceTests(unittest.TestCase):
             event_type="standup_voice_brief",
             payload_json={"execution_id": execution_id, "automation_id": automation_id},
             context_json={},
+        )
+
+    @staticmethod
+    def _github_request(*, request_id: str, dedupe_key: str, subject_key: str) -> WebhookJobEnqueueRequest:
+        return WebhookJobEnqueueRequest(
+            transport=WEBHOOK_TRANSPORT_GITHUB,
+            request_id=request_id,
+            tenant_id="tenant-1",
+            project_id="project-1",
+            subject_key=subject_key,
+            dedupe_key=dedupe_key,
+            event_type="check_run",
+            payload_json={"action": "completed"},
+            context_json={
+                "tenant_id": "tenant-1",
+                "project_id": "project-1",
+                "pr_number": 26,
+                "review_summary_present": False,
+                "delivery_id": dedupe_key,
+                "github_event": "check_run",
+                "normalized_action": "completed",
+                "installation_id": 12345,
+                "repo_full_name": "example/repo",
+            },
         )
 
     def test_blocking_reconciliation_does_not_cancel_existing_run(self) -> None:
@@ -287,6 +312,58 @@ class WorkerWebhookJobServiceTests(unittest.TestCase):
             mark_failed.assert_called_once()
             self.assertEqual(session.get(WebhookJob, processed.job_id).status, "failed")
 
+    def test_github_subject_jobs_are_coalesced_and_marked_done_together(self) -> None:
+        with self.session_factory() as session:
+            first = enqueue_webhook_job(
+                session,
+                request=self._github_request(
+                    request_id="request-github-1",
+                    dedupe_key="delivery-github-1",
+                    subject_key="github_pr:tenant-1:example/repo:26",
+                ),
+            ).job
+            second = enqueue_webhook_job(
+                session,
+                request=self._github_request(
+                    request_id="request-github-2",
+                    dedupe_key="delivery-github-2",
+                    subject_key="github_pr:tenant-1:example/repo:26",
+                ),
+            ).job
+            session.commit()
+
+        with self.session_factory() as session:
+            with (
+                patch(
+                    "orchestrator.core.worker.webhook_job_service.build_github_review_runtime",
+                    return_value=(SimpleNamespace(), SimpleNamespace()),
+                ),
+                patch(
+                    "orchestrator.core.worker.webhook_job_service.build_github_webhook_ingress_result",
+                    return_value=IngressResult(actions=()),
+                ) as build_result,
+                patch(
+                    "orchestrator.core.worker.webhook_job_service.build_http_transport_action_executors",
+                    return_value=(),
+                ),
+                patch(
+                    "orchestrator.core.worker.webhook_job_service.execute_side_effect_ingress_result",
+                ),
+            ):
+                processed = process_next_webhook_job(
+                    session=session,
+                    settings=self._settings(),
+                    owner_id="worker-1",
+                )
+
+            self.assertIsNotNone(processed)
+            assert processed is not None
+            self.assertEqual(session.get(WebhookJob, first.job_id).status, "done")
+            self.assertEqual(session.get(WebhookJob, second.job_id).status, "done")
+            self.assertEqual(session.get(WebhookJob, first.job_id).attempt_count, 1)
+            self.assertEqual(session.get(WebhookJob, second.job_id).attempt_count, 1)
+            build_result.assert_called_once()
+
     def test_process_next_webhook_job_snapshots_job_context_before_rollback(self) -> None:
         class _BrokenJob:
             def __init__(self) -> None:
@@ -311,7 +388,7 @@ class WorkerWebhookJobServiceTests(unittest.TestCase):
 
         with (
             patch("orchestrator.core.worker.webhook_job_service.claim_next_webhook_job", return_value=claim),
-            patch("orchestrator.core.worker.webhook_job_service._process_github_job", side_effect=_fail_processing),
+            patch("orchestrator.core.worker.webhook_job_service._process_github_subject_jobs", side_effect=_fail_processing),
             patch(
                 "orchestrator.core.worker.webhook_job_service.mark_webhook_job_ids_failed",
                 return_value=("failed-job",),

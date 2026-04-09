@@ -62,6 +62,7 @@ from orchestrator.api.admin.tenant_project_helpers import (
     primary_repo_url as _primary_repo_url_impl,
     resolve_project_discord_channel_binding as _resolve_project_discord_channel_binding_impl,
     slugify_tenant_name as _slugify_tenant_name_impl,
+    sync_tenant_project_discord_channels as _sync_tenant_project_discord_channels_impl,
     sync_tenant_jira_project_keys as _sync_tenant_jira_project_keys_impl,
 )
 from orchestrator.api.schemas import (
@@ -149,6 +150,17 @@ def sync_tenant_jira_project_keys(session: Session, *, tenant: Tenant) -> None:
         session,
         tenant=tenant,
         normalize_project_key_fn=_normalize_project_key,
+    )
+
+
+def reconcile_tenant_projects(session: Session, *, tenant: Tenant) -> None:
+    ensure_default_project_for_tenant(session, tenant=tenant)
+    sync_tenant_jira_project_keys(session, tenant=tenant)
+    _sync_tenant_project_discord_channels_impl(
+        session,
+        tenant=tenant,
+        settings=get_settings(),
+        resolve_project_discord_channel_binding_fn=resolve_project_discord_channel_binding,
     )
 
 
