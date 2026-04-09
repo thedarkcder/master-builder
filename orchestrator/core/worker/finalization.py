@@ -127,7 +127,10 @@ class WorkflowFinalizer:
             persisted_status=str(getattr(finalized_run, "status", "") or "").strip().lower(),
             last_error=str(getattr(finalized_run, "last_error", "") or "").strip() or None,
             persisted_plan=dict(getattr(finalized_run, "plan", {}) or {}) if isinstance(getattr(finalized_run, "plan", None), dict) else None,
-            event_types=_event_types_for(workflow_result=workflow_result),
+            event_types=_event_types_for(
+                workflow_result=workflow_result,
+                persisted_status=str(getattr(finalized_run, "status", "") or "").strip().lower(),
+            ),
             tail_steps=("orchestration_trace", "jira_feedback", "manual_pr_reporting", "workspace_cleanup"),
         )
 
@@ -216,12 +219,12 @@ class CompletionTailExecutor:
             )
 
 
-def _event_types_for(*, workflow_result: WorkflowResult) -> tuple[str, ...]:
-    if workflow_result.outcome == "success":
+def _event_types_for(*, workflow_result: WorkflowResult, persisted_status: str) -> tuple[str, ...]:
+    if persisted_status == "succeeded":
         return ("TASK_COMPLETED",)
-    if workflow_result.outcome == "blocked":
+    if persisted_status == "blocked":
         return ("RUN_BLOCKED",)
-    if workflow_result.outcome != "failed":
+    if persisted_status != "failed":
         return ()
     event_types: list[str] = ["RUN_FAILED", "TASK_FAILED"]
     diagnostics_stage = (

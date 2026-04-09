@@ -976,9 +976,9 @@ class WorkerProcessServiceTests(unittest.TestCase):
         finalized_workflow_result = finalize_run.call_args.kwargs["workflow_result"]
         self.assertEqual(finalized_workflow_result.outcome, "success")
         event_types = [call.kwargs["event_type"] for call in emit_agent_event.call_args_list]
-        self.assertIn("TASK_COMPLETED", event_types)
-        self.assertNotIn("RUN_FAILED", event_types)
-        self.assertNotIn("TASK_FAILED", event_types)
+        self.assertNotIn("TASK_COMPLETED", event_types)
+        self.assertIn("RUN_FAILED", event_types)
+        self.assertIn("TASK_FAILED", event_types)
         recorded_messages = [json.loads(str(row["message"])) for row in recorded_rows if row.get("stage") == "telemetry"]
         self.assertTrue(
             any(

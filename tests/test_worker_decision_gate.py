@@ -209,7 +209,17 @@ def test_apply_decision_gate_passes_issue_context_into_worker_decision() -> None
     run = _run()
     tenant = SimpleNamespace(tenant_id="tenant-1", jira_config={"ready_label": "agent:ready"})
     captured: dict[str, object] = {}
-    oauth = _oauth_context()
+    oauth = SimpleNamespace(
+        client=SimpleNamespace(
+            get_issue_detail=lambda **_: SimpleNamespace(
+                summary="Live summary",
+                description="Live description",
+                labels=["agent:ready", "worker:linux"],
+            )
+        ),
+        connection=SimpleNamespace(cloud_id="cloud-1"),
+        access_token="access-token",
+    )
 
     def _capture_worker_decision(**kwargs):  # noqa: ANN003
         captured.update(kwargs)
@@ -235,8 +245,9 @@ def test_apply_decision_gate_passes_issue_context_into_worker_decision() -> None
     assert captured["tenant_id"] == "tenant-1"
     assert captured["project_id"] is None
     assert captured["issue_key"] == "example-46"
-    assert captured["issue_summary"] == "Summary"
-    assert captured["issue_description"] == "Description"
+    assert captured["issue_summary"] == "Live summary"
+    assert captured["issue_description"] == "Live description"
+    assert captured["issue_labels"] == ["agent:ready", "worker:linux"]
 
 
 def test_apply_decision_gate_preserves_trigger_context_on_block() -> None:

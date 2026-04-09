@@ -14,6 +14,7 @@ from orchestrator.core.workflow.checkpoints import (
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.core.workflow.execution_snapshot import SnapshotWorkflow
 from orchestrator.core.workflow.runner import WorkflowResult, WorkflowStageCheckpoint
+from orchestrator.core.worker.run_disposition import resolve_run_disposition
 from orchestrator.storage.models import Project, Run, WorkflowExecution
 from orchestrator.storage.run_queue_events import notify_run_enqueued
 
@@ -258,23 +259,9 @@ def finalize_workflow_result(
     run.finished_at = datetime.now(timezone.utc)
     run.last_heartbeat_at = None
     run.worker_service_instance_id = None
-    if workflow_result.outcome == "success":
-        run.status = RUN_STATUS_SUCCEEDED
-        run.last_error = None
-    elif workflow_result.outcome == "failed":
-        run.status = RUN_STATUS_FAILED
-        run.last_error = (
-            workflow_result.diagnostics.message
-            if workflow_result.diagnostics is not None
-            else (workflow_result.blocker_message or "Workflow failed without diagnostics")
-        )
-    else:
-        run.status = RUN_STATUS_BLOCKED
-        run.last_error = (
-            workflow_result.blocker_message
-            or (workflow_result.diagnostics.message if workflow_result.diagnostics is not None else None)
-            or "Workflow blocked without diagnostics"
-        )
+    disposition = resolve_run_disposition(workflow_result=workflow_result)
+    run.status = disposition.status
+    run.last_error = disposition.last_error
 
     workflow = _workflow_for_run(session, run=run)
     if workflow is not None:

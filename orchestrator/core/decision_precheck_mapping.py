@@ -323,29 +323,30 @@ def worker_blocking_gate(
         return None
     if classification in {"decision_gate", "both"} and pre_check.decision_gate.triggered:
         return pre_check.decision_gate
-    if classification not in {"gtd", "both"}:
-        return None
-    questions = tuple(
-        str(question).strip()
-        for question in pre_check.gtd.clarification_questions
-        if str(question).strip()
-    )
-    missing = tuple(
-        str(item).strip()
-        for item in pre_check.gtd.missing_criteria
-        if str(item).strip()
-    )
-    reason = decision_reason(pre_check=pre_check, classification=classification) or (
-        "Good To Do details are incomplete" if block_reason == "gtd_required" else "Clarification required"
-    )
-    return DecisionGateResult(
-        triggered=True,
-        reason=reason,
-        missing_sections=missing,
-        questions=questions,
-        recommendation="Clarification required before execution.",
-        tags=(),
-    )
+    if classification in {"gtd", "both"} and str(block_reason or "").strip() == "execution_blocked":
+        questions = tuple(
+            str(question).strip()
+            for question in pre_check.gtd.clarification_questions
+            if str(question).strip()
+        )
+        missing = tuple(
+            str(item).strip()
+            for item in pre_check.gtd.missing_criteria
+            if str(item).strip()
+        )
+        reason = (
+            decision_reason(pre_check=pre_check, classification=classification)
+            or enqueue_reason_guidance("execution_blocked")
+        )
+        return DecisionGateResult(
+            triggered=True,
+            reason=reason,
+            missing_sections=missing,
+            questions=questions,
+            recommendation="Resolve execution-readiness blockers before execution.",
+            tags=(),
+        )
+    return None
 
 
 def serialize_result_snapshot(
@@ -517,7 +518,7 @@ def case_state_for_decision(*, decision: IngressDecision) -> str:
     pre_check = decision.pre_check
     if decision.block_reason == "decision_gate_required":
         return "blocked_decision_gate"
-    if decision.block_reason == "gtd_required":
+    if decision.block_reason in {"gtd_required", "execution_blocked"}:
         return "blocked_gtd"
     if pre_check is not None and str(getattr(pre_check, "outcome", "") or "").strip() == "ready_for_agent":
         return "ready_for_execution"
