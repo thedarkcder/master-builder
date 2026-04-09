@@ -16,7 +16,7 @@ from orchestrator.core.worker_capabilities import (
     required_worker_capability_for_run,
 )
 from orchestrator.core.worker.run_lifecycle import resolve_project_for_run, start_run
-from orchestrator.storage.models import Run, Tenant, TenantRunClaim
+from orchestrator.storage.models import Project, Run, Tenant, TenantRunClaim
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 class QueueSelectionResult:
     run: Run | None = None
     tenant: Tenant | None = None
+    project: Project | None = None
     effective_policy: dict | None = None
     terminal_run: Run | None = None
 
@@ -50,9 +51,16 @@ class QueueClaimabilityProbe:
 class QueueCandidateEvaluation:
     candidate: Run
     tenant: Tenant | None
+    project: Project | None
     effective_policy: dict | None
     capability_compatible: bool
     tenant_missing: bool
+
+
+@dataclass(frozen=True)
+class QueueCandidateClaimability:
+    reason: QueueClaimabilityReason
+    selection: QueueSelectionResult | None = None
 
 
 def coerce_positive_int(value: object, *, default: int) -> int:
@@ -127,6 +135,7 @@ def _evaluate_candidate(
         return QueueCandidateEvaluation(
             candidate=candidate,
             tenant=None,
+            project=None,
             effective_policy=None,
             capability_compatible=False,
             tenant_missing=False,
@@ -137,6 +146,7 @@ def _evaluate_candidate(
         return QueueCandidateEvaluation(
             candidate=candidate,
             tenant=None,
+            project=None,
             effective_policy=None,
             capability_compatible=True,
             tenant_missing=True,
@@ -151,6 +161,7 @@ def _evaluate_candidate(
     return QueueCandidateEvaluation(
         candidate=candidate,
         tenant=candidate_tenant,
+        project=project,
         effective_policy=effective_policy,
         capability_compatible=True,
         tenant_missing=False,
@@ -181,7 +192,40 @@ def _candidate_selection_details(
     return QueueSelectionResult(
         run=candidate,
         tenant=evaluation.tenant,
+        project=evaluation.project,
         effective_policy=evaluation.effective_policy,
+    )
+
+
+def _claimability_for_selection(
+    session: Session,
+    *,
+    selection: QueueSelectionResult,
+    running_status: str,
+    lock_tenant_claim: bool,
+) -> QueueCandidateClaimability:
+    if selection.terminal_run is not None:
+        return QueueCandidateClaimability(
+            reason=QueueClaimabilityReason.TERMINAL,
+            selection=selection,
+        )
+    if selection.run is None or selection.tenant is None:
+        return QueueCandidateClaimability(reason=QueueClaimabilityReason.CAPABILITY_MISMATCH)
+
+    effective_policy = selection.effective_policy if isinstance(selection.effective_policy, dict) else {}
+    max_concurrent_runs = coerce_positive_int(effective_policy.get("max_concurrent_runs"), default=1)
+    if lock_tenant_claim:
+        _lock_tenant_run_claim(session, tenant_id=selection.tenant.tenant_id)
+    current_running = running_run_count(
+        session,
+        tenant_id=selection.tenant.tenant_id,
+        running_status=running_status,
+    )
+    if current_running >= max_concurrent_runs:
+        return QueueCandidateClaimability(reason=QueueClaimabilityReason.CONCURRENCY_LIMIT)
+    return QueueCandidateClaimability(
+        reason=QueueClaimabilityReason.CLAIMABLE,
+        selection=selection,
     )
 
 
@@ -244,25 +288,31 @@ def probe_claimable_queued_run(
                 tenant_id=candidate.tenant_id,
                 issue_key=candidate.issue_key,
             )
-        assert evaluation.tenant is not None
-        effective_policy = evaluation.effective_policy if isinstance(evaluation.effective_policy, dict) else {}
-        max_concurrent_runs = coerce_positive_int(effective_policy.get("max_concurrent_runs"), default=1)
-        current_running = running_run_count(
-            session,
-            tenant_id=evaluation.tenant.tenant_id,
-            running_status=running_status,
+        selection = QueueSelectionResult(
+            run=candidate,
+            tenant=evaluation.tenant,
+            project=evaluation.project,
+            effective_policy=evaluation.effective_policy,
         )
-        if current_running >= max_concurrent_runs:
+        claimability = _claimability_for_selection(
+            session,
+            selection=selection,
+            running_status=running_status,
+            lock_tenant_claim=False,
+        )
+        if claimability.reason == QueueClaimabilityReason.CONCURRENCY_LIMIT:
             saw_concurrency_limit = True
             continue
-        return QueueClaimabilityProbe(
-            claimable=True,
-            reason=QueueClaimabilityReason.CLAIMABLE,
-            run_id=candidate.run_id,
-            tenant_id=candidate.tenant_id,
-            issue_key=candidate.issue_key,
-        )
-
+        if claimability.reason == QueueClaimabilityReason.CLAIMABLE and claimability.selection is not None:
+            claimable = claimability.selection
+            assert claimable.run is not None
+            return QueueClaimabilityProbe(
+                claimable=True,
+                reason=QueueClaimabilityReason.CLAIMABLE,
+                run_id=claimable.run.run_id,
+                tenant_id=claimable.run.tenant_id,
+                issue_key=claimable.run.issue_key,
+            )
     if saw_concurrency_limit:
         reason = QueueClaimabilityReason.CONCURRENCY_LIMIT
     elif saw_capability_mismatch:
@@ -298,28 +348,21 @@ def claim_next_queued_run(
             failed_status=failed_status,
             allowed_capabilities=allowed_capabilities,
         )
-        if selection.terminal_run is not None:
-            return selection
-        if selection.run is None or selection.tenant is None:
-            session.rollback()
-            continue
-
-        effective_policy = selection.effective_policy if isinstance(selection.effective_policy, dict) else {}
-        max_concurrent_runs = coerce_positive_int(effective_policy.get("max_concurrent_runs"), default=1)
-        _lock_tenant_run_claim(session, tenant_id=selection.tenant.tenant_id)
-        current_running = running_run_count(
+        claimability = _claimability_for_selection(
             session,
-            tenant_id=selection.tenant.tenant_id,
+            selection=selection,
             running_status=running_status,
+            lock_tenant_claim=True,
         )
-        if current_running >= max_concurrent_runs:
-            logger.info(
-                "worker_skipping_run_due_to_concurrency_limit tenant_id=%s issue_key=%s running=%s max=%s",
-                selection.tenant.tenant_id,
-                selection.run.issue_key,
-                current_running,
-                max_concurrent_runs,
-            )
+        if claimability.reason == QueueClaimabilityReason.TERMINAL:
+            return selection
+        if claimability.reason != QueueClaimabilityReason.CLAIMABLE or selection.run is None or selection.tenant is None:
+            if claimability.reason == QueueClaimabilityReason.CONCURRENCY_LIMIT:
+                logger.info(
+                    "worker_skipping_run_due_to_concurrency_limit tenant_id=%s issue_key=%s",
+                    selection.tenant.tenant_id if selection.tenant is not None else None,
+                    selection.run.issue_key if selection.run is not None else None,
+                )
             session.rollback()
             continue
 

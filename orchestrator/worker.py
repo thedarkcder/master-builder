@@ -685,6 +685,15 @@ async def run_worker(*, mode: str = WORKER_MODE_RUNS) -> None:
                     logger.exception("worker_child_task_failed mode=%s error=%s", mode, exc)
                     drain_requested = True
                     continue
+                logger.info(
+                    "worker_child_completed mode=%s pid=%s return_code=%s processed=%s dependency_failure=%s timed_out=%s",
+                    mode,
+                    handle.process.pid,
+                    child_result.return_code,
+                    child_result.processed,
+                    child_result.dependency_failure,
+                    child_result.timed_out,
+                )
                 if child_result.dependency_failure:
                     raise WorkerDependencyFailure("Worker runtime unavailable in child process")
                 if child_result.return_code == WORKER_CHILD_EXIT_RUNTIME_FAILURE:

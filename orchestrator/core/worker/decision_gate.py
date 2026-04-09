@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from types import SimpleNamespace
 
 from orchestrator.core.communications.enqueue_reason_contract import enqueue_reason_guidance
@@ -11,6 +12,49 @@ from orchestrator.core.worker.run_lifecycle import resolve_project_for_run
 from orchestrator.core.worker.stage_events import run_not_ready_update
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.core.workflow.execution_snapshot import SnapshotWorkflow
+
+logger = logging.getLogger(__name__)
+
+
+def _load_live_issue_context(
+    *,
+    session,
+    tenant,
+    settings,
+    tenant_jira_oauth_context_fn,
+    issue_key: str,
+    fallback_summary: str | None,
+    fallback_description: str | None,
+) -> tuple[str | None, str | None, list[str] | None]:
+    issue_summary = fallback_summary
+    issue_description = fallback_description
+    issue_labels: list[str] | None = None
+    try:
+        oauth = tenant_jira_oauth_context_fn(session=session, tenant=tenant, settings=settings)
+        client = getattr(oauth, "client", None)
+        connection = getattr(oauth, "connection", None)
+        access_token = getattr(oauth, "access_token", None)
+        cloud_id = getattr(connection, "cloud_id", None)
+        if client is None or access_token is None or not str(cloud_id or "").strip():
+            return issue_summary, issue_description, issue_labels
+        issue_detail = client.get_issue_detail(
+            access_token=access_token,
+            cloud_id=str(cloud_id),
+            issue_id_or_key=issue_key,
+        )
+        issue_summary = str(getattr(issue_detail, "summary", "") or "").strip() or issue_summary
+        issue_description = str(getattr(issue_detail, "description", "") or "").strip() or issue_description
+        labels_raw = getattr(issue_detail, "labels", None)
+        if isinstance(labels_raw, (list, tuple, set)):
+            issue_labels = [str(label).strip() for label in labels_raw if str(label).strip()]
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "worker_issue_context_refresh_failed tenant_id=%s issue_key=%s error=%s",
+            getattr(tenant, "tenant_id", None),
+            issue_key,
+            exc,
+        )
+    return issue_summary, issue_description, issue_labels
 
 
 def apply_decision_gate(
@@ -31,6 +75,15 @@ def apply_decision_gate(
 ) -> tuple[object | None, dict | None]:
     terminalizer = mark_run_terminal if mark_run_terminal_fn is None else mark_run_terminal_fn
     project = resolve_project_for_run(session, run=run)
+    issue_summary, issue_description, issue_labels = _load_live_issue_context(
+        session=session,
+        tenant=tenant,
+        settings=settings,
+        tenant_jira_oauth_context_fn=tenant_jira_oauth_context_fn,
+        issue_key=run.issue_key,
+        fallback_summary=run.issue_summary,
+        fallback_description=run.issue_description,
+    )
     try:
         worker_decision = evaluate_worker_decision_fn(
             run_plan=getattr(run, "plan", None),
@@ -38,12 +91,12 @@ def apply_decision_gate(
             project_id=run.project_id,
             issue_key=run.issue_key,
             run_id=run.run_id,
-            issue_summary=run.issue_summary,
-            issue_description=run.issue_description,
+            issue_summary=issue_summary,
+            issue_description=issue_description,
             session=session,
             tenant=tenant,
             project=project,
-            issue_labels=None,
+            issue_labels=issue_labels,
             settings=settings,
             tenant_jira_oauth_context_fn=tenant_jira_oauth_context_fn,
         )
