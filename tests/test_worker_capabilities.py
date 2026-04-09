@@ -53,14 +53,13 @@ def test_infer_required_worker_capability_prefers_explicit_label() -> None:
     assert inferred == "macos"
 
 
-def test_infer_required_worker_capability_defaults_to_linux_without_label() -> None:
+def test_infer_required_worker_capability_returns_empty_without_explicit_label() -> None:
     inferred = infer_required_worker_capability(
         issue_summary="Implement SwiftUI onboarding",
         issue_description="Use Xcode and XCTest",
         issue_labels=[],
     )
-    assert inferred == "linux"
-    assert worker_label_for_capability(inferred) == "worker:linux"
+    assert inferred == ""
 
 
 def test_required_worker_capability_for_run_prefers_plan() -> None:
