@@ -4,17 +4,21 @@ import asyncio
 import logging
 import signal
 import sys
-from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from uuid import uuid4
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from orchestrator.api.admin.tenant_crud import purge_expired_archived_tenants
 from orchestrator.core.codex_runtime import CodexRuntimeError
 from orchestrator.core.config import Settings, get_settings
+from orchestrator.core.deployment_runtime import (
+    reconcile_deployment_releases_once,
+    run_deployment_reconciliation_loop,
+)
 from orchestrator.core.discord.notifications import send_tenant_discord_message
 from orchestrator.core.logging import configure_logging
 from orchestrator.core.platform_metrics import platform_metrics
@@ -23,6 +27,10 @@ from orchestrator.core.runs import RUN_STATUS_RUNNING
 from orchestrator.core.worker.run_health import (
     recover_stale_running_runs,
     worker_service_instance_id_for_mode,
+)
+from orchestrator.core.worker.queue_selector import (
+    QueueClaimabilityProbe,
+    probe_claimable_queued_run,
 )
 from orchestrator.core.worker.execution_service import (
     process_next_webhook_job_with_dependencies as _process_next_webhook_job_with_dependencies,
@@ -41,7 +49,7 @@ from orchestrator.storage.run_queue_events import (
     is_postgres_database_url,
     postgres_dsn_from_database_url,
 )
-from orchestrator.storage.models import Project, Run, Tenant, WorkerRuntimeState
+from orchestrator.storage.models import Project, Run, Tenant, WebhookJob, WorkerRuntimeState
 
 try:
     import psycopg
@@ -52,6 +60,7 @@ logger = logging.getLogger(__name__)
 WORKER_RUNTIME_HEARTBEAT_INTERVAL_SECONDS = 30
 WORKER_MODE_RUNS = "runs"
 WORKER_MODE_WEBHOOKS = "webhooks"
+WORKER_MODE_DEPLOYMENTS = "deployments"
 WORKER_CHILD_EXIT_PROCESSED = 0
 WORKER_CHILD_EXIT_IDLE = 3
 WORKER_CHILD_EXIT_DEPENDENCY_FAILURE = 4
@@ -67,6 +76,7 @@ class WorkerChildProcessResult:
     return_code: int
     processed: bool
     dependency_failure: bool
+    timed_out: bool = False
 
 
 @dataclass(frozen=True)
@@ -250,27 +260,39 @@ def process_next_queued_run(session: Session, runner: WorkflowRunner) -> object 
     )
 
 
-def _process_next_webhook_job_once(*, session_factory: sessionmaker[Session]) -> object | None:
-    return _process_next_webhook_job_with_dependencies(session_factory=session_factory)
+def _process_next_webhook_job_once(
+    *,
+    session_factory: sessionmaker[Session],
+    owner_id: str,
+) -> object | None:
+    return _process_next_webhook_job_with_dependencies(
+        session_factory=session_factory,
+        owner_id=owner_id,
+    )
 
 
 def _process_next_run_once(*, session_factory: sessionmaker[Session]) -> object | None:
+    class _LazyWorkflowRunner:
+        def __init__(self, *, session: Session) -> None:
+            self._session = session
+            self._runner: WorkflowRunner | None = None
+
+        def run(self, *args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+            if self._runner is None:
+                try:
+                    self._runner = build_workflow_runner_for_session(session=self._session)
+                except CodexRuntimeError as exc:
+                    platform_metrics.record_worker_failure(kind="dependency")
+                    raise WorkerDependencyFailure(f"Worker runtime unavailable: {exc}") from exc
+            return self._runner.run(*args, **kwargs)
+
     with session_factory() as session:
-        try:
-            runner = build_workflow_runner_for_session(session=session)
-        except CodexRuntimeError as exc:
-            platform_metrics.record_worker_failure(kind="dependency")
-            raise WorkerDependencyFailure(f"Worker runtime unavailable: {exc}") from exc
-        return process_next_queued_run(session, runner)
+        return process_next_queued_run(session, _LazyWorkflowRunner(session=session))
 
 
-def _resolve_worker_processor(*, mode: str) -> Callable[..., object | None]:
-    normalized_mode = str(mode or "").strip().lower()
-    if normalized_mode == WORKER_MODE_RUNS:
-        return _process_next_run_once
-    if normalized_mode == WORKER_MODE_WEBHOOKS:
-        return _process_next_webhook_job_once
-    raise ValueError(f"Unsupported worker mode '{mode}'")
+def _resolve_webhook_owner_id(*, settings: Settings) -> str:
+    service_instance_id = worker_service_instance_id_for_mode(settings=settings, mode=WORKER_MODE_WEBHOOKS)
+    return f"worker:{service_instance_id}:child:{uuid4().hex}"
 
 
 def _child_command_for_mode(*, mode: str) -> str:
@@ -279,6 +301,8 @@ def _child_command_for_mode(*, mode: str) -> str:
         return "worker-child-runs"
     if normalized_mode == WORKER_MODE_WEBHOOKS:
         return "worker-child-webhooks"
+    if normalized_mode == WORKER_MODE_DEPLOYMENTS:
+        return "worker-child-deployments"
     raise ValueError(f"Unsupported worker mode '{mode}'")
 
 
@@ -292,10 +316,62 @@ def _resolve_worker_child_capacity(
     return max(1, min(policy_slots, configured_cap))
 
 
+def _resolve_worker_child_timeout_seconds(*, settings: Settings) -> int:
+    workflow_timeout_minutes = max(
+        1,
+        int(getattr(settings, "workflow_orchestrated_run_timeout_minutes", 90)),
+    )
+    return max(60, workflow_timeout_minutes * 60)
+
+
+def _probe_claimable_run_once(
+    *,
+    session_factory: sessionmaker[Session],
+    settings: Settings,
+) -> QueueClaimabilityProbe:
+    capability_context = resolve_worker_capability_context(
+        raw_value=getattr(settings, "worker_capabilities", None),
+        source="ORCHESTRATOR_WORKER_CAPABILITIES",
+    )
+    with session_factory() as session:
+        return probe_claimable_queued_run(
+            session,
+            queued_status="queued",
+            running_status="running",
+            worker_capabilities=set(capability_context.available),
+        )
+
+
+def _has_available_webhook_job_once(
+    *,
+    session_factory: sessionmaker[Session],
+) -> bool:
+    now = datetime.now(timezone.utc)
+    with session_factory() as session:
+        job_id = session.execute(
+            select(WebhookJob.job_id)
+            .where(
+                WebhookJob.available_at <= now,
+                or_(
+                    WebhookJob.status == "pending",
+                    and_(
+                        WebhookJob.status == "processing",
+                        WebhookJob.lease_expires_at.is_not(None),
+                        WebhookJob.lease_expires_at <= now,
+                    ),
+                ),
+            )
+            .order_by(WebhookJob.created_at.asc())
+            .limit(1)
+        ).scalar_one_or_none()
+        return job_id is not None
+
+
 async def _spawn_worker_child_process(
     *,
     mode: str,
     wake_event: asyncio.Event,
+    child_timeout_seconds: int,
 ) -> WorkerChildProcessHandle:
     _ = wake_event
     process = await asyncio.create_subprocess_exec(
@@ -304,9 +380,45 @@ async def _spawn_worker_child_process(
         "orchestrator.cli",
         _child_command_for_mode(mode=mode),
     )
+    logger.info(
+        "worker_child_spawned mode=%s pid=%s timeout_seconds=%s",
+        mode,
+        process.pid,
+        child_timeout_seconds,
+    )
 
     async def _await_result() -> WorkerChildProcessResult:
-        return_code = await process.wait()
+        try:
+            return_code = await asyncio.wait_for(
+                process.wait(),
+                timeout=max(1, int(child_timeout_seconds)),
+            )
+        except asyncio.TimeoutError:
+            logger.error(
+                "worker_child_timed_out mode=%s pid=%s timeout_seconds=%s",
+                mode,
+                process.pid,
+                child_timeout_seconds,
+            )
+            with suppress(ProcessLookupError):
+                process.terminate()
+            try:
+                return_code = await asyncio.wait_for(process.wait(), timeout=5.0)
+            except asyncio.TimeoutError:
+                logger.error(
+                    "worker_child_terminate_grace_expired mode=%s pid=%s",
+                    mode,
+                    process.pid,
+                )
+                with suppress(ProcessLookupError):
+                    process.kill()
+                return_code = await process.wait()
+            return WorkerChildProcessResult(
+                return_code=WORKER_CHILD_EXIT_RUNTIME_FAILURE,
+                processed=False,
+                dependency_failure=False,
+                timed_out=True,
+            )
         return WorkerChildProcessResult(
             return_code=return_code,
             processed=return_code == WORKER_CHILD_EXIT_PROCESSED,
@@ -455,9 +567,23 @@ def run_worker_child_once(*, mode: str = WORKER_MODE_RUNS) -> int:
         default_agent_id=str(settings.agent_id or "").strip() or "worker",
     )
     session_factory = create_session_factory()
-    process_next_work_item_once = _resolve_worker_processor(mode=mode)
     try:
-        processed = process_next_work_item_once(session_factory=session_factory)
+        normalized_mode = str(mode or "").strip().lower()
+        if normalized_mode == WORKER_MODE_RUNS:
+            processed = _process_next_run_once(session_factory=session_factory)
+        elif normalized_mode == WORKER_MODE_WEBHOOKS:
+            processed = _process_next_webhook_job_once(
+                session_factory=session_factory,
+                owner_id=_resolve_webhook_owner_id(settings=settings),
+            )
+        elif normalized_mode == WORKER_MODE_DEPLOYMENTS:
+            processed_count = reconcile_deployment_releases_once(
+                session_factory=session_factory,
+                settings=settings,
+            )
+            return WORKER_CHILD_EXIT_PROCESSED if processed_count > 0 else WORKER_CHILD_EXIT_IDLE
+        else:
+            raise ValueError(f"Unsupported worker mode '{mode}'")
     except WorkerDependencyFailure:
         platform_metrics.record_worker_failure(kind="dependency")
         return WORKER_CHILD_EXIT_DEPENDENCY_FAILURE
@@ -485,20 +611,19 @@ async def run_worker(*, mode: str = WORKER_MODE_RUNS) -> None:
         loop.add_signal_handler(sig, stop_event.set)
 
     if not is_postgres_database_url(settings.database_url):
+        if mode != WORKER_MODE_DEPLOYMENTS:
+            raise RuntimeError(
+                "Event-driven worker requires PostgreSQL (LISTEN/NOTIFY); "
+                "set ORCHESTRATOR_DATABASE_URL to a postgresql URL."
+            )
+    if mode != WORKER_MODE_DEPLOYMENTS and not is_postgres_database_url(settings.database_url):
         raise RuntimeError(
             "Event-driven worker requires PostgreSQL (LISTEN/NOTIFY); "
             "set ORCHESTRATOR_DATABASE_URL to a postgresql URL."
         )
 
     wake_event = asyncio.Event()
-    listener = RunQueueNotificationBridge(
-        postgres_dsn=postgres_dsn_from_database_url(settings.database_url),
-        wake_event=wake_event,
-        loop=loop,
-        logger=logger,
-        notify_channel=RUN_QUEUE_NOTIFY_CHANNEL,
-        psycopg_module=psycopg,
-    )
+    listener = None
     stale_recovery_task: asyncio.Task[None] | None = None
     archived_tenant_purge_task: asyncio.Task[None] | None = None
     worker_runtime_heartbeat_task: asyncio.Task[None] | None = None
@@ -506,8 +631,9 @@ async def run_worker(*, mode: str = WORKER_MODE_RUNS) -> None:
     agent_id = str(settings.agent_id or "").strip() or "worker"
     active_children: dict[asyncio.Task[WorkerChildProcessResult], WorkerChildProcessHandle] = {}
     drain_requested = True
+    poll_interval_seconds = max(1, int(getattr(settings, "worker_poll_interval_seconds", 5)))
+    child_timeout_seconds = _resolve_worker_child_timeout_seconds(settings=settings)
     try:
-        listener.start()
         await asyncio.to_thread(
             _register_worker_runtime_once,
             session_factory=session_factory,
@@ -526,37 +652,55 @@ async def run_worker(*, mode: str = WORKER_MODE_RUNS) -> None:
                 worker_mode=mode,
             )
         )
-        if mode == WORKER_MODE_RUNS:
-            await asyncio.to_thread(
-                _recover_worker_run_health_once,
+        if mode == WORKER_MODE_DEPLOYMENTS:
+            logger.info("worker_started mode=%s", mode)
+            await run_deployment_reconciliation_loop(
                 session_factory=session_factory,
                 settings=settings,
-                agent_id=agent_id,
-                service_instance_id=service_instance_id,
+                stop_event=stop_event,
             )
-            await asyncio.to_thread(
-                _purge_archived_tenants_once,
-                session_factory=session_factory,
+        else:
+            listener = RunQueueNotificationBridge(
+                postgres_dsn=postgres_dsn_from_database_url(settings.database_url),
+                wake_event=wake_event,
+                loop=loop,
+                logger=logger,
+                notify_channel=RUN_QUEUE_NOTIFY_CHANNEL,
+                psycopg_module=psycopg,
             )
-            stale_recovery_task = asyncio.create_task(
-                _run_stale_recovery_loop(
+            listener.start()
+            if mode == WORKER_MODE_RUNS:
+                await asyncio.to_thread(
+                    _recover_worker_run_health_once,
                     session_factory=session_factory,
                     settings=settings,
-                    stop_event=stop_event,
                     agent_id=agent_id,
                     service_instance_id=service_instance_id,
                 )
-            )
-            archived_tenant_purge_task = asyncio.create_task(
-                _run_archived_tenant_purge_loop(
+                await asyncio.to_thread(
+                    _purge_archived_tenants_once,
                     session_factory=session_factory,
-                    settings=settings,
-                    stop_event=stop_event,
                 )
-            )
+                stale_recovery_task = asyncio.create_task(
+                    _run_stale_recovery_loop(
+                        session_factory=session_factory,
+                        settings=settings,
+                        stop_event=stop_event,
+                        agent_id=agent_id,
+                        service_instance_id=service_instance_id,
+                    )
+                )
+                archived_tenant_purge_task = asyncio.create_task(
+                    _run_archived_tenant_purge_loop(
+                        session_factory=session_factory,
+                        settings=settings,
+                        stop_event=stop_event,
+                    )
+                )
 
-        logger.info("worker_started mode=%s", mode)
-        while not stop_event.is_set():
+        if mode == WORKER_MODE_RUNS:
+            logger.info("worker_started mode=%s", mode)
+        while not stop_event.is_set() and mode != WORKER_MODE_DEPLOYMENTS:
             completed_children = [task for task in active_children if task.done()]
             completed_count = 0
             any_processed = False
@@ -575,10 +719,11 @@ async def run_worker(*, mode: str = WORKER_MODE_RUNS) -> None:
                 if child_result.return_code == WORKER_CHILD_EXIT_RUNTIME_FAILURE:
                     platform_metrics.record_worker_failure(kind="child_crash")
                     logger.error(
-                        "worker_child_failed mode=%s return_code=%s pid=%s",
+                        "worker_child_failed mode=%s return_code=%s pid=%s timed_out=%s",
                         mode,
                         child_result.return_code,
                         handle.process.pid,
+                        child_result.timed_out,
                     )
                     drain_requested = True
                     continue
@@ -612,9 +757,31 @@ async def run_worker(*, mode: str = WORKER_MODE_RUNS) -> None:
                 session_factory=session_factory,
             )
             while drain_requested and len(active_children) < parallel_slots and not stop_event.is_set():
+                if mode == WORKER_MODE_RUNS:
+                    run_probe = await asyncio.to_thread(
+                        _probe_claimable_run_once,
+                        session_factory=session_factory,
+                        settings=settings,
+                    )
+                    if not run_probe.claimable:
+                        logger.info(
+                            "worker_no_claimable_run reason=%s",
+                            run_probe.reason.value,
+                        )
+                        drain_requested = False
+                        break
+                else:
+                    has_webhook_job = await asyncio.to_thread(
+                        _has_available_webhook_job_once,
+                        session_factory=session_factory,
+                    )
+                    if not has_webhook_job:
+                        drain_requested = False
+                        break
                 child = await _spawn_worker_child_process(
                     mode=mode,
                     wake_event=wake_event,
+                    child_timeout_seconds=child_timeout_seconds,
                 )
                 active_children[child.wait_task] = child
 
@@ -622,11 +789,23 @@ async def run_worker(*, mode: str = WORKER_MODE_RUNS) -> None:
                 break
 
             if not active_children and not drain_requested:
-                await wait_for_wake_or_stop(wake_event=wake_event, stop_event=stop_event)
+                timed_out = await wait_for_wake_or_stop(
+                    wake_event=wake_event,
+                    stop_event=stop_event,
+                    timeout_seconds=float(poll_interval_seconds),
+                )
+                if timed_out and not stop_event.is_set():
+                    drain_requested = True
                 continue
 
             if active_children:
-                wake_task = asyncio.create_task(wait_for_wake_or_stop(wake_event=wake_event, stop_event=stop_event))
+                wake_task = asyncio.create_task(
+                    wait_for_wake_or_stop(
+                        wake_event=wake_event,
+                        stop_event=stop_event,
+                        timeout_seconds=float(poll_interval_seconds),
+                    )
+                )
                 done, pending = await asyncio.wait(
                     set(active_children.keys()) | {wake_task},
                     return_when=asyncio.FIRST_COMPLETED,
@@ -667,7 +846,8 @@ async def run_worker(*, mode: str = WORKER_MODE_RUNS) -> None:
                 service_instance_id=service_instance_id,
                 worker_mode=mode,
             )
-        listener.stop()
+        if listener is not None:
+            listener.stop()
         logger.info("worker_stopped mode=%s", mode)
 
 

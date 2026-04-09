@@ -106,6 +106,8 @@ class Settings(BaseSettings):
     project_automation_lock_key: int = 947102033131
     project_automation_poll_seconds: int = 30
     project_automation_interval_seconds: int = 30
+    deployment_reconcile_poll_seconds: int = 30
+    deployment_reconcile_batch_size: int = 25
     workflow_orchestrated_run_timeout_minutes: int = 90
     run_events_initial_limit: int = 100
     run_logs_initial_limit: int = 200

@@ -1,5 +1,3 @@
-import Link from "next/link";
-
 import { Button } from "@/components/ui/button";
 
 type ReviewStepProps = {
@@ -50,11 +48,6 @@ export function ReviewStep({
         <Button onClick={onSave} disabled={saving}>
           {saving ? "Saving..." : "Save workspace"}
         </Button>
-        {tenantDisplayId ? (
-          <Button variant="outline" asChild>
-            <Link href={`/${encodeURIComponent(tenantDisplayId)}/settings`}>Open workspace settings</Link>
-          </Button>
-        ) : null}
       </div>
     </div>
   );

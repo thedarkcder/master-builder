@@ -44,7 +44,8 @@ export function GitHubStep({
         <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Current installation</div>
         <div className="mt-3 text-sm font-medium text-slate-900">{installationId ?? "Not connected yet"}</div>
         <p className="mt-3 text-sm text-slate-500">
-          After the install completes, load repositories and choose the primary repository in the next step.
+          After install, click Load repositories, then continue to Repository defaults. Jira-to-repository mapping is
+          configured per project after workspace setup.
         </p>
       </div>
     </div>

@@ -156,6 +156,21 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
         )
         self.patch_stack.enter_context(
             patch(
+                "orchestrator.api.routes.webhook.enqueue_webhook_job",
+                return_value=SimpleNamespace(
+                    created=True,
+                    job=SimpleNamespace(job_id="coolify-job-1", dedupe_key="coolify-delivery-1"),
+                ),
+            )
+        )
+        self.patch_stack.enter_context(
+            patch(
+                "orchestrator.api.routes.webhook.notify_webhook_job_enqueued",
+                return_value=None,
+            )
+        )
+        self.patch_stack.enter_context(
+            patch(
                 "orchestrator.api.routes.webhook_discord_interactions._read_json_payload",
                 new=AsyncMock(return_value=({"type": 1}, b"{}")),
             )
@@ -456,12 +471,105 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 path="/api/admin/tenants/route25/health",
                 auth=admin,
             ),
+            ("GET", "/api/admin/tenants/{tenant_id}/deployment-plane"): RouteScenario(
+                path="/api/admin/tenants/route25/deployment-plane",
+                auth=admin,
+            ),
+            ("PUT", "/api/admin/tenants/{tenant_id}/deployment-plane"): RouteScenario(
+                path="/api/admin/tenants/route25/deployment-plane",
+                auth=admin,
+                json={
+                    "provider": "internal_coolify",
+                    "infrastructure_provider": "hetzner",
+                    "state": "active",
+                    "base_domain": "apps.example.com",
+                    "platform_subdomain": "builder",
+                    "secret_refs": {},
+                },
+                expected_statuses=(200,),
+            ),
+            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/deployment-config"): RouteScenario(
+                path="/api/admin/tenants/route25/projects/route25-default/deployment-config",
+                auth=admin,
+            ),
+            ("PUT", "/api/admin/tenants/{tenant_id}/projects/{project_id}/deployment-config"): RouteScenario(
+                path="/api/admin/tenants/route25/projects/route25-default/deployment-config",
+                auth=admin,
+                json={
+                    "enabled": True,
+                    "environment_name": "production",
+                    "source_strategy": "dockerfile",
+                    "domains": [{"key": "primary", "host": "app.example.com"}],
+                    "resources": [],
+                    "backup_policies": [],
+                },
+                expected_statuses=(200,),
+            ),
+            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/deployment-releases"): RouteScenario(
+                path="/api/admin/tenants/route25/projects/route25-default/deployment-releases",
+                auth=admin,
+            ),
+            ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/deployment-releases"): RouteScenario(
+                path="/api/admin/tenants/route25/projects/route25-default/deployment-releases",
+                auth=admin,
+                json={
+                    "git_ref": "main",
+                    "commit_sha": "abcdef",
+                    "reason": "smoke",
+                },
+                expected_statuses=(201, 409),
+            ),
+            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/deployment-releases/{release_id}"): RouteScenario(
+                path="/api/admin/tenants/route25/projects/route25-default/deployment-releases/release-missing",
+                auth=admin,
+                expected_statuses=(404,),
+            ),
+            ("PATCH", "/api/admin/tenants/{tenant_id}/projects/{project_id}/deployment-releases/{release_id}/status"): RouteScenario(
+                path="/api/admin/tenants/route25/projects/route25-default/deployment-releases/release-missing/status",
+                auth=admin,
+                json={"status": "provisioning"},
+                expected_statuses=(404,),
+            ),
+            ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/deployment-resources/apply"): RouteScenario(
+                path="/api/admin/tenants/route25/projects/route25-default/deployment-resources/apply",
+                auth=admin,
+                json={"resource_keys": []},
+                expected_statuses=(200,),
+            ),
+            ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/deployment-domains/apply"): RouteScenario(
+                path="/api/admin/tenants/route25/projects/route25-default/deployment-domains/apply",
+                auth=admin,
+                json={"domain_keys": []},
+                expected_statuses=(200,),
+            ),
+            ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/deployment-backups/apply"): RouteScenario(
+                path="/api/admin/tenants/route25/projects/route25-default/deployment-backups/apply",
+                auth=admin,
+                json={"backup_keys": []},
+                expected_statuses=(200,),
+            ),
+            ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/deployment-backups/trigger"): RouteScenario(
+                path="/api/admin/tenants/route25/projects/route25-default/deployment-backups/trigger",
+                auth=admin,
+                json={"backup_keys": []},
+                expected_statuses=(200,),
+            ),
+            ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/deployment-backups/restore"): RouteScenario(
+                path="/api/admin/tenants/route25/projects/route25-default/deployment-backups/restore",
+                auth=admin,
+                json={"backup_key": "daily"},
+                expected_statuses=(200,),
+            ),
             ("GET", "/api/admin/tenants/{tenant_id}/delivery-summary"): RouteScenario(
                 path="/api/admin/tenants/route25/delivery-summary",
                 auth=admin,
             ),
             ("GET", "/api/admin/observability/platform"): RouteScenario(
                 path="/api/admin/observability/platform",
+                auth=admin,
+            ),
+            ("GET", "/api/admin/observability/webhook-jobs"): RouteScenario(
+                path="/api/admin/observability/webhook-jobs?tenant_id=route25&project_id=route25-default&limit=25&offset=0",
                 auth=admin,
             ),
             ("GET", "/api/admin/observability/knowledge-jira-sync"): RouteScenario(
@@ -944,6 +1052,11 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 path="/discord/webhook/route25",
                 json={"user_id": "u1", "command": "!help", "channel_id": "discord-channel-1"},
             ),
+            ("POST", "/deployments/coolify/webhook/{tenant_id}/{project_id}/{token}"): RouteScenario(
+                path="/deployments/coolify/webhook/route25/route25-default/token-123",
+                json={"status": "success", "deployment_uuid": "deployment-1", "application_uuid": "application-1"},
+                expected_statuses=(202,),
+            ),
             ("POST", "/github/webhook"): RouteScenario(path="/github/webhook", json={"action": "opened"}),
             ("POST", "/api/public/register"): RouteScenario(
                 path="/api/public/register",
@@ -1040,6 +1153,18 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 500,
                 msg=f"{method} {scenario.path} returned 500: {response.text[:300]}",
             )
+
+    def test_coolify_deployment_webhook_route_enqueues_job(self) -> None:
+        response = self.client.post(
+            "/deployments/coolify/webhook/route25/route25-default/token-123",
+            json={"status": "success", "deployment_uuid": "deployment-1", "application_uuid": "application-1"},
+        )
+        self.assertEqual(response.status_code, 202)
+        self.assertIn('"accepted":true', response.text)
+        from orchestrator.api.routes import webhook as webhook_route_module
+
+        webhook_route_module.enqueue_webhook_job.assert_called()
+        webhook_route_module.notify_webhook_job_enqueued.assert_called()
 
 
 if __name__ == "__main__":

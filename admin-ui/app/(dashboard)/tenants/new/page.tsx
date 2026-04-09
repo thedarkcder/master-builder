@@ -20,6 +20,18 @@ export default async function NewTenantRootRedirect({
       }
     }
   }
+  if (!params.has("tenant_id") && !params.has("jira_connection_id") && !params.has("github_install") && !params.has("discord_install")) {
+    params.set("fresh", "1");
+  }
   const query = params.toString();
-  redirect(query ? `/tenants/new/basics?${query}` : "/tenants/new/basics");
+  let targetStep = "basics";
+  if (params.get("discord_install") === "success") {
+    targetStep = "discord";
+  } else if (params.get("github_install") === "success") {
+    targetStep = "github";
+  } else if (params.has("jira_connection_id") || params.get("jira_oauth") === "success") {
+    targetStep = "jira";
+  }
+
+  redirect(query ? `/tenants/new/${targetStep}?${query}` : `/tenants/new/${targetStep}`);
 }

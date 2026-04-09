@@ -19,6 +19,10 @@ from orchestrator.storage.models import (
     TenantUserCredential,
     TenantUserDiscordIdentity,
 )
+from orchestrator.api.admin.deployment_config_service import (
+    normalize_tenant_deployment_plane,
+    tenant_deployment_plane_to_schema,
+)
 
 
 def create_tenant(
@@ -29,8 +33,7 @@ def create_tenant(
     with_preserved_jira_system_fields_fn,
     with_managed_github_refs_fn,
     with_preserved_discord_system_fields_fn,
-    ensure_default_project_for_tenant_fn,
-    sync_tenant_jira_project_keys_fn,
+    reconcile_tenant_projects_fn,
     tenant_to_schema_fn,
 ):  # noqa: ANN001
     tenant_id = allocate_tenant_id_fn(session, name=payload.name)
@@ -54,6 +57,7 @@ def create_tenant(
         ),
         experience_config=dict(payload.experience),
         setup_state=dict(payload.setup_state),
+        deployment_plane_config={},
         created_at=now,
         updated_at=now,
     )
@@ -64,8 +68,7 @@ def create_tenant(
             updated_at=now,
         )
     )
-    ensure_default_project_for_tenant_fn(session, tenant=tenant)
-    sync_tenant_jira_project_keys_fn(session, tenant=tenant)
+    reconcile_tenant_projects_fn(session, tenant=tenant)
     session.commit()
     session.refresh(tenant)
     return tenant_to_schema_fn(tenant)
@@ -86,8 +89,7 @@ def update_tenant(
     with_preserved_jira_system_fields_fn,
     with_managed_github_refs_fn,
     with_preserved_discord_system_fields_fn,
-    ensure_default_project_for_tenant_fn,
-    sync_tenant_jira_project_keys_fn,
+    reconcile_tenant_projects_fn,
     tenant_to_schema_fn,
 ):  # noqa: ANN001
     tenant = get_tenant_or_404(session=session, tenant_id=tenant_id)
@@ -111,8 +113,7 @@ def update_tenant(
     tenant.experience_config = dict(payload.experience)
     tenant.setup_state = dict(payload.setup_state)
     tenant.updated_at = datetime.now(timezone.utc)
-    ensure_default_project_for_tenant_fn(session, tenant=tenant)
-    sync_tenant_jira_project_keys_fn(session, tenant=tenant)
+    reconcile_tenant_projects_fn(session, tenant=tenant)
 
     session.commit()
     session.refresh(tenant)
@@ -226,3 +227,17 @@ def purge_expired_archived_tenants(*, session, now: datetime | None = None) -> i
         _delete_tenant_and_owned_data(session=session, tenant_id=tenant_id)
     session.commit()
     return len(expired_tenant_ids)
+
+
+def get_tenant_deployment_plane(*, session, tenant_id: str):  # noqa: ANN001
+    tenant = get_tenant_or_404(session=session, tenant_id=tenant_id)
+    return tenant_deployment_plane_to_schema(tenant)
+
+
+def update_tenant_deployment_plane(*, session, tenant_id: str, payload):  # noqa: ANN001
+    tenant = get_tenant_or_404(session=session, tenant_id=tenant_id)
+    tenant.deployment_plane_config = normalize_tenant_deployment_plane(payload)
+    tenant.updated_at = datetime.now(timezone.utc)
+    session.commit()
+    session.refresh(tenant)
+    return tenant_deployment_plane_to_schema(tenant)

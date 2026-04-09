@@ -173,6 +173,264 @@ export type ProjectRecord = {
   updated_at: string;
 };
 
+export type ProjectDeploymentDomainRecord = {
+  key: string;
+  host: string;
+  path?: string | null;
+  is_primary?: boolean;
+  tls_enabled?: boolean;
+};
+
+export type ProjectDeploymentResourceRecord = {
+  key: string;
+  kind: string;
+  name?: string | null;
+  config?: Record<string, unknown>;
+};
+
+export type ProjectDeploymentBackupPolicyRecord = {
+  key: string;
+  resource_key: string;
+  enabled?: boolean;
+  schedule?: string | null;
+  retention_days?: number | null;
+  config?: Record<string, unknown>;
+};
+
+export type ProjectDeploymentConfigRecord = {
+  enabled: boolean;
+  environment_name: string | null;
+  source_strategy: "dockerfile" | "docker_compose" | null;
+  domains: ProjectDeploymentDomainRecord[];
+  resources: ProjectDeploymentResourceRecord[];
+  backup_policies: ProjectDeploymentBackupPolicyRecord[];
+};
+
+export type ProjectDeploymentReleaseCreatePayload = {
+  git_ref?: string | null;
+  commit_sha?: string | null;
+  reason?: string | null;
+};
+
+export type ProjectDeploymentReleaseStatusUpdatePayload = {
+  status: "queued" | "provisioning" | "deploying" | "live" | "failed" | "rolled_back";
+  last_error?: string | null;
+  deployment_uuid?: string | null;
+};
+
+export type ProjectDeploymentReleaseRecord = {
+  release_id: string;
+  tenant_id: string;
+  project_id: string;
+  provider: string;
+  app_id?: string | null;
+  status: string;
+  environment_name: string | null;
+  source_strategy: string | null;
+  git_ref: string | null;
+  commit_sha: string | null;
+  requested_by_user_id: string | null;
+  deployment_snapshot: Record<string, unknown>;
+  provider_context: Record<string, unknown>;
+  last_error: string | null;
+  requested_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export const PROJECT_APP_STATUSES = [
+  "draft",
+  "needs_pr_merge",
+  "ready",
+  "deploying",
+  "live",
+  "failed",
+] as const;
+
+export type ProjectAppStatus = (typeof PROJECT_APP_STATUSES)[number];
+
+export const PROJECT_APP_ANALYSIS_RUN_STATUSES = ["queued", "running", "completed", "failed"] as const;
+
+export type ProjectAppAnalysisRunStatus = (typeof PROJECT_APP_ANALYSIS_RUN_STATUSES)[number];
+
+export type ProjectAppRecord = {
+  app_id: string;
+  tenant_id: string;
+  project_id: string;
+  name: string;
+  slug: string;
+  source_path: string;
+  detection_confidence: number | null;
+  detected_runtime: string | null;
+  detected_language: string | null;
+  analysis_source: string | null;
+  build_strategy: "dockerfile" | "docker_compose" | "nixpacks" | string | null;
+  exposed_port: number | null;
+  healthcheck: string | Record<string, unknown> | null;
+  start_command: string | null;
+  env_schema_json: Record<string, unknown> | null;
+  secret_schema_json: Record<string, unknown> | null;
+  status: ProjectAppStatus | string;
+  last_release_status?: string | null;
+  last_release_id?: string | null;
+  last_error?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ProjectAppAnalysisRunRecord = {
+  analysis_run_id: string;
+  tenant_id: string;
+  project_id: string;
+  status: ProjectAppAnalysisRunStatus | string;
+  raw_result: Record<string, unknown> | null;
+  last_error: string | null;
+  requested_by_user_id: string | null;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  updated_at: string;
+};
+
+export type ProjectAppDeploymentConfigRecord = ProjectDeploymentConfigRecord & {
+  app_id: string;
+  build_strategy: "dockerfile" | "docker_compose" | "nixpacks" | string | null;
+  exposed_port: number | null;
+  healthcheck: string | Record<string, unknown> | null;
+  start_command: string | null;
+  env_schema_json: Record<string, unknown> | null;
+  secret_schema_json: Record<string, unknown> | null;
+};
+
+export type ProjectAppDeploymentConfigUpdatePayload = {
+  enabled: boolean;
+  environment_name: string | null;
+  source_strategy: "dockerfile" | "docker_compose" | null;
+  build_strategy: "dockerfile" | "docker_compose" | "nixpacks" | null;
+  exposed_port: number | null;
+  healthcheck: string | Record<string, unknown> | null;
+  start_command: string | null;
+  env_schema_json: Record<string, unknown> | null;
+  secret_schema_json: Record<string, unknown> | null;
+  domains: ProjectDeploymentDomainRecord[];
+  resources: ProjectDeploymentResourceRecord[];
+  backup_policies: ProjectDeploymentBackupPolicyRecord[];
+};
+
+export type ProjectAppDeploymentReleaseRecord = ProjectDeploymentReleaseRecord & {
+  app_id: string;
+};
+
+export type ProjectAppAnalysisRunCreatePayload = Record<string, never>;
+
+export type TenantDeploymentsOverviewFailureRecord = {
+  tenant_id: string;
+  project_id: string;
+  project_name: string;
+  app_id: string;
+  app_name: string;
+  slug: string;
+  source_path: string | null;
+  status: string;
+  last_error: string | null;
+  last_release_id: string | null;
+  updated_at: string;
+};
+
+export type TenantDeploymentsOverviewAppRecord = {
+  tenant_id: string;
+  tenant_name?: string | null;
+  project_id: string;
+  project_name: string;
+  app_id: string;
+  app_name: string;
+  slug: string;
+  source_path: string | null;
+  status: string;
+  detection_confidence: number | null;
+  detected_runtime: string | null;
+  detected_language: string | null;
+  build_strategy: string | null;
+  last_release_status: string | null;
+  last_error: string | null;
+  updated_at: string;
+};
+
+export type TenantDeploymentsOverviewRecord = {
+  summary: {
+    total_apps: number;
+    draft_count: number;
+    needs_pr_merge_count: number;
+    ready_count: number;
+    deploying_count: number;
+    live_count: number;
+    failed_count: number;
+  };
+  latest_failures: TenantDeploymentsOverviewFailureRecord[];
+  apps: TenantDeploymentsOverviewAppRecord[];
+  generated_at: string | null;
+};
+
+export type ProjectDeploymentOperationResultRecord = {
+  ok: boolean;
+  action: string;
+  details: string;
+  job_id?: string | null;
+  status?: string | null;
+  metadata?: Record<string, unknown>;
+};
+
+type ProjectDeploymentOperationApiItemRecord = {
+  key: string;
+  kind?: string | null;
+  status: "applied" | "skipped" | "unsupported" | "failed";
+  provider_uuid?: string | null;
+  message?: string | null;
+  details?: Record<string, unknown>;
+};
+
+type ProjectDeploymentOperationApiRecord = {
+  operation: string;
+  tenant_id: string;
+  project_id: string;
+  provider: string;
+  application_uuid?: string | null;
+  items: ProjectDeploymentOperationApiItemRecord[];
+  applied_count: number;
+  skipped_count: number;
+  unsupported_count: number;
+  failed_count: number;
+  executed_at: string;
+};
+
+export type ProjectDeploymentApplyResourcesPayload = {
+  resources: ProjectDeploymentResourceRecord[];
+};
+
+export type ProjectDeploymentApplyDomainsPayload = {
+  domains: ProjectDeploymentDomainRecord[];
+};
+
+export type ProjectDeploymentApplyBackupsPayload = {
+  backup_policies: ProjectDeploymentBackupPolicyRecord[];
+};
+
+export type ProjectDeploymentBackupNowPayload = {
+  resource_key?: string | null;
+  backup_policy_key?: string | null;
+};
+
+export type ProjectDeploymentRestoreRequestPayload = {
+  resource_key?: string | null;
+  backup_key: string;
+  backup_uuid?: string | null;
+  execution_uuid?: string | null;
+  restore_mode?: "replace" | "clone" | string | null;
+  note?: string | null;
+};
+
 export type ProjectAutomationExecutionRecord = {
   execution_id: string;
   automation_id: string;
@@ -460,6 +718,42 @@ export type PlatformServiceInstanceRecord = {
 
 export type PlatformStatusRecord = {
   services: PlatformServiceStatusRecord[];
+};
+
+export type WebhookQueueJobRecord = {
+  job_id: string;
+  transport: string;
+  tenant_id: string | null;
+  project_id: string | null;
+  subject_key: string;
+  dedupe_key: string | null;
+  request_id: string;
+  event_type: string | null;
+  status: "pending" | "processing" | "failed" | "done" | string;
+  owner_id: string | null;
+  lease_expires_at: string | null;
+  available_at: string;
+  attempt_count: number;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+};
+
+export type WebhookQueueSummaryRecord = {
+  pending_count: number;
+  processing_count: number;
+  failed_count: number;
+  done_count: number;
+};
+
+export type WebhookQueueJobPageRecord = {
+  items: WebhookQueueJobRecord[];
+  total: number;
+  limit: number;
+  offset: number;
+  summary: WebhookQueueSummaryRecord;
 };
 
 export type JiraWebhookActionResult = {
@@ -1733,6 +2027,519 @@ export function getProject(credentials: Credentials, tenantId: string, projectId
   );
 }
 
+export function getProjectDeploymentConfig(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+): Promise<ProjectDeploymentConfigRecord> {
+  return request<ProjectDeploymentConfigRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/deployment-config`
+  );
+}
+
+export function updateProjectDeploymentConfig(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  payload: ProjectDeploymentConfigRecord,
+): Promise<ProjectDeploymentConfigRecord> {
+  return request<ProjectDeploymentConfigRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/deployment-config`,
+    {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }
+  );
+}
+
+export function listProjectDeploymentReleases(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+): Promise<ProjectDeploymentReleaseRecord[]> {
+  return request<ProjectDeploymentReleaseRecord[]>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/deployment-releases`
+  );
+}
+
+export function createProjectDeploymentRelease(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  payload: ProjectDeploymentReleaseCreatePayload,
+): Promise<ProjectDeploymentReleaseRecord> {
+  return request<ProjectDeploymentReleaseRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/deployment-releases`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }
+  );
+}
+
+export function getProjectDeploymentRelease(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  releaseId: string,
+): Promise<ProjectDeploymentReleaseRecord> {
+  return request<ProjectDeploymentReleaseRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/deployment-releases/${encodeURIComponent(releaseId)}`
+  );
+}
+
+export function updateProjectDeploymentReleaseStatus(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  releaseId: string,
+  payload: ProjectDeploymentReleaseStatusUpdatePayload,
+): Promise<ProjectDeploymentReleaseRecord> {
+  return request<ProjectDeploymentReleaseRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/deployment-releases/${encodeURIComponent(releaseId)}/status`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }
+  );
+}
+
+export function listProjectApps(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+): Promise<ProjectAppRecord[]> {
+  return request<ProjectAppRecord[]>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/apps`
+  );
+}
+
+export function getProjectApp(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  appId: string,
+): Promise<ProjectAppRecord> {
+  return request<ProjectAppRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/apps/${encodeURIComponent(appId)}`
+  );
+}
+
+export function createProjectApp(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  payload: Partial<ProjectAppRecord>,
+): Promise<ProjectAppRecord> {
+  return request<ProjectAppRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/apps`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }
+  );
+}
+
+export function updateProjectApp(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  appId: string,
+  payload: Partial<ProjectAppRecord>,
+): Promise<ProjectAppRecord> {
+  return request<ProjectAppRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/apps/${encodeURIComponent(appId)}`,
+    {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }
+  );
+}
+
+export function createProjectAppAnalysisRun(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  payload: ProjectAppAnalysisRunCreatePayload = {},
+): Promise<ProjectAppAnalysisRunRecord> {
+  return request<ProjectAppAnalysisRunRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/apps/analyze`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }
+  );
+}
+
+export function listProjectAppAnalysisRuns(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+): Promise<ProjectAppAnalysisRunRecord[]> {
+  return request<ProjectAppAnalysisRunRecord[]>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/apps/analysis-runs`
+  );
+}
+
+export function getProjectAppAnalysisRun(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  analysisRunId: string,
+): Promise<ProjectAppAnalysisRunRecord> {
+  return request<ProjectAppAnalysisRunRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/apps/analysis-runs/${encodeURIComponent(analysisRunId)}`
+  );
+}
+
+export function getProjectAppDeploymentConfig(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  appId: string,
+): Promise<ProjectAppDeploymentConfigRecord> {
+  return request<ProjectAppDeploymentConfigRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/apps/${encodeURIComponent(appId)}/deployment-config`
+  );
+}
+
+export function updateProjectAppDeploymentConfig(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  appId: string,
+  payload: ProjectAppDeploymentConfigUpdatePayload,
+): Promise<ProjectAppDeploymentConfigRecord> {
+  return request<ProjectAppDeploymentConfigRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/apps/${encodeURIComponent(appId)}/deployment-config`,
+    {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }
+  );
+}
+
+export function listProjectAppReleases(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  appId: string,
+): Promise<ProjectAppDeploymentReleaseRecord[]> {
+  return request<ProjectAppDeploymentReleaseRecord[]>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/apps/${encodeURIComponent(appId)}/deployment-releases`
+  );
+}
+
+export function createProjectAppRelease(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  appId: string,
+  payload: ProjectDeploymentReleaseCreatePayload,
+): Promise<ProjectAppDeploymentReleaseRecord> {
+  return request<ProjectAppDeploymentReleaseRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/apps/${encodeURIComponent(appId)}/deployment-releases`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }
+  );
+}
+
+export function getProjectAppDeploymentRelease(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  appId: string,
+  releaseId: string,
+): Promise<ProjectAppDeploymentReleaseRecord> {
+  return request<ProjectAppDeploymentReleaseRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/apps/${encodeURIComponent(appId)}/deployment-releases/${encodeURIComponent(releaseId)}`
+  );
+}
+
+export function updateProjectAppDeploymentReleaseStatus(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  appId: string,
+  releaseId: string,
+  payload: ProjectDeploymentReleaseStatusUpdatePayload,
+): Promise<ProjectAppDeploymentReleaseRecord> {
+  return request<ProjectAppDeploymentReleaseRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/apps/${encodeURIComponent(appId)}/deployment-releases/${encodeURIComponent(releaseId)}/status`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }
+  );
+}
+
+export function applyProjectAppDeploymentResources(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  appId: string,
+  payload: ProjectDeploymentApplyResourcesPayload,
+): Promise<ProjectDeploymentOperationResultRecord> {
+  const resourceKeys = payload.resources
+    .map((resource) => normalizeDeploymentItemKey(resource.key))
+    .filter((key): key is string => Boolean(key));
+  return request<ProjectDeploymentOperationApiRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/apps/${encodeURIComponent(appId)}/deployment-resources/apply`,
+    {
+      method: "POST",
+      body: JSON.stringify({ resource_keys: resourceKeys }),
+    }
+  ).then(toDeploymentOperationResult);
+}
+
+export function applyProjectAppDeploymentDomains(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  appId: string,
+  payload: ProjectDeploymentApplyDomainsPayload,
+): Promise<ProjectDeploymentOperationResultRecord> {
+  const domainKeys = payload.domains
+    .map((domain) => normalizeDeploymentItemKey(domain.key))
+    .filter((key): key is string => Boolean(key));
+  return request<ProjectDeploymentOperationApiRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/apps/${encodeURIComponent(appId)}/deployment-domains/apply`,
+    {
+      method: "POST",
+      body: JSON.stringify({ domain_keys: domainKeys }),
+    }
+  ).then(toDeploymentOperationResult);
+}
+
+export function applyProjectAppDeploymentBackups(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  appId: string,
+  payload: ProjectDeploymentApplyBackupsPayload,
+): Promise<ProjectDeploymentOperationResultRecord> {
+  const backupKeys = payload.backup_policies
+    .map((policy) => normalizeDeploymentItemKey(policy.key))
+    .filter((key): key is string => Boolean(key));
+  return request<ProjectDeploymentOperationApiRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/apps/${encodeURIComponent(appId)}/deployment-backups/apply`,
+    {
+      method: "POST",
+      body: JSON.stringify({ backup_keys: backupKeys }),
+    }
+  ).then(toDeploymentOperationResult);
+}
+
+export function requestProjectAppDeploymentBackupNow(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  appId: string,
+  payload: ProjectDeploymentBackupNowPayload,
+): Promise<ProjectDeploymentOperationResultRecord> {
+  const normalizedBackupKey = normalizeDeploymentItemKey(payload.backup_policy_key);
+  const backupKeys = normalizedBackupKey ? [normalizedBackupKey] : [];
+  return request<ProjectDeploymentOperationApiRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/apps/${encodeURIComponent(appId)}/deployment-backups/trigger`,
+    {
+      method: "POST",
+      body: JSON.stringify({ backup_keys: backupKeys }),
+    }
+  ).then(toDeploymentOperationResult);
+}
+
+export function requestProjectAppDeploymentRestore(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  appId: string,
+  payload: ProjectDeploymentRestoreRequestPayload,
+): Promise<ProjectDeploymentOperationResultRecord> {
+  return request<ProjectDeploymentOperationApiRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/apps/${encodeURIComponent(appId)}/deployment-backups/restore`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        backup_key: payload.backup_key,
+        backup_uuid: payload.backup_uuid ?? null,
+        execution_uuid: payload.execution_uuid ?? null,
+      }),
+    }
+  ).then(toDeploymentOperationResult);
+}
+
+export function getTenantDeploymentsOverview(
+  credentials: Credentials,
+  tenantId: string,
+): Promise<TenantDeploymentsOverviewRecord> {
+  return request<TenantDeploymentsOverviewRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/deployments/overview`
+  );
+}
+
+function normalizeDeploymentItemKey(value: string | null | undefined): string | null {
+  const normalized = String(value || "").trim().toLowerCase();
+  return normalized.length > 0 ? normalized : null;
+}
+
+function toDeploymentOperationResult(payload: ProjectDeploymentOperationApiRecord): ProjectDeploymentOperationResultRecord {
+  const failed = Number(payload.failed_count || 0);
+  const unsupported = Number(payload.unsupported_count || 0);
+  const skipped = Number(payload.skipped_count || 0);
+  const applied = Number(payload.applied_count || 0);
+  const total = Array.isArray(payload.items) ? payload.items.length : 0;
+  const detailParts = [`applied ${applied}`];
+  if (skipped > 0) {
+    detailParts.push(`skipped ${skipped}`);
+  }
+  if (unsupported > 0) {
+    detailParts.push(`unsupported ${unsupported}`);
+  }
+  if (failed > 0) {
+    detailParts.push(`failed ${failed}`);
+  }
+  const detailSummary = total > 0 ? `${detailParts.join(", ")} (${total} item${total === 1 ? "" : "s"})` : "No items processed.";
+  const status = failed > 0 ? "failed" : unsupported > 0 || skipped > 0 ? "partial" : "applied";
+  return {
+    ok: failed === 0,
+    action: payload.operation,
+    details: detailSummary,
+    status,
+    metadata: {
+      provider: payload.provider,
+      application_uuid: payload.application_uuid ?? null,
+      applied_count: applied,
+      skipped_count: skipped,
+      unsupported_count: unsupported,
+      failed_count: failed,
+      executed_at: payload.executed_at,
+      items: payload.items,
+    },
+  };
+}
+
+export function applyProjectDeploymentResources(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  payload: ProjectDeploymentApplyResourcesPayload,
+): Promise<ProjectDeploymentOperationResultRecord> {
+  const resourceKeys = payload.resources
+    .map((resource) => normalizeDeploymentItemKey(resource.key))
+    .filter((key): key is string => Boolean(key));
+  return request<ProjectDeploymentOperationApiRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/deployment-resources/apply`,
+    {
+      method: "POST",
+      body: JSON.stringify({ resource_keys: resourceKeys }),
+    }
+  ).then(toDeploymentOperationResult);
+}
+
+export function applyProjectDeploymentDomains(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  payload: ProjectDeploymentApplyDomainsPayload,
+): Promise<ProjectDeploymentOperationResultRecord> {
+  const domainKeys = payload.domains
+    .map((domain) => normalizeDeploymentItemKey(domain.key))
+    .filter((key): key is string => Boolean(key));
+  return request<ProjectDeploymentOperationApiRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/deployment-domains/apply`,
+    {
+      method: "POST",
+      body: JSON.stringify({ domain_keys: domainKeys }),
+    }
+  ).then(toDeploymentOperationResult);
+}
+
+export function applyProjectDeploymentBackups(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  payload: ProjectDeploymentApplyBackupsPayload,
+): Promise<ProjectDeploymentOperationResultRecord> {
+  const backupKeys = payload.backup_policies
+    .map((backupPolicy) => normalizeDeploymentItemKey(backupPolicy.key))
+    .filter((key): key is string => Boolean(key));
+  return request<ProjectDeploymentOperationApiRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/deployment-backups/apply`,
+    {
+      method: "POST",
+      body: JSON.stringify({ backup_keys: backupKeys }),
+    }
+  ).then(toDeploymentOperationResult);
+}
+
+export function requestProjectDeploymentBackupNow(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  payload: ProjectDeploymentBackupNowPayload,
+): Promise<ProjectDeploymentOperationResultRecord> {
+  const normalizedBackupKey = normalizeDeploymentItemKey(payload.backup_policy_key);
+  const backupKeys = normalizedBackupKey ? [normalizedBackupKey] : [];
+  return request<ProjectDeploymentOperationApiRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/deployment-backups/trigger`,
+    {
+      method: "POST",
+      body: JSON.stringify({ backup_keys: backupKeys }),
+    }
+  ).then(toDeploymentOperationResult);
+}
+
+export function requestProjectDeploymentRestore(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  payload: ProjectDeploymentRestoreRequestPayload,
+): Promise<ProjectDeploymentOperationResultRecord> {
+  return request<ProjectDeploymentOperationApiRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/deployment-backups/restore`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        backup_key: payload.backup_key,
+        backup_uuid: payload.backup_uuid ?? null,
+        execution_uuid: payload.execution_uuid ?? null,
+      }),
+    }
+  ).then(toDeploymentOperationResult);
+}
+
 export function getProjectAutomations(
   credentials: Credentials,
   tenantId: string,
@@ -2017,6 +2824,40 @@ export function getKnowledgeJiraSyncRuntimeStatus(
 
 export function getPlatformStatus(credentials: Credentials): Promise<PlatformStatusRecord> {
   return request<PlatformStatusRecord>(credentials, "/api/admin/status");
+}
+
+export function listWebhookQueueJobs(
+  credentials: Credentials,
+  params: {
+    tenantId: string;
+    projectId: string;
+    status?: string;
+    transport?: string;
+    subjectKey?: string;
+    limit?: number;
+    offset?: number;
+  }
+): Promise<WebhookQueueJobPageRecord> {
+  const query = new URLSearchParams();
+  if (params?.status) {
+    query.set("status", params.status);
+  }
+  if (params?.transport) {
+    query.set("transport", params.transport);
+  }
+  query.set("tenant_id", params.tenantId);
+  query.set("project_id", params.projectId);
+  if (params?.subjectKey) {
+    query.set("subject_key", params.subjectKey);
+  }
+  if (typeof params?.limit === "number") {
+    query.set("limit", String(params.limit));
+  }
+  if (typeof params?.offset === "number") {
+    query.set("offset", String(params.offset));
+  }
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return request<WebhookQueueJobPageRecord>(credentials, `/api/admin/observability/webhook-jobs${suffix}`);
 }
 
 export function listRuns(

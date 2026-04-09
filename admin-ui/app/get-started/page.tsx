@@ -10,6 +10,7 @@ import { DiscordLogo } from "@/components/icons/discord-logo";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { getDefaultAuthenticatedRoute, getTenantDashboardRoute } from "@/lib/auth-routing";
+import { readLastWorkspaceTenantIdFromBrowser } from "@/lib/workspace-preference";
 import {
   completeOnboarding,
   createTenantDiscordInvite,
@@ -92,7 +93,8 @@ export default function GetStartedPage() {
 
   useEffect(() => {
     if (ready && credentials && principal && !needsOnboarding) {
-      router.replace(getDefaultAuthenticatedRoute(principal));
+      const preferredTenantId = readLastWorkspaceTenantIdFromBrowser();
+      router.replace(getDefaultAuthenticatedRoute(principal, { preferredTenantId }));
     }
   }, [credentials, needsOnboarding, principal, ready, router]);
 

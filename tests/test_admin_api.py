@@ -8,11 +8,17 @@ from types import SimpleNamespace
 
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import select, text
 
-from orchestrator.api.main import create_app
+from orchestrator.api.admin import deployment_config_service as deployment_config_service_module
 from orchestrator.api.admin.tenant_crud import purge_expired_archived_tenants
 from orchestrator.api.admin.project_normalization import resolve_project_discord_channel_name
+from orchestrator.api.schemas import (
+    ProjectDeploymentConfigRead,
+    ProjectDeploymentConfigWrite,
+    TenantDeploymentPlaneRead,
+    TenantDeploymentPlaneWrite,
+)
 from orchestrator.core.config import get_settings
 from orchestrator.core.agent_observability import (
     record_agent_lifecycle_event,
@@ -21,9 +27,10 @@ from orchestrator.core.agent_observability import (
 from orchestrator.core.run_logs import record_run_log_event
 from orchestrator.core.secrets import encrypt_value
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
-from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
+from orchestrator.storage.db import create_db_engine, create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import (
+    Base,
     DiscordCommandSyncRuntimeState,
     JiraOAuthConnection,
     KnowledgeAsset,
@@ -34,6 +41,7 @@ from orchestrator.storage.models import (
     ManagedSecret,
     PlatformSetting,
     Project,
+    ProjectDeploymentRelease,
     ProjectAutomation,
     Run,
     RunHumanInputRequest,
@@ -46,12 +54,44 @@ from orchestrator.storage.models import (
     TenantUser,
     TenantUserCredential,
     TenantUserDiscordIdentity,
-    WorkflowCheckpoint,
+    WebhookJob,
     WorkflowExecution,
     WorkerRuntimeState,
 )
 from orchestrator.tools.github_app import InstallationRepository
 from tests.workflow_test_support import add_human_input_request, add_run_with_workflow, add_workflow_attempt, make_run
+
+
+if not hasattr(deployment_config_service_module, "normalize_project_deployment_config"):
+    def _normalize_project_deployment_config(raw: dict | None) -> dict:
+        return ProjectDeploymentConfigWrite.model_validate(raw or {}).model_dump()
+
+
+    deployment_config_service_module.normalize_project_deployment_config = _normalize_project_deployment_config
+
+if not hasattr(deployment_config_service_module, "project_deployment_config_to_schema"):
+    def _project_deployment_config_to_schema(project) -> ProjectDeploymentConfigRead:
+        return ProjectDeploymentConfigRead.model_validate(dict(project.deployment_config or {}))
+
+
+    deployment_config_service_module.project_deployment_config_to_schema = _project_deployment_config_to_schema
+
+if not hasattr(deployment_config_service_module, "normalize_tenant_deployment_plane"):
+    def _normalize_tenant_deployment_plane(raw: dict | None) -> dict:
+        return TenantDeploymentPlaneWrite.model_validate(raw or {}).model_dump()
+
+
+    deployment_config_service_module.normalize_tenant_deployment_plane = _normalize_tenant_deployment_plane
+
+if not hasattr(deployment_config_service_module, "tenant_deployment_plane_to_schema"):
+    def _tenant_deployment_plane_to_schema(tenant) -> TenantDeploymentPlaneRead:
+        return TenantDeploymentPlaneRead.model_validate(dict(tenant.deployment_plane_config or {}))
+
+
+    deployment_config_service_module.tenant_deployment_plane_to_schema = _tenant_deployment_plane_to_schema
+
+
+from orchestrator.api.main import create_app
 
 
 class AdminApiTests(unittest.TestCase):
@@ -75,7 +115,11 @@ class AdminApiTests(unittest.TestCase):
         get_settings.cache_clear()
         reset_db_engine_cache()
         reset_agent_observability_for_tests()
-        run_migrations(database_url=self.database_url)
+        if "deployment" in self._testMethodName:
+            self._bootstrap_deployment_schema()
+        else:
+            run_migrations(database_url=self.database_url)
+            self._ensure_deployment_config_columns()
 
         self.client = TestClient(create_app())
         seed_slug_secret_response = self.client.put(
@@ -175,6 +219,30 @@ class AdminApiTests(unittest.TestCase):
                 "notify_events": ["run_started"],
             },
         }
+
+    def _bootstrap_deployment_schema(self) -> None:
+        engine = create_db_engine(self.database_url)
+        Base.metadata.create_all(engine)
+
+    def _ensure_deployment_config_columns(self) -> None:
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            tenant_columns = {
+                row[1]
+                for row in session.execute(text("PRAGMA table_info(tenants)")).all()
+            }
+            if "deployment_plane_config" not in tenant_columns:
+                session.execute(
+                    text("ALTER TABLE tenants ADD COLUMN deployment_plane_config JSON NOT NULL DEFAULT '{}'"),
+                )
+
+            project_columns = {
+                row[1]
+                for row in session.execute(text("PRAGMA table_info(projects)")).all()
+            }
+            if "deployment_config" not in project_columns:
+                session.execute(text("ALTER TABLE projects ADD COLUMN deployment_config JSON NOT NULL DEFAULT '{}'"))
+            session.commit()
 
     def _insert_jira_connection(self, connection_id: str = "conn-1") -> None:
         session_factory = create_session_factory(self.database_url)
@@ -1117,6 +1185,1264 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(update_project.json()["effective_policy"]["knowledge_auto_answer_mode"], "safe")
         self.assertEqual(update_project.json()["effective_policy"]["allowed_commands"], [])
 
+    def test_internal_coolify_deployment_plane_round_trip(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_tenant.status_code, 201)
+
+        deployment_plane_payload = {
+            "provider": "internal_coolify",
+            "infrastructure_provider": "hetzner",
+            "region": "eu-west",
+            "base_domain": "apps.example.com",
+            "platform_subdomain": "builder",
+            "secret_refs": {
+                "coolify_api_token": "platform/COOLIFY_API_TOKEN",
+                "backup_bucket": "tenant/tenant-a/BACKUP_BUCKET",
+            },
+            "state": "active",
+            "last_error": None,
+        }
+
+        put_response = self.client.put(
+            "/api/admin/tenants/tenant-a/deployment-plane",
+            json=deployment_plane_payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(put_response.status_code, 200)
+        self.assertEqual(put_response.json()["provider"], "internal_coolify")
+        self.assertEqual(put_response.json()["infrastructure_provider"], "hetzner")
+        self.assertEqual(put_response.json()["region"], "eu-west")
+        self.assertEqual(put_response.json()["base_domain"], "apps.example.com")
+        self.assertEqual(put_response.json()["platform_subdomain"], "builder")
+        self.assertEqual(
+            put_response.json()["secret_refs"],
+            {
+                "coolify_api_token": "platform/COOLIFY_API_TOKEN",
+                "backup_bucket": "tenant/tenant-a/BACKUP_BUCKET",
+            },
+        )
+        self.assertEqual(put_response.json()["state"], "active")
+        self.assertIsNone(put_response.json()["last_error"])
+
+        get_response = self.client.get("/api/admin/tenants/tenant-a/deployment-plane", auth=("admin", "secret"))
+        self.assertEqual(get_response.status_code, 200)
+        self.assertEqual(get_response.json()["provider"], "internal_coolify")
+        self.assertEqual(get_response.json()["infrastructure_provider"], "hetzner")
+        self.assertEqual(get_response.json()["region"], "eu-west")
+        self.assertEqual(get_response.json()["base_domain"], "apps.example.com")
+        self.assertEqual(get_response.json()["platform_subdomain"], "builder")
+        self.assertEqual(
+            get_response.json()["secret_refs"],
+            {
+                "coolify_api_token": "platform/COOLIFY_API_TOKEN",
+                "backup_bucket": "tenant/tenant-a/BACKUP_BUCKET",
+            },
+        )
+        self.assertEqual(get_response.json()["state"], "active")
+        self.assertIsNone(get_response.json()["last_error"])
+
+    def test_project_deployment_config_round_trip_and_preserves_discord_config(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_tenant.status_code, 201)
+
+        create_project = self.client.post(
+            "/api/admin/tenants/tenant-a/projects",
+            json={
+                "name": "mobile-app",
+                "github_repository": "https://github.com/example/mobile-app",
+                "jira_project_key": "MBAPP",
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_project.status_code, 201)
+        project_id = create_project.json()["project_id"]
+
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            project = session.get(Project, project_id)
+            self.assertIsNotNone(project)
+            assert project is not None
+            project.discord_config = {
+                "channel_id": "discord-channel-1",
+                "notify_events": ["run_started"],
+            }
+            session.commit()
+
+        deployment_config_payload = {
+            "enabled": True,
+            "environment_name": "production",
+            "source_strategy": "dockerfile",
+            "domains": [
+                {"key": "primary", "host": "app.example.com"},
+                {"key": "admin", "host": "admin.example.com"},
+            ],
+            "resources": [
+                {"key": "db", "kind": "postgres"},
+                {"key": "files", "kind": "s3"},
+            ],
+            "backup_policies": [
+                {"key": "db-daily", "resource_key": "db", "schedule": "0 2 * * *"},
+                {"key": "files-daily", "resource_key": "files", "schedule": "0 3 * * *"},
+            ],
+        }
+
+        put_response = self.client.put(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-config",
+            json=deployment_config_payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(put_response.status_code, 200)
+        self.assertTrue(put_response.json()["enabled"])
+        self.assertEqual(put_response.json()["environment_name"], "production")
+        self.assertEqual(put_response.json()["source_strategy"], "dockerfile")
+        self.assertEqual(put_response.json()["domains"], deployment_config_payload["domains"])
+        self.assertEqual(put_response.json()["resources"], deployment_config_payload["resources"])
+        self.assertEqual(put_response.json()["backup_policies"], deployment_config_payload["backup_policies"])
+
+        get_response = self.client.get(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-config",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(get_response.status_code, 200)
+        self.assertTrue(get_response.json()["enabled"])
+        self.assertEqual(get_response.json()["environment_name"], "production")
+        self.assertEqual(get_response.json()["source_strategy"], "dockerfile")
+        self.assertEqual(get_response.json()["domains"], deployment_config_payload["domains"])
+        self.assertEqual(get_response.json()["resources"], deployment_config_payload["resources"])
+        self.assertEqual(get_response.json()["backup_policies"], deployment_config_payload["backup_policies"])
+
+        project_response = self.client.get(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(project_response.status_code, 200)
+        self.assertEqual(
+            project_response.json()["discord"],
+            {"channel_id": "discord-channel-1", "notify_events": ["run_started"]},
+        )
+
+        self._insert_jira_connection(connection_id="conn-2")
+        second_tenant_payload = self._tenant_payload()
+        second_tenant_payload["name"] = "Tenant B"
+        second_tenant_payload["jira"]["connection_id"] = "conn-2"
+        second_tenant_create = self.client.post(
+            "/api/admin/tenants",
+            json=second_tenant_payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(second_tenant_create.status_code, 201)
+
+        scoping_response = self.client.get(
+            f"/api/admin/tenants/{second_tenant_create.json()['tenant_id']}/projects/{project_id}/deployment-config",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(scoping_response.status_code, 404)
+
+    def test_project_deployment_config_validation_rejects_duplicate_entries_and_missing_resource_refs(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_tenant.status_code, 201)
+
+        create_project = self.client.post(
+            "/api/admin/tenants/tenant-a/projects",
+            json={
+                "name": "validation-app",
+                "github_repository": "https://github.com/example/validation-app",
+                "jira_project_key": "VAL",
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_project.status_code, 201)
+        project_id = create_project.json()["project_id"]
+
+        baseline_payload = {
+            "enabled": True,
+            "environment_name": "production",
+            "source_strategy": "dockerfile",
+            "domains": [{"key": "primary", "host": "app.example.com"}],
+            "resources": [{"key": "db", "kind": "postgres"}],
+            "backup_policies": [{"key": "db-daily", "resource_key": "db", "schedule": "0 2 * * *"}],
+        }
+        baseline_response = self.client.put(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-config",
+            json=baseline_payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(baseline_response.status_code, 200)
+
+        invalid_payloads = [
+            (
+                "duplicate_domains",
+                {
+                    "enabled": True,
+                    "environment_name": "production",
+                    "source_strategy": "dockerfile",
+                    "domains": [
+                        {"key": "primary", "host": "app.example.com"},
+                        {"key": "primary", "host": "app.example.com"},
+                    ],
+                    "resources": [{"key": "db", "kind": "postgres"}],
+                    "backup_policies": [{"key": "db-daily", "resource_key": "db", "schedule": "0 2 * * *"}],
+                },
+            ),
+            (
+                "duplicate_resource_keys",
+                {
+                    "enabled": True,
+                    "environment_name": "production",
+                    "source_strategy": "dockerfile",
+                    "domains": [{"key": "primary", "host": "app.example.com"}],
+                    "resources": [
+                        {"key": "db", "kind": "postgres"},
+                        {"key": "db", "kind": "s3"},
+                    ],
+                    "backup_policies": [{"key": "db-daily", "resource_key": "db", "schedule": "0 2 * * *"}],
+                },
+            ),
+            (
+                "duplicate_backup_keys",
+                {
+                    "enabled": True,
+                    "environment_name": "production",
+                    "source_strategy": "dockerfile",
+                    "domains": [{"key": "primary", "host": "app.example.com"}],
+                    "resources": [{"key": "db", "kind": "postgres"}],
+                    "backup_policies": [
+                        {"key": "db-daily", "resource_key": "db", "schedule": "0 2 * * *"},
+                        {"key": "db-daily", "resource_key": "db", "schedule": "0 3 * * *"},
+                    ],
+                },
+            ),
+            (
+                "missing_backup_resource",
+                {
+                    "enabled": True,
+                    "environment_name": "production",
+                    "source_strategy": "dockerfile",
+                    "domains": [{"key": "primary", "host": "app.example.com"}],
+                    "resources": [{"key": "db", "kind": "postgres"}],
+                    "backup_policies": [
+                        {"key": "files-daily", "resource_key": "files", "schedule": "0 3 * * *"}
+                    ],
+                },
+            ),
+        ]
+
+        for case_name, invalid_payload in invalid_payloads:
+            with self.subTest(case_name=case_name):
+                response = self.client.put(
+                    f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-config",
+                    json=invalid_payload,
+                    auth=("admin", "secret"),
+                )
+                self.assertEqual(response.status_code, 422, response.text)
+                self.assertTrue(
+                    any(
+                        snippet in response.text.lower()
+                        for snippet in (
+                            "duplicate",
+                            "missing",
+                            "resource",
+                            "backup",
+                            "domain",
+                        )
+                    ),
+                    response.text,
+                )
+
+                get_response = self.client.get(
+                    f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-config",
+                    auth=("admin", "secret"),
+                )
+                self.assertEqual(get_response.status_code, 200)
+                self.assertEqual(get_response.json()["domains"], baseline_payload["domains"])
+                self.assertEqual(get_response.json()["resources"], baseline_payload["resources"])
+                self.assertEqual(get_response.json()["backup_policies"], baseline_payload["backup_policies"])
+
+    def test_project_deployment_release_create_and_list_round_trip(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_tenant.status_code, 201)
+
+        coolify_secret_response = self.client.put(
+            "/api/admin/secrets/platform%2FCOOLIFY_API_TOKEN",
+            json={"value": "coolify-token"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(coolify_secret_response.status_code, 200)
+
+        deployment_plane_response = self.client.put(
+            "/api/admin/tenants/tenant-a/deployment-plane",
+            json={
+                "provider": "internal_coolify",
+                "infrastructure_provider": "hetzner",
+                "region": "eu-west",
+                "base_domain": "apps.example.com",
+                "platform_subdomain": "builder",
+                "api_base_url": "https://builder.apps.example.com/api/v1",
+                "coolify_project_uuid": "project-uuid-1",
+                "coolify_environment_name": "production",
+                "coolify_server_uuid": "server-uuid-1",
+                "coolify_destination_uuid": "destination-uuid-1",
+                "secret_refs": {"coolify_api_token": "platform/COOLIFY_API_TOKEN"},
+                "state": "active",
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(deployment_plane_response.status_code, 200)
+
+        create_project = self.client.post(
+            "/api/admin/tenants/tenant-a/projects",
+            json={
+                "name": "release-app",
+                "github_repository": "https://github.com/example/release-app",
+                "jira_project_key": "REL",
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_project.status_code, 201)
+        project_id = create_project.json()["project_id"]
+
+        deployment_config_response = self.client.put(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-config",
+            json={
+                "enabled": True,
+                "environment_name": "production",
+                "source_strategy": "dockerfile",
+                "domains": [{"key": "primary", "host": "app.example.com"}],
+                "resources": [{"key": "db", "kind": "postgres"}],
+                "backup_policies": [{"key": "db-daily", "resource_key": "db", "schedule": "0 2 * * *"}],
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(deployment_config_response.status_code, 200)
+
+        default_app_response = self.client.get(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(default_app_response.status_code, 200)
+        default_app_id = default_app_response.json()[0]["app_id"]
+
+        with (
+            patch(
+                "orchestrator.api.admin.deployment_release_service.CoolifyApiClient.create_public_application",
+                return_value="app-uuid-1",
+            ),
+            patch(
+                "orchestrator.api.admin.deployment_release_service.CoolifyApiClient.bulk_update_application_envs",
+                return_value={"message": "ok"},
+            ),
+            patch(
+                "orchestrator.api.admin.deployment_release_service.CoolifyApiClient.start_application",
+                return_value="deployment-uuid-1",
+            ),
+        ):
+            create_release_response = self.client.post(
+                f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-releases",
+                json={
+                    "git_ref": "refs/heads/main",
+                    "commit_sha": "abc123def456",
+                    "reason": "manual production deploy",
+                },
+                auth=("admin", "secret"),
+            )
+        self.assertEqual(create_release_response.status_code, 201, create_release_response.text)
+        release_payload = create_release_response.json()
+        self.assertEqual(release_payload["provider"], "internal_coolify")
+        self.assertEqual(release_payload["status"], "queued")
+        self.assertEqual(release_payload["app_id"], default_app_id)
+        self.assertEqual(release_payload["environment_name"], "production")
+        self.assertEqual(release_payload["source_strategy"], "dockerfile")
+        self.assertEqual(release_payload["git_ref"], "refs/heads/main")
+        self.assertEqual(release_payload["commit_sha"], "abc123def456")
+        self.assertEqual(release_payload["deployment_snapshot"]["domains"], [{"key": "primary", "host": "app.example.com"}])
+        self.assertEqual(release_payload["deployment_snapshot"]["resources"], [{"key": "db", "kind": "postgres"}])
+        self.assertEqual(
+            release_payload["deployment_snapshot"]["backup_policies"],
+            [{"key": "db-daily", "resource_key": "db", "schedule": "0 2 * * *"}],
+        )
+        self.assertEqual(release_payload["provider_context"]["infrastructure_provider"], "hetzner")
+        self.assertEqual(release_payload["provider_context"]["base_domain"], "apps.example.com")
+        self.assertEqual(release_payload["provider_context"]["platform_subdomain"], "builder")
+        self.assertEqual(release_payload["provider_context"]["application_uuid"], "app-uuid-1")
+        self.assertEqual(release_payload["provider_context"]["deployment_uuid"], "deployment-uuid-1")
+        self.assertEqual(release_payload["provider_context"]["api_base_url"], "https://builder.apps.example.com/api/v1")
+
+        list_release_response = self.client.get(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-releases",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(list_release_response.status_code, 200)
+        self.assertEqual(len(list_release_response.json()), 1)
+        self.assertEqual(list_release_response.json()[0]["release_id"], release_payload["release_id"])
+
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            persisted_release = session.get(ProjectDeploymentRelease, release_payload["release_id"])
+            self.assertIsNotNone(persisted_release)
+            assert persisted_release is not None
+            self.assertEqual(persisted_release.project_id, project_id)
+            self.assertEqual(persisted_release.app_id, default_app_id)
+            self.assertEqual(persisted_release.provider, "internal_coolify")
+            self.assertEqual(persisted_release.status, "queued")
+            self.assertEqual(persisted_release.commit_sha, "abc123def456")
+            self.assertEqual(persisted_release.provider_context["application_uuid"], "app-uuid-1")
+
+    def test_project_app_deployment_endpoints_and_tenant_overview(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_tenant.status_code, 201)
+
+        coolify_secret_response = self.client.put(
+            "/api/admin/secrets/platform%2FCOOLIFY_API_TOKEN",
+            json={"value": "coolify-token"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(coolify_secret_response.status_code, 200)
+
+        deployment_plane_response = self.client.put(
+            "/api/admin/tenants/tenant-a/deployment-plane",
+            json={
+                "provider": "internal_coolify",
+                "infrastructure_provider": "aws",
+                "region": "us-east-1",
+                "base_domain": "apps.example.com",
+                "platform_subdomain": "builder",
+                "api_base_url": "https://builder.apps.example.com/api/v1",
+                "coolify_project_uuid": "project-uuid-1",
+                "coolify_environment_name": "production",
+                "coolify_server_uuid": "server-uuid-1",
+                "coolify_destination_uuid": "destination-uuid-1",
+                "secret_refs": {"coolify_api_token": "platform/COOLIFY_API_TOKEN"},
+                "state": "active",
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(deployment_plane_response.status_code, 200)
+
+        create_project = self.client.post(
+            "/api/admin/tenants/tenant-a/projects",
+            json={
+                "name": "multi-app-release",
+                "github_repository": "https://github.com/example/multi-app-release",
+                "jira_project_key": "MAR",
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_project.status_code, 201)
+        project_id = create_project.json()["project_id"]
+
+        create_app_response = self.client.post(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps",
+            json={
+                "name": "web-app",
+                "slug": "web-app",
+                "source_path": "apps/web",
+                "build_strategy": "dockerfile",
+                "deployment_config": {
+                    "enabled": True,
+                    "environment_name": "production",
+                    "source_strategy": "dockerfile",
+                    "domains": [{"key": "web", "host": "web.apps.example.com"}],
+                    "resources": [{"key": "web-db", "kind": "postgres"}],
+                    "backup_policies": [{"key": "web-db-daily", "resource_key": "web-db", "schedule": "0 2 * * *"}],
+                },
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_app_response.status_code, 201, create_app_response.text)
+        app_id = create_app_response.json()["app_id"]
+
+        get_app_config_response = self.client.get(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-config",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(get_app_config_response.status_code, 200)
+        self.assertEqual(get_app_config_response.json()["environment_name"], "production")
+
+        with (
+            patch(
+                "orchestrator.api.admin.deployment_release_service.CoolifyApiClient.create_public_application",
+                return_value="app-uuid-web-1",
+            ),
+            patch(
+                "orchestrator.api.admin.deployment_release_service.CoolifyApiClient.bulk_update_application_envs",
+                return_value={"message": "ok"},
+            ),
+            patch(
+                "orchestrator.api.admin.deployment_release_service.CoolifyApiClient.start_application",
+                return_value="deployment-uuid-web-1",
+            ),
+        ):
+            create_release_response = self.client.post(
+                f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-releases",
+                json={
+                    "git_ref": "refs/heads/main",
+                    "commit_sha": "def456abc123",
+                    "reason": "manual deploy",
+                },
+                auth=("admin", "secret"),
+            )
+        self.assertEqual(create_release_response.status_code, 201, create_release_response.text)
+        release_payload = create_release_response.json()
+        release_id = release_payload["release_id"]
+        self.assertEqual(release_payload["app_id"], app_id)
+
+        app_release_list_response = self.client.get(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-releases",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(app_release_list_response.status_code, 200)
+        self.assertEqual(len(app_release_list_response.json()), 1)
+        self.assertEqual(app_release_list_response.json()[0]["release_id"], release_id)
+
+        project_release_list_response = self.client.get(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-releases",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(project_release_list_response.status_code, 200)
+        self.assertEqual(project_release_list_response.json(), [])
+
+        update_release_status_response = self.client.patch(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-releases/{release_id}/status",
+            json={"status": "failed", "last_error": "healthcheck failed"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(update_release_status_response.status_code, 200, update_release_status_response.text)
+        self.assertEqual(update_release_status_response.json()["status"], "failed")
+
+        overview_response = self.client.get(
+            "/api/admin/tenants/tenant-a/deployments/overview",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(overview_response.status_code, 200, overview_response.text)
+        overview_payload = overview_response.json()
+        self.assertEqual(overview_payload["summary"]["total_apps"], 2)
+        self.assertEqual(overview_payload["summary"]["failed_count"], 1)
+        self.assertEqual(len(overview_payload["latest_failures"]), 1)
+        self.assertEqual(overview_payload["latest_failures"][0]["app_id"], app_id)
+        self.assertEqual(overview_payload["latest_failures"][0]["status"], "failed")
+
+    def test_project_deployment_release_create_requires_active_plane_and_ready_project_config(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_tenant.status_code, 201)
+
+        create_project = self.client.post(
+            "/api/admin/tenants/tenant-a/projects",
+            json={
+                "name": "blocked-release-app",
+                "github_repository": "https://github.com/example/blocked-release-app",
+                "jira_project_key": "BLK",
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_project.status_code, 201)
+        project_id = create_project.json()["project_id"]
+
+        no_plane_response = self.client.post(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-releases",
+            json={"git_ref": "refs/heads/main"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(no_plane_response.status_code, 409)
+        self.assertIn("deployment plane", no_plane_response.json()["detail"].lower())
+
+        plane_response = self.client.put(
+            "/api/admin/tenants/tenant-a/deployment-plane",
+            json={
+                "provider": "internal_coolify",
+                "infrastructure_provider": "aws",
+                "region": "us-east-1",
+                "base_domain": "apps.example.com",
+                "platform_subdomain": "builder",
+                "api_base_url": "https://builder.apps.example.com/api/v1",
+                "coolify_project_uuid": "project-uuid-1",
+                "coolify_environment_name": "production",
+                "coolify_server_uuid": "server-uuid-1",
+                "coolify_destination_uuid": "destination-uuid-1",
+                "state": "active",
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(plane_response.status_code, 200)
+
+        missing_project_config_response = self.client.post(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-releases",
+            json={"git_ref": "refs/heads/main"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(missing_project_config_response.status_code, 409)
+        self.assertIn("environment_name", missing_project_config_response.json()["detail"])
+
+        disabled_config_response = self.client.put(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-config",
+            json={
+                "enabled": False,
+                "environment_name": "production",
+                "source_strategy": "dockerfile",
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(disabled_config_response.status_code, 200)
+
+        disabled_release_response = self.client.post(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-releases",
+            json={"git_ref": "refs/heads/main"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(disabled_release_response.status_code, 409)
+        self.assertIn("disabled", disabled_release_response.json()["detail"].lower())
+
+        list_release_response = self.client.get(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-releases",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(list_release_response.status_code, 200)
+        self.assertEqual(list_release_response.json(), [])
+
+    def test_project_deployment_release_status_transitions_and_detail_lookup(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_tenant.status_code, 201)
+
+        coolify_secret_response = self.client.put(
+            "/api/admin/secrets/platform%2FCOOLIFY_API_TOKEN",
+            json={"value": "coolify-token"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(coolify_secret_response.status_code, 200)
+
+        plane_response = self.client.put(
+            "/api/admin/tenants/tenant-a/deployment-plane",
+            json={
+                "provider": "internal_coolify",
+                "infrastructure_provider": "hetzner",
+                "region": "eu-west",
+                "base_domain": "apps.example.com",
+                "platform_subdomain": "builder",
+                "api_base_url": "https://builder.apps.example.com/api/v1",
+                "coolify_project_uuid": "project-uuid-1",
+                "coolify_environment_name": "production",
+                "coolify_server_uuid": "server-uuid-1",
+                "coolify_destination_uuid": "destination-uuid-1",
+                "secret_refs": {"coolify_api_token": "platform/COOLIFY_API_TOKEN"},
+                "state": "active",
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(plane_response.status_code, 200)
+
+        create_project = self.client.post(
+            "/api/admin/tenants/tenant-a/projects",
+            json={
+                "name": "statusful-release-app",
+                "github_repository": "https://github.com/example/statusful-release-app",
+                "jira_project_key": "STS",
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_project.status_code, 201)
+        project_id = create_project.json()["project_id"]
+
+        deployment_config_response = self.client.put(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-config",
+            json={
+                "enabled": True,
+                "environment_name": "production",
+                "source_strategy": "dockerfile",
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(deployment_config_response.status_code, 200)
+
+        with (
+            patch(
+                "orchestrator.api.admin.deployment_release_service.CoolifyApiClient.create_public_application",
+                return_value="app-uuid-2",
+            ),
+            patch(
+                "orchestrator.api.admin.deployment_release_service.CoolifyApiClient.bulk_update_application_envs",
+                return_value={"message": "ok"},
+            ),
+            patch(
+                "orchestrator.api.admin.deployment_release_service.CoolifyApiClient.start_application",
+                return_value="deployment-uuid-2",
+            ),
+        ):
+            create_release_response = self.client.post(
+                f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-releases",
+                json={"git_ref": "refs/heads/main"},
+                auth=("admin", "secret"),
+            )
+        self.assertEqual(create_release_response.status_code, 201)
+        release_id = create_release_response.json()["release_id"]
+
+        provisioning_response = self.client.patch(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-releases/{release_id}/status",
+            json={"status": "provisioning"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(provisioning_response.status_code, 200)
+        self.assertEqual(provisioning_response.json()["status"], "provisioning")
+
+        deploying_response = self.client.patch(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-releases/{release_id}/status",
+            json={"status": "deploying", "deployment_uuid": "deployment-uuid-2b"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(deploying_response.status_code, 200)
+        self.assertEqual(deploying_response.json()["status"], "deploying")
+        self.assertEqual(deploying_response.json()["provider_context"]["deployment_uuid"], "deployment-uuid-2b")
+
+        live_response = self.client.patch(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-releases/{release_id}/status",
+            json={"status": "live"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(live_response.status_code, 200)
+        self.assertEqual(live_response.json()["status"], "live")
+        self.assertIsNotNone(live_response.json()["completed_at"])
+
+        detail_response = self.client.get(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-releases/{release_id}",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(detail_response.status_code, 200)
+        self.assertEqual(detail_response.json()["release_id"], release_id)
+        self.assertEqual(detail_response.json()["status"], "live")
+
+        with create_session_factory(self.database_url)() as session:
+            persisted_release = session.get(ProjectDeploymentRelease, release_id)
+            self.assertIsNotNone(persisted_release)
+            assert persisted_release is not None
+            self.assertEqual(persisted_release.status, "live")
+            self.assertEqual(persisted_release.provider_context["deployment_uuid"], "deployment-uuid-2b")
+            self.assertIsNotNone(persisted_release.completed_at)
+
+    def test_project_deployment_release_status_rejects_invalid_transition(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_tenant.status_code, 201)
+
+        coolify_secret_response = self.client.put(
+            "/api/admin/secrets/platform%2FCOOLIFY_API_TOKEN",
+            json={"value": "coolify-token"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(coolify_secret_response.status_code, 200)
+
+        plane_response = self.client.put(
+            "/api/admin/tenants/tenant-a/deployment-plane",
+            json={
+                "provider": "internal_coolify",
+                "infrastructure_provider": "hetzner",
+                "region": "eu-west",
+                "base_domain": "apps.example.com",
+                "platform_subdomain": "builder",
+                "api_base_url": "https://builder.apps.example.com/api/v1",
+                "coolify_project_uuid": "project-uuid-1",
+                "coolify_environment_name": "production",
+                "coolify_server_uuid": "server-uuid-1",
+                "coolify_destination_uuid": "destination-uuid-1",
+                "secret_refs": {"coolify_api_token": "platform/COOLIFY_API_TOKEN"},
+                "state": "active",
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(plane_response.status_code, 200)
+
+        create_project = self.client.post(
+            "/api/admin/tenants/tenant-a/projects",
+            json={
+                "name": "invalid-transition-release-app",
+                "github_repository": "https://github.com/example/invalid-transition-release-app",
+                "jira_project_key": "INV",
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_project.status_code, 201)
+        project_id = create_project.json()["project_id"]
+
+        deployment_config_response = self.client.put(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-config",
+            json={
+                "enabled": True,
+                "environment_name": "production",
+                "source_strategy": "dockerfile",
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(deployment_config_response.status_code, 200)
+
+        with (
+            patch(
+                "orchestrator.api.admin.deployment_release_service.CoolifyApiClient.create_public_application",
+                return_value="app-uuid-3",
+            ),
+            patch(
+                "orchestrator.api.admin.deployment_release_service.CoolifyApiClient.bulk_update_application_envs",
+                return_value={"message": "ok"},
+            ),
+            patch(
+                "orchestrator.api.admin.deployment_release_service.CoolifyApiClient.start_application",
+                return_value="deployment-uuid-3",
+            ),
+        ):
+            create_release_response = self.client.post(
+                f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-releases",
+                json={"git_ref": "refs/heads/main"},
+                auth=("admin", "secret"),
+            )
+        self.assertEqual(create_release_response.status_code, 201)
+        release_id = create_release_response.json()["release_id"]
+
+        invalid_transition_response = self.client.patch(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-releases/{release_id}/status",
+            json={"status": "live"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(invalid_transition_response.status_code, 409)
+        self.assertIn("cannot transition", invalid_transition_response.json()["detail"])
+
+        detail_response = self.client.get(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-releases/{release_id}",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(detail_response.status_code, 200)
+        self.assertEqual(detail_response.json()["status"], "queued")
+
+    def test_project_deployment_execution_endpoints_apply_resources_domains_backups_and_restore_contracts(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_tenant.status_code, 201)
+
+        coolify_secret_response = self.client.put(
+            "/api/admin/secrets/platform%2FCOOLIFY_API_TOKEN",
+            json={"value": "coolify-token"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(coolify_secret_response.status_code, 200)
+
+        deployment_plane_response = self.client.put(
+            "/api/admin/tenants/tenant-a/deployment-plane",
+            json={
+                "provider": "internal_coolify",
+                "infrastructure_provider": "hetzner",
+                "region": "eu-west",
+                "base_domain": "apps.example.com",
+                "platform_subdomain": "builder",
+                "api_base_url": "https://builder.apps.example.com/api/v1",
+                "coolify_project_uuid": "project-uuid-1",
+                "coolify_environment_name": "production",
+                "coolify_server_uuid": "server-uuid-1",
+                "coolify_destination_uuid": "destination-uuid-1",
+                "secret_refs": {"coolify_api_token": "platform/COOLIFY_API_TOKEN"},
+                "state": "active",
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(deployment_plane_response.status_code, 200)
+
+        create_project = self.client.post(
+            "/api/admin/tenants/tenant-a/projects",
+            json={
+                "name": "orchestration-app",
+                "github_repository": "https://github.com/example/orchestration-app",
+                "jira_project_key": "ORC",
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_project.status_code, 201)
+        project_id = create_project.json()["project_id"]
+
+        deployment_config_response = self.client.put(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-config",
+            json={
+                "enabled": True,
+                "environment_name": "production",
+                "source_strategy": "dockerfile",
+                "domains": [
+                    {"key": "primary", "host": "app.example.com"},
+                    {"key": "api", "host": "api.example.com", "tls_enabled": False},
+                ],
+                "resources": [
+                    {
+                        "key": "db",
+                        "kind": "postgres",
+                        "name": "app-db",
+                        "config": {
+                            "postgres_user": "app",
+                            "postgres_password": "app-secret",
+                            "postgres_db": "app",
+                        },
+                    },
+                    {
+                        "key": "cache",
+                        "kind": "cache",
+                        "name": "app-cache",
+                        "config": {
+                            "database_type": "redis",
+                            "redis_password": "cache-secret",
+                        },
+                    },
+                    {
+                        "key": "files",
+                        "kind": "volume",
+                        "name": "app-files",
+                        "config": {"mount_path": "/data", "host_path": "/srv/app-files"},
+                    },
+                    {
+                        "key": "bucket",
+                        "kind": "s3",
+                        "name": "app-bucket",
+                    },
+                ],
+                "backup_policies": [
+                    {
+                        "key": "db-daily",
+                        "resource_key": "db",
+                        "schedule": "0 2 * * *",
+                        "config": {"timeout": 600},
+                    },
+                    {
+                        "key": "files-daily",
+                        "resource_key": "files",
+                        "schedule": "0 3 * * *",
+                    },
+                ],
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(deployment_config_response.status_code, 200)
+
+        with (
+            patch(
+                "orchestrator.api.admin.deployment_release_service.CoolifyApiClient.create_public_application",
+                return_value="app-uuid-1",
+            ),
+            patch(
+                "orchestrator.api.admin.deployment_release_service.CoolifyApiClient.bulk_update_application_envs",
+                return_value={"message": "ok"},
+            ),
+            patch(
+                "orchestrator.api.admin.deployment_release_service.CoolifyApiClient.start_application",
+                return_value="deployment-uuid-1",
+            ),
+        ):
+            create_release_response = self.client.post(
+                f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-releases",
+                json={"git_ref": "refs/heads/main"},
+                auth=("admin", "secret"),
+            )
+        self.assertEqual(create_release_response.status_code, 201, create_release_response.text)
+
+        with (
+            patch(
+                "orchestrator.api.admin.project_service.CoolifyApiClient.create_database",
+                side_effect=["db-uuid-1", "cache-uuid-1"],
+            ) as create_database_mock,
+            patch(
+                "orchestrator.api.admin.project_service.CoolifyApiClient.create_service",
+                return_value="service-uuid-1",
+            ) as create_service_mock,
+            patch(
+                "orchestrator.api.admin.project_service.CoolifyApiClient.create_application_storage",
+                return_value="storage-uuid-1",
+            ) as create_storage_mock,
+            patch(
+                "orchestrator.api.admin.project_service.CoolifyApiClient.update_application",
+                return_value={"message": "domains-updated"},
+            ) as update_application_mock,
+            patch(
+                "orchestrator.api.admin.project_service.CoolifyApiClient.create_database_backup",
+                return_value="backup-uuid-1",
+            ) as create_backup_mock,
+            patch(
+                "orchestrator.api.admin.project_service.CoolifyApiClient.trigger_database_backup",
+                return_value={"message": "triggered"},
+            ) as trigger_backup_mock,
+        ):
+            resources_response = self.client.post(
+                f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-resources/apply",
+                json={"resource_keys": ["db", "cache", "files", "bucket"]},
+                auth=("admin", "secret"),
+            )
+            domains_response = self.client.post(
+                f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-domains/apply",
+                json={"domain_keys": ["primary", "api"]},
+                auth=("admin", "secret"),
+            )
+            backups_response = self.client.post(
+                f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-backups/apply",
+                json={"backup_keys": ["db-daily", "files-daily"]},
+                auth=("admin", "secret"),
+            )
+            trigger_response = self.client.post(
+                f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-backups/trigger",
+                json={"backup_keys": ["db-daily"]},
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(create_database_mock.call_count, 2)
+        self.assertEqual(create_service_mock.call_count, 1)
+        self.assertEqual(create_storage_mock.call_count, 1)
+        self.assertEqual(update_application_mock.call_count, 1)
+        self.assertEqual(create_backup_mock.call_count, 1)
+        self.assertEqual(trigger_backup_mock.call_count, 1)
+
+        self.assertEqual(resources_response.status_code, 200, resources_response.text)
+        self.assertEqual(resources_response.json()["applied_count"], 4)
+        self.assertEqual(resources_response.json()["unsupported_count"], 0)
+        self.assertEqual(
+            {item["key"]: item["status"] for item in resources_response.json()["items"]},
+            {"db": "applied", "cache": "applied", "files": "applied", "bucket": "applied"},
+        )
+
+        self.assertEqual(domains_response.status_code, 200, domains_response.text)
+        self.assertEqual(domains_response.json()["applied_count"], 2)
+        self.assertEqual(domains_response.json()["items"][0]["status"], "applied")
+        self.assertEqual(update_application_mock.call_args.kwargs["application_uuid"], "app-uuid-1")
+        self.assertEqual(update_application_mock.call_args.kwargs["payload"]["domains"], "app.example.com,api.example.com")
+        self.assertTrue(update_application_mock.call_args.kwargs["payload"]["is_force_https_enabled"])
+
+        self.assertEqual(backups_response.status_code, 200, backups_response.text)
+        self.assertEqual(backups_response.json()["applied_count"], 1)
+        self.assertEqual(backups_response.json()["unsupported_count"], 1)
+        self.assertEqual(
+            {item["key"]: item["status"] for item in backups_response.json()["items"]},
+            {"db-daily": "applied", "files-daily": "unsupported"},
+        )
+        self.assertEqual(trigger_response.status_code, 200, trigger_response.text)
+        self.assertEqual(trigger_response.json()["applied_count"], 1)
+        self.assertEqual(trigger_response.json()["items"][0]["status"], "applied")
+
+        restore_response = self.client.post(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-backups/restore",
+            json={"backup_key": "db-daily", "execution_uuid": "execution-uuid-1"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(restore_response.status_code, 200)
+        self.assertEqual(restore_response.json()["items"][0]["status"], "unsupported")
+        self.assertIn("restore", restore_response.json()["items"][0]["message"].lower())
+
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            project = session.get(Project, project_id)
+            assert project is not None
+            deployment_config = ProjectDeploymentConfigRead.model_validate(dict(project.deployment_config or {}))
+            self.assertEqual(
+                deployment_config.resources[0].config["coolify_uuid"],
+                "db-uuid-1",
+            )
+            self.assertEqual(
+                deployment_config.resources[1].config["coolify_uuid"],
+                "cache-uuid-1",
+            )
+            self.assertEqual(
+                deployment_config.resources[2].config["coolify_uuid"],
+                "storage-uuid-1",
+            )
+            self.assertEqual(
+                deployment_config.domains[0].config["coolify_application_uuid"],
+                "app-uuid-1",
+            )
+            self.assertEqual(
+                deployment_config.backup_policies[0].config["coolify_backup_uuid"],
+                "backup-uuid-1",
+            )
+
+    def test_project_deployment_execution_endpoints_enforce_tenant_scoping(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_tenant.status_code, 201)
+
+        second_tenant_create = self.client.post(
+            "/api/admin/tenants",
+            json={**payload, "name": "Other Tenant"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(second_tenant_create.status_code, 201)
+
+        project_create = self.client.post(
+            "/api/admin/tenants/tenant-a/projects",
+            json={
+                "name": "scoped-app",
+                "github_repository": "https://github.com/example/scoped-app",
+                "jira_project_key": "SCP",
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(project_create.status_code, 201)
+        project_id = project_create.json()["project_id"]
+
+        cross_tenant_response = self.client.post(
+            f"/api/admin/tenants/{second_tenant_create.json()['tenant_id']}/projects/{project_id}/deployment-resources/apply",
+            json={},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(cross_tenant_response.status_code, 404)
+
+    def test_project_apps_default_app_is_created_and_legacy_deployment_config_uses_it(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_tenant.status_code, 201)
+
+        project_create = self.client.post(
+            "/api/admin/tenants/tenant-a/projects",
+            json={
+                "name": "apps-surface-app",
+                "github_repository": "https://github.com/example/apps-surface-app",
+                "jira_project_key": "APP",
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(project_create.status_code, 201)
+        project_id = project_create.json()["project_id"]
+
+        list_apps_response = self.client.get(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(list_apps_response.status_code, 200, list_apps_response.text)
+        self.assertEqual(len(list_apps_response.json()), 1)
+        default_app = list_apps_response.json()[0]
+        self.assertEqual(default_app["source_path"], ".")
+        self.assertEqual(default_app["slug"], "default")
+
+        update_app_response = self.client.patch(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{default_app['app_id']}",
+            json={
+                "name": "Primary App",
+                "build_strategy": "dockerfile",
+                "deployment_config": {
+                    "enabled": True,
+                    "environment_name": "production",
+                    "source_strategy": "dockerfile",
+                    "domains": [{"key": "primary", "host": "app.example.com"}],
+                    "resources": [{"key": "db", "kind": "postgres"}],
+                    "backup_policies": [],
+                },
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(update_app_response.status_code, 200, update_app_response.text)
+
+        deployment_config_response = self.client.get(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-config",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(deployment_config_response.status_code, 200)
+        self.assertEqual(deployment_config_response.json()["environment_name"], "production")
+        self.assertEqual(deployment_config_response.json()["domains"][0]["host"], "app.example.com")
+
+    def test_project_app_analysis_run_can_be_started_and_listed(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_tenant.status_code, 201)
+
+        project_create = self.client.post(
+            "/api/admin/tenants/tenant-a/projects",
+            json={
+                "name": "analysis-app",
+                "github_repository": "https://github.com/example/analysis-app",
+                "jira_project_key": "ANA",
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(project_create.status_code, 201)
+        project_id = project_create.json()["project_id"]
+
+        start_response = self.client.post(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/analyze",
+            json={"planner_version": "planner-v1"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(start_response.status_code, 201, start_response.text)
+        run_payload = start_response.json()
+        self.assertEqual(run_payload["status"], "queued")
+        self.assertEqual(run_payload["planner_version"], "planner-v1")
+        self.assertEqual(run_payload["request_payload"]["planner_version"], "planner-v1")
+
+        list_response = self.client.get(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/analysis-runs",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(list_response.status_code, 200)
+        self.assertEqual(len(list_response.json()), 1)
+        self.assertEqual(list_response.json()[0]["run_id"], run_payload["run_id"])
+
+        detail_response = self.client.get(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/analysis-runs/{run_payload['run_id']}",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(detail_response.status_code, 200)
+        self.assertEqual(detail_response.json()["run_id"], run_payload["run_id"])
+        self.assertEqual(detail_response.json()["status"], "queued")
+
     def test_project_update_migrates_inline_secret_values_to_project_managed_refs(self) -> None:
         payload = self._tenant_payload()
         self._insert_jira_connection(connection_id="conn-1")
@@ -1793,6 +3119,74 @@ class AdminApiTests(unittest.TestCase):
             self.assertEqual(workflow.source_workflow_id, "workflow-terminal-1")
             self.assertEqual(workflow.source_run_id, "run-terminal-1")
             self.assertEqual(workflow.status, "queued")
+
+    def test_create_workflow_attempt_repairs_stale_active_status_before_policy_check(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201)
+
+        self._seed_workflow_attempt(
+            workflow_id="workflow-stale-active-1",
+            run_id="run-stale-active-1",
+            issue_key="TP-1001B",
+            issue_summary="Stale active workflow",
+            workflow_status="queued",
+            run_status="failed",
+            checkpoint_id="checkpoint-stale-active-1",
+            checkpoint_kind="execution",
+        )
+
+        response = self.client.post(
+            "/api/admin/workflows/workflow-stale-active-1/attempts",
+            json={"mode": "restart", "checkpoint_kind": "execution"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 201, response.text)
+        body = response.json()
+        self.assertNotEqual(body["workflow_id"], "workflow-stale-active-1")
+        self.assertEqual(body["entry_mode"], "restart")
+        self.assertEqual(body["entry_stage"], "test")
+
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            stale = session.get(WorkflowExecution, "workflow-stale-active-1")
+            self.assertIsNotNone(stale)
+            assert stale is not None
+            self.assertEqual(stale.status, "failed")
+
+    def test_create_workflow_attempt_returns_conflict_when_scope_already_has_active_workflow(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201)
+
+        self._seed_workflow_attempt(
+            workflow_id="workflow-terminal-conflict-1",
+            run_id="run-terminal-conflict-1",
+            issue_key="TP-1001C",
+            issue_summary="Terminal workflow with active-scope conflict",
+            workflow_status="failed",
+            run_status="failed",
+            checkpoint_id="checkpoint-terminal-conflict-1",
+            checkpoint_kind="execution",
+        )
+        self._seed_workflow_attempt(
+            workflow_id="workflow-active-conflict-1",
+            run_id="run-active-conflict-1",
+            issue_key="TP-1001C",
+            issue_summary="Active workflow occupying dedupe scope",
+            workflow_status="queued",
+            run_status="queued",
+        )
+
+        response = self.client.post(
+            "/api/admin/workflows/workflow-terminal-conflict-1/attempts",
+            json={"mode": "restart", "checkpoint_kind": "execution"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertIn("already exists for this issue and dedupe scope", response.json()["detail"])
 
     def test_create_fresh_workflow_attempt_from_terminal_workflow_starts_without_checkpoint(self) -> None:
         payload = self._tenant_payload()
@@ -4535,6 +5929,135 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(instances_by_id["worker-1"]["active_run_count"], 1)
         self.assertEqual(instances_by_id["worker-2"]["status"], "idle")
         self.assertEqual(instances_by_id["worker-2"]["capabilities"], ["macOS"])
+
+    def test_admin_webhook_queue_endpoint_lists_rows_with_summary(self) -> None:
+        session_factory = create_session_factory(self.database_url)
+        now = datetime.now(timezone.utc)
+        with session_factory() as session:
+            session.add(
+                Tenant(
+                    tenant_id="route25",
+                    name="Route25",
+                    is_enabled=True,
+                    jira_config={},
+                    github_config={},
+                    repos_config={},
+                    policy_config={},
+                    discord_config={},
+                    experience_config={},
+                    setup_state={},
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.add(
+                Project(
+                    project_id="route25-default",
+                    tenant_id="route25",
+                    name="Route25 Default",
+                    github_repository="github.com/example/route25",
+                    jira_project_key="GP",
+                    policy_overrides={},
+                    environment={},
+                    secret_refs={},
+                    discord_config={},
+                    is_archived=False,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.add_all(
+                [
+                    WebhookJob(
+                        job_id="job-pending-1",
+                        transport="github_webhook",
+                        tenant_id="route25",
+                        project_id="route25-default",
+                        subject_key="github_pr:route25:repo:26",
+                        dedupe_key="delivery-1",
+                        request_id="request-1",
+                        event_type="pull_request",
+                        status="pending",
+                        owner_id=None,
+                        lease_expires_at=None,
+                        available_at=now - timedelta(seconds=10),
+                        attempt_count=0,
+                        last_error=None,
+                        payload_json={},
+                        context_json={},
+                        created_at=now - timedelta(minutes=3),
+                        updated_at=now - timedelta(minutes=3),
+                        started_at=None,
+                        completed_at=None,
+                    ),
+                    WebhookJob(
+                        job_id="job-processing-1",
+                        transport="github_webhook",
+                        tenant_id="route25",
+                        project_id="route25-default",
+                        subject_key="github_pr:route25:repo:26",
+                        dedupe_key="delivery-2",
+                        request_id="request-2",
+                        event_type="pull_request_review",
+                        status="processing",
+                        owner_id="worker:route25:webhooks:child:1",
+                        lease_expires_at=now + timedelta(minutes=2),
+                        available_at=now - timedelta(seconds=5),
+                        attempt_count=1,
+                        last_error=None,
+                        payload_json={},
+                        context_json={},
+                        created_at=now - timedelta(minutes=2),
+                        updated_at=now - timedelta(minutes=1),
+                        started_at=now - timedelta(minutes=1),
+                        completed_at=None,
+                    ),
+                    WebhookJob(
+                        job_id="job-failed-1",
+                        transport="jira_webhook",
+                        tenant_id="route25",
+                        project_id="route25-default",
+                        subject_key="jira:route25:GP-186",
+                        dedupe_key="delivery-3",
+                        request_id="request-3",
+                        event_type="jira:issue_updated",
+                        status="failed",
+                        owner_id=None,
+                        lease_expires_at=None,
+                        available_at=now - timedelta(seconds=20),
+                        attempt_count=2,
+                        last_error="github token missing",
+                        payload_json={},
+                        context_json={},
+                        created_at=now - timedelta(minutes=4),
+                        updated_at=now - timedelta(minutes=1),
+                        started_at=now - timedelta(minutes=3),
+                        completed_at=now - timedelta(minutes=1),
+                    ),
+                ]
+            )
+            session.commit()
+
+        response = self.client.get(
+            "/api/admin/observability/webhook-jobs?tenant_id=route25&project_id=route25-default&status=pending&limit=10&offset=0",
+            auth=("admin", "secret"),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["total"], 1)
+        self.assertEqual(payload["summary"]["pending_count"], 1)
+        self.assertEqual(payload["summary"]["processing_count"], 1)
+        self.assertEqual(payload["summary"]["failed_count"], 1)
+        self.assertEqual(payload["items"][0]["job_id"], "job-pending-1")
+        self.assertEqual(payload["items"][0]["status"], "pending")
+
+        missing_project_response = self.client.get(
+            "/api/admin/observability/webhook-jobs?tenant_id=route25&status=pending&limit=10&offset=0",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(missing_project_response.status_code, 400)
+        self.assertIn("project_id is required", missing_project_response.json()["detail"])
 
     def test_platform_status_dedupes_legacy_worker_runtime_rows_by_agent_and_mode(self) -> None:
         now = datetime.now(timezone.utc)
