@@ -80,11 +80,6 @@ from orchestrator.storage.models import (
 )
 from orchestrator.tools.project_repo_checkout import project_repo_dir
 
-_READY_FOR_AGENT_OVERRIDE_SOURCES = {
-    "admin_rerun",
-    "cli_run",
-    "github_pr_remediation",
-}
 _LEGACY_REMEDIATION_DESCRIPTION_PREFIX = "automated remediation run triggered from github pr #"
 _LEGACY_REMEDIATION_SUMMARY_MARKER = ": pr remediation for #"
 
@@ -407,6 +402,7 @@ def resolve_enqueue_precheck_outcome(
     issue_summary: str | None = None,
     issue_description: str | None = None,
 ) -> str | None:
+    _ = source
     if is_pr_remediation_run(
         run_plan=precheck_source_plan,
         issue_summary=issue_summary,
@@ -418,11 +414,7 @@ def resolve_enqueue_precheck_outcome(
         precheck_outcome=precheck_outcome,
         precheck_source_plan=precheck_source_plan,
     )
-    if normalized_outcome is not None:
-        return normalized_outcome
-    if source in _READY_FOR_AGENT_OVERRIDE_SOURCES:
-        return "ready_for_agent"
-    return None
+    return normalized_outcome
 
 
 def evaluate_worker_decision(

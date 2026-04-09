@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
 from typing import Any
 
 from orchestrator.core.runtime_invocation import AgentInvocationContext, invoke_runtime_json
@@ -39,12 +38,10 @@ def precheck_classification(pre_check: object) -> str:
     return "clear"
 
 
-def _normalize_slot_name(raw_value: str) -> str:
-    normalized = str(raw_value or "").strip().lower()
-    if not normalized:
+def _canonical_slot_name(raw_value: object) -> str:
+    if not isinstance(raw_value, str):
         return ""
-    normalized = re.sub(r"[^a-z0-9]+", "_", normalized).strip("_")
-    return normalized if normalized in _CANONICAL_SLOT_KEYS else ""
+    return raw_value if raw_value in _CANONICAL_SLOT_KEYS else ""
 
 
 def precheck_missing_slots(pre_check: object) -> list[str]:
@@ -54,15 +51,15 @@ def precheck_missing_slots(pre_check: object) -> list[str]:
         missing_sections = getattr(decision_gate, "missing_sections", ())
         if isinstance(missing_sections, (list, tuple)):
             for item in missing_sections:
-                normalized = _normalize_slot_name(str(item))
-                if normalized and normalized not in slots:
-                    slots.append(normalized)
+                canonical = _canonical_slot_name(item)
+                if canonical and canonical not in slots:
+                    slots.append(canonical)
     gtd_missing = getattr(pre_check, "gtd_missing_criteria", ())
     if isinstance(gtd_missing, (list, tuple)):
         for item in gtd_missing:
-            normalized = _normalize_slot_name(str(item))
-            if normalized and normalized not in slots:
-                slots.append(normalized)
+            canonical = _canonical_slot_name(item)
+            if canonical and canonical not in slots:
+                slots.append(canonical)
     return slots
 
 
