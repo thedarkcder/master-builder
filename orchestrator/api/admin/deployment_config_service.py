@@ -55,6 +55,12 @@ def ensure_project_default_app(
     tenant_id: str,
     project: Project,
 ) -> ProjectApp:  # noqa: ANN001
+    for pending in getattr(session, "new", ()):
+        if not isinstance(pending, ProjectApp):
+            continue
+        if pending.tenant_id == tenant_id and pending.project_id == project.project_id and pending.source_path == ".":
+            return pending
+
     default_app = get_project_default_app(session=session, tenant_id=tenant_id, project_id=project.project_id)
     if default_app is not None:
         return default_app

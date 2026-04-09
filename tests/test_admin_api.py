@@ -43,6 +43,7 @@ from orchestrator.storage.models import (
     Project,
     ProjectDeploymentRelease,
     ProjectAutomation,
+    ProjectInstallRequest,
     Run,
     RunHumanInputRequest,
     Tenant,
@@ -2496,6 +2497,158 @@ class AdminApiTests(unittest.TestCase):
             password_secret = session.get(ManagedSecret, f"project/tenant-a/{project_id}/APPLE_TEST_PASSWORD")
             self.assertIsNotNone(supabase_secret)
             self.assertIsNotNone(password_secret)
+
+    def test_project_update_preserves_upstream_secret_refs_without_creating_project_copies(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_tenant.status_code, 201)
+
+        projects_response = self.client.get("/api/admin/tenants/tenant-a/projects", auth=("admin", "secret"))
+        self.assertEqual(projects_response.status_code, 200)
+        project_id = projects_response.json()[0]["project_id"]
+
+        update_project = self.client.put(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}",
+            json={
+                "name": projects_response.json()[0]["name"],
+                "github_repository": projects_response.json()[0]["github_repository"],
+                "jira_project_key": projects_response.json()[0]["jira_project_key"],
+                "environment": {},
+                "secret_refs": {
+                    "RAILWAY_TOKEN": "platform/RAILWAY_TOKEN",
+                    "SUPABASE_SERVICE_ROLE_KEY": "tenant/tenant-a/SUPABASE_SERVICE_ROLE_KEY",
+                },
+                "is_archived": False,
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(update_project.status_code, 200)
+        body = update_project.json()
+        self.assertEqual(
+            body["secret_refs"],
+            {
+                "RAILWAY_TOKEN": "platform/RAILWAY_TOKEN",
+                "SUPABASE_SERVICE_ROLE_KEY": "tenant/tenant-a/SUPABASE_SERVICE_ROLE_KEY",
+            },
+        )
+
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            project = session.get(Project, project_id)
+            assert project is not None
+            self.assertEqual(project.secret_refs, body["secret_refs"])
+            self.assertIsNone(session.get(ManagedSecret, f"project/tenant-a/{project_id}/RAILWAY_TOKEN"))
+            self.assertIsNone(session.get(ManagedSecret, f"project/tenant-a/{project_id}/SUPABASE_SERVICE_ROLE_KEY"))
+
+    def test_project_installs_crud_and_request_surfaces_round_trip(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_tenant.status_code, 201)
+
+        projects_response = self.client.get("/api/admin/tenants/tenant-a/projects", auth=("admin", "secret"))
+        self.assertEqual(projects_response.status_code, 200)
+        project_id = projects_response.json()[0]["project_id"]
+
+        create_install = self.client.post(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/installs",
+            json={
+                "kind": "fastlane_lane",
+                "label": "iOS Beta Lane",
+                "enabled": True,
+                "config": {"working_dir": ".", "platform": "ios", "lane": "beta", "use_bundle_exec": True},
+                "binding_names": ["MATCH_PASSWORD", "FASTLANE_SESSION"],
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_install.status_code, 201)
+        install_id = create_install.json()["install_id"]
+
+        list_installs = self.client.get(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/installs",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(list_installs.status_code, 200)
+        self.assertEqual(list_installs.json()["installs"][0]["label"], "iOS Beta Lane")
+        self.assertEqual(
+            list_installs.json()["installs"][0]["binding_names"],
+            ["MATCH_PASSWORD", "FASTLANE_SESSION"],
+        )
+
+        update_install = self.client.put(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/installs/{install_id}",
+            json={
+                "kind": "fastlane_lane",
+                "label": "iOS Release Lane",
+                "enabled": False,
+                "config": {"working_dir": ".", "platform": "ios", "lane": "release", "use_bundle_exec": True},
+                "binding_names": ["MATCH_PASSWORD"],
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(update_install.status_code, 200)
+        self.assertEqual(update_install.json()["label"], "iOS Release Lane")
+        self.assertFalse(update_install.json()["enabled"])
+
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            session.add(
+                ProjectInstallRequest(
+                    request_id="install-request-1",
+                    tenant_id="tenant-a",
+                    project_id=project_id,
+                    workflow_id="workflow-1",
+                    run_id="run-1",
+                    issue_key="MB-101",
+                    kind="fastlane_lane",
+                    label="iOS Release Lane",
+                    reason="Ticket requires Fastlane release automation",
+                    suggested_config_json={"working_dir": ".", "platform": "ios", "lane": "release"},
+                    required_bindings_json=["MATCH_PASSWORD"],
+                    status="pending",
+                    request_kind="project_missing_install",
+                    created_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc),
+                )
+            )
+            session.commit()
+
+        list_requests = self.client.get(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/install-requests",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(list_requests.status_code, 200)
+        self.assertEqual(list_requests.json()["requests"][0]["request_id"], "install-request-1")
+
+        fulfill_request = self.client.put(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/install-requests/install-request-1",
+            json={"status": "fulfilled"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(fulfill_request.status_code, 200)
+        self.assertEqual(fulfill_request.json()["status"], "fulfilled")
+
+        delete_install = self.client.delete(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/installs/{install_id}",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(delete_install.status_code, 204)
+
+        final_installs = self.client.get(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/installs",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(final_installs.status_code, 200)
+        self.assertEqual(final_installs.json()["installs"], [])
 
     def test_project_automations_round_trip_and_stays_out_of_discord_config(self) -> None:
         payload = self._tenant_payload()

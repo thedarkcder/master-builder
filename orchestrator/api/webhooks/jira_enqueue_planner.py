@@ -261,11 +261,9 @@ def plan_jira_run_flow(
                 guidance=gate_block.guidance,
                 trigger_reason=trigger_reason,
                 webhook_event=context.webhook_event,
-                decision_gate_reason=gate_block.decision_gate_reason if gate_block.reason == "decision_gate_required" else None,
-                gtd_missing_criteria=list(gate_block.gtd_missing_criteria) if gate_block.reason == "gtd_required" else None,
-                gtd_questions=list(gate_block.gtd_questions) if gate_block.reason == "gtd_required" else None,
+                decision_gate_reason=gate_block.detail if gate_block.reason == "decision_gate_required" else None,
                 ready_label=(
-                    jira_webhook_precheck.resolve_ready_label_for_tenant(context.tenant)
+                    gate_block.ready_label or jira_webhook_precheck.resolve_ready_label_for_tenant(context.tenant)
                     if gate_block.reason == "missing_ready_label"
                     else None
                 ),
@@ -275,13 +273,9 @@ def plan_jira_run_flow(
                     context=context,
                     reason=gate_block.reason,
                     extra_detail=(
-                        f"decision_gate_reason={gate_block.decision_gate_reason}"
+                        f"decision_gate_reason={gate_block.detail}"
                         if gate_block.reason == "decision_gate_required"
-                        else (
-                            "missing_gtd=" + ", ".join(gate_block.gtd_missing_criteria)
-                            if gate_block.reason == "gtd_required"
-                            else None
-                        )
+                        else gate_block.detail
                     ),
                 ),
             ),
