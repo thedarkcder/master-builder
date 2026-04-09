@@ -348,7 +348,6 @@ class LiveVoiceServiceTests(unittest.TestCase):
         def _execute_tenant_command_ingress(**kwargs):  # noqa: ANN003
             ingress_contexts.append(dict(current_log_context()))
             ingress_calls.append(kwargs)
-            payload = kwargs["payload"]
             return DiscordCommandResponse(
                 ok=True,
                 command="!ask",
