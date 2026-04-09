@@ -3,6 +3,7 @@ from __future__ import annotations
 import subprocess
 import unittest
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -570,6 +571,61 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             popen_mock.call_args.kwargs["env"]["ORCHESTRATOR_DATABASE_URL"],
             settings.codex_tool_database_url,
         )
+
+    def test_cli_request_does_not_inherit_unrelated_parent_environment_values(self) -> None:
+        settings = self._settings()
+
+        class _FakePipe:
+            def readline(self) -> str:
+                return ""
+
+            def close(self) -> None:
+                return None
+
+        class _FakeStdin:
+            def write(self, _content: str) -> None:
+                return None
+
+            def close(self) -> None:
+                return None
+
+        class _FakePopen:
+            def __init__(self, output_path: str) -> None:
+                self.stdin = _FakeStdin()
+                self.stdout = _FakePipe()
+                self.stderr = _FakePipe()
+                Path(output_path).write_text("json-output", encoding="utf-8")
+
+            def wait(self, timeout: float | None = None) -> int:  # noqa: ARG002
+                return 0
+
+            def kill(self) -> None:
+                return None
+
+        def fake_popen(args: list[str], **_kwargs: object):
+            output_idx = args.index("--output-last-message") + 1
+            return _FakePopen(args[output_idx])
+
+        original_secret = os.environ.get("UNRELATED_PARENT_SECRET")
+        os.environ["UNRELATED_PARENT_SECRET"] = "should-not-leak"
+        try:
+            with (
+                patch("orchestrator.core.codex_runtime.shutil.which", return_value="/usr/bin/codex"),
+                patch("orchestrator.core.codex_runtime.subprocess.Popen", side_effect=fake_popen) as popen_mock,
+            ):
+                runtime = build_codex_runtime(settings=settings)
+                self.assertEqual(runtime.run_text(system_prompt="s", user_prompt="u"), "json-output")
+
+            self.assertNotIn("UNRELATED_PARENT_SECRET", popen_mock.call_args.kwargs["env"])
+            self.assertEqual(
+                popen_mock.call_args.kwargs["env"]["ORCHESTRATOR_DATABASE_URL"],
+                settings.database_url,
+            )
+        finally:
+            if original_secret is None:
+                os.environ.pop("UNRELATED_PARENT_SECRET", None)
+            else:
+                os.environ["UNRELATED_PARENT_SECRET"] = original_secret
 
     def test_cli_request_preserves_non_postgres_tool_database_url(self) -> None:
         settings = self._settings()

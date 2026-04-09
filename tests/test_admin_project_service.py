@@ -348,15 +348,12 @@ def test_update_project_migrates_inline_secret_values_to_project_managed_refs() 
     )
 
     upsert_calls: list[tuple[str, str]] = []
-    with (
-        patch("orchestrator.api.admin.project_service.resolve_scoped_secret_ref", return_value=None),
-        patch(
-            "orchestrator.core.tenant_secret_service._upsert_managed_secret",
-            side_effect=lambda session, *, secret_ref, plaintext_value, encryption_key, scope, tenant_id: upsert_calls.append(
-                (secret_ref, plaintext_value)
-            )
-            or SimpleNamespace(secret_ref=secret_ref, source="managed", updated_at=None),
-        ),
+    with patch(
+        "orchestrator.core.tenant_secret_service._upsert_managed_secret",
+        side_effect=lambda session, *, secret_ref, plaintext_value, encryption_key, scope, tenant_id: upsert_calls.append(
+            (secret_ref, plaintext_value)
+        )
+        or SimpleNamespace(secret_ref=secret_ref, source="managed", updated_at=None),
     ):
         service.update_project(session=session, tenant_id="t1", project_id="p1", payload=payload)
 
@@ -366,6 +363,52 @@ def test_update_project_migrates_inline_secret_values_to_project_managed_refs() 
     }
     assert ("project/t1/p1/SUPABASE_URL", "https://example.supabase.co") in upsert_calls
     assert ("project/t1/p1/APPLE_TEST_PASSWORD", "Ft6ygA&aYkf%hy") in upsert_calls
+
+
+def test_update_project_preserves_upstream_secret_refs_without_copying() -> None:
+    from orchestrator.storage.models import Tenant
+
+    session = _Session()
+    tenant = SimpleNamespace(tenant_id="t1", policy_config={}, updated_at=None)
+    session.set(Tenant, "t1", tenant)
+    existing_project = Project(
+        project_id="p1",
+        tenant_id="t1",
+        name="Existing",
+        github_repository="https://github.com/example/repo",
+        jira_project_key="TP",
+        policy_overrides={},
+        environment={},
+        secret_refs={},
+        discord_config={},
+        is_archived=False,
+        created_at=None,  # type: ignore[arg-type]
+        updated_at=None,  # type: ignore[arg-type]
+    )
+    session.set(Project, "p1", existing_project)
+    service = _service()
+    payload = SimpleNamespace(
+        name="Updated",
+        github_repository="https://github.com/example/repo",
+        jira_project_key="tp",
+        policy_overrides=None,
+        environment=None,
+        secret_refs={
+            "RAILWAY_TOKEN": "platform/RAILWAY_TOKEN",
+            "SUPABASE_SERVICE_ROLE_KEY": "tenant/t1/SUPABASE_SERVICE_ROLE_KEY",
+        },
+        discord=None,
+        is_archived=False,
+    )
+
+    with patch("orchestrator.core.tenant_secret_service._upsert_managed_secret") as upsert_mock:
+        service.update_project(session=session, tenant_id="t1", project_id="p1", payload=payload)
+
+    assert existing_project.secret_refs == {
+        "RAILWAY_TOKEN": "platform/RAILWAY_TOKEN",
+        "SUPABASE_SERVICE_ROLE_KEY": "tenant/t1/SUPABASE_SERVICE_ROLE_KEY",
+    }
+    upsert_mock.assert_not_called()
 
 
 def test_get_project_does_not_mutate_existing_secret_refs() -> None:

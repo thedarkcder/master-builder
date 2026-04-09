@@ -9,9 +9,8 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from orchestrator.storage.models import Project, Tenant
-from orchestrator.core.platform_secret_service import resolve_platform_secret_ref
 from orchestrator.core.secret_manager import normalize_secret_ref
-from orchestrator.core.tenant_secret_service import resolve_scoped_secret_ref, tenant_secret_service
+from orchestrator.core.tenant_secret_service import tenant_secret_service
 from orchestrator.tools.discord_api import DiscordApiError
 from orchestrator.tools.jira_oauth import JiraOAuthError
 from orchestrator.tools.project_repo_checkout import ProjectRepoCheckoutError
@@ -85,36 +84,12 @@ class AdminProjectService:
                 if normalized_candidate == managed_ref:
                     materialized[variable_name] = managed_ref
                     continue
-                if normalized_candidate.startswith("platform/"):
-                    resolved_value = resolve_platform_secret_ref(
-                        session,
-                        secret_ref=normalized_candidate,
-                        encryption_key=encryption_key,
-                    )
-                    if resolved_value is None:
-                        raise ValueError(f"Project secret '{variable_name}' references missing secret '{normalized_candidate}'")
-                    candidate = resolved_value
-                elif normalized_candidate.startswith(("tenant/", "project/")):
-                    resolved_value = resolve_scoped_secret_ref(
-                        session,
-                        secret_ref=normalized_candidate,
-                        encryption_key=encryption_key,
-                        tenant_id=tenant_id,
-                        project_id=project_id,
-                    )
-                    if resolved_value is None:
-                        raise ValueError(f"Project secret '{variable_name}' references missing secret '{normalized_candidate}'")
-                    candidate = resolved_value
-                else:
-                    resolved_value = resolve_scoped_secret_ref(
-                        session,
-                        secret_ref=normalized_candidate,
-                        encryption_key=encryption_key,
-                        tenant_id=tenant_id,
-                        project_id=project_id,
-                    )
-                    if resolved_value is not None:
-                        candidate = resolved_value
+                if normalized_candidate.startswith(("platform/", "tenant/", "project/")):
+                    materialized[variable_name] = normalized_candidate
+                    continue
+                if "/" not in normalized_candidate and ":" not in normalized_candidate:
+                    materialized[variable_name] = normalized_candidate
+                    continue
 
             tenant_secret_service.upsert_secret(
                 session=session,

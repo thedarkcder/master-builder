@@ -363,7 +363,7 @@ class DiscordCommandApiTests(unittest.TestCase):
                 description="Objective: run command should carry Jira detail context.",
             ),
         ), patch(
-            "orchestrator.api.discord.commands.run_controls.evaluate_issue_precheck_state",
+            "orchestrator.api.discord.commands.run_controls.evaluate_issue_clarification_state",
             return_value=self._ready_decision_result(),
         ):
             response = self.client.post(
@@ -404,7 +404,7 @@ class DiscordCommandApiTests(unittest.TestCase):
                 ],
             ),
             patch(
-                "orchestrator.api.discord.commands.run_controls.evaluate_issue_precheck_state",
+                "orchestrator.api.discord.commands.run_controls.evaluate_issue_clarification_state",
                 return_value=self._ready_decision_result(),
             ) as decision_mock,
         ):
@@ -435,7 +435,7 @@ class DiscordCommandApiTests(unittest.TestCase):
                 ),
             ),
             patch(
-                "orchestrator.api.discord.commands.run_controls.evaluate_issue_precheck_state",
+                "orchestrator.api.discord.commands.run_controls.evaluate_issue_clarification_state",
                 return_value=self._missing_ready_decision_result(),
             ),
         ):
@@ -454,7 +454,7 @@ class DiscordCommandApiTests(unittest.TestCase):
             "orchestrator.api.discord.ingress.jira_runtime.fetch_jira_issue_preview",
             return_value=JiraIssuePreview(key="TP-20", summary="Do thing", status="To Do"),
         ), patch(
-            "orchestrator.api.discord.commands.run_controls.evaluate_issue_precheck_state",
+            "orchestrator.api.discord.commands.run_controls.evaluate_issue_clarification_state",
             return_value=self._ready_decision_result(),
         ):
             response = self.client.post(
@@ -480,7 +480,7 @@ class DiscordCommandApiTests(unittest.TestCase):
                 description="Objective: refreshed from Jira for retry.",
             ),
         ), patch(
-            "orchestrator.api.discord.commands.run_controls.evaluate_issue_precheck_state",
+            "orchestrator.api.discord.commands.run_controls.evaluate_issue_clarification_state",
             return_value=self._ready_decision_result(),
         ):
             response = self.client.post(
@@ -510,7 +510,7 @@ class DiscordCommandApiTests(unittest.TestCase):
                 description="Objective: refreshed from Jira for retry.",
             ),
         ), patch(
-            "orchestrator.api.discord.commands.run_controls.evaluate_issue_precheck_state",
+            "orchestrator.api.discord.commands.run_controls.evaluate_issue_clarification_state",
             return_value=self._ready_decision_result(),
         ):
             response = self.client.post(
@@ -529,7 +529,7 @@ class DiscordCommandApiTests(unittest.TestCase):
             "orchestrator.api.discord.ingress.jira_runtime.fetch_jira_issue_preview",
             return_value=JiraIssuePreview(key="TP-30", summary="Retry thing", status="To Do"),
         ), patch(
-            "orchestrator.api.discord.commands.run_controls.evaluate_issue_precheck_state",
+            "orchestrator.api.discord.commands.run_controls.evaluate_issue_clarification_state",
             return_value=self._ready_decision_result(),
         ):
             response = self.client.post(
@@ -630,7 +630,7 @@ class DiscordCommandApiTests(unittest.TestCase):
                 ),
             ),
             patch(
-                "orchestrator.api.discord.commands.run_controls.evaluate_issue_precheck_state",
+                "orchestrator.api.discord.commands.run_controls.evaluate_issue_clarification_state",
                 return_value=self._ready_decision_result(),
             ),
         ):
@@ -1060,7 +1060,7 @@ class DiscordCommandApiTests(unittest.TestCase):
                 return_value=enqueue_result,
             ) as enqueue_mock,
             patch(
-                "orchestrator.api.discord.commands.run_controls.evaluate_issue_precheck_state",
+                "orchestrator.api.discord.commands.run_controls.evaluate_issue_clarification_state",
                 return_value=self._ready_decision_result(),
             ) as decision_mock,
         ):
