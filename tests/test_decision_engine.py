@@ -120,15 +120,9 @@ class DecisionEngineTests(unittest.TestCase):
             ),
         )
 
-    def test_resolve_enqueue_precheck_outcome_uses_source_defaults(self) -> None:
-        self.assertEqual(
-            resolve_enqueue_precheck_outcome(source="admin_rerun"),
-            "ready_for_agent",
-        )
-        self.assertEqual(
-            resolve_enqueue_precheck_outcome(source="github_pr_remediation"),
-            "ready_for_agent",
-        )
+    def test_resolve_enqueue_precheck_outcome_requires_persisted_outcome_without_source_override(self) -> None:
+        self.assertIsNone(resolve_enqueue_precheck_outcome(source="admin_rerun"))
+        self.assertIsNone(resolve_enqueue_precheck_outcome(source="github_pr_remediation"))
         self.assertIsNone(resolve_enqueue_precheck_outcome(source="jira_webhook"))
 
     def test_resolve_enqueue_precheck_outcome_forces_ready_for_remediation_trigger_context(self) -> None:
