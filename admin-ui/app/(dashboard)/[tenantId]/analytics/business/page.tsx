@@ -69,7 +69,7 @@ export default function BusinessAnalyticsPage() {
               icon: <Clock3 className="h-5 w-5 text-violet-500" />
             },
           ].map((item) => (
-            <div key={item.label} className="rounded-xl border px-4 py-3">
+            <div key={item.label} className="rounded-xl border bg-background px-4 py-3">
               <div className="flex items-start justify-between">
                 <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">{item.label}</p>
                 {item.icon}

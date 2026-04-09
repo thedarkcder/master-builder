@@ -99,11 +99,7 @@ export default function TenantDashboardPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-xl font-semibold">{tenant?.name ?? tenantId}</h1>
-          <p className="text-sm text-muted-foreground">Tenant workspace overview.</p>
-        </div>
+      <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
         <Button variant="outline" size="sm" onClick={() => void loadData()} disabled={loading}>
           <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
           Refresh
@@ -198,7 +194,7 @@ export default function TenantDashboardPage() {
             { label: "Queued", value: summary.queued_count },
             { label: "Cycle Time", value: summary.median_cycle_time_hours == null ? "—" : `${summary.median_cycle_time_hours}h` },
           ].map((item) => (
-            <div key={item.label} className="rounded-xl border px-4 py-3">
+            <div key={item.label} className="rounded-xl border bg-background px-4 py-3">
               <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">{item.label}</p>
               <p className="mt-2 text-2xl font-semibold">{item.value}</p>
             </div>

@@ -70,25 +70,19 @@ export function TenantProjectsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-semibold">Projects</h1>
-          <p className="text-sm text-muted-foreground">Manage projects linked to GitHub and Jira.</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={() => void loadDashboard()} disabled={busy}>
-            <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${busy ? "animate-spin" : ""}`} />
-            Refresh
+      <div className="flex items-center justify-end gap-2">
+        <Button variant="outline" size="sm" onClick={() => void loadDashboard()} disabled={busy}>
+          <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${busy ? "animate-spin" : ""}`} />
+          Refresh
+        </Button>
+        {allowProjectManagement ? (
+          <Button asChild size="sm">
+            <Link href={`/${encodeURIComponent(params.tenantId)}/projects/new`}>
+              <Plus className="mr-1.5 h-3.5 w-3.5" />
+              Add project
+            </Link>
           </Button>
-          {allowProjectManagement ? (
-            <Button asChild size="sm">
-              <Link href={`/${encodeURIComponent(params.tenantId)}/projects/new`}>
-                <Plus className="mr-1.5 h-3.5 w-3.5" />
-                Add project
-              </Link>
-            </Button>
-          ) : null}
-        </div>
+        ) : null}
       </div>
 
       {statusLine ? (
@@ -101,7 +95,7 @@ export function TenantProjectsPage() {
           { label: "Active", value: activeProjects.length, sub: "Currently active", icon: <CheckCircle2 className="h-4 w-4 text-success" />, iconBg: "bg-success/10" },
           { label: "Archived", value: archivedProjects.length, sub: "No longer active", icon: <Archive className="h-4 w-4 text-muted-foreground" />, iconBg: "bg-muted" },
         ].map((item) => (
-          <div key={item.label} className="rounded-xl border px-4 py-3">
+          <div key={item.label} className="rounded-xl border bg-background px-4 py-3">
             <div className="flex items-start justify-between">
               <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">{item.label}</p>
               <div className={`flex h-8 w-8 items-center justify-center rounded-lg ${item.iconBg}`}>{item.icon}</div>

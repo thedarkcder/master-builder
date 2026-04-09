@@ -18,7 +18,6 @@ from orchestrator.core.decision_precheck_mapping import (
     issue_fingerprint as issue_fingerprint_state,
     normalize_occurred_at as normalize_occurred_at_event,
     resolve_idempotency_key as resolve_idempotency_key_event,
-    worker_blocking_gate as worker_blocking_gate_state,
 )
 from orchestrator.core.decision_resolution_service import (
     append_auto_resolved_block as append_auto_resolved_block_resolution,
@@ -38,7 +37,6 @@ from orchestrator.core.decision_reply_service import (
 )
 from orchestrator.core.decision_planner import DecisionPlannerResult, plan_decision_questions
 from orchestrator.core.decision_state_repository import (
-    active_cycle as active_cycle_state,
     decision_gate_closed_cycle_id as decision_gate_closed_cycle_id_state,
     decision_gate_closed_permanently as decision_gate_closed_permanently_state,
     existing_case_for_issue as existing_case_for_issue_state,
@@ -59,11 +57,14 @@ from orchestrator.core.decision_types import (
 from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.knowledge_base import SlotResolution, resolve_missing_slots_from_knowledge
 from orchestrator.core.pre_run_check import (
-    PreRunCheckResult,
     evaluate_execution_readiness_only,
+    PreRunCheckResult,
     evaluate_pre_run_check,
 )
-from orchestrator.core.workflow.execution_snapshot import load_parsed_trigger_context_from_plan
+from orchestrator.core.workflow.execution_snapshot import (
+    ExecutionSnapshot,
+    load_parsed_trigger_context_from_plan,
+)
 from orchestrator.core.workflow.trigger_context import GithubPrRemediationTriggerContext
 from orchestrator.core.precheck_decision import precheck_classification, precheck_missing_slots
 from orchestrator.core.runtime_invocation import invoke_runtime_json
@@ -79,11 +80,6 @@ from orchestrator.storage.models import (
 )
 from orchestrator.tools.project_repo_checkout import project_repo_dir
 
-_READY_FOR_AGENT_OVERRIDE_SOURCES = {
-    "admin_rerun",
-    "cli_run",
-    "github_pr_remediation",
-}
 _LEGACY_REMEDIATION_DESCRIPTION_PREFIX = "automated remediation run triggered from github pr #"
 _LEGACY_REMEDIATION_SUMMARY_MARKER = ": pr remediation for #"
 
@@ -396,6 +392,8 @@ def evaluate_ingress_precheck(
         policy_error=None,
         label_actions=actions,
     )
+
+
 def resolve_enqueue_precheck_outcome(
     *,
     source: DecisionSource,
@@ -404,6 +402,7 @@ def resolve_enqueue_precheck_outcome(
     issue_summary: str | None = None,
     issue_description: str | None = None,
 ) -> str | None:
+    _ = source
     if is_pr_remediation_run(
         run_plan=precheck_source_plan,
         issue_summary=issue_summary,
@@ -415,11 +414,7 @@ def resolve_enqueue_precheck_outcome(
         precheck_outcome=precheck_outcome,
         precheck_source_plan=precheck_source_plan,
     )
-    if normalized_outcome is not None:
-        return normalized_outcome
-    if source in _READY_FOR_AGENT_OVERRIDE_SOURCES:
-        return "ready_for_agent"
-    return None
+    return normalized_outcome
 
 
 def evaluate_worker_decision(
@@ -440,6 +435,21 @@ def evaluate_worker_decision(
     evaluate_pre_run_check_fn: Callable[..., PreRunCheckResult] = evaluate_pre_run_check,
     evaluate_decision_gate_fn: Callable[..., DecisionGateResult] | None = None,
 ) -> WorkerDecision:
+    _ = (
+        tenant_id,
+        project_id,
+        issue_key,
+        run_id,
+        issue_summary,
+        issue_description,
+        session,
+        project,
+        issue_labels,
+        settings,
+        tenant_jira_oauth_context_fn,
+        evaluate_pre_run_check_fn,
+        evaluate_decision_gate_fn,
+    )
     if is_ready_for_agent_precheck(run_plan):
         return WorkerDecision(allowed=True, decision_gate=None, configuration_error=None)
 
@@ -450,250 +460,101 @@ def evaluate_worker_decision(
     ):
         return WorkerDecision(allowed=True, decision_gate=None, configuration_error=None)
 
-    if (
-        session is not None
-        and tenant is not None
-        and project is not None
-        and issue_key
-        and settings is not None
-        and tenant_jira_oauth_context_fn is not None
-    ):
-        from orchestrator.core.decision_clarification_service import evaluate_issue_clarification_state
+    snapshot = ExecutionSnapshot.load(run_plan)
+    if snapshot is None:
+        return WorkerDecision(
+            allowed=False,
+            decision_gate=None,
+            configuration_error="Execution readiness check failed: unsupported execution snapshot version/shape",
+            block_reason="policy_eval_failed",
+        )
 
-        result = evaluate_issue_clarification_state(
-            session=session,
-            tenant=tenant,
-            project=project,
-            event=DecisionEventInput(
-                source="worker_execution",
-                event_type="worker_gate_check",
-                idempotency_key=None,
-                issue_key=issue_key,
-                issue_summary=issue_summary,
-                issue_description=issue_description,
-                issue_labels=list(issue_labels or []),
+    persisted_outcome = resolve_precheck_outcome_for_enqueue(
+        precheck_outcome=None,
+        precheck_source_plan=run_plan,
+    )
+    if persisted_outcome is None:
+        return WorkerDecision(
+            allowed=False,
+            decision_gate=None,
+            configuration_error="Execution readiness check failed: missing persisted pre_check_outcome",
+            block_reason="policy_eval_failed",
+        )
+
+    if persisted_outcome == "ready_for_agent":
+        return WorkerDecision(
+            allowed=True,
+            decision_gate=None,
+            configuration_error=None,
+            classification="clear",
+        )
+
+    execution_context = snapshot.context.execution_context
+    run_not_ready = execution_context.get("run_not_ready")
+    run_not_ready_payload = run_not_ready if isinstance(run_not_ready, dict) else {}
+    configured_ready_label = (
+        str((tenant.jira_config or {}).get("ready_label") or "").strip()
+        if tenant is not None
+        else ""
+    )
+
+    if persisted_outcome == "missing_ready_label":
+        ready_label = (
+            str(run_not_ready_payload.get("ready_label") or "").strip()
+            or configured_ready_label
+            or None
+        )
+        guidance = (
+            f"{enqueue_reason_guidance('missing_ready_label')} ({ready_label})"
+            if ready_label
+            else enqueue_reason_guidance("missing_ready_label")
+        )
+        return WorkerDecision(
+            allowed=False,
+            decision_gate=DecisionGateResult(
+                triggered=True,
+                reason=guidance,
+                missing_sections=(),
+                questions=(),
+                recommendation="Apply the configured ready label before execution.",
+                tags=(),
             ),
-            settings=settings,
-            tenant_jira_oauth_context_fn=tenant_jira_oauth_context_fn,
-            evaluate_pre_run_check_fn=evaluate_pre_run_check_fn,
-            publish_jira_comment_fn=None,
-        )
-        decision = result.decision
-        pre_check = decision.pre_check if isinstance(decision.pre_check, PreRunCheckResult) else None
-        if decision.policy_error:
-            return WorkerDecision(
-                allowed=False,
-                decision_gate=None,
-                configuration_error=str(decision.policy_error),
-                block_reason=decision.block_reason,
-                classification=result.classification,
-                pre_check=pre_check,
-            )
-        blocking_gate = worker_blocking_gate_state(
-            pre_check=pre_check,
-            classification=result.classification,
-            block_reason=decision.block_reason,
-        )
-        if blocking_gate is not None:
-            return WorkerDecision(
-                allowed=False,
-                decision_gate=blocking_gate,
-                configuration_error=None,
-                block_reason=decision.block_reason,
-                classification=result.classification,
-                pre_check=pre_check,
-            )
-        if str(decision.block_reason or "").strip() == "missing_ready_label":
-            return WorkerDecision(
-                allowed=False,
-                decision_gate=DecisionGateResult(
-                    triggered=True,
-                    reason=enqueue_reason_guidance("missing_ready_label"),
-                    missing_sections=(),
-                    questions=(),
-                    recommendation="Apply the configured ready label before execution.",
-                    tags=(),
-                ),
-                configuration_error=None,
-                block_reason="missing_ready_label",
-                classification=result.classification,
-                pre_check=pre_check,
-            )
-        return WorkerDecision(
-            allowed=True,
-            decision_gate=None,
             configuration_error=None,
-            block_reason=decision.block_reason,
-            classification=result.classification,
-            pre_check=pre_check,
+            block_reason="missing_ready_label",
+            classification="clear",
         )
 
-    if session is not None and issue_key:
-        existing_case = existing_case_for_issue_state(
-            session=session,
-            tenant_id=str(tenant_id or ""),
-            issue_key=issue_key,
-        )
-        if existing_case is not None:
-            classification = str(existing_case.classification or "").strip() or "clear"
-            cycle = active_cycle_state(session=session, case=existing_case)
-            snapshot = (
-                existing_case.metadata_json.get("result_snapshot")
-                if isinstance(existing_case.metadata_json, dict)
-                and isinstance(existing_case.metadata_json.get("result_snapshot"), dict)
-                else {}
-            )
-            decision = decision_from_snapshot_state(
-                snapshot=snapshot,
-                source=str(existing_case.last_source or "worker_execution"),
-                classification=classification,
-                cycle=cycle,
-                case=existing_case,
-            )
-            if decision.policy_error:
-                return WorkerDecision(
-                    allowed=False,
-                    decision_gate=None,
-                    configuration_error=str(decision.policy_error),
-                    block_reason=decision.block_reason,
-                    classification=classification,
-                    pre_check=decision.pre_check if isinstance(decision.pre_check, PreRunCheckResult) else None,
-                )
-            blocking_gate = worker_blocking_gate_state(
-                pre_check=decision.pre_check,
-                classification=classification,
-                block_reason=decision.block_reason,
-            )
-            if blocking_gate is not None:
-                return WorkerDecision(
-                    allowed=False,
-                    decision_gate=blocking_gate,
-                    configuration_error=None,
-                    block_reason=decision.block_reason,
-                    classification=classification,
-                    pre_check=decision.pre_check if isinstance(decision.pre_check, PreRunCheckResult) else None,
-                )
-            if str(decision.block_reason or "").strip() == "missing_ready_label":
-                return WorkerDecision(
-                    allowed=False,
-                    decision_gate=DecisionGateResult(
-                        triggered=True,
-                        reason=enqueue_reason_guidance("missing_ready_label"),
-                        missing_sections=(),
-                        questions=(),
-                        recommendation="Apply the configured ready label before execution.",
-                        tags=(),
-                    ),
-                    configuration_error=None,
-                    block_reason="missing_ready_label",
-                    classification=classification,
-                    pre_check=decision.pre_check if isinstance(decision.pre_check, PreRunCheckResult) else None,
-                )
-            return WorkerDecision(
-                allowed=True,
-                decision_gate=None,
-                configuration_error=None,
-                block_reason=decision.block_reason,
-                classification=classification,
-                pre_check=decision.pre_check if isinstance(decision.pre_check, PreRunCheckResult) else None,
-            )
-
-    if tenant is not None:
-        decision = evaluate_ingress_precheck(
-            source="worker_execution",
-            tenant_id=tenant_id,
-            project_id=project_id,
-            issue_key=issue_key,
-            issue_summary=issue_summary,
-            issue_description=issue_description,
-            recorded_answers=None,
-            issue_labels=issue_labels,
-            ready_label=(tenant.jira_config or {}).get("ready_label"),
-            evaluate_pre_run_check_fn=evaluate_pre_run_check_fn,
-        )
-        classification = precheck_classification(decision.pre_check) if decision.pre_check is not None else "clear"
-        if decision.policy_error:
-            return WorkerDecision(
-                allowed=False,
-                decision_gate=None,
-                configuration_error=str(decision.policy_error),
-                block_reason=decision.block_reason,
-                classification=classification,
-                pre_check=decision.pre_check if isinstance(decision.pre_check, PreRunCheckResult) else None,
-            )
-        blocking_gate = worker_blocking_gate_state(
-            pre_check=decision.pre_check,
-            classification=classification,
-            block_reason=decision.block_reason,
-        )
-        if blocking_gate is not None:
-            return WorkerDecision(
-                allowed=False,
-                decision_gate=blocking_gate,
-                configuration_error=None,
-                block_reason=decision.block_reason,
-                classification=classification,
-                pre_check=decision.pre_check if isinstance(decision.pre_check, PreRunCheckResult) else None,
-            )
-        if str(decision.block_reason or "").strip() == "missing_ready_label":
-            return WorkerDecision(
-                allowed=False,
-                decision_gate=DecisionGateResult(
-                    triggered=True,
-                    reason=enqueue_reason_guidance("missing_ready_label"),
-                    missing_sections=(),
-                    questions=(),
-                    recommendation="Apply the configured ready label before execution.",
-                    tags=(),
-                ),
-                configuration_error=None,
-                block_reason="missing_ready_label",
-                classification=classification,
-                pre_check=decision.pre_check if isinstance(decision.pre_check, PreRunCheckResult) else None,
-            )
+    if persisted_outcome in {"decision_gate_required", "gtd_required", "execution_blocked"}:
+        guidance = enqueue_reason_guidance(persisted_outcome)
+        reason = str(run_not_ready_payload.get("reason") or "").strip() or guidance
         return WorkerDecision(
-            allowed=True,
-            decision_gate=None,
+            allowed=False,
+            decision_gate=DecisionGateResult(
+                triggered=True,
+                reason=reason,
+                missing_sections=(),
+                questions=(),
+                recommendation="Resolve the open clarification topics before execution.",
+                tags=(),
+            ),
             configuration_error=None,
-            block_reason=decision.block_reason,
-            classification=classification,
-            pre_check=decision.pre_check if isinstance(decision.pre_check, PreRunCheckResult) else None,
+            block_reason=persisted_outcome,
+            classification="decision_gate" if persisted_outcome == "decision_gate_required" else "gtd",
         )
 
-    if evaluate_decision_gate_fn is None:
+    if persisted_outcome == "policy_eval_failed":
         return WorkerDecision(
             allowed=False,
             decision_gate=None,
-            configuration_error="Decision Gate configuration error: missing worker decision evaluator",
-        )
-    try:
-        decision_gate = evaluate_decision_gate_fn(
-            tenant_id=tenant_id,
-            project_id=project_id,
-            issue_key=issue_key,
-            run_id=run_id,
-            issue_summary=issue_summary,
-            issue_description=issue_description,
-        )
-    except (FileNotFoundError, ValueError) as exc:
-        return WorkerDecision(
-            allowed=False,
-            decision_gate=None,
-            configuration_error=f"Decision Gate configuration error: {exc}",
+            configuration_error="Execution readiness check failed: persisted policy evaluation failure",
+            block_reason="policy_eval_failed",
         )
 
-    if decision_gate.triggered:
-        return WorkerDecision(
-            allowed=False,
-            decision_gate=decision_gate,
-            configuration_error=None,
-            block_reason="decision_gate_required",
-            classification="decision_gate",
-        )
     return WorkerDecision(
-        allowed=True,
-        decision_gate=decision_gate,
-        configuration_error=None,
+        allowed=False,
+        decision_gate=None,
+        configuration_error=f"Execution readiness check failed: unsupported persisted outcome '{persisted_outcome}'",
+        block_reason="policy_eval_failed",
         classification="clear",
     )
 

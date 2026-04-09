@@ -24,6 +24,10 @@ from orchestrator.core.worker.run_health import (
     recover_stale_running_runs,
     worker_service_instance_id_for_mode,
 )
+from orchestrator.core.worker.queue_selector import (
+    QueueClaimabilityProbe,
+    probe_claimable_queued_run,
+)
 from orchestrator.core.worker.execution_service import (
     process_next_webhook_job_with_dependencies as _process_next_webhook_job_with_dependencies,
     process_next_queued_run_with_dependencies as _process_next_queued_run_with_dependencies,
@@ -67,6 +71,7 @@ class WorkerChildProcessResult:
     return_code: int
     processed: bool
     dependency_failure: bool
+    timed_out: bool = False
 
 
 @dataclass(frozen=True)
@@ -304,47 +309,62 @@ def _resolve_worker_child_capacity(
     return max(1, min(policy_slots, configured_cap))
 
 
-def _has_claimable_work_once(
+def _resolve_worker_child_timeout_seconds(*, settings: Settings) -> int:
+    workflow_timeout_minutes = max(
+        1,
+        int(getattr(settings, "workflow_orchestrated_run_timeout_minutes", 90)),
+    )
+    return max(60, workflow_timeout_minutes * 60)
+
+
+def _probe_claimable_run_once(
     *,
     session_factory: sessionmaker[Session],
-    mode: str,
-) -> bool:
-    normalized_mode = str(mode or "").strip().lower()
+    settings: Settings,
+) -> QueueClaimabilityProbe:
+    capability_context = resolve_worker_capability_context(
+        raw_value=getattr(settings, "worker_capabilities", None),
+        source="ORCHESTRATOR_WORKER_CAPABILITIES",
+    )
     with session_factory() as session:
-        if normalized_mode == WORKER_MODE_RUNS:
-            run_id = session.execute(
-                select(Run.run_id)
-                .where(Run.status == "queued")
-                .order_by(Run.created_at.asc())
-                .limit(1)
-            ).scalar_one_or_none()
-            return run_id is not None
-        if normalized_mode == WORKER_MODE_WEBHOOKS:
-            now = datetime.now(timezone.utc)
-            job_id = session.execute(
-                select(WebhookJob.job_id)
-                .where(
-                    WebhookJob.available_at <= now,
-                    or_(
-                        WebhookJob.status == "pending",
-                        and_(
-                            WebhookJob.status == "processing",
-                            WebhookJob.lease_expires_at.is_not(None),
-                            WebhookJob.lease_expires_at <= now,
-                        ),
+        return probe_claimable_queued_run(
+            session,
+            queued_status="queued",
+            running_status="running",
+            worker_capabilities=set(capability_context.available),
+        )
+
+
+def _has_available_webhook_job_once(
+    *,
+    session_factory: sessionmaker[Session],
+) -> bool:
+    now = datetime.now(timezone.utc)
+    with session_factory() as session:
+        job_id = session.execute(
+            select(WebhookJob.job_id)
+            .where(
+                WebhookJob.available_at <= now,
+                or_(
+                    WebhookJob.status == "pending",
+                    and_(
+                        WebhookJob.status == "processing",
+                        WebhookJob.lease_expires_at.is_not(None),
+                        WebhookJob.lease_expires_at <= now,
                     ),
-                )
-                .order_by(WebhookJob.created_at.asc())
-                .limit(1)
-            ).scalar_one_or_none()
-            return job_id is not None
-    raise ValueError(f"Unsupported worker mode '{mode}'")
+                ),
+            )
+            .order_by(WebhookJob.created_at.asc())
+            .limit(1)
+        ).scalar_one_or_none()
+        return job_id is not None
 
 
 async def _spawn_worker_child_process(
     *,
     mode: str,
     wake_event: asyncio.Event,
+    child_timeout_seconds: int,
 ) -> WorkerChildProcessHandle:
     _ = wake_event
     process = await asyncio.create_subprocess_exec(
@@ -353,9 +373,45 @@ async def _spawn_worker_child_process(
         "orchestrator.cli",
         _child_command_for_mode(mode=mode),
     )
+    logger.info(
+        "worker_child_spawned mode=%s pid=%s timeout_seconds=%s",
+        mode,
+        process.pid,
+        child_timeout_seconds,
+    )
 
     async def _await_result() -> WorkerChildProcessResult:
-        return_code = await process.wait()
+        try:
+            return_code = await asyncio.wait_for(
+                process.wait(),
+                timeout=max(1, int(child_timeout_seconds)),
+            )
+        except asyncio.TimeoutError:
+            logger.error(
+                "worker_child_timed_out mode=%s pid=%s timeout_seconds=%s",
+                mode,
+                process.pid,
+                child_timeout_seconds,
+            )
+            with suppress(ProcessLookupError):
+                process.terminate()
+            try:
+                return_code = await asyncio.wait_for(process.wait(), timeout=5.0)
+            except asyncio.TimeoutError:
+                logger.error(
+                    "worker_child_terminate_grace_expired mode=%s pid=%s",
+                    mode,
+                    process.pid,
+                )
+                with suppress(ProcessLookupError):
+                    process.kill()
+                return_code = await process.wait()
+            return WorkerChildProcessResult(
+                return_code=WORKER_CHILD_EXIT_RUNTIME_FAILURE,
+                processed=False,
+                dependency_failure=False,
+                timed_out=True,
+            )
         return WorkerChildProcessResult(
             return_code=return_code,
             processed=return_code == WORKER_CHILD_EXIT_PROCESSED,
@@ -564,6 +620,7 @@ async def run_worker(*, mode: str = WORKER_MODE_RUNS) -> None:
     active_children: dict[asyncio.Task[WorkerChildProcessResult], WorkerChildProcessHandle] = {}
     drain_requested = True
     poll_interval_seconds = max(1, int(getattr(settings, "worker_poll_interval_seconds", 5)))
+    child_timeout_seconds = _resolve_worker_child_timeout_seconds(settings=settings)
     try:
         listener.start()
         await asyncio.to_thread(
@@ -628,15 +685,25 @@ async def run_worker(*, mode: str = WORKER_MODE_RUNS) -> None:
                     logger.exception("worker_child_task_failed mode=%s error=%s", mode, exc)
                     drain_requested = True
                     continue
+                logger.info(
+                    "worker_child_completed mode=%s pid=%s return_code=%s processed=%s dependency_failure=%s timed_out=%s",
+                    mode,
+                    handle.process.pid,
+                    child_result.return_code,
+                    child_result.processed,
+                    child_result.dependency_failure,
+                    child_result.timed_out,
+                )
                 if child_result.dependency_failure:
                     raise WorkerDependencyFailure("Worker runtime unavailable in child process")
                 if child_result.return_code == WORKER_CHILD_EXIT_RUNTIME_FAILURE:
                     platform_metrics.record_worker_failure(kind="child_crash")
                     logger.error(
-                        "worker_child_failed mode=%s return_code=%s pid=%s",
+                        "worker_child_failed mode=%s return_code=%s pid=%s timed_out=%s",
                         mode,
                         child_result.return_code,
                         handle.process.pid,
+                        child_result.timed_out,
                     )
                     drain_requested = True
                     continue
@@ -670,17 +737,31 @@ async def run_worker(*, mode: str = WORKER_MODE_RUNS) -> None:
                 session_factory=session_factory,
             )
             while drain_requested and len(active_children) < parallel_slots and not stop_event.is_set():
-                has_claimable_work = await asyncio.to_thread(
-                    _has_claimable_work_once,
-                    session_factory=session_factory,
-                    mode=mode,
-                )
-                if not has_claimable_work:
-                    drain_requested = False
-                    break
+                if mode == WORKER_MODE_RUNS:
+                    run_probe = await asyncio.to_thread(
+                        _probe_claimable_run_once,
+                        session_factory=session_factory,
+                        settings=settings,
+                    )
+                    if not run_probe.claimable:
+                        logger.info(
+                            "worker_no_claimable_run reason=%s",
+                            run_probe.reason.value,
+                        )
+                        drain_requested = False
+                        break
+                else:
+                    has_webhook_job = await asyncio.to_thread(
+                        _has_available_webhook_job_once,
+                        session_factory=session_factory,
+                    )
+                    if not has_webhook_job:
+                        drain_requested = False
+                        break
                 child = await _spawn_worker_child_process(
                     mode=mode,
                     wake_event=wake_event,
+                    child_timeout_seconds=child_timeout_seconds,
                 )
                 active_children[child.wait_task] = child
 

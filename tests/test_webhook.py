@@ -35,6 +35,7 @@ from orchestrator.core.discord.channel_tenant_index import invalidate_discord_ch
 from orchestrator.core.config import get_settings
 from orchestrator.core.codex_runtime import CodexRuntimeError
 from orchestrator.core.decision_gate import DecisionGateResult
+from orchestrator.core.decision_types import DecisionEngineResult, IngressDecision, resolve_execution_gate_state
 from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.pre_run_check import PreRunCheckResult
 from orchestrator.core.precheck_question_lock import build_precheck_questions_block
@@ -77,6 +78,38 @@ class JiraWebhookTests(unittest.TestCase):
                     else ("Which dependencies or risks may impact delivery?",)
                 ),
             ),
+        )
+
+    @staticmethod
+    def _decision_result(
+        *,
+        pre_check: PreRunCheckResult,
+        issue_labels: list[str],
+        cycle_id: str | None = None,
+        auto_resolved_slots: list[str] | None = None,
+    ) -> DecisionEngineResult:
+        block_reason = pre_check.outcome if pre_check.outcome in {"decision_gate_required", "gtd_required", "missing_ready_label"} else None
+        classification = "decision_gate" if pre_check.outcome in {"decision_gate_required", "gtd_required", "execution_blocked"} else "clear"
+        decision = IngressDecision(
+            source="jira_webhook",
+            pre_check=pre_check,
+            block_reason=block_reason,
+            guidance=None,
+            policy_error=None,
+            label_actions=(),
+        )
+        return DecisionEngineResult(
+            decision=decision,
+            issue_labels=list(issue_labels),
+            classification=classification,
+            missing_slots=[],
+            auto_resolved_slots=list(auto_resolved_slots or []),
+            case_id="test-case",
+            case_state="open",
+            cycle_id=cycle_id,
+            outbox_effect_ids=(),
+            duplicate_event=False,
+            execution_gate=resolve_execution_gate_state(decision=decision, classification=classification),
         )
 
     def setUp(self) -> None:
@@ -176,15 +209,9 @@ class JiraWebhookTests(unittest.TestCase):
             *list(context.issue_labels or []),
             *[label for label in labels_to_add if label not in set(context.issue_labels or [])],
         ]
-        block_reason = pre_check.outcome if pre_check.outcome in {"decision_gate_required", "gtd_required", "missing_ready_label"} else None
-        return SimpleNamespace(
-            decision=SimpleNamespace(
-                pre_check=pre_check,
-                block_reason=block_reason,
-                policy_error=None,
-            ),
+        return self._decision_result(
+            pre_check=pre_check,
             issue_labels=issue_labels,
-            auto_resolved_slots=[],
             cycle_id=None,
         )
 
@@ -496,14 +523,9 @@ class JiraWebhookTests(unittest.TestCase):
                     connection=SimpleNamespace(cloud_id="cloud-1"),
                     client=oauth_client,
                 )
-                decision_result = SimpleNamespace(
-                    decision=SimpleNamespace(
-                        pre_check=unresolved_pre_check,
-                        block_reason="decision_gate_required",
-                        policy_error=None,
-                    ),
+                decision_result = self._decision_result(
+                    pre_check=unresolved_pre_check,
                     issue_labels=[],
-                    auto_resolved_slots=[],
                     cycle_id="cycle-1",
                 )
 
@@ -576,14 +598,9 @@ class JiraWebhookTests(unittest.TestCase):
                     connection=SimpleNamespace(cloud_id="cloud-1"),
                     client=oauth_client,
                 )
-                decision_result = SimpleNamespace(
-                    decision=SimpleNamespace(
-                        pre_check=self._pre_run_check(),
-                        block_reason=None,
-                        policy_error=None,
-                    ),
+                decision_result = self._decision_result(
+                    pre_check=self._pre_run_check(),
                     issue_labels=["agent:ready"],
-                    auto_resolved_slots=[],
                     cycle_id="cycle-2",
                 )
 

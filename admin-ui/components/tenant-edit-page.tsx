@@ -515,24 +515,12 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
 
   return (
     <div className="space-y-6">
-      <div className="space-y-2">
-        <div className="flex flex-wrap items-end justify-between gap-3">
-          <div className="space-y-1">
-            <h2 className="text-2xl font-semibold tracking-tight">{tenant.name}</h2>
-            <p className="text-sm text-muted-foreground">Configure integrations, delivery policy, and workspace operations.</p>
-          </div>
-          <div className="rounded-full border px-3 py-1 text-xs font-medium uppercase tracking-[0.2em] text-muted-foreground">
-            {tenant.tenant_id}
-          </div>
-        </div>
-        {statusLine ? <p className={cn("rounded-xl border px-4 py-3 text-sm", statusClasses)}>{statusLine}</p> : null}
-      </div>
+      {statusLine ? <p className={cn("rounded-xl border px-4 py-3 text-sm", statusClasses)}>{statusLine}</p> : null}
 
       {section === "setup" ? (
         <div className="overflow-hidden rounded-2xl border bg-background">
           <div className="px-6 pt-6">
             <h2 className="text-base font-semibold">Setup Flow</h2>
-            <p className="mt-1 text-sm text-muted-foreground">Follow this order to keep setup predictable and complete.</p>
           </div>
           <div className="space-y-3 p-6 text-sm">
             <ol className="list-decimal space-y-2 pl-5">
@@ -560,7 +548,6 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
         <div className="overflow-hidden rounded-2xl border bg-background">
           <div className="px-6 pt-6">
             <h2 className="text-base font-semibold">Integrations</h2>
-            <p className="mt-1 text-sm text-muted-foreground">Connect external systems before configuring tenant policy.</p>
           </div>
           <div className="mt-4 divide-y border-t text-sm">
             <div className="space-y-2 px-6 py-4">
@@ -592,7 +579,6 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
         <div className="overflow-hidden rounded-2xl border bg-background">
           <div className="px-6 pt-6">
             <h2 className="text-base font-semibold">Jira Integration</h2>
-            <p className="mt-1 text-sm text-muted-foreground">Connect and manage Jira access and webhook lifecycle for this tenant.</p>
           </div>
           <div className="space-y-3 p-6 text-sm">
             <p>
@@ -655,7 +641,6 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
         <div className="overflow-hidden rounded-2xl border bg-background">
           <div className="px-6 pt-6">
             <h2 className="text-base font-semibold">GitHub Integration</h2>
-            <p className="mt-1 text-sm text-muted-foreground">Connect GitHub App once for this tenant. Project mappings are managed in Projects.</p>
           </div>
           <div className="space-y-4 p-6 text-sm">
             <p>
@@ -696,7 +681,6 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
         <div className="overflow-hidden rounded-2xl border bg-background">
           <div className="px-6 pt-6">
             <h2 className="text-base font-semibold">Projects</h2>
-            <p className="mt-1 text-sm text-muted-foreground">Create, edit, and archive tenant projects with repo/Jira mappings.</p>
           </div>
           <div className="p-6">
             <ProjectsManager
@@ -716,7 +700,6 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
         <div className="overflow-hidden rounded-2xl border bg-background">
           <div className="px-6 pt-6">
             <h2 className="text-base font-semibold">Discord Integration</h2>
-            <p className="mt-1 text-sm text-muted-foreground">Install the tenant bot, confirm the connected guild, and configure onboarding invites.</p>
           </div>
           <div className="space-y-4 p-6">
             <div className="space-y-2 text-sm">
@@ -729,7 +712,7 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
                 />
                 <span>Enable Discord</span>
               </label>
-              <div className="rounded-xl border px-4 py-3 text-xs text-muted-foreground">
+              <div className="rounded-xl border bg-background px-4 py-3 text-xs text-muted-foreground">
                 Connected guild: <strong>{tenant.discord?.guild_id ?? "not installed yet"}</strong>
                 <br />
                 Installed at: <strong>{tenant.discord?.installed_at ?? "not installed yet"}</strong>
@@ -778,7 +761,7 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
                   />
                 </div>
               </div>
-              <div className="rounded-xl border px-4 py-3 text-xs text-muted-foreground">
+              <div className="rounded-xl border bg-background px-4 py-3 text-xs text-muted-foreground">
                 Live voice rooms are configured per project on the project Discord page. Onboarding joins use the tenant onboarding channel.
               </div>
               <Button onClick={() => void saveDiscordSettings()} disabled={saving}>
@@ -793,7 +776,6 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
         <div className="overflow-hidden rounded-2xl border bg-background">
           <div className="px-6 pt-6">
             <h2 className="text-base font-semibold">Workspace configuration</h2>
-            <p className="mt-1 text-sm text-muted-foreground">Update identity and policy.</p>
           </div>
           <div className="p-6">
             <TenantForm
@@ -823,9 +805,6 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
           <div className="overflow-hidden rounded-2xl border bg-background">
             <div className="px-6 pt-6">
               <h2 className="text-base font-semibold">Danger zone</h2>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Irreversible actions for this workspace. Proceed with caution.
-              </p>
             </div>
             <div className="divide-y">
               <div className="flex flex-wrap items-center justify-between gap-4 px-6 py-5">
@@ -918,7 +897,6 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
         <div className="overflow-hidden rounded-2xl border bg-background">
           <div className="px-6 pt-6">
             <h2 className="text-base font-semibold">Integration Health</h2>
-            <p className="mt-1 text-sm text-muted-foreground">Run checks and preview ready-gate eligibility for this tenant.</p>
           </div>
           <div className="space-y-3 p-6 text-sm">
             <div className="flex flex-wrap gap-2">
@@ -929,7 +907,7 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
                 Preview Ready Gate
               </Button>
             </div>
-            <div className="rounded-xl border px-4 py-3">
+            <div className="rounded-xl border bg-background px-4 py-3">
               <p className="font-medium">Ready Gate Preview</p>
               <p className="text-muted-foreground">
                 {readyPreview ? readyPreview.guidance : "Run preview to inspect currently eligible issues."}
@@ -967,7 +945,6 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
         <div className="overflow-hidden rounded-2xl border bg-background">
           <div className="px-6 pt-6">
             <h2 className="text-base font-semibold">Notifications</h2>
-            <p className="mt-1 text-sm text-muted-foreground">Review important tenant events and required actions in one place.</p>
           </div>
           <div className="p-6 text-sm">
             <div className="overflow-hidden rounded-xl border">

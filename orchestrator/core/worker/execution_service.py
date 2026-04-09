@@ -11,7 +11,6 @@ from orchestrator.core.config import Settings, get_settings
 from orchestrator.core.agent_observability import record_agent_lifecycle_event
 from orchestrator.core.discord.notifications import send_tenant_discord_message
 from orchestrator.core.jira_links import tenant_jira_issue_url
-from orchestrator.core.pre_run_check import evaluate_execution_readiness_only
 from orchestrator.core.worker.webhook_job_service import process_next_webhook_job
 from orchestrator.core.worker.decision_gate import apply_decision_gate
 from orchestrator.core.worker.jira_stage_service import send_stage_update_to_jira as _send_stage_update_to_jira
@@ -144,7 +143,6 @@ def _process_next_queued_run_impl(
             tenant=tenant,
             settings=settings,
             tenant_jira_oauth_context_fn=tenant_jira_oauth_context,
-            evaluate_execution_readiness_fn=evaluate_execution_readiness_only,
             send_discord_message_fn=send_discord_message_fn,
             send_jira_message_fn=send_jira_message_fn,
             ask_reply_components_fn=ask_reply_components_fn,

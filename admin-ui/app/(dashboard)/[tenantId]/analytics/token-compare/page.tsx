@@ -252,7 +252,7 @@ export default function TenantTokenComparePage() {
 
   return (
     <div className="space-y-6">
-      <details className="group rounded-lg border bg-card" open>
+      <details className="group rounded-lg border bg-background" open>
         <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-sm font-medium">
           <span>Filters</span>
           <span className="text-xs text-muted-foreground group-open:hidden">Show</span>
@@ -368,7 +368,7 @@ export default function TenantTokenComparePage() {
                         ["Total I/O", formatNumber(run.totals.total_io)],
                         ["Cache Ratio", `${(run.totals.cache_ratio * 100).toFixed(1)}%`]
                       ].map(([label, value]) => (
-                        <div key={label} className="rounded-xl border px-4 py-3">
+                        <div key={label} className="rounded-xl border bg-background px-4 py-3">
                           <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">{label}</p>
                           <p className="font-semibold">{value}</p>
                         </div>

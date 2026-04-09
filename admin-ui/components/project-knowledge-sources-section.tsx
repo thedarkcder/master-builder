@@ -236,9 +236,6 @@ export function ProjectKnowledgeSourcesSection({
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h2 className="text-base font-semibold">Managed Sources</h2>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Configure the upstream knowledge connectors for this project. The semantic layer stays source-agnostic.
-              </p>
             </div>
             <Button variant="outline" size="sm" onClick={() => void loadSources()} disabled={!credentials || loading}>
               {loading ? "Refreshing..." : "Refresh"}
@@ -343,9 +340,6 @@ export function ProjectKnowledgeSourcesSection({
       <div className="overflow-hidden rounded-2xl border bg-background">
         <div className="p-6 pb-3">
           <h2 className="text-base font-semibold">Add Source</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Add Jira, Google Drive, or Discord as a project knowledge source.
-          </p>
         </div>
         <div className="space-y-4 p-6 pt-0">
           <div className="flex flex-wrap gap-2">

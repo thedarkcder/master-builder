@@ -13,7 +13,6 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import {
   debugProjectKnowledgeSearch,
   deleteProjectKnowledgeAsset,
-  getProject,
   getProjectKnowledgeAsset,
   getProjectKnowledgeStats,
   listProjectKnowledgeAssets,
@@ -64,7 +63,6 @@ export function ProjectKnowledgeBrowserPage({
 }: ProjectKnowledgeBrowserPageProps) {
   const { credentials } = useAuth();
   const [activeView, setActiveView] = useState<"browse" | "add" | "sources">(initialView);
-  const [projectName, setProjectName] = useState(projectId);
   const [stats, setStats] = useState<ProjectKnowledgeStatsRecord | null>(null);
   const [assets, setAssets] = useState<ProjectKnowledgeAssetRecord[]>([]);
   const [assetTotal, setAssetTotal] = useState(0);
@@ -108,8 +106,7 @@ export function ProjectKnowledgeBrowserPage({
     }
     setLoadingPage(true);
     try {
-      const [project, statsPayload, page] = await Promise.all([
-        getProject(credentials, tenantId, projectId),
+      const [statsPayload, page] = await Promise.all([
         getProjectKnowledgeStats(credentials, tenantId, projectId),
         listProjectKnowledgeAssets(credentials, tenantId, projectId, {
           limit: ASSET_PAGE_SIZE,
@@ -119,7 +116,6 @@ export function ProjectKnowledgeBrowserPage({
           query: appliedQuery || undefined
         })
       ]);
-      setProjectName(project.name);
       setStats(statsPayload);
       setAssets(page.items);
       setAssetTotal(page.total);
@@ -310,10 +306,6 @@ export function ProjectKnowledgeBrowserPage({
               Back to project
             </Link>
           </p>
-          <h1 className="text-2xl font-semibold tracking-tight">{projectName} Knowledge</h1>
-          <p className="text-sm text-muted-foreground">
-            Browse the stored knowledge behind this project, not just the asset titles.
-          </p>
         </div>
         <div className="flex flex-wrap gap-2">
           <Button
@@ -355,7 +347,6 @@ export function ProjectKnowledgeBrowserPage({
       <div className="overflow-hidden rounded-2xl border bg-background">
         <div className="p-6 pb-3">
           <h2 className="text-base font-semibold">Knowledge Analytics</h2>
-          <p className="mt-1 text-sm text-muted-foreground">Project-wide stats and hourly sync state.</p>
         </div>
         <div className="space-y-3 p-6 pt-0">
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
@@ -420,7 +411,6 @@ export function ProjectKnowledgeBrowserPage({
       <div className="overflow-hidden rounded-2xl border bg-background">
         <div className="p-6 pb-3">
           <h2 className="text-base font-semibold">Asset Browser</h2>
-          <p className="mt-1 text-sm text-muted-foreground">Filter, page, and inspect all project knowledge assets.</p>
         </div>
         <div className="space-y-4 p-6 pt-0">
           <div className="rounded-md border p-4">

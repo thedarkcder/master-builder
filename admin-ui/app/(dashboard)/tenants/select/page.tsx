@@ -121,12 +121,6 @@ export default function SelectTenantPage() {
         <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-primary shadow-[0_0_24px_rgba(99,102,241,0.3)]">
           <Zap className="h-6 w-6 text-white" />
         </div>
-        <div>
-          <h1 className="text-2xl font-bold">Select a workspace</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Open an active workspace, or manage archived workspaces below.
-          </p>
-        </div>
       </div>
 
       {/* Tenant list */}
@@ -138,7 +132,7 @@ export default function SelectTenantPage() {
         ) : null}
 
         {loading ? (
-          <div className="overflow-hidden rounded-xl border bg-card shadow-sm">
+          <div className="overflow-hidden rounded-xl border bg-background shadow-sm">
             <div className="divide-y">
               {[...Array(3)].map((_, i) => (
                 <div key={i} className="flex items-center gap-3 px-4 py-4">
@@ -153,7 +147,7 @@ export default function SelectTenantPage() {
           </div>
         ) : (
           <div className="space-y-4">
-            <div className="overflow-hidden rounded-xl border bg-card shadow-sm">
+            <div className="overflow-hidden rounded-xl border bg-background shadow-sm">
               <div className="border-b px-4 py-3">
                 <p className="text-sm font-semibold">Active workspaces</p>
               </div>
@@ -242,7 +236,7 @@ export default function SelectTenantPage() {
             </div>
 
             {archivedTenants.length > 0 ? (
-              <div className="overflow-hidden rounded-xl border bg-card shadow-sm">
+              <div className="overflow-hidden rounded-xl border bg-background shadow-sm">
                 <div className="border-b px-4 py-3">
                   <p className="text-sm font-semibold">Archived workspaces</p>
                   <p className="mt-1 text-xs text-muted-foreground">

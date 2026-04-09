@@ -273,7 +273,6 @@ export function TenantProfilePage({ section = "profile" }: { section?: "profile"
                         <UserRound className="h-4 w-4 text-muted-foreground" />
                         <h2 className="text-base font-semibold">Account</h2>
                       </div>
-                      <p className="mt-1 text-sm text-muted-foreground">These details identify you across Master Builder.</p>
                     </div>
                     <div className="grid gap-4 md:grid-cols-2">
                       <div className="space-y-2">
@@ -312,7 +311,6 @@ export function TenantProfilePage({ section = "profile" }: { section?: "profile"
                           <Check className="h-4 w-4 text-muted-foreground" />
                           <h2 className="text-base font-semibold">Workspace view</h2>
                         </div>
-                        <p className="mt-1 text-sm text-muted-foreground">Choose which view opens by default in this workspace.</p>
                       </div>
                       <div className="max-w-sm space-y-2">
                         <label className="text-sm font-medium" htmlFor="profile-mode-override">
@@ -341,14 +339,13 @@ export function TenantProfilePage({ section = "profile" }: { section?: "profile"
                           <DiscordLogo className="h-4 w-4 text-[#5865F2]" />
                           <h2 className="text-base font-semibold">Discord</h2>
                         </div>
-                        <p className="mt-1 text-sm text-muted-foreground">Link your Discord profile and open a workspace join link when needed.</p>
                       </div>
                       <div className="grid gap-3 md:grid-cols-2">
-                        <div className="rounded-xl border px-4 py-3">
+                        <div className="rounded-xl border bg-background px-4 py-3">
                           <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Identity</p>
                           <p className="mt-2 text-sm font-medium">{linkedDiscordName ?? "Not linked"}</p>
                         </div>
-                        <div className="rounded-xl border px-4 py-3">
+                        <div className="rounded-xl border bg-background px-4 py-3">
                           <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Workspace invite</p>
                           <p className="mt-2 text-sm font-medium">
                             {workspaceInviteAvailable ? "Available" : "Not configured"}
@@ -386,7 +383,7 @@ export function TenantProfilePage({ section = "profile" }: { section?: "profile"
                       <Shield className="h-4 w-4 text-muted-foreground" />
                       <h2 className="text-base font-semibold">Security</h2>
                     </div>
-                    <p className="mt-1 text-sm text-muted-foreground">Use a new password with at least eight characters.</p>
+                    <p className="text-sm text-muted-foreground">Minimum eight characters.</p>
                   </div>
                   <div className="grid gap-4 md:grid-cols-2">
                     <div className="space-y-2">

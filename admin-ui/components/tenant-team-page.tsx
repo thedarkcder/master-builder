@@ -274,7 +274,6 @@ export function TenantTeamPage({ section }: { section: TenantTeamSection }) {
           <div className="divide-y">
             <div className="p-6">
               <h2 className="text-base font-semibold">Members</h2>
-              <p className="mt-1 text-sm text-muted-foreground">Manage people, role, team membership, and onboarding status.</p>
             </div>
             {members.length === 0 ? (
               <div className="p-6 text-sm text-muted-foreground">No members found.</div>
@@ -346,7 +345,6 @@ export function TenantTeamPage({ section }: { section: TenantTeamSection }) {
             <div className="flex flex-wrap items-center justify-between gap-3 p-6">
               <div>
                 <h2 className="text-base font-semibold">Teams</h2>
-                <p className="mt-1 text-sm text-muted-foreground">Create groups and decide what each team can access.</p>
               </div>
               <Button type="button" variant={showCreateTeamForm ? "outline" : "default"} onClick={() => setShowCreateTeamForm((current) => !current)}>
                 {showCreateTeamForm ? "Close" : "New team"}
@@ -452,7 +450,6 @@ export function TenantTeamPage({ section }: { section: TenantTeamSection }) {
           <div className="divide-y">
             <div className="p-6">
               <h2 className="text-base font-semibold">Invites</h2>
-              <p className="mt-1 text-sm text-muted-foreground">Invite people to the workspace and choose their access.</p>
             </div>
             <div className="p-6 text-sm">
               <div className="grid gap-3 md:grid-cols-2">

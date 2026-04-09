@@ -23,6 +23,7 @@ DecisionSource = Literal[
 _BLOCKING_PRECHECK_OUTCOMES = {
     "decision_gate_required",
     "gtd_required",
+    "execution_blocked",
     "missing_ready_label",
 }
 
@@ -195,7 +196,7 @@ def resolve_execution_gate_state(
             ),
         )
 
-    if block_reason in {"decision_gate_required", "gtd_required"} or classification in {"decision_gate", "gtd", "both"}:
+    if block_reason in {"decision_gate_required", "gtd_required", "execution_blocked"} or classification in {"decision_gate", "gtd", "both"}:
         detail = str(getattr(decision.pre_check, "decision_gate_reason", "") or "").strip() or None
         return ExecutionGateResolution(
             state=ExecutionGateState.BLOCK_DECISION,

@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import Link from "next/link";
 import { Bot, Plus, RefreshCw, RotateCcw, Save, Trash2 } from "lucide-react";
 
 import { useAuth } from "@/components/auth-provider";
@@ -391,17 +390,7 @@ export default function AgentRuntimesPage() {
 
   return (
     <div className="mx-auto w-full max-w-6xl space-y-8">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div className="space-y-1">
-          <h1 className="text-3xl font-semibold tracking-tight">Agent runtimes</h1>
-          <p className="text-sm text-muted-foreground">
-            Manage platform-wide routing and profile definitions. For worker health and heartbeat details, use{" "}
-            <Link href="/status" className="text-primary underline-offset-4 hover:underline">
-              platform status
-            </Link>
-            .
-          </p>
-        </div>
+      <div className="flex flex-wrap items-center justify-end gap-3">
         <Button
           variant="outline"
           size="sm"
@@ -436,9 +425,6 @@ export default function AgentRuntimesPage() {
                   </div>
                   <div>
                     <h2 className="text-base font-semibold">Runtime routing</h2>
-                    <p className="text-sm text-muted-foreground">
-                      Named-agent overrides win over role defaults. Leave a row blank to inherit.
-                    </p>
                     <p className="mt-1 text-xs text-muted-foreground">
                       Text <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">!pm</code> uses{" "}
                       <span className="font-mono">pm_primary</span> (built-in default profile{" "}
@@ -615,12 +601,7 @@ export default function AgentRuntimesPage() {
           <div className="overflow-hidden rounded-2xl border bg-background">
             <div className="p-6 pb-3">
               <div className="flex items-center justify-between gap-2">
-                <div>
-                  <h2 className="text-base font-semibold">Profiles</h2>
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    Built-ins can be edited and reset. Custom profiles can be created and deleted.
-                  </p>
-                </div>
+                <h2 className="text-base font-semibold">Profiles</h2>
                 <Button
                   variant="outline"
                   size="sm"
@@ -682,12 +663,7 @@ export default function AgentRuntimesPage() {
 
           <div className="overflow-hidden rounded-2xl border bg-background">
             <div className="p-6 pb-3">
-              <div>
-                <h2 className="text-base font-semibold">{editingProfileName ? `Edit ${editingProfileName}` : "Create profile"}</h2>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  Secret refs should point to Platform Secrets. Tenant and project model pickers will follow the engineering execution runtime.
-                </p>
-              </div>
+              <h2 className="text-base font-semibold">{editingProfileName ? `Edit ${editingProfileName}` : "Create profile"}</h2>
             </div>
             <div className="space-y-4 px-6 pb-6">
               <div className="space-y-2">
@@ -875,9 +851,6 @@ export default function AgentRuntimesPage() {
           <div className="overflow-hidden rounded-2xl border bg-background">
             <div className="px-6 pt-6 pb-3">
               <h2 className="text-base font-semibold">Implemented tools</h2>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Read-only list of the governed tools available in the runtime bridge and the workflow stages that can call them.
-              </p>
             </div>
             <div className="px-6 pb-4">
               <p className="text-xs text-muted-foreground">
