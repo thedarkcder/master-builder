@@ -221,8 +221,10 @@ test("renders a dynamic team run without the fixed PM DEV TEST REVIEW stage bar"
       edges: [
         { from_task_key: "brief", to_task_key: "research" },
         { from_task_key: "research", to_task_key: "message_map" },
+        { from_task_key: "research", to_task_key: "visuals" },
         { from_task_key: "message_map", to_task_key: "copy_draft" },
         { from_task_key: "copy_draft", to_task_key: "launch_review" },
+        { from_task_key: "visuals", to_task_key: "launch_review" },
       ],
       nodes: [
         {
@@ -259,6 +261,17 @@ test("renders a dynamic team run without the fixed PM DEV TEST REVIEW stage bar"
           approval_rule: {},
         },
         {
+          task_key: "visuals",
+          label: "Visuals",
+          owner_role_key: "designer",
+          owner_persona_key: "creative_designer",
+          owner_agent_key: "creative_designer_agent",
+          status: "pending",
+          dependency_keys: ["research"],
+          artifact_contract: { produces: ["creative_assets"] },
+          approval_rule: {},
+        },
+        {
           task_key: "copy_draft",
           label: "Copy Draft",
           owner_role_key: "writer",
@@ -276,7 +289,7 @@ test("renders a dynamic team run without the fixed PM DEV TEST REVIEW stage bar"
           owner_persona_key: "launch_reviewer",
           owner_agent_key: "launch_review_agent",
           status: "pending",
-          dependency_keys: ["copy_draft"],
+          dependency_keys: ["copy_draft", "visuals"],
           artifact_contract: { produces: ["launch_ready"] },
           approval_rule: { type: "manual" },
         },
@@ -294,8 +307,14 @@ test("renders a dynamic team run without the fixed PM DEV TEST REVIEW stage bar"
   await expect(page.getByTestId("team-run-node-brief")).toContainText("Brief");
   await expect(page.getByTestId("team-run-node-research")).toContainText("Research");
   await expect(page.getByTestId("team-run-node-message_map")).toContainText("Message Map");
+  await expect(page.getByTestId("team-run-node-visuals")).toContainText("Visuals");
   await expect(page.getByTestId("team-run-node-copy_draft")).toContainText("Copy Draft");
   await expect(page.getByTestId("team-run-node-launch_review")).toContainText("Launch Review");
+  await expect(page.getByTestId("team-run-node-dependencies-brief")).toContainText("Start task");
+  await expect(page.getByTestId("team-run-node-dependencies-research")).toContainText("Depends on: brief");
+  await expect(page.getByTestId("team-run-node-dependencies-message_map")).toContainText("Depends on: research");
+  await expect(page.getByTestId("team-run-node-dependencies-visuals")).toContainText("Depends on: research");
+  await expect(page.getByTestId("team-run-node-dependencies-launch_review")).toContainText("Depends on: copy_draft, visuals");
   await expect(page.getByText("PM", { exact: true })).toHaveCount(0);
   await expect(page.getByText("DEV", { exact: true })).toHaveCount(0);
   await expect(page.getByText("TEST", { exact: true })).toHaveCount(0);
@@ -304,6 +323,7 @@ test("renders a dynamic team run without the fixed PM DEV TEST REVIEW stage bar"
   await page.getByRole("button", { name: "Agents" }).click();
   await expect(page.getByText("launch_strategy_agent")).toBeVisible();
   await expect(page.getByText("campaign_writer_agent")).toHaveCount(2);
+  await expect(page.getByText("creative_designer_agent")).toBeVisible();
   await expect(page.getByText("launch_review_agent")).toBeVisible();
 });
 

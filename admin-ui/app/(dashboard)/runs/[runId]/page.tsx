@@ -755,6 +755,9 @@ export default function RunDetailPage() {
                     tileDetail: "pending",
                     detail: "pending",
                   };
+                  const dependencyLabel = node.dependency_keys.length > 0
+                    ? `Depends on: ${node.dependency_keys.join(", ")}`
+                    : "Start task";
                   const isRunning = progress.status === "running";
                   const isDone = progress.status === "completed";
                   const isBlocked = progress.status === "blocked";
@@ -783,8 +786,14 @@ export default function RunDetailPage() {
                           {node.owner_role_key}
                           {node.owner_persona_key ? ` · ${node.owner_persona_key}` : ""}
                         </span>
+                        <span
+                          data-testid={`team-run-node-dependencies-${node.task_key}`}
+                          className="text-[10px] text-muted-foreground"
+                        >
+                          {dependencyLabel}
+                        </span>
                       </div>
-                      {idx < teamRun.nodes.length - 1 ? <span className="text-muted-foreground/40">→</span> : null}
+                      {idx < teamRun.nodes.length - 1 ? <span className="text-muted-foreground/40">•</span> : null}
                     </div>
                   );
                 })}

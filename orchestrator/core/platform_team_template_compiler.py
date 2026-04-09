@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
 
 
@@ -47,6 +48,40 @@ class CompiledPlatformTeamTemplate:
     roles: list[CompiledPlatformTeamRole]
     tasks: list[CompiledPlatformTeamTask]
     edges: list[CompiledPlatformTeamEdge]
+
+
+def _validate_task_graph(*, task_keys: set[str], edges: list[CompiledPlatformTeamEdge]) -> None:
+    if not task_keys:
+        raise ValueError("Team template must define at least one task")
+
+    inbound_count = {task_key: 0 for task_key in task_keys}
+    adjacency: dict[str, list[str]] = {task_key: [] for task_key in task_keys}
+    seen_edges: set[tuple[str, str]] = set()
+    for edge in edges:
+        edge_key = (edge.from_task_key, edge.to_task_key)
+        if edge_key in seen_edges:
+            raise ValueError(f"Duplicate edge: {edge.from_task_key}->{edge.to_task_key}")
+        seen_edges.add(edge_key)
+        inbound_count[edge.to_task_key] += 1
+        adjacency[edge.from_task_key].append(edge.to_task_key)
+
+    roots = [task_key for task_key, inbound in inbound_count.items() if inbound == 0]
+    if not roots:
+        raise ValueError("Team template must include at least one root task; dependency graph must be acyclic")
+
+    remaining_inbound = dict(inbound_count)
+    ready = deque(sorted(roots))
+    visited = 0
+    while ready:
+        task_key = ready.popleft()
+        visited += 1
+        for successor in adjacency[task_key]:
+            remaining_inbound[successor] -= 1
+            if remaining_inbound[successor] == 0:
+                ready.append(successor)
+
+    if visited != len(task_keys):
+        raise ValueError("Team template dependency graph must be acyclic")
 
 
 def compile_platform_team_template(payload: dict) -> CompiledPlatformTeamTemplate:
@@ -102,6 +137,8 @@ def compile_platform_team_template(payload: dict) -> CompiledPlatformTeamTemplat
                 to_task_key=to_task_key,
             )
         )
+
+    _validate_task_graph(task_keys=task_keys, edges=compiled_edges)
 
     return CompiledPlatformTeamTemplate(
         roles=compiled_roles,

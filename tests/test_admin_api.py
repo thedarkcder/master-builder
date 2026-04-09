@@ -480,6 +480,78 @@ class AdminApiTests(unittest.TestCase):
         self.assertNotIn("launch_strategy_primary", runtimes_after_deactivate_body["available_named_agents"])
         self.assertNotIn("team.launch.strategy", runtimes_after_deactivate_body["available_selectors"])
 
+    def test_platform_team_template_rejects_cyclic_graphs(self) -> None:
+        persona_response = self.client.post(
+            "/api/admin/platform-personas",
+            json={
+                "persona_key": "cycle_test_persona",
+                "label": "Cycle Test Persona",
+                "allowed_surfaces": ["team_run_execution"],
+                "is_active": True,
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(persona_response.status_code, 201, persona_response.text)
+
+        agent_response = self.client.post(
+            "/api/admin/platform-agents",
+            json={
+                "agent_key": "cycle_test_agent",
+                "label": "Cycle Test Agent",
+                "persona_key": "cycle_test_persona",
+                "runtime_role_key": "cycle_test_role",
+                "named_agent_key": "cycle_test_named_agent",
+                "selector_key": "team.cycle.test",
+                "default_profile_name": "general_planning_default",
+                "is_active": True,
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(agent_response.status_code, 201, agent_response.text)
+
+        template_response = self.client.post(
+            "/api/admin/platform-team-templates",
+            json={
+                "team_key": "cycle_test_team",
+                "label": "Cycle Test Team",
+                "is_active": True,
+                "roles": [
+                    {
+                        "role_key": "cycle_role",
+                        "label": "Cycle Role",
+                        "position": 1,
+                        "persona_key": "cycle_test_persona",
+                        "agent_key": "cycle_test_agent",
+                    }
+                ],
+                "tasks": [
+                    {
+                        "task_key": "task_a",
+                        "label": "Task A",
+                        "owner_role_key": "cycle_role",
+                        "position": 1,
+                        "artifact_contract": {},
+                        "approval_rule": {},
+                    },
+                    {
+                        "task_key": "task_b",
+                        "label": "Task B",
+                        "owner_role_key": "cycle_role",
+                        "position": 2,
+                        "artifact_contract": {},
+                        "approval_rule": {},
+                    },
+                ],
+                "edges": [
+                    {"from_task_key": "task_a", "to_task_key": "task_b"},
+                    {"from_task_key": "task_b", "to_task_key": "task_a"},
+                ],
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(template_response.status_code, 400, template_response.text)
+        self.assertIn("acyclic", str(template_response.json().get("detail", "")).lower())
+
     def test_launch_team_run_snapshots_published_definition_and_stays_stable_after_catalog_edits(self) -> None:
         payload = self._tenant_payload()
         self._insert_jira_connection(connection_id="conn-1")
