@@ -300,6 +300,15 @@ jobs:
           set -euo pipefail
           ruff check . || (echo "ruff failed" && exit 1)
 
+      - name: Ruff strict on changed Python lines
+        if: github.event_name == 'pull_request'
+        shell: bash
+        env:
+          GITHUB_BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          python scripts/quality/check_ruff_changed_lines.py
+
       - name: Compatibility shim policy
         shell: bash
         run: |
@@ -311,6 +320,12 @@ jobs:
         run: |
           set -euo pipefail
           python scripts/quality/check_dead_code.py
+
+      - name: No untracked TODO/FIXME in production paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/quality/check_no_todo_markers.py
 
       - name: Pytest confidence pack
         shell: bash
