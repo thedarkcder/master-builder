@@ -38,6 +38,7 @@ from orchestrator.core.decision_reply_service import (
 )
 from orchestrator.core.decision_planner import DecisionPlannerResult, plan_decision_questions
 from orchestrator.core.decision_state_repository import (
+    active_cycle as active_cycle_state,
     decision_gate_closed_cycle_id as decision_gate_closed_cycle_id_state,
     decision_gate_closed_permanently as decision_gate_closed_permanently_state,
     existing_case_for_issue as existing_case_for_issue_state,

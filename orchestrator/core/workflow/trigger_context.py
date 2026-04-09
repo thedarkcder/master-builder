@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
-
 
 PR_REMEDIATION_TRIGGER_SOURCE = "github_pr_review_feedback"
 _MANUAL_FIX_COMMENT_TYPES = {"review_comment", "issue_comment"}

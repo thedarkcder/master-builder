@@ -3,6 +3,8 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from orchestrator.core.decision_gate import DecisionGateResult
+from orchestrator.core.gtd import GoodToDoValidationResult
+from orchestrator.core.pre_run_check import PreRunCheckResult
 from orchestrator.core.worker.decision_gate import apply_decision_gate
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.storage.models import JiraOAuthConnection
@@ -28,9 +30,30 @@ class _Session:
         return None
 
 
-def _oauth_context():
+class _IssueDetailClient:
+    def __init__(
+        self,
+        *,
+        summary: str = "Summary",
+        description: str = "Description",
+        labels: list[str] | None = None,
+    ) -> None:
+        self.summary = summary
+        self.description = description
+        self.labels = list(labels or [])
+
+    def get_issue_detail(self, *, access_token: str, cloud_id: str, issue_id_or_key: str):  # noqa: ARG002
+        return SimpleNamespace(
+            key=issue_id_or_key,
+            summary=self.summary,
+            description=self.description,
+            labels=list(self.labels),
+        )
+
+
+def _oauth_context(*, client: _IssueDetailClient):
     return SimpleNamespace(
-        client=None,
+        client=client,
         connection=SimpleNamespace(cloud_id="cloud-1"),
         access_token="access-token",
     )
@@ -51,28 +74,31 @@ def _run() -> SimpleNamespace:
     )
 
 
-def _worker_decision(
+def _readiness_check(
     *,
-    allowed: bool,
-    block_reason: str | None = None,
+    outcome: str,
     ready_label: str = "agent:ready",
-    pre_check_outcome: str | None = None,
-) -> SimpleNamespace:
-    return SimpleNamespace(
-        allowed=allowed,
-        block_reason=block_reason,
+    ready_label_present: bool = True,
+) -> PreRunCheckResult:
+    return PreRunCheckResult(
+        outcome=outcome,
         ready_label=ready_label,
-        pre_check=SimpleNamespace(
-            outcome=pre_check_outcome,
-            ready_label=ready_label,
-        ),
+        ready_label_present=ready_label_present,
+        required_worker_capability="linux",
+        required_worker_label="worker:linux",
+        required_worker_label_present=True,
         decision_gate=DecisionGateResult(
-            triggered=not allowed,
-            reason="Need a decision",
+            triggered=False,
+            reason="Decision Gate permanently satisfied",
             missing_sections=(),
             questions=(),
             recommendation="Proceed",
             tags=(),
+        ),
+        gtd=GoodToDoValidationResult(
+            valid=True,
+            missing_criteria=(),
+            clarification_questions=(),
         ),
     )
 
@@ -81,17 +107,6 @@ def test_apply_decision_gate_marks_failed_on_configuration_error() -> None:
     session = _Session()
     run = _run()
     tenant = SimpleNamespace(tenant_id="tenant-1")
-    captured: dict[str, object] = {}
-
-    def _mark_terminal(*, session, run_id: str, terminal_status: str, last_error: str | None = None):  # noqa: ANN001
-        _ = session
-        captured["run_id"] = run_id
-        captured["terminal_status"] = terminal_status
-        captured["last_error"] = last_error
-        run.status = terminal_status
-        run.last_error = last_error
-        run.finished_at = datetime.now()
-        return run
 
     with patch("orchestrator.core.worker.decision_gate.resolve_project_for_run", return_value=None):
         terminal, meta = apply_decision_gate(
@@ -100,19 +115,15 @@ def test_apply_decision_gate_marks_failed_on_configuration_error() -> None:
             tenant=tenant,
             settings=SimpleNamespace(admin_ui_base_url="https://admin.example.test"),
             tenant_jira_oauth_context_fn=lambda **_: None,
-            evaluate_worker_decision_fn=lambda **_: (_ for _ in ()).throw(RuntimeError("Tenant Jira OAuth context is incomplete")),
             send_discord_message_fn=lambda **_: None,
             send_jira_message_fn=lambda **_: None,
             ask_reply_components_fn=lambda: [],
             blocked_status="blocked",
             failed_status="failed",
-            mark_run_terminal_fn=_mark_terminal,
         )
 
     assert terminal is run
     assert meta is None
-    assert captured["run_id"] == "run-1"
-    assert captured["terminal_status"] == "failed"
     assert run.status == "failed"
     assert "Execution readiness check failed" in (run.last_error or "")
     assert isinstance(run.finished_at, datetime)
@@ -122,7 +133,7 @@ def test_apply_decision_gate_returns_none_when_issue_is_ready() -> None:
     session = _Session()
     run = _run()
     tenant = SimpleNamespace(tenant_id="tenant-1", jira_config={"ready_label": "agent:ready"})
-    oauth = _oauth_context()
+    oauth = _oauth_context(client=_IssueDetailClient(labels=["agent:ready"]))
 
     with patch("orchestrator.core.worker.decision_gate.resolve_project_for_run", return_value=None):
         terminal, meta = apply_decision_gate(
@@ -131,7 +142,7 @@ def test_apply_decision_gate_returns_none_when_issue_is_ready() -> None:
             tenant=tenant,
             settings=SimpleNamespace(admin_ui_base_url="https://admin.example.test"),
             tenant_jira_oauth_context_fn=lambda **_: oauth,
-            evaluate_worker_decision_fn=lambda **_: _worker_decision(allowed=True),
+            evaluate_execution_readiness_fn=lambda **_: _readiness_check(outcome="ready_for_agent"),
             send_discord_message_fn=lambda **_: None,
             send_jira_message_fn=lambda **_: None,
             ask_reply_components_fn=lambda: [],
@@ -157,7 +168,7 @@ def test_apply_decision_gate_uses_tenant_jira_connection_url_for_stage_update() 
         jira_config={"connection_id": "conn-1", "ready_label": "agent:ready"},
     )
     sent_discord_messages: list[str] = []
-    oauth = _oauth_context()
+    oauth = _oauth_context(client=_IssueDetailClient(labels=[]))
 
     def _send_discord_message_fn(
         *,
@@ -186,10 +197,9 @@ def test_apply_decision_gate_uses_tenant_jira_connection_url_for_stage_update() 
             tenant=tenant,
             settings=SimpleNamespace(admin_ui_base_url="https://admin.example.test"),
             tenant_jira_oauth_context_fn=lambda **_: oauth,
-            evaluate_worker_decision_fn=lambda **_: _worker_decision(
-                allowed=False,
-                block_reason="missing_ready_label",
-                pre_check_outcome="missing_ready_label",
+            evaluate_execution_readiness_fn=lambda **_: _readiness_check(
+                outcome="missing_ready_label",
+                ready_label_present=False,
             ),
             send_discord_message_fn=_send_discord_message_fn,
             send_jira_message_fn=lambda **_: None,
@@ -204,16 +214,22 @@ def test_apply_decision_gate_uses_tenant_jira_connection_url_for_stage_update() 
     assert "https://jira.example.test/browse/YANA-46" in sent_discord_messages[0]
 
 
-def test_apply_decision_gate_passes_issue_context_into_worker_decision() -> None:
+def test_apply_decision_gate_passes_issue_context_into_readiness_check() -> None:
     session = _Session()
     run = _run()
     tenant = SimpleNamespace(tenant_id="tenant-1", jira_config={"ready_label": "agent:ready"})
     captured: dict[str, object] = {}
-    oauth = _oauth_context()
+    oauth = _oauth_context(
+        client=_IssueDetailClient(
+            summary="Live issue summary",
+            description="Live issue description",
+            labels=["agent:ready", "worker:linux"],
+        )
+    )
 
-    def _capture_worker_decision(**kwargs):  # noqa: ANN003
+    def _capture_readiness(**kwargs):  # noqa: ANN003
         captured.update(kwargs)
-        return _worker_decision(allowed=True)
+        return _readiness_check(outcome="ready_for_agent")
 
     with patch("orchestrator.core.worker.decision_gate.resolve_project_for_run", return_value=None):
         terminal, meta = apply_decision_gate(
@@ -222,7 +238,7 @@ def test_apply_decision_gate_passes_issue_context_into_worker_decision() -> None
             tenant=tenant,
             settings=SimpleNamespace(admin_ui_base_url="https://admin.example.test"),
             tenant_jira_oauth_context_fn=lambda **_: oauth,
-            evaluate_worker_decision_fn=_capture_worker_decision,
+            evaluate_execution_readiness_fn=_capture_readiness,
             send_discord_message_fn=lambda **_: None,
             send_jira_message_fn=lambda **_: None,
             ask_reply_components_fn=lambda: [],
@@ -235,8 +251,10 @@ def test_apply_decision_gate_passes_issue_context_into_worker_decision() -> None
     assert captured["tenant_id"] == "tenant-1"
     assert captured["project_id"] is None
     assert captured["issue_key"] == "YANA-46"
-    assert captured["issue_summary"] == "Summary"
-    assert captured["issue_description"] == "Description"
+    assert captured["issue_summary"] == "Live issue summary"
+    assert captured["issue_description"] == "Live issue description"
+    assert captured["issue_labels"] == ["agent:ready", "worker:linux"]
+    assert captured["ready_label"] == "agent:ready"
 
 
 def test_apply_decision_gate_preserves_trigger_context_on_block() -> None:
@@ -246,7 +264,7 @@ def test_apply_decision_gate_preserves_trigger_context_on_block() -> None:
         trigger_context={"source": "github_pr_review_feedback", "pr_number": 6}
     ).dump()
     tenant = SimpleNamespace(tenant_id="tenant-1", jira_config={"ready_label": "agent:ready"})
-    oauth = _oauth_context()
+    oauth = _oauth_context(client=_IssueDetailClient(labels=[]))
 
     with (
         patch("orchestrator.core.worker.decision_gate.resolve_project_for_run", return_value=None),
@@ -258,10 +276,9 @@ def test_apply_decision_gate_preserves_trigger_context_on_block() -> None:
             tenant=tenant,
             settings=SimpleNamespace(admin_ui_base_url="https://admin.example.test"),
             tenant_jira_oauth_context_fn=lambda **_: oauth,
-            evaluate_worker_decision_fn=lambda **_: _worker_decision(
-                allowed=False,
-                block_reason="missing_ready_label",
-                pre_check_outcome="missing_ready_label",
+            evaluate_execution_readiness_fn=lambda **_: _readiness_check(
+                outcome="missing_ready_label",
+                ready_label_present=False,
             ),
             send_discord_message_fn=lambda **_: SimpleNamespace(sent=True, reason="sent"),
             send_jira_message_fn=lambda **_: None,
@@ -282,7 +299,7 @@ def test_apply_decision_gate_refreshes_latest_plan_before_replacing_it() -> None
     run = _run()
     run.plan = {}
     tenant = SimpleNamespace(tenant_id="tenant-1", jira_config={"ready_label": "agent:ready"})
-    oauth = _oauth_context()
+    oauth = _oauth_context(client=_IssueDetailClient(labels=[]))
 
     def _refresh(_run, attribute_names=None):  # noqa: ANN001
         session.refreshed = True
@@ -304,10 +321,9 @@ def test_apply_decision_gate_refreshes_latest_plan_before_replacing_it() -> None
             tenant=tenant,
             settings=SimpleNamespace(admin_ui_base_url="https://admin.example.test"),
             tenant_jira_oauth_context_fn=lambda **_: oauth,
-            evaluate_worker_decision_fn=lambda **_: _worker_decision(
-                allowed=False,
-                block_reason="missing_ready_label",
-                pre_check_outcome="missing_ready_label",
+            evaluate_execution_readiness_fn=lambda **_: _readiness_check(
+                outcome="missing_ready_label",
+                ready_label_present=False,
             ),
             send_discord_message_fn=lambda **_: SimpleNamespace(sent=True, reason="sent"),
             send_jira_message_fn=lambda **_: None,
