@@ -5,6 +5,7 @@ from typing import Any
 from uuid import uuid4
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from orchestrator.core.followup_context_service import (
@@ -214,7 +215,32 @@ def create_human_input_request(
     workflow.blocked_reason = None
     workflow.updated_at = now
     session.add(request)
-    session.commit()
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        existing_request = session.execute(
+            select(RunHumanInputRequest)
+            .where(
+                RunHumanInputRequest.workflow_id == run.workflow_id,
+                RunHumanInputRequest.status == INPUT_STATUS_PENDING,
+            )
+            .order_by(RunHumanInputRequest.created_at.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+        if existing_request is None:
+            raise
+        if str(existing_request.thread_channel_id or "").strip():
+            raise ValueError("A pending human input request already exists for this workflow")
+        _dispatch_human_input_request(
+            session=session,
+            settings=settings,
+            tenant=tenant,
+            project=project,
+            run=run,
+            request=existing_request,
+        )
+        return existing_request
     session.refresh(request)
     _dispatch_human_input_request(
         session=session,
@@ -422,7 +448,9 @@ def resume_workflow_from_human_input_answer(
     checkpoint = session.get(WorkflowCheckpoint, request.checkpoint_id)
     if checkpoint is None:
         raise ValueError("Checkpoint for human input request was not found")
-    checkpoint_plan = ExecutionSnapshot.require(checkpoint.payload_json, allow_empty=True).dump()
+    checkpoint_plan_snapshot = ExecutionSnapshot.require(checkpoint.payload_json, allow_empty=True)
+    checkpoint_plan_snapshot.context.execution_context["human_input_request_id"] = request.request_id
+    checkpoint_plan = checkpoint_plan_snapshot.dump()
 
     enqueue_result = enqueue_attempt_for_workflow_uncommitted(
         session,
@@ -440,20 +468,22 @@ def resume_workflow_from_human_input_answer(
     )
     if not enqueue_result.enqueued:
         if enqueue_result.reason == "run_already_active":
-            request.status = INPUT_STATUS_CONSUMED
-            request.consumed_by_run_id = enqueue_result.run.run_id
-            request.updated_at = _now()
-            close_followup_contexts(
-                session=session,
-                tenant_id=request.tenant_id,
-                context_type=FOLLOWUP_CONTEXT_HUMAN_INPUT,
-                request_id=request.request_id,
-                status=CLOSED_FOLLOWUP_CONTEXT_STATUS,
-            )
-            session.commit()
-            session.refresh(request)
-            session.refresh(enqueue_result.run)
-            return enqueue_result.run
+            if _run_matches_human_input_request(run=enqueue_result.run, request_id=request.request_id):
+                request.status = INPUT_STATUS_CONSUMED
+                request.consumed_by_run_id = enqueue_result.run.run_id
+                request.updated_at = _now()
+                close_followup_contexts(
+                    session=session,
+                    tenant_id=request.tenant_id,
+                    context_type=FOLLOWUP_CONTEXT_HUMAN_INPUT,
+                    request_id=request.request_id,
+                    status=CLOSED_FOLLOWUP_CONTEXT_STATUS,
+                )
+                session.commit()
+                session.refresh(request)
+                session.refresh(enqueue_result.run)
+                return enqueue_result.run
+            raise ValueError("Workflow already has an active resume run that is unrelated to this human-input request")
         raise ValueError(f"Unable to enqueue resumed run: {enqueue_result.reason}")
 
     request.status = INPUT_STATUS_CONSUMED
@@ -477,7 +507,7 @@ def _existing_resume_run_for_request(*, session: Session, request: RunHumanInput
     normalized_checkpoint_id = str(request.checkpoint_id or "").strip()
     if not normalized_source_run_id or not normalized_checkpoint_id:
         return None
-    return (
+    candidates = (
         session.execute(
             select(Run)
             .where(
@@ -487,11 +517,24 @@ def _existing_resume_run_for_request(*, session: Session, request: RunHumanInput
                 Run.status.in_(NON_TERMINAL_RUN_STATUSES),
             )
             .order_by(Run.attempt_number.desc())
-            .limit(1)
         )
         .scalars()
-        .first()
+        .all()
     )
+    for candidate in candidates:
+        if _run_matches_human_input_request(run=candidate, request_id=request.request_id):
+            return candidate
+    return None
+
+
+def _run_matches_human_input_request(*, run: Run, request_id: str) -> bool:
+    if not str(request_id or "").strip():
+        return False
+    snapshot = ExecutionSnapshot.load(getattr(run, "plan", None))
+    if snapshot is None:
+        return False
+    value = str(snapshot.context.execution_context.get("human_input_request_id") or "").strip()
+    return value == str(request_id).strip()
 
 
 def _dispatch_human_input_request(

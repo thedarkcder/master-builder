@@ -186,7 +186,7 @@ def test_resume_workflow_from_human_input_answer_creates_resume_attempt_and_cons
     )
     resumed_run = SimpleNamespace(run_id="run-2")
     existing_resume_query = MagicMock()
-    existing_resume_query.scalars.return_value.first.return_value = None
+    existing_resume_query.scalars.return_value.all.return_value = []
     lock_query = MagicMock()
     lock_query.scalars.return_value.one_or_none.return_value = request
     session.execute.side_effect = [lock_query, existing_resume_query]
@@ -224,6 +224,8 @@ def test_resume_workflow_from_human_input_answer_creates_resume_attempt_and_cons
     assert bootstrap.entry_stage == "review"
     assert bootstrap.entry_checkpoint_id == "checkpoint-1"
     assert bootstrap.branch == "feature/GP-122"
+    snapshot = ExecutionSnapshot.require(bootstrap.plan, allow_empty=True)
+    assert snapshot.context.execution_context.get("human_input_request_id") == "request-1"
     assert request.status == "consumed"
     assert request.consumed_by_run_id == "run-2"
 
@@ -240,10 +242,13 @@ def test_resume_workflow_from_human_input_answer_reuses_existing_resume_run() ->
         tenant_id="route25",
     )
     existing_resume_run = SimpleNamespace(run_id="run-2", attempt_number=2)
+    existing_run_snapshot = ExecutionSnapshot.empty()
+    existing_run_snapshot.context.execution_context["human_input_request_id"] = "request-1"
+    existing_resume_run.plan = existing_run_snapshot.dump()
     lock_query = MagicMock()
     lock_query.scalars.return_value.one_or_none.return_value = request
     existing_resume_query = MagicMock()
-    existing_resume_query.scalars.return_value.first.return_value = existing_resume_run
+    existing_resume_query.scalars.return_value.all.return_value = [existing_resume_run]
     session.execute.side_effect = [lock_query, existing_resume_query]
 
     with patch(
@@ -259,6 +264,59 @@ def test_resume_workflow_from_human_input_answer_reuses_existing_resume_run() ->
     assert request.status == "consumed"
     assert request.consumed_by_run_id == "run-2"
     enqueue_run_mock.assert_not_called()
+
+
+def test_resume_workflow_from_human_input_answer_rejects_unrelated_active_resume_run() -> None:
+    session = MagicMock()
+    request = SimpleNamespace(
+        request_id="request-1",
+        workflow_id="workflow-1",
+        checkpoint_id="checkpoint-1",
+        source_run_id="run-1",
+        status="answered",
+        consumed_by_run_id=None,
+        tenant_id="route25",
+        source_stage="review",
+    )
+    source_run = SimpleNamespace(
+        run_id="run-1",
+        branch="feature/GP-122",
+        pr_url="https://github.com/example/repo/pull/123",
+    )
+    checkpoint = SimpleNamespace(
+        checkpoint_id="checkpoint-1",
+        payload_json=ExecutionSnapshot.empty(trigger_context={"source": "manual"}).dump(),
+    )
+    unrelated_snapshot = ExecutionSnapshot.empty()
+    unrelated_snapshot.context.execution_context["human_input_request_id"] = "other-request"
+    unrelated_active_run = SimpleNamespace(
+        run_id="run-unrelated",
+        plan=unrelated_snapshot.dump(),
+    )
+    lock_query = MagicMock()
+    lock_query.scalars.return_value.one_or_none.return_value = request
+    existing_resume_query = MagicMock()
+    existing_resume_query.scalars.return_value.all.return_value = []
+    session.execute.side_effect = [lock_query, existing_resume_query]
+    session.get.side_effect = lambda model, key: (
+        source_run if key == "run-1" else checkpoint if key == "checkpoint-1" else None
+    )
+    enqueue_result = SimpleNamespace(enqueued=False, reason="run_already_active", run=unrelated_active_run)
+
+    with patch(
+        "orchestrator.core.run_human_input_service.enqueue_attempt_for_workflow_uncommitted",
+        return_value=enqueue_result,
+    ):
+        try:
+            resume_workflow_from_human_input_answer(
+                session=session,
+                settings=SimpleNamespace(secrets_encryption_key="secret-key"),
+                request=request,
+            )
+        except ValueError as exc:
+            assert "unrelated to this human-input request" in str(exc)
+        else:
+            raise AssertionError("Expected ValueError for unrelated active resume run")
 
 
 def test_create_human_input_request_commits_before_dispatching_discord_message() -> None:
