@@ -363,7 +363,7 @@ class DiscordCommandApiTests(unittest.TestCase):
                 description="Objective: run command should carry Jira detail context.",
             ),
         ), patch(
-            "orchestrator.api.discord.commands.run_controls.evaluate_issue_clarification_state",
+            "orchestrator.api.discord.ingress.executor._default_decision_clarification_port.evaluate_issue_clarification_state",
             return_value=self._ready_decision_result(),
         ):
             response = self.client.post(
@@ -404,7 +404,7 @@ class DiscordCommandApiTests(unittest.TestCase):
                 ],
             ),
             patch(
-                "orchestrator.api.discord.commands.run_controls.evaluate_issue_clarification_state",
+                "orchestrator.api.discord.ingress.executor._default_decision_clarification_port.evaluate_issue_clarification_state",
                 return_value=self._ready_decision_result(),
             ) as decision_mock,
         ):
@@ -435,7 +435,7 @@ class DiscordCommandApiTests(unittest.TestCase):
                 ),
             ),
             patch(
-                "orchestrator.api.discord.commands.run_controls.evaluate_issue_clarification_state",
+                "orchestrator.api.discord.ingress.executor._default_decision_clarification_port.evaluate_issue_clarification_state",
                 return_value=self._missing_ready_decision_result(),
             ),
         ):
@@ -454,7 +454,7 @@ class DiscordCommandApiTests(unittest.TestCase):
             "orchestrator.api.discord.ingress.jira_runtime.fetch_jira_issue_preview",
             return_value=JiraIssuePreview(key="TP-20", summary="Do thing", status="To Do"),
         ), patch(
-            "orchestrator.api.discord.commands.run_controls.evaluate_issue_clarification_state",
+            "orchestrator.api.discord.ingress.executor._default_decision_clarification_port.evaluate_issue_clarification_state",
             return_value=self._ready_decision_result(),
         ):
             response = self.client.post(
@@ -480,7 +480,7 @@ class DiscordCommandApiTests(unittest.TestCase):
                 description="Objective: refreshed from Jira for retry.",
             ),
         ), patch(
-            "orchestrator.api.discord.commands.run_controls.evaluate_issue_clarification_state",
+            "orchestrator.api.discord.ingress.executor._default_decision_clarification_port.evaluate_issue_clarification_state",
             return_value=self._ready_decision_result(),
         ):
             response = self.client.post(
@@ -510,7 +510,7 @@ class DiscordCommandApiTests(unittest.TestCase):
                 description="Objective: refreshed from Jira for retry.",
             ),
         ), patch(
-            "orchestrator.api.discord.commands.run_controls.evaluate_issue_clarification_state",
+            "orchestrator.api.discord.ingress.executor._default_decision_clarification_port.evaluate_issue_clarification_state",
             return_value=self._ready_decision_result(),
         ):
             response = self.client.post(
@@ -529,7 +529,7 @@ class DiscordCommandApiTests(unittest.TestCase):
             "orchestrator.api.discord.ingress.jira_runtime.fetch_jira_issue_preview",
             return_value=JiraIssuePreview(key="TP-30", summary="Retry thing", status="To Do"),
         ), patch(
-            "orchestrator.api.discord.commands.run_controls.evaluate_issue_clarification_state",
+            "orchestrator.api.discord.ingress.executor._default_decision_clarification_port.evaluate_issue_clarification_state",
             return_value=self._ready_decision_result(),
         ):
             response = self.client.post(
@@ -591,7 +591,7 @@ class DiscordCommandApiTests(unittest.TestCase):
             patch("orchestrator.api.discord.ingress.jira_runtime.tenant_jira_oauth_context", return_value=oauth_context),
             patch("orchestrator.api.discord.ingress.executor.build_codex_runtime", return_value=runtime),
             patch(
-                "orchestrator.api.discord.commands.run_controls.capture_decision_reply_and_recheck",
+                "orchestrator.api.discord.ingress.executor._default_decision_clarification_port.capture_decision_reply_and_recheck",
                 return_value=SimpleNamespace(
                     capture=SimpleNamespace(
                         cycle=SimpleNamespace(cycle_id="cycle-1"),
@@ -630,7 +630,7 @@ class DiscordCommandApiTests(unittest.TestCase):
                 ),
             ),
             patch(
-                "orchestrator.api.discord.commands.run_controls.evaluate_issue_clarification_state",
+                "orchestrator.api.discord.ingress.executor._default_decision_clarification_port.evaluate_issue_clarification_state",
                 return_value=self._ready_decision_result(),
             ),
         ):
@@ -718,7 +718,7 @@ class DiscordCommandApiTests(unittest.TestCase):
             ) as preview_mock,
             patch("orchestrator.api.discord.ingress.jira_runtime.tenant_jira_oauth_context", return_value=oauth_context),
             patch(
-                "orchestrator.api.discord.commands.run_controls.capture_decision_reply_and_recheck",
+                "orchestrator.api.discord.ingress.executor._default_decision_clarification_port.capture_decision_reply_and_recheck",
                 return_value=SimpleNamespace(
                     capture=SimpleNamespace(evidence_id="evidence-2"),
                     decision_result=SimpleNamespace(
@@ -821,7 +821,7 @@ class DiscordCommandApiTests(unittest.TestCase):
         with (
             patch("orchestrator.api.discord.ingress.jira_runtime.tenant_jira_oauth_context", return_value=oauth_context),
             patch(
-                "orchestrator.api.discord.commands.run_controls.capture_decision_reply_and_recheck"
+                "orchestrator.api.discord.ingress.executor._default_decision_clarification_port.capture_decision_reply_and_recheck"
             ) as reply_recheck_mock,
             patch(
                 "orchestrator.api.discord.commands.run_controls.unresolved_question_feedback_for_cycle",
@@ -931,7 +931,7 @@ class DiscordCommandApiTests(unittest.TestCase):
         with (
             patch("orchestrator.api.discord.ingress.jira_runtime.tenant_jira_oauth_context", return_value=oauth_context),
             patch(
-                "orchestrator.api.discord.commands.run_controls.capture_decision_reply_and_recheck",
+                "orchestrator.api.discord.ingress.executor._default_decision_clarification_port.capture_decision_reply_and_recheck",
                 return_value=SimpleNamespace(
                     capture=SimpleNamespace(evidence_id="evidence-3"),
                     decision_result=SimpleNamespace(
@@ -1029,7 +1029,7 @@ class DiscordCommandApiTests(unittest.TestCase):
         with (
             patch("orchestrator.api.discord.ingress.jira_runtime.tenant_jira_oauth_context", return_value=oauth_context),
             patch(
-                "orchestrator.api.discord.commands.run_controls.capture_decision_reply_and_recheck",
+                "orchestrator.api.discord.ingress.executor._default_decision_clarification_port.capture_decision_reply_and_recheck",
                 return_value=SimpleNamespace(
                     capture=SimpleNamespace(evidence_id="evidence-4"),
                     decision_result=SimpleNamespace(
@@ -1060,7 +1060,7 @@ class DiscordCommandApiTests(unittest.TestCase):
                 return_value=enqueue_result,
             ) as enqueue_mock,
             patch(
-                "orchestrator.api.discord.commands.run_controls.evaluate_issue_clarification_state",
+                "orchestrator.api.discord.ingress.executor._default_decision_clarification_port.evaluate_issue_clarification_state",
                 return_value=self._ready_decision_result(),
             ) as decision_mock,
         ):
@@ -1110,7 +1110,7 @@ class DiscordCommandApiTests(unittest.TestCase):
         with (
             patch("orchestrator.api.discord.ingress.jira_runtime.tenant_jira_oauth_context", return_value=oauth_context),
             patch(
-                "orchestrator.api.discord.commands.run_controls.capture_decision_reply_and_recheck",
+                "orchestrator.api.discord.ingress.executor._default_decision_clarification_port.capture_decision_reply_and_recheck",
                 side_effect=ValueError("No active decision cycle exists for TP-92"),
             ),
         ):

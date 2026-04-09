@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from orchestrator.core.decision_gate import DecisionGateResult
 from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.precheck_policy import evaluate_precheck_policy
+from orchestrator.core.execution_readiness_state_machine import resolve_precheck_outcome
 from orchestrator.core.worker_capability_normalization import WorkerCapability
 from orchestrator.core.worker_capabilities import (
     infer_required_worker_capability,
@@ -99,9 +100,16 @@ def evaluate_execution_readiness_only(
     invalid_label_guard = _invalid_worker_label_guard(invalid_worker_labels)
     conflicting_capability_guard = _conflicting_worker_capability_guard(conflicting_worker_capabilities)
     gtd_guard = invalid_label_guard or conflicting_capability_guard
-    outcome = "execution_blocked" if gtd_guard is not None else "ready_for_agent"
-    if gtd_guard is None and normalized_ready_label is not None and not ready_label_present:
-        outcome = "missing_ready_label"
+    outcome = (
+        "execution_blocked"
+        if gtd_guard is not None
+        else resolve_precheck_outcome(
+            decision_gate_triggered=False,
+            gtd_valid=True,
+            ready_label_present=ready_label_present,
+            ready_label_required=normalized_ready_label is not None,
+        )
+    )
     return PreRunCheckResult(
         outcome=outcome,
         ready_label=normalized_ready_label,
@@ -221,14 +229,12 @@ def evaluate_pre_run_check(
     decision_gate = precheck_policy.decision_gate
     gtd = precheck_policy.gtd
 
-    if decision_gate.triggered:
-        outcome = "decision_gate_required"
-    elif not gtd.valid:
-        outcome = "gtd_required"
-    elif normalized_ready_label is None or ready_label_present:
-        outcome = "ready_for_agent"
-    else:
-        outcome = "missing_ready_label"
+    outcome = resolve_precheck_outcome(
+        decision_gate_triggered=decision_gate.triggered,
+        gtd_valid=gtd.valid,
+        ready_label_present=ready_label_present,
+        ready_label_required=normalized_ready_label is not None,
+    )
 
     return PreRunCheckResult(
         outcome=outcome,

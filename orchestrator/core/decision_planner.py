@@ -7,6 +7,7 @@ from orchestrator.core.agent_tools import allowed_tools_for_stage, execute_agent
 from orchestrator.core.runtime_invocation import AgentInvocationContext, invoke_runtime_json_with_tools
 from orchestrator.core.codex_runtime import CodexRuntimeError, build_codex_runtime
 from orchestrator.core.prompt_templates import render_prompt
+from orchestrator.core.runtime_payload_models import DecisionPlannerPayload
 from orchestrator.storage.models import DecisionCase, DecisionCycle, Project, Tenant
 
 
@@ -91,59 +92,31 @@ def plan_decision_questions(
     except CodexRuntimeError as exc:
         raise RuntimeError(f"Decision planner failed: {exc}") from exc
 
-    gate_status = str(payload.get("gate_status") or "").strip().lower()
-    if gate_status not in {"clear", "blocked_decision_gate", "blocked_gtd", "blocked_both"}:
-        raise RuntimeError("Decision planner returned invalid gate_status")
-    reason = str(payload.get("reason") or "").strip()
-    if gate_status != "clear" and not reason:
-        raise RuntimeError("Decision planner returned blocked state without reason")
-
-    def _normalize_questions(raw_value: object) -> list[DecisionPlannerQuestion]:
-        normalized_questions: list[DecisionPlannerQuestion] = []
-        if not isinstance(raw_value, list):
-            return normalized_questions
-        for item in raw_value:
-            if not isinstance(item, dict):
-                continue
-            question_id = str(item.get("question_id") or "").strip()
-            question = str(item.get("question") or "").strip()
-            if not question_id or not question:
-                continue
-            kind = str(item.get("kind") or "").strip().lower() or (
-                "gtd" if classification == "gtd" else "decision_gate"
-            )
-            if kind not in {"decision_gate", "gtd"}:
-                kind = "decision_gate"
-            status = str(item.get("status") or "").strip().lower() or "open"
-            if status not in {"open", "answered", "accepted"}:
-                status = "open"
-            normalized_questions.append(
-                DecisionPlannerQuestion(
-                    question_id=question_id,
-                    kind=kind,
-                    question=question,
-                    status=status,
-                    detail=str(item.get("detail") or "").strip() or None,
-                )
-            )
-        return normalized_questions
-
-    normalized_questions = _normalize_questions(payload.get("questions"))
-    normalized_question_states = _normalize_questions(payload.get("question_states"))
-    if not normalized_question_states:
-        normalized_question_states = list(normalized_questions)
-
-    captured_answer_summary = str(payload.get("captured_answer_summary") or "").strip() or None
+    parsed_payload = DecisionPlannerPayload.from_payload(payload, classification=classification)
     return DecisionPlannerResult(
-        gate_status=gate_status,
-        reason=reason,
-        questions=tuple(normalized_questions),
-        question_states=tuple(normalized_question_states),
-        resolved_items=tuple(
-            str(item).strip() for item in payload.get("resolved_items", []) if str(item).strip()
-        ) if isinstance(payload.get("resolved_items"), list) else (),
-        missing_items=tuple(
-            str(item).strip() for item in payload.get("missing_items", []) if str(item).strip()
-        ) if isinstance(payload.get("missing_items"), list) else (),
-        captured_answer_summary=captured_answer_summary,
+        gate_status=parsed_payload.gate_status,
+        reason=parsed_payload.reason,
+        questions=tuple(
+            DecisionPlannerQuestion(
+                question_id=item.question_id,
+                kind=item.kind,
+                question=item.question,
+                status=item.status,
+                detail=item.detail,
+            )
+            for item in parsed_payload.questions
+        ),
+        question_states=tuple(
+            DecisionPlannerQuestion(
+                question_id=item.question_id,
+                kind=item.kind,
+                question=item.question,
+                status=item.status,
+                detail=item.detail,
+            )
+            for item in parsed_payload.question_states
+        ),
+        resolved_items=parsed_payload.resolved_items,
+        missing_items=parsed_payload.missing_items,
+        captured_answer_summary=parsed_payload.captured_answer_summary,
     )

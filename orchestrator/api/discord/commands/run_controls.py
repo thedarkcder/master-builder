@@ -16,11 +16,9 @@ from orchestrator.core.communications.enqueue_reason_contract import (
     enqueue_reason_guidance,
     format_enqueue_conflict_detail,
 )
-from orchestrator.core.decision_clarification_service import (
-    capture_decision_reply_and_recheck,
-    evaluate_issue_clarification_state,
-)
 from orchestrator.core.decision_engine import DecisionEventInput, DecisionSource
+from orchestrator.core.decision_clarification_port import DecisionClarificationPort
+from orchestrator.core.execution_admission import resolve_execution_admission
 from orchestrator.core.decision_reply_service import (
     unresolved_question_feedback_for_cycle,
 )
@@ -31,11 +29,12 @@ from orchestrator.core.followup_context_service import (
 from orchestrator.core.pre_run_check import evaluate_pre_run_check
 from orchestrator.core.precheck_decision import build_precheck_message
 from orchestrator.core.project_policy import resolve_effective_policy
-from orchestrator.core.run_gate_service import enqueue_issue_run_with_precheck, resolve_run_gate_block
+from orchestrator.core.run_gate_service import enqueue_issue_run_with_precheck
 from orchestrator.core.runs import cancel_run
 from orchestrator.storage.models import Run, Tenant
 
 logger = logging.getLogger(__name__)
+
 
 def _oauth_context_value(oauth_context: Any, field: str) -> Any:
     if isinstance(oauth_context, dict):
@@ -101,13 +100,14 @@ def _queue_run_from_issue_context(
     issue_summary: str | None,
     issue_description: str | None,
     issue_labels: list[str] | None,
+    decision_clarification_port: DecisionClarificationPort,
     settings_factory: Callable[[], Any],
     tenant_jira_oauth_context: Callable[..., Any],
     conflict_prefix: str,
     success_message: str,
 ) -> DiscordCommandResponse:
     settings = settings_factory()
-    decision_result = evaluate_issue_clarification_state(
+    decision_result = decision_clarification_port.evaluate_issue_clarification_state(
         session=session,
         tenant=tenant,
         project=project,
@@ -126,16 +126,12 @@ def _queue_run_from_issue_context(
         oauth_context=None,
         publish_jira_comment_fn=None,
     )
-    gate_block = resolve_run_gate_block(decision_result=decision_result)
-    if gate_block is not None:
-        detail = gate_block.guidance
-        if gate_block.reason == "missing_ready_label" and gate_block.ready_label:
-            detail = f"{detail} ({gate_block.ready_label})"
+    admission = resolve_execution_admission(decision_result=decision_result)
+    if admission.blocked:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=detail,
+            detail=admission.discord_conflict_detail(),
         )
-    precheck_outcome = str(getattr(decision_result.decision.pre_check, "outcome", "") or "").strip() or None
     enqueue_result = enqueue_issue_run_with_precheck(
         session,
         tenant_id=tenant_id,
@@ -145,7 +141,7 @@ def _queue_run_from_issue_context(
         issue_description=issue_description,
         repo_url=project.github_repository,
         delivery_id=None,
-        precheck_outcome=precheck_outcome,
+        precheck_outcome=admission.precheck_outcome,
         max_concurrent_runs=resolve_effective_policy(
             tenant_policy=tenant.policy_config,
             project_overrides=project.policy_overrides,
@@ -184,6 +180,7 @@ def dispatch_run_control_command(
     arguments: list[str],
     scope: CommandScope,
     retryable_statuses: set[str],
+    decision_clarification_port: DecisionClarificationPort,
     resolve_project_for_issue: Callable[..., Any],
     fetch_issue_preview: Callable[..., Any],
     fetch_issue_detail: Callable[..., Any],
@@ -236,6 +233,7 @@ def dispatch_run_control_command(
             issue_summary=issue_preview.summary,
             issue_description=issue_description,
             issue_labels=issue_labels,
+            decision_clarification_port=decision_clarification_port,
             settings_factory=settings_factory,
             tenant_jira_oauth_context=tenant_jira_oauth_context,
             conflict_prefix="Run could not be queued",
@@ -329,6 +327,7 @@ def dispatch_run_control_command(
             issue_summary=issue_preview.summary,
             issue_description=issue_description,
             issue_labels=issue_labels,
+            decision_clarification_port=decision_clarification_port,
             settings_factory=settings_factory,
             tenant_jira_oauth_context=tenant_jira_oauth_context,
             conflict_prefix="Retry could not be queued",
@@ -433,7 +432,7 @@ def dispatch_run_control_command(
                 return False, str(exc)
 
         try:
-            reply_result = capture_decision_reply_and_recheck(
+            reply_result = decision_clarification_port.capture_decision_reply_and_recheck(
                 session=session,
                 settings=settings,
                 tenant=tenant,
@@ -596,6 +595,7 @@ def dispatch_run_control_command(
             issue_summary=issue_preview.summary,
             issue_description=issue_description,
             issue_labels=effective_issue_labels or None,
+            decision_clarification_port=decision_clarification_port,
             settings_factory=settings_factory,
             tenant_jira_oauth_context=tenant_jira_oauth_context,
             conflict_prefix="Retry could not be queued" if has_retryable_run else "Run could not be queued",

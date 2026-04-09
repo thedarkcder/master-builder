@@ -3,23 +3,11 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from orchestrator.core.precheck_slot_registry import canonical_slot_id
+from orchestrator.core.runtime_payload_models import PrecheckMessagePayload
 from orchestrator.core.runtime_invocation import AgentInvocationContext, invoke_runtime_json
 from orchestrator.core.codex_runtime import CodexRuntime, CodexRuntimeError
 from orchestrator.core.prompt_templates import render_prompt
-
-
-_CANONICAL_SLOT_KEYS = {
-    "objective",
-    "scope",
-    "acceptance_criteria",
-    "how_to_test",
-    "nfr_intent",
-    "reliability_security_constraints",
-    "out_of_scope",
-    "rollout_constraints",
-    "decision_owner",
-    "dependencies_and_risks",
-}
 
 
 def precheck_classification(pre_check: object) -> str:
@@ -39,9 +27,7 @@ def precheck_classification(pre_check: object) -> str:
 
 
 def _canonical_slot_name(raw_value: object) -> str:
-    if not isinstance(raw_value, str):
-        return ""
-    return raw_value if raw_value in _CANONICAL_SLOT_KEYS else ""
+    return canonical_slot_id(raw_value)
 
 
 def precheck_missing_slots(pre_check: object) -> list[str]:
@@ -102,15 +88,9 @@ def build_precheck_message(
             gtd_questions=gtd_questions,
         )
 
-    message = str(payload.get("message") or "").strip()
-    questions_raw = payload.get("questions")
-    questions = (
-        [str(item).strip() for item in questions_raw if str(item).strip()]
-        if isinstance(questions_raw, list)
-        else []
-    )
-    response_classification = str(payload.get("classification") or "").strip().lower()
-    if not message or response_classification not in {"decision_gate", "gtd", "both", "clear"}:
+    try:
+        parsed_payload = PrecheckMessagePayload.from_payload(payload)
+    except RuntimeError:
         return _fallback_precheck_message(
             issue_key=issue_key,
             classification=classification,
@@ -119,7 +99,7 @@ def build_precheck_message(
             gtd_missing_criteria=gtd_missing_criteria,
             gtd_questions=gtd_questions,
         )
-    return message, questions
+    return parsed_payload.message, list(parsed_payload.questions)
 
 
 def _fallback_precheck_message(
