@@ -3,6 +3,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import tempfile
 import unittest
+import unittest.mock
+
+from sqlalchemy import select
 
 from orchestrator.core.config import get_settings
 from orchestrator.core.decision_gate import DecisionGateResult
@@ -129,6 +132,55 @@ class DecisionReplyServiceTests(unittest.TestCase):
     def tearDown(self) -> None:
         self._tmp.cleanup()
         reset_db_engine_cache()
+
+    def _create_gtd_dependencies_cycle(self, *, session, issue_key: str, question_text: str) -> tuple[DecisionCase, DecisionCycle]:
+        case = DecisionCase(
+            case_id=f"case-{issue_key}",
+            tenant_id="tenant-reply",
+            project_id="project-reply",
+            issue_key=issue_key,
+            state="blocked_gtd",
+            blocked_reason="gtd_required",
+            classification="gtd",
+            issue_fingerprint=None,
+            active_cycle_id=f"cycle-{issue_key}",
+            last_source="jira_webhook",
+            last_event_type="comment_created",
+            last_event_at=datetime.now(timezone.utc),
+            required_worker_capability=None,
+            required_worker_label=None,
+            ready_label=None,
+            ready_label_present=False,
+            metadata_json={},
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+        )
+        cycle = DecisionCycle(
+            cycle_id=f"cycle-{issue_key}",
+            case_id=case.case_id,
+            tenant_id="tenant-reply",
+            project_id="project-reply",
+            issue_key=issue_key,
+            status="open",
+            reason="Need dependencies and risks",
+            classification="gtd",
+            question_set_json=[
+                {
+                    "id": "gtd_dependencies_risks",
+                    "kind": "gtd",
+                    "text": question_text,
+                }
+            ],
+            unresolved_question_ids_json=["gtd_dependencies_risks"],
+            metadata_json={},
+            opened_at=datetime.now(timezone.utc),
+            closed_at=None,
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+        )
+        session.add_all((case, cycle))
+        session.flush()
+        return case, cycle
 
     def test_serialize_recorded_answers_for_policy_includes_answered_and_accepted_answers(self) -> None:
         answered = DecisionAnswer(
@@ -345,6 +397,182 @@ class DecisionReplyServiceTests(unittest.TestCase):
         self.assertIn("Outstanding questions:", comment)
         self.assertNotIn("[dg_1] What config is approved?", comment.split("Outstanding questions:")[-1])
         self.assertEqual(feedback, ())
+
+    def test_capture_decision_reply_keeps_answered_status_until_planner_accepts(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-reply")
+            project = session.get(Project, "project-reply")
+            assert tenant is not None and project is not None
+            self._create_gtd_dependencies_cycle(
+                session=session,
+                issue_key="MAB-174",
+                question_text='For MAB-174, what should be recorded in Dependencies / Risks? Reply "none" if there are no additional dependencies or risks.',
+            )
+            session.commit()
+
+            with (
+                unittest.mock.patch(
+                    "orchestrator.core.decision_reply_service.build_codex_runtime",
+                    return_value=object(),
+                ),
+                unittest.mock.patch(
+                    "orchestrator.core.decision_reply_service.invoke_runtime_json",
+                    return_value={
+                        "answers": [
+                            {
+                                "question_id": "gtd_dependencies_risks",
+                                "status": "answered",
+                                "answer": "Dependencies / Risks: CI signing depends on a valid provisioning profile; risk is TestFlight build failure until signing is configured.",
+                                "notes": "Concrete final dependencies/risks entry.",
+                            }
+                        ]
+                    },
+                ),
+            ):
+                capture = capture_decision_reply(
+                    session=session,
+                    settings=self.settings,
+                    tenant=tenant,
+                    project=project,
+                    issue_key="MAB-174",
+                    reply_text="Dependencies / Risks: CI signing depends on a valid provisioning profile; risk is TestFlight build failure until signing is configured.",
+                    source_transport="discord",
+                    source_ref="msg-gtd-1",
+                )
+            session.commit()
+
+            answer = session.execute(
+                select(DecisionAnswer).where(
+                    DecisionAnswer.issue_key == "MAB-174",
+                    DecisionAnswer.question_id == "gtd_dependencies_risks",
+                )
+            ).scalar_one()
+
+        self.assertEqual(capture.accepted_question_ids, ())
+        self.assertEqual(capture.answered_question_ids, ("gtd_dependencies_risks",))
+        self.assertEqual(answer.status, "answered")
+
+    def test_sync_cycle_answers_from_planner_keeps_planner_answered_status(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-reply")
+            project = session.get(Project, "project-reply")
+            assert tenant is not None and project is not None
+            case, cycle = self._create_gtd_dependencies_cycle(
+                session=session,
+                issue_key="MAB-175",
+                question_text='For MAB-175, what should be recorded in Dependencies / Risks? Reply "none" if there are no additional dependencies or risks.',
+            )
+            answer = DecisionAnswer(
+                answer_id="answer-gtd-175",
+                case_id=case.case_id,
+                cycle_id=cycle.cycle_id,
+                tenant_id="tenant-reply",
+                project_id="project-reply",
+                issue_key="MAB-175",
+                question_id="gtd_dependencies_risks",
+                question_kind="gtd",
+                question_text=cycle.question_set_json[0]["text"],
+                status="answered",
+                normalized_answer="Dependencies / Risks: CI signing depends on a valid provisioning profile; risk is TestFlight build failure until signing is configured.",
+                source_transport="discord",
+                source_ref="msg-gtd-175",
+                evidence_ids_json=[],
+                metadata_json={},
+                answered_at=datetime.now(timezone.utc),
+                accepted_at=None,
+                created_at=datetime.now(timezone.utc),
+                updated_at=datetime.now(timezone.utc),
+            )
+            session.add(answer)
+            session.commit()
+
+            accepted_ids, answered_ids, effect_ids = sync_cycle_answers_from_planner(
+                session=session,
+                tenant=tenant,
+                project=project,
+                case=case,
+                cycle=cycle,
+                planner_question_states=[
+                    {
+                        "question_id": "gtd_dependencies_risks",
+                        "kind": "gtd",
+                        "question": cycle.question_set_json[0]["text"],
+                        "status": "answered",
+                        "detail": "Concrete risk was captured and should become the final Dependencies / Risks entry.",
+                    }
+                ],
+                now=datetime.now(timezone.utc),
+            )
+            session.commit()
+            session.refresh(answer)
+
+        self.assertEqual(accepted_ids, ())
+        self.assertEqual(answered_ids, ("gtd_dependencies_risks",))
+        self.assertEqual(answer.status, "answered")
+        self.assertEqual(
+            answer.normalized_answer,
+            "Dependencies / Risks: CI signing depends on a valid provisioning profile; risk is TestFlight build failure until signing is configured.",
+        )
+        self.assertEqual(effect_ids, ())
+
+    def test_sync_cycle_answers_from_planner_keeps_meta_dependencies_and_risks_answer_open(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-reply")
+            project = session.get(Project, "project-reply")
+            assert tenant is not None and project is not None
+            case, cycle = self._create_gtd_dependencies_cycle(
+                session=session,
+                issue_key="MAB-176",
+                question_text='For MAB-176, what should be recorded in Dependencies / Risks? Reply "none" if there are no additional dependencies or risks.',
+            )
+            answer = DecisionAnswer(
+                answer_id="answer-gtd-176",
+                case_id=case.case_id,
+                cycle_id=cycle.cycle_id,
+                tenant_id="tenant-reply",
+                project_id="project-reply",
+                issue_key="MAB-176",
+                question_id="gtd_dependencies_risks",
+                question_kind="gtd",
+                question_text=cycle.question_set_json[0]["text"],
+                status="answered",
+                normalized_answer="The only remaining gap is an explicit Dependencies / Risks entry for the workflow.",
+                source_transport="discord",
+                source_ref="msg-gtd-176",
+                evidence_ids_json=[],
+                metadata_json={},
+                answered_at=datetime.now(timezone.utc),
+                accepted_at=None,
+                created_at=datetime.now(timezone.utc),
+                updated_at=datetime.now(timezone.utc),
+            )
+            session.add(answer)
+            session.commit()
+
+            accepted_ids, answered_ids, effect_ids = sync_cycle_answers_from_planner(
+                session=session,
+                tenant=tenant,
+                project=project,
+                case=case,
+                cycle=cycle,
+                planner_question_states=[
+                    {
+                        "question_id": "gtd_dependencies_risks",
+                        "kind": "gtd",
+                        "question": cycle.question_set_json[0]["text"],
+                        "status": "answered",
+                        "detail": "Still waiting for the final Dependencies / Risks wording.",
+                    }
+                ],
+                now=datetime.now(timezone.utc),
+            )
+            session.commit()
+            session.refresh(answer)
+
+        self.assertEqual(accepted_ids, ())
+        self.assertEqual(answered_ids, ("gtd_dependencies_risks",))
+        self.assertEqual(answer.status, "answered")
+        self.assertEqual(effect_ids, ())
 
     def test_apply_frozen_cycle_to_precheck_hides_questions_when_none_unresolved(self) -> None:
         with self.session_factory() as session:

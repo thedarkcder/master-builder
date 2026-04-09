@@ -18,6 +18,7 @@ from orchestrator.core.communications.enqueue_reason_contract import (
 )
 from orchestrator.core.decision_clarification_service import (
     capture_decision_reply_and_recheck,
+    evaluate_issue_clarification_state,
 )
 from orchestrator.core.decision_engine import DecisionEventInput, DecisionSource
 from orchestrator.core.decision_reply_service import (
@@ -27,10 +28,10 @@ from orchestrator.core.followup_context_service import (
     FOLLOWUP_CONTEXT_DECISION_GATE,
     close_followup_contexts,
 )
-from orchestrator.core.pre_run_check import evaluate_execution_readiness_only, evaluate_pre_run_check
+from orchestrator.core.pre_run_check import evaluate_pre_run_check
 from orchestrator.core.precheck_decision import build_precheck_message
 from orchestrator.core.project_policy import resolve_effective_policy
-from orchestrator.core.run_gate_service import enqueue_issue_run_with_precheck
+from orchestrator.core.run_gate_service import enqueue_issue_run_with_precheck, resolve_run_gate_block
 from orchestrator.core.runs import cancel_run
 from orchestrator.storage.models import Run, Tenant
 
@@ -105,21 +106,36 @@ def _queue_run_from_issue_context(
     conflict_prefix: str,
     success_message: str,
 ) -> DiscordCommandResponse:
-    ready_label = str((tenant.jira_config or {}).get("ready_label") or "").strip() or None
-    pre_check = evaluate_execution_readiness_only(
-        tenant_id=tenant.tenant_id,
-        project_id=project.project_id if project is not None else None,
-        issue_key=issue_key,
-        issue_summary=issue_summary,
-        issue_description=issue_description,
-        issue_labels=issue_labels,
-        ready_label=ready_label,
+    settings = settings_factory()
+    decision_result = evaluate_issue_clarification_state(
+        session=session,
+        tenant=tenant,
+        project=project,
+        event=DecisionEventInput(
+            source=source,
+            event_type="discord_run_control",
+            idempotency_key=None,
+            issue_key=issue_key,
+            issue_summary=issue_summary,
+            issue_description=issue_description,
+            issue_labels=issue_labels,
+        ),
+        settings=settings,
+        tenant_jira_oauth_context_fn=tenant_jira_oauth_context,
+        evaluate_pre_run_check_fn=evaluate_pre_run_check,
+        oauth_context=None,
+        publish_jira_comment_fn=None,
     )
-    if pre_check.outcome == "missing_ready_label":
+    gate_block = resolve_run_gate_block(decision_result=decision_result)
+    if gate_block is not None:
+        detail = gate_block.guidance
+        if gate_block.reason == "missing_ready_label" and gate_block.ready_label:
+            detail = f"{detail} ({gate_block.ready_label})"
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"{enqueue_reason_guidance('missing_ready_label')} ({str(pre_check.ready_label or '').strip()})",
+            detail=detail,
         )
+    precheck_outcome = str(getattr(decision_result.decision.pre_check, "outcome", "") or "").strip() or None
     enqueue_result = enqueue_issue_run_with_precheck(
         session,
         tenant_id=tenant_id,
@@ -129,7 +145,7 @@ def _queue_run_from_issue_context(
         issue_description=issue_description,
         repo_url=project.github_repository,
         delivery_id=None,
-        precheck_outcome=pre_check.outcome,
+        precheck_outcome=precheck_outcome,
         max_concurrent_runs=resolve_effective_policy(
             tenant_policy=tenant.policy_config,
             project_overrides=project.policy_overrides,

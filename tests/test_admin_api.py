@@ -35,7 +35,6 @@ from orchestrator.storage.models import (
     PlatformSetting,
     Project,
     ProjectAutomation,
-    ProjectInstall,
     ProjectInstallRequest,
     Run,
     RunHumanInputRequest,

@@ -22,6 +22,8 @@ from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.core.config import get_settings
 from orchestrator.core.decision_planner import DecisionPlannerQuestion, DecisionPlannerResult
 from orchestrator.core.decision_gate import DecisionGateResult
+from orchestrator.core.decision_types import ExecutionGateReason, ExecutionGateResolution, ExecutionGateState
+from orchestrator.core.decision_engine import DecisionEngineResult
 from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.pre_run_check import PreRunCheckResult
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
@@ -196,6 +198,50 @@ class DiscordCommandApiTests(unittest.TestCase):
             ),
         )
 
+    def _ready_decision_result(self) -> DecisionEngineResult:
+        pre_check = self._ready_precheck_result()
+        return DecisionEngineResult(
+            decision=SimpleNamespace(pre_check=pre_check, block_reason=None, policy_error=None, guidance=None),
+            issue_labels=["agent:ready"],
+            classification="clear",
+            missing_slots=[],
+            auto_resolved_slots=[],
+            case_id="case-ready",
+            case_state="clear",
+            cycle_id=None,
+            outbox_effect_ids=(),
+            duplicate_event=False,
+            execution_gate=ExecutionGateResolution(state=ExecutionGateState.ALLOW_EXECUTION),
+        )
+
+    def _missing_ready_decision_result(self) -> DecisionEngineResult:
+        pre_check = self._missing_ready_precheck_result()
+        return DecisionEngineResult(
+            decision=SimpleNamespace(
+                pre_check=pre_check,
+                block_reason="missing_ready_label",
+                policy_error=None,
+                guidance="Issue is missing the configured ready label.",
+            ),
+            issue_labels=[],
+            classification="clear",
+            missing_slots=[],
+            auto_resolved_slots=[],
+            case_id="case-missing-ready",
+            case_state="blocked",
+            cycle_id=None,
+            outbox_effect_ids=(),
+            duplicate_event=False,
+            execution_gate=ExecutionGateResolution(
+                state=ExecutionGateState.BLOCK_READY_LABEL,
+                reason=ExecutionGateReason(
+                    reason_code="missing_ready_label",
+                    guidance="Issue is missing the configured ready label.",
+                    ready_label="agent:ready",
+                ),
+            ),
+        )
+
     def _missing_ready_precheck_result(self) -> PreRunCheckResult:
         return PreRunCheckResult(
             outcome="missing_ready_label",
@@ -317,8 +363,8 @@ class DiscordCommandApiTests(unittest.TestCase):
                 description="Objective: run command should carry Jira detail context.",
             ),
         ), patch(
-            "orchestrator.api.discord.commands.run_controls.evaluate_execution_readiness_only",
-            return_value=self._ready_precheck_result(),
+            "orchestrator.api.discord.commands.run_controls.evaluate_issue_clarification_state",
+            return_value=self._ready_decision_result(),
         ):
             response = self.client.post(
                 f"/discord/command/{self.tenant_id}",
@@ -358,9 +404,9 @@ class DiscordCommandApiTests(unittest.TestCase):
                 ],
             ),
             patch(
-                "orchestrator.api.discord.commands.run_controls.evaluate_execution_readiness_only",
-                return_value=self._ready_precheck_result(),
-            ) as precheck_mock,
+                "orchestrator.api.discord.commands.run_controls.evaluate_issue_clarification_state",
+                return_value=self._ready_decision_result(),
+            ) as decision_mock,
         ):
             response = self.client.post(
                 f"/discord/command/{self.tenant_id}",
@@ -368,8 +414,8 @@ class DiscordCommandApiTests(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 200)
-        issue_description = str(precheck_mock.call_args.kwargs["issue_description"])
-        self.assertIn("agent:ready", precheck_mock.call_args.kwargs["issue_labels"])
+        issue_description = str(decision_mock.call_args.kwargs["event"].issue_description)
+        self.assertIn("agent:ready", decision_mock.call_args.kwargs["event"].issue_labels)
         self.assertEqual(issue_description, "Objective: run command should carry Jira detail context.")
 
     def test_run_rejects_when_ready_label_is_missing(self) -> None:
@@ -389,8 +435,8 @@ class DiscordCommandApiTests(unittest.TestCase):
                 ),
             ),
             patch(
-                "orchestrator.api.discord.commands.run_controls.evaluate_execution_readiness_only",
-                return_value=self._missing_ready_precheck_result(),
+                "orchestrator.api.discord.commands.run_controls.evaluate_issue_clarification_state",
+                return_value=self._missing_ready_decision_result(),
             ),
         ):
             response = self.client.post(
@@ -408,8 +454,8 @@ class DiscordCommandApiTests(unittest.TestCase):
             "orchestrator.api.discord.ingress.jira_runtime.fetch_jira_issue_preview",
             return_value=JiraIssuePreview(key="TP-20", summary="Do thing", status="To Do"),
         ), patch(
-            "orchestrator.api.discord.commands.run_controls.evaluate_execution_readiness_only",
-            return_value=self._ready_precheck_result(),
+            "orchestrator.api.discord.commands.run_controls.evaluate_issue_clarification_state",
+            return_value=self._ready_decision_result(),
         ):
             response = self.client.post(
                 f"/discord/command/{self.tenant_id}",
@@ -434,8 +480,8 @@ class DiscordCommandApiTests(unittest.TestCase):
                 description="Objective: refreshed from Jira for retry.",
             ),
         ), patch(
-            "orchestrator.api.discord.commands.run_controls.evaluate_execution_readiness_only",
-            return_value=self._ready_precheck_result(),
+            "orchestrator.api.discord.commands.run_controls.evaluate_issue_clarification_state",
+            return_value=self._ready_decision_result(),
         ):
             response = self.client.post(
                 f"/discord/command/{self.tenant_id}",
@@ -464,8 +510,8 @@ class DiscordCommandApiTests(unittest.TestCase):
                 description="Objective: refreshed from Jira for retry.",
             ),
         ), patch(
-            "orchestrator.api.discord.commands.run_controls.evaluate_execution_readiness_only",
-            return_value=self._ready_precheck_result(),
+            "orchestrator.api.discord.commands.run_controls.evaluate_issue_clarification_state",
+            return_value=self._ready_decision_result(),
         ):
             response = self.client.post(
                 f"/discord/command/{self.tenant_id}",
@@ -483,8 +529,8 @@ class DiscordCommandApiTests(unittest.TestCase):
             "orchestrator.api.discord.ingress.jira_runtime.fetch_jira_issue_preview",
             return_value=JiraIssuePreview(key="TP-30", summary="Retry thing", status="To Do"),
         ), patch(
-            "orchestrator.api.discord.commands.run_controls.evaluate_execution_readiness_only",
-            return_value=self._ready_precheck_result(),
+            "orchestrator.api.discord.commands.run_controls.evaluate_issue_clarification_state",
+            return_value=self._ready_decision_result(),
         ):
             response = self.client.post(
                 f"/discord/command/{self.tenant_id}",
@@ -582,6 +628,10 @@ class DiscordCommandApiTests(unittest.TestCase):
                         cycle_id=None,
                     ),
                 ),
+            ),
+            patch(
+                "orchestrator.api.discord.commands.run_controls.evaluate_issue_clarification_state",
+                return_value=self._ready_decision_result(),
             ),
         ):
             response = self.client.post(
@@ -1010,12 +1060,9 @@ class DiscordCommandApiTests(unittest.TestCase):
                 return_value=enqueue_result,
             ) as enqueue_mock,
             patch(
-                "orchestrator.api.discord.commands.run_controls.evaluate_execution_readiness_only",
-                wraps=__import__(
-                    "orchestrator.api.discord.commands.run_controls",
-                    fromlist=["evaluate_execution_readiness_only"],
-                ).evaluate_execution_readiness_only,
-            ) as readiness_mock,
+                "orchestrator.api.discord.commands.run_controls.evaluate_issue_clarification_state",
+                return_value=self._ready_decision_result(),
+            ) as decision_mock,
         ):
             response = self.client.post(
                 f"/discord/command/{self.tenant_id}",
@@ -1034,7 +1081,7 @@ class DiscordCommandApiTests(unittest.TestCase):
         oauth_client.update_issue_summary_and_description.assert_not_called()
         enqueue_mock.assert_called_once()
         self.assertEqual(
-            readiness_mock.call_args.kwargs["issue_labels"],
+            decision_mock.call_args.kwargs["event"].issue_labels,
             ["worker:linux", "agent:ready"],
         )
 
