@@ -1,0 +1,2 @@
+# Regex allowlist for intentional dead-code findings from `check_dead_code.py`.
+# Keep this file small and remove entries as code is deleted.
