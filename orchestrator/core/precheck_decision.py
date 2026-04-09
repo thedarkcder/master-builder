@@ -8,6 +8,20 @@ from orchestrator.core.codex_runtime import CodexRuntime, CodexRuntimeError
 from orchestrator.core.prompt_templates import render_prompt
 
 
+_CANONICAL_SLOT_KEYS = {
+    "objective",
+    "scope",
+    "acceptance_criteria",
+    "how_to_test",
+    "nfr_intent",
+    "reliability_security_constraints",
+    "out_of_scope",
+    "rollout_constraints",
+    "decision_owner",
+    "dependencies_and_risks",
+}
+
+
 def precheck_classification(pre_check: object) -> str:
     decision_gate = bool(getattr(pre_check, "decision_gate_triggered", False))
     gtd_valid_raw = getattr(pre_check, "gtd_valid", None)
@@ -24,36 +38,10 @@ def precheck_classification(pre_check: object) -> str:
     return "clear"
 
 
-def _normalize_slot_name(raw_value: str) -> str:
-    normalized = str(raw_value or "").strip().lower()
-    normalized = normalized.replace("-", " ").replace("_", " ")
-    canonical = {
-        "objective": "objective",
-        "scope": "scope",
-        "acceptance criteria": "acceptance_criteria",
-        "acceptance": "acceptance_criteria",
-        "how to test": "how_to_test",
-        "test plan": "how_to_test",
-        "nfr intent": "nfr_intent",
-        "nfr": "nfr_intent",
-        "mvp vs scale-ready": "nfr_intent",
-        "reliability/security constraints": "reliability_security_constraints",
-        "reliability constraints": "reliability_security_constraints",
-        "security constraints": "reliability_security_constraints",
-        "out of scope": "out_of_scope",
-        "rollout constraints": "rollout_constraints",
-        "migration constraints": "rollout_constraints",
-        "decision owner": "decision_owner",
-        "dependencies / risks": "dependencies_and_risks",
-        "dependencies and risks": "dependencies_and_risks",
-        "risks": "dependencies_and_risks",
-    }
-    if normalized in canonical:
-        return canonical[normalized]
-    for key, value in canonical.items():
-        if key in normalized:
-            return value
-    return normalized.replace(" ", "_")
+def _canonical_slot_name(raw_value: object) -> str:
+    if not isinstance(raw_value, str):
+        return ""
+    return raw_value if raw_value in _CANONICAL_SLOT_KEYS else ""
 
 
 def precheck_missing_slots(pre_check: object) -> list[str]:
@@ -63,15 +51,15 @@ def precheck_missing_slots(pre_check: object) -> list[str]:
         missing_sections = getattr(decision_gate, "missing_sections", ())
         if isinstance(missing_sections, (list, tuple)):
             for item in missing_sections:
-                normalized = _normalize_slot_name(str(item))
-                if normalized and normalized not in slots:
-                    slots.append(normalized)
+                canonical = _canonical_slot_name(item)
+                if canonical and canonical not in slots:
+                    slots.append(canonical)
     gtd_missing = getattr(pre_check, "gtd_missing_criteria", ())
     if isinstance(gtd_missing, (list, tuple)):
         for item in gtd_missing:
-            normalized = _normalize_slot_name(str(item))
-            if normalized and normalized not in slots:
-                slots.append(normalized)
+            canonical = _canonical_slot_name(item)
+            if canonical and canonical not in slots:
+                slots.append(canonical)
     return slots
 
 
