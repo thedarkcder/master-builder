@@ -12,7 +12,7 @@ from orchestrator.core.agent_observability import (
     agent_observability_tracker,
     reset_agent_observability_for_tests,
 )
-from orchestrator.core.runs import RUN_DEDUPE_SCOPE_ISSUE_EXECUTION, enqueue_run
+from orchestrator.core.runs import enqueue_run
 from orchestrator.core.worker_capability_normalization import WorkerCapability
 from orchestrator.core.workflow.runner import (
     PmPlan,

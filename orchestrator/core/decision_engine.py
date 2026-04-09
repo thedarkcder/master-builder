@@ -46,6 +46,7 @@ from orchestrator.core.decision_state_repository import (
 )
 from orchestrator.core.decision_effect_service import publish_decision_effects as publish_decision_effects_repo
 from orchestrator.core.decision_types import (
+    DecisionClassification,
     DecisionEngineResult,
     DecisionEventInput,
     DecisionLabelAction,
@@ -53,6 +54,7 @@ from orchestrator.core.decision_types import (
     IngressDecision,
     WorkerDecision,
     blocking_reason_for_precheck,
+    resolve_execution_gate_state,
 )
 from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.knowledge_base import SlotResolution, resolve_missing_slots_from_knowledge
@@ -111,8 +113,8 @@ def _planner_classification(gate_status: str) -> str:
     if normalized == "blocked_gtd":
         return "gtd"
     if normalized == "blocked_both":
-        return "both"
-    return "clear"
+        return DecisionClassification.BOTH.value
+    return DecisionClassification.CLEAR.value
 
 
 def _planner_block_reason(classification: str) -> str | None:
@@ -501,6 +503,22 @@ def evaluate_worker_decision(
                 classification=result.classification,
                 pre_check=pre_check,
             )
+        if str(decision.block_reason or "").strip() == "missing_ready_label":
+            return WorkerDecision(
+                allowed=False,
+                decision_gate=DecisionGateResult(
+                    triggered=True,
+                    reason=enqueue_reason_guidance("missing_ready_label"),
+                    missing_sections=(),
+                    questions=(),
+                    recommendation="Apply the configured ready label before execution.",
+                    tags=(),
+                ),
+                configuration_error=None,
+                block_reason="missing_ready_label",
+                classification=result.classification,
+                pre_check=pre_check,
+            )
         return WorkerDecision(
             allowed=True,
             decision_gate=None,
@@ -555,6 +573,22 @@ def evaluate_worker_decision(
                     classification=classification,
                     pre_check=decision.pre_check if isinstance(decision.pre_check, PreRunCheckResult) else None,
                 )
+            if str(decision.block_reason or "").strip() == "missing_ready_label":
+                return WorkerDecision(
+                    allowed=False,
+                    decision_gate=DecisionGateResult(
+                        triggered=True,
+                        reason=enqueue_reason_guidance("missing_ready_label"),
+                        missing_sections=(),
+                        questions=(),
+                        recommendation="Apply the configured ready label before execution.",
+                        tags=(),
+                    ),
+                    configuration_error=None,
+                    block_reason="missing_ready_label",
+                    classification=classification,
+                    pre_check=decision.pre_check if isinstance(decision.pre_check, PreRunCheckResult) else None,
+                )
             return WorkerDecision(
                 allowed=True,
                 decision_gate=None,
@@ -598,6 +632,22 @@ def evaluate_worker_decision(
                 decision_gate=blocking_gate,
                 configuration_error=None,
                 block_reason=decision.block_reason,
+                classification=classification,
+                pre_check=decision.pre_check if isinstance(decision.pre_check, PreRunCheckResult) else None,
+            )
+        if str(decision.block_reason or "").strip() == "missing_ready_label":
+            return WorkerDecision(
+                allowed=False,
+                decision_gate=DecisionGateResult(
+                    triggered=True,
+                    reason=enqueue_reason_guidance("missing_ready_label"),
+                    missing_sections=(),
+                    questions=(),
+                    recommendation="Apply the configured ready label before execution.",
+                    tags=(),
+                ),
+                configuration_error=None,
+                block_reason="missing_ready_label",
                 classification=classification,
                 pre_check=decision.pre_check if isinstance(decision.pre_check, PreRunCheckResult) else None,
             )
@@ -661,6 +711,38 @@ __all__ = [
     "evaluate_worker_decision",
     "resolve_enqueue_precheck_outcome",
 ]
+
+
+def _build_decision_engine_result(
+    *,
+    decision: IngressDecision,
+    issue_labels: list[str],
+    classification: str,
+    missing_slots: list[str],
+    auto_resolved_slots: list[str],
+    case_id: str,
+    case_state: str,
+    cycle_id: str | None,
+    outbox_effect_ids: tuple[str, ...],
+    duplicate_event: bool,
+) -> DecisionEngineResult:
+    execution_gate = resolve_execution_gate_state(
+        decision=decision,
+        classification=classification,
+    )
+    return DecisionEngineResult(
+        decision=decision,
+        issue_labels=issue_labels,
+        classification=classification,
+        missing_slots=missing_slots,
+        auto_resolved_slots=auto_resolved_slots,
+        case_id=case_id,
+        case_state=case_state,
+        cycle_id=cycle_id,
+        outbox_effect_ids=outbox_effect_ids,
+        duplicate_event=duplicate_event,
+        execution_gate=execution_gate,
+    )
 
 
 def evaluate_decision_event(
@@ -820,7 +902,7 @@ def evaluate_decision_event(
                     publish_jira_comment_fn=publish_jira_comment_fn,
                     occurred_at=occurred_at,
                 )
-            return DecisionEngineResult(
+            return _build_decision_engine_result(
                 decision=decision,
                 issue_labels=issue_labels,
                 classification=classification,
@@ -877,7 +959,7 @@ def evaluate_decision_event(
                 publish_jira_comment_fn=publish_jira_comment_fn,
                 occurred_at=occurred_at,
             )
-        return DecisionEngineResult(
+        return _build_decision_engine_result(
             decision=resolved_decision,
             issue_labels=issue_labels,
             classification="clear",
@@ -932,7 +1014,7 @@ def evaluate_decision_event(
                 publish_jira_comment_fn=publish_jira_comment_fn,
                 occurred_at=occurred_at,
             )
-        return DecisionEngineResult(
+        return _build_decision_engine_result(
             decision=decision,
             issue_labels=issue_labels,
             classification="clear",
@@ -993,7 +1075,7 @@ def evaluate_decision_event(
                 publish_jira_comment_fn=publish_jira_comment_fn,
                 occurred_at=occurred_at,
             )
-        return DecisionEngineResult(
+        return _build_decision_engine_result(
             decision=decision,
             issue_labels=issue_labels,
             classification="clear",
@@ -1158,7 +1240,7 @@ def evaluate_decision_event(
             label_actions=decision.label_actions,
         )
 
-    return DecisionEngineResult(
+    return _build_decision_engine_result(
         decision=decision,
         issue_labels=issue_labels,
         classification=classification,
