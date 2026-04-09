@@ -46,7 +46,6 @@ from orchestrator.storage.models import (
     TenantUser,
     TenantUserCredential,
     TenantUserDiscordIdentity,
-    WorkflowCheckpoint,
     WorkflowExecution,
     WorkerRuntimeState,
 )

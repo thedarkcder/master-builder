@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import logging
 
+from sqlalchemy import select
+
 from orchestrator.core.guardrails import enforce_safe_command
 from orchestrator.core.platform_secret_service import resolve_platform_secret_ref
 from orchestrator.core.run_human_input_service import answered_human_inputs_for_attempt
