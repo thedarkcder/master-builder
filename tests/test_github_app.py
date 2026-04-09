@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import unittest
 from io import BytesIO
-from types import SimpleNamespace
 from urllib.error import HTTPError
 from unittest.mock import MagicMock, patch
 
