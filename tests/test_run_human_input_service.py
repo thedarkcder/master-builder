@@ -177,6 +177,7 @@ def test_resume_workflow_from_human_input_answer_creates_resume_attempt_and_cons
         payload_json=ExecutionSnapshot.empty(trigger_context={"source": "manual"}).dump(),
     )
     resumed_run = SimpleNamespace(run_id="run-2")
+    session.execute.return_value.scalars.return_value.one_or_none.return_value = request
     session.get.side_effect = lambda model, key: (
         source_run if key == "run-1" else checkpoint if key == "checkpoint-1" else None
     )
@@ -184,7 +185,10 @@ def test_resume_workflow_from_human_input_answer_creates_resume_attempt_and_cons
 
     with (
         patch("orchestrator.core.run_human_input_service.encrypt_value", return_value="encrypted"),
-        patch("orchestrator.core.run_human_input_service.enqueue_run", return_value=enqueue_result) as enqueue_run_mock,
+        patch(
+            "orchestrator.core.run_human_input_service.enqueue_attempt_for_workflow_uncommitted",
+            return_value=enqueue_result,
+        ) as enqueue_run_mock,
     ):
         answered = answer_human_input_request(
             session=session,
@@ -209,3 +213,124 @@ def test_resume_workflow_from_human_input_answer_creates_resume_attempt_and_cons
     assert bootstrap.branch == "feature/GP-122"
     assert request.status == "consumed"
     assert request.consumed_by_run_id == "run-2"
+
+
+def test_create_human_input_request_commits_before_dispatching_discord_message() -> None:
+    session = MagicMock()
+    tenant = SimpleNamespace(tenant_id="route25")
+    project = SimpleNamespace(project_id="route25-default")
+    run = SimpleNamespace(
+        run_id="run-1",
+        workflow_id="workflow-1",
+        issue_key="GP-186",
+        status="running",
+        last_heartbeat_at="heartbeat",
+        worker_service_instance_id="worker-1",
+        attempt_number=2,
+        plan=ExecutionSnapshot.empty(trigger_context={"source": "manual"}).dump(),
+    )
+    workflow = SimpleNamespace(
+        workflow_id="workflow-1",
+        status="running",
+        active_run_id="run-1",
+        latest_checkpoint_id=None,
+        blocked_reason=None,
+        updated_at=None,
+    )
+    checkpoint = SimpleNamespace(checkpoint_id="checkpoint-1")
+    send_result = SimpleNamespace(
+        sent=True,
+        channel_id="channel-1",
+        thread_channel_id="thread-1",
+        message_id="message-1",
+        reason=None,
+    )
+    session.execute.return_value.scalar_one_or_none.return_value = None
+    session.get.side_effect = lambda model, key: workflow if key == "workflow-1" else None
+    committed_before_send = {"value": False}
+
+    def _commit() -> None:
+        committed_before_send["value"] = True
+
+    def _send_side_effect(**_kwargs):
+        assert committed_before_send["value"] is True
+        return send_result
+
+    session.commit.side_effect = _commit
+    with (
+        patch("orchestrator.core.run_human_input_service.snapshot_checkpoint_for_run", return_value=checkpoint),
+        patch("orchestrator.core.run_human_input_service.send_tenant_discord_message", side_effect=_send_side_effect),
+    ):
+        request = create_human_input_request(
+            session=session,
+            settings=SimpleNamespace(),
+            tenant=tenant,
+            project=project,
+            run=run,
+            issue_key="GP-186",
+            source_stage="test",
+            request_type="release_decision",
+            prompt="Approve release?",
+        )
+
+    assert request.thread_channel_id == "thread-1"
+    assert session.commit.call_count == 2
+
+
+def test_create_human_input_request_redelivers_existing_pending_request_without_thread() -> None:
+    session = MagicMock()
+    tenant = SimpleNamespace(tenant_id="route25")
+    project = SimpleNamespace(project_id="route25-default")
+    run = SimpleNamespace(
+        run_id="run-1",
+        workflow_id="workflow-1",
+        issue_key="GP-189",
+        status="waiting_for_input",
+        last_heartbeat_at=None,
+        worker_service_instance_id=None,
+        attempt_number=1,
+        plan=ExecutionSnapshot.empty(trigger_context={"source": "manual"}).dump(),
+    )
+    existing_request = SimpleNamespace(
+        request_id="request-1",
+        workflow_id="workflow-1",
+        checkpoint_id="checkpoint-1",
+        source_run_id="run-1",
+        issue_key="GP-189",
+        source_stage="dev",
+        request_type="credential_input",
+        prompt="Provide the credential value",
+        instructions=None,
+        expected_reply_format=None,
+        request_context_json={},
+        thread_channel_id=None,
+        thread_message_id=None,
+    )
+    send_result = SimpleNamespace(
+        sent=True,
+        channel_id="channel-1",
+        thread_channel_id="thread-1",
+        message_id="message-1",
+        reason=None,
+    )
+    session.execute.return_value.scalar_one_or_none.return_value = existing_request
+
+    with (
+        patch("orchestrator.core.run_human_input_service.snapshot_checkpoint_for_run") as checkpoint_mock,
+        patch("orchestrator.core.run_human_input_service.send_tenant_discord_message", return_value=send_result),
+    ):
+        request = create_human_input_request(
+            session=session,
+            settings=SimpleNamespace(),
+            tenant=tenant,
+            project=project,
+            run=run,
+            issue_key="GP-189",
+            source_stage="dev",
+            request_type="credential_input",
+            prompt="Provide the credential value",
+        )
+
+    checkpoint_mock.assert_not_called()
+    assert request is existing_request
+    assert request.thread_channel_id == "thread-1"

@@ -15,13 +15,16 @@ from sqlalchemy.orm import Session
 from sqlalchemy import select
 
 from orchestrator.api.jira_oauth.service import jira_oauth_client, refresh_jira_connection_tokens
-from orchestrator.core.discord.notifications import send_tenant_discord_message
+from orchestrator.core.binding_resolution_service import check_project_bindings
+from orchestrator.core.install_registry_service import get_project_install, list_project_installs
+from orchestrator.core.install_request_service import ProjectInstallRequestWrite, create_install_request, request_kind_for_install
 from orchestrator.core.knowledge_exact_read import ExactReadRequest, exact_read_knowledge_source
 from orchestrator.core.knowledge_base import build_knowledge_prompt_context
 from orchestrator.core.platform_secret_service import resolve_platform_secret_ref
 from orchestrator.core.project_policy import resolve_effective_policy
 from orchestrator.core.run_human_input_service import create_human_input_request
 from orchestrator.core.tenant_secret_service import resolve_scoped_secret_ref
+from orchestrator.core.trusted_install_executor import run_install as execute_project_install
 from orchestrator.core.worker_workspace import resolve_worker_workspace_key
 from orchestrator.core.workflow.execution_snapshot import load_parsed_trigger_context_from_plan
 from orchestrator.core.workflow.trigger_context import GithubPrRemediationTriggerContext
@@ -49,9 +52,9 @@ TOOL_ALLOWLIST: dict[str, set[str]] = {
         "decision.read_state",
         "knowledge.exact_read",
         "knowledge.read",
-        "project.get_runtime_values",
-        "project.list_runtime_keys",
-        "project.request_runtime_values",
+        "project.list_installs",
+        "project.check_runtime_bindings",
+        "project.request_install",
         "run.request_human_input",
         "repo.read",
     },
@@ -64,18 +67,20 @@ TOOL_ALLOWLIST: dict[str, set[str]] = {
         "github.push_branch",
         "github.open_pr",
         "repo.read",
-        "project.get_runtime_values",
-        "project.list_runtime_keys",
-        "project.request_runtime_values",
+        "project.list_installs",
+        "project.check_runtime_bindings",
+        "project.request_install",
+        "exec.run_install",
         "run.request_human_input",
     },
     "test": {
         "knowledge.exact_read",
         "jira.comment",
         "repo.read",
-        "project.get_runtime_values",
-        "project.list_runtime_keys",
-        "project.request_runtime_values",
+        "project.list_installs",
+        "project.check_runtime_bindings",
+        "project.request_install",
+        "exec.run_install",
         "run.request_human_input",
     },
     "review": {
@@ -85,9 +90,10 @@ TOOL_ALLOWLIST: dict[str, set[str]] = {
         "github.push_branch",
         "github.open_pr",
         "repo.read",
-        "project.get_runtime_values",
-        "project.list_runtime_keys",
-        "project.request_runtime_values",
+        "project.list_installs",
+        "project.check_runtime_bindings",
+        "project.request_install",
+        "exec.run_install",
         "run.request_human_input",
     },
     "orchestrator": {
@@ -106,9 +112,10 @@ TOOL_ALLOWLIST: dict[str, set[str]] = {
         "github.list_pr_issue_comments",
         "github.list_check_suites",
         "repo.read",
-        "project.get_runtime_values",
-        "project.list_runtime_keys",
-        "project.request_runtime_values",
+        "project.list_installs",
+        "project.check_runtime_bindings",
+        "project.request_install",
+        "exec.run_install",
         "run.request_human_input",
     },
     "decision_planner": {
@@ -117,37 +124,28 @@ TOOL_ALLOWLIST: dict[str, set[str]] = {
         "decision.read_state",
         "knowledge.exact_read",
         "knowledge.read",
-        "project.get_runtime_values",
-        "project.list_runtime_keys",
-        "project.request_runtime_values",
+        "project.list_installs",
+        "project.check_runtime_bindings",
+        "project.request_install",
         "run.request_human_input",
     },
     "voice_entry_router": {
         "knowledge.exact_read",
         "knowledge.read",
         "jira.get_issue",
-        "project.get_runtime_values",
-        "project.list_runtime_keys",
     },
     # Persona-specific framing lives in ask_answer_*.j2 (persona_id); tool allowlist is shared across personas.
     "discord_ask_answer": {
         "knowledge.exact_read",
         "knowledge.read",
         "jira.get_issue",
-        "jira.comment",
         "repo.read",
-        "project.get_runtime_values",
-        "project.list_runtime_keys",
-        "project.request_runtime_values",
-        "run.request_human_input",
     },
     "discord_voice_room_persona": {
         "knowledge.exact_read",
         "knowledge.read",
         "jira.get_issue",
         "repo.read",
-        "project.get_runtime_values",
-        "project.list_runtime_keys",
     },
     "discord_pm_interview": {
         "jira.get_issue",
@@ -156,9 +154,6 @@ TOOL_ALLOWLIST: dict[str, set[str]] = {
         "decision.read_state",
         "knowledge.exact_read",
         "knowledge.read",
-        "project.get_runtime_values",
-        "project.list_runtime_keys",
-        "project.request_runtime_values",
         "run.request_human_input",
         "repo.read",
     },
@@ -181,11 +176,12 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "jira.transition": "Move the active Jira issue to another workflow state. Use this only when the stage outcome is clear, for example Testing, Done, or Blocked.",
     "knowledge.exact_read": "Read a specific knowledge asset or exact knowledge match by identifier. Use this when you already know the document you need and want authoritative contents.",
     "knowledge.read": "Search the knowledge base and summarize the most relevant results for the active issue. Use this when you need supporting context but do not know the exact document.",
-    "project.get_runtime_values": "Fetch project-configured runtime values by key, including environment entries and secret-backed values. Use this before running commands that need project credentials or config, and treat the result as the source of truth for whether a key is present.",
-    "project.list_runtime_keys": "List the runtime configuration keys available for the current project from environment values and secret refs. Use this to discover what config or credential names exist before requesting values.",
-    "project.request_runtime_values": "Send a request for missing project runtime values to a human operator. Use this when required config or secrets are not configured and you need someone to provide them.",
+    "project.list_installs": "List the integrations installed for the active project. Use this to confirm whether a required Fastlane, Supabase, Railway, Slack, or similar install already exists before planning or execution.",
+    "project.check_runtime_bindings": "Check whether explicitly named project bindings are configured. Use this only to verify presence of required env or secret-backed bindings; it never returns the underlying values.",
+    "project.request_install": "Create a structured install request for the active run and pause the workflow. Use this when execution depends on an integration that is not yet installed for the project.",
     "repo.read": "Run guarded read-only repository commands and return file or git metadata. Use this to inspect code, files, branches, or diffs without making changes.",
     "run.request_human_input": "Create a structured human-input request for the active run and pause the workflow until a reply arrives. Use this when one-time operator clarification or data is required to continue.",
+    "exec.run_install": "Execute a registered project install with its pre-approved bindings injected server-side. Use this when a configured integration must run and the model must not see the binding values.",
 }
 
 _READ_ONLY_SHELL_OPERATOR_PATTERN = re.compile(r"[|;&><`]|(?:\$\()")
@@ -337,6 +333,14 @@ def execute_agent_tool(
         return _tool_repo_read(context=context, args=args)
     if tool_name.startswith("project."):
         return _execute_project_tool(
+            session=session,
+            settings=settings,
+            context=context,
+            tool_name=tool_name,
+            args=args,
+        )
+    if tool_name.startswith("exec."):
+        return _execute_exec_tool(
             session=session,
             settings=settings,
             context=context,
@@ -701,19 +705,25 @@ def _execute_project_tool(
     tool_name: str,
     args: dict[str, Any],  # noqa: ANN401
 ) -> dict[str, Any]:
-    if tool_name == "project.list_runtime_keys":
-        environment_map = context.project.environment if isinstance(context.project.environment, dict) else {}
-        secret_ref_map = context.project.secret_refs if isinstance(context.project.secret_refs, dict) else {}
-        environment_keys = sorted({str(key).strip() for key in environment_map.keys() if str(key).strip()})
-        secret_ref_keys = sorted({str(key).strip() for key in secret_ref_map.keys() if str(key).strip()})
-        all_keys = sorted(set(environment_keys) | set(secret_ref_keys))
+    if tool_name == "project.list_installs":
+        installs = list_project_installs(
+            session=session,
+            tenant_id=context.tenant.tenant_id,
+            project_id=context.project.project_id,
+        )
         return {
-            "keys": all_keys,
-            "environment_keys": environment_keys,
-            "secret_ref_keys": secret_ref_keys,
+            "installs": [
+                {
+                    "install_id": install.install_id,
+                    "kind": install.kind,
+                    "label": install.label,
+                    "enabled": install.enabled,
+                }
+                for install in installs
+            ]
         }
 
-    if tool_name == "project.request_runtime_values":
+    if tool_name == "project.check_runtime_bindings":
         raw_keys = args.get("keys")
         if isinstance(raw_keys, str):
             requested_keys = [raw_keys]
@@ -723,89 +733,98 @@ def _execute_project_tool(
             requested_keys = []
         normalized_keys = [key for key in requested_keys if key]
         if not normalized_keys:
-            raise ValueError("project.request_runtime_values requires non-empty 'keys'")
-        reason = str(args.get("reason") or "").strip()
-        message_lines = [
-            f"Runtime value request for {context.issue_key or 'unknown issue'}",
-            f"- Tenant: {context.tenant.tenant_id}",
-            f"- Project: {context.project.project_id}",
-            f"- Stage: {context.stage}",
-            f"- Run: {context.run_id or 'n/a'}",
-            f"- Keys: {', '.join(normalized_keys)}",
-        ]
-        if reason:
-            message_lines.append(f"- Reason: {reason}")
-        send_result = send_tenant_discord_message(
+            raise ValueError("project.check_runtime_bindings requires non-empty 'keys'")
+        statuses = check_project_bindings(
             session=session,
-            tenant=context.tenant,
             project=context.project,
-            message="\n".join(message_lines),
-            settings=settings,
-            event=None,
+            tenant_id=context.tenant.tenant_id,
+            encryption_key=str(getattr(settings, "secrets_encryption_key", "") or "").strip(),
+            keys=normalized_keys,
         )
         return {
-            "requested_keys": normalized_keys,
-            "reason": reason or None,
-            "notification_sent": bool(send_result.sent),
-            "notification_reason": send_result.reason,
-            "channel_id": send_result.channel_id,
+            "bindings": [
+                {
+                    "key": item.key,
+                    "present": item.present,
+                    "source": item.source,
+                }
+                for item in statuses
+            ]
         }
 
-    if tool_name != "project.get_runtime_values":
-        raise ValueError(f"Unsupported Project tool '{tool_name}'")
-
-    raw_keys = args.get("keys")
-    if isinstance(raw_keys, str):
-        requested_keys = [raw_keys]
-    elif isinstance(raw_keys, list):
-        requested_keys = [str(item or "").strip() for item in raw_keys]
-    else:
-        requested_keys = []
-    normalized_keys = [key for key in requested_keys if key]
-    if not normalized_keys:
-        raise ValueError("project.get_runtime_values requires non-empty 'keys'")
-
-    environment_map = context.project.environment if isinstance(context.project.environment, dict) else {}
-    secret_ref_map = context.project.secret_refs if isinstance(context.project.secret_refs, dict) else {}
-    encryption_key = str(getattr(settings, "secrets_encryption_key", "") or "").strip()
-
-    values: dict[str, dict[str, Any]] = {}
-    for key in normalized_keys:
-        if key in environment_map:
-            values[key] = {
-                "source": "environment",
-                "value": str(environment_map.get(key) or ""),
-                "secret_ref": None,
-            }
-            continue
-        secret_ref = str(secret_ref_map.get(key) or "").strip()
-        if not secret_ref:
-            values[key] = {"source": "missing", "value": None, "secret_ref": None}
-            continue
-        try:
-            if secret_ref.startswith("platform/"):
-                resolved_value = resolve_platform_secret_ref(
-                    session,
-                    secret_ref=secret_ref,
-                    encryption_key=encryption_key,
-                )
-            else:
-                resolved_value = resolve_scoped_secret_ref(
-                    session,
-                    secret_ref=secret_ref,
-                    tenant_id=context.tenant.tenant_id,
-                    project_id=context.project.project_id,
-                    encryption_key=encryption_key,
-                )
-        except ValueError as exc:
-            raise ValueError(f"Invalid secret ref for {key}: {exc}") from exc
-        values[key] = {
-            "source": "secret_ref" if resolved_value else "missing",
-            "value": resolved_value,
-            "secret_ref": secret_ref,
+    if tool_name == "project.request_install":
+        if context.run_id is None or context.run is None:
+            raise ValueError("project.request_install requires an active run context")
+        kind = str(args.get("kind") or "").strip().lower()
+        label = str(args.get("label") or "").strip()
+        reason = str(args.get("reason") or "").strip()
+        suggested_config = args.get("suggested_config")
+        raw_required_bindings = args.get("required_bindings")
+        if isinstance(raw_required_bindings, str):
+            required_bindings = [raw_required_bindings]
+        elif isinstance(raw_required_bindings, list):
+            required_bindings = [str(item or "").strip() for item in raw_required_bindings]
+        else:
+            required_bindings = []
+        if not kind:
+            raise ValueError("project.request_install requires non-empty 'kind'")
+        if not label:
+            raise ValueError("project.request_install requires non-empty 'label'")
+        if not reason:
+            raise ValueError("project.request_install requires non-empty 'reason'")
+        request = create_install_request(
+            session=session,
+            settings=settings,
+            tenant=context.tenant,
+            project=context.project,
+            run=context.run,
+            source_stage=context.stage,
+            payload=ProjectInstallRequestWrite(
+                kind=kind,
+                label=label,
+                reason=reason,
+                suggested_config=suggested_config if isinstance(suggested_config, dict) else {},
+                required_bindings=tuple(required_bindings),
+            ),
+        )
+        return {
+            "request_id": request.request_id,
+            "request_kind": request.request_kind,
+            "status": request.status,
+            "waiting_for_input": True,
+            "kind_supported": request_kind_for_install(kind) != "unsupported_kind",
         }
 
-    return {"values": values}
+    raise ValueError(f"Unsupported Project tool '{tool_name}'")
+
+
+def _execute_exec_tool(
+    *,
+    session: Session,
+    settings,
+    context: AgentToolContext,
+    tool_name: str,
+    args: dict[str, Any],  # noqa: ANN401
+) -> dict[str, Any]:
+    if tool_name != "exec.run_install":
+        raise ValueError(f"Unsupported Exec tool '{tool_name}'")
+    install_id = str(args.get("install_id") or "").strip()
+    if not install_id:
+        raise ValueError("exec.run_install requires non-empty 'install_id'")
+    runtime_input = args.get("runtime_input")
+    if runtime_input is not None and not isinstance(runtime_input, dict):
+        raise ValueError("exec.run_install runtime_input must be a JSON object when provided")
+    install = get_project_install(session=session, install_id=install_id)
+    if install is None:
+        raise ValueError(f"Install '{install_id}' was not found")
+    return execute_project_install(
+        session=session,
+        settings=settings,
+        project=context.project,
+        install=install,
+        repo_dir=context.repo_dir,
+        runtime_input=runtime_input if isinstance(runtime_input, dict) else None,
+    )
 
 
 def _execute_run_tool(
