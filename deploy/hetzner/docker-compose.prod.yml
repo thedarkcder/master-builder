@@ -1,0 +1,460 @@
+x-extra_hosts_host_gateway: &extra_hosts_host_gateway
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+
+services:
+  llama-cpp-model-init:
+    image: curlimages/curl:8.16.0
+    restart: "no"
+    command:
+      - /bin/sh
+      - -ceu
+      - |
+        if [ -f "${LLAMA_CPP_MODEL_PATH:-/models/gemma-4.gguf}" ]; then
+          exit 0
+        fi
+        if [ -z "${LLAMA_CPP_MODEL_URL:-}" ]; then
+          echo "LLAMA_CPP_MODEL_URL is required when model file is not preloaded: ${LLAMA_CPP_MODEL_PATH:-/models/gemma-4.gguf}" >&2
+          exit 1
+        fi
+        mkdir -p "$(dirname "${LLAMA_CPP_MODEL_PATH:-/models/gemma-4.gguf}")"
+        curl -fL "${LLAMA_CPP_MODEL_URL}" -o "${LLAMA_CPP_MODEL_PATH:-/models/gemma-4.gguf}"
+    environment:
+      LLAMA_CPP_MODEL_URL: ${LLAMA_CPP_MODEL_URL:-}
+      LLAMA_CPP_MODEL_PATH: ${LLAMA_CPP_MODEL_PATH:-/models/gemma-4.gguf}
+    volumes:
+      - llama-models:/models
+
+  llama-cpp:
+    image: ghcr.io/ggml-org/llama.cpp:server
+    restart: unless-stopped
+    depends_on:
+      llama-cpp-model-init:
+        condition: service_completed_successfully
+    ports:
+      - "${LLAMA_CPP_PORT:-8080}:8080"
+    command:
+      - /bin/sh
+      - -ceu
+      - |
+        exec /app/llama-server \
+          -m "${LLAMA_CPP_MODEL_PATH:-/models/gemma-4.gguf}" \
+          --host 0.0.0.0 \
+          --port 8080 \
+          -ngl "${LLAMA_CPP_N_GPU_LAYERS:-0}" \
+          --ctx-size "${LLAMA_CPP_CTX_SIZE:-8192}"
+    environment:
+      LLAMA_CPP_MODEL_PATH: ${LLAMA_CPP_MODEL_PATH:-/models/gemma-4.gguf}
+      LLAMA_CPP_N_GPU_LAYERS: ${LLAMA_CPP_N_GPU_LAYERS:-0}
+      LLAMA_CPP_CTX_SIZE: ${LLAMA_CPP_CTX_SIZE:-8192}
+    volumes:
+      - llama-models:/models
+    healthcheck:
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://127.0.0.1:8080/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-orchestrator}
+      POSTGRES_USER: ${POSTGRES_USER:-orchestrator}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-orchestrator}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-orchestrator} -d ${POSTGRES_DB:-orchestrator}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  api:
+    <<: *extra_hosts_host_gateway
+    build:
+      context: ../..
+      dockerfile: orchestrator/Dockerfile
+      target: app-runtime-base
+      args:
+        CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
+    restart: unless-stopped
+    environment:
+      ORCHESTRATOR_ADMIN_USERNAME: ${ORCHESTRATOR_ADMIN_USERNAME:-admin}
+      ORCHESTRATOR_ADMIN_PASSWORD: ${ORCHESTRATOR_ADMIN_PASSWORD:?Set ORCHESTRATOR_ADMIN_PASSWORD}
+      ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
+      POSTGRES_URL: ${POSTGRES_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
+      ORCHESTRATOR_REDIS_URL: ${ORCHESTRATOR_REDIS_URL:-redis://redis:6379/0}
+      ORCHESTRATOR_CORS_ORIGINS: ${ORCHESTRATOR_CORS_ORIGINS:-http://localhost:4100,http://127.0.0.1:4100}
+      ORCHESTRATOR_CORS_ORIGIN_REGEX: ${ORCHESTRATOR_CORS_ORIGIN_REGEX:-}
+      ORCHESTRATOR_PUBLIC_API_BASE_URL: ${ORCHESTRATOR_PUBLIC_API_BASE_URL:-http://localhost:4000}
+      ORCHESTRATOR_ADMIN_UI_BASE_URL: ${ORCHESTRATOR_ADMIN_UI_BASE_URL:-http://localhost:4100}
+      ORCHESTRATOR_CODEX_SANDBOX_MODE: ${ORCHESTRATOR_CODEX_SANDBOX_MODE:-danger-full-access}
+      ORCHESTRATOR_CODEX_MODEL: ${ORCHESTRATOR_CODEX_MODEL:-gpt-5-codex}
+      ORCHESTRATOR_CODEX_TIMEOUT_SECONDS: ${ORCHESTRATOR_CODEX_TIMEOUT_SECONDS:-0}
+      ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET: ${ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET:?Set ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET}
+      ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET: ${ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET:?Set ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET}
+      ORCHESTRATOR_EMAIL_DELIVERY_PROVIDER: ${ORCHESTRATOR_EMAIL_DELIVERY_PROVIDER:-resend}
+      ORCHESTRATOR_EMAIL_FROM_NAME: ${ORCHESTRATOR_EMAIL_FROM_NAME:-Master Builder}
+      ORCHESTRATOR_EMAIL_FROM_ADDRESS: ${ORCHESTRATOR_EMAIL_FROM_ADDRESS:?Set ORCHESTRATOR_EMAIL_FROM_ADDRESS}
+      ORCHESTRATOR_RESEND_API_KEY: ${ORCHESTRATOR_RESEND_API_KEY:-}
+      ORCHESTRATOR_SMTP_HOST: ${ORCHESTRATOR_SMTP_HOST:-}
+      ORCHESTRATOR_SMTP_PORT: ${ORCHESTRATOR_SMTP_PORT:-}
+      ORCHESTRATOR_SMTP_USERNAME: ${ORCHESTRATOR_SMTP_USERNAME:-}
+      ORCHESTRATOR_SMTP_PASSWORD: ${ORCHESTRATOR_SMTP_PASSWORD:-}
+      ORCHESTRATOR_SMTP_USE_TLS: ${ORCHESTRATOR_SMTP_USE_TLS:-false}
+      ORCHESTRATOR_SMTP_USE_SSL: ${ORCHESTRATOR_SMTP_USE_SSL:-false}
+      ORCHESTRATOR_SECRETS_ENCRYPTION_KEY: ${ORCHESTRATOR_SECRETS_ENCRYPTION_KEY:?Set ORCHESTRATOR_SECRETS_ENCRYPTION_KEY}
+      ORCHESTRATOR_SENTRY_DSN: ${ORCHESTRATOR_SENTRY_DSN:-}
+      ORCHESTRATOR_SENTRY_ENVIRONMENT: ${ORCHESTRATOR_SENTRY_ENVIRONMENT:-prod}
+      ORCHESTRATOR_SENTRY_RELEASE: ${ORCHESTRATOR_SENTRY_RELEASE:-}
+      ORCHESTRATOR_SENTRY_TRACES_SAMPLE_RATE: ${ORCHESTRATOR_SENTRY_TRACES_SAMPLE_RATE:-0.0}
+      ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR: /var/lib/master-builder/workdirs
+      ORCHESTRATOR_LOG_BUS_ENABLED: ${ORCHESTRATOR_LOG_BUS_ENABLED:-true}
+      ORCHESTRATOR_WORKER_CAPABILITIES: ${ORCHESTRATOR_WORKER_CAPABILITIES:-linux}
+      ORCHESTRATOR_API_WORKERS: ${ORCHESTRATOR_API_WORKERS:-4}
+    ports:
+      - "${MASTER_BUILDER_API_PORT:-4000}:4000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - python -c "import json,sys,urllib.request; data=json.loads(urllib.request.urlopen('http://127.0.0.1:4000/health', timeout=5).read().decode()); sys.exit(0 if data.get('status') == 'ok' else 1)"
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+    command:
+      - /bin/sh
+      - -ceu
+      - |
+        mkdir -p /root/.codex
+        cp -a /app/.codex/. /root/.codex/
+        if [ -f /app/AGENTS.md ]; then cp /app/AGENTS.md /root/AGENTS.md; fi
+        python -m orchestrator migrate
+        uvicorn orchestrator.api.main:app --host 0.0.0.0 --port 4000 --workers "${ORCHESTRATOR_API_WORKERS:-4}"
+    volumes:
+      - codex-home:/root/.codex
+      - workdirs-data:/var/lib/master-builder/workdirs
+
+  run-worker:
+    <<: *extra_hosts_host_gateway
+    build:
+      context: ../..
+      dockerfile: orchestrator/Dockerfile
+      target: android-runtime
+      args:
+        CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      llama-cpp:
+        condition: service_healthy
+    environment:
+      ORCHESTRATOR_ADMIN_USERNAME: ${ORCHESTRATOR_ADMIN_USERNAME:-admin}
+      ORCHESTRATOR_ADMIN_PASSWORD: ${ORCHESTRATOR_ADMIN_PASSWORD:?Set ORCHESTRATOR_ADMIN_PASSWORD}
+      ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
+      POSTGRES_URL: ${POSTGRES_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
+      ORCHESTRATOR_REDIS_URL: ${ORCHESTRATOR_REDIS_URL:-redis://redis:6379/0}
+      ORCHESTRATOR_PUBLIC_API_BASE_URL: ${ORCHESTRATOR_PUBLIC_API_BASE_URL:-http://localhost:4000}
+      ORCHESTRATOR_ADMIN_UI_BASE_URL: ${ORCHESTRATOR_ADMIN_UI_BASE_URL:-http://localhost:4100}
+      ORCHESTRATOR_CODEX_SANDBOX_MODE: ${ORCHESTRATOR_CODEX_SANDBOX_MODE:-danger-full-access}
+      ORCHESTRATOR_CODEX_MODEL: ${ORCHESTRATOR_CODEX_MODEL:-gpt-5-codex}
+      ORCHESTRATOR_CODEX_TIMEOUT_SECONDS: ${ORCHESTRATOR_CODEX_TIMEOUT_SECONDS:-0}
+      ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET: ${ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET:?Set ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET}
+      ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET: ${ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET:?Set ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET}
+      ORCHESTRATOR_SECRETS_ENCRYPTION_KEY: ${ORCHESTRATOR_SECRETS_ENCRYPTION_KEY:?Set ORCHESTRATOR_SECRETS_ENCRYPTION_KEY}
+      ORCHESTRATOR_SENTRY_DSN: ${ORCHESTRATOR_SENTRY_DSN:-}
+      ORCHESTRATOR_SENTRY_ENVIRONMENT: ${ORCHESTRATOR_SENTRY_ENVIRONMENT:-prod}
+      ORCHESTRATOR_SENTRY_RELEASE: ${ORCHESTRATOR_SENTRY_RELEASE:-}
+      ORCHESTRATOR_SENTRY_TRACES_SAMPLE_RATE: ${ORCHESTRATOR_SENTRY_TRACES_SAMPLE_RATE:-0.0}
+      ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR: /var/lib/master-builder/workdirs
+    command:
+      - /bin/sh
+      - -ceu
+      - |
+        mkdir -p /root/.codex
+        cp -a /app/.codex/. /root/.codex/
+        if [ -f /app/AGENTS.md ]; then cp /app/AGENTS.md /root/AGENTS.md; fi
+        python -m orchestrator migrate
+        python -m orchestrator worker-runs
+    volumes:
+      - codex-home:/root/.codex
+      - workdirs-data:/var/lib/master-builder/workdirs
+
+  webhook-worker:
+    <<: *extra_hosts_host_gateway
+    build:
+      context: ../..
+      dockerfile: orchestrator/Dockerfile
+      target: voice-runtime
+      args:
+        CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      llama-cpp:
+        condition: service_healthy
+    environment:
+      ORCHESTRATOR_ADMIN_USERNAME: ${ORCHESTRATOR_ADMIN_USERNAME:-admin}
+      ORCHESTRATOR_ADMIN_PASSWORD: ${ORCHESTRATOR_ADMIN_PASSWORD:?Set ORCHESTRATOR_ADMIN_PASSWORD}
+      ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
+      POSTGRES_URL: ${POSTGRES_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
+      ORCHESTRATOR_REDIS_URL: ${ORCHESTRATOR_REDIS_URL:-redis://redis:6379/0}
+      ORCHESTRATOR_PUBLIC_API_BASE_URL: ${ORCHESTRATOR_PUBLIC_API_BASE_URL:-http://localhost:4000}
+      ORCHESTRATOR_ADMIN_UI_BASE_URL: ${ORCHESTRATOR_ADMIN_UI_BASE_URL:-http://localhost:4100}
+      ORCHESTRATOR_CODEX_SANDBOX_MODE: ${ORCHESTRATOR_CODEX_SANDBOX_MODE:-danger-full-access}
+      ORCHESTRATOR_CODEX_MODEL: ${ORCHESTRATOR_CODEX_MODEL:-gpt-5-codex}
+      ORCHESTRATOR_CODEX_TIMEOUT_SECONDS: ${ORCHESTRATOR_CODEX_TIMEOUT_SECONDS:-0}
+      ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET: ${ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET:?Set ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET}
+      ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET: ${ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET:?Set ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET}
+      ORCHESTRATOR_EMAIL_DELIVERY_PROVIDER: ${ORCHESTRATOR_EMAIL_DELIVERY_PROVIDER:-resend}
+      ORCHESTRATOR_EMAIL_FROM_NAME: ${ORCHESTRATOR_EMAIL_FROM_NAME:-Master Builder}
+      ORCHESTRATOR_EMAIL_FROM_ADDRESS: ${ORCHESTRATOR_EMAIL_FROM_ADDRESS:?Set ORCHESTRATOR_EMAIL_FROM_ADDRESS}
+      ORCHESTRATOR_RESEND_API_KEY: ${ORCHESTRATOR_RESEND_API_KEY:-}
+      ORCHESTRATOR_SMTP_HOST: ${ORCHESTRATOR_SMTP_HOST:-}
+      ORCHESTRATOR_SMTP_PORT: ${ORCHESTRATOR_SMTP_PORT:-}
+      ORCHESTRATOR_SMTP_USERNAME: ${ORCHESTRATOR_SMTP_USERNAME:-}
+      ORCHESTRATOR_SMTP_PASSWORD: ${ORCHESTRATOR_SMTP_PASSWORD:-}
+      ORCHESTRATOR_SMTP_USE_TLS: ${ORCHESTRATOR_SMTP_USE_TLS:-false}
+      ORCHESTRATOR_SMTP_USE_SSL: ${ORCHESTRATOR_SMTP_USE_SSL:-false}
+      ORCHESTRATOR_SECRETS_ENCRYPTION_KEY: ${ORCHESTRATOR_SECRETS_ENCRYPTION_KEY:?Set ORCHESTRATOR_SECRETS_ENCRYPTION_KEY}
+      ORCHESTRATOR_VOICE_STT_PROVIDER: ${ORCHESTRATOR_VOICE_STT_PROVIDER:-whisper}
+      ORCHESTRATOR_VOICE_TTS_PROVIDER: ${ORCHESTRATOR_VOICE_TTS_PROVIDER:-pocket_tts}
+      ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR: /var/lib/master-builder/workdirs
+      HF_HOME: /root/.cache/huggingface
+      HF_HUB_OFFLINE: ${HF_HUB_OFFLINE:-1}
+    command:
+      - /bin/sh
+      - -ceu
+      - |
+        mkdir -p /root/.codex
+        cp -a /app/.codex/. /root/.codex/
+        if [ -f /app/AGENTS.md ]; then cp /app/AGENTS.md /root/AGENTS.md; fi
+        python -m orchestrator migrate
+        python -m orchestrator worker-webhooks
+    volumes:
+      - codex-home:/root/.codex
+      - workdirs-data:/var/lib/master-builder/workdirs
+      - huggingface-cache:/root/.cache/huggingface
+      - pocket-tts-cache:/root/.cache/pocket_tts
+
+  project-automation:
+    <<: *extra_hosts_host_gateway
+    build:
+      context: ../..
+      dockerfile: orchestrator/Dockerfile
+      target: app-runtime-base
+      args:
+        CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      ORCHESTRATOR_ADMIN_USERNAME: ${ORCHESTRATOR_ADMIN_USERNAME:-admin}
+      ORCHESTRATOR_ADMIN_PASSWORD: ${ORCHESTRATOR_ADMIN_PASSWORD:?Set ORCHESTRATOR_ADMIN_PASSWORD}
+      ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
+      POSTGRES_URL: ${POSTGRES_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
+      ORCHESTRATOR_REDIS_URL: ${ORCHESTRATOR_REDIS_URL:-redis://redis:6379/0}
+      ORCHESTRATOR_PUBLIC_API_BASE_URL: ${ORCHESTRATOR_PUBLIC_API_BASE_URL:-http://localhost:4000}
+      ORCHESTRATOR_ADMIN_UI_BASE_URL: ${ORCHESTRATOR_ADMIN_UI_BASE_URL:-http://localhost:4100}
+      ORCHESTRATOR_CODEX_SANDBOX_MODE: ${ORCHESTRATOR_CODEX_SANDBOX_MODE:-danger-full-access}
+      ORCHESTRATOR_CODEX_MODEL: ${ORCHESTRATOR_CODEX_MODEL:-gpt-5-codex}
+      ORCHESTRATOR_CODEX_TIMEOUT_SECONDS: ${ORCHESTRATOR_CODEX_TIMEOUT_SECONDS:-0}
+      ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET: ${ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET:?Set ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET}
+      ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET: ${ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET:?Set ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET}
+      ORCHESTRATOR_SECRETS_ENCRYPTION_KEY: ${ORCHESTRATOR_SECRETS_ENCRYPTION_KEY:?Set ORCHESTRATOR_SECRETS_ENCRYPTION_KEY}
+      ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR: /var/lib/master-builder/workdirs
+    command:
+      - /bin/sh
+      - -ceu
+      - |
+        mkdir -p /root/.codex
+        cp -a /app/.codex/. /root/.codex/
+        if [ -f /app/AGENTS.md ]; then cp /app/AGENTS.md /root/AGENTS.md; fi
+        python -m orchestrator migrate
+        python -m orchestrator project-automation
+    volumes:
+      - codex-home:/root/.codex
+      - workdirs-data:/var/lib/master-builder/workdirs
+
+  discord-gateway:
+    <<: *extra_hosts_host_gateway
+    build:
+      context: ../..
+      dockerfile: orchestrator/Dockerfile
+      target: voice-runtime
+      args:
+        CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
+        LIBDAVE_FORCE_BUILD: ${LIBDAVE_FORCE_BUILD:-0}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
+      POSTGRES_URL: ${POSTGRES_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
+      ORCHESTRATOR_SECRETS_ENCRYPTION_KEY: ${ORCHESTRATOR_SECRETS_ENCRYPTION_KEY:?Set ORCHESTRATOR_SECRETS_ENCRYPTION_KEY}
+      ORCHESTRATOR_DISCORD_GATEWAY_LOCK_KEY: ${ORCHESTRATOR_DISCORD_GATEWAY_LOCK_KEY:-947102033127}
+      ORCHESTRATOR_DISCORD_GATEWAY_POLL_SECONDS: ${ORCHESTRATOR_DISCORD_GATEWAY_POLL_SECONDS:-3}
+      ORCHESTRATOR_VOICE_STT_PROVIDER: ${ORCHESTRATOR_VOICE_STT_PROVIDER:-whisper}
+      ORCHESTRATOR_VOICE_TTS_PROVIDER: ${ORCHESTRATOR_VOICE_TTS_PROVIDER:-pocket_tts}
+      ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR: /var/lib/master-builder/workdirs
+      HF_HOME: /root/.cache/huggingface
+      HF_HUB_OFFLINE: ${HF_HUB_OFFLINE:-1}
+    command:
+      - /bin/sh
+      - -ceu
+      - |
+        mkdir -p /root/.codex
+        cp -a /app/.codex/. /root/.codex/
+        if [ -f /app/AGENTS.md ]; then cp /app/AGENTS.md /root/AGENTS.md; fi
+        python -m orchestrator migrate
+        HF_HUB_OFFLINE=0 python -m orchestrator voice-prewarm
+        python -m orchestrator discord-gateway
+    volumes:
+      - codex-home:/root/.codex
+      - workdirs-data:/var/lib/master-builder/workdirs
+      - huggingface-cache:/root/.cache/huggingface
+      - pocket-tts-cache:/root/.cache/pocket_tts
+
+  discord-live-voice:
+    <<: *extra_hosts_host_gateway
+    build:
+      context: ../..
+      dockerfile: orchestrator/Dockerfile
+      target: voice-runtime
+      args:
+        CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
+        LIBDAVE_FORCE_BUILD: ${LIBDAVE_FORCE_BUILD:-0}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
+      POSTGRES_URL: ${POSTGRES_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
+      ORCHESTRATOR_SECRETS_ENCRYPTION_KEY: ${ORCHESTRATOR_SECRETS_ENCRYPTION_KEY:?Set ORCHESTRATOR_SECRETS_ENCRYPTION_KEY}
+      ORCHESTRATOR_DISCORD_LIVE_VOICE_LOCK_KEY: ${ORCHESTRATOR_DISCORD_LIVE_VOICE_LOCK_KEY:-947102033129}
+      ORCHESTRATOR_DISCORD_LIVE_VOICE_POLL_SECONDS: ${ORCHESTRATOR_DISCORD_LIVE_VOICE_POLL_SECONDS:-3}
+      ORCHESTRATOR_VOICE_STT_PROVIDER: ${ORCHESTRATOR_VOICE_STT_PROVIDER:-whisper}
+      ORCHESTRATOR_VOICE_TTS_PROVIDER: ${ORCHESTRATOR_VOICE_TTS_PROVIDER:-pocket_tts}
+      ORCHESTRATOR_LIVE_VOICE_TRANSPORT_COMMAND: ${ORCHESTRATOR_LIVE_VOICE_TRANSPORT_COMMAND:-/usr/local/bin/live-voice-transport}
+      ORCHESTRATOR_LIVE_VOICE_TRANSPORT_STARTUP_TIMEOUT_SECONDS: ${ORCHESTRATOR_LIVE_VOICE_TRANSPORT_STARTUP_TIMEOUT_SECONDS:-10}
+      ORCHESTRATOR_LIVE_VOICE_TRANSPORT_REQUEST_TIMEOUT_SECONDS: ${ORCHESTRATOR_LIVE_VOICE_TRANSPORT_REQUEST_TIMEOUT_SECONDS:-10}
+      ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR: /var/lib/master-builder/workdirs
+      HF_HOME: /root/.cache/huggingface
+      HF_HUB_OFFLINE: ${HF_HUB_OFFLINE:-1}
+    command:
+      - /bin/sh
+      - -ceu
+      - |
+        mkdir -p /root/.codex
+        cp -a /app/.codex/. /root/.codex/
+        if [ -f /app/AGENTS.md ]; then cp /app/AGENTS.md /root/AGENTS.md; fi
+        python -m orchestrator migrate
+        HF_HUB_OFFLINE=0 python -m orchestrator voice-prewarm
+        python -m orchestrator discord-live-voice
+    volumes:
+      - codex-home:/root/.codex
+      - workdirs-data:/var/lib/master-builder/workdirs
+      - huggingface-cache:/root/.cache/huggingface
+      - pocket-tts-cache:/root/.cache/pocket_tts
+
+  knowledge-sync:
+    <<: *extra_hosts_host_gateway
+    build:
+      context: ../..
+      dockerfile: orchestrator/Dockerfile
+      target: app-runtime-base
+      args:
+        CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
+      POSTGRES_URL: ${POSTGRES_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
+      ORCHESTRATOR_SECRETS_ENCRYPTION_KEY: ${ORCHESTRATOR_SECRETS_ENCRYPTION_KEY:?Set ORCHESTRATOR_SECRETS_ENCRYPTION_KEY}
+      ORCHESTRATOR_SENTRY_DSN: ${ORCHESTRATOR_SENTRY_DSN:-}
+      ORCHESTRATOR_SENTRY_ENVIRONMENT: ${ORCHESTRATOR_SENTRY_ENVIRONMENT:-prod}
+      ORCHESTRATOR_SENTRY_RELEASE: ${ORCHESTRATOR_SENTRY_RELEASE:-}
+      ORCHESTRATOR_SENTRY_TRACES_SAMPLE_RATE: ${ORCHESTRATOR_SENTRY_TRACES_SAMPLE_RATE:-0.0}
+      ORCHESTRATOR_KNOWLEDGE_JIRA_SYNC_INTERVAL_SECONDS: ${ORCHESTRATOR_KNOWLEDGE_JIRA_SYNC_INTERVAL_SECONDS:-3600}
+      ORCHESTRATOR_KNOWLEDGE_JIRA_SYNC_POLL_SECONDS: ${ORCHESTRATOR_KNOWLEDGE_JIRA_SYNC_POLL_SECONDS:-30}
+      ORCHESTRATOR_KNOWLEDGE_JIRA_SYNC_LOCK_KEY: ${ORCHESTRATOR_KNOWLEDGE_JIRA_SYNC_LOCK_KEY:-947102033128}
+      ORCHESTRATOR_KNOWLEDGE_JIRA_SYNC_MAX_ISSUES: ${ORCHESTRATOR_KNOWLEDGE_JIRA_SYNC_MAX_ISSUES:-500}
+      ORCHESTRATOR_KNOWLEDGE_JIRA_SYNC_INVALID_TOKEN_BACKOFF_SECONDS: ${ORCHESTRATOR_KNOWLEDGE_JIRA_SYNC_INVALID_TOKEN_BACKOFF_SECONDS:-21600}
+      ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR: /var/lib/master-builder/workdirs
+      HF_HOME: /root/.cache/huggingface
+      HF_HUB_OFFLINE: ${HF_HUB_OFFLINE:-1}
+    command:
+      - /bin/sh
+      - -ceu
+      - |
+        mkdir -p /root/.codex
+        cp -a /app/.codex/. /root/.codex/
+        if [ -f /app/AGENTS.md ]; then cp /app/AGENTS.md /root/AGENTS.md; fi
+        python -m orchestrator migrate
+        HF_HUB_OFFLINE=0 python -m orchestrator knowledge-prewarm
+        python -m orchestrator knowledge-jira-sync
+    volumes:
+      - codex-home:/root/.codex
+      - workdirs-data:/var/lib/master-builder/workdirs
+      - huggingface-cache:/root/.cache/huggingface
+
+  admin-ui:
+    build:
+      context: ../../admin-ui
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_started
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:4000}
+      NEXTAUTH_URL: ${NEXTAUTH_URL:-http://localhost:4100}
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:?Set NEXTAUTH_SECRET}
+    ports:
+      - "${MASTER_BUILDER_ADMIN_UI_PORT:-4100}:4100"
+
+volumes:
+  llama-models:
+  postgres-data:
+  redis-data:
+  codex-home:
+  workdirs-data:
+  huggingface-cache:
+  pocket-tts-cache:
