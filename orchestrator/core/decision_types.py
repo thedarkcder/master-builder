@@ -7,6 +7,11 @@ from typing import Literal
 
 from orchestrator.core.communications.enqueue_reason_contract import enqueue_reason_guidance
 from orchestrator.core.decision_gate import DecisionGateResult
+from orchestrator.core.execution_readiness_state_machine import (
+    ReadinessState,
+    blocking_reason_for_outcome,
+    resolve_readiness_decision,
+)
 from orchestrator.core.pre_run_check import PreRunCheckResult
 
 DecisionSource = Literal[
@@ -20,19 +25,9 @@ DecisionSource = Literal[
     "worker_execution",
 ]
 
-_BLOCKING_PRECHECK_OUTCOMES = {
-    "decision_gate_required",
-    "gtd_required",
-    "execution_blocked",
-    "missing_ready_label",
-}
-
-
 def blocking_reason_for_precheck(pre_check: object) -> str | None:
     outcome = str(getattr(pre_check, "outcome", "") or "").strip()
-    if outcome in _BLOCKING_PRECHECK_OUTCOMES:
-        return outcome
-    return None
+    return blocking_reason_for_outcome(outcome)
 
 
 @dataclass(frozen=True)
@@ -169,7 +164,12 @@ def resolve_execution_gate_state(
     decision: IngressDecision,
     classification: str,
 ) -> ExecutionGateResolution:
-    if decision.policy_error or decision.pre_check is None:
+    readiness = resolve_readiness_decision(
+        policy_error=decision.policy_error,
+        block_reason=decision.block_reason,
+        classification=classification,
+    )
+    if decision.pre_check is None or readiness.state == ReadinessState.POLICY_ERROR:
         return ExecutionGateResolution(
             state=ExecutionGateState.POLICY_ERROR,
             reason=ExecutionGateReason(
@@ -179,8 +179,7 @@ def resolve_execution_gate_state(
             ),
         )
 
-    block_reason = str(decision.block_reason or "").strip()
-    if block_reason == "missing_ready_label":
+    if readiness.state == ReadinessState.BLOCKED_READY_LABEL:
         ready_label = str(getattr(decision.pre_check, "ready_label", "") or "").strip() or None
         guidance = (
             f"{enqueue_reason_guidance('missing_ready_label')} ({ready_label})"
@@ -196,13 +195,14 @@ def resolve_execution_gate_state(
             ),
         )
 
-    if block_reason in {"decision_gate_required", "gtd_required", "execution_blocked"} or classification in {"decision_gate", "gtd", "both"}:
+    if readiness.state == ReadinessState.BLOCKED_DECISION:
         detail = str(getattr(decision.pre_check, "decision_gate_reason", "") or "").strip() or None
+        reason_code = str(readiness.reason_code or "").strip() or "decision_gate_required"
         return ExecutionGateResolution(
             state=ExecutionGateState.BLOCK_DECISION,
             reason=ExecutionGateReason(
-                reason_code=block_reason or "decision_gate_required",
-                guidance=enqueue_reason_guidance(block_reason or "decision_gate_required"),
+                reason_code=reason_code,
+                guidance=enqueue_reason_guidance(reason_code),
                 detail=detail,
             ),
         )

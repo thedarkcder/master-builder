@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from orchestrator.api.webhooks import jira_webhook_board_gate, jira_webhook_precheck
 from orchestrator.core.communications import DiscordTenantNotificationAction, TransportAction
 from orchestrator.core.communications.enqueue_reason_contract import enqueue_reason_guidance
-from orchestrator.core.run_gate_service import resolve_run_gate_block
+from orchestrator.core.execution_admission import resolve_execution_admission
 from orchestrator.core.run_gate_service import enqueue_issue_run_with_precheck
 
 logger = logging.getLogger(__name__)
@@ -28,7 +28,7 @@ def plan_jira_enqueue(
     session,
     context,
     issue_description: str | None,
-    precheck_decision,
+    precheck_outcome: str | None,
 ) -> object:  # noqa: ANN001
     return enqueue_issue_run_with_precheck(
         session,
@@ -39,7 +39,7 @@ def plan_jira_enqueue(
         issue_description=issue_description,
         repo_url=context.project.github_repository,
         delivery_id=context.delivery_id,
-        precheck_outcome=precheck_decision.pre_check.outcome if precheck_decision.pre_check is not None else None,
+        precheck_outcome=precheck_outcome,
         max_concurrent_runs=context.tenant.policy_config.get("max_concurrent_runs"),
     )
 
@@ -219,8 +219,8 @@ def plan_jira_run_flow(
         issue_description=resolved_issue_description,
     )
     precheck_decision = decision_result.decision
-    gate_block = resolve_run_gate_block(decision_result=decision_result)
-    if gate_block is not None and gate_block.reason == "policy_eval_failed":
+    admission = resolve_execution_admission(decision_result=decision_result)
+    if admission.blocked and admission.reason_code == "policy_eval_failed":
         logger.warning(
             "jira_webhook_not_started request_id=%s tenant_id=%s issue_key=%s reason=policy_eval_failed error=%s",
             context.request_id,
@@ -245,38 +245,33 @@ def plan_jira_run_flow(
                 ),
             ),
         )
-    if gate_block is not None:
+    if admission.blocked:
         logger.info(
             "jira_webhook_not_started request_id=%s tenant_id=%s issue_key=%s reason=%s",
             context.request_id,
             context.tenant_id,
             context.issue_key,
-            gate_block.reason,
+            admission.reason_code,
         )
         return JiraRunPlan(
             content=jira_webhook_response_fn(
                 context,
                 enqueued=False,
-                reason=gate_block.reason,
-                guidance=gate_block.guidance,
                 trigger_reason=trigger_reason,
                 webhook_event=context.webhook_event,
-                decision_gate_reason=gate_block.detail if gate_block.reason == "decision_gate_required" else None,
-                ready_label=(
-                    gate_block.ready_label or jira_webhook_precheck.resolve_ready_label_for_tenant(context.tenant)
-                    if gate_block.reason == "missing_ready_label"
-                    else None
+                **admission.jira_response_fields(
+                    fallback_ready_label=(
+                        jira_webhook_precheck.resolve_ready_label_for_tenant(context.tenant)
+                        if admission.reason_code == "missing_ready_label"
+                        else None
+                    ),
                 ),
             ),
             actions=(
                 build_jira_enqueue_skipped_notification_action(
                     context=context,
-                    reason=gate_block.reason,
-                    extra_detail=(
-                        f"decision_gate_reason={gate_block.detail}"
-                        if gate_block.reason == "decision_gate_required"
-                        else gate_block.detail
-                    ),
+                    reason=admission.reason_code,
+                    extra_detail=admission.notification_extra_detail(),
                 ),
             ),
         )
@@ -285,7 +280,7 @@ def plan_jira_run_flow(
         session=session,
         context=context,
         issue_description=resolved_issue_description,
-        precheck_decision=precheck_decision,
+        precheck_outcome=admission.precheck_outcome,
     )
     if not enqueue_result.enqueued:
         logger.info(

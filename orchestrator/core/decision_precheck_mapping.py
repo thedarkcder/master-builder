@@ -10,6 +10,12 @@ from typing import Any, Callable
 from sqlalchemy.orm import Session
 
 from orchestrator.core.decision_gate import DecisionGateResult
+from orchestrator.core.decision_snapshot_codec import (
+    DecisionResultSnapshot,
+    PrecheckSnapshot,
+    apply_frozen_cycle_questions,
+    build_question_set as build_question_set_codec,
+)
 from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.knowledge_base import SlotResolution
 from orchestrator.core.pre_run_check import PreRunCheckResult, evaluate_pre_run_check
@@ -25,8 +31,6 @@ from orchestrator.core.decision_types import (
 )
 from orchestrator.storage.models import DecisionCase, DecisionCycle
 
-QUESTION_KIND_DG = "decision_gate"
-QUESTION_KIND_GTD = "gtd"
 BLOCKED_CLASSIFICATIONS = {"decision_gate", "gtd", "both"}
 logger = logging.getLogger(__name__)
 
@@ -356,161 +360,38 @@ def serialize_result_snapshot(
     missing_slots: list[str],
     auto_resolved_slots: list[str],
 ) -> dict[str, object]:
-    return {
-        "classification": classification,
-        "issue_labels": [str(label).strip() for label in issue_labels if str(label).strip()],
-        "missing_slots": [str(slot).strip() for slot in missing_slots if str(slot).strip()],
-        "auto_resolved_slots": [str(slot).strip() for slot in auto_resolved_slots if str(slot).strip()],
-        "block_reason": decision.block_reason,
-        "guidance": decision.guidance,
-        "policy_error": decision.policy_error,
-        "pre_check": serialize_precheck_result(decision.pre_check),
-    }
+    return DecisionResultSnapshot.from_decision(
+        decision=decision,
+        classification=classification,
+        issue_labels=issue_labels,
+        missing_slots=missing_slots,
+        auto_resolved_slots=auto_resolved_slots,
+    ).dump()
 
 
 def serialize_precheck_result(pre_check: object | None) -> dict[str, object] | None:
     if not isinstance(pre_check, PreRunCheckResult):
         return None
-    return {
-        "outcome": pre_check.outcome,
-        "ready_label": pre_check.ready_label,
-        "ready_label_present": pre_check.ready_label_present,
-        "required_worker_capability": pre_check.required_worker_capability,
-        "required_worker_label": pre_check.required_worker_label,
-        "required_worker_label_present": pre_check.required_worker_label_present,
-        "decision_gate": {
-            "triggered": pre_check.decision_gate.triggered,
-            "reason": pre_check.decision_gate.reason,
-            "missing_sections": list(pre_check.decision_gate.missing_sections),
-            "questions": list(pre_check.decision_gate.questions),
-            "recommendation": pre_check.decision_gate.recommendation,
-            "tags": list(pre_check.decision_gate.tags),
-        },
-        "gtd": {
-            "valid": pre_check.gtd.valid,
-            "missing_criteria": list(pre_check.gtd.missing_criteria),
-            "clarification_questions": list(pre_check.gtd.clarification_questions),
-        },
-    }
+    return PrecheckSnapshot.from_precheck(pre_check).dump()
 
 
 def deserialize_precheck_result(value: object) -> PreRunCheckResult | None:
-    if not isinstance(value, dict):
-        return None
-    decision_gate_payload = value.get("decision_gate")
-    gtd_payload = value.get("gtd")
-    if not isinstance(decision_gate_payload, dict) or not isinstance(gtd_payload, dict):
-        return None
-    return PreRunCheckResult(
-        outcome=str(value.get("outcome") or "").strip(),
-        ready_label=str(value.get("ready_label") or "").strip() or None,
-        ready_label_present=bool(value.get("ready_label_present", False)),
-        required_worker_capability=str(value.get("required_worker_capability") or "").strip(),
-        required_worker_label=str(value.get("required_worker_label") or "").strip(),
-        required_worker_label_present=bool(value.get("required_worker_label_present", False)),
-        decision_gate=DecisionGateResult(
-            triggered=bool(decision_gate_payload.get("triggered")),
-            reason=str(decision_gate_payload.get("reason") or "").strip(),
-            missing_sections=string_tuple(decision_gate_payload.get("missing_sections")),
-            questions=string_tuple(decision_gate_payload.get("questions")),
-            recommendation=str(decision_gate_payload.get("recommendation") or "").strip(),
-            tags=string_tuple(decision_gate_payload.get("tags")),
-        ),
-        gtd=GoodToDoValidationResult(
-            valid=bool(gtd_payload.get("valid")),
-            missing_criteria=string_tuple(gtd_payload.get("missing_criteria")),
-            clarification_questions=string_tuple(gtd_payload.get("clarification_questions")),
-        ),
-    )
+    snapshot = PrecheckSnapshot.load(value)
+    return snapshot.to_precheck() if snapshot is not None else None
 
 
 def apply_frozen_cycle_to_precheck(*, pre_check: object, cycle: DecisionCycle, classification: str) -> object:
-    unresolved_ids = {
-        str(question_id).strip()
-        for question_id in cycle.unresolved_question_ids_json
-        if str(question_id).strip()
-    }
-    decision_gate_questions = [
-        str(item.get("text") or "").strip()
-        for item in cycle.question_set_json
-        if (
-            str(item.get("kind") or "").strip() == QUESTION_KIND_DG
-            and str(item.get("text") or "").strip()
-            and (
-                not str(item.get("id") or "").strip()
-                or str(item.get("id") or "").strip() in unresolved_ids
-            )
-        )
-    ]
-    gtd_questions = [
-        str(item.get("text") or "").strip()
-        for item in cycle.question_set_json
-        if (
-            str(item.get("kind") or "").strip() == QUESTION_KIND_GTD
-            and str(item.get("text") or "").strip()
-            and (
-                not str(item.get("id") or "").strip()
-                or str(item.get("id") or "").strip() in unresolved_ids
-            )
-        )
-    ]
-    resolved = pre_check
-    decision_gate = getattr(resolved, "decision_gate", None)
-    gtd = getattr(resolved, "gtd", None)
-    if classification in {"decision_gate", "both"} and decision_gate is not None:
-        next_decision_gate = decision_gate
-        if cycle.reason:
-            next_decision_gate = replace(next_decision_gate, reason=cycle.reason)
-        next_decision_gate = replace(next_decision_gate, questions=tuple(decision_gate_questions))
-        resolved = replace(resolved, decision_gate=next_decision_gate)
-    if classification in {"gtd", "both"} and gtd is not None:
-        resolved = replace(resolved, gtd=replace(gtd, clarification_questions=tuple(gtd_questions)))
-    return resolved
+    return apply_frozen_cycle_questions(
+        pre_check=pre_check,
+        cycle_question_set=list(cycle.question_set_json),
+        unresolved_question_ids=list(cycle.unresolved_question_ids_json),
+        cycle_reason=cycle.reason,
+        classification=classification,
+    )
 
 
 def build_question_set(*, pre_check: object, classification: str) -> list[dict]:
-    if pre_check is None:
-        return []
-    items: list[dict] = []
-    if classification in {"decision_gate", "both"}:
-        decision_gate = getattr(pre_check, "decision_gate", None)
-        questions = getattr(decision_gate, "questions", ()) if decision_gate is not None else ()
-        for question in questions:
-            text = str(question or "").strip()
-            if not text:
-                continue
-            items.append(
-                {
-                    "id": f"dg_{stable_short_hash(text)}",
-                    "kind": QUESTION_KIND_DG,
-                    "text": text,
-                }
-            )
-    if classification in {"gtd", "both"}:
-        for question in getattr(pre_check, "gtd_clarification_questions", ()):
-            text = str(question or "").strip()
-            if not text:
-                continue
-            items.append(
-                {
-                    "id": f"gtd_{stable_short_hash(text)}",
-                    "kind": QUESTION_KIND_GTD,
-                    "text": text,
-                }
-            )
-    deduped: list[dict] = []
-    seen: set[str] = set()
-    for item in items:
-        item_id = str(item.get("id") or "").strip()
-        if not item_id or item_id in seen:
-            continue
-        deduped.append(item)
-        seen.add(item_id)
-    return deduped
-
-
-def stable_short_hash(value: str) -> str:
-    return hashlib.sha1(str(value).encode("utf-8")).hexdigest()[:10]
+    return build_question_set_codec(pre_check=pre_check, classification=classification)
 
 
 def case_state_for_decision(*, decision: IngressDecision) -> str:
