@@ -162,19 +162,33 @@ class QueueListenerTests(unittest.TestCase):
     def test_wait_for_wake_or_stop(self) -> None:
         from orchestrator.core.worker.queue_listener import wait_for_wake_or_stop
 
-        async def _run() -> tuple[bool, bool]:
+        async def _run() -> tuple[bool, bool, bool]:
             wake = asyncio.Event()
             stop = asyncio.Event()
             wake.set()
-            await wait_for_wake_or_stop(wake_event=wake, stop_event=stop)
+            timed_out_first = await wait_for_wake_or_stop(wake_event=wake, stop_event=stop)
             first = wake.is_set()
             wake.clear()
             stop.set()
-            await wait_for_wake_or_stop(wake_event=wake, stop_event=stop)
-            return first, stop.is_set()
+            timed_out_second = await wait_for_wake_or_stop(wake_event=wake, stop_event=stop)
+            return first, stop.is_set(), timed_out_first or timed_out_second
 
         result = asyncio.run(_run())
-        self.assertEqual(result, (True, True))
+        self.assertEqual(result, (True, True, False))
+
+    def test_wait_for_wake_or_stop_timeout(self) -> None:
+        from orchestrator.core.worker.queue_listener import wait_for_wake_or_stop
+
+        async def _run() -> bool:
+            wake = asyncio.Event()
+            stop = asyncio.Event()
+            return await wait_for_wake_or_stop(
+                wake_event=wake,
+                stop_event=stop,
+                timeout_seconds=0.01,
+            )
+
+        self.assertTrue(asyncio.run(_run()))
 
 
 class RuntimeFactoryTests(unittest.TestCase):
@@ -228,8 +242,42 @@ class WorkerTests(unittest.TestCase):
             worker_module._process_next_run_once(session_factory=_session_factory)
 
         webhook_mock.assert_not_called()
+        runner_mock.assert_not_called()
+        run_mock.assert_called_once()
+
+    def test_process_next_run_once_builds_runner_lazily(self) -> None:
+        import orchestrator.worker as worker_module
+
+        run_session = MagicMock(name="run-session")
+
+        class _SessionCtx:
+            def __init__(self, current_session) -> None:  # noqa: ANN001
+                self._session = current_session
+
+            def __enter__(self):  # noqa: ANN204
+                return self._session
+
+            def __exit__(self, exc_type, exc, tb) -> bool:  # noqa: ANN001, ANN204
+                return False
+
+        def _session_factory():  # noqa: ANN202
+            return _SessionCtx(run_session)
+
+        runner = MagicMock()
+
+        def _run_next(session, lazy_runner):  # noqa: ANN001, ANN202
+            lazy_runner.run("request")
+            return object()
+
+        with (
+            patch.object(worker_module, "build_workflow_runner_for_session", return_value=runner) as runner_mock,
+            patch.object(worker_module, "process_next_queued_run", side_effect=_run_next) as run_mock,
+        ):
+            worker_module._process_next_run_once(session_factory=_session_factory)
+
         runner_mock.assert_called_once_with(session=run_session)
-        run_mock.assert_called_once_with(run_session, runner_mock.return_value)
+        run_mock.assert_called_once()
+        runner.run.assert_called_once_with("request")
 
     def test_process_next_queued_run_passes_send_discord_fn(self) -> None:
         import orchestrator.worker as worker_module
@@ -254,12 +302,19 @@ class WorkerTests(unittest.TestCase):
         wait_calls = {"count": 0}
         spawned_modes: list[str] = []
 
-        async def _wait_for_wake_or_stop(*, wake_event: asyncio.Event, stop_event: asyncio.Event) -> None:
+        async def _wait_for_wake_or_stop(
+            *,
+            wake_event: asyncio.Event,
+            stop_event: asyncio.Event,
+            timeout_seconds: float | None = None,
+        ) -> bool:
+            _ = timeout_seconds
             wait_calls["count"] += 1
             if wait_calls["count"] == 1:
                 wake_event.set()
-                return
+                return False
             stop_event.set()
+            return False
 
         async def _spawn_worker_child_process(*, mode: str, wake_event: asyncio.Event):
             _ = wake_event
@@ -284,6 +339,7 @@ class WorkerTests(unittest.TestCase):
             patch.object(worker_module, "RunQueueNotificationBridge", return_value=listener),
             patch.object(worker_module, "wait_for_wake_or_stop", new=_wait_for_wake_or_stop),
             patch.object(worker_module, "_resolve_worker_child_capacity", return_value=1),
+            patch.object(worker_module, "_has_claimable_work_once", return_value=True),
             patch.object(worker_module, "_spawn_worker_child_process", new=_spawn_worker_child_process),
             patch.object(worker_module, "_recover_worker_run_health_once") as recovery_mock,
             patch.object(worker_module, "_run_stale_recovery_loop") as stale_loop_mock,
@@ -312,12 +368,19 @@ class WorkerTests(unittest.TestCase):
         spawned_modes: list[str] = []
         wait_calls = {"count": 0}
 
-        async def _wait_for_wake_or_stop(*, wake_event: asyncio.Event, stop_event: asyncio.Event) -> None:
+        async def _wait_for_wake_or_stop(
+            *,
+            wake_event: asyncio.Event,
+            stop_event: asyncio.Event,
+            timeout_seconds: float | None = None,
+        ) -> bool:
+            _ = timeout_seconds
             wait_calls["count"] += 1
             if wait_calls["count"] == 1:
                 wake_event.set()
-                return
+                return False
             stop_event.set()
+            return False
 
         async def _spawn_worker_child_process(*, mode: str, wake_event: asyncio.Event):
             _ = wake_event
@@ -348,6 +411,7 @@ class WorkerTests(unittest.TestCase):
             patch.object(worker_module, "RunQueueNotificationBridge", return_value=listener),
             patch.object(worker_module, "wait_for_wake_or_stop", new=_wait_for_wake_or_stop),
             patch.object(worker_module, "_resolve_worker_child_capacity", return_value=1),
+            patch.object(worker_module, "_has_claimable_work_once", return_value=True),
             patch.object(worker_module, "_spawn_worker_child_process", new=_spawn_worker_child_process),
             patch.object(worker_module, "_recover_worker_run_health_once") as recovery_mock,
             patch.object(worker_module, "_run_stale_recovery_loop", new=_stale_recovery_loop),
@@ -407,7 +471,7 @@ class WorkerTests(unittest.TestCase):
             patch.object(worker_module, "get_settings", return_value=fake_settings),
             patch.object(worker_module, "configure_logging"),
             patch.object(worker_module, "create_session_factory", return_value=MagicMock()),
-            patch.object(worker_module, "_resolve_worker_processor", return_value=MagicMock(return_value=object())),
+            patch.object(worker_module, "_process_next_run_once", return_value=object()),
         ):
             self.assertEqual(
                 worker_module.run_worker_child_once(mode="runs"),
@@ -418,12 +482,15 @@ class WorkerTests(unittest.TestCase):
             patch.object(worker_module, "get_settings", return_value=fake_settings),
             patch.object(worker_module, "configure_logging"),
             patch.object(worker_module, "create_session_factory", return_value=MagicMock()),
-            patch.object(worker_module, "_resolve_worker_processor", return_value=MagicMock(return_value=None)),
+            patch.object(worker_module, "_resolve_webhook_owner_id", return_value="worker:webhooks:child:test"),
+            patch.object(worker_module, "_process_next_webhook_job_once", return_value=None) as process_webhook_once,
         ):
             self.assertEqual(
                 worker_module.run_worker_child_once(mode="webhooks"),
                 worker_module.WORKER_CHILD_EXIT_IDLE,
             )
+        process_webhook_once.assert_called_once()
+        self.assertEqual(process_webhook_once.call_args.kwargs["owner_id"], "worker:webhooks:child:test")
 
     def test_resolve_worker_child_capacity_applies_policy_and_runtime_cap(self) -> None:
         import orchestrator.worker as worker_module
@@ -465,12 +532,19 @@ class WorkerTests(unittest.TestCase):
         recovery_mock = MagicMock()
         wait_calls = {"count": 0}
 
-        async def _wait_for_wake_or_stop(*, wake_event: asyncio.Event, stop_event: asyncio.Event) -> None:
+        async def _wait_for_wake_or_stop(
+            *,
+            wake_event: asyncio.Event,
+            stop_event: asyncio.Event,
+            timeout_seconds: float | None = None,
+        ) -> bool:
+            _ = timeout_seconds
             wait_calls["count"] += 1
             if wait_calls["count"] == 1:
                 wake_event.set()
-                return
+                return False
             stop_event.set()
+            return False
 
         async def _stale_recovery_loop(*, stop_event: asyncio.Event, **_kwargs: object) -> None:
             await stop_event.wait()
@@ -507,6 +581,7 @@ class WorkerTests(unittest.TestCase):
             patch.object(worker_module, "RunQueueNotificationBridge", return_value=listener),
             patch.object(worker_module, "wait_for_wake_or_stop", new=_wait_for_wake_or_stop),
             patch.object(worker_module, "_resolve_worker_child_capacity", return_value=1),
+            patch.object(worker_module, "_has_claimable_work_once", return_value=True),
             patch.object(worker_module, "_spawn_worker_child_process", new=_spawn_worker_child_process),
             patch.object(worker_module, "_recover_worker_run_health_once", new=recovery_mock),
             patch.object(worker_module, "_run_stale_recovery_loop", new=_stale_recovery_loop),
@@ -546,12 +621,19 @@ class WorkerTests(unittest.TestCase):
         recovery_mock = MagicMock()
         wait_calls = {"count": 0}
 
-        async def _wait_for_wake_or_stop(*, wake_event: asyncio.Event, stop_event: asyncio.Event) -> None:
+        async def _wait_for_wake_or_stop(
+            *,
+            wake_event: asyncio.Event,
+            stop_event: asyncio.Event,
+            timeout_seconds: float | None = None,
+        ) -> bool:
+            _ = timeout_seconds
             wait_calls["count"] += 1
             if wait_calls["count"] == 1:
                 wake_event.set()
-                return
+                return False
             stop_event.set()
+            return False
 
         async def _stale_recovery_loop(*, stop_event: asyncio.Event, **_kwargs: object) -> None:
             await stop_event.wait()
@@ -584,6 +666,7 @@ class WorkerTests(unittest.TestCase):
             patch.object(worker_module, "RunQueueNotificationBridge", return_value=listener),
             patch.object(worker_module, "wait_for_wake_or_stop", new=_wait_for_wake_or_stop),
             patch.object(worker_module, "_resolve_worker_child_capacity", return_value=2) as slots_mock,
+            patch.object(worker_module, "_has_claimable_work_once", return_value=True),
             patch.object(worker_module, "_spawn_worker_child_process", new=_spawn_worker_child_process),
             patch.object(worker_module, "_recover_worker_run_health_once", new=recovery_mock),
             patch.object(worker_module, "_run_stale_recovery_loop", new=_stale_recovery_loop),
@@ -611,11 +694,18 @@ class WorkerTests(unittest.TestCase):
         recovery_mock = MagicMock()
         child_spawns = {"count": 0}
 
-        async def _wait_for_wake_or_stop(*, wake_event: asyncio.Event, stop_event: asyncio.Event) -> None:
+        async def _wait_for_wake_or_stop(
+            *,
+            wake_event: asyncio.Event,
+            stop_event: asyncio.Event,
+            timeout_seconds: float | None = None,
+        ) -> bool:
+            _ = timeout_seconds
             if child_spawns["count"] >= 2:
                 stop_event.set()
-                return
+                return False
             wake_event.set()
+            return False
 
         async def _stale_recovery_loop(*, stop_event: asyncio.Event, **_kwargs: object) -> None:
             await stop_event.wait()
@@ -649,6 +739,7 @@ class WorkerTests(unittest.TestCase):
             patch.object(worker_module, "RunQueueNotificationBridge", return_value=listener),
             patch.object(worker_module, "wait_for_wake_or_stop", new=_wait_for_wake_or_stop),
             patch.object(worker_module, "_resolve_worker_child_capacity", return_value=1),
+            patch.object(worker_module, "_has_claimable_work_once", return_value=True),
             patch.object(worker_module, "_recover_worker_run_health_once", new=recovery_mock),
             patch.object(worker_module, "_run_stale_recovery_loop", new=_stale_recovery_loop),
             patch.object(worker_module, "_spawn_worker_child_process", new=_spawn_worker_child_process),
@@ -676,9 +767,16 @@ class WorkerTests(unittest.TestCase):
         listener = MagicMock()
         recovery_mock = MagicMock()
 
-        async def _wait_for_wake_or_stop(*, wake_event: asyncio.Event, stop_event: asyncio.Event) -> None:
+        async def _wait_for_wake_or_stop(
+            *,
+            wake_event: asyncio.Event,
+            stop_event: asyncio.Event,
+            timeout_seconds: float | None = None,
+        ) -> bool:
+            _ = timeout_seconds
             _ = stop_event
             wake_event.set()
+            return False
 
         async def _stale_recovery_loop(*, stop_event: asyncio.Event, **_kwargs: object) -> None:
             await stop_event.wait()
@@ -706,6 +804,7 @@ class WorkerTests(unittest.TestCase):
             patch.object(worker_module, "RunQueueNotificationBridge", return_value=listener),
             patch.object(worker_module, "wait_for_wake_or_stop", new=_wait_for_wake_or_stop),
             patch.object(worker_module, "_resolve_worker_child_capacity", return_value=1),
+            patch.object(worker_module, "_has_claimable_work_once", return_value=True),
             patch.object(worker_module, "_spawn_worker_child_process", new=_spawn_worker_child_process),
             patch.object(worker_module, "_recover_worker_run_health_once", new=recovery_mock),
             patch.object(worker_module, "_run_stale_recovery_loop", new=_stale_recovery_loop),

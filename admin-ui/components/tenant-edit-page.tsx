@@ -9,7 +9,6 @@ import { useAuth } from "@/components/auth-provider";
 import { ProjectsManager } from "@/components/projects-manager";
 import { TenantForm } from "@/components/tenant-form";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -56,7 +55,8 @@ type TenantEditSection =
   | "health"
   | "config"
   | "projects"
-  | "notifications";
+  | "notifications"
+  | "danger";
 
 export function TenantEditPage({ section }: { section: TenantEditSection }) {
   const router = useRouter();
@@ -83,6 +83,7 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
   const [projectsBusy, setProjectsBusy] = useState(false);
   const [archiveBusy, setArchiveBusy] = useState(false);
   const [archiveConfirmationName, setArchiveConfirmationName] = useState("");
+  const [showArchiveConfirm, setShowArchiveConfirm] = useState(false);
   const [discordEnabled, setDiscordEnabled] = useState(false);
   const [discordServerId, setDiscordServerId] = useState("");
   const [discordOnboardingChannelId, setDiscordOnboardingChannelId] = useState("");
@@ -148,7 +149,6 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
           setReasoningEfforts(modelCatalog.reasoning_efforts);
           setGlobalCodexReasoningEffort(modelCatalog.default_reasoning_effort);
         } catch {
-          // Don't block tenant settings if platform model catalog is unavailable.
           setCodexModels([]);
           setGlobalCodexModel("");
           setReasoningEfforts([]);
@@ -455,12 +455,12 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
 
   if (loading) {
     return (
-      <Card>
-        <CardHeader>
+      <div className="overflow-hidden rounded-2xl border bg-background">
+        <div className="px-6 pt-6">
           <Skeleton className="h-6 w-64" />
-          <Skeleton className="h-4 w-80" />
-        </CardHeader>
-        <CardContent className="space-y-3">
+          <Skeleton className="mt-2 h-4 w-80" />
+        </div>
+        <div className="space-y-3 p-6">
           <Skeleton className="h-10 w-full" />
           <div className="grid gap-4 border-t pt-3 md:grid-cols-[220px_1fr]">
             <div className="space-y-2 rounded-md border bg-muted/20 p-2">
@@ -471,24 +471,24 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
             </div>
             <Skeleton className="h-32 w-full rounded-md border" />
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
     );
   }
 
   if (!tenant) {
     return (
-      <Card>
-        <CardHeader>
-          <CardTitle>Tenant Not Found</CardTitle>
-          <CardDescription>The requested tenant could not be loaded.</CardDescription>
-        </CardHeader>
-        <CardContent>
+      <div className="overflow-hidden rounded-2xl border bg-background">
+        <div className="px-6 pt-6">
+          <h2 className="text-base font-semibold">Tenant Not Found</h2>
+          <p className="mt-1 text-sm text-muted-foreground">The requested tenant could not be loaded.</p>
+        </div>
+        <div className="p-6">
           <Button asChild>
             <Link href="/tenants/select">Back to Tenants</Link>
           </Button>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
     );
   }
 
@@ -525,16 +525,16 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
             {tenant.tenant_id}
           </div>
         </div>
-        {statusLine ? <p className={cn("rounded-md border px-3 py-2 text-sm", statusClasses)}>{statusLine}</p> : null}
+        {statusLine ? <p className={cn("rounded-xl border px-4 py-3 text-sm", statusClasses)}>{statusLine}</p> : null}
       </div>
 
       {section === "setup" ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>Setup Flow</CardTitle>
-            <CardDescription>Follow this order to keep setup predictable and complete.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3 text-sm">
+        <div className="overflow-hidden rounded-2xl border bg-background">
+          <div className="px-6 pt-6">
+            <h2 className="text-base font-semibold">Setup Flow</h2>
+            <p className="mt-1 text-sm text-muted-foreground">Follow this order to keep setup predictable and complete.</p>
+          </div>
+          <div className="space-y-3 p-6 text-sm">
             <ol className="list-decimal space-y-2 pl-5">
               <li>Manage required integration secrets.</li>
               <li>Connect integrations from the dedicated Jira and GitHub pages.</li>
@@ -552,49 +552,49 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
                 <Link href={getTenantSettingsRoute(tenant.tenant_id, "integrations")}>Open Integrations</Link>
               </Button>
             </div>
-          </CardContent>
-        </Card>
+          </div>
+        </div>
       ) : null}
 
       {section === "integrations" ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>Integrations</CardTitle>
-            <CardDescription>Connect external systems before configuring tenant policy.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3 text-sm">
-            <div className="space-y-2 rounded-md border p-3">
+        <div className="overflow-hidden rounded-2xl border bg-background">
+          <div className="px-6 pt-6">
+            <h2 className="text-base font-semibold">Integrations</h2>
+            <p className="mt-1 text-sm text-muted-foreground">Connect external systems before configuring tenant policy.</p>
+          </div>
+          <div className="mt-4 divide-y border-t text-sm">
+            <div className="space-y-2 px-6 py-4">
               <p className="font-medium">Jira</p>
               <p className="text-muted-foreground">Connect Jira OAuth and verify tenant board access.</p>
               <Button asChild variant="outline" size="sm">
                 <Link href={getTenantSettingsRoute(tenant.tenant_id, "jira")}>Open Jira</Link>
               </Button>
             </div>
-            <div className="space-y-2 rounded-md border p-3">
+            <div className="space-y-2 px-6 py-4">
               <p className="font-medium">GitHub</p>
               <p className="text-muted-foreground">Install or reconnect GitHub App for this tenant.</p>
               <Button asChild variant="outline" size="sm">
                 <Link href={getTenantSettingsRoute(tenant.tenant_id, "github")}>Open GitHub</Link>
               </Button>
             </div>
-            <div className="space-y-2 rounded-md border p-3">
+            <div className="space-y-2 px-6 py-4">
               <p className="font-medium">Discord</p>
               <p className="text-muted-foreground">Manage notification and command settings for tenant channels.</p>
               <Button asChild variant="outline" size="sm">
                 <Link href={getTenantSettingsRoute(tenant.tenant_id, "discord")}>Open Discord</Link>
               </Button>
             </div>
-          </CardContent>
-        </Card>
+          </div>
+        </div>
       ) : null}
 
       {section === "jira" ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>Jira Integration</CardTitle>
-            <CardDescription>Connect and manage Jira access and webhook lifecycle for this tenant.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3 text-sm">
+        <div className="overflow-hidden rounded-2xl border bg-background">
+          <div className="px-6 pt-6">
+            <h2 className="text-base font-semibold">Jira Integration</h2>
+            <p className="mt-1 text-sm text-muted-foreground">Connect and manage Jira access and webhook lifecycle for this tenant.</p>
+          </div>
+          <div className="space-y-3 p-6 text-sm">
             <p>
               <strong>Status:</strong> {jiraConnected ? "Connected" : "Not connected"}
             </p>
@@ -647,17 +647,17 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
               </div>
               </div>
             ) : null}
-          </CardContent>
-        </Card>
+          </div>
+        </div>
       ) : null}
 
       {section === "github" ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>GitHub Integration</CardTitle>
-            <CardDescription>Connect GitHub App once for this tenant. Project mappings are managed in Projects.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4 text-sm">
+        <div className="overflow-hidden rounded-2xl border bg-background">
+          <div className="px-6 pt-6">
+            <h2 className="text-base font-semibold">GitHub Integration</h2>
+            <p className="mt-1 text-sm text-muted-foreground">Connect GitHub App once for this tenant. Project mappings are managed in Projects.</p>
+          </div>
+          <div className="space-y-4 p-6 text-sm">
             <p>
               <strong>Status:</strong> {githubInstalled ? "Connected" : "Not connected"}
             </p>
@@ -688,17 +688,17 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
                 discord: false
               }}
             />
-          </CardContent>
-        </Card>
+          </div>
+        </div>
       ) : null}
 
       {section === "projects" ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>Projects</CardTitle>
-            <CardDescription>Create, edit, and archive tenant projects with repo/Jira mappings.</CardDescription>
-          </CardHeader>
-          <CardContent>
+        <div className="overflow-hidden rounded-2xl border bg-background">
+          <div className="px-6 pt-6">
+            <h2 className="text-base font-semibold">Projects</h2>
+            <p className="mt-1 text-sm text-muted-foreground">Create, edit, and archive tenant projects with repo/Jira mappings.</p>
+          </div>
+          <div className="p-6">
             <ProjectsManager
               projects={projects}
               repositories={githubRepositories}
@@ -708,17 +708,17 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
               onCreateProject={handleCreateProject}
               onUpdateProject={handleUpdateProject}
             />
-          </CardContent>
-        </Card>
+          </div>
+        </div>
       ) : null}
 
       {section === "discord" ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>Discord Integration</CardTitle>
-            <CardDescription>Install the tenant bot, confirm the connected guild, and configure onboarding invites.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
+        <div className="overflow-hidden rounded-2xl border bg-background">
+          <div className="px-6 pt-6">
+            <h2 className="text-base font-semibold">Discord Integration</h2>
+            <p className="mt-1 text-sm text-muted-foreground">Install the tenant bot, confirm the connected guild, and configure onboarding invites.</p>
+          </div>
+          <div className="space-y-4 p-6">
             <div className="space-y-2 text-sm">
               <label className="flex items-center gap-2">
                 <input
@@ -729,7 +729,7 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
                 />
                 <span>Enable Discord</span>
               </label>
-              <div className="rounded-md border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+              <div className="rounded-xl border px-4 py-3 text-xs text-muted-foreground">
                 Connected guild: <strong>{tenant.discord?.guild_id ?? "not installed yet"}</strong>
                 <br />
                 Installed at: <strong>{tenant.discord?.installed_at ?? "not installed yet"}</strong>
@@ -778,95 +778,149 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
                   />
                 </div>
               </div>
-              <p className="rounded-md border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+              <div className="rounded-xl border px-4 py-3 text-xs text-muted-foreground">
                 Live voice rooms are configured per project on the project Discord page. Onboarding joins use the tenant onboarding channel.
-              </p>
+              </div>
               <Button onClick={() => void saveDiscordSettings()} disabled={saving}>
                 {saving ? "Saving..." : "Save"}
               </Button>
             </div>
-          </CardContent>
-        </Card>
+          </div>
+        </div>
       ) : null}
 
       {section === "config" ? (
-        <div className="space-y-6">
-          <Card>
-            <CardHeader>
-              <CardTitle>Workspace configuration</CardTitle>
-              <CardDescription>Update identity and policy.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <TenantForm
-                mode="edit"
-                initialValues={recordToFormValues(tenant)}
-                onSubmit={handleSave}
-                submitting={saving}
-                codexModels={codexModels}
-                reasoningEfforts={reasoningEfforts}
-                globalCodexModel={globalCodexModel}
-                globalCodexReasoningEffort={globalCodexReasoningEffort}
-                visibleSections={{
-                  identity: true,
-                  jira: false,
-                  github: false,
-                  repository: false,
-                  policy: true,
-                  discord: false
-                }}
-              />
-            </CardContent>
-          </Card>
+        <div className="overflow-hidden rounded-2xl border bg-background">
+          <div className="px-6 pt-6">
+            <h2 className="text-base font-semibold">Workspace configuration</h2>
+            <p className="mt-1 text-sm text-muted-foreground">Update identity and policy.</p>
+          </div>
+          <div className="p-6">
+            <TenantForm
+              mode="edit"
+              initialValues={recordToFormValues(tenant)}
+              onSubmit={handleSave}
+              submitting={saving}
+              codexModels={codexModels}
+              reasoningEfforts={reasoningEfforts}
+              globalCodexModel={globalCodexModel}
+              globalCodexReasoningEffort={globalCodexReasoningEffort}
+              visibleSections={{
+                identity: true,
+                jira: false,
+                github: false,
+                repository: false,
+                policy: true,
+                discord: false
+              }}
+            />
+          </div>
+        </div>
+      ) : null}
 
-          <Card className="border-red-200 bg-red-50/40">
-            <CardHeader>
-              <CardTitle>Danger zone</CardTitle>
-              <CardDescription>
-                Archiving disables this workspace immediately and schedules permanent deletion in 60 days.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="space-y-2">
-                <p className="text-sm text-muted-foreground">
-                  Type <span className="font-medium text-foreground">{tenant.name}</span> to confirm.
-                </p>
-                <Input
-                  value={archiveConfirmationName}
-                  onChange={(event) => setArchiveConfirmationName(event.target.value)}
-                  placeholder={tenant.name}
-                  disabled={archiveBusy || !tenant.is_enabled}
-                />
-              </div>
-              <div className="flex flex-wrap items-center gap-3">
+      {section === "danger" ? (
+        <div className="space-y-6">
+          <div className="overflow-hidden rounded-2xl border bg-background">
+            <div className="px-6 pt-6">
+              <h2 className="text-base font-semibold">Danger zone</h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Irreversible actions for this workspace. Proceed with caution.
+              </p>
+            </div>
+            <div className="divide-y">
+              <div className="flex flex-wrap items-center justify-between gap-4 px-6 py-5">
+                <div className="space-y-0.5">
+                  <p className="text-sm font-medium">{tenant.is_enabled ? "Archive this workspace" : "Unarchive this workspace"}</p>
+                  <p className="text-sm text-muted-foreground">
+                    {tenant.is_enabled
+                      ? "Archiving disables the workspace immediately and schedules permanent deletion in 60 days."
+                      : `This workspace is archived. Scheduled purge: ${tenant.purge_after_at ?? "not scheduled"}.`}
+                  </p>
+                </div>
                 <Button
                   variant="outline"
-                  className={tenant.is_enabled ? "border-red-300 bg-red-600 text-white hover:bg-red-700 hover:text-white" : undefined}
-                  onClick={() => void handleArchiveToggle()}
-                  disabled={
-                    archiveBusy ||
-                    (tenant.is_enabled && archiveConfirmationName.trim() !== tenant.name.trim())
+                  className={
+                    tenant.is_enabled
+                      ? "border-red-300 text-red-600 hover:bg-red-50 hover:text-red-700"
+                      : undefined
                   }
+                  onClick={() => {
+                    if (tenant.is_enabled) {
+                      setShowArchiveConfirm(true);
+                      setArchiveConfirmationName("");
+                    } else {
+                      void handleArchiveToggle();
+                    }
+                  }}
+                  disabled={archiveBusy}
                 >
-                  {tenant.is_enabled ? "Archive workspace" : "Unarchive workspace"}
+                  {tenant.is_enabled ? "Archive workspace…" : "Unarchive workspace"}
                 </Button>
-                <p className="text-xs text-muted-foreground">
-                  {tenant.is_enabled
-                    ? "Archived workspaces move into the archived list and can be restored before purge."
-                    : `Scheduled purge: ${tenant.purge_after_at ?? "not scheduled"}`}
-                </p>
               </div>
-            </CardContent>
-          </Card>
+            </div>
+          </div>
+
+          {showArchiveConfirm ? (
+            <div className="fixed inset-0 z-50 flex items-center justify-center">
+              <div
+                className="fixed inset-0 bg-black/50"
+                onClick={() => setShowArchiveConfirm(false)}
+              />
+              <div className="relative mx-4 w-full max-w-md rounded-2xl border bg-background p-6 shadow-lg">
+                <h3 className="text-lg font-semibold">Archive workspace</h3>
+                <p className="mt-2 text-sm text-muted-foreground">
+                  This will disable <span className="font-medium text-foreground">{tenant.name}</span> immediately
+                  and schedule permanent deletion in 60 days.
+                </p>
+                <div className="mt-4 space-y-2">
+                  <p className="text-sm">
+                    To confirm, type <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-sm">{tenant.name}</span> below.
+                  </p>
+                  <Input
+                    value={archiveConfirmationName}
+                    onChange={(event) => setArchiveConfirmationName(event.target.value)}
+                    placeholder={tenant.name}
+                    autoFocus
+                    disabled={archiveBusy}
+                  />
+                </div>
+                <div className="mt-6 flex justify-end gap-3">
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setShowArchiveConfirm(false);
+                      setArchiveConfirmationName("");
+                    }}
+                    disabled={archiveBusy}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    className="border-red-300 bg-red-600 text-white hover:bg-red-700 hover:text-white"
+                    onClick={() => {
+                      void handleArchiveToggle().then(() => setShowArchiveConfirm(false));
+                    }}
+                    disabled={
+                      archiveBusy ||
+                      archiveConfirmationName.trim() !== tenant.name.trim()
+                    }
+                  >
+                    {archiveBusy ? "Archiving…" : "Archive workspace"}
+                  </Button>
+                </div>
+              </div>
+            </div>
+          ) : null}
         </div>
       ) : null}
 
       {section === "health" ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>Integration Health</CardTitle>
-            <CardDescription>Run checks and preview ready-gate eligibility for this tenant.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3 text-sm">
+        <div className="overflow-hidden rounded-2xl border bg-background">
+          <div className="px-6 pt-6">
+            <h2 className="text-base font-semibold">Integration Health</h2>
+            <p className="mt-1 text-sm text-muted-foreground">Run checks and preview ready-gate eligibility for this tenant.</p>
+          </div>
+          <div className="space-y-3 p-6 text-sm">
             <div className="flex flex-wrap gap-2">
               <Button variant="secondary" onClick={() => void runHealthChecks()}>
                 Run Health Checks
@@ -875,7 +929,7 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
                 Preview Ready Gate
               </Button>
             </div>
-            <div className="rounded-md border p-3">
+            <div className="rounded-xl border px-4 py-3">
               <p className="font-medium">Ready Gate Preview</p>
               <p className="text-muted-foreground">
                 {readyPreview ? readyPreview.guidance : "Run preview to inspect currently eligible issues."}
@@ -905,18 +959,18 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
                 </div>
               ) : null}
             </div>
-          </CardContent>
-        </Card>
+          </div>
+        </div>
       ) : null}
 
       {section === "notifications" ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>Notifications</CardTitle>
-            <CardDescription>Review important tenant events and required actions in one place.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3 text-sm">
-            <div className="rounded-md border">
+        <div className="overflow-hidden rounded-2xl border bg-background">
+          <div className="px-6 pt-6">
+            <h2 className="text-base font-semibold">Notifications</h2>
+            <p className="mt-1 text-sm text-muted-foreground">Review important tenant events and required actions in one place.</p>
+          </div>
+          <div className="p-6 text-sm">
+            <div className="overflow-hidden rounded-xl border">
               <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3 border-b px-3 py-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
                 <span>Notification</span>
                 <span>Status</span>
@@ -935,8 +989,8 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
                 </li>
               </ul>
             </div>
-          </CardContent>
-        </Card>
+          </div>
+        </div>
       ) : null}
     </div>
   );

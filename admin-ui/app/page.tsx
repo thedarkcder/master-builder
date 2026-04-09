@@ -1,8 +1,10 @@
 import Image from "next/image";
 import Link from "next/link";
+import { cookies } from "next/headers";
 
 import { auth } from "@/auth";
 import { getDefaultAuthenticatedRoute } from "@/lib/auth-routing";
+import { getLastWorkspaceCookieName } from "@/lib/workspace-preference";
 
 const heroFluidImage =
   "https://lh3.googleusercontent.com/aida-public/AB6AXuBuvZ27cHqaDDOEJ11nIggfen9hZf4ZT5UBIR0Ucb-RxSvah0Z8DhQTirK1xQ3fg3s5uRfYrFmCHy9XiKhZxF2sR0WJ17PkNpkycMosB0qv5i9_QW60RvzAdcDdlMFoyP0MYwdDYL0wW3Bx29DElub0VobAmgHCmrC2ejoKFokjILlAkYVV-6TYoy1q2ebKcMZNP0XhOWgKGXO8RzTrqhMNF5rgCYtbM8ZvxQYRdVEi-TqrWqMFCPVczGap2xeSHLieya711aEE-2Ew";
@@ -47,7 +49,11 @@ const governancePoints = [
 
 export default async function HomePage() {
   const session = await auth();
-  const primaryHref = session ? getDefaultAuthenticatedRoute(session.user?.principal) : "/login";
+  const cookieStore = await cookies();
+  const preferredTenantId = cookieStore.get(getLastWorkspaceCookieName())?.value ?? null;
+  const primaryHref = session
+    ? getDefaultAuthenticatedRoute(session.user?.principal, { preferredTenantId })
+    : "/login";
   const primaryLabel = session ? "Open workspace" : "Strategic consultation";
 
   return (

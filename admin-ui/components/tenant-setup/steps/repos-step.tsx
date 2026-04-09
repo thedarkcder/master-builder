@@ -24,7 +24,7 @@ export function ReposStep({
   return (
     <div className="space-y-6">
       <div className="space-y-3">
-        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Repository</div>
+        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Repository default</div>
         <select
           className="h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm"
           value={selectedRepoUrl}
@@ -38,6 +38,9 @@ export function ReposStep({
             </option>
           ))}
         </select>
+        <p className="text-xs text-slate-500">
+          This is a workspace default. Jira-project-to-repository mappings are configured per project.
+        </p>
       </div>
 
       <div className="rounded-2xl border border-slate-200 bg-slate-50/70 px-5 py-5">

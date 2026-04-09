@@ -8,7 +8,7 @@ import { ArrowLeft, CheckCircle2, Clock, MessageSquare, User } from "lucide-reac
 import { useAuth } from "@/components/auth-provider";
 import { DiscordSection } from "@/components/tenant-form-sections";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+
 import { Input } from "@/components/ui/input";
 import {
   approveDiscordAllowlistRequest,
@@ -123,8 +123,7 @@ function flattenAutomationExecutions(automations: ProjectAutomationRecord[]): Au
       return (kindByAutomationId.get(right.automation_id) ?? right.automation_kind).localeCompare(
         kindByAutomationId.get(left.automation_id) ?? left.automation_kind,
       );
-    })
-    .slice(0, 20);
+    });
 }
 
 function isDraftAutomation(automation: ProjectAutomationRecord): boolean {
@@ -149,7 +148,14 @@ export function ProjectAutomationsContent({
   const [automationDefinitions, setAutomationDefinitions] = useState<ProjectAutomationRecord[]>([]);
   const [automationBusy, setAutomationBusy] = useState(false);
   const [automationStatusLine, setAutomationStatusLine] = useState("");
+  const [executionsPage, setExecutionsPage] = useState(1);
+  const EXECUTIONS_PAGE_SIZE = 5;
   const automationExecutions = flattenAutomationExecutions(automationDefinitions);
+  const executionsTotalPages = Math.max(1, Math.ceil(automationExecutions.length / EXECUTIONS_PAGE_SIZE));
+  const pagedExecutions = automationExecutions.slice(
+    (executionsPage - 1) * EXECUTIONS_PAGE_SIZE,
+    executionsPage * EXECUTIONS_PAGE_SIZE,
+  );
 
   useEffect(() => {
     if (!credentials) return;
@@ -230,15 +236,15 @@ export function ProjectAutomationsContent({
         <p className="rounded-lg border bg-muted/40 px-4 py-2.5 text-sm text-muted-foreground">{automationStatusLine}</p>
       ) : null}
 
-      <Card id="project-automations">
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base">Project Automations</CardTitle>
-          <p className="text-sm text-muted-foreground">
+      <div id="project-automations" className="overflow-hidden rounded-2xl border bg-background">
+        <div className="p-6 pb-3">
+          <h2 className="text-base font-semibold">Project Automations</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
             Configure scheduled standup/retro voice brief automations for this project. Deliveries use your Discord text
             channel IDs.
           </p>
-        </CardHeader>
-        <CardContent className="space-y-4">
+        </div>
+        <div className="space-y-4 p-6 pt-0">
           <div className="space-y-3">
             {automationDefinitions.map((automation, index) => {
               const automationId = automation.automation_id || `automation-${index}`;
@@ -358,38 +364,68 @@ export function ProjectAutomationsContent({
               {automationBusy ? "Saving…" : "Save automations"}
             </Button>
           </div>
-          <div className="space-y-2">
-            <p className="text-sm font-medium">Recent executions</p>
+          <div className="space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-sm font-medium">Recent executions</p>
+              {automationExecutions.length > 0 ? (
+                <span className="text-xs text-muted-foreground">{automationExecutions.length} total</span>
+              ) : null}
+            </div>
             {automationExecutions.length === 0 ? (
               <p className="text-xs text-muted-foreground">No automation executions recorded for this project yet.</p>
             ) : (
-              <ul className="space-y-2">
-                {automationExecutions.map((execution) => (
-                  <li
-                    key={execution.execution_id}
-                    data-testid={`project-automation-execution-${execution.execution_id}`}
-                    className="rounded-md border bg-muted/20 p-3 text-sm"
-                  >
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div>
-                        <span className="font-medium">{execution.automation_label}</span>
-                        <p className="text-xs text-muted-foreground">{execution.automation_id}</p>
+              <>
+                <ul className="space-y-2">
+                  {pagedExecutions.map((execution) => (
+                    <li
+                      key={execution.execution_id}
+                      data-testid={`project-automation-execution-${execution.execution_id}`}
+                      className="rounded-md border bg-muted/20 p-3 text-sm"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <span className="font-medium">{execution.automation_label}</span>
+                          <p className="text-xs text-muted-foreground">{execution.automation_id}</p>
+                        </div>
+                        <span className="text-xs text-muted-foreground">{execution.status}</span>
                       </div>
-                      <span className="text-xs text-muted-foreground">{execution.status}</span>
-                    </div>
-                    <div className="mt-2 space-y-1 text-xs text-muted-foreground">
-                      <p>Scheduled for: {execution.scheduled_for}</p>
-                      <p>Completed at: {execution.completed_at ?? "not completed yet"}</p>
-                      <p>Discord message ID: {execution.discord_message_id ?? "not recorded"}</p>
-                      {execution.last_error ? <p className="text-destructive">Last error: {execution.last_error}</p> : null}
-                    </div>
-                  </li>
-                ))}
-              </ul>
+                      <div className="mt-2 space-y-1 text-xs text-muted-foreground">
+                        <p>Scheduled for: {execution.scheduled_for}</p>
+                        <p>Completed at: {execution.completed_at ?? "not completed yet"}</p>
+                        <p>Discord message ID: {execution.discord_message_id ?? "not recorded"}</p>
+                        {execution.last_error ? <p className="text-destructive">Last error: {execution.last_error}</p> : null}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+                {executionsTotalPages > 1 ? (
+                  <div className="flex items-center justify-end gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setExecutionsPage((p) => Math.max(1, p - 1))}
+                      disabled={executionsPage <= 1}
+                    >
+                      ← Prev
+                    </Button>
+                    <span className="text-xs text-muted-foreground">
+                      Page {executionsPage} of {executionsTotalPages}
+                    </span>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setExecutionsPage((p) => Math.min(executionsTotalPages, p + 1))}
+                      disabled={executionsPage >= executionsTotalPages}
+                    >
+                      Next →
+                    </Button>
+                  </div>
+                ) : null}
+              </>
             )}
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
     </div>
   );
 }
@@ -527,11 +563,11 @@ export function ProjectNotificationsContent({
       ) : null}
 
       {/* Notification Settings */}
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base">Notification Settings</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
+      <div className="overflow-hidden rounded-2xl border bg-background">
+        <div className="p-6 pb-3">
+          <h2 className="text-base font-semibold">Notification Settings</h2>
+        </div>
+        <div className="space-y-4 p-6 pt-0">
           <DiscordSection
             title="Project Discord"
             description="Enable notifications for this project and choose which events should be posted."
@@ -584,27 +620,27 @@ export function ProjectNotificationsContent({
               {busy ? "Saving…" : "Save Discord settings"}
             </Button>
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
 
       {/* Access Requests */}
-      <Card>
-        <CardHeader className="pb-3">
+      <div className="overflow-hidden rounded-2xl border bg-background">
+        <div className="p-6 pb-3">
           <div className="flex items-center justify-between gap-2">
-            <CardTitle className="text-base">Access Requests</CardTitle>
+            <h2 className="text-base font-semibold">Access Requests</h2>
             {allowlistRequests.length > 0 ? (
               <span className="flex h-5 w-5 items-center justify-center rounded-full bg-warning text-[10px] font-bold text-white">
                 {allowlistRequests.length}
               </span>
             ) : null}
           </div>
-          <p className="text-sm text-muted-foreground">
+          <p className="mt-1 text-sm text-muted-foreground">
             Approve pending{" "}
             <code className="rounded bg-muted px-1 text-xs">/request</code>{" "}
             submissions for this project.
           </p>
-        </CardHeader>
-        <CardContent>
+        </div>
+        <div className="p-6 pt-0">
           {allowlistRequests.length === 0 ? (
             <div className="flex flex-col items-center justify-center gap-2 rounded-lg border bg-muted/30 py-8 text-center">
               <CheckCircle2 className="h-6 w-6 text-success" />
@@ -647,8 +683,8 @@ export function ProjectNotificationsContent({
               ))}
             </ul>
           )}
-        </CardContent>
-      </Card>
+        </div>
+      </div>
     </div>
   );
 }

@@ -13,9 +13,9 @@ import {
 
 import { useAuth } from "@/components/auth-provider";
 import { getDefaultAuthenticatedRoute } from "@/lib/auth-routing";
+import { readLastWorkspaceTenantIdFromBrowser } from "@/lib/workspace-preference";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { listManagedSecrets, listRuns, listTenants, type RunRecord } from "@/lib/api";
@@ -29,7 +29,7 @@ type DashboardStats = {
   totalSecrets: number;
 };
 
-type StatCardProps = {
+type StatItemProps = {
   label: string;
   value: string | number;
   sub: string;
@@ -37,18 +37,16 @@ type StatCardProps = {
   iconBg: string;
 };
 
-function StatCard({ label, value, sub, icon, iconBg }: StatCardProps) {
+function StatItem({ label, value, sub, icon, iconBg }: StatItemProps) {
   return (
-    <Card>
-      <CardHeader className="flex flex-row items-start justify-between space-y-0 pb-2">
-        <p className="text-sm font-medium text-muted-foreground">{label}</p>
+    <div className="rounded-xl border px-4 py-3">
+      <div className="flex items-start justify-between">
+        <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">{label}</p>
         <div className={`flex h-8 w-8 items-center justify-center rounded-lg ${iconBg}`}>{icon}</div>
-      </CardHeader>
-      <CardContent>
-        <p className="text-3xl font-bold tracking-tight">{value}</p>
-        <p className="mt-1 text-xs text-muted-foreground">{sub}</p>
-      </CardContent>
-    </Card>
+      </div>
+      <p className="mt-1 text-3xl font-bold tracking-tight">{value}</p>
+      <p className="mt-1 text-xs text-muted-foreground">{sub}</p>
+    </div>
   );
 }
 
@@ -126,7 +124,8 @@ export default function DashboardPage() {
 
   useEffect(() => {
     if (ready && credentials && principalReady && principal?.principal_type === "tenant_user") {
-      window.location.replace(getDefaultAuthenticatedRoute(principal));
+      const preferredTenantId = readLastWorkspaceTenantIdFromBrowser();
+      window.location.replace(getDefaultAuthenticatedRoute(principal, { preferredTenantId }));
       return;
     }
   }, [credentials, principal, principalReady, ready]);
@@ -151,7 +150,6 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-6">
-      {/* Page header */}
       <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0">
           <h1 className="text-xl font-semibold">Operations Overview</h1>
@@ -172,41 +170,39 @@ export default function DashboardPage() {
       </div>
 
       {errorMessage ? (
-        <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-5 py-4 text-sm leading-relaxed text-destructive break-words">
+        <div className="rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
           {errorMessage}
         </div>
       ) : null}
 
-      {/* Stat cards */}
       {loading || !stats ? (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
-          {[...Array(5)].map((_, i) => <Skeleton key={i} className="h-28 w-full rounded-lg" />)}
+          {[...Array(5)].map((_, i) => <Skeleton key={i} className="h-28 w-full rounded-xl" />)}
         </div>
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
           {statsData.map((s) => (
-            <StatCard key={s.label} {...s} />
+            <StatItem key={s.label} {...s} />
           ))}
         </div>
       )}
 
-      {/* Recent runs */}
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
-          <CardTitle className="text-base">Recent Runs</CardTitle>
+      <div className="overflow-hidden rounded-2xl border bg-background">
+        <div className="flex items-center justify-between p-5 pb-0">
+          <h2 className="text-base font-semibold">Recent Runs</h2>
           <Button asChild variant="ghost" size="sm">
             <Link href="/tenants/select" className="text-xs text-muted-foreground hover:text-foreground">
               View all →
             </Link>
           </Button>
-        </CardHeader>
-        <CardContent className="p-0">
+        </div>
+        <div className="mt-4">
           {loading ? (
-            <div className="space-y-2 px-6 pb-6">
+            <div className="space-y-2 px-5 pb-5">
               {[...Array(4)].map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}
             </div>
           ) : recentRuns.length === 0 ? (
-            <p className="px-6 pb-6 text-sm text-muted-foreground">No runs recorded yet.</p>
+            <p className="px-5 pb-5 text-sm text-muted-foreground">No runs recorded yet.</p>
           ) : (
             <Table>
               <TableHeader>
@@ -238,8 +234,8 @@ export default function DashboardPage() {
               </TableBody>
             </Table>
           )}
-        </CardContent>
-      </Card>
+        </div>
+      </div>
     </div>
   );
 }
