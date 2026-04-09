@@ -264,6 +264,39 @@ class DecisionEngineTests(unittest.TestCase):
         self.assertEqual(worker_decision.block_reason, "decision_gate_required")
         evaluate_clarification.assert_called_once()
 
+    def test_worker_decision_blocks_on_missing_ready_label_from_clarification_service(self) -> None:
+        decision = SimpleNamespace(
+            pre_check=_precheck(outcome="missing_ready_label", ready_label_present=False),
+            block_reason="missing_ready_label",
+            policy_error=None,
+        )
+        with mock.patch(
+            "orchestrator.core.decision_clarification_service.evaluate_issue_clarification_state",
+            return_value=SimpleNamespace(
+                decision=decision,
+                classification="clear",
+            ),
+        ):
+            worker_decision = evaluate_worker_decision(
+                run_plan=None,
+                tenant_id="t1",
+                project_id="p1",
+                issue_key="TP-1",
+                run_id="run-1",
+                issue_summary="summary",
+                issue_description="desc",
+                session=SimpleNamespace(),
+                tenant=SimpleNamespace(tenant_id="t1", jira_config={"ready_label": "agent:ready"}),
+                project=SimpleNamespace(project_id="p1"),
+                issue_labels=[],
+                settings=SimpleNamespace(),
+                tenant_jira_oauth_context_fn=lambda **_: None,
+                evaluate_pre_run_check_fn=lambda **_: _precheck(outcome="missing_ready_label", ready_label_present=False),
+            )
+
+        self.assertFalse(worker_decision.allowed)
+        self.assertEqual(worker_decision.block_reason, "missing_ready_label")
+
 
 class LabelActionServiceTests(unittest.TestCase):
     def test_apply_issue_label_actions_respects_policy_and_dedupes(self) -> None:
