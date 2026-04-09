@@ -6,15 +6,18 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/components/auth-provider";
 import {
   createTenant,
+  createTenantInvite,
   getTenant,
   listGitHubRepositories,
+  listTenantInvites,
   listJiraProjects,
   startDiscordInstall,
   startGitHubInstall,
   startJiraConnect,
   updateTenant,
   type GitHubRepositoryRecord,
-  type JiraProjectRecord
+  type JiraProjectRecord,
+  type TenantInviteRecord
 } from "@/lib/api";
 import {
   defaultTenantFormValues,
@@ -27,8 +30,14 @@ import {
   type TenantFormValues
 } from "@/lib/tenant-form";
 
-import { STEP_ORDER, type WizardStepKey } from "@/components/tenant-setup/types";
-import { persistWizardDraft, previewTenantId, readWizardDraft, type WizardDraft } from "@/components/tenant-setup/wizard-draft";
+import { STEP_ORDER, stepIndexForKey, stepKeyAtIndex, type WizardStepKey } from "@/components/tenant-setup/types";
+import {
+  clearWizardDraft,
+  persistWizardDraft,
+  previewTenantId,
+  readWizardDraft,
+  type WizardDraft
+} from "@/components/tenant-setup/wizard-draft";
 
 type StatusTone = "info" | "success" | "error";
 
@@ -67,6 +76,7 @@ export function useTenantSetupController(stepKey: WizardStepKey) {
   });
   const [statusLine, setStatusLine] = useState("");
   const [saving, setSaving] = useState(false);
+  const [freshResetApplied, setFreshResetApplied] = useState(false);
   const [createdTenantId, setCreatedTenantId] = useState(() => {
     const draft = readWizardDraft();
     return typeof draft?.createdTenantId === "string" ? draft.createdTenantId : "";
@@ -78,8 +88,13 @@ export function useTenantSetupController(stepKey: WizardStepKey) {
     return typeof draft?.selectedRepoUrl === "string" ? draft.selectedRepoUrl : "";
   });
   const [jiraProjects, setJiraProjects] = useState<JiraProjectRecord[]>([]);
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteFullName, setInviteFullName] = useState("");
+  const [inviteRole, setInviteRole] = useState<"tenant_admin" | "technical_member" | "business_member">("business_member");
+  const [sendingInvite, setSendingInvite] = useState(false);
+  const [recentInvites, setRecentInvites] = useState<TenantInviteRecord[]>([]);
 
-  const stepIndex = STEP_ORDER.findIndex((step) => step.key === stepKey);
+  const stepIndex = stepIndexForKey(stepKey);
 
   const advanceValidationError = useMemo(() => {
     if (!values.name.trim()) {
@@ -104,9 +119,6 @@ export function useTenantSetupController(stepKey: WizardStepKey) {
       return null;
     }
     if (stepKey === "discord") {
-      if (!values.discord.guild_id?.trim()) {
-        return "Install the Discord bot before continuing.";
-      }
       return null;
     }
     if (stepKey === "repos") {
@@ -134,6 +146,29 @@ export function useTenantSetupController(stepKey: WizardStepKey) {
   }, [values, textFields, createdTenantId, selectedRepoUrl]);
 
   useEffect(() => {
+    if (stepKey !== "basics") {
+      return;
+    }
+    if (freshResetApplied) {
+      return;
+    }
+    if (searchParams.get("fresh") !== "1") {
+      return;
+    }
+    const defaults = defaultTenantFormValues();
+    clearWizardDraft();
+    setValues(defaults);
+    setTextFields(formValuesToTextFields(defaults));
+    setCreatedTenantId("");
+    setSelectedRepoUrl("");
+    setInstallationRepos([]);
+    setJiraProjects([]);
+    setStatusLine("");
+    setFreshResetApplied(true);
+    router.replace("/tenants/new/basics");
+  }, [freshResetApplied, router, searchParams, stepKey]);
+
+  useEffect(() => {
     const tenantIdParam = searchParams.get("tenant_id");
     if (!credentials || typeof tenantIdParam !== "string" || tenantIdParam.length === 0) {
       return;
@@ -153,10 +188,8 @@ export function useTenantSetupController(stepKey: WizardStepKey) {
         setTextFields(formValuesToTextFields(form));
         setCreatedTenantId(record.tenant_id);
         setSelectedRepoUrl(form.repos.github_repository ?? "");
-        if (searchParams.get("github_install") === "success") {
-          setStatusLine("GitHub App install completed. Load repositories to continue setup.");
-        } else if (searchParams.get("discord_install") === "success") {
-          setStatusLine("Discord bot install completed. Confirm the onboarding channel and invite settings.");
+        if (searchParams.get("discord_install") === "cancelled") {
+          setStatusLine("Discord install was cancelled. You can continue setup and configure Discord later.");
         } else {
           setStatusLine("");
         }
@@ -180,9 +213,9 @@ export function useTenantSetupController(stepKey: WizardStepKey) {
     }
     setValues((prev) => ({ ...prev, jira: { ...prev.jira, connection_id: connectionId } }));
     if (searchParams.get("jira_oauth") === "success") {
-      setStatusLine("Jira OAuth connected. Load Jira projects and select project keys.");
+      void loadJiraProjectsForConnectionId(connectionId, { statusPrefix: "Jira OAuth connected." });
     }
-  }, [searchParams]);
+  }, [credentials, searchParams]);
 
   async function ensureTenantCreated(): Promise<string | null> {
     if (!credentials) {
@@ -205,7 +238,7 @@ export function useTenantSetupController(stepKey: WizardStepKey) {
       setValues(form);
       setTextFields(formValuesToTextFields(form));
       setCreatedTenantId(created.tenant_id);
-      setStatusLine(`Created tenant ${created.tenant_id}.`);
+      setStatusLine("");
       return created.tenant_id;
     } catch (error) {
       setStatusLine(`Create failed: ${(error as Error).message}`);
@@ -227,12 +260,15 @@ export function useTenantSetupController(stepKey: WizardStepKey) {
     }
   }
 
-  async function loadJiraProjectsForConnection() {
-    if (!credentials || !values.jira.connection_id) {
+  async function loadJiraProjectsForConnectionId(
+    connectionId: string,
+    options: { statusPrefix?: string } = {}
+  ) {
+    if (!credentials || !connectionId) {
       return;
     }
     try {
-      const projects = await listJiraProjects(credentials, values.jira.connection_id);
+      const projects = await listJiraProjects(credentials, connectionId);
       setJiraProjects(projects);
       if (projects.length === 0) {
         setStatusLine("Connected Jira site is valid, but no projects were returned.");
@@ -248,10 +284,21 @@ export function useTenantSetupController(stepKey: WizardStepKey) {
         }));
       }
 
-      setStatusLine(`Loaded ${projects.length} Jira project option(s).`);
+      if (options.statusPrefix) {
+        setStatusLine(options.statusPrefix);
+      } else {
+        setStatusLine("");
+      }
     } catch (error) {
       setStatusLine(`Unable to load Jira projects: ${(error as Error).message}`);
     }
+  }
+
+  async function loadJiraProjectsForConnection() {
+    if (!values.jira.connection_id) {
+      return;
+    }
+    await loadJiraProjectsForConnectionId(values.jira.connection_id);
   }
 
   function toggleJiraProject(projectKey: string) {
@@ -318,7 +365,7 @@ export function useTenantSetupController(stepKey: WizardStepKey) {
         setSelectedRepoUrl(defaultRepo);
         setTextFields((prev) => ({ ...prev, githubRepositoryText: defaultRepo }));
       }
-      setStatusLine(`Loaded ${repositories.length} repository option(s) from GitHub installation.`);
+      setStatusLine("");
     } catch (error) {
       setStatusLine(`Unable to load repositories: ${(error as Error).message}`);
     }
@@ -330,6 +377,64 @@ export function useTenantSetupController(stepKey: WizardStepKey) {
     }
     void loadInstallationRepositories();
   }, [stepKey, values.github.installation_id, installationRepos.length]);
+
+  useEffect(() => {
+    if (stepKey !== "invite" || !credentials || !createdTenantId) {
+      return;
+    }
+    const auth = credentials;
+    const tenantId = createdTenantId;
+    let cancelled = false;
+    async function loadInvites(): Promise<void> {
+      try {
+        const payload = await listTenantInvites(auth, tenantId);
+        if (!cancelled) {
+          setRecentInvites(payload.items);
+        }
+      } catch {
+        if (!cancelled) {
+          setRecentInvites([]);
+        }
+      }
+    }
+    void loadInvites();
+    return () => {
+      cancelled = true;
+    };
+  }, [stepKey, credentials, createdTenantId]);
+
+  async function sendWorkspaceInvite(): Promise<void> {
+    if (!credentials) {
+      setStatusLine("Missing API credentials.");
+      return;
+    }
+    if (!inviteEmail.trim()) {
+      setStatusLine("Invite email is required.");
+      return;
+    }
+    const tenantId = await ensureTenantCreated();
+    if (!tenantId) {
+      return;
+    }
+    setSendingInvite(true);
+    try {
+      const invite = await createTenantInvite(credentials, tenantId, {
+        email: inviteEmail.trim(),
+        full_name: inviteFullName.trim() || null,
+        role: inviteRole,
+        team_ids: [],
+        mode_override: null
+      });
+      setRecentInvites((prev) => [invite, ...prev.filter((item) => item.invite_id !== invite.invite_id)]);
+      setInviteEmail("");
+      setInviteFullName("");
+      setStatusLine("");
+    } catch (error) {
+      setStatusLine(`Unable to send invite: ${(error as Error).message}`);
+    } finally {
+      setSendingInvite(false);
+    }
+  }
 
   async function saveTenant(): Promise<boolean> {
     if (!credentials) {
@@ -347,7 +452,7 @@ export function useTenantSetupController(stepKey: WizardStepKey) {
       const form = recordToFormValues(updated);
       setValues(form);
       setTextFields(formValuesToTextFields(form));
-      setStatusLine(`Saved tenant ${updated.tenant_id}.`);
+      setStatusLine("");
       return true;
     } catch (error) {
       setStatusLine(`Save failed: ${(error as Error).message}`);
@@ -357,15 +462,31 @@ export function useTenantSetupController(stepKey: WizardStepKey) {
     }
   }
 
+  async function saveTenantAndOpenWorkspace(): Promise<boolean> {
+    const saved = await saveTenant();
+    if (!saved) {
+      return false;
+    }
+    const tenantId = (createdTenantId || values.tenantId || "").trim();
+    if (!tenantId) {
+      return true;
+    }
+    router.push(`/${encodeURIComponent(tenantId)}/dashboard`);
+    return true;
+  }
+
   function goToStep(index: number) {
+    const nextStepKey = stepKeyAtIndex(index);
+    if (!nextStepKey) {
+      return;
+    }
     persistWizardDraft({
       values,
       textFields,
       createdTenantId,
       selectedRepoUrl
     });
-    const next = STEP_ORDER[index];
-    router.push(`/tenants/new/${next.key}`);
+    router.push(`/tenants/new/${nextStepKey}`);
   }
 
   async function nextStep() {
@@ -413,6 +534,14 @@ export function useTenantSetupController(stepKey: WizardStepKey) {
     setSelectedRepoUrl,
     installationRepos,
     jiraProjects,
+    inviteEmail,
+    setInviteEmail,
+    inviteFullName,
+    setInviteFullName,
+    inviteRole,
+    setInviteRole,
+    sendingInvite,
+    recentInvites,
     stepIndex,
     selectedProjectKeys,
     nextStep,
@@ -422,8 +551,10 @@ export function useTenantSetupController(stepKey: WizardStepKey) {
     toggleJiraProject,
     startGitHubInstallFlow,
     startDiscordInstallFlow,
+    sendWorkspaceInvite,
     loadInstallationRepositories,
-    saveTenant
+    saveTenant,
+    saveTenantAndOpenWorkspace
   };
 }
 

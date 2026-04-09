@@ -1159,6 +1159,42 @@ class PlatformStatusRead(BaseModel):
     services: list[PlatformServiceStatusRead] = Field(default_factory=list)
 
 
+class WebhookQueueJobRead(BaseModel):
+    job_id: str
+    transport: str
+    tenant_id: str | None = None
+    project_id: str | None = None
+    subject_key: str
+    dedupe_key: str | None = None
+    request_id: str
+    event_type: str | None = None
+    status: str
+    owner_id: str | None = None
+    lease_expires_at: datetime | None = None
+    available_at: datetime
+    attempt_count: int
+    last_error: str | None = None
+    created_at: datetime
+    updated_at: datetime
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+
+
+class WebhookQueueSummaryRead(BaseModel):
+    pending_count: int
+    processing_count: int
+    failed_count: int
+    done_count: int
+
+
+class WebhookQueueJobPageRead(BaseModel):
+    items: list[WebhookQueueJobRead] = Field(default_factory=list)
+    total: int
+    limit: int
+    offset: int
+    summary: WebhookQueueSummaryRead
+
+
 class TenantObservabilityRead(BaseModel):
     tenant_id: str
     total_projects: int

@@ -40,12 +40,6 @@ export default function AnalyticsLayout({ children }: { children: React.ReactNod
 
   return (
     <div className="space-y-0">
-      <div className="mb-1">
-        <h1 className="text-xl font-semibold">Analytics</h1>
-        <p className="text-sm text-muted-foreground">
-          {isNonTechnical ? "Delivery progress and recent completions." : "Delivery reporting plus token usage and diagnostics."}
-        </p>
-      </div>
       <div className="border-b overflow-x-auto">
         <nav className="-mb-px flex min-w-max gap-0" aria-label="Analytics tabs">
           {tabs.map((tab) => {

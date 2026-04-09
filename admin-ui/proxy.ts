@@ -5,10 +5,12 @@ import type { Session } from "next-auth";
 import { auth } from "@/auth";
 import type { AuthenticatedPrincipalRecord } from "@/lib/api";
 import { getDefaultAuthenticatedRoute } from "@/lib/auth-routing";
+import { getLastWorkspaceCookieName } from "@/lib/workspace-preference";
 
-function defaultRouteForSession(session: Session | null): string {
+function defaultRouteForSession(session: Session | null, preferredTenantId?: string | null): string {
   return getDefaultAuthenticatedRoute(
     ((session?.user ?? {}) as { principal?: AuthenticatedPrincipalRecord }).principal,
+    { preferredTenantId },
   );
 }
 
@@ -23,6 +25,7 @@ export default auth((request: NextRequest & { auth: Session | null }) => {
     pathname === "/privacy" ||
     pathname.startsWith("/invite/accept");
   const session = request.auth;
+  const preferredTenantId = request.cookies.get(getLastWorkspaceCookieName())?.value ?? null;
 
   if (pathname.startsWith("/_next") || pathname === "/favicon.ico") {
     return NextResponse.next();
@@ -33,7 +36,7 @@ export default auth((request: NextRequest & { auth: Session | null }) => {
   }
 
   if (session && (pathname === "/login" || pathname === "/register")) {
-    return NextResponse.redirect(new URL(defaultRouteForSession(session), request.url));
+    return NextResponse.redirect(new URL(defaultRouteForSession(session, preferredTenantId), request.url));
   }
 
   return NextResponse.next();

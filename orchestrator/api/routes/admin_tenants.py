@@ -11,8 +11,7 @@ from orchestrator.api.admin.config_helpers import (
 from orchestrator.api.admin.route_helpers import (
     admin_project_service,
     allocate_tenant_id,
-    ensure_default_project_for_tenant,
-    sync_tenant_jira_project_keys,
+    reconcile_tenant_projects,
     with_managed_github_refs,
     with_preserved_jira_system_fields,
 )
@@ -74,6 +73,7 @@ from orchestrator.core.discord.oauth import (
     discord_oauth_is_configured,
     issue_discord_oauth_state,
 )
+from orchestrator.core.discord.oauth_config import resolve_discord_oauth_config
 from orchestrator.core.email_delivery import EmailDeliveryError
 from orchestrator.core.invites import email_delivery
 from orchestrator.core.platform_secret_service import (
@@ -282,8 +282,7 @@ def create_tenant(
         with_preserved_jira_system_fields_fn=with_preserved_jira_system_fields,
         with_managed_github_refs_fn=with_managed_github_refs,
         with_preserved_discord_system_fields_fn=with_preserved_discord_system_fields,
-        ensure_default_project_for_tenant_fn=ensure_default_project_for_tenant,
-        sync_tenant_jira_project_keys_fn=sync_tenant_jira_project_keys,
+        reconcile_tenant_projects_fn=reconcile_tenant_projects,
         tenant_to_schema_fn=tenant_to_schema,
     )
 
@@ -320,8 +319,7 @@ def update_tenant(
         with_preserved_jira_system_fields_fn=with_preserved_jira_system_fields,
         with_managed_github_refs_fn=with_managed_github_refs,
         with_preserved_discord_system_fields_fn=with_preserved_discord_system_fields,
-        ensure_default_project_for_tenant_fn=ensure_default_project_for_tenant,
-        sync_tenant_jira_project_keys_fn=sync_tenant_jira_project_keys,
+        reconcile_tenant_projects_fn=reconcile_tenant_projects,
         tenant_to_schema_fn=tenant_to_schema,
     )
 
@@ -592,7 +590,9 @@ def get_tenant_discord_identity(
     session: Session = Depends(get_session),
 ) -> TenantDiscordIdentityRead:
     membership = require_tenant_membership(principal=principal, tenant_id=tenant_id)
-    oauth_configured = discord_oauth_is_configured(settings=get_settings())
+    settings = get_settings()
+    oauth_config = resolve_discord_oauth_config(session=session, settings=settings)
+    oauth_configured = discord_oauth_is_configured(config=oauth_config)
     if principal.user_id is None or membership is None:
         return TenantDiscordIdentityRead(linked=False, oauth_configured=oauth_configured)
     identity = get_discord_identity(session=session, user_id=principal.user_id)
@@ -620,6 +620,7 @@ def start_tenant_discord_link(
     if principal.user_id is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tenant user context required")
     settings = get_settings()
+    oauth_config = resolve_discord_oauth_config(session=session, settings=settings)
     state = issue_discord_oauth_state(
         settings=settings,
         tenant_id=tenant_id,
@@ -627,7 +628,7 @@ def start_tenant_discord_link(
         redirect_to=redirect_to,
     )
     try:
-        authorize_url = build_discord_oauth_authorize_url(settings=settings, state=state)
+        authorize_url = build_discord_oauth_authorize_url(config=oauth_config, state=state)
     except DiscordOAuthError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     return TenantDiscordLinkStartRead(authorize_url=authorize_url)

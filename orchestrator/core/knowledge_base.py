@@ -3,6 +3,7 @@ from __future__ import annotations
 from base64 import b64decode
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from enum import Enum
 from functools import lru_cache
 import hashlib
 import importlib
@@ -68,6 +69,11 @@ _SLOT_NAME_MAX_LENGTH = 128
 class KnowledgePromptContext:
     text: str
     citations: list[dict[str, Any]]
+
+
+class KnowledgeEmbeddingAccessMode(str, Enum):
+    BEST_EFFORT = "best_effort"
+    LOCAL_ONLY = "local_only"
 
 
 @dataclass(frozen=True)
@@ -444,11 +450,17 @@ def _cosine_similarity(vec_a: list[float], vec_b: list[float]) -> float:
     return dot / (norm_a * norm_b)
 
 
-def _embed_texts(texts: list[str]) -> list[list[float] | None]:
+def _embed_texts(
+    texts: list[str],
+    *,
+    embedding_access_mode: KnowledgeEmbeddingAccessMode = KnowledgeEmbeddingAccessMode.BEST_EFFORT,
+) -> list[list[float] | None]:
     if not texts:
         return []
     try:
-        model = _knowledge_text_embedding_model()
+        model = _knowledge_text_embedding_model(
+            _local_files_only_for_embedding_access_mode(embedding_access_mode)
+        )
     except Exception:  # noqa: BLE001
         return [None for _ in texts]
     try:
@@ -529,6 +541,14 @@ def _resolve_knowledge_embedding_local_files_only(local_files_only: bool | None)
     if local_files_only is not None:
         return local_files_only
     return _knowledge_embedding_offline_enabled()
+
+
+def _local_files_only_for_embedding_access_mode(
+    embedding_access_mode: KnowledgeEmbeddingAccessMode,
+) -> bool | None:
+    if embedding_access_mode is KnowledgeEmbeddingAccessMode.LOCAL_ONLY:
+        return True
+    return None
 
 
 def _asset_checksum(*, text_content: str, binary_content: bytes | None) -> str | None:
@@ -1543,9 +1563,13 @@ def _sqlite_fallback_context(
     normalized_query: str,
     max_items: int,
     max_chars: int,
+    embedding_access_mode: KnowledgeEmbeddingAccessMode,
 ) -> KnowledgePromptContext:
     query_tokens = _candidate_tokens(normalized_query)
-    query_embedding = _embed_texts([normalized_query])[0]
+    query_embedding = _embed_texts(
+        [normalized_query],
+        embedding_access_mode=embedding_access_mode,
+    )[0]
     rows = session.execute(
         select(KnowledgeChunk, KnowledgeAsset)
         .join(KnowledgeAsset, KnowledgeAsset.asset_id == KnowledgeChunk.asset_id)
@@ -1643,9 +1667,13 @@ def _postgres_hybrid_context(
     normalized_query: str,
     max_items: int,
     max_chars: int,
+    embedding_access_mode: KnowledgeEmbeddingAccessMode,
 ) -> KnowledgePromptContext:
     query_tokens = _candidate_tokens(normalized_query)
-    query_embedding = _embed_texts([normalized_query])[0]
+    query_embedding = _embed_texts(
+        [normalized_query],
+        embedding_access_mode=embedding_access_mode,
+    )[0]
     candidate_scores: dict[str, dict[str, float]] = {}
     if query_embedding:
         embedding_literal = vector_literal(query_embedding)
@@ -1750,6 +1778,7 @@ def build_knowledge_prompt_context(
     query: str,
     max_items: int = 5,
     max_chars: int = 3200,
+    embedding_access_mode: KnowledgeEmbeddingAccessMode = KnowledgeEmbeddingAccessMode.BEST_EFFORT,
 ) -> KnowledgePromptContext:
     if not tenant_id:
         return KnowledgePromptContext(text="", citations=[])
@@ -1777,6 +1806,7 @@ def build_knowledge_prompt_context(
                 normalized_query=normalized_query,
                 max_items=max_items,
                 max_chars=max_chars,
+                embedding_access_mode=embedding_access_mode,
             )
         except Exception:  # noqa: BLE001
             chunk_context = _sqlite_fallback_context(
@@ -1786,6 +1816,7 @@ def build_knowledge_prompt_context(
                 normalized_query=normalized_query,
                 max_items=max_items,
                 max_chars=max_chars,
+                embedding_access_mode=embedding_access_mode,
             )
     else:
         chunk_context = _sqlite_fallback_context(
@@ -1795,6 +1826,7 @@ def build_knowledge_prompt_context(
             normalized_query=normalized_query,
             max_items=max_items,
             max_chars=max_chars,
+            embedding_access_mode=embedding_access_mode,
         )
 
     sections = []

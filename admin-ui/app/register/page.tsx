@@ -10,6 +10,7 @@ import { getDefaultAuthenticatedRoute } from "@/lib/auth-routing";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { registerTenantAdministrator } from "@/lib/api";
+import { readLastWorkspaceTenantIdFromBrowser } from "@/lib/workspace-preference";
 
 export default function RegisterPage() {
   const router = useRouter();
@@ -23,7 +24,12 @@ export default function RegisterPage() {
 
   useEffect(() => {
     if (ready && credentials && principal) {
-      router.replace(needsOnboarding ? "/get-started" : getDefaultAuthenticatedRoute(principal));
+      const preferredTenantId = readLastWorkspaceTenantIdFromBrowser();
+      router.replace(
+        needsOnboarding
+          ? "/get-started"
+          : getDefaultAuthenticatedRoute(principal, { preferredTenantId }),
+      );
     }
   }, [credentials, needsOnboarding, principal, ready, router]);
 

@@ -5,7 +5,6 @@ import { useEffect, useMemo, useState } from "react";
 
 import { useAuth } from "@/components/auth-provider";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -253,167 +252,163 @@ export function TenantTeamPage({ section }: { section: TenantTeamSection }) {
 
   if (loading) {
     return (
-      <Card>
-        <CardHeader>
+      <div className="overflow-hidden rounded-2xl border bg-background">
+        <div className="p-6">
           <Skeleton className="h-6 w-64" />
-          <Skeleton className="h-4 w-80" />
-        </CardHeader>
-        <CardContent className="space-y-3">
+          <Skeleton className="mt-2 h-4 w-80" />
+        </div>
+        <div className="space-y-3 p-6 pt-0">
           <Skeleton className="h-10 w-full" />
           <Skeleton className="h-32 w-full rounded-md border" />
-        </CardContent>
-      </Card>
+        </div>
+      </div>
     );
   }
 
   return (
     <div className="space-y-4">
-      {statusLine ? <div className={`rounded-md border px-3 py-2 text-sm ${statusClasses}`}>{statusLine}</div> : null}
+      {statusLine ? <div className={`rounded-xl border px-4 py-3 text-sm ${statusClasses}`}>{statusLine}</div> : null}
 
       {section === "members" ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>Members</CardTitle>
-            <CardDescription>Manage people, role, team membership, and onboarding status.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3 text-sm">
+        <div className="overflow-hidden rounded-2xl border bg-background">
+          <div className="divide-y">
+            <div className="p-6">
+              <h2 className="text-base font-semibold">Members</h2>
+            </div>
             {members.length === 0 ? (
-              <p className="text-muted-foreground">No members found.</p>
+              <div className="p-6 text-sm text-muted-foreground">No members found.</div>
             ) : (
-              <div className="space-y-3">
-                {members.map((member) => (
-                  <div key={member.membership_id} className="rounded-lg border p-3">
-                    <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div>
-                        <p className="font-medium">{member.full_name || member.email}</p>
-                        <p className="text-xs text-muted-foreground">{member.email}</p>
-                        <p className="text-xs text-muted-foreground">Discord: {describeDiscordState(member)}</p>
-                      </div>
-                      <div className="flex flex-wrap gap-2">
-                        <select
-                          className="rounded-md border bg-background px-2 py-1"
-                          value={member.role}
-                          onChange={(event) =>
+              members.map((member) => (
+                <div key={member.membership_id} className="px-6 py-4 text-sm">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <p className="font-medium">{member.full_name || member.email}</p>
+                      <p className="text-xs text-muted-foreground">{member.email}</p>
+                      <p className="text-xs text-muted-foreground">Discord: {describeDiscordState(member)}</p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <select
+                        className="rounded-md border bg-background px-2 py-1"
+                        value={member.role}
+                        onChange={(event) =>
+                          void handleUpdateMember(member, {
+                            role: event.target.value as TenantMemberRecord["role"],
+                          })
+                        }
+                      >
+                        {ROLE_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => void handleUpdateMember(member, { is_active: !member.is_active })}
+                      >
+                        {member.is_active ? "Deactivate" : "Reactivate"}
+                      </Button>
+                    </div>
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {teams.map((team) => {
+                      const assigned = member.team_ids.includes(team.team_id);
+                      return (
+                        <Button
+                          key={`${member.membership_id}-${team.team_id}`}
+                          variant={assigned ? "default" : "outline"}
+                          size="sm"
+                          onClick={() =>
                             void handleUpdateMember(member, {
-                              role: event.target.value as TenantMemberRecord["role"],
+                              team_ids: assigned
+                                ? member.team_ids.filter((teamId) => teamId !== team.team_id)
+                                : [...member.team_ids, team.team_id],
                             })
                           }
                         >
-                          {ROLE_OPTIONS.map((option) => (
-                            <option key={option.value} value={option.value}>
-                              {option.label}
-                            </option>
-                          ))}
-                        </select>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => void handleUpdateMember(member, { is_active: !member.is_active })}
-                        >
-                          {member.is_active ? "Deactivate" : "Reactivate"}
-                        </Button>
-                      </div>
-                    </div>
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      {teams.map((team) => {
-                        const assigned = member.team_ids.includes(team.team_id);
-                        return (
-                          <Button
-                            key={`${member.membership_id}-${team.team_id}`}
-                            variant={assigned ? "default" : "outline"}
-                            size="sm"
-                            onClick={() =>
-                              void handleUpdateMember(member, {
-                                team_ids: assigned
-                                  ? member.team_ids.filter((teamId) => teamId !== team.team_id)
-                                  : [...member.team_ids, team.team_id],
-                              })
-                            }
-                          >
-                            {team.name}
-                          </Button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      ) : null}
-
-      {section === "teams" ? (
-        <Card>
-          <CardHeader>
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="space-y-1">
-                <CardTitle>Teams</CardTitle>
-                <CardDescription>Create groups and decide what each team can access.</CardDescription>
-              </div>
-              <Button type="button" variant={showCreateTeamForm ? "outline" : "default"} onClick={() => setShowCreateTeamForm((current) => !current)}>
-                {showCreateTeamForm ? "Close" : "New team"}
-              </Button>
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-4 text-sm">
-            {showCreateTeamForm ? (
-              <div className="grid gap-3 rounded-lg border p-3 md:grid-cols-2">
-                <Input placeholder="Team name" value={newTeamName} onChange={(event) => setNewTeamName(event.target.value)} />
-                <Input
-                  placeholder="Description"
-                  value={newTeamDescription}
-                  onChange={(event) => setNewTeamDescription(event.target.value)}
-                />
-                <div className="space-y-2 md:col-span-2">
-                  <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Access</p>
-                  <div className="flex flex-wrap gap-2">
-                    {TEAM_PERMISSION_OPTIONS.map((permissionOption) => {
-                      const selected = newTeamPermissions.includes(permissionOption.key);
-                      return (
-                        <Button
-                          key={permissionOption.key}
-                          type="button"
-                          variant={selected ? "default" : "outline"}
-                          size="sm"
-                          onClick={() =>
-                            setNewTeamPermissions((current) =>
-                              current.includes(permissionOption.key)
-                                ? current.filter((item) => item !== permissionOption.key)
-                                : [...current, permissionOption.key],
-                            )
-                          }
-                        >
-                          {permissionOption.label}
+                          {team.name}
                         </Button>
                       );
                     })}
                   </div>
                 </div>
-                <div className="flex flex-wrap gap-2 md:col-span-2">
-                  <Button onClick={() => void handleCreateTeam()} disabled={busy || !newTeamName.trim()}>
-                    Create team
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => {
-                      setShowCreateTeamForm(false);
-                      setNewTeamName("");
-                      setNewTeamDescription("");
-                      setNewTeamPermissions([]);
-                    }}
-                  >
-                    Cancel
-                  </Button>
+              ))
+            )}
+          </div>
+        </div>
+      ) : null}
+
+      {section === "teams" ? (
+        <div className="overflow-hidden rounded-2xl border bg-background">
+          <div className="divide-y">
+            <div className="flex flex-wrap items-center justify-between gap-3 p-6">
+              <div>
+                <h2 className="text-base font-semibold">Teams</h2>
+              </div>
+              <Button type="button" variant={showCreateTeamForm ? "outline" : "default"} onClick={() => setShowCreateTeamForm((current) => !current)}>
+                {showCreateTeamForm ? "Close" : "New team"}
+              </Button>
+            </div>
+            {showCreateTeamForm ? (
+              <div className="p-6 text-sm">
+                <div className="grid gap-3 md:grid-cols-2">
+                  <Input placeholder="Team name" value={newTeamName} onChange={(event) => setNewTeamName(event.target.value)} />
+                  <Input
+                    placeholder="Description"
+                    value={newTeamDescription}
+                    onChange={(event) => setNewTeamDescription(event.target.value)}
+                  />
+                  <div className="space-y-2 md:col-span-2">
+                    <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Access</p>
+                    <div className="flex flex-wrap gap-2">
+                      {TEAM_PERMISSION_OPTIONS.map((permissionOption) => {
+                        const selected = newTeamPermissions.includes(permissionOption.key);
+                        return (
+                          <Button
+                            key={permissionOption.key}
+                            type="button"
+                            variant={selected ? "default" : "outline"}
+                            size="sm"
+                            onClick={() =>
+                              setNewTeamPermissions((current) =>
+                                current.includes(permissionOption.key)
+                                  ? current.filter((item) => item !== permissionOption.key)
+                                  : [...current, permissionOption.key],
+                              )
+                            }
+                          >
+                            {permissionOption.label}
+                          </Button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-2 md:col-span-2">
+                    <Button onClick={() => void handleCreateTeam()} disabled={busy || !newTeamName.trim()}>
+                      Create team
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => {
+                        setShowCreateTeamForm(false);
+                        setNewTeamName("");
+                        setNewTeamDescription("");
+                        setNewTeamPermissions([]);
+                      }}
+                    >
+                      Cancel
+                    </Button>
+                  </div>
                 </div>
               </div>
             ) : null}
-
-            <div className="space-y-3">
-              {teams.length === 0 ? <p className="text-muted-foreground">No teams created yet.</p> : null}
-              {teams.map((team) => (
-                <div key={team.team_id} className="rounded-lg border p-3">
+            {teams.length === 0 ? (
+              <div className="p-6 text-sm text-muted-foreground">No teams created yet.</div>
+            ) : (
+              teams.map((team) => (
+                <div key={team.team_id} className="px-6 py-4 text-sm">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
                       <p className="font-medium">{team.name}</p>
@@ -444,97 +439,95 @@ export function TenantTeamPage({ section }: { section: TenantTeamSection }) {
                     </div>
                   ) : null}
                 </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
+              ))
+            )}
+          </div>
+        </div>
       ) : null}
 
       {section === "invites" ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>Invites</CardTitle>
-            <CardDescription>Invite people to the workspace and choose their access.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4 text-sm">
-            <div className="grid gap-3 rounded-lg border p-3 md:grid-cols-2">
-              <Input placeholder="Email" value={inviteEmail} onChange={(event) => setInviteEmail(event.target.value)} />
-              <Input placeholder="Full name" value={inviteName} onChange={(event) => setInviteName(event.target.value)} />
-              <select
-                aria-label="Role"
-                className="rounded-md border bg-background px-3 py-2"
-                value={inviteRole}
-                onChange={(event) =>
-                  setInviteRole(event.target.value as "tenant_admin" | "technical_member" | "business_member")
-                }
-              >
-                {ROLE_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-              <div className="space-y-2 md:col-span-2">
-                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Assign teams</p>
-                <div className="flex flex-wrap gap-2 rounded-md border p-3">
-                  {teams.length === 0 ? (
-                    <p className="text-xs text-muted-foreground">Create a team first, then assign it here.</p>
-                  ) : (
-                    teams.map((team) => {
-                      const selected = inviteTeamIds.includes(team.team_id);
-                      return (
-                        <Button
-                          key={`invite-team-${team.team_id}`}
-                          type="button"
-                          variant={selected ? "default" : "outline"}
-                          size="sm"
-                          onClick={() =>
-                            setInviteTeamIds((current) =>
-                              current.includes(team.team_id)
-                                ? current.filter((teamId) => teamId !== team.team_id)
-                                : [...current, team.team_id],
-                            )
-                          }
-                        >
-                          {team.name}
-                        </Button>
-                      );
-                    })
-                  )}
-                </div>
-              </div>
-              <div className="md:col-span-2">
-                <Button onClick={() => void handleCreateInvite()} disabled={busy || !inviteEmail.trim()}>
-                  Send invite
-                </Button>
-              </div>
+        <div className="overflow-hidden rounded-2xl border bg-background">
+          <div className="divide-y">
+            <div className="p-6">
+              <h2 className="text-base font-semibold">Invites</h2>
             </div>
-
-            <div className="space-y-3">
-              {invites.map((invite) => (
-                <div key={invite.invite_id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3">
-                  <div>
-                    <p className="font-medium">{invite.email}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {labelForInviteStatus(invite.status)} • {labelForRole(invite.role)} •{" "}
-                      {invite.team_ids.length > 0
-                        ? invite.team_ids.map((teamId) => teamNameById.get(teamId) ?? "Unknown team").join(", ")
-                        : "No teams assigned"}
-                    </p>
-                  </div>
-                  <div className="flex gap-2">
-                    <Button variant="outline" size="sm" onClick={() => void handleInviteAction(invite.invite_id, "resend")}>
-                      Resend
-                    </Button>
-                    <Button variant="outline" size="sm" onClick={() => void handleInviteAction(invite.invite_id, "revoke")}>
-                      Revoke
-                    </Button>
+            <div className="p-6 text-sm">
+              <div className="grid gap-3 md:grid-cols-2">
+                <Input placeholder="Email" value={inviteEmail} onChange={(event) => setInviteEmail(event.target.value)} />
+                <Input placeholder="Full name" value={inviteName} onChange={(event) => setInviteName(event.target.value)} />
+                <select
+                  aria-label="Role"
+                  className="rounded-md border bg-background px-3 py-2"
+                  value={inviteRole}
+                  onChange={(event) =>
+                    setInviteRole(event.target.value as "tenant_admin" | "technical_member" | "business_member")
+                  }
+                >
+                  {ROLE_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+                <div className="space-y-2 md:col-span-2">
+                  <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Assign teams</p>
+                  <div className="flex flex-wrap gap-2 rounded-md border p-3">
+                    {teams.length === 0 ? (
+                      <p className="text-xs text-muted-foreground">Create a team first, then assign it here.</p>
+                    ) : (
+                      teams.map((team) => {
+                        const selected = inviteTeamIds.includes(team.team_id);
+                        return (
+                          <Button
+                            key={`invite-team-${team.team_id}`}
+                            type="button"
+                            variant={selected ? "default" : "outline"}
+                            size="sm"
+                            onClick={() =>
+                              setInviteTeamIds((current) =>
+                                current.includes(team.team_id)
+                                  ? current.filter((teamId) => teamId !== team.team_id)
+                                  : [...current, team.team_id],
+                              )
+                            }
+                          >
+                            {team.name}
+                          </Button>
+                        );
+                      })
+                    )}
                   </div>
                 </div>
-              ))}
+                <div className="md:col-span-2">
+                  <Button onClick={() => void handleCreateInvite()} disabled={busy || !inviteEmail.trim()}>
+                    Send invite
+                  </Button>
+                </div>
+              </div>
             </div>
-          </CardContent>
-        </Card>
+            {invites.map((invite) => (
+              <div key={invite.invite_id} className="flex flex-wrap items-center justify-between gap-3 px-6 py-4 text-sm">
+                <div>
+                  <p className="font-medium">{invite.email}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {labelForInviteStatus(invite.status)} • {labelForRole(invite.role)} •{" "}
+                    {invite.team_ids.length > 0
+                      ? invite.team_ids.map((teamId) => teamNameById.get(teamId) ?? "Unknown team").join(", ")
+                      : "No teams assigned"}
+                  </p>
+                </div>
+                <div className="flex gap-2">
+                  <Button variant="outline" size="sm" onClick={() => void handleInviteAction(invite.invite_id, "resend")}>
+                    Resend
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={() => void handleInviteAction(invite.invite_id, "revoke")}>
+                    Revoke
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
       ) : null}
     </div>
   );
