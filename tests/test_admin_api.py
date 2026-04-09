@@ -35,6 +35,8 @@ from orchestrator.storage.models import (
     PlatformSetting,
     Project,
     ProjectAutomation,
+    ProjectInstall,
+    ProjectInstallRequest,
     Run,
     RunHumanInputRequest,
     Tenant,
@@ -46,7 +48,7 @@ from orchestrator.storage.models import (
     TenantUser,
     TenantUserCredential,
     TenantUserDiscordIdentity,
-    WorkflowCheckpoint,
+    WebhookJob,
     WorkflowExecution,
     WorkerRuntimeState,
 )
@@ -1044,7 +1046,7 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(create_project.json()["environment"], {"APP_ENV": "prod"})
         self.assertEqual(
             create_project.json()["secret_refs"],
-            {"API_TOKEN": f"project/tenant-a/{project_id}/API_TOKEN"},
+            {"API_TOKEN": "RUNNER_TOKEN"},
         )
         self.assertIsNone(create_project.json()["discord"])
         self.assertEqual(create_project.json()["effective_policy"]["codex_model"], "gpt-5.4")
@@ -1094,7 +1096,7 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(update_project.json()["environment"], {"APP_ENV": "stage"})
         self.assertEqual(
             update_project.json()["secret_refs"],
-            {"API_TOKEN": f"project/tenant-a/{project_id}/API_TOKEN"},
+            {"API_TOKEN": "RUNNER_TOKEN_NEXT"},
         )
         self.assertIsNone(update_project.json()["discord"])
         self.assertEqual(update_project.json()["policy_overrides"]["codex_model"], "gpt-5.3-codex-spark")
@@ -1166,6 +1168,158 @@ class AdminApiTests(unittest.TestCase):
             password_secret = session.get(ManagedSecret, f"project/tenant-a/{project_id}/APPLE_TEST_PASSWORD")
             self.assertIsNotNone(supabase_secret)
             self.assertIsNotNone(password_secret)
+
+    def test_project_update_preserves_upstream_secret_refs_without_creating_project_copies(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_tenant.status_code, 201)
+
+        projects_response = self.client.get("/api/admin/tenants/tenant-a/projects", auth=("admin", "secret"))
+        self.assertEqual(projects_response.status_code, 200)
+        project_id = projects_response.json()[0]["project_id"]
+
+        update_project = self.client.put(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}",
+            json={
+                "name": projects_response.json()[0]["name"],
+                "github_repository": projects_response.json()[0]["github_repository"],
+                "jira_project_key": projects_response.json()[0]["jira_project_key"],
+                "environment": {},
+                "secret_refs": {
+                    "RAILWAY_TOKEN": "platform/RAILWAY_TOKEN",
+                    "SUPABASE_SERVICE_ROLE_KEY": "tenant/tenant-a/SUPABASE_SERVICE_ROLE_KEY",
+                },
+                "is_archived": False,
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(update_project.status_code, 200)
+        body = update_project.json()
+        self.assertEqual(
+            body["secret_refs"],
+            {
+                "RAILWAY_TOKEN": "platform/RAILWAY_TOKEN",
+                "SUPABASE_SERVICE_ROLE_KEY": "tenant/tenant-a/SUPABASE_SERVICE_ROLE_KEY",
+            },
+        )
+
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            project = session.get(Project, project_id)
+            assert project is not None
+            self.assertEqual(project.secret_refs, body["secret_refs"])
+            self.assertIsNone(session.get(ManagedSecret, f"project/tenant-a/{project_id}/RAILWAY_TOKEN"))
+            self.assertIsNone(session.get(ManagedSecret, f"project/tenant-a/{project_id}/SUPABASE_SERVICE_ROLE_KEY"))
+
+    def test_project_installs_crud_and_request_surfaces_round_trip(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_tenant.status_code, 201)
+
+        projects_response = self.client.get("/api/admin/tenants/tenant-a/projects", auth=("admin", "secret"))
+        self.assertEqual(projects_response.status_code, 200)
+        project_id = projects_response.json()[0]["project_id"]
+
+        create_install = self.client.post(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/installs",
+            json={
+                "kind": "fastlane_lane",
+                "label": "iOS Beta Lane",
+                "enabled": True,
+                "config": {"working_dir": ".", "platform": "ios", "lane": "beta", "use_bundle_exec": True},
+                "binding_names": ["MATCH_PASSWORD", "FASTLANE_SESSION"],
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_install.status_code, 201)
+        install_id = create_install.json()["install_id"]
+
+        list_installs = self.client.get(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/installs",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(list_installs.status_code, 200)
+        self.assertEqual(list_installs.json()["installs"][0]["label"], "iOS Beta Lane")
+        self.assertEqual(
+            list_installs.json()["installs"][0]["binding_names"],
+            ["MATCH_PASSWORD", "FASTLANE_SESSION"],
+        )
+
+        update_install = self.client.put(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/installs/{install_id}",
+            json={
+                "kind": "fastlane_lane",
+                "label": "iOS Release Lane",
+                "enabled": False,
+                "config": {"working_dir": ".", "platform": "ios", "lane": "release", "use_bundle_exec": True},
+                "binding_names": ["MATCH_PASSWORD"],
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(update_install.status_code, 200)
+        self.assertEqual(update_install.json()["label"], "iOS Release Lane")
+        self.assertFalse(update_install.json()["enabled"])
+
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            session.add(
+                ProjectInstallRequest(
+                    request_id="install-request-1",
+                    tenant_id="tenant-a",
+                    project_id=project_id,
+                    workflow_id="workflow-1",
+                    run_id="run-1",
+                    issue_key="MB-101",
+                    kind="fastlane_lane",
+                    label="iOS Release Lane",
+                    reason="Ticket requires Fastlane release automation",
+                    suggested_config_json={"working_dir": ".", "platform": "ios", "lane": "release"},
+                    required_bindings_json=["MATCH_PASSWORD"],
+                    status="pending",
+                    request_kind="project_missing_install",
+                    created_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc),
+                )
+            )
+            session.commit()
+
+        list_requests = self.client.get(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/install-requests",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(list_requests.status_code, 200)
+        self.assertEqual(list_requests.json()["requests"][0]["request_id"], "install-request-1")
+
+        fulfill_request = self.client.put(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/install-requests/install-request-1",
+            json={"status": "fulfilled"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(fulfill_request.status_code, 200)
+        self.assertEqual(fulfill_request.json()["status"], "fulfilled")
+
+        delete_install = self.client.delete(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/installs/{install_id}",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(delete_install.status_code, 204)
+
+        final_installs = self.client.get(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/installs",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(final_installs.status_code, 200)
+        self.assertEqual(final_installs.json()["installs"], [])
 
     def test_project_automations_round_trip_and_stays_out_of_discord_config(self) -> None:
         payload = self._tenant_payload()
@@ -1793,6 +1947,74 @@ class AdminApiTests(unittest.TestCase):
             self.assertEqual(workflow.source_workflow_id, "workflow-terminal-1")
             self.assertEqual(workflow.source_run_id, "run-terminal-1")
             self.assertEqual(workflow.status, "queued")
+
+    def test_create_workflow_attempt_repairs_stale_active_status_before_policy_check(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201)
+
+        self._seed_workflow_attempt(
+            workflow_id="workflow-stale-active-1",
+            run_id="run-stale-active-1",
+            issue_key="TP-1001B",
+            issue_summary="Stale active workflow",
+            workflow_status="queued",
+            run_status="failed",
+            checkpoint_id="checkpoint-stale-active-1",
+            checkpoint_kind="execution",
+        )
+
+        response = self.client.post(
+            "/api/admin/workflows/workflow-stale-active-1/attempts",
+            json={"mode": "restart", "checkpoint_kind": "execution"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 201, response.text)
+        body = response.json()
+        self.assertNotEqual(body["workflow_id"], "workflow-stale-active-1")
+        self.assertEqual(body["entry_mode"], "restart")
+        self.assertEqual(body["entry_stage"], "test")
+
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            stale = session.get(WorkflowExecution, "workflow-stale-active-1")
+            self.assertIsNotNone(stale)
+            assert stale is not None
+            self.assertEqual(stale.status, "failed")
+
+    def test_create_workflow_attempt_returns_conflict_when_scope_already_has_active_workflow(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201)
+
+        self._seed_workflow_attempt(
+            workflow_id="workflow-terminal-conflict-1",
+            run_id="run-terminal-conflict-1",
+            issue_key="TP-1001C",
+            issue_summary="Terminal workflow with active-scope conflict",
+            workflow_status="failed",
+            run_status="failed",
+            checkpoint_id="checkpoint-terminal-conflict-1",
+            checkpoint_kind="execution",
+        )
+        self._seed_workflow_attempt(
+            workflow_id="workflow-active-conflict-1",
+            run_id="run-active-conflict-1",
+            issue_key="TP-1001C",
+            issue_summary="Active workflow occupying dedupe scope",
+            workflow_status="queued",
+            run_status="queued",
+        )
+
+        response = self.client.post(
+            "/api/admin/workflows/workflow-terminal-conflict-1/attempts",
+            json={"mode": "restart", "checkpoint_kind": "execution"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertIn("already exists for this issue and dedupe scope", response.json()["detail"])
 
     def test_create_fresh_workflow_attempt_from_terminal_workflow_starts_without_checkpoint(self) -> None:
         payload = self._tenant_payload()
@@ -4535,6 +4757,135 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(instances_by_id["worker-1"]["active_run_count"], 1)
         self.assertEqual(instances_by_id["worker-2"]["status"], "idle")
         self.assertEqual(instances_by_id["worker-2"]["capabilities"], ["macOS"])
+
+    def test_admin_webhook_queue_endpoint_lists_rows_with_summary(self) -> None:
+        session_factory = create_session_factory(self.database_url)
+        now = datetime.now(timezone.utc)
+        with session_factory() as session:
+            session.add(
+                Tenant(
+                    tenant_id="example",
+                    name="example",
+                    is_enabled=True,
+                    jira_config={},
+                    github_config={},
+                    repos_config={},
+                    policy_config={},
+                    discord_config={},
+                    experience_config={},
+                    setup_state={},
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.add(
+                Project(
+                    project_id="example-default",
+                    tenant_id="example",
+                    name="example Default",
+                    github_repository="github.com/example/example",
+                    jira_project_key="GP",
+                    policy_overrides={},
+                    environment={},
+                    secret_refs={},
+                    discord_config={},
+                    is_archived=False,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.add_all(
+                [
+                    WebhookJob(
+                        job_id="job-pending-1",
+                        transport="github_webhook",
+                        tenant_id="example",
+                        project_id="example-default",
+                        subject_key="github_pr:example:repo:26",
+                        dedupe_key="delivery-1",
+                        request_id="request-1",
+                        event_type="pull_request",
+                        status="pending",
+                        owner_id=None,
+                        lease_expires_at=None,
+                        available_at=now - timedelta(seconds=10),
+                        attempt_count=0,
+                        last_error=None,
+                        payload_json={},
+                        context_json={},
+                        created_at=now - timedelta(minutes=3),
+                        updated_at=now - timedelta(minutes=3),
+                        started_at=None,
+                        completed_at=None,
+                    ),
+                    WebhookJob(
+                        job_id="job-processing-1",
+                        transport="github_webhook",
+                        tenant_id="example",
+                        project_id="example-default",
+                        subject_key="github_pr:example:repo:26",
+                        dedupe_key="delivery-2",
+                        request_id="request-2",
+                        event_type="pull_request_review",
+                        status="processing",
+                        owner_id="worker:example:webhooks:child:1",
+                        lease_expires_at=now + timedelta(minutes=2),
+                        available_at=now - timedelta(seconds=5),
+                        attempt_count=1,
+                        last_error=None,
+                        payload_json={},
+                        context_json={},
+                        created_at=now - timedelta(minutes=2),
+                        updated_at=now - timedelta(minutes=1),
+                        started_at=now - timedelta(minutes=1),
+                        completed_at=None,
+                    ),
+                    WebhookJob(
+                        job_id="job-failed-1",
+                        transport="jira_webhook",
+                        tenant_id="example",
+                        project_id="example-default",
+                        subject_key="jira:example:GP-186",
+                        dedupe_key="delivery-3",
+                        request_id="request-3",
+                        event_type="jira:issue_updated",
+                        status="failed",
+                        owner_id=None,
+                        lease_expires_at=None,
+                        available_at=now - timedelta(seconds=20),
+                        attempt_count=2,
+                        last_error="github token missing",
+                        payload_json={},
+                        context_json={},
+                        created_at=now - timedelta(minutes=4),
+                        updated_at=now - timedelta(minutes=1),
+                        started_at=now - timedelta(minutes=3),
+                        completed_at=now - timedelta(minutes=1),
+                    ),
+                ]
+            )
+            session.commit()
+
+        response = self.client.get(
+            "/api/admin/observability/webhook-jobs?tenant_id=example&project_id=example-default&status=pending&limit=10&offset=0",
+            auth=("admin", "secret"),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["total"], 1)
+        self.assertEqual(payload["summary"]["pending_count"], 1)
+        self.assertEqual(payload["summary"]["processing_count"], 1)
+        self.assertEqual(payload["summary"]["failed_count"], 1)
+        self.assertEqual(payload["items"][0]["job_id"], "job-pending-1")
+        self.assertEqual(payload["items"][0]["status"], "pending")
+
+        missing_project_response = self.client.get(
+            "/api/admin/observability/webhook-jobs?tenant_id=example&status=pending&limit=10&offset=0",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(missing_project_response.status_code, 400)
+        self.assertIn("project_id is required", missing_project_response.json()["detail"])
 
     def test_platform_status_dedupes_legacy_worker_runtime_rows_by_agent_and_mode(self) -> None:
         now = datetime.now(timezone.utc)

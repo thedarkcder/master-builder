@@ -1,10 +1,17 @@
 from __future__ import annotations
 
 from orchestrator.api.admin.project_normalization import normalize_project_discord_config
-from orchestrator.api.schemas import ProjectRead, RunRead, TenantRead, WorkflowRead
+from orchestrator.api.schemas import (
+    ProjectInstallRead,
+    ProjectInstallRequestRead,
+    ProjectRead,
+    RunRead,
+    TenantRead,
+    WorkflowRead,
+)
 from orchestrator.core.config import get_settings
 from orchestrator.core.project_policy import resolve_effective_policy
-from orchestrator.storage.models import Project, Run, Tenant, WorkflowExecution
+from orchestrator.storage.models import Project, ProjectInstall, ProjectInstallRequest, Run, Tenant, WorkflowExecution
 
 
 def tenant_to_schema(tenant: Tenant) -> TenantRead:
@@ -102,4 +109,41 @@ def project_to_schema(project: Project, *, tenant_policy: dict) -> ProjectRead:
         is_archived=project.is_archived,
         created_at=project.created_at,
         updated_at=project.updated_at,
+    )
+
+
+def project_install_to_schema(install: ProjectInstall) -> ProjectInstallRead:
+    return ProjectInstallRead(
+        install_id=install.install_id,
+        tenant_id=install.tenant_id,
+        project_id=install.project_id,
+        kind=install.kind,
+        label=install.label,
+        enabled=install.enabled,
+        config=install.config_json if isinstance(install.config_json, dict) else {},
+        binding_names=[str(item or "").strip() for item in list(install.binding_names_json or []) if str(item or "").strip()],
+        created_at=install.created_at,
+        updated_at=install.updated_at,
+    )
+
+
+def project_install_request_to_schema(request: ProjectInstallRequest) -> ProjectInstallRequestRead:
+    return ProjectInstallRequestRead(
+        request_id=request.request_id,
+        tenant_id=request.tenant_id,
+        project_id=request.project_id,
+        workflow_id=request.workflow_id,
+        run_id=request.run_id,
+        issue_key=request.issue_key,
+        kind=request.kind,
+        label=request.label,
+        reason=request.reason,
+        suggested_config=request.suggested_config_json if isinstance(request.suggested_config_json, dict) else {},
+        required_bindings=[
+            str(item or "").strip() for item in list(request.required_bindings_json or []) if str(item or "").strip()
+        ],
+        status=request.status,
+        request_kind=request.request_kind,
+        created_at=request.created_at,
+        updated_at=request.updated_at,
     )
