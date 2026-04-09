@@ -111,6 +111,7 @@ def _template_to_schema(*, session: Session, template) -> PlatformTeamTemplateRe
                 "label": task.label,
                 "owner_role_key": task.owner_role_key,
                 "position": task.position,
+                "executor_kind": task.executor_kind,
                 "artifact_contract": dict(task.artifact_contract or {}),
                 "approval_rule": dict(task.approval_rule or {}),
             }

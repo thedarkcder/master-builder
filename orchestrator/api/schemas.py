@@ -987,6 +987,7 @@ class PlatformTeamTaskWrite(BaseModel):
     label: str
     owner_role_key: str
     position: int = 1
+    executor_kind: str | None = None
     artifact_contract: dict = Field(default_factory=dict)
     approval_rule: dict = Field(default_factory=dict)
 
@@ -1053,6 +1054,7 @@ class TeamRunNodeRead(BaseModel):
     owner_agent_key: str | None = None
     status: str
     dependency_keys: list[str] = Field(default_factory=list)
+    executor_kind: str | None = None
     artifact_contract: dict = Field(default_factory=dict)
     approval_rule: dict = Field(default_factory=dict)
 

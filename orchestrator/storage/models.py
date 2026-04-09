@@ -434,6 +434,7 @@ class PlatformTeamTask(Base):
     label: Mapped[str] = mapped_column(String(255), nullable=False)
     owner_role_key: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     position: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    executor_kind: Mapped[str | None] = mapped_column(String(128), nullable=True)
     artifact_contract: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     approval_rule: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

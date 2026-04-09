@@ -180,6 +180,7 @@ def _coerce_positive_limit(value: int | None) -> int | None:
 
 def _build_initial_plan(
     *,
+    session: Session | None,
     bootstrap: RunBootstrap | None,
     normalized_precheck_outcome: str | None,
     orchestration_backend: str | None = None,
@@ -195,6 +196,7 @@ def _build_initial_plan(
         snapshot.context.execution_context["pre_check_outcome"] = normalized_precheck_outcome
     if not isinstance(snapshot.context.execution_context.get("team_run"), dict):
         snapshot.context.execution_context["team_run"] = platform_team_catalog_service.build_issue_workflow_team_run_snapshot(
+            session=session,
             snapshot=snapshot,
             entry_mode=(bootstrap.entry_mode if bootstrap is not None else "fresh"),
             entry_stage=(bootstrap.entry_stage if bootstrap is not None else None),
@@ -361,6 +363,7 @@ def enqueue_run(
         precheck_source_plan=precheck_source_plan,
     )
     initial_plan = _build_initial_plan(
+        session=session,
         bootstrap=bootstrap,
         normalized_precheck_outcome=normalized_precheck_outcome,
         orchestration_backend="temporal" if _temporal_required_for_run(bootstrap=bootstrap) else _current_orchestration_backend(),
@@ -517,6 +520,7 @@ def enqueue_attempt_for_workflow(
         entry_checkpoint_id=bootstrap.entry_checkpoint_id,
         dedupe_scope=workflow.dedupe_scope,
         plan=_build_initial_plan(
+            session=session,
             bootstrap=bootstrap,
             normalized_precheck_outcome=None,
             orchestration_backend="temporal" if _temporal_required_for_run(bootstrap=bootstrap) else _workflow_orchestration_backend(session, workflow),

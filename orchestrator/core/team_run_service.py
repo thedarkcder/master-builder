@@ -7,6 +7,10 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from orchestrator.core.issue_team_run_service import (
+    DEV_EXECUTOR_KIND,
+    PM_EXECUTOR_KIND,
+    REVIEW_EXECUTOR_KIND,
+    TEST_EXECUTOR_KIND,
     execute_issue_workflow_task,
     resume_issue_workflow_human_input,
 )
@@ -167,7 +171,7 @@ def execute_next_ready_team_task(*, session: Session, run_id: str) -> tuple[Run,
     executor_kind = str(node.get("executor_kind") or "").strip().lower()
     if not executor_kind:
         return run, None
-    if executor_kind in {"workflow.pm", "workflow.dev", "workflow.test", "workflow.review"}:
+    if executor_kind in {PM_EXECUTOR_KIND, DEV_EXECUTOR_KIND, TEST_EXECUTOR_KIND, REVIEW_EXECUTOR_KIND}:
         execution = execute_issue_workflow_task(
             session=session,
             run=run,
