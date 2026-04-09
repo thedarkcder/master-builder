@@ -722,9 +722,6 @@ class PlatformTeamCatalogService:
             raw_team_run = snapshot.context.execution_context.get("team_run")
             if isinstance(raw_team_run, dict):
                 return _normalize_team_run_payload(raw_team_run)
-            legacy_payload = _legacy_team_run_from_snapshot(snapshot)
-            if legacy_payload is not None:
-                return legacy_payload
         return None
 
     def _role_rows(self, *, session: Session, template_id: str) -> list[PlatformTeamRole]:
@@ -796,52 +793,5 @@ def _normalize_team_run_payload(payload: dict[str, object]) -> dict[str, object]
         "status": _clean_text(payload.get("status")) or "queued",
         "runtime_state": dict(payload.get("runtime_state") or {}),
     }
-
-
-def _legacy_team_run_from_snapshot(snapshot: ExecutionSnapshot) -> dict[str, object] | None:
-    if not snapshot.stages:
-        return None
-    stage_order = ("pm", "dev", "test", "review")
-    nodes: list[dict[str, object]] = []
-    previous: str | None = None
-    edges: list[dict[str, str]] = []
-    for stage_name in stage_order:
-        record = snapshot.stages.get(stage_name)
-        stage_label = stage_name.upper()
-        status = "pending"
-        if record is not None:
-            normalized = str(record.status or "").strip().lower()
-            if normalized == "completed":
-                status = "completed"
-            elif normalized in {"running", "started"}:
-                status = "running"
-            elif normalized in {"blocked", "failed", "interrupted"}:
-                status = "blocked"
-        node = {
-            "task_key": stage_name,
-            "label": stage_label,
-            "owner_role_key": stage_name,
-            "owner_persona_key": stage_name,
-            "owner_agent_key": stage_name,
-            "status": status,
-            "dependency_keys": [previous] if previous else [],
-            "artifact_contract": dict((record.artifact or {}) if record is not None else {}),
-            "approval_rule": {},
-        }
-        nodes.append(node)
-        if previous is not None:
-            edges.append({"from_task_key": previous, "to_task_key": stage_name})
-        previous = stage_name
-    return {
-        "team_key": "legacy_workflow",
-        "team_label": "Legacy Workflow",
-        "definition_version": 1,
-        "nodes": nodes,
-        "edges": edges,
-        "artifacts": [],
-        "approvals": [],
-        "status": _clean_text(snapshot.workflow.outcome) or "queued",
-    }
-
 
 platform_team_catalog_service = PlatformTeamCatalogService()

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timezone
+from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from orchestrator.core.platform_team_catalog_service import platform_team_catalog_service
@@ -207,3 +208,23 @@ def test_team_run_path_executes_custom_non_stage_task_keys() -> None:
         temp_dir.cleanup()
         os.environ.pop("ORCHESTRATOR_DATABASE_URL", None)
         reset_db_engine_cache()
+
+
+def test_team_run_paths_do_not_reintroduce_fixed_stage_assumptions() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    guarded_files = [
+        repo_root / "admin-ui/app/(dashboard)/runs/[runId]/page.tsx",
+        repo_root / "admin-ui/lib/run-detail-view-model.ts",
+        repo_root / "orchestrator/core/platform_team_catalog_service.py",
+    ]
+    forbidden_fragments = (
+        '["pm", "dev", "test", "review"]',
+        'type AgentStage = "pm" | "dev" | "test" | "review"',
+        "run-stage-dev",
+        "def _legacy_team_run_from_snapshot(",
+        "legacy_payload = _legacy_team_run_from_snapshot(",
+    )
+    for path in guarded_files:
+        content = path.read_text(encoding="utf-8")
+        for fragment in forbidden_fragments:
+            assert fragment not in content, f"{path} reintroduced forbidden fragment: {fragment}"

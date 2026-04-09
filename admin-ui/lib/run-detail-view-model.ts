@@ -11,12 +11,6 @@ export type InvocationTelemetry = {
   started_at?: string;
 };
 
-export type StageCheckpointEntry = {
-  status: string;
-  completedAt: string | null;
-  summary: string;
-};
-
 export type TeamTaskProgressStatus = "not_started" | "running" | "completed" | "blocked";
 
 export type WorkflowDiagnosticsHistoryEntry = {
@@ -75,31 +69,6 @@ export function parseTelemetryPayload(message: string): InvocationTelemetry | nu
   }
 }
 
-export function parseStageCheckpoints(
-  plan: Record<string, unknown> | null | undefined,
-): Partial<Record<string, StageCheckpointEntry>> {
-  if (!isRecord(plan)) {
-    return {};
-  }
-  const stagesRaw = isRecord(plan["stages"]) ? plan["stages"] : null;
-  if (!stagesRaw) {
-    return {};
-  }
-  const parsed: Partial<Record<string, StageCheckpointEntry>> = {};
-  for (const stage of ["pm", "dev", "test", "review"]) {
-    const item = stagesRaw[stage];
-    if (!isRecord(item)) {
-      continue;
-    }
-    parsed[stage] = {
-      status: String(item["status"] ?? "").trim().toLowerCase() || "completed",
-      completedAt: String(item["completed_at"] ?? "").trim() || null,
-      summary: String(item["summary"] ?? "").trim(),
-    };
-  }
-  return parsed;
-}
-
 export function parseExecutionContext(plan: Record<string, unknown> | null | undefined): Record<string, string> {
   if (!isRecord(plan)) {
     return {};
@@ -129,36 +98,6 @@ export function parseExecutionContext(plan: Record<string, unknown> | null | und
   return parsed;
 }
 
-export function parseStageArtifact(
-  plan: Record<string, unknown> | null | undefined,
-  stage: string,
-): Record<string, unknown> | null {
-  if (!isRecord(plan)) {
-    return null;
-  }
-  const stagesRaw = isRecord(plan["stages"]) ? plan["stages"] : null;
-  if (!stagesRaw) {
-    return null;
-  }
-  const stageRaw = stagesRaw[stage];
-  if (!isRecord(stageRaw)) {
-    return null;
-  }
-  return isRecord(stageRaw["artifact"]) ? stageRaw["artifact"] : null;
-}
-
-export function stageFromCommand(command: string | null | undefined): string {
-  const value = String(command ?? "").trim();
-  if (!value) {
-    return "unknown";
-  }
-  const idx = value.lastIndexOf(".");
-  if (idx < 0 || idx === value.length - 1) {
-    return value;
-  }
-  return value.slice(idx + 1);
-}
-
 export function formatDuration(durationMs: number): string {
   const normalized = Math.max(0, Math.floor(durationMs));
   const totalSeconds = Math.floor(normalized / 1000);
@@ -186,32 +125,27 @@ export function formatTokenCount(value: number): string {
 }
 
 export function stageColor(stage: string): string {
-  switch (stage) {
-    case "queue_wait":
-      return "#94a3b8";
-    case "pm":
-      return "#0ea5e9";
-    case "dev":
-      return "#22c55e";
-    case "test":
-      return "#f59e0b";
-    case "review":
-      return "#ef4444";
-    case "orchestrated_run":
-      return "#8b5cf6";
-    default:
-      return "#64748b";
+  const normalized = String(stage ?? "").trim().toLowerCase();
+  if (normalized === "queue_wait") {
+    return "#94a3b8";
   }
+  if (normalized === "orchestrated_run") {
+    return "#8b5cf6";
+  }
+  const palette = ["#0ea5e9", "#22c55e", "#f59e0b", "#ef4444", "#06b6d4", "#10b981", "#eab308", "#f97316", "#64748b"];
+  let hash = 0;
+  for (let idx = 0; idx < normalized.length; idx += 1) {
+    hash = (hash * 31 + normalized.charCodeAt(idx)) >>> 0;
+  }
+  return palette[hash % palette.length];
 }
 
 export function stageDisplayLabel(stage: string): string {
-  if (stage === "pm" || stage === "dev" || stage === "test" || stage === "review") {
-    return stage.toUpperCase();
+  const normalized = String(stage ?? "").trim();
+  if (!normalized) {
+    return "UNKNOWN";
   }
-  if (stage === "orchestrated_run") {
-    return "ORCHESTRATED RUN";
-  }
-  return stage;
+  return normalized.replace(/_/g, " ").toUpperCase();
 }
 
 function normalizeInlineText(value: string): string {

@@ -46,7 +46,6 @@ from orchestrator.storage.models import (
     TenantUser,
     TenantUserCredential,
     TenantUserDiscordIdentity,
-    WorkflowCheckpoint,
     WorkflowExecution,
     WorkerRuntimeState,
 )
@@ -2353,7 +2352,7 @@ class AdminApiTests(unittest.TestCase):
                 "ready_for_agent",
             )
 
-    def test_create_fresh_workflow_attempt_from_blocked_workflow_creates_new_workflow_lineage(self) -> None:
+    def test_create_fresh_workflow_attempt_from_blocked_workflow_is_rejected_while_blocked_remains_active(self) -> None:
         payload = self._tenant_payload()
         self._insert_jira_connection(connection_id="conn-1")
         create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
@@ -2371,22 +2370,16 @@ class AdminApiTests(unittest.TestCase):
         )
 
         response = self._post_workflow_attempt("workflow-blocked-fresh-1", {"mode": "fresh"})
-        self.assertEqual(response.status_code, 201, response.text)
-        body = response.json()
-        self.assertNotEqual(body["workflow_id"], "workflow-blocked-fresh-1")
-        self.assertEqual(body["attempt_number"], 1)
-        self.assertEqual(body["entry_mode"], "fresh")
-        self.assertEqual(body["entry_stage"], "orchestrated")
-        self.assertIsNone(body["entry_checkpoint_id"])
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertIn("run_already_active", response.text)
 
         session_factory = create_session_factory(self.database_url)
         with session_factory() as session:
-            workflow = session.get(WorkflowExecution, body["workflow_id"])
-            self.assertIsNotNone(workflow)
-            assert workflow is not None
-            self.assertEqual(workflow.source_workflow_id, "workflow-blocked-fresh-1")
-            self.assertEqual(workflow.source_run_id, "run-blocked-fresh-1")
-            self.assertEqual(workflow.status, "queued")
+            workflows = session.execute(
+                select(WorkflowExecution).where(WorkflowExecution.issue_key == "TP-1002B")
+            ).scalars().all()
+            self.assertEqual(len(workflows), 1)
+            self.assertEqual(workflows[0].workflow_id, "workflow-blocked-fresh-1")
 
     def test_fresh_workflow_attempt_rejects_checkpoint_kind(self) -> None:
         payload = self._tenant_payload()

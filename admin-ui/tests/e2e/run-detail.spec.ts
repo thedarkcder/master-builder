@@ -8,7 +8,7 @@ import {
   seedAdminSession,
 } from "./support/admin-ui";
 
-test("renders checkpoint-backed failed-after-dev runs with separate execution and integration branches", async ({ page }) => {
+test("renders legacy non-team runs as unsupported in the dynamic team-run UI", async ({ page }) => {
   const run = makeRun({
     plan: makeExecutionSnapshotPlan({
       stages: {
@@ -51,19 +51,19 @@ test("renders checkpoint-backed failed-after-dev runs with separate execution an
   await expect(page.getByTestId("run-integration-branch")).toContainText("release/2026-03-27");
   await expect(page.getByTestId("run-execution-branch")).toContainText(`run/gp-124/${run.run_id}`);
 
-  await expect(page.getByTestId("run-stage-dev")).toHaveAttribute("data-stage-status", "completed");
-  await expect(page.getByTestId("run-stage-dev-detail")).toHaveText("1m 0s");
-  await expect(page.getByTestId("run-stage-test")).toHaveAttribute("data-stage-status", "not_started");
-  await expect(page.getByTestId("run-stage-test-detail")).toContainText("not started");
-  await expect(page.getByTestId("run-stage-review")).toHaveAttribute("data-stage-status", "not_started");
+  await expect(
+    page.getByText("This run does not include a team definition snapshot and is no longer supported in the dynamic team-run UI."),
+  ).toBeVisible();
   await expect(page.getByRole("heading", { name: "Failure Reason" })).toBeVisible();
   await expect(page.getByText(/heartbeat timeout/i)).toBeVisible();
 
   await page.getByRole("button", { name: "Agents" }).click();
-  await expect(page.getByText("PR created and code pushed.", { exact: true })).toBeVisible({ timeout: 15000 });
+  await expect(page.getByText("Legacy non-team runs are no longer rendered in the Agents panel.")).toBeVisible({
+    timeout: 15000,
+  });
 });
 
-test("marks a finished stage without a checkpoint as interrupted on terminal runs", async ({ page }) => {
+test("shows non-team runs as unsupported in agents and stage-strip panels", async ({ page }) => {
   const run = makeRun({
     plan: makeExecutionSnapshotPlan({
       stages: {
@@ -94,15 +94,17 @@ test("marks a finished stage without a checkpoint as interrupted on terminal run
   await page.goto(`/runs/${run.run_id}`);
 
   await expect(page.getByText("Loading run details...")).toHaveCount(0, { timeout: 15000 });
-  await expect(page.getByTestId("run-stage-dev")).toHaveAttribute("data-stage-status", "interrupted");
-  await expect(page.getByTestId("run-stage-dev-detail")).toHaveText("interrupted");
-  await expect(page.getByTestId("run-stage-test")).toHaveAttribute("data-stage-status", "not_started");
+  await expect(
+    page.getByText("This run does not include a team definition snapshot and is no longer supported in the dynamic team-run UI."),
+  ).toBeVisible();
 
   await page.getByRole("button", { name: "Agents" }).click();
-  await expect(page.getByText("agent finished, checkpoint missing")).toBeVisible({ timeout: 15000 });
+  await expect(page.getByText("Legacy non-team runs are no longer rendered in the Agents panel.")).toBeVisible({
+    timeout: 15000,
+  });
 });
 
-test("offers execution resume when review state exists and posts the workflow attempt payload", async ({ page }) => {
+test("offers latest-checkpoint resume and posts the workflow attempt payload", async ({ page }) => {
   const run = makeRun({
     plan: makeExecutionSnapshotPlan({
       stages: {
@@ -164,8 +166,8 @@ test("offers execution resume when review state exists and posts the workflow at
   await expect(page.getByText("Loading run details...")).toHaveCount(0, { timeout: 15000 });
   await page.getByTestId("run-rerun-trigger").click();
   await expect(page.getByTestId("rerun-option-fresh")).toBeVisible();
-  await expect(page.getByTestId("rerun-option-execution")).toBeVisible();
-  await page.getByTestId("rerun-option-execution").click();
+  await expect(page.getByTestId("rerun-option-resume-execution")).toBeVisible();
+  await page.getByTestId("rerun-option-resume-execution").click();
 
   expect(rerunPayload).toEqual({ mode: "resume", checkpoint_kind: "execution" });
   await expect(page).toHaveURL(/8e8957f2-79f8-4dc8-8deb-786b2c93828d$/, { timeout: 15000 });
