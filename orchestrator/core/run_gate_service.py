@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from orchestrator.core.communications.enqueue_reason_contract import enqueue_reason_guidance
 from orchestrator.core.decision_engine import DecisionEngineResult
+from orchestrator.core.decision_types import ExecutionGateReason, ExecutionGateState
 from orchestrator.core.runs import EnqueueRunResult, enqueue_run, resolve_precheck_outcome_for_enqueue
 
 
@@ -13,58 +14,47 @@ from orchestrator.core.runs import EnqueueRunResult, enqueue_run, resolve_preche
 class RunGateBlock:
     reason: str
     guidance: str
-    decision_gate_reason: str | None
-    decision_gate_questions: tuple[str, ...]
-    gtd_missing_criteria: tuple[str, ...]
-    gtd_questions: tuple[str, ...]
+    detail: str | None
     ready_label: str | None
 
 
 def resolve_run_gate_block(*, decision_result: DecisionEngineResult) -> RunGateBlock | None:
-    precheck_decision = decision_result.decision
-    pre_check = precheck_decision.pre_check
-    if pre_check is None:
-        return RunGateBlock(
-            reason="policy_eval_failed",
-            guidance=enqueue_reason_guidance("policy_eval_failed"),
-            decision_gate_reason=None,
-            decision_gate_questions=(),
-            gtd_missing_criteria=(),
-            gtd_questions=(),
-            ready_label=None,
-        )
-
-    block_reason = str(precheck_decision.block_reason or "").strip()
-    if block_reason not in {"decision_gate_required", "gtd_required", "missing_ready_label"}:
+    gate_state = decision_result.execution_gate.state
+    gate_reason = decision_result.execution_gate.reason
+    if gate_state == ExecutionGateState.ALLOW_EXECUTION:
         return None
-
-    decision_gate_questions = tuple(
-        str(question).strip()
-        for question in getattr(pre_check.decision_gate, "questions", ())
-        if str(question).strip()
-    )
-    gtd_missing_criteria = tuple(
-        str(item).strip()
-        for item in getattr(pre_check, "gtd_missing_criteria", ())
-        if str(item).strip()
-    )
-    gtd_questions = tuple(
-        str(question).strip()
-        for question in getattr(pre_check, "gtd_clarification_questions", ())
-        if str(question).strip()
+    resolved_reason = _resolve_gate_reason(
+        gate_state=gate_state,
+        gate_reason=gate_reason,
+        fallback_reason=str(decision_result.decision.block_reason or "").strip() or None,
     )
     return RunGateBlock(
-        reason=block_reason,
-        guidance=enqueue_reason_guidance(block_reason),
-        decision_gate_reason=(
-            str(getattr(pre_check, "decision_gate_reason", "") or "").strip() or None
-            if block_reason == "decision_gate_required"
-            else None
-        ),
-        decision_gate_questions=decision_gate_questions if block_reason == "decision_gate_required" else (),
-        gtd_missing_criteria=gtd_missing_criteria if block_reason == "gtd_required" else (),
-        gtd_questions=gtd_questions if block_reason == "gtd_required" else (),
-        ready_label=(str(pre_check.ready_label or "").strip() or None) if block_reason == "missing_ready_label" else None,
+        reason=resolved_reason.reason_code,
+        guidance=resolved_reason.guidance,
+        detail=resolved_reason.detail,
+        ready_label=resolved_reason.ready_label,
+    )
+
+
+def _resolve_gate_reason(
+    *,
+    gate_state: ExecutionGateState,
+    gate_reason: ExecutionGateReason | None,
+    fallback_reason: str | None,
+) -> ExecutionGateReason:
+    if gate_reason is not None:
+        return gate_reason
+    if gate_state == ExecutionGateState.POLICY_ERROR:
+        return ExecutionGateReason(
+            reason_code="policy_eval_failed",
+            guidance=enqueue_reason_guidance("policy_eval_failed"),
+        )
+    reason_code = fallback_reason or "decision_gate_required"
+    if gate_state == ExecutionGateState.BLOCK_READY_LABEL:
+        reason_code = "missing_ready_label"
+    return ExecutionGateReason(
+        reason_code=reason_code,
+        guidance=enqueue_reason_guidance(reason_code),
     )
 
 

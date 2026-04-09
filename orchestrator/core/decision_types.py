@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime
+from enum import Enum
 from typing import Literal
 
 from orchestrator.core.communications.enqueue_reason_contract import enqueue_reason_guidance
@@ -91,6 +92,40 @@ class WorkerDecision:
     pre_check: PreRunCheckResult | None = None
 
 
+class DecisionClassification(str, Enum):
+    CLEAR = "clear"
+    DECISION_GATE = "decision_gate"
+    GTD = "gtd"
+    BOTH = "both"
+
+
+class DecisionQuestionStatus(str, Enum):
+    OPEN = "open"
+    ANSWERED = "answered"
+    ACCEPTED = "accepted"
+
+
+class ExecutionGateState(str, Enum):
+    ALLOW_EXECUTION = "allow_execution"
+    BLOCK_DECISION = "block_decision"
+    BLOCK_READY_LABEL = "block_ready_label"
+    POLICY_ERROR = "policy_error"
+
+
+@dataclass(frozen=True)
+class ExecutionGateReason:
+    reason_code: str
+    guidance: str
+    detail: str | None = None
+    ready_label: str | None = None
+
+
+@dataclass(frozen=True)
+class ExecutionGateResolution:
+    state: ExecutionGateState
+    reason: ExecutionGateReason | None = None
+
+
 @dataclass(frozen=True)
 class DecisionEventInput:
     source: DecisionSource
@@ -115,3 +150,60 @@ class DecisionEngineResult:
     cycle_id: str | None
     outbox_effect_ids: tuple[str, ...]
     duplicate_event: bool
+    execution_gate: ExecutionGateResolution = field(
+        default_factory=lambda: ExecutionGateResolution(state=ExecutionGateState.ALLOW_EXECUTION)
+    )
+
+    @property
+    def execution_gate_state(self) -> ExecutionGateState:
+        return self.execution_gate.state
+
+    @property
+    def execution_gate_reason(self) -> ExecutionGateReason | None:
+        return self.execution_gate.reason
+
+
+def resolve_execution_gate_state(
+    *,
+    decision: IngressDecision,
+    classification: str,
+) -> ExecutionGateResolution:
+    if decision.policy_error or decision.pre_check is None:
+        return ExecutionGateResolution(
+            state=ExecutionGateState.POLICY_ERROR,
+            reason=ExecutionGateReason(
+                reason_code="policy_eval_failed",
+                guidance=enqueue_reason_guidance("policy_eval_failed"),
+                detail=str(decision.policy_error or "").strip() or None,
+            ),
+        )
+
+    block_reason = str(decision.block_reason or "").strip()
+    if block_reason == "missing_ready_label":
+        ready_label = str(getattr(decision.pre_check, "ready_label", "") or "").strip() or None
+        guidance = (
+            f"{enqueue_reason_guidance('missing_ready_label')} ({ready_label})"
+            if ready_label
+            else enqueue_reason_guidance("missing_ready_label")
+        )
+        return ExecutionGateResolution(
+            state=ExecutionGateState.BLOCK_READY_LABEL,
+            reason=ExecutionGateReason(
+                reason_code="missing_ready_label",
+                guidance=guidance,
+                ready_label=ready_label,
+            ),
+        )
+
+    if block_reason in {"decision_gate_required", "gtd_required"} or classification in {"decision_gate", "gtd", "both"}:
+        detail = str(getattr(decision.pre_check, "decision_gate_reason", "") or "").strip() or None
+        return ExecutionGateResolution(
+            state=ExecutionGateState.BLOCK_DECISION,
+            reason=ExecutionGateReason(
+                reason_code=block_reason or "decision_gate_required",
+                guidance=enqueue_reason_guidance(block_reason or "decision_gate_required"),
+                detail=detail,
+            ),
+        )
+
+    return ExecutionGateResolution(state=ExecutionGateState.ALLOW_EXECUTION)

@@ -221,6 +221,35 @@ class Project(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class ProjectInstall(Base):
+    __tablename__ = "project_installs"
+    __table_args__ = (
+        Index("ix_project_installs_tenant_project_enabled", "tenant_id", "project_id", "enabled"),
+        Index("ix_project_installs_tenant_project_kind", "tenant_id", "project_id", "kind"),
+    )
+
+    install_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey("tenants.tenant_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    project_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey("projects.project_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    kind: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    label: Mapped[str] = mapped_column(String(255), nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    config_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    binding_names_json: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class ProjectApp(Base):
     __tablename__ = "project_apps"
     __table_args__ = (
@@ -336,6 +365,51 @@ class ProjectDeploymentRelease(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ProjectInstallRequest(Base):
+    __tablename__ = "project_install_requests"
+    __table_args__ = (
+        Index("ix_project_install_requests_scope_status", "tenant_id", "project_id", "status"),
+        Index("ix_project_install_requests_scope_kind_status", "tenant_id", "project_id", "kind", "status"),
+        Index("ix_project_install_requests_run_status", "run_id", "status"),
+    )
+
+    request_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey("tenants.tenant_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    project_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey("projects.project_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    workflow_id: Mapped[str | None] = mapped_column(
+        String(64),
+        ForeignKey("workflow_executions.workflow_id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    run_id: Mapped[str | None] = mapped_column(
+        String(64),
+        ForeignKey("runs.run_id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    issue_key: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    kind: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    label: Mapped[str] = mapped_column(String(255), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    suggested_config_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    required_bindings_json: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    request_kind: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
 
 
 class ProjectAutomation(Base):
