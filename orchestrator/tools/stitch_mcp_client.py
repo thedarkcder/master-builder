@@ -32,6 +32,7 @@ SUPPORTED_PROTOCOL_VERSIONS = frozenset(
 )
 CLIENT_NAME = "stitch-core-client"
 CLIENT_VERSION = "0.0.3"
+_SSE_CONTROL_PREFIXES = (":", "data:", "event:", "id:", "retry:")
 
 
 class StitchMcpError(RuntimeError):
@@ -253,7 +254,7 @@ class StitchMcpClient:
             raise StitchMcpError("Empty response from Stitch MCP")
 
         stripped = buffered_lines[0].lstrip()
-        if stripped.startswith("event:") or stripped.startswith("data:"):
+        if stripped.startswith(_SSE_CONTROL_PREFIXES):
 
             def _all_lines() -> Iterator[str]:
                 yield from buffered_lines
