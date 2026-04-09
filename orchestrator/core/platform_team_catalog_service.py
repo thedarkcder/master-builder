@@ -11,13 +11,9 @@ from sqlalchemy.orm import Session
 from orchestrator.core.platform_issue_workflow_catalog import (
     BUILTIN_ISSUE_AGENTS,
     BUILTIN_ISSUE_PERSONAS,
-    ISSUE_WORKFLOW_DEV_EXECUTOR_KIND,
-    ISSUE_WORKFLOW_PM_EXECUTOR_KIND,
-    ISSUE_WORKFLOW_REVIEW_EXECUTOR_KIND,
     ISSUE_WORKFLOW_STAGE_TO_EXECUTOR_KIND,
     ISSUE_WORKFLOW_TEAM_KEY,
     ISSUE_WORKFLOW_TEAM_LABEL,
-    ISSUE_WORKFLOW_TEST_EXECUTOR_KIND,
     issue_workflow_template_payload,
 )
 from orchestrator.core.platform_team_template_compiler import compile_platform_team_template
@@ -409,21 +405,27 @@ class PlatformTeamCatalogService:
         roles = sorted(
             {
                 str(value or "").strip()
-                for value in session.execute(select(PlatformAgent.runtime_role_key)).scalars().all()
+                for value in session.execute(
+                    select(PlatformAgent.runtime_role_key).where(PlatformAgent.is_active.is_(True))
+                ).scalars().all()
                 if str(value or "").strip()
             }
         )
         named_agents = sorted(
             {
                 str(value or "").strip()
-                for value in session.execute(select(PlatformAgent.named_agent_key)).scalars().all()
+                for value in session.execute(
+                    select(PlatformAgent.named_agent_key).where(PlatformAgent.is_active.is_(True))
+                ).scalars().all()
                 if str(value or "").strip()
             }
         )
         selectors = sorted(
             {
                 str(value or "").strip()
-                for value in session.execute(select(PlatformAgent.selector_key)).scalars().all()
+                for value in session.execute(
+                    select(PlatformAgent.selector_key).where(PlatformAgent.is_active.is_(True))
+                ).scalars().all()
                 if str(value or "").strip()
             }
         )
@@ -615,7 +617,7 @@ class PlatformTeamCatalogService:
     def build_issue_workflow_team_run_snapshot(
         self,
         *,
-        session: Session | None = None,
+        session: Session,
         snapshot: ExecutionSnapshot,
         entry_mode: str | None,
         entry_stage: str | None,
@@ -638,72 +640,6 @@ class PlatformTeamCatalogService:
             ISSUE_WORKFLOW_STAGE_TO_EXECUTOR_KIND["test"]: node_statuses["test"],
             ISSUE_WORKFLOW_STAGE_TO_EXECUTOR_KIND["review"]: node_statuses["review"],
         }
-        if session is None:
-            nodes: list[dict[str, object]] = [
-                {
-                    "task_key": "pm",
-                    "label": "PM",
-                    "owner_role_key": "pm",
-                    "owner_persona_key": "pm",
-                    "owner_agent_key": "pm_primary",
-                    "status": node_statuses["pm"],
-                    "dependency_keys": [],
-                    "executor_kind": ISSUE_WORKFLOW_PM_EXECUTOR_KIND,
-                    "artifact_contract": {"produces": ["pm_plan"]},
-                    "approval_rule": {},
-                },
-                {
-                    "task_key": "dev",
-                    "label": "DEV",
-                    "owner_role_key": "engineering",
-                    "owner_persona_key": "engineering",
-                    "owner_agent_key": "workflow_dev_default",
-                    "status": node_statuses["dev"],
-                    "dependency_keys": ["pm"],
-                    "executor_kind": ISSUE_WORKFLOW_DEV_EXECUTOR_KIND,
-                    "artifact_contract": {"produces": ["dev_result"]},
-                    "approval_rule": {},
-                },
-                {
-                    "task_key": "test",
-                    "label": "TEST",
-                    "owner_role_key": "test",
-                    "owner_persona_key": "test",
-                    "owner_agent_key": "workflow_test_default",
-                    "status": node_statuses["test"],
-                    "dependency_keys": ["dev"],
-                    "executor_kind": ISSUE_WORKFLOW_TEST_EXECUTOR_KIND,
-                    "artifact_contract": {"produces": ["test_result"]},
-                    "approval_rule": {},
-                },
-                {
-                    "task_key": "review",
-                    "label": "REVIEW",
-                    "owner_role_key": "review",
-                    "owner_persona_key": "review",
-                    "owner_agent_key": "workflow_review_default",
-                    "status": node_statuses["review"],
-                    "dependency_keys": ["test"],
-                    "executor_kind": ISSUE_WORKFLOW_REVIEW_EXECUTOR_KIND,
-                    "artifact_contract": {"produces": ["review_result"]},
-                    "approval_rule": {},
-                },
-            ]
-            return {
-                "team_key": ISSUE_WORKFLOW_TEAM_KEY,
-                "team_label": ISSUE_WORKFLOW_TEAM_LABEL,
-                "definition_version": 1,
-                "nodes": nodes,
-                "edges": [
-                    {"from_task_key": "pm", "to_task_key": "dev"},
-                    {"from_task_key": "dev", "to_task_key": "test"},
-                    {"from_task_key": "test", "to_task_key": "review"},
-                ],
-                "artifacts": [],
-                "approvals": [],
-                "status": str(snapshot.workflow.outcome or "").strip() or "queued",
-                "runtime_state": runtime_state,
-            }
         template = self.ensure_issue_workflow_template(session=session)
         team_run = self.build_team_run_snapshot(session=session, template=template)
         nodes = [dict(node) for node in team_run.get("nodes", []) if isinstance(node, dict)]

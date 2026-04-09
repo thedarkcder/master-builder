@@ -6,7 +6,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from orchestrator.core.platform_team_catalog_service import platform_team_catalog_service
-from orchestrator.core.team_run_service import complete_team_task, initialize_team_run
+from orchestrator.core.team_run_service import complete_team_task, execute_next_ready_team_task, initialize_team_run
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
@@ -210,12 +210,79 @@ def test_team_run_path_executes_custom_non_stage_task_keys() -> None:
         reset_db_engine_cache()
 
 
+def test_unknown_executor_kind_blocks_run_instead_of_noop() -> None:
+    temp_dir = TemporaryDirectory()
+    database_url = f"sqlite:///{temp_dir.name}/team_run_unknown_executor_guardrails.db"
+    os.environ["ORCHESTRATOR_DATABASE_URL"] = database_url
+    reset_db_engine_cache()
+    run_migrations(database_url=database_url)
+    session_factory = create_session_factory(database_url=database_url)
+    now = datetime.now(timezone.utc)
+    try:
+        with session_factory() as session:
+            _seed_tenant(session, now=now)
+            snapshot = ExecutionSnapshot.empty()
+            snapshot.context.execution_context["team_run"] = {
+                "team_key": "custom_ops",
+                "team_label": "Custom Ops Team",
+                "definition_version": 1,
+                "nodes": [
+                    {
+                        "task_key": "auto_custom",
+                        "label": "Auto Custom",
+                        "owner_role_key": "operator",
+                        "owner_persona_key": "ops_persona",
+                        "owner_agent_key": "ops_agent",
+                        "status": "ready",
+                        "dependency_keys": [],
+                        "artifact_contract": {},
+                        "approval_rule": {},
+                        "executor_kind": "workflow.custom_auto",
+                    }
+                ],
+                "edges": [],
+                "artifacts": [],
+                "approvals": [],
+                "status": "running",
+                "runtime_state": {},
+            }
+            run = make_run(
+                run_id="run-team-guardrail-unsupported-executor",
+                tenant_id="tenant-guardrails",
+                issue_key="MK-102",
+                issue_summary="Unknown executor should block",
+                created_at=now,
+                project_id="project-guardrails",
+                status="running",
+                entry_stage="team",
+                plan=snapshot.dump(),
+            )
+            add_run_with_workflow(session, run, workflow_status="running")
+            session.commit()
+
+            run = initialize_team_run(session=session, run_id=run.run_id)
+            run, task_key = execute_next_ready_team_task(session=session, run_id=run.run_id)
+
+            persisted = ExecutionSnapshot.require(run.plan)
+            team_run = persisted.context.execution_context["team_run"]
+            assert task_key == "auto_custom"
+            assert run.status == "blocked"
+            assert "Unsupported team task executor" in str(run.last_error or "")
+            assert str(team_run["nodes"][0]["status"]) == "blocked"
+    finally:
+        temp_dir.cleanup()
+        os.environ.pop("ORCHESTRATOR_DATABASE_URL", None)
+        reset_db_engine_cache()
+
+
 def test_team_run_paths_do_not_reintroduce_fixed_stage_assumptions() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     guarded_files = [
         repo_root / "admin-ui/app/(dashboard)/runs/[runId]/page.tsx",
         repo_root / "admin-ui/lib/run-detail-view-model.ts",
         repo_root / "orchestrator/core/platform_team_catalog_service.py",
+        repo_root / "orchestrator/core/team_run_service.py",
+        repo_root / "orchestrator/core/runs.py",
     ]
     forbidden_fragments = (
         '["pm", "dev", "test", "review"]',
@@ -223,6 +290,8 @@ def test_team_run_paths_do_not_reintroduce_fixed_stage_assumptions() -> None:
         "run-stage-dev",
         "def _legacy_team_run_from_snapshot(",
         "legacy_payload = _legacy_team_run_from_snapshot(",
+        "if executor_kind in {PM_EXECUTOR_KIND, DEV_EXECUTOR_KIND, TEST_EXECUTOR_KIND, REVIEW_EXECUTOR_KIND}",
+        "build_issue_workflow_team_run_snapshot(session=None",
     )
     for path in guarded_files:
         content = path.read_text(encoding="utf-8")

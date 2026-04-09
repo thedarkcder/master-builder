@@ -31,16 +31,16 @@ import {
 } from "@/lib/api";
 import { buildRunDetailPath, resolveRunRouteContext } from "@/lib/dashboard-paths";
 import {
+  buildChatTimelineEntries,
+  buildInvocationSessionRows,
+  buildRunTimeline,
   dedupeRunLogs,
   formatDuration,
   formatTokenCount,
+  type InvocationSessionRow,
   isAbortLikeError,
-  isRecord,
   normalizeTeamTaskStatus,
   parseExecutionContext,
-  parseRunLogChatText,
-  parseStageUpdateEvents,
-  parseTelemetryPayload,
   parseWorkflowDiagnostics,
   stageColor,
   stageDisplayLabel,
@@ -51,45 +51,12 @@ import {
   type TeamTaskProgressStatus,
 } from "@/lib/run-detail-view-model";
 
-type InvocationSessionRow = {
-  key: string;
-  stage: string;
-  attempt: number | null;
-  invocationId: string;
-  startedAt: string | null;
-  finishedAt: string | null;
-  status: string | null;
-  durationMs: number | null;
-  resumedSession: boolean | null;
-  codexSessionId: string | null;
-};
-
 type TeamTaskProgressEntry = {
   status: TeamTaskProgressStatus;
   tileDetail: string;
   detail: string;
 };
 
-type TimelineSegment = {
-  key: string;
-  label: string;
-  stage: string;
-  startMs: number;
-  endMs: number;
-  durationMs: number;
-  color: string;
-  detail: string;
-};
-
-type ChatTimelineEntry = {
-  key: string;
-  recordedAt: string;
-  stage: string;
-  attempt: number | null;
-  speaker: string;
-  text: string;
-  kind: "message" | "reasoning" | "status" | "error";
-};
 type RunPanelTab = "overview" | "agents" | "diagnostics" | "cost";
 const CHAT_PAGE_SIZE = 40;
 
@@ -106,18 +73,6 @@ const PANEL_TABS: { id: RunPanelTab; label: string }[] = [
   { id: "diagnostics", label: "Diagnostics" },
   { id: "cost", label: "Cost" }
 ];
-
-function invocationStageFromCommand(command: string | null | undefined): string {
-  const value = String(command ?? "").trim();
-  if (!value) {
-    return "unknown";
-  }
-  const idx = value.lastIndexOf(".");
-  if (idx < 0 || idx === value.length - 1) {
-    return value.toLowerCase();
-  }
-  return value.slice(idx + 1).trim().toLowerCase() || "unknown";
-}
 
 export default function RunDetailPage() {
   const params = useParams<{ runId: string }>();
@@ -417,58 +372,7 @@ export default function RunDetailPage() {
   const latestCheckpointKind = workflow?.latest_checkpoint_kind === "pm" || workflow?.latest_checkpoint_kind === "execution"
     ? workflow.latest_checkpoint_kind
     : null;
-  const invocationSessionRows = useMemo(() => {
-    const telemetryRows = logs
-      .filter((entry) => entry.stage === "telemetry" && entry.stream === "system")
-      .slice()
-      .sort((a, b) => new Date(a.recorded_at).getTime() - new Date(b.recorded_at).getTime());
-    const byInvocation = new Map<string, InvocationSessionRow>();
-    for (const entry of telemetryRows) {
-      const payload = parseTelemetryPayload(entry.message);
-      if (!payload) {
-        continue;
-      }
-      if (payload.event_kind !== "stage_invocation_started" && payload.event_kind !== "stage_invocation_finished") {
-        continue;
-      }
-      const invocationId = String(entry.invocation_id ?? "").trim() || `unknown-${entry.recorded_at}-${entry.command ?? ""}`;
-      const stage = invocationStageFromCommand(entry.command);
-      const current =
-        byInvocation.get(invocationId) ??
-        ({
-          key: invocationId,
-          stage,
-          attempt: entry.attempt ?? null,
-          invocationId,
-          startedAt: null,
-          finishedAt: null,
-          status: null,
-          durationMs: null,
-          resumedSession: null,
-          codexSessionId: null
-        } satisfies InvocationSessionRow);
-      if (payload.event_kind === "stage_invocation_started") {
-        current.startedAt = entry.recorded_at;
-      }
-      if (payload.event_kind === "stage_invocation_finished") {
-        current.finishedAt = entry.recorded_at;
-        current.status = payload.status ? String(payload.status) : current.status;
-        current.durationMs = typeof payload.duration_ms === "number" ? payload.duration_ms : current.durationMs;
-      }
-      if (typeof payload.resumed_session === "boolean") {
-        current.resumedSession = payload.resumed_session;
-      }
-      if (payload.codex_session_id) {
-        current.codexSessionId = String(payload.codex_session_id);
-      }
-      byInvocation.set(invocationId, current);
-    }
-    return Array.from(byInvocation.values()).sort((a, b) => {
-      const aTime = new Date(a.startedAt ?? a.finishedAt ?? 0).getTime();
-      const bTime = new Date(b.startedAt ?? b.finishedAt ?? 0).getTime();
-      return bTime - aTime;
-    });
-  }, [logs]);
+  const invocationSessionRows = useMemo<InvocationSessionRow[]>(() => buildInvocationSessionRows(logs), [logs]);
   const latestCodexSessionId = useMemo(() => {
     const fromTimeline = invocationSessionRows.find((row) => row.codexSessionId)?.codexSessionId;
     return fromTimeline ?? null;
@@ -632,175 +536,14 @@ export default function RunDetailPage() {
       .map((value) => [value, value] as [string, string]);
     return [["all", teamRun ? "All tasks" : "All stages"], ...options];
   }, [logs, teamRun]);
-  const runTimeline = useMemo(() => {
-    if (!run) {
-      return null;
-    }
-    const telemetryRows = logs
-      .filter((entry) => entry.stage === "telemetry" && entry.stream === "system")
-      .slice()
-      .sort((a, b) => new Date(a.recorded_at).getTime() - new Date(b.recorded_at).getTime());
-    let queueWaitMs = 0;
-    for (const entry of telemetryRows) {
-      const payload = parseTelemetryPayload(entry.message);
-      if (!payload || payload.event_kind !== "queue_wait") {
-        continue;
-      }
-      if (typeof payload.queue_wait_ms === "number" && payload.queue_wait_ms >= 0) {
-        queueWaitMs = payload.queue_wait_ms;
-      }
-    }
-    const createdMs = run.created_at ? new Date(run.created_at).getTime() : NaN;
-    const startedMs = run.started_at ? new Date(run.started_at).getTime() : NaN;
-    const finishedMs = run.finished_at ? new Date(run.finished_at).getTime() : NaN;
-    const nowMs = Date.now();
-
-    const segments: TimelineSegment[] = [];
-    if (Number.isFinite(createdMs) && Number.isFinite(startedMs) && startedMs > createdMs) {
-      const waitDurationMs = queueWaitMs > 0 ? queueWaitMs : startedMs - createdMs;
-      const queueEnd = createdMs + waitDurationMs;
-      segments.push({
-        key: "queue_wait",
-        label: "Queue Wait",
-        stage: "queue_wait",
-        startMs: createdMs,
-        endMs: Math.max(createdMs + 1, queueEnd),
-        durationMs: Math.max(1, waitDurationMs),
-        color: stageColor("queue_wait"),
-        detail: "Queued before task start",
-      });
-    }
-
-    for (const row of invocationSessionRows) {
-      if (!row.startedAt) {
-        continue;
-      }
-      const startMs = new Date(row.startedAt).getTime();
-      const endMs = row.finishedAt ? new Date(row.finishedAt).getTime() : (isActiveRun ? nowMs : NaN);
-      if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) {
-        continue;
-      }
-      const inProgress = !row.finishedAt;
-      segments.push({
-        key: `stage-${row.invocationId}`,
-        label: row.stage.toUpperCase(),
-        stage: row.stage,
-        startMs,
-        endMs,
-        durationMs: endMs - startMs,
-        color: stageColor(row.stage),
-        detail: `${inProgress ? "in progress" : row.resumedSession ? "resumed session" : "new session"}${row.attempt !== null ? ` · attempt ${row.attempt}` : ""}`,
-      });
-    }
-
-    if (segments.length === 0) {
-      return null;
-    }
-    const minStartMs = Math.min(...segments.map((segment) => segment.startMs));
-    const maxEndMs = Math.max(
-      ...segments.map((segment) => segment.endMs),
-      Number.isFinite(finishedMs) ? finishedMs : 0,
-      nowMs
-    );
-    const totalMs = Math.max(1, maxEndMs - minStartMs);
-    const resumedCount = invocationSessionRows.filter((row) => row.resumedSession === true).length;
-    const stageMs = segments
-      .filter((segment) => segment.stage !== "queue_wait")
-      .reduce((sum, segment) => sum + segment.durationMs, 0);
-    return {
-      segments: segments.sort((a, b) => a.startMs - b.startMs),
-      minStartMs,
-      maxEndMs,
-      totalMs,
-      queueWaitMs,
-      stageMs,
-      resumedCount,
-    };
-  }, [invocationSessionRows, isActiveRun, logs, run]);
-  const chatTimelineEntries = useMemo(() => {
-    const stageUpdates = parseStageUpdateEvents(run);
-    const stageUpdateEntries: ChatTimelineEntry[] = stageUpdates
-      .map((entry, idx): ChatTimelineEntry | null => {
-        if (!isRecord(entry)) {
-          return null;
-        }
-        const stage = String(entry["stage"] ?? "").trim() || "workflow";
-        const rawMessage =
-          String(entry["jira_message"] ?? "").trim() || String(entry["discord_message"] ?? "").trim();
-        if (!rawMessage) {
-          return null;
-        }
-        return {
-          key: `stage-update-${idx}`,
-          recordedAt: run?.finished_at ?? run?.started_at ?? run?.created_at ?? new Date().toISOString(),
-          stage,
-          attempt: null,
-          speaker: "system",
-          text: `Stage update: ${stage}. ${rawMessage}`,
-          kind: "status"
-        } satisfies ChatTimelineEntry;
-      })
-      .filter((entry): entry is ChatTimelineEntry => entry !== null);
-
-    const logEntries = logs
-      .slice()
-      .sort((a, b) => new Date(a.recorded_at).getTime() - new Date(b.recorded_at).getTime())
-      .map((entry, idx): ChatTimelineEntry | null => {
-        const parsed = parseRunLogChatText(entry);
-        if (!parsed) {
-          return null;
-        }
-        return {
-          key: `${entry.recorded_at}-${entry.stage}-${idx}`,
-          recordedAt: entry.recorded_at,
-          stage: entry.stage,
-          attempt: entry.attempt,
-          speaker: parsed.speaker,
-          text: parsed.text,
-          kind: parsed.kind
-        } satisfies ChatTimelineEntry;
-      })
-      .filter((entry): entry is ChatTimelineEntry => entry !== null);
-
-    const diagnosticsEntries: ChatTimelineEntry[] = (workflowDiagnostics?.history ?? []).map((entry, idx) => ({
-      key: `diag-${idx}`,
-      recordedAt: run?.finished_at ?? run?.started_at ?? run?.created_at ?? new Date().toISOString(),
-      stage: entry.stage || "workflow",
-      attempt: Number.isFinite(Number(entry.attempt)) ? Number(entry.attempt) : null,
-      speaker: "diagnostics",
-      text: entry.event,
-      kind: "status"
-    }));
-
-    const timeline = [...logEntries, ...diagnosticsEntries, ...stageUpdateEntries]
-      .map((entry, index) => ({ entry, index }))
-      .sort((a, b) => {
-        const tsDiff = new Date(a.entry.recordedAt).getTime() - new Date(b.entry.recordedAt).getTime();
-        if (tsDiff !== 0) {
-          return tsDiff;
-        }
-        // Keep arrival/build order for same-timestamp entries so new events append.
-        return a.index - b.index;
-      })
-      .slice(-160)
-      .map((wrapped) => wrapped.entry);
-    const seen = new Set<string>();
-    return timeline.filter((entry) => {
-      const key = [
-        entry.recordedAt,
-        entry.stage,
-        entry.attempt ?? "",
-        entry.speaker,
-        entry.kind,
-        entry.text
-      ].join("::");
-      if (seen.has(key)) {
-        return false;
-      }
-      seen.add(key);
-      return true;
-    });
-  }, [logs, run?.created_at, run?.finished_at, run?.plan, run?.started_at, workflowDiagnostics?.history]);
+  const runTimeline = useMemo(
+    () => buildRunTimeline({ run, logs, invocationSessionRows, isActiveRun }),
+    [invocationSessionRows, isActiveRun, logs, run]
+  );
+  const chatTimelineEntries = useMemo(
+    () => buildChatTimelineEntries({ run, logs, workflowDiagnostics }),
+    [logs, run, workflowDiagnostics]
+  );
   const visibleChatTimelineEntries = useMemo(
     () => chatTimelineEntries.slice(-Math.max(CHAT_PAGE_SIZE, chatVisibleCount)),
     [chatTimelineEntries, chatVisibleCount]

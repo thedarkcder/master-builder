@@ -98,21 +98,6 @@ _DEFAULT_ROUTING = {
     "workflow.design_review": PROFILE_GENERAL_PLANNING,
     "workflow.design_feedback": PROFILE_GENERAL_PLANNING,
 }
-_KNOWN_AGENT_ROLES = (
-    AGENT_ROLE_PM,
-    AGENT_ROLE_ENGINEERING,
-    AGENT_ROLE_TEST,
-    AGENT_ROLE_REVIEW,
-    AGENT_ROLE_MARKETING,
-)
-_KNOWN_AGENT_NAMES = (
-    AGENT_NAME_PM_PRIMARY,
-    AGENT_NAME_VOICE_ROOM_PM,
-    AGENT_NAME_WORKFLOW_DEV_DEFAULT,
-    AGENT_NAME_WORKFLOW_TEST_DEFAULT,
-    AGENT_NAME_WORKFLOW_REVIEW_DEFAULT,
-    AGENT_NAME_MARKETING_DEFAULT,
-)
 _DEFAULT_AGENT_ROLE_ROUTING = {
     AGENT_ROLE_PM: PROFILE_PM_CONVERSATION_DEFAULT,
     AGENT_ROLE_ENGINEERING: PROFILE_ENGINEERING_EXECUTION_DEFAULT,
@@ -190,18 +175,6 @@ def runtime_kind_supports_reasoning_effort(runtime_kind: str) -> bool:
 def runtime_kind_supports_api_key(runtime_kind: str) -> bool:
     normalized = str(runtime_kind or "").strip().lower()
     return normalized in _HTTP_RUNTIME_KINDS
-
-
-def list_known_agent_roles() -> list[str]:
-    return list(_KNOWN_AGENT_ROLES)
-
-
-def list_known_agent_names() -> list[str]:
-    return list(_KNOWN_AGENT_NAMES)
-
-
-def list_known_execution_selectors() -> list[str]:
-    return sorted(_DEFAULT_ROUTING.keys())
 
 
 def default_execution_profile_routing() -> dict[str, str]:

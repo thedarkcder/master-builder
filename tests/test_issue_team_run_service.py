@@ -6,7 +6,6 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from orchestrator.core.issue_team_run_service import execute_issue_workflow_task
 from orchestrator.core.platform_team_catalog_service import platform_team_catalog_service
 from orchestrator.core.team_run_service import execute_next_ready_team_task
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
@@ -68,6 +67,7 @@ def test_issue_team_run_executes_to_success() -> None:
             _seed_tenant(session, now=now)
             snapshot = ExecutionSnapshot.empty()
             snapshot.context.execution_context["team_run"] = platform_team_catalog_service.build_issue_workflow_team_run_snapshot(
+                session=session,
                 snapshot=snapshot,
                 entry_mode="fresh",
                 entry_stage=None,
@@ -151,6 +151,7 @@ def test_issue_team_run_loops_back_to_dev_after_test_failure() -> None:
             _seed_tenant(session, now=now)
             snapshot = ExecutionSnapshot.empty()
             snapshot.context.execution_context["team_run"] = platform_team_catalog_service.build_issue_workflow_team_run_snapshot(
+                session=session,
                 snapshot=snapshot,
                 entry_mode="fresh",
                 entry_stage=None,

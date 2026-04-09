@@ -449,6 +449,37 @@ class AdminApiTests(unittest.TestCase):
         self.assertNotIn("pm", runtimes["available_roles"])
         self.assertNotIn("voice_room_pm", runtimes["available_named_agents"])
 
+        update_agent_response = self.client.put(
+            f"/api/admin/platform-agents/{agent_response.json()['agent_id']}",
+            json={
+                "agent_key": "launch_strategy_agent",
+                "label": "Launch Strategy Agent",
+                "description": "Owns launch strategy tasks.",
+                "persona_key": "launch_strategist",
+                "runtime_role_key": "launch_strategy",
+                "named_agent_key": "launch_strategy_primary",
+                "selector_key": "team.launch.strategy",
+                "default_profile_name": "general_planning_default",
+                "is_active": False,
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(update_agent_response.status_code, 200, update_agent_response.text)
+
+        bindings_after_deactivate = self.client.get("/api/admin/platform-runtime-bindings", auth=("admin", "secret"))
+        self.assertEqual(bindings_after_deactivate.status_code, 200, bindings_after_deactivate.text)
+        bindings_after_deactivate_body = bindings_after_deactivate.json()
+        self.assertNotIn("launch_strategy", bindings_after_deactivate_body["available_roles"])
+        self.assertNotIn("launch_strategy_primary", bindings_after_deactivate_body["available_named_agents"])
+        self.assertNotIn("team.launch.strategy", bindings_after_deactivate_body["available_selectors"])
+
+        runtimes_after_deactivate = self.client.get("/api/admin/agent-runtimes", auth=("admin", "secret"))
+        self.assertEqual(runtimes_after_deactivate.status_code, 200, runtimes_after_deactivate.text)
+        runtimes_after_deactivate_body = runtimes_after_deactivate.json()
+        self.assertNotIn("launch_strategy", runtimes_after_deactivate_body["available_roles"])
+        self.assertNotIn("launch_strategy_primary", runtimes_after_deactivate_body["available_named_agents"])
+        self.assertNotIn("team.launch.strategy", runtimes_after_deactivate_body["available_selectors"])
+
     def test_launch_team_run_snapshots_published_definition_and_stays_stable_after_catalog_edits(self) -> None:
         payload = self._tenant_payload()
         self._insert_jira_connection(connection_id="conn-1")

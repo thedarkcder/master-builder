@@ -31,7 +31,12 @@ from orchestrator.core.agent_execution_profiles import (
     runtime_kind_supports_api_key,
     runtime_kind_supports_reasoning_effort,
 )
-from orchestrator.core.platform_team_catalog_service import platform_team_catalog_service
+from orchestrator.core.agent_runtime_routing_policy import (
+    AgentRuntimeRoutingValidationError,
+    canonicalize_selector_routing,
+    load_runtime_binding_catalog,
+    validate_runtime_routing_payload,
+)
 from orchestrator.core.config import get_settings
 from orchestrator.core.platform_settings_service import (
     SETTING_KEY_AGENT_RUNTIME_PROFILES,
@@ -41,14 +46,6 @@ from orchestrator.core.platform_settings_service import (
 from orchestrator.core.security import require_admin
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
-
-
-def _canonicalize_selector_routing(selector_routing: dict[str, str]) -> dict[str, str]:
-    normalized: dict[str, str] = {}
-    for selector, profile_name in selector_routing.items():
-        canonical_selector = "discord.voice_entry_router" if selector == "discord.voice_room_router" else selector
-        normalized[canonical_selector] = profile_name
-    return normalized
 
 
 def _default_profiles() -> dict[str, dict]:
@@ -92,7 +89,7 @@ def _merged_profiles(*, session: Session) -> tuple[dict[str, dict], dict[str, di
 
 def _current_routing(*, session: Session) -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
     payload = platform_settings_service.get_json(session=session, setting_key=SETTING_KEY_AGENT_RUNTIME_ROUTING)
-    selector_routing = _canonicalize_selector_routing(normalize_execution_profile_routing(payload.get("selector_routing")))
+    selector_routing = canonicalize_selector_routing(normalize_execution_profile_routing(payload.get("selector_routing")))
     return (
         normalize_agent_routing(payload.get("role_routing")),
         normalize_agent_routing(payload.get("name_routing")),
@@ -193,37 +190,6 @@ def _available_profiles(*, session: Session) -> dict[str, AgentExecutionProfileR
     return available
 
 
-def _validate_routing_payload(
-    *,
-    session: Session,
-    role_routing: dict[str, str],
-    name_routing: dict[str, str],
-    selector_routing: dict[str, str],
-    available_profiles: dict[str, AgentExecutionProfileRead],
-) -> None:
-    bindings = _runtime_bindings(session=session)
-    known_roles = set(bindings["available_roles"])
-    known_names = set(bindings["available_named_agents"])
-    known_selectors = set(bindings["available_selectors"])
-    known_profiles = set(available_profiles.keys())
-
-    for role, profile_name in role_routing.items():
-        if role not in known_roles:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Unknown agent role: {role}")
-        if profile_name not in known_profiles:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Unknown execution profile: {profile_name}")
-    for agent_name, profile_name in name_routing.items():
-        if agent_name not in known_names:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Unknown named agent: {agent_name}")
-        if profile_name not in known_profiles:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Unknown execution profile: {profile_name}")
-    for selector, profile_name in selector_routing.items():
-        if selector not in known_selectors:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Unknown selector: {selector}")
-        if profile_name not in known_profiles:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Unknown execution profile: {profile_name}")
-
-
 def _normalize_profile_payload(payload: AgentExecutionProfileWrite) -> dict[str, object]:
     return {
         "runtime_kind": payload.runtime_kind,
@@ -292,10 +258,10 @@ def _validate_profile_write(
 
 def _build_routing_response(*, session: Session) -> AgentRuntimeRoutingRead:
     role_routing, name_routing, selector_routing = _current_routing(session=session)
-    bindings = _runtime_bindings(session=session)
-    available_roles = set(bindings["available_roles"])
-    available_named_agents = set(bindings["available_named_agents"])
-    available_selectors = set(bindings["available_selectors"])
+    bindings = load_runtime_binding_catalog(session=session)
+    available_roles = bindings.available_roles
+    available_named_agents = bindings.available_named_agents
+    available_selectors = bindings.available_selectors
     return AgentRuntimeRoutingRead(
         role_routing=role_routing,
         name_routing=name_routing,
@@ -310,11 +276,6 @@ def _build_routing_response(*, session: Session) -> AgentRuntimeRoutingRead:
             selector_routing={key: value for key, value in default_execution_profile_routing().items() if key in available_selectors},
         ),
     )
-
-
-def _runtime_bindings(*, session: Session) -> dict[str, list[str]]:
-    return platform_team_catalog_service.list_runtime_bindings(session=session)
-
 
 @router.get("/agent-runtimes", response_model=AgentRuntimeRoutingRead)
 def get_agent_runtimes(
@@ -333,14 +294,18 @@ def put_agent_runtimes(
     available_profiles = _available_profiles(session=session)
     role_routing = normalize_agent_routing(payload.role_routing)
     name_routing = normalize_agent_routing(payload.name_routing)
-    selector_routing = _canonicalize_selector_routing(normalize_execution_profile_routing(payload.selector_routing))
-    _validate_routing_payload(
-        session=session,
-        role_routing=role_routing,
-        name_routing=name_routing,
-        selector_routing=selector_routing,
-        available_profiles=available_profiles,
-    )
+    selector_routing = canonicalize_selector_routing(normalize_execution_profile_routing(payload.selector_routing))
+    bindings = load_runtime_binding_catalog(session=session)
+    try:
+        validate_runtime_routing_payload(
+            role_routing=role_routing,
+            name_routing=name_routing,
+            selector_routing=selector_routing,
+            available_profiles=available_profiles.keys(),
+            bindings=bindings,
+        )
+    except AgentRuntimeRoutingValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     platform_settings_service.upsert_json(
         session=session,
         setting_key=SETTING_KEY_AGENT_RUNTIME_ROUTING,

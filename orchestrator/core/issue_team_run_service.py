@@ -87,6 +87,11 @@ def _stage_for_executor_kind(executor_kind: str) -> str:
     return stage
 
 
+def is_issue_workflow_executor_kind(executor_kind: str) -> bool:
+    normalized = str(executor_kind or "").strip().lower()
+    return normalized in EXECUTOR_KIND_TO_STAGE
+
+
 def _task_key_for_executor_kind(team_run: dict[str, Any], executor_kind: str) -> str:
     normalized = str(executor_kind or "").strip().lower()
     for node in team_run_nodes(team_run):

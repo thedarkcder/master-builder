@@ -7,11 +7,8 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from orchestrator.core.issue_team_run_service import (
-    DEV_EXECUTOR_KIND,
-    PM_EXECUTOR_KIND,
-    REVIEW_EXECUTOR_KIND,
-    TEST_EXECUTOR_KIND,
     execute_issue_workflow_task,
+    is_issue_workflow_executor_kind,
     resume_issue_workflow_human_input,
 )
 from orchestrator.core.platform_team_catalog_service import platform_team_catalog_service
@@ -121,7 +118,7 @@ def execute_next_ready_team_task(*, session: Session, run_id: str) -> tuple[Run,
     executor_kind = str(node.get("executor_kind") or "").strip().lower()
     if not executor_kind:
         return run, None
-    if executor_kind in {PM_EXECUTOR_KIND, DEV_EXECUTOR_KIND, TEST_EXECUTOR_KIND, REVIEW_EXECUTOR_KIND}:
+    if is_issue_workflow_executor_kind(executor_kind):
         execution = execute_issue_workflow_task(
             session=session,
             run=run,
@@ -132,18 +129,34 @@ def execute_next_ready_team_task(*, session: Session, run_id: str) -> tuple[Run,
         )
         return (
             _persist_team_run(
+                session=session,
+                run=run,
+                workflow=workflow,
+                snapshot=snapshot,
+                team_run=execution.team_run,
+                run_status=execution.run_status,
+                workflow_status=execution.workflow_status,
+                last_error=execution.last_error,
+            ),
+            task_key,
+        )
+    node["status"] = "blocked"
+    unsupported_executor_error = f"Unsupported team task executor for task {task_key}: {executor_kind}"
+    node["summary"] = unsupported_executor_error
+    team_run["status"] = RUN_STATUS_BLOCKED
+    return (
+        _persist_team_run(
             session=session,
             run=run,
             workflow=workflow,
             snapshot=snapshot,
-            team_run=execution.team_run,
-            run_status=execution.run_status,
-            workflow_status=execution.workflow_status,
-            last_error=execution.last_error,
-            ),
-            task_key,
-        )
-    return run, None
+            team_run=team_run,
+            run_status=RUN_STATUS_BLOCKED,
+            workflow_status=RUN_STATUS_BLOCKED,
+            last_error=unsupported_executor_error,
+        ),
+        task_key,
+    )
 
 
 def complete_team_task(

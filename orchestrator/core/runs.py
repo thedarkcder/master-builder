@@ -218,6 +218,8 @@ def _build_initial_plan(
     if normalized_precheck_outcome is not None:
         snapshot.context.execution_context["pre_check_outcome"] = normalized_precheck_outcome
     if not isinstance(snapshot.context.execution_context.get("team_run"), dict):
+        if session is None:
+            raise RunStateTransitionError("Session is required to initialize team_run snapshot")
         snapshot.context.execution_context["team_run"] = platform_team_catalog_service.build_issue_workflow_team_run_snapshot(
             session=session,
             snapshot=snapshot,
