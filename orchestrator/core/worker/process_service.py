@@ -166,7 +166,9 @@ def process_next_queued_run(
                 )
         return decision_gate_run
 
-    project = resolve_project_for_run_fn(session, run=run)
+    project = getattr(selection, "project", None)
+    if project is None:
+        project = resolve_project_for_run_fn(session, run=run)
     if project is None:
         return fail_missing_project_mapping_fn(session, run=run)
     if project.is_archived:
@@ -185,9 +187,13 @@ def process_next_queued_run(
         send_discord_message=send_discord_message_fn,
         send_jira_message=send_jira_message_fn,
     )
-    effective_policy = resolve_effective_policy(
-        tenant_policy=tenant.policy_config,
-        project_overrides=project.policy_overrides,
+    effective_policy = (
+        dict(selection.effective_policy)
+        if isinstance(getattr(selection, "effective_policy", None), dict)
+        else resolve_effective_policy(
+            tenant_policy=tenant.policy_config,
+            project_overrides=project.policy_overrides,
+        )
     )
     _emit_queue_wait_metric(
         session=session,

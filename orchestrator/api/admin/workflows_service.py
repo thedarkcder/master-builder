@@ -5,6 +5,7 @@ from uuid import uuid4
 
 from fastapi import HTTPException, status
 from sqlalchemy import desc, or_, select
+from sqlalchemy.exc import IntegrityError
 
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.core.workflow.transitions import ATTEMPT_ENTRY_MODES, attempt_creation_policy
@@ -14,6 +15,36 @@ from orchestrator.storage.run_queue_events import notify_run_enqueued
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _reconcile_workflow_status_with_active_attempt(*, session, workflow) -> None:  # noqa: ANN001
+    active_run_id = str(getattr(workflow, "active_run_id", "") or "").strip()
+    if not active_run_id:
+        return
+    active_run = session.get(Run, active_run_id)
+    if active_run is None:
+        return
+    run_status = str(getattr(active_run, "status", "") or "").strip().lower()
+    if run_status in {"queued", "running"}:
+        return
+
+    now = _now()
+    workflow.updated_at = now
+    workflow.last_error = active_run.last_error
+    if run_status == "waiting_for_input":
+        workflow.status = "waiting_for_input"
+        workflow.finished_at = None
+        workflow.blocked_reason = None
+        return
+    if run_status == "blocked":
+        workflow.status = "blocked"
+        workflow.finished_at = None
+        workflow.blocked_reason = active_run.last_error
+        return
+    if run_status in {"succeeded", "failed", "cancelled"}:
+        workflow.status = run_status
+        workflow.finished_at = active_run.finished_at or now
+        workflow.blocked_reason = None
 
 
 def _latest_checkpoint_for_kind(*, session, workflow_id: str, checkpoint_kind: str) -> WorkflowCheckpoint | None:  # noqa: ANN001
@@ -126,6 +157,17 @@ def _next_attempt_number(*, session, workflow_id: str) -> int:  # noqa: ANN001
     return (max((run.attempt_number for run in existing_runs), default=0) or 0) + 1
 
 
+def _is_active_scope_unique_violation(error: IntegrityError) -> bool:
+    message = str(error).lower()
+    if "uq_workflow_executions_active_scope" in message:
+        return True
+    return (
+        "workflow_executions.tenant_id" in message
+        and "workflow_executions.issue_key" in message
+        and "workflow_executions.dedupe_scope" in message
+    )
+
+
 def list_workflows(
     *,
     session,
@@ -197,6 +239,7 @@ def create_workflow_attempt(
     if workflow is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow not found")
 
+    _reconcile_workflow_status_with_active_attempt(session=session, workflow=workflow)
     normalized_mode = str(mode or "").strip().lower()
     if normalized_mode not in ATTEMPT_ENTRY_MODES:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid attempt mode")
@@ -303,6 +346,18 @@ def create_workflow_attempt(
         run_id=next_run.run_id,
         issue_key=next_workflow.issue_key,
     )
-    session.commit()
+    try:
+        session.commit()
+    except IntegrityError as error:
+        session.rollback()
+        if _is_active_scope_unique_violation(error):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "A queued or in-progress workflow already exists for this issue "
+                    "and dedupe scope. Resume the active workflow instead."
+                ),
+            ) from error
+        raise
     session.refresh(next_run)
     return run_to_schema_fn(next_run)

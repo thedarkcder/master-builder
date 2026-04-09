@@ -18,9 +18,9 @@ from orchestrator.core.communications.enqueue_reason_contract import (
 )
 from orchestrator.core.decision_clarification_service import (
     capture_decision_reply_and_recheck,
-    evaluate_issue_clarification_state,
 )
 from orchestrator.core.decision_engine import DecisionEventInput, DecisionSource
+from orchestrator.core.issue_precheck_service import evaluate_issue_precheck_state
 from orchestrator.core.decision_reply_service import (
     unresolved_question_feedback_for_cycle,
 )
@@ -107,7 +107,7 @@ def _queue_run_from_issue_context(
     success_message: str,
 ) -> DiscordCommandResponse:
     settings = settings_factory()
-    decision_result = evaluate_issue_clarification_state(
+    decision_result = evaluate_issue_precheck_state(
         session=session,
         tenant=tenant,
         project=project,

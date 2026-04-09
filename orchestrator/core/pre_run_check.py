@@ -105,7 +105,7 @@ def evaluate_execution_readiness_only(
     sync_guard = _execution_sync_guard(normalized_labels=normalized_labels)
     gtd_guard = invalid_label_guard or conflicting_capability_guard or sync_guard
     ready_for_agent_label_override = any(label in normalized_labels for label in ready_for_agent_labels)
-    outcome = "gtd_required" if gtd_guard is not None else "ready_for_agent"
+    outcome = "execution_blocked" if gtd_guard is not None else "ready_for_agent"
     if gtd_guard is None and normalized_ready_label is not None and not ready_label_present and not ready_for_agent_label_override:
         outcome = "missing_ready_label"
     return PreRunCheckResult(

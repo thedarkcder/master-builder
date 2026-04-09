@@ -464,6 +464,10 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 path="/api/admin/observability/platform",
                 auth=admin,
             ),
+            ("GET", "/api/admin/observability/webhook-jobs"): RouteScenario(
+                path="/api/admin/observability/webhook-jobs?tenant_id=example&project_id=example-default&limit=25&offset=0",
+                auth=admin,
+            ),
             ("GET", "/api/admin/observability/knowledge-jira-sync"): RouteScenario(
                 path="/api/admin/observability/knowledge-jira-sync",
                 auth=admin,

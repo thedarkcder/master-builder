@@ -2,6 +2,13 @@
 
 Multi-tenant Jira-driven agent orchestrator service.
 
+## Deployment packaging
+- Deployment execution contract: `docs/deployment-packaging.md`
+- Provider package workspace: `deploy/README.md`
+- Shared deployment contracts:
+  - `deploy/common/env.required.md`
+  - `deploy/common/service-profile.md`
+
 ## Requirements
 - Python 3.11+
 - Atlassian OAuth app credentials for Jira connect flow
