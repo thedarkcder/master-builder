@@ -23,6 +23,7 @@ _ENQUEUE_REASON_GUIDANCE = {
     "decision_gate_cooldown_active": "Decision Gate was recently required for this issue. Wait for cooldown, then rerun.",
     "decision_gate_required": "Decision Gate is required before execution. Reply with the missing clarifications.",
     "gtd_required": "Good To Do details are incomplete. Add the missing GTD details, then rerun.",
+    "execution_blocked": "Execution readiness checks failed. Resolve sync/capability blockers, then rerun.",
     "missing_ready_label": "Issue is missing the configured ready label.",
     "policy_eval_failed": "Pre-run policy evaluation failed. Resolve policy/runtime errors before rerunning.",
 }

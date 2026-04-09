@@ -11,6 +11,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from orchestrator.core.config import Settings
+from orchestrator.core.discord.oauth_config import DiscordOAuthConfig
 
 
 class DiscordOAuthError(RuntimeError):
@@ -34,18 +35,18 @@ class DiscordOAuthUser:
     access_token: str
 
 
-def discord_oauth_is_configured(*, settings: Settings) -> bool:
-    return bool(settings.discord_oauth_client_id.strip() and settings.discord_oauth_redirect_url.strip())
+def discord_oauth_is_configured(*, config: DiscordOAuthConfig) -> bool:
+    return config.authorize_configured
 
 
 def build_discord_oauth_authorize_url(
     *,
-    settings: Settings,
+    config: DiscordOAuthConfig,
     state: str,
 ) -> str:
-    client_id = settings.discord_oauth_client_id.strip()
-    redirect_uri = settings.discord_oauth_redirect_url.strip()
-    if not discord_oauth_is_configured(settings=settings):
+    client_id = config.client_id
+    redirect_uri = config.redirect_url
+    if not discord_oauth_is_configured(config=config):
         raise DiscordOAuthError("Discord OAuth is not configured")
     query = urlencode(
         {
@@ -108,18 +109,20 @@ def parse_discord_oauth_state(*, settings: Settings, state: str) -> DiscordOAuth
     )
 
 
-def exchange_code_for_user(*, settings: Settings, code: str) -> DiscordOAuthUser:
+def exchange_code_for_user(*, config: DiscordOAuthConfig, code: str) -> DiscordOAuthUser:
+    if not config.exchange_configured:
+        raise DiscordOAuthError("Discord OAuth is not configured")
     token_payload = _discord_http_json(
         url="https://discord.com/api/v10/oauth2/token",
         method="POST",
         headers={"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"},
         data=urlencode(
             {
-                "client_id": settings.discord_oauth_client_id,
-                "client_secret": settings.discord_oauth_client_secret,
+                "client_id": config.client_id,
+                "client_secret": config.client_secret,
                 "grant_type": "authorization_code",
                 "code": code,
-                "redirect_uri": settings.discord_oauth_redirect_url,
+                "redirect_uri": config.redirect_url,
             }
         ).encode("utf-8"),
     )

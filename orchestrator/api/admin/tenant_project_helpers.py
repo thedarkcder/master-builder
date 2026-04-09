@@ -138,6 +138,55 @@ def ensure_default_project_for_tenant(
     )
 
 
+def sync_tenant_project_discord_channels(
+    session: Session,
+    *,
+    tenant: Tenant,
+    settings,  # noqa: ANN001
+    resolve_project_discord_channel_binding_fn,
+) -> None:
+    tenant_discord_config = dict(getattr(tenant, "discord_config", None) or {})
+    guild_id = str(tenant_discord_config.get("guild_id") or "").strip()
+    if not guild_id:
+        return
+
+    persisted_projects = session.execute(
+        select(Project)
+        .where(Project.tenant_id == tenant.tenant_id, Project.is_archived.is_(False))
+        .order_by(Project.created_at.asc())
+    ).scalars().all()
+    pending_projects = [
+        project
+        for project in session.new
+        if isinstance(project, Project)
+        and project.tenant_id == tenant.tenant_id
+        and not project.is_archived
+    ]
+    persisted_ids = {item.project_id for item in persisted_projects}
+    projects = persisted_projects + [project for project in pending_projects if project.project_id not in persisted_ids]
+    if not projects:
+        return
+
+    now = datetime.now(timezone.utc)
+    updated_any = False
+    for project in projects:
+        discord_config = dict(project.discord_config or {})
+        if str(discord_config.get("channel_id") or "").strip():
+            continue
+        project.discord_config = resolve_project_discord_channel_binding_fn(
+            session=session,
+            settings=settings,
+            tenant=tenant,
+            project=project,
+            discord_config=discord_config,
+        )
+        project.updated_at = now
+        updated_any = True
+
+    if updated_any:
+        tenant.updated_at = now
+
+
 def sync_tenant_jira_project_keys(
     session: Session,
     *,

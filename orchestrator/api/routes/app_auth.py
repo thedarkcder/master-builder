@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import UTC
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -11,8 +10,7 @@ from sqlalchemy.orm import Session
 
 from orchestrator.api.admin.route_helpers import (
     allocate_tenant_id,
-    ensure_default_project_for_tenant,
-    sync_tenant_jira_project_keys,
+    reconcile_tenant_projects,
     validate_codex_assets_for_tenant_init,
 )
 from orchestrator.api.admin.schema_mappers import tenant_to_schema
@@ -32,6 +30,7 @@ from orchestrator.api.schemas import (
 from orchestrator.core.auth_tokens import create_auth_access_token
 from orchestrator.core.config import get_settings
 from orchestrator.core.discord.oauth import DiscordOAuthError, exchange_code_for_user, parse_discord_oauth_state
+from orchestrator.core.discord.oauth_config import resolve_discord_oauth_config
 from orchestrator.core.password_reset_email import send_password_reset_email
 from orchestrator.core.password_reset_tokens import (
     PasswordResetTokenError,
@@ -166,8 +165,7 @@ def public_register(
         onboarding_kind="tenant_admin_setup",
     )
     session.add(tenant)
-    ensure_default_project_for_tenant(session, tenant=tenant)
-    sync_tenant_jira_project_keys(session, tenant=tenant)
+    reconcile_tenant_projects(session, tenant=tenant)
     try:
         session.commit()
     except IntegrityError as exc:
@@ -444,9 +442,10 @@ def discord_oauth_callback(
     session: Session = Depends(get_session),
 ) -> RedirectResponse:
     settings = get_settings()
+    oauth_config = resolve_discord_oauth_config(session=session, settings=settings)
     try:
         parsed_state = parse_discord_oauth_state(settings=settings, state=state)
-        discord_user = exchange_code_for_user(settings=settings, code=code)
+        discord_user = exchange_code_for_user(config=oauth_config, code=code)
     except DiscordOAuthError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 

@@ -431,6 +431,52 @@ class WorkerRunLifecycleTests(unittest.TestCase):
             assert refreshed_running is not None
             self.assertEqual(refreshed_running.status, "running")
 
+    def test_finalize_workflow_result_fails_on_unsupported_outcome(self) -> None:
+        now = datetime.now(timezone.utc)
+        with self.session_factory() as session:
+            _, run, _ = add_workflow_attempt(
+                session,
+                run_id="run-unsupported-outcome",
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                issue_key="TA-998",
+                issue_summary="unsupported outcome",
+                issue_description="desc",
+                repo_url="https://github.com/example/a",
+                workflow_status="running",
+                run_status="running",
+                created_at=now,
+                started_at=now,
+                last_heartbeat_at=now,
+                worker_service_instance_id="node-a:1234",
+            )
+            session.commit()
+            session.refresh(run)
+
+            unsupported_result = WorkflowResult(
+                outcome="success",  # typed baseline; overridden below for unsupported-path coverage
+                plan=PmPlan(
+                    plan_steps=["done"],
+                    acceptance_criteria=["done"],
+                    risks=[],
+                ),
+                pr_url=None,
+                summary=[],
+                test_guidance=[],
+                attempts=1,
+            )
+            object.__setattr__(unsupported_result, "outcome", "nonsense")
+
+            finalized = finalize_workflow_result(
+                session,
+                run=run,
+                workflow_result=unsupported_result,
+                stage_updates=[{"stage": "task_completed"}],
+                expected_worker_service_instance_id="node-a:1234",
+            )
+            self.assertEqual(finalized.status, "failed")
+            self.assertIn("Unsupported workflow outcome", finalized.last_error or "")
+
     def test_finalize_workflow_result_returns_run_when_ownership_is_lost(self) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:

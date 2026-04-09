@@ -17,7 +17,7 @@ from sqlalchemy import select
 from orchestrator.api.jira_oauth.service import jira_oauth_client, refresh_jira_connection_tokens
 from orchestrator.core.discord.notifications import send_tenant_discord_message
 from orchestrator.core.knowledge_exact_read import ExactReadRequest, exact_read_knowledge_source
-from orchestrator.core.knowledge_base import build_knowledge_prompt_context
+from orchestrator.core.knowledge_base import KnowledgeEmbeddingAccessMode, build_knowledge_prompt_context
 from orchestrator.core.platform_secret_service import resolve_platform_secret_ref
 from orchestrator.core.project_policy import resolve_effective_policy
 from orchestrator.core.run_human_input_service import create_human_input_request
@@ -228,6 +228,12 @@ class AgentToolContext:
     run_id: str | None
     repo_dir: Path
     run: Run | None = None
+
+
+def _knowledge_embedding_access_mode_for_context(context: AgentToolContext) -> KnowledgeEmbeddingAccessMode:
+    if context.run_id:
+        return KnowledgeEmbeddingAccessMode.LOCAL_ONLY
+    return KnowledgeEmbeddingAccessMode.BEST_EFFORT
 
 
 def _ensure_repo_checkout_exists(repo_dir: Path) -> None:
@@ -685,6 +691,7 @@ def _execute_knowledge_tool(
         query=query,
         max_items=max(1, min(max_items, 10)),
         max_chars=max(500, min(max_chars, 6000)),
+        embedding_access_mode=_knowledge_embedding_access_mode_for_context(context),
     )
     return {
         "query": query,

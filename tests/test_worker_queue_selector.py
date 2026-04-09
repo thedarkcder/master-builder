@@ -5,8 +5,10 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from orchestrator.core.worker.queue_selector import (
+    QueueClaimabilityReason,
     claim_next_queued_run,
     coerce_positive_int,
+    probe_claimable_queued_run,
     select_next_queued_run,
 )
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
@@ -420,3 +422,143 @@ class WorkerQueueSelectorTests(unittest.TestCase):
             )
             self.assertIsNotNone(macos_result.run)
             self.assertEqual(macos_result.run.run_id, "run-macos")
+
+    def test_probe_claimable_queued_run_reports_claimable_candidate_after_skipping_limited_tenant(self) -> None:
+        now = datetime.now(timezone.utc)
+        with self.session_factory() as session:
+            session.add(
+                Tenant(
+                    tenant_id="tenant-a",
+                    name="Tenant A",
+                    is_enabled=True,
+                    jira_config={},
+                    github_config={},
+                    repos_config={"github_repository": "https://github.com/example/a"},
+                    policy_config={"max_concurrent_runs": 1},
+                    discord_config=None,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.add(
+                Tenant(
+                    tenant_id="tenant-b",
+                    name="Tenant B",
+                    is_enabled=True,
+                    jira_config={},
+                    github_config={},
+                    repos_config={"github_repository": "https://github.com/example/b"},
+                    policy_config={"max_concurrent_runs": 1},
+                    discord_config=None,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            _add_run(
+                session,
+                now=now,
+                run_id="run-a-running",
+                tenant_id="tenant-a",
+                issue_key="MAB-910",
+                issue_summary="Tenant A running",
+                issue_description="running",
+                repo_url="https://github.com/example/a",
+                branch=None,
+                pr_url=None,
+                status="running",
+                plan=_plan_for_capability("linux"),
+                started_at=now,
+                finished_at=None,
+            )
+            _add_run(
+                session,
+                now=now,
+                run_id="run-a-queued",
+                tenant_id="tenant-a",
+                issue_key="MAB-911",
+                issue_summary="Tenant A queued",
+                issue_description="queued",
+                repo_url="https://github.com/example/a",
+                branch=None,
+                pr_url=None,
+                status="queued",
+                plan=_plan_for_capability("linux"),
+                started_at=None,
+                finished_at=None,
+            )
+            _add_run(
+                session,
+                now=now,
+                run_id="run-b-queued",
+                tenant_id="tenant-b",
+                issue_key="MAB-912",
+                issue_summary="Tenant B queued",
+                issue_description="queued",
+                repo_url="https://github.com/example/b",
+                branch=None,
+                pr_url=None,
+                status="queued",
+                plan=_plan_for_capability("linux"),
+                started_at=None,
+                finished_at=None,
+            )
+            session.commit()
+
+            probe = probe_claimable_queued_run(
+                session,
+                queued_status="queued",
+                running_status="running",
+                worker_capabilities={"linux"},
+            )
+
+            self.assertTrue(probe.claimable)
+            self.assertEqual(probe.reason, QueueClaimabilityReason.CLAIMABLE)
+            self.assertEqual(probe.run_id, "run-b-queued")
+            self.assertEqual(probe.tenant_id, "tenant-b")
+            self.assertEqual(probe.issue_key, "MAB-912")
+
+    def test_probe_claimable_queued_run_reports_capability_mismatch_when_no_worker_match(self) -> None:
+        now = datetime.now(timezone.utc)
+        with self.session_factory() as session:
+            session.add(
+                Tenant(
+                    tenant_id="tenant-capabilities",
+                    name="Tenant Capabilities",
+                    is_enabled=True,
+                    jira_config={},
+                    github_config={},
+                    repos_config={"github_repository": "https://github.com/example/mobile"},
+                    policy_config={"max_concurrent_runs": 2},
+                    discord_config=None,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            _add_run(
+                session,
+                now=now,
+                run_id="run-macos",
+                tenant_id="tenant-capabilities",
+                issue_key="IOS-10",
+                issue_summary="Build iOS app with SwiftUI",
+                issue_description="Implement iOS app shell",
+                repo_url="https://github.com/example/mobile",
+                branch=None,
+                pr_url=None,
+                status="queued",
+                plan=_plan_for_capability("macos"),
+                started_at=None,
+                finished_at=None,
+            )
+            session.commit()
+
+            probe = probe_claimable_queued_run(
+                session,
+                queued_status="queued",
+                running_status="running",
+                worker_capabilities={"linux"},
+            )
+
+            self.assertFalse(probe.claimable)
+            self.assertEqual(probe.reason, QueueClaimabilityReason.CAPABILITY_MISMATCH)
+            self.assertIsNone(probe.run_id)

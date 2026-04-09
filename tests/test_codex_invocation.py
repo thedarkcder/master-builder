@@ -4,6 +4,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from orchestrator.core.knowledge_base import KnowledgeEmbeddingAccessMode
 from orchestrator.core.runtime_invocation import (
     AgentInvocationContext,
     invoke_runtime_json,
@@ -577,6 +578,46 @@ class CodexInvocationTests(unittest.TestCase):
         self.assertEqual(payload, {"ok": True})
         self.assertEqual(captured["model_override"], "gpt-5.3-codex-spark")
         self.assertEqual(captured["reasoning_effort"], "high")
+
+    def test_invoke_runtime_json_uses_local_only_knowledge_lookup_for_worker_execution(self) -> None:
+        class _Runtime:
+            def run_json(self, **_kwargs):  # noqa: ANN003
+                return {"ok": True}
+
+        context = AgentInvocationContext(
+            channel="worker",
+            tenant_id="tenant-1",
+            project_id="proj-1",
+            command="workflow",
+            stage="dev",
+            working_dir=".",
+            run_id="run-1",
+        )
+
+        with (
+            patch("orchestrator.core.runtime_invocation._get_log_writer", return_value=self._Writer()),
+            patch(
+                "orchestrator.core.runtime_invocation._resolve_knowledge_policy_for_context",
+                return_value=("proj-1", True, "aggressive", "gpt-5.4", "medium", False),
+            ),
+            patch("orchestrator.core.runtime_invocation.create_session_factory"),
+            patch(
+                "orchestrator.core.runtime_invocation.build_knowledge_prompt_context",
+                return_value=SimpleNamespace(text="", citations=[]),
+            ) as knowledge_mock,
+        ):
+            payload = invoke_runtime_json(
+                runtime=_Runtime(),  # type: ignore[arg-type]
+                context=context,
+                system_prompt="system",
+                user_prompt="user",
+            )
+
+        self.assertEqual(payload, {"ok": True})
+        self.assertEqual(
+            knowledge_mock.call_args.kwargs["embedding_access_mode"],
+            KnowledgeEmbeddingAccessMode.LOCAL_ONLY,
+        )
 
     def test_invoke_runtime_json_prefers_scoped_reasoning_override_over_context_default(self) -> None:
         captured: dict[str, object] = {}

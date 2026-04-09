@@ -15,7 +15,7 @@ def _decision_result(*, outcome: str) -> DecisionEngineResult:
         gate_state = ExecutionGateState.ALLOW_EXECUTION
     elif outcome == "missing_ready_label":
         gate_state = ExecutionGateState.BLOCK_READY_LABEL
-    elif outcome in {"decision_gate_required", "gtd_required"}:
+    elif outcome in {"decision_gate_required", "gtd_required", "execution_blocked"}:
         gate_state = ExecutionGateState.BLOCK_DECISION
     else:
         gate_state = ExecutionGateState.POLICY_ERROR
@@ -37,12 +37,12 @@ def _decision_result(*, outcome: str) -> DecisionEngineResult:
                     tags=(),
                 ),
                 gtd=GoodToDoValidationResult(
-                    valid=outcome != "gtd_required",
-                    missing_criteria=("how_to_test",) if outcome == "gtd_required" else (),
-                    clarification_questions=("How do we test this?",) if outcome == "gtd_required" else (),
+                    valid=outcome not in {"gtd_required", "execution_blocked"},
+                    missing_criteria=("how_to_test",) if outcome in {"gtd_required", "execution_blocked"} else (),
+                    clarification_questions=("How do we test this?",) if outcome in {"gtd_required", "execution_blocked"} else (),
                 ),
             ),
-            block_reason=outcome if outcome in {"decision_gate_required", "gtd_required", "missing_ready_label"} else None,
+            block_reason=outcome if outcome in {"decision_gate_required", "gtd_required", "execution_blocked", "missing_ready_label"} else None,
             guidance=None,
             policy_error=None,
         ),
@@ -78,6 +78,14 @@ def test_resolve_run_gate_block_returns_gtd_details() -> None:
 
     assert block is not None
     assert block.reason == "gtd_required"
+    assert block.detail is None
+
+
+def test_resolve_run_gate_block_returns_execution_blocked_details() -> None:
+    block = resolve_run_gate_block(decision_result=_decision_result(outcome="execution_blocked"))
+
+    assert block is not None
+    assert block.reason == "execution_blocked"
     assert block.detail is None
 
 
