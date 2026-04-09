@@ -272,6 +272,16 @@ class AdminApiTests(unittest.TestCase):
             )
             session.commit()
 
+    def _default_app_id(self, tenant_id: str, project_id: str) -> str:
+        response = self.client.get(
+            f"/api/admin/tenants/{tenant_id}/projects/{project_id}/apps",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        apps = response.json()
+        self.assertGreaterEqual(len(apps), 1)
+        return str(apps[0]["app_id"])
+
     def _seed_workflow_attempt(
         self,
         *,
@@ -1247,7 +1257,7 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(get_response.json()["state"], "active")
         self.assertIsNone(get_response.json()["last_error"])
 
-    def test_project_deployment_config_round_trip_and_preserves_discord_config(self) -> None:
+    def test_project_app_deployment_config_round_trip_and_preserves_discord_config(self) -> None:
         payload = self._tenant_payload()
         self._insert_jira_connection(connection_id="conn-1")
         create_tenant = self.client.post(
@@ -1268,6 +1278,7 @@ class AdminApiTests(unittest.TestCase):
         )
         self.assertEqual(create_project.status_code, 201)
         project_id = create_project.json()["project_id"]
+        app_id = self._default_app_id("tenant-a", project_id)
 
         session_factory = create_session_factory(self.database_url)
         with session_factory() as session:
@@ -1299,7 +1310,7 @@ class AdminApiTests(unittest.TestCase):
         }
 
         put_response = self.client.put(
-            f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-config",
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-config",
             json=deployment_config_payload,
             auth=("admin", "secret"),
         )
@@ -1312,7 +1323,7 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(put_response.json()["backup_policies"], deployment_config_payload["backup_policies"])
 
         get_response = self.client.get(
-            f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-config",
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-config",
             auth=("admin", "secret"),
         )
         self.assertEqual(get_response.status_code, 200)
@@ -1345,12 +1356,12 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(second_tenant_create.status_code, 201)
 
         scoping_response = self.client.get(
-            f"/api/admin/tenants/{second_tenant_create.json()['tenant_id']}/projects/{project_id}/deployment-config",
+            f"/api/admin/tenants/{second_tenant_create.json()['tenant_id']}/projects/{project_id}/apps/{app_id}/deployment-config",
             auth=("admin", "secret"),
         )
         self.assertEqual(scoping_response.status_code, 404)
 
-    def test_project_deployment_config_validation_rejects_duplicate_entries_and_missing_resource_refs(self) -> None:
+    def test_project_app_deployment_config_validation_rejects_duplicate_entries_and_missing_resource_refs(self) -> None:
         payload = self._tenant_payload()
         self._insert_jira_connection(connection_id="conn-1")
         create_tenant = self.client.post(
@@ -1371,6 +1382,7 @@ class AdminApiTests(unittest.TestCase):
         )
         self.assertEqual(create_project.status_code, 201)
         project_id = create_project.json()["project_id"]
+        app_id = self._default_app_id("tenant-a", project_id)
 
         baseline_payload = {
             "enabled": True,
@@ -1381,7 +1393,7 @@ class AdminApiTests(unittest.TestCase):
             "backup_policies": [{"key": "db-daily", "resource_key": "db", "schedule": "0 2 * * *"}],
         }
         baseline_response = self.client.put(
-            f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-config",
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-config",
             json=baseline_payload,
             auth=("admin", "secret"),
         )
@@ -1448,7 +1460,7 @@ class AdminApiTests(unittest.TestCase):
         for case_name, invalid_payload in invalid_payloads:
             with self.subTest(case_name=case_name):
                 response = self.client.put(
-                    f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-config",
+                    f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-config",
                     json=invalid_payload,
                     auth=("admin", "secret"),
                 )
@@ -1468,7 +1480,7 @@ class AdminApiTests(unittest.TestCase):
                 )
 
                 get_response = self.client.get(
-                    f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-config",
+                    f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-config",
                     auth=("admin", "secret"),
                 )
                 self.assertEqual(get_response.status_code, 200)
@@ -1476,7 +1488,7 @@ class AdminApiTests(unittest.TestCase):
                 self.assertEqual(get_response.json()["resources"], baseline_payload["resources"])
                 self.assertEqual(get_response.json()["backup_policies"], baseline_payload["backup_policies"])
 
-    def test_project_deployment_release_create_and_list_round_trip(self) -> None:
+    def test_project_app_deployment_release_create_and_list_round_trip(self) -> None:
         payload = self._tenant_payload()
         self._insert_jira_connection(connection_id="conn-1")
         create_tenant = self.client.post(
@@ -1525,8 +1537,9 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(create_project.status_code, 201)
         project_id = create_project.json()["project_id"]
 
+        default_app_id = self._default_app_id("tenant-a", project_id)
         deployment_config_response = self.client.put(
-            f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-config",
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{default_app_id}/deployment-config",
             json={
                 "enabled": True,
                 "environment_name": "production",
@@ -1538,13 +1551,6 @@ class AdminApiTests(unittest.TestCase):
             auth=("admin", "secret"),
         )
         self.assertEqual(deployment_config_response.status_code, 200)
-
-        default_app_response = self.client.get(
-            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps",
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(default_app_response.status_code, 200)
-        default_app_id = default_app_response.json()[0]["app_id"]
 
         with (
             patch(
@@ -1561,7 +1567,7 @@ class AdminApiTests(unittest.TestCase):
             ),
         ):
             create_release_response = self.client.post(
-                f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-releases",
+                f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{default_app_id}/deployment-releases",
                 json={
                     "git_ref": "refs/heads/main",
                     "commit_sha": "abc123def456",
@@ -1592,7 +1598,7 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(release_payload["provider_context"]["api_base_url"], "https://builder.apps.example.com/api/v1")
 
         list_release_response = self.client.get(
-            f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-releases",
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{default_app_id}/deployment-releases",
             auth=("admin", "secret"),
         )
         self.assertEqual(list_release_response.status_code, 200)
@@ -1724,13 +1730,6 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(len(app_release_list_response.json()), 1)
         self.assertEqual(app_release_list_response.json()[0]["release_id"], release_id)
 
-        project_release_list_response = self.client.get(
-            f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-releases",
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(project_release_list_response.status_code, 200)
-        self.assertEqual(project_release_list_response.json(), [])
-
         update_release_status_response = self.client.patch(
             f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-releases/{release_id}/status",
             json={"status": "failed", "last_error": "healthcheck failed"},
@@ -1751,7 +1750,7 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(overview_payload["latest_failures"][0]["app_id"], app_id)
         self.assertEqual(overview_payload["latest_failures"][0]["status"], "failed")
 
-    def test_project_deployment_release_create_requires_active_plane_and_ready_project_config(self) -> None:
+    def test_project_app_deployment_release_create_requires_active_plane_and_ready_project_config(self) -> None:
         payload = self._tenant_payload()
         self._insert_jira_connection(connection_id="conn-1")
         create_tenant = self.client.post(
@@ -1772,9 +1771,10 @@ class AdminApiTests(unittest.TestCase):
         )
         self.assertEqual(create_project.status_code, 201)
         project_id = create_project.json()["project_id"]
+        app_id = self._default_app_id("tenant-a", project_id)
 
         no_plane_response = self.client.post(
-            f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-releases",
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-releases",
             json={"git_ref": "refs/heads/main"},
             auth=("admin", "secret"),
         )
@@ -1801,7 +1801,7 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(plane_response.status_code, 200)
 
         missing_project_config_response = self.client.post(
-            f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-releases",
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-releases",
             json={"git_ref": "refs/heads/main"},
             auth=("admin", "secret"),
         )
@@ -1809,7 +1809,7 @@ class AdminApiTests(unittest.TestCase):
         self.assertIn("environment_name", missing_project_config_response.json()["detail"])
 
         disabled_config_response = self.client.put(
-            f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-config",
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-config",
             json={
                 "enabled": False,
                 "environment_name": "production",
@@ -1820,7 +1820,7 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(disabled_config_response.status_code, 200)
 
         disabled_release_response = self.client.post(
-            f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-releases",
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-releases",
             json={"git_ref": "refs/heads/main"},
             auth=("admin", "secret"),
         )
@@ -1828,13 +1828,13 @@ class AdminApiTests(unittest.TestCase):
         self.assertIn("disabled", disabled_release_response.json()["detail"].lower())
 
         list_release_response = self.client.get(
-            f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-releases",
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-releases",
             auth=("admin", "secret"),
         )
         self.assertEqual(list_release_response.status_code, 200)
         self.assertEqual(list_release_response.json(), [])
 
-    def test_project_deployment_release_status_transitions_and_detail_lookup(self) -> None:
+    def test_project_app_deployment_release_status_transitions_and_detail_lookup(self) -> None:
         payload = self._tenant_payload()
         self._insert_jira_connection(connection_id="conn-1")
         create_tenant = self.client.post(
@@ -1882,9 +1882,10 @@ class AdminApiTests(unittest.TestCase):
         )
         self.assertEqual(create_project.status_code, 201)
         project_id = create_project.json()["project_id"]
+        app_id = self._default_app_id("tenant-a", project_id)
 
         deployment_config_response = self.client.put(
-            f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-config",
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-config",
             json={
                 "enabled": True,
                 "environment_name": "production",
@@ -1909,7 +1910,7 @@ class AdminApiTests(unittest.TestCase):
             ),
         ):
             create_release_response = self.client.post(
-                f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-releases",
+                f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-releases",
                 json={"git_ref": "refs/heads/main"},
                 auth=("admin", "secret"),
             )
@@ -1917,7 +1918,7 @@ class AdminApiTests(unittest.TestCase):
         release_id = create_release_response.json()["release_id"]
 
         provisioning_response = self.client.patch(
-            f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-releases/{release_id}/status",
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-releases/{release_id}/status",
             json={"status": "provisioning"},
             auth=("admin", "secret"),
         )
@@ -1925,7 +1926,7 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(provisioning_response.json()["status"], "provisioning")
 
         deploying_response = self.client.patch(
-            f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-releases/{release_id}/status",
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-releases/{release_id}/status",
             json={"status": "deploying", "deployment_uuid": "deployment-uuid-2b"},
             auth=("admin", "secret"),
         )
@@ -1934,7 +1935,7 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(deploying_response.json()["provider_context"]["deployment_uuid"], "deployment-uuid-2b")
 
         live_response = self.client.patch(
-            f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-releases/{release_id}/status",
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-releases/{release_id}/status",
             json={"status": "live"},
             auth=("admin", "secret"),
         )
@@ -1943,7 +1944,7 @@ class AdminApiTests(unittest.TestCase):
         self.assertIsNotNone(live_response.json()["completed_at"])
 
         detail_response = self.client.get(
-            f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-releases/{release_id}",
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-releases/{release_id}",
             auth=("admin", "secret"),
         )
         self.assertEqual(detail_response.status_code, 200)
@@ -1958,7 +1959,7 @@ class AdminApiTests(unittest.TestCase):
             self.assertEqual(persisted_release.provider_context["deployment_uuid"], "deployment-uuid-2b")
             self.assertIsNotNone(persisted_release.completed_at)
 
-    def test_project_deployment_release_status_rejects_invalid_transition(self) -> None:
+    def test_project_app_deployment_release_status_rejects_invalid_transition(self) -> None:
         payload = self._tenant_payload()
         self._insert_jira_connection(connection_id="conn-1")
         create_tenant = self.client.post(
@@ -2006,9 +2007,10 @@ class AdminApiTests(unittest.TestCase):
         )
         self.assertEqual(create_project.status_code, 201)
         project_id = create_project.json()["project_id"]
+        app_id = self._default_app_id("tenant-a", project_id)
 
         deployment_config_response = self.client.put(
-            f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-config",
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-config",
             json={
                 "enabled": True,
                 "environment_name": "production",
@@ -2033,7 +2035,7 @@ class AdminApiTests(unittest.TestCase):
             ),
         ):
             create_release_response = self.client.post(
-                f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-releases",
+                f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-releases",
                 json={"git_ref": "refs/heads/main"},
                 auth=("admin", "secret"),
             )
@@ -2041,7 +2043,7 @@ class AdminApiTests(unittest.TestCase):
         release_id = create_release_response.json()["release_id"]
 
         invalid_transition_response = self.client.patch(
-            f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-releases/{release_id}/status",
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-releases/{release_id}/status",
             json={"status": "live"},
             auth=("admin", "secret"),
         )
@@ -2049,13 +2051,13 @@ class AdminApiTests(unittest.TestCase):
         self.assertIn("cannot transition", invalid_transition_response.json()["detail"])
 
         detail_response = self.client.get(
-            f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-releases/{release_id}",
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-releases/{release_id}",
             auth=("admin", "secret"),
         )
         self.assertEqual(detail_response.status_code, 200)
         self.assertEqual(detail_response.json()["status"], "queued")
 
-    def test_project_deployment_execution_endpoints_apply_resources_domains_backups_and_restore_contracts(self) -> None:
+    def test_project_app_deployment_execution_endpoints_apply_resources_domains_backups_and_restore_contracts(self) -> None:
         payload = self._tenant_payload()
         self._insert_jira_connection(connection_id="conn-1")
         create_tenant = self.client.post(
@@ -2103,9 +2105,10 @@ class AdminApiTests(unittest.TestCase):
         )
         self.assertEqual(create_project.status_code, 201)
         project_id = create_project.json()["project_id"]
+        app_id = self._default_app_id("tenant-a", project_id)
 
         deployment_config_response = self.client.put(
-            f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-config",
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-config",
             json={
                 "enabled": True,
                 "environment_name": "production",
@@ -2179,7 +2182,7 @@ class AdminApiTests(unittest.TestCase):
             ),
         ):
             create_release_response = self.client.post(
-                f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-releases",
+                f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-releases",
                 json={"git_ref": "refs/heads/main"},
                 auth=("admin", "secret"),
             )
@@ -2212,22 +2215,22 @@ class AdminApiTests(unittest.TestCase):
             ) as trigger_backup_mock,
         ):
             resources_response = self.client.post(
-                f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-resources/apply",
+                f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-resources/apply",
                 json={"resource_keys": ["db", "cache", "files", "bucket"]},
                 auth=("admin", "secret"),
             )
             domains_response = self.client.post(
-                f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-domains/apply",
+                f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-domains/apply",
                 json={"domain_keys": ["primary", "api"]},
                 auth=("admin", "secret"),
             )
             backups_response = self.client.post(
-                f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-backups/apply",
+                f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-backups/apply",
                 json={"backup_keys": ["db-daily", "files-daily"]},
                 auth=("admin", "secret"),
             )
             trigger_response = self.client.post(
-                f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-backups/trigger",
+                f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-backups/trigger",
                 json={"backup_keys": ["db-daily"]},
                 auth=("admin", "secret"),
             )
@@ -2266,7 +2269,7 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(trigger_response.json()["items"][0]["status"], "applied")
 
         restore_response = self.client.post(
-            f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-backups/restore",
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-backups/restore",
             json={"backup_key": "db-daily", "execution_uuid": "execution-uuid-1"},
             auth=("admin", "secret"),
         )
@@ -2300,7 +2303,7 @@ class AdminApiTests(unittest.TestCase):
                 "backup-uuid-1",
             )
 
-    def test_project_deployment_execution_endpoints_enforce_tenant_scoping(self) -> None:
+    def test_project_app_deployment_execution_endpoints_enforce_tenant_scoping(self) -> None:
         payload = self._tenant_payload()
         self._insert_jira_connection(connection_id="conn-1")
         create_tenant = self.client.post(
@@ -2328,15 +2331,16 @@ class AdminApiTests(unittest.TestCase):
         )
         self.assertEqual(project_create.status_code, 201)
         project_id = project_create.json()["project_id"]
+        app_id = self._default_app_id("tenant-a", project_id)
 
         cross_tenant_response = self.client.post(
-            f"/api/admin/tenants/{second_tenant_create.json()['tenant_id']}/projects/{project_id}/deployment-resources/apply",
+            f"/api/admin/tenants/{second_tenant_create.json()['tenant_id']}/projects/{project_id}/apps/{app_id}/deployment-resources/apply",
             json={},
             auth=("admin", "secret"),
         )
         self.assertEqual(cross_tenant_response.status_code, 404)
 
-    def test_project_apps_default_app_is_created_and_legacy_deployment_config_uses_it(self) -> None:
+    def test_project_apps_default_app_is_created_and_used_for_app_scoped_deployment_config(self) -> None:
         payload = self._tenant_payload()
         self._insert_jira_connection(connection_id="conn-1")
         create_tenant = self.client.post(
@@ -2387,7 +2391,7 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(update_app_response.status_code, 200, update_app_response.text)
 
         deployment_config_response = self.client.get(
-            f"/api/admin/tenants/tenant-a/projects/{project_id}/deployment-config",
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{default_app['app_id']}/deployment-config",
             auth=("admin", "secret"),
         )
         self.assertEqual(deployment_config_response.status_code, 200)

@@ -1,4 +1,4 @@
-export type ProjectSection = "overview" | "apps" | "settings" | "deployment" | "runs" | "webhooks" | "notifications" | "automations" | "secrets" | "danger";
+export type ProjectSection = "overview" | "apps" | "settings" | "runs" | "webhooks" | "notifications" | "automations" | "secrets" | "danger";
 export type RunPanel = "overview" | "agents" | "diagnostics" | "cost";
 
 function encodeSegment(value: string): string {
@@ -58,10 +58,12 @@ export function resolveProjectSection(pathname: string): ProjectSection | null {
   if (!rawSection) {
     return "overview";
   }
+  if (rawSection === "deployment") {
+    return "apps";
+  }
   if (
     rawSection === "apps" ||
     rawSection === "settings" ||
-    rawSection === "deployment" ||
     rawSection === "runs" ||
     rawSection === "webhooks" ||
     rawSection === "notifications" ||

@@ -141,3 +141,4 @@
 
 - When a worker parent decides whether to spawn child processors, never use a looser "any queued row exists" check than the child uses to claim work. Share one typed claimability contract between the supervisor preflight and the claim path or the runtime will churn, misreport idleness, and hide the real blocker.
 - When the user explicitly asks for subagent-heavy execution and says to complete without frequent check-ins, keep work parallelized end-to-end, avoid pausing after partial slices, and always finish with full verification evidence before reporting completion.
+- When introducing a new internal domain term (for example `app` vs `project`), align UI language, API shape, and PR wording in the same change. Do not ship parallel route contracts that keep the old mental model alive unless the user explicitly asks for backward compatibility.

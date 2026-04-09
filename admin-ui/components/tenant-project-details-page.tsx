@@ -19,7 +19,6 @@ import {
 
 import { useAuth } from "@/components/auth-provider";
 import { TenantProjectAppsPage } from "@/components/tenant-project-apps-page";
-import { ProjectDeploymentContent } from "@/components/tenant-project-deployment-page";
 import { ProjectAutomationsContent, ProjectNotificationsContent } from "@/components/tenant-project-discord-page";
 import { CodexModelSelect } from "@/components/codex-model-select";
 import { OverrideSegmentedControl } from "@/components/override-segmented-control";
@@ -53,7 +52,7 @@ import {
 } from "@/lib/auth-routing";
 import { buildProjectSectionPath, buildRunDetailPath, resolveProjectSection } from "@/lib/dashboard-paths";
 
-type Tab = "overview" | "apps" | "settings" | "deployment" | "runs" | "webhooks" | "notifications" | "automations" | "secrets" | "danger";
+type Tab = "overview" | "apps" | "settings" | "runs" | "webhooks" | "notifications" | "automations" | "secrets" | "danger";
 type SettingsSection = "general" | "ai" | "automation" | "knowledge" | "governance";
 type OverrideToggleValue = "inherit" | "enabled" | "disabled";
 type RequireAgentsValue = "inherit" | "required";
@@ -87,7 +86,6 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "overview", label: "Overview" },
   { id: "apps", label: "Apps" },
   { id: "settings", label: "Settings" },
-  { id: "deployment", label: "Deployment" },
   { id: "runs", label: "Runs" },
   { id: "webhooks", label: "Webhooks" },
   { id: "notifications", label: "Notifications" },
@@ -264,7 +262,7 @@ export function TenantProjectDetailsPage() {
     if (allowProjectManagement) {
       return resolved;
     }
-    return resolved === "apps" || resolved === "settings" || resolved === "deployment" || resolved === "notifications" || resolved === "automations" || resolved === "secrets" || resolved === "danger"
+    return resolved === "apps" || resolved === "settings" || resolved === "notifications" || resolved === "automations" || resolved === "secrets" || resolved === "danger"
       ? "overview"
       : resolved;
   }, [allowProjectManagement, pathname]);
@@ -751,11 +749,6 @@ export function TenantProjectDetailsPage() {
                       {allowProjectManagement ? (
                         <Button asChild size="sm" variant="outline">
                           <Link href={buildProjectSectionPath(params.tenantId, params.projectId, "settings")}>Open settings</Link>
-                        </Button>
-                      ) : null}
-                      {allowProjectManagement ? (
-                        <Button asChild size="sm" variant="outline">
-                          <Link href={buildProjectSectionPath(params.tenantId, params.projectId, "deployment")}>Deployment</Link>
                         </Button>
                       ) : null}
                       <Button asChild size="sm" variant="outline">
@@ -1355,11 +1348,6 @@ export function TenantProjectDetailsPage() {
       {/* ── Deployment tab ─────────────────────────────────────────────── */}
       {activeTab === "apps" ? (
         <TenantProjectAppsPage tenantId={params.tenantId} projectId={params.projectId} credentials={credentials} />
-      ) : null}
-
-      {/* ── Deployment tab ─────────────────────────────────────────────── */}
-      {activeTab === "deployment" ? (
-        <ProjectDeploymentContent tenantId={params.tenantId} projectId={params.projectId} credentials={credentials} />
       ) : null}
 
       {/* ── Runs tab ─────────────────────────────────────────────────────── */}

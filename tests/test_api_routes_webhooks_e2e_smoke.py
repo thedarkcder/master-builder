@@ -488,12 +488,72 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 },
                 expected_statuses=(200,),
             ),
-            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/deployment-config"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/deployment-config",
+            ("GET", "/api/admin/tenants/{tenant_id}/deployments/overview"): RouteScenario(
+                path="/api/admin/tenants/example/deployments/overview",
                 auth=admin,
             ),
-            ("PUT", "/api/admin/tenants/{tenant_id}/projects/{project_id}/deployment-config"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/deployment-config",
+            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps"): RouteScenario(
+                path="/api/admin/tenants/example/projects/example-default/apps",
+                auth=admin,
+            ),
+            ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps"): RouteScenario(
+                path="/api/admin/tenants/example/projects/example-default/apps",
+                auth=admin,
+                json={
+                    "name": "smoke app",
+                    "slug": "smoke-app",
+                    "source_path": "apps/smoke",
+                    "build_strategy": "dockerfile",
+                    "deployment_config": {
+                        "enabled": True,
+                        "environment_name": "production",
+                        "source_strategy": "dockerfile",
+                        "domains": [],
+                        "resources": [],
+                        "backup_policies": [],
+                    },
+                },
+                expected_statuses=(201,),
+            ),
+            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}"): RouteScenario(
+                path="/api/admin/tenants/example/projects/example-default/apps/app-missing",
+                auth=admin,
+                expected_statuses=(404,),
+            ),
+            ("PUT", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}"): RouteScenario(
+                path="/api/admin/tenants/example/projects/example-default/apps/app-missing",
+                auth=admin,
+                json={"name": "updated app"},
+                expected_statuses=(404,),
+            ),
+            ("PATCH", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}"): RouteScenario(
+                path="/api/admin/tenants/example/projects/example-default/apps/app-missing",
+                auth=admin,
+                json={"name": "updated app"},
+                expected_statuses=(404,),
+            ),
+            ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/analyze"): RouteScenario(
+                path="/api/admin/tenants/example/projects/example-default/apps/analyze",
+                auth=admin,
+                json={"planner_version": "smoke-v1"},
+                expected_statuses=(201,),
+            ),
+            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/analysis-runs"): RouteScenario(
+                path="/api/admin/tenants/example/projects/example-default/apps/analysis-runs",
+                auth=admin,
+            ),
+            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/analysis-runs/{run_id}"): RouteScenario(
+                path="/api/admin/tenants/example/projects/example-default/apps/analysis-runs/run-missing",
+                auth=admin,
+                expected_statuses=(404,),
+            ),
+            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-config"): RouteScenario(
+                path="/api/admin/tenants/example/projects/example-default/apps/app-missing/deployment-config",
+                auth=admin,
+                expected_statuses=(404,),
+            ),
+            ("PUT", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-config"): RouteScenario(
+                path="/api/admin/tenants/example/projects/example-default/apps/app-missing/deployment-config",
                 auth=admin,
                 json={
                     "enabled": True,
@@ -503,62 +563,69 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                     "resources": [],
                     "backup_policies": [],
                 },
-                expected_statuses=(200,),
+                expected_statuses=(404,),
             ),
-            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/deployment-releases"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/deployment-releases",
+            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-releases"): RouteScenario(
+                path="/api/admin/tenants/example/projects/example-default/apps/app-missing/deployment-releases",
                 auth=admin,
+                expected_statuses=(404,),
             ),
-            ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/deployment-releases"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/deployment-releases",
+            ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-releases"): RouteScenario(
+                path="/api/admin/tenants/example/projects/example-default/apps/app-missing/deployment-releases",
                 auth=admin,
                 json={
                     "git_ref": "main",
                     "commit_sha": "abcdef",
                     "reason": "smoke",
                 },
-                expected_statuses=(201, 409),
+                expected_statuses=(404,),
             ),
-            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/deployment-releases/{release_id}"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/deployment-releases/release-missing",
+            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-releases/{release_id}"): RouteScenario(
+                path="/api/admin/tenants/example/projects/example-default/apps/app-missing/deployment-releases/release-missing",
                 auth=admin,
                 expected_statuses=(404,),
             ),
-            ("PATCH", "/api/admin/tenants/{tenant_id}/projects/{project_id}/deployment-releases/{release_id}/status"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/deployment-releases/release-missing/status",
+            ("PATCH", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-releases/{release_id}/status"): RouteScenario(
+                path="/api/admin/tenants/example/projects/example-default/apps/app-missing/deployment-releases/release-missing/status",
                 auth=admin,
                 json={"status": "provisioning"},
                 expected_statuses=(404,),
             ),
-            ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/deployment-resources/apply"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/deployment-resources/apply",
+            ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-resources/apply"): RouteScenario(
+                path="/api/admin/tenants/example/projects/example-default/apps/app-missing/deployment-resources/apply",
                 auth=admin,
                 json={"resource_keys": []},
-                expected_statuses=(200,),
+                expected_statuses=(404,),
             ),
-            ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/deployment-domains/apply"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/deployment-domains/apply",
+            ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-domains/apply"): RouteScenario(
+                path="/api/admin/tenants/example/projects/example-default/apps/app-missing/deployment-domains/apply",
                 auth=admin,
                 json={"domain_keys": []},
-                expected_statuses=(200,),
+                expected_statuses=(404,),
             ),
-            ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/deployment-backups/apply"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/deployment-backups/apply",
+            ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-backups/apply"): RouteScenario(
+                path="/api/admin/tenants/example/projects/example-default/apps/app-missing/deployment-backups/apply",
                 auth=admin,
                 json={"backup_keys": []},
-                expected_statuses=(200,),
+                expected_statuses=(404,),
             ),
-            ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/deployment-backups/trigger"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/deployment-backups/trigger",
+            ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-backups/trigger"): RouteScenario(
+                path="/api/admin/tenants/example/projects/example-default/apps/app-missing/deployment-backups/trigger",
                 auth=admin,
                 json={"backup_keys": []},
-                expected_statuses=(200,),
+                expected_statuses=(404,),
             ),
-            ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/deployment-backups/restore"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/deployment-backups/restore",
+            ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-backups/request"): RouteScenario(
+                path="/api/admin/tenants/example/projects/example-default/apps/app-missing/deployment-backups/request",
+                auth=admin,
+                json={"backup_keys": []},
+                expected_statuses=(404,),
+            ),
+            ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-backups/restore"): RouteScenario(
+                path="/api/admin/tenants/example/projects/example-default/apps/app-missing/deployment-backups/restore",
                 auth=admin,
                 json={"backup_key": "daily"},
-                expected_statuses=(200,),
+                expected_statuses=(404,),
             ),
             ("GET", "/api/admin/tenants/{tenant_id}/delivery-summary"): RouteScenario(
                 path="/api/admin/tenants/example/delivery-summary",

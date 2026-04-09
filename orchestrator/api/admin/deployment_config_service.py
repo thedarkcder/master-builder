@@ -83,7 +83,6 @@ def ensure_project_default_app(
         updated_at=now,
     )
     session.add(default_app)
-    session.flush()
     return default_app
 
 
