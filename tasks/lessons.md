@@ -140,3 +140,4 @@
 
 - When the user asks to fix all architecture findings in one pass, include contract-level tests for each seam and run the broad affected suite before closing; targeted green tests are not enough if neighboring lifecycle contracts can still regress.
 - When replacing fixed-stage workflows with catalog-driven team runs, remove legacy adapters and fallback UI branches in the same change; leaving read-time fallback logic creates hidden dual contracts that break invariants.
+- Before saying a branch is merge-ready, verify both unresolved PR review threads and check-run failures; a green local suite is not sufficient if CI workflow logic or reviewer blockers are still open.

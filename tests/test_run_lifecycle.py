@@ -4,6 +4,8 @@ from datetime import datetime, timezone
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from sqlalchemy.exc import IntegrityError
+
 from orchestrator.core.config import get_settings
 from orchestrator.core.runs import (
     RUN_DEDUPE_SCOPE_ISSUE_EXECUTION,
@@ -416,6 +418,42 @@ class RunLifecycleTests(unittest.TestCase):
             else:
                 os.environ["ORCHESTRATOR_ORCHESTRATION_BACKEND"] = previous_backend
             get_settings.cache_clear()
+
+    def test_enqueue_attempt_integrity_conflict_returns_transition_error(self) -> None:
+        with self.session_factory() as session:
+            with patch("orchestrator.core.runs.start_team_run_workflow_for_run"):
+                first = enqueue_run(
+                    session,
+                    tenant_id="tenant-runs",
+                    project_id=None,
+                    issue_key="TP-918",
+                )
+            workflow = session.get(WorkflowExecution, first.run.workflow_id)
+            assert workflow is not None
+            workflow.status = "waiting_for_input"
+            session.commit()
+
+            with patch.object(
+                session,
+                "commit",
+                side_effect=IntegrityError("insert into runs", {"attempt_number": 2}, Exception("duplicate")),
+            ):
+                with self.assertRaises(RunStateTransitionError) as exc_info:
+                    enqueue_run(
+                        session,
+                        tenant_id="tenant-runs",
+                        project_id=None,
+                        issue_key="TP-918",
+                        bootstrap=RunBootstrap(
+                            workflow_id=workflow.workflow_id,
+                            parent_run_id=first.run.run_id,
+                            entry_mode="resume",
+                            entry_stage="review",
+                            plan=ExecutionSnapshot.empty().dump(),
+                        ),
+                    )
+
+            self.assertIn("concurrent attempt creation", str(exc_info.exception))
 
     def test_resume_attempt_for_temporal_workflow_keeps_temporal_ownership(self) -> None:
         previous_backend = os.environ.get("ORCHESTRATOR_ORCHESTRATION_BACKEND")

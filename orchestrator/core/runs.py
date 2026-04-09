@@ -570,7 +570,21 @@ def enqueue_attempt_for_workflow(
         run_id=run.run_id,
         issue_key=workflow.issue_key,
     )
-    session.commit()
+    try:
+        session.commit()
+    except IntegrityError as exc:
+        session.rollback()
+        refreshed_workflow = session.get(WorkflowExecution, workflow_id)
+        if (
+            refreshed_workflow is not None
+            and refreshed_workflow.status in {RUN_STATUS_QUEUED, RUN_STATUS_RUNNING}
+        ):
+            active_run = _run_for_workflow(session, refreshed_workflow)
+            if active_run is not None and active_run.status in ACTIVE_RUN_STATUSES:
+                return EnqueueRunResult(enqueued=False, reason="run_already_active", run=active_run)
+        raise RunStateTransitionError(
+            f"Failed to enqueue workflow attempt for {workflow_id} due to concurrent attempt creation"
+        ) from exc
     session.refresh(run)
     _maybe_start_temporal_run_workflow(session=session, run=run)
     return EnqueueRunResult(enqueued=True, reason=None, run=run)

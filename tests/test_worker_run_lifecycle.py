@@ -359,6 +359,49 @@ class WorkerRunLifecycleTests(unittest.TestCase):
             self.assertEqual(finalized.plan["stages"]["pm"]["status"], "completed")
             self.assertEqual(finalized.plan["context"]["trigger_context"], {"source": "manual"})
 
+    def test_finalize_blocked_result_preserves_workflow_blocked_reason(self) -> None:
+        now = datetime.now(timezone.utc)
+        with self.session_factory() as session:
+            _, run, _ = add_workflow_attempt(
+                session,
+                run_id="run-blocked-finalize",
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                issue_key="TA-206",
+                issue_summary="blocked workflow finalization",
+                issue_description="desc",
+                repo_url="https://github.com/example/a",
+                workflow_status="running",
+                run_status="running",
+                created_at=now,
+                started_at=now,
+            )
+            session.commit()
+            session.refresh(run)
+
+            finalized = finalize_workflow_result(
+                session,
+                run=run,
+                workflow_result=WorkflowResult(
+                    outcome="blocked",
+                    plan=PmPlan(plan_steps=["review"], acceptance_criteria=["approval"], risks=[]),
+                    pr_url=None,
+                    summary=["Blocked pending human approval"],
+                    test_guidance=[],
+                    attempts=1,
+                    blocker_message="Awaiting compliance sign-off",
+                ),
+                stage_updates=[{"stage": "approval_wait"}],
+            )
+
+            self.assertEqual(finalized.status, "blocked")
+            self.assertEqual(finalized.last_error, "Awaiting compliance sign-off")
+            workflow = self._get_workflow(session, issue_key="TA-206")
+            assert workflow is not None
+            self.assertEqual(workflow.status, "blocked")
+            self.assertEqual(workflow.blocked_reason, "Awaiting compliance sign-off")
+            self.assertIsNone(workflow.finished_at)
+
     def test_start_run_returns_none_when_status_does_not_match_expected(self) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:

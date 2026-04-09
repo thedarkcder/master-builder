@@ -281,9 +281,9 @@ def finalize_workflow_result(
         workflow.status = run.status
         workflow.last_error = run.last_error
         workflow.active_run_id = run.run_id
-        workflow.finished_at = run.finished_at
+        workflow.finished_at = None if run.status == RUN_STATUS_BLOCKED else run.finished_at
         workflow.updated_at = run.finished_at or datetime.now(timezone.utc)
-        workflow.blocked_reason = None
+        workflow.blocked_reason = run.last_error if run.status == RUN_STATUS_BLOCKED else None
     session.commit()
     session.refresh(run)
     return run

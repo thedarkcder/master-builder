@@ -49,7 +49,14 @@ jobs:
 
           first_file_named() {
             local filename="$1"
-            git ls-files | awk -F/ -v filename="$filename" '$NF==filename {print; exit}'
+            local path
+            while IFS= read -r path; do
+              if [[ "${path##*/}" == "$filename" ]]; then
+                printf '%s\n' "$path"
+                return 0
+              fi
+            done < <(git ls-files)
+            return 0
           }
 
           # Java detection
