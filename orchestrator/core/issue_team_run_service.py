@@ -8,6 +8,12 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from orchestrator.core.config import get_settings
+from orchestrator.core.issue_workflow_contract import (
+    ISSUE_WORKFLOW_STAGE_TO_EXECUTOR_KIND,
+    issue_workflow_stage_for_executor_kind as _issue_workflow_stage_for_executor_kind,
+    issue_workflow_task_key_for_stage,
+    is_issue_workflow_executor_kind as _is_issue_workflow_executor_kind,
+)
 from orchestrator.core.project_policy import resolve_effective_policy
 from orchestrator.core.runs import (
     RUN_STATUS_BLOCKED,
@@ -58,17 +64,10 @@ class IssueTeamTaskExecution:
     last_error: str | None = None
 
 
-PM_EXECUTOR_KIND = "workflow.pm"
-DEV_EXECUTOR_KIND = "workflow.dev"
-TEST_EXECUTOR_KIND = "workflow.test"
-REVIEW_EXECUTOR_KIND = "workflow.review"
-EXECUTOR_KIND_TO_STAGE = {
-    PM_EXECUTOR_KIND: "pm",
-    DEV_EXECUTOR_KIND: "dev",
-    TEST_EXECUTOR_KIND: "test",
-    REVIEW_EXECUTOR_KIND: "review",
-}
-STAGE_TO_EXECUTOR_KIND = {stage: executor_kind for executor_kind, stage in EXECUTOR_KIND_TO_STAGE.items()}
+PM_EXECUTOR_KIND = ISSUE_WORKFLOW_STAGE_TO_EXECUTOR_KIND["pm"]
+DEV_EXECUTOR_KIND = ISSUE_WORKFLOW_STAGE_TO_EXECUTOR_KIND["dev"]
+TEST_EXECUTOR_KIND = ISSUE_WORKFLOW_STAGE_TO_EXECUTOR_KIND["test"]
+REVIEW_EXECUTOR_KIND = ISSUE_WORKFLOW_STAGE_TO_EXECUTOR_KIND["review"]
 
 
 def _now() -> datetime:
@@ -80,16 +79,14 @@ def _now_iso() -> str:
 
 
 def _stage_for_executor_kind(executor_kind: str) -> str:
-    normalized = str(executor_kind or "").strip().lower()
-    stage = EXECUTOR_KIND_TO_STAGE.get(normalized)
+    stage = _issue_workflow_stage_for_executor_kind(executor_kind)
     if stage is None:
         raise RunStateTransitionError(f"Unsupported issue workflow executor: {executor_kind}")
     return stage
 
 
 def is_issue_workflow_executor_kind(executor_kind: str) -> bool:
-    normalized = str(executor_kind or "").strip().lower()
-    return normalized in EXECUTOR_KIND_TO_STAGE
+    return _is_issue_workflow_executor_kind(executor_kind)
 
 
 def _task_key_for_executor_kind(team_run: dict[str, Any], executor_kind: str) -> str:
@@ -98,6 +95,18 @@ def _task_key_for_executor_kind(team_run: dict[str, Any], executor_kind: str) ->
         if str(node.get("executor_kind") or "").strip().lower() == normalized:
             return str(node.get("task_key") or "").strip()
     raise RunStateTransitionError(f"Team task not found for executor: {executor_kind}")
+
+
+def _task_key_for_stage(team_run: dict[str, Any], stage_key: str) -> str:
+    expected_task_key = issue_workflow_task_key_for_stage(stage_key)
+    if expected_task_key:
+        for node in team_run_nodes(team_run):
+            if str(node.get("task_key") or "").strip() == expected_task_key:
+                return expected_task_key
+    executor_kind = ISSUE_WORKFLOW_STAGE_TO_EXECUTOR_KIND.get(str(stage_key or "").strip().lower())
+    if executor_kind is None:
+        raise RunStateTransitionError(f"Unsupported issue workflow stage: {stage_key}")
+    return _task_key_for_executor_kind(team_run, executor_kind)
 
 
 def _append_artifact(team_run: dict[str, Any], *, task_key: str, artifact_type: str, payload: dict[str, Any], summary: str | None, attempt: int) -> None:
@@ -296,10 +305,10 @@ def execute_issue_workflow_task(
     max_attempts = max(1, int(runtime_state.get("max_attempts") or 1))
     executor_kind = str(team_run_node(team_run, task_key).get("executor_kind") or "").strip().lower()
     stage = _stage_for_executor_kind(executor_kind)
-    pm_task_key = _task_key_for_executor_kind(team_run, PM_EXECUTOR_KIND)
-    dev_task_key = _task_key_for_executor_kind(team_run, DEV_EXECUTOR_KIND)
-    test_task_key = _task_key_for_executor_kind(team_run, TEST_EXECUTOR_KIND)
-    review_task_key = _task_key_for_executor_kind(team_run, REVIEW_EXECUTOR_KIND)
+    pm_task_key = _task_key_for_stage(team_run, "pm")
+    dev_task_key = _task_key_for_stage(team_run, "dev")
+    test_task_key = _task_key_for_stage(team_run, "test")
+    review_task_key = _task_key_for_stage(team_run, "review")
 
     if stage == "pm":
         plan = agents.pm(
@@ -542,7 +551,7 @@ def resume_issue_workflow_human_input(
         raise RunStateTransitionError("Human input request does not belong to this run")
     if str(request.status or "").strip().lower() == INPUT_STATUS_CONSUMED:
         normalized_stage = str(request.source_stage or "").strip().lower() or "pm"
-        task_key = _task_key_for_executor_kind(team_run, STAGE_TO_EXECUTOR_KIND.get(normalized_stage, PM_EXECUTOR_KIND))
+        task_key = _task_key_for_stage(team_run, normalized_stage or "pm")
         return IssueTeamTaskExecution(task_key=task_key, team_run=team_run, run_status=RUN_STATUS_RUNNING, workflow_status=RUN_STATUS_RUNNING)
     if str(request.status or "").strip().lower() != INPUT_STATUS_ANSWERED:
         raise RunStateTransitionError("Human input request is not answered")
@@ -557,8 +566,7 @@ def resume_issue_workflow_human_input(
         status=CLOSED_FOLLOWUP_CONTEXT_STATUS,
     )
     normalized_stage = str(request.source_stage or "").strip().lower() or "pm"
-    executor_kind = STAGE_TO_EXECUTOR_KIND.get(normalized_stage, PM_EXECUTOR_KIND)
-    task_key = _task_key_for_executor_kind(team_run, executor_kind)
+    task_key = _task_key_for_stage(team_run, normalized_stage or "pm")
     set_team_run_node_status(team_run, task_key, "ready")
     runtime_state = get_team_run_runtime_state(team_run)
     set_team_run_runtime_state(team_run, runtime_state)

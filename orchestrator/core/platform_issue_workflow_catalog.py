@@ -3,19 +3,20 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 
+from orchestrator.core.issue_workflow_contract import (
+    ISSUE_WORKFLOW_STAGE_CONTRACTS,
+    ISSUE_WORKFLOW_STAGE_TO_EXECUTOR_KIND,
+    ISSUE_WORKFLOW_TEAM_KEY as _ISSUE_WORKFLOW_TEAM_KEY,
+    ISSUE_WORKFLOW_TEAM_LABEL as _ISSUE_WORKFLOW_TEAM_LABEL,
+)
 
-ISSUE_WORKFLOW_TEAM_KEY = "issue_workflow"
-ISSUE_WORKFLOW_TEAM_LABEL = "Engineering Workflow"
-ISSUE_WORKFLOW_PM_EXECUTOR_KIND = "workflow.pm"
-ISSUE_WORKFLOW_DEV_EXECUTOR_KIND = "workflow.dev"
-ISSUE_WORKFLOW_TEST_EXECUTOR_KIND = "workflow.test"
-ISSUE_WORKFLOW_REVIEW_EXECUTOR_KIND = "workflow.review"
-ISSUE_WORKFLOW_STAGE_TO_EXECUTOR_KIND = {
-    "pm": ISSUE_WORKFLOW_PM_EXECUTOR_KIND,
-    "dev": ISSUE_WORKFLOW_DEV_EXECUTOR_KIND,
-    "test": ISSUE_WORKFLOW_TEST_EXECUTOR_KIND,
-    "review": ISSUE_WORKFLOW_REVIEW_EXECUTOR_KIND,
-}
+ISSUE_WORKFLOW_TEAM_KEY = _ISSUE_WORKFLOW_TEAM_KEY
+ISSUE_WORKFLOW_TEAM_LABEL = _ISSUE_WORKFLOW_TEAM_LABEL
+
+ISSUE_WORKFLOW_PM_EXECUTOR_KIND = ISSUE_WORKFLOW_STAGE_TO_EXECUTOR_KIND["pm"]
+ISSUE_WORKFLOW_DEV_EXECUTOR_KIND = ISSUE_WORKFLOW_STAGE_TO_EXECUTOR_KIND["dev"]
+ISSUE_WORKFLOW_TEST_EXECUTOR_KIND = ISSUE_WORKFLOW_STAGE_TO_EXECUTOR_KIND["test"]
+ISSUE_WORKFLOW_REVIEW_EXECUTOR_KIND = ISSUE_WORKFLOW_STAGE_TO_EXECUTOR_KIND["review"]
 
 
 @dataclass(frozen=True)
@@ -85,48 +86,46 @@ BUILTIN_ISSUE_AGENTS = (
 
 _ISSUE_WORKFLOW_TEMPLATE_PAYLOAD = {
     "roles": [
-        {"role_key": "pm", "label": "PM", "position": 1, "persona_key": "pm", "agent_key": "pm_primary"},
-        {"role_key": "engineering", "label": "DEV", "position": 2, "persona_key": "engineering", "agent_key": "workflow_dev_default"},
-        {"role_key": "test", "label": "TEST", "position": 3, "persona_key": "test", "agent_key": "workflow_test_default"},
-        {"role_key": "review", "label": "REVIEW", "position": 4, "persona_key": "review", "agent_key": "workflow_review_default"},
+        {
+            "role_key": "pm",
+            "label": "PM",
+            "position": 1,
+            "persona_key": "pm",
+            "agent_key": "pm_primary",
+        },
+        {
+            "role_key": "engineering",
+            "label": "DEV",
+            "position": 2,
+            "persona_key": "engineering",
+            "agent_key": "workflow_dev_default",
+        },
+        {
+            "role_key": "test",
+            "label": "TEST",
+            "position": 3,
+            "persona_key": "test",
+            "agent_key": "workflow_test_default",
+        },
+        {
+            "role_key": "review",
+            "label": "REVIEW",
+            "position": 4,
+            "persona_key": "review",
+            "agent_key": "workflow_review_default",
+        },
     ],
     "tasks": [
         {
-            "task_key": "pm",
-            "label": "PM",
-            "owner_role_key": "pm",
-            "position": 1,
-            "executor_kind": ISSUE_WORKFLOW_PM_EXECUTOR_KIND,
-            "artifact_contract": {"produces": ["pm_plan"]},
+            "task_key": stage.task_key,
+            "label": stage.label,
+            "owner_role_key": stage.role_key,
+            "position": idx + 1,
+            "executor_kind": stage.executor_kind,
+            "artifact_contract": {"produces": [stage.artifact_type]},
             "approval_rule": {},
-        },
-        {
-            "task_key": "dev",
-            "label": "DEV",
-            "owner_role_key": "engineering",
-            "position": 2,
-            "executor_kind": ISSUE_WORKFLOW_DEV_EXECUTOR_KIND,
-            "artifact_contract": {"produces": ["dev_result"]},
-            "approval_rule": {},
-        },
-        {
-            "task_key": "test",
-            "label": "TEST",
-            "owner_role_key": "test",
-            "position": 3,
-            "executor_kind": ISSUE_WORKFLOW_TEST_EXECUTOR_KIND,
-            "artifact_contract": {"produces": ["test_result"]},
-            "approval_rule": {},
-        },
-        {
-            "task_key": "review",
-            "label": "REVIEW",
-            "owner_role_key": "review",
-            "position": 4,
-            "executor_kind": ISSUE_WORKFLOW_REVIEW_EXECUTOR_KIND,
-            "artifact_contract": {"produces": ["review_result"]},
-            "approval_rule": {},
-        },
+        }
+        for idx, stage in enumerate(ISSUE_WORKFLOW_STAGE_CONTRACTS)
     ],
     "edges": [
         {"from_task_key": "pm", "to_task_key": "dev"},

@@ -30,18 +30,20 @@ import {
   type TokenTimelineRecord
 } from "@/lib/api";
 import { buildRunDetailPath, resolveRunRouteContext } from "@/lib/dashboard-paths";
+import { buildChatTimelineEntries } from "@/lib/run-detail-projections/chat";
+import { parseWorkflowDiagnostics } from "@/lib/run-detail-projections/diagnostics";
 import {
-  buildChatTimelineEntries,
   buildInvocationSessionRows,
   buildRunTimeline,
+  type InvocationSessionRow,
+} from "@/lib/run-detail-projections/timeline";
+import {
   dedupeRunLogs,
   formatDuration,
   formatTokenCount,
-  type InvocationSessionRow,
   isAbortLikeError,
   normalizeTeamTaskStatus,
   parseExecutionContext,
-  parseWorkflowDiagnostics,
   stageColor,
   stageDisplayLabel,
   statusFromLifecycleEvent,

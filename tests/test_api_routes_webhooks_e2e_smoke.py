@@ -481,6 +481,145 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 path="/api/admin/agent-runtimes",
                 auth=admin,
             ),
+            ("GET", "/api/admin/platform-personas"): RouteScenario(
+                path="/api/admin/platform-personas",
+                auth=admin,
+            ),
+            ("POST", "/api/admin/platform-personas"): RouteScenario(
+                path="/api/admin/platform-personas",
+                auth=admin,
+                json={
+                    "persona_key": "smoke_persona",
+                    "label": "Smoke Persona",
+                    "allowed_surfaces": ["team_run_execution"],
+                    "is_active": True,
+                },
+                expected_statuses=(201, 400, 409, 422),
+            ),
+            ("PUT", "/api/admin/platform-personas/{persona_id}"): RouteScenario(
+                path="/api/admin/platform-personas/persona-missing",
+                auth=admin,
+                json={
+                    "persona_key": "smoke_persona",
+                    "label": "Smoke Persona",
+                    "allowed_surfaces": ["team_run_execution"],
+                    "is_active": True,
+                },
+                expected_statuses=(400, 404, 422),
+            ),
+            ("GET", "/api/admin/platform-agents"): RouteScenario(
+                path="/api/admin/platform-agents",
+                auth=admin,
+            ),
+            ("POST", "/api/admin/platform-agents"): RouteScenario(
+                path="/api/admin/platform-agents",
+                auth=admin,
+                json={
+                    "agent_key": "smoke_agent",
+                    "label": "Smoke Agent",
+                    "persona_key": "smoke_persona",
+                    "runtime_role_key": "smoke_role",
+                    "named_agent_key": "smoke_named_agent",
+                    "selector_key": "smoke.selector",
+                    "default_profile_name": "general_planning_default",
+                    "is_active": True,
+                },
+                expected_statuses=(201, 400, 409, 422),
+            ),
+            ("PUT", "/api/admin/platform-agents/{agent_id}"): RouteScenario(
+                path="/api/admin/platform-agents/agent-missing",
+                auth=admin,
+                json={
+                    "agent_key": "smoke_agent",
+                    "label": "Smoke Agent",
+                    "persona_key": "smoke_persona",
+                    "runtime_role_key": "smoke_role",
+                    "named_agent_key": "smoke_named_agent",
+                    "selector_key": "smoke.selector",
+                    "default_profile_name": "general_planning_default",
+                    "is_active": True,
+                },
+                expected_statuses=(400, 404, 422),
+            ),
+            ("GET", "/api/admin/platform-team-templates"): RouteScenario(
+                path="/api/admin/platform-team-templates",
+                auth=admin,
+            ),
+            ("POST", "/api/admin/platform-team-templates"): RouteScenario(
+                path="/api/admin/platform-team-templates",
+                auth=admin,
+                json={
+                    "team_key": "smoke_team",
+                    "label": "Smoke Team",
+                    "is_active": True,
+                    "roles": [
+                        {
+                            "role_key": "smoke_role",
+                            "label": "Smoke Role",
+                            "position": 1,
+                            "persona_key": "smoke_persona",
+                            "agent_key": "smoke_agent",
+                        }
+                    ],
+                    "tasks": [
+                        {
+                            "task_key": "smoke_task",
+                            "label": "Smoke Task",
+                            "owner_role_key": "smoke_role",
+                            "position": 1,
+                            "executor_kind": None,
+                            "artifact_contract": {},
+                            "approval_rule": {},
+                        }
+                    ],
+                    "edges": [],
+                },
+                expected_statuses=(201, 400, 409, 422),
+            ),
+            ("PUT", "/api/admin/platform-team-templates/{template_id}"): RouteScenario(
+                path="/api/admin/platform-team-templates/template-missing",
+                auth=admin,
+                json={
+                    "label": "Smoke Team Updated",
+                    "is_active": True,
+                    "roles": [],
+                    "tasks": [],
+                    "edges": [],
+                },
+                expected_statuses=(400, 404, 422),
+            ),
+            ("POST", "/api/admin/platform-team-templates/{template_id}/publish"): RouteScenario(
+                path="/api/admin/platform-team-templates/template-missing/publish",
+                auth=admin,
+                expected_statuses=(404,),
+            ),
+            ("GET", "/api/admin/platform-runtime-bindings"): RouteScenario(
+                path="/api/admin/platform-runtime-bindings",
+                auth=admin,
+            ),
+            ("POST", "/api/admin/platform-team-templates/{template_id}/runs"): RouteScenario(
+                path="/api/admin/platform-team-templates/template-missing/runs",
+                auth=admin,
+                json={
+                    "tenant_id": "route25",
+                    "project_id": "route25-default",
+                    "issue_key": "SMOKE-1",
+                    "issue_summary": "Smoke team run",
+                },
+                expected_statuses=(404, 422),
+            ),
+            ("POST", "/api/admin/runs/{run_id}/team-tasks/{task_key}/complete"): RouteScenario(
+                path="/api/admin/runs/run-missing/team-tasks/task-smoke/complete",
+                auth=admin,
+                json={},
+                expected_statuses=(404, 422),
+            ),
+            ("POST", "/api/admin/runs/{run_id}/team-tasks/{task_key}/approvals"): RouteScenario(
+                path="/api/admin/runs/run-missing/team-tasks/task-smoke/approvals",
+                auth=admin,
+                json={"decision": "approved"},
+                expected_statuses=(404, 422),
+            ),
             ("GET", "/api/admin/agent-runtime-profiles"): RouteScenario(
                 path="/api/admin/agent-runtime-profiles",
                 auth=admin,
