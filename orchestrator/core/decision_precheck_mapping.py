@@ -27,6 +27,7 @@ from orchestrator.core.decision_types import (
     DecisionEventInput,
     DecisionLabelAction,
     IngressDecision,
+    PrecheckOutcome,
     blocking_reason_for_precheck,
     resolve_execution_gate_state,
     tenant_ready_label,
@@ -104,8 +105,8 @@ def derive_label_actions(pre_check: object) -> tuple[DecisionLabelAction, ...]:
     actions: list[DecisionLabelAction] = []
     ready_label_missing = bool(getattr(pre_check, "ready_label_missing", False))
     ready_label = str(getattr(pre_check, "ready_label", "") or "").strip()
-    outcome = str(getattr(pre_check, "outcome", "") or "").strip().lower()
-    if ready_label_missing and ready_label and outcome == "missing_ready_label":
+    outcome = PrecheckOutcome.parse(getattr(pre_check, "outcome", None))
+    if ready_label_missing and ready_label and outcome is PrecheckOutcome.MISSING_READY_LABEL:
         actions.append(
             DecisionLabelAction(
                 label=ready_label,
@@ -218,7 +219,11 @@ def decision_from_snapshot(
         if normalized_pre_check is None:
             ready_label = str(case.ready_label or "").strip() or None
             ready_label_present = bool(case.ready_label_present)
-            outcome = "missing_ready_label" if ready_label and not ready_label_present else "ready_for_agent"
+            outcome = (
+                PrecheckOutcome.MISSING_READY_LABEL.value
+                if ready_label and not ready_label_present
+                else PrecheckOutcome.READY_FOR_AGENT.value
+            )
             normalized_pre_check = PreRunCheckResult(
                 outcome=outcome,
                 ready_label=ready_label,
@@ -240,8 +245,8 @@ def decision_from_snapshot(
                     clarification_questions=(),
                 ),
             )
-        if str(getattr(normalized_pre_check, "outcome", "") or "").strip() == "decision_gate_required":
-            normalized_pre_check = replace(normalized_pre_check, outcome="ready_for_agent")
+        if PrecheckOutcome.parse(getattr(normalized_pre_check, "outcome", None)) is PrecheckOutcome.DECISION_GATE_REQUIRED:
+            normalized_pre_check = replace(normalized_pre_check, outcome=PrecheckOutcome.READY_FOR_AGENT.value)
         return IngressDecision(
             source=source,  # type: ignore[arg-type]
             pre_check=normalized_pre_check,
@@ -326,7 +331,7 @@ def worker_blocking_gate(
     parsed_classification = DecisionClassification.parse(classification)
     if parsed_classification.includes_decision_gate and pre_check.decision_gate.triggered:
         return pre_check.decision_gate
-    if parsed_classification.includes_gtd and str(block_reason or "").strip() == "execution_blocked":
+    if parsed_classification.includes_gtd and PrecheckOutcome.parse(block_reason) is PrecheckOutcome.EXECUTION_BLOCKED:
         questions = tuple(
             str(question).strip()
             for question in pre_check.gtd.clarification_questions
@@ -396,11 +401,12 @@ def build_question_set(*, pre_check: object, classification: str) -> list[dict]:
 
 def case_state_for_decision(*, decision: IngressDecision) -> str:
     pre_check = decision.pre_check
-    if decision.block_reason == "decision_gate_required":
+    parsed_block_reason = PrecheckOutcome.parse(decision.block_reason)
+    if parsed_block_reason is PrecheckOutcome.DECISION_GATE_REQUIRED:
         return "blocked_decision_gate"
-    if decision.block_reason in {"gtd_required", "execution_blocked"}:
+    if parsed_block_reason in {PrecheckOutcome.GTD_REQUIRED, PrecheckOutcome.EXECUTION_BLOCKED}:
         return "blocked_gtd"
-    if pre_check is not None and str(getattr(pre_check, "outcome", "") or "").strip() == "ready_for_agent":
+    if pre_check is not None and PrecheckOutcome.parse(getattr(pre_check, "outcome", None)) is PrecheckOutcome.READY_FOR_AGENT:
         return "ready_for_execution"
     return "clear"
 

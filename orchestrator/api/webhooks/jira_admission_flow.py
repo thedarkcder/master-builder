@@ -22,7 +22,7 @@ from orchestrator.core.communications.jira_enqueue_presentation import (
 )
 from orchestrator.core.decision_clarification_service import evaluate_issue_clarification_state
 from orchestrator.core.decision_engine import DecisionEngineResult, DecisionEventInput
-from orchestrator.core.decision_types import tenant_ready_label
+from orchestrator.core.decision_types import tenant_ready_label, tenant_ready_trigger_mode
 from orchestrator.core.execution_admission import ExecutionAdmissionReason, resolve_execution_admission
 from orchestrator.core.pre_run_check import evaluate_pre_run_check
 from orchestrator.core.precheck_question_lock import (
@@ -56,12 +56,7 @@ def is_todo_status(status_name: str) -> bool:
 
 
 def resolve_ready_trigger_mode_for_tenant(tenant) -> str:  # noqa: ANN001
-    raw_mode = tenant.jira_config.get("ready_trigger_mode")
-    if isinstance(raw_mode, str):
-        normalized_mode = raw_mode.strip().lower()
-        if normalized_mode in {"status_recheck", "transition_only"}:
-            return normalized_mode
-    return "status_recheck"
+    return tenant_ready_trigger_mode(tenant)
 
 
 def resolve_ready_label_for_tenant(tenant) -> str | None:  # noqa: ANN001

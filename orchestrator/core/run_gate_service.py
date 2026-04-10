@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from orchestrator.core.communications.enqueue_reason_contract import enqueue_reason_guidance
 from orchestrator.core.decision_engine import DecisionEngineResult
-from orchestrator.core.decision_types import ExecutionGateReason, ExecutionGateState
+from orchestrator.core.decision_types import ExecutionGateReason, ExecutionGateState, PrecheckOutcome
 from orchestrator.core.runs import EnqueueRunResult, enqueue_run, resolve_precheck_outcome_for_enqueue
 
 
@@ -26,7 +26,7 @@ def resolve_run_gate_block(*, decision_result: DecisionEngineResult) -> RunGateB
     resolved_reason = _resolve_gate_reason(
         gate_state=gate_state,
         gate_reason=gate_reason,
-        fallback_reason=str(decision_result.decision.block_reason or "").strip() or None,
+        fallback_reason=PrecheckOutcome.parse(decision_result.decision.block_reason),
     )
     return RunGateBlock(
         reason=resolved_reason.reason_code,
@@ -40,18 +40,18 @@ def _resolve_gate_reason(
     *,
     gate_state: ExecutionGateState,
     gate_reason: ExecutionGateReason | None,
-    fallback_reason: str | None,
+    fallback_reason: PrecheckOutcome | None,
 ) -> ExecutionGateReason:
     if gate_reason is not None:
         return gate_reason
     if gate_state == ExecutionGateState.POLICY_ERROR:
         return ExecutionGateReason(
-            reason_code="policy_eval_failed",
-            guidance=enqueue_reason_guidance("policy_eval_failed"),
+            reason_code=PrecheckOutcome.POLICY_EVAL_FAILED.value,
+            guidance=enqueue_reason_guidance(PrecheckOutcome.POLICY_EVAL_FAILED.value),
         )
-    reason_code = fallback_reason or "decision_gate_required"
+    reason_code = (fallback_reason or PrecheckOutcome.DECISION_GATE_REQUIRED).value
     if gate_state == ExecutionGateState.BLOCK_READY_LABEL:
-        reason_code = "missing_ready_label"
+        reason_code = PrecheckOutcome.MISSING_READY_LABEL.value
     return ExecutionGateReason(
         reason_code=reason_code,
         guidance=enqueue_reason_guidance(reason_code),

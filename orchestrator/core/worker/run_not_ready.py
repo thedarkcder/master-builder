@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from orchestrator.core.communications.enqueue_reason_contract import enqueue_reason_guidance
+from orchestrator.core.decision_types import PrecheckOutcome
 
 
 @dataclass(frozen=True)
@@ -16,11 +17,13 @@ class RunNotReadyOutcome:
 
 def derive_run_not_ready_outcome(*, worker_decision: object) -> RunNotReadyOutcome:
     pre_check = getattr(worker_decision, "pre_check", None)
-    block_reason = str(getattr(worker_decision, "block_reason", "") or "").strip() or None
+    parsed_block_reason = PrecheckOutcome.parse(getattr(worker_decision, "block_reason", None))
+    block_reason = parsed_block_reason.value if parsed_block_reason is not None else None
     ready_label = str(getattr(pre_check, "ready_label", "") or "").strip() or None
-    pre_check_outcome = str(getattr(pre_check, "outcome", "") or "").strip() or None
+    parsed_pre_check_outcome = PrecheckOutcome.parse(getattr(pre_check, "outcome", None))
+    pre_check_outcome = parsed_pre_check_outcome.value if parsed_pre_check_outcome is not None else None
 
-    if block_reason == "missing_ready_label":
+    if parsed_block_reason is PrecheckOutcome.MISSING_READY_LABEL:
         reason = (
             f"{enqueue_reason_guidance('missing_ready_label')} ({ready_label})"
             if ready_label

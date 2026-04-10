@@ -6,6 +6,7 @@ import re
 from sqlalchemy import select
 
 from orchestrator.api.jira_oauth.service import jira_oauth_client, refresh_jira_connection_tokens
+from orchestrator.core.decision_types import JiraConfigKey, tenant_jira_config_text
 from orchestrator.core.workflow.execution_snapshot import require_github_pr_remediation_context_from_plan
 from orchestrator.storage.models import JiraOAuthConnection, Run
 from orchestrator.tools.jira_oauth import JiraIssueCreateInput
@@ -117,7 +118,7 @@ def create_pr_remediation_bug_issue_key(
     issue_comments: list,
     manual_fix_request: dict[str, object] | None = None,
 ) -> str:
-    connection_id = str((tenant.jira_config or {}).get("connection_id") or "").strip()
+    connection_id = tenant_jira_config_text(tenant=tenant, key=JiraConfigKey.CONNECTION_ID)
     if not connection_id:
         raise ValueError("jira_connection_missing")
     connection = session.get(JiraOAuthConnection, connection_id)
