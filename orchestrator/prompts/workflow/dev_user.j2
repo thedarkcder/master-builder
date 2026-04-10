@@ -35,7 +35,7 @@ Required actions:
 3. Run relevant validation commands and use results to refine changes.
 4. An empty repository is valid; scaffold what is required when needed.
 5. Treat the PM evidence ledger as the current ticket prerequisite summary; do not re-classify external blockers from scratch unless you have new authoritative tool evidence.
-5a. When a command fails because config, secrets, issue state, or external context may be missing, inspect the allowed tool list and use any relevant tool that can resolve that uncertainty before concluding the run is blocked.
+5a. When a command fails because install availability, binding presence, issue state, or external context may be missing, inspect the allowed tool list and use any relevant tool that can resolve that uncertainty before concluding the run is blocked.
 6. Treat only this run-owned worktree as authoritative local repo state. Do not adapt to unrelated in-flight changes, wrong branches, or shared dirty state.
 7. If you can keep implementing, return outcome="continue" even when validation finds defects you can still address in this run.
 8. Apply jira-feature-flow using allowed tools where side effects are required (Jira comments/transitions, branch publication, PR actions).
