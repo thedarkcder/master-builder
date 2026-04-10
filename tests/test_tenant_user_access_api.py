@@ -1050,6 +1050,77 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
             self.assertEqual(project.jira_project_key, "TP")
             self.assertEqual(project.discord_config["channel_id"], "discord-channel-123")
 
+    def test_discord_install_callback_backfills_live_voice_room_for_existing_project_channel(self) -> None:
+        registration = self._register()
+        token = self._login()
+        tenant_id = registration["tenant"]["tenant_id"]
+
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            tenant = session.get(Tenant, tenant_id)
+            self.assertIsNotNone(tenant)
+            assert tenant is not None
+            project = Project(
+                project_id=f"{tenant_id}-project-1",
+                tenant_id=tenant_id,
+                name="Alpha Project",
+                github_repository="https://github.com/example/repo",
+                jira_project_key="TP",
+                policy_overrides={},
+                environment={},
+                secret_refs={},
+                discord_config={"channel_id": "project-text-123"},
+                is_archived=False,
+                created_at=datetime.now(timezone.utc),
+                updated_at=datetime.now(timezone.utc),
+            )
+            session.add(project)
+            session.commit()
+
+        start_response = self.client.post(
+            f"/api/admin/tenants/{tenant_id}/discord/install/start?return_to=edit",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        self.assertEqual(start_response.status_code, 200, start_response.text)
+        state_token = parse_qs(urlparse(start_response.json()["install_url"]).query)["state"][0]
+
+        fake_client = Mock()
+        fake_client.ensure_voice_channel.return_value = Mock(channel_id="voice-room-123")
+
+        with (
+            patch("orchestrator.api.admin.tenant_project_helpers.resolve_platform_secret_ref", return_value="discord-bot-token"),
+            patch("orchestrator.api.admin.tenant_project_helpers.DiscordApiClient", return_value=fake_client) as client_mock,
+            patch("orchestrator.api.routes.admin_discord_install.sync_discord_guild_commands") as sync_mock,
+        ):
+            callback_response = self.client.get(
+                f"/api/admin/discord/install/callback?state={state_token}&guild_id=987654321&code=oauth-code",
+                follow_redirects=False,
+            )
+
+        self.assertEqual(callback_response.status_code, 302, callback_response.text)
+        client_mock.assert_called_once_with(bot_token="discord-bot-token")
+        fake_client.ensure_text_channel.assert_not_called()
+        fake_client.ensure_voice_channel.assert_called_once_with(
+            guild_id="987654321",
+            name="alpha-project-voice",
+            parent_id=None,
+        )
+        sync_mock.assert_called_once()
+
+        with session_factory() as session:
+            project = session.get(Project, f"{tenant_id}-project-1")
+            self.assertIsNotNone(project)
+            assert project is not None
+            discord_config = dict(project.discord_config or {})
+            self.assertEqual(discord_config["channel_id"], "project-text-123")
+            self.assertTrue(discord_config["live_voice_enabled"])
+            self.assertEqual(
+                discord_config["live_voice_room_links"],
+                {"voice-room-123": "project-text-123"},
+            )
+            self.assertEqual(discord_config["voice_room_channel_ids"], ["voice-room-123"])
+            self.assertEqual(discord_config["voice_room_channel_id"], "voice-room-123")
+
     def test_discord_install_callback_handles_access_denied_without_422(self) -> None:
         registration = self._register()
         token = self._login()

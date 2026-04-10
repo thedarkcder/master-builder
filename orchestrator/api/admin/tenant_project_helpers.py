@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from orchestrator.core.decision_types import jira_config_project_keys
 from orchestrator.core.platform_secret_service import PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF, resolve_platform_secret_ref
 from orchestrator.storage.models import Project, Tenant
-from orchestrator.tools.discord_api import DiscordApiClient, DiscordTextChannel
+from orchestrator.tools.discord_api import DiscordApiClient, DiscordTextChannel, DiscordVoiceChannel
 
 
 def slugify_tenant_name(name: str) -> str:
@@ -74,6 +74,25 @@ def resolve_project_discord_channel_binding(
     existing_channel_id = str(normalized.get("channel_id") or "").strip()
     if existing_channel_id:
         normalized["channel_id"] = existing_channel_id
+    live_voice_links = {
+        str(voice_channel_id).strip(): str(linked_channel_id).strip()
+        for voice_channel_id, linked_channel_id in dict(normalized.get("live_voice_room_links") or {}).items()
+        if str(voice_channel_id).strip() and str(linked_channel_id).strip()
+    }
+    if live_voice_links:
+        normalized["live_voice_room_links"] = live_voice_links
+        voice_room_channel_ids = [
+            channel_id
+            for channel_id in [str(value).strip() for value in normalized.get("voice_room_channel_ids", [])]
+            if channel_id
+        ]
+        for voice_channel_id in live_voice_links:
+            if voice_channel_id not in voice_room_channel_ids:
+                voice_room_channel_ids.append(voice_channel_id)
+        if voice_room_channel_ids:
+            normalized["voice_room_channel_ids"] = voice_room_channel_ids
+            normalized["voice_room_channel_id"] = voice_room_channel_ids[0]
+    if existing_channel_id and live_voice_links:
         return normalized
 
     token_ref = PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF
@@ -93,12 +112,35 @@ def resolve_project_discord_channel_binding(
     parent_id = settings.discord_channel_category_id.strip() or None
     channel_name = resolve_project_discord_channel_name_fn(settings=settings, tenant=tenant, project=project)
     client = DiscordApiClient(bot_token=bot_token)
-    channel: DiscordTextChannel = client.ensure_text_channel(
-        guild_id=guild_id,
-        name=channel_name,
-        parent_id=parent_id,
-    )
-    normalized["channel_id"] = channel.channel_id
+    if not existing_channel_id:
+        channel: DiscordTextChannel = client.ensure_text_channel(
+            guild_id=guild_id,
+            name=channel_name,
+            parent_id=parent_id,
+        )
+        normalized["channel_id"] = channel.channel_id
+
+    if not live_voice_links:
+        voice_channel: DiscordVoiceChannel = client.ensure_voice_channel(
+            guild_id=guild_id,
+            name=f"{channel_name}-voice",
+            parent_id=parent_id,
+        )
+        live_voice_links = {voice_channel.channel_id: normalized["channel_id"]}
+        normalized["live_voice_enabled"] = True
+
+    normalized["live_voice_room_links"] = live_voice_links
+    voice_room_channel_ids = [
+        channel_id
+        for channel_id in [str(value).strip() for value in normalized.get("voice_room_channel_ids", [])]
+        if channel_id
+    ]
+    for voice_channel_id in live_voice_links:
+        if voice_channel_id not in voice_room_channel_ids:
+            voice_room_channel_ids.append(voice_channel_id)
+    if voice_room_channel_ids:
+        normalized["voice_room_channel_ids"] = voice_room_channel_ids
+        normalized["voice_room_channel_id"] = voice_room_channel_ids[0]
     return normalized
 
 
@@ -170,15 +212,16 @@ def sync_tenant_project_discord_channels(
     updated_any = False
     for project in projects:
         discord_config = dict(project.discord_config or {})
-        if str(discord_config.get("channel_id") or "").strip():
-            continue
-        project.discord_config = resolve_project_discord_channel_binding_fn(
+        updated_config = resolve_project_discord_channel_binding_fn(
             session=session,
             settings=settings,
             tenant=tenant,
             project=project,
             discord_config=discord_config,
         )
+        if updated_config == discord_config:
+            continue
+        project.discord_config = updated_config
         project.updated_at = now
         updated_any = True
 
