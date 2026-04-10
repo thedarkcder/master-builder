@@ -982,12 +982,14 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
         self.assertEqual(query["client_id"], ["discord-client-id-123"])
         self.assertEqual(query["permissions"], ["3224728621023057"])
 
-        callback_response = self.client.get(
-            f"/api/admin/discord/install/callback?state={query['state'][0]}&guild_id=987654321&code=oauth-code",
-            follow_redirects=False,
-        )
+        with patch("orchestrator.api.routes.admin_discord_install.sync_discord_guild_commands") as sync_mock:
+            callback_response = self.client.get(
+                f"/api/admin/discord/install/callback?state={query['state'][0]}&guild_id=987654321&code=oauth-code",
+                follow_redirects=False,
+            )
         self.assertEqual(callback_response.status_code, 302, callback_response.text)
         self.assertIn("/tenants/new/discord", callback_response.headers["location"])
+        sync_mock.assert_called_once()
 
         tenant_response = self.client.get(
             f"/api/admin/tenants/{tenant_id}",
