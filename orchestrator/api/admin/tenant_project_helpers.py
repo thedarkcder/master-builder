@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from orchestrator.core.decision_types import jira_config_project_keys
 from orchestrator.core.platform_secret_service import PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF, resolve_platform_secret_ref
 from orchestrator.storage.models import Project, Tenant
 from orchestrator.tools.discord_api import DiscordApiClient, DiscordTextChannel
@@ -27,12 +28,10 @@ def allocate_tenant_id(session: Session, *, name: str) -> str:
 
 
 def primary_jira_project_key(jira_config: dict) -> str | None:
-    project_keys = jira_config.get("project_keys")
-    if isinstance(project_keys, list):
-        for key in project_keys:
-            key_normalized = str(key).strip().upper()
-            if key_normalized:
-                return key_normalized
+    for key in jira_config_project_keys(jira_config=jira_config):
+        key_normalized = key.upper()
+        if key_normalized:
+            return key_normalized
     return None
 
 
