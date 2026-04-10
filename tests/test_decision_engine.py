@@ -7,6 +7,8 @@ from unittest import mock
 from orchestrator.core.decision_engine import (
     DecisionLabelAction,
     evaluate_ingress_precheck,
+)
+from orchestrator.core.decision_execution_readiness import (
     evaluate_worker_decision,
     resolve_enqueue_precheck_outcome,
 )
@@ -137,18 +139,13 @@ class DecisionEngineTests(unittest.TestCase):
             "ready_for_agent",
         )
 
-    def test_resolve_enqueue_precheck_outcome_forces_ready_for_legacy_remediation_marker(self) -> None:
+    def test_resolve_enqueue_precheck_outcome_does_not_force_ready_without_trigger_context(self) -> None:
         self.assertEqual(
             resolve_enqueue_precheck_outcome(
                 source="admin_rerun",
                 precheck_source_plan=_run_plan(pre_check_outcome="gtd_required"),
-                issue_summary="GP-115: PR remediation for #6",
-                issue_description=(
-                    "Automated remediation run triggered from GitHub PR #6 "
-                    "(https://github.com/org/repo/pull/6)."
-                ),
             ),
-            "ready_for_agent",
+            "gtd_required",
         )
 
     def test_resolve_execution_gate_state_returns_structured_resolution(self) -> None:
@@ -199,7 +196,7 @@ class DecisionEngineTests(unittest.TestCase):
         self.assertIsNone(worker_decision.decision_gate)
         self.assertIsNone(worker_decision.configuration_error)
 
-    def test_worker_decision_allows_pr_remediation_via_legacy_issue_markers(self) -> None:
+    def test_worker_decision_blocks_without_pr_remediation_trigger_context(self) -> None:
         worker_decision = evaluate_worker_decision(
             run_plan=_run_plan(pre_check_outcome="gtd_required"),
             tenant_id="t1",
@@ -213,9 +210,9 @@ class DecisionEngineTests(unittest.TestCase):
             ),
             evaluate_decision_gate_fn=lambda **_: (_ for _ in ()).throw(RuntimeError("should not call")),
         )
-        self.assertTrue(worker_decision.allowed)
-        self.assertIsNone(worker_decision.decision_gate)
-        self.assertIsNone(worker_decision.configuration_error)
+        self.assertFalse(worker_decision.allowed)
+        self.assertEqual(worker_decision.block_reason, "gtd_required")
+        self.assertIsNotNone(worker_decision.decision_gate)
 
     def test_worker_decision_returns_configuration_error_when_snapshot_missing(self) -> None:
         worker_decision = evaluate_worker_decision(

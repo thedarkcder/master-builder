@@ -2,12 +2,11 @@ from __future__ import annotations
 
 import logging
 from types import SimpleNamespace
-
-from orchestrator.core.communications.enqueue_reason_contract import enqueue_reason_guidance
 from orchestrator.core.dashboard_links import admin_run_url
-from orchestrator.core import decision_engine as decision_engine_runtime
+from orchestrator.core import decision_execution_readiness as decision_engine_runtime
 from orchestrator.core.jira_links import tenant_jira_issue_url
 from orchestrator.core.runs import mark_run_terminal
+from orchestrator.core.worker.run_not_ready import derive_run_not_ready_outcome
 from orchestrator.core.worker.run_lifecycle import resolve_project_for_run
 from orchestrator.core.worker.stage_events import run_not_ready_update
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
@@ -112,27 +111,17 @@ def apply_decision_gate(
     if worker_decision.allowed:
         return None, None
 
-    pre_check = getattr(worker_decision, "pre_check", None)
-    block_reason = str(getattr(worker_decision, "block_reason", "") or "").strip()
-    ready_label = str(getattr(pre_check, "ready_label", "") or "").strip()
-    if block_reason == "missing_ready_label":
-        reason = (
-            f"{enqueue_reason_guidance('missing_ready_label')} ({ready_label})"
-            if ready_label
-            else enqueue_reason_guidance("missing_ready_label")
+    try:
+        run_not_ready = derive_run_not_ready_outcome(worker_decision=worker_decision)
+    except ValueError as exc:
+        error_text = f"Execution readiness check failed: {exc}"
+        terminal_run = terminalizer(
+            session=session,
+            run_id=run.run_id,
+            terminal_status=failed_status,
+            last_error=error_text,
         )
-        next_steps = (
-            [f"Apply ready label `{ready_label}` to the Jira issue, then retry the run."]
-            if ready_label
-            else ["Apply the configured ready label to the Jira issue, then retry the run."]
-        )
-    else:
-        fallback_reason = enqueue_reason_guidance(block_reason or "decision_gate_required")
-        decision_gate_reason = (
-            str(getattr(getattr(worker_decision, "decision_gate", None), "reason", "") or "").strip()
-        )
-        reason = decision_gate_reason or fallback_reason
-        next_steps = ["Reply with the required clarification on the issue, then retry the run."]
+        return terminal_run, None
 
     jira_url = tenant_jira_issue_url(session=session, tenant=tenant, issue_key=run.issue_key)
     stage_update = run_not_ready_update(
@@ -141,8 +130,8 @@ def apply_decision_gate(
         run_id=run.run_id,
         jira_url=jira_url,
         run_url=admin_run_url(admin_ui_base_url=settings.admin_ui_base_url, run_id=run.run_id),
-        reason=reason,
-        next_steps=next_steps,
+        reason=run_not_ready.reason,
+        next_steps=run_not_ready.next_steps,
     )
     session.refresh(run, attribute_names=["plan"])
     snapshot = ExecutionSnapshot.require(run.plan, allow_empty=True)
@@ -150,25 +139,23 @@ def apply_decision_gate(
         outcome="blocked",
         attempts=0,
         summary=[],
-        blocker_message=reason,
+        blocker_message=run_not_ready.reason,
         requeue_target=None,
         requeue_reason=None,
     )
     snapshot.events.stage_updates = [stage_update]
     snapshot.context.execution_context["run_not_ready"] = {
-        "ready_label": ready_label or None,
-        "reason": reason,
-        "block_reason": block_reason or None,
+        "ready_label": run_not_ready.ready_label,
+        "reason": run_not_ready.reason,
+        "block_reason": run_not_ready.block_reason,
     }
-    snapshot.context.execution_context["pre_check_outcome"] = (
-        getattr(pre_check, "outcome", None) if pre_check is not None else None
-    )
+    snapshot.context.execution_context["pre_check_outcome"] = run_not_ready.pre_check_outcome
     run.plan = snapshot.dump()
     terminal_run = terminalizer(
         session=session,
         run_id=run.run_id,
         terminal_status=blocked_status,
-        last_error=reason,
+        last_error=run_not_ready.reason,
     )
     send_result = SimpleNamespace(sent=False, reason="not_attempted")
     send_error: str | None = None

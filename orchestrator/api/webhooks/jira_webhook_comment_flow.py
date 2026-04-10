@@ -22,13 +22,16 @@ from orchestrator.api.webhooks.jira_parent_child_sync import (
     is_system_generated_comment,
 )
 from orchestrator.api.webhooks.jira_webhook_types import JiraWebhookContext, jira_webhook_response
+from orchestrator.core.communications.decision_clarification_presentation import (
+    build_decision_clarification_presentation,
+    load_cycle_question_feedback,
+)
 from orchestrator.core.codex_runtime import CodexRuntimeError
 from orchestrator.core.decision_clarification_service import capture_decision_reply_and_recheck
 from orchestrator.core.decision_engine import DecisionEventInput
 from orchestrator.core.decision_reply_service import (
     active_case_and_cycle_for_issue,
     is_machine_generated_decision_comment,
-    unresolved_question_feedback_for_cycle,
 )
 from orchestrator.core.followup_context_service import (
     FOLLOWUP_CONTEXT_DECISION_GATE,
@@ -222,21 +225,21 @@ def stage_handle_comment_decision_reply(
             issue_key=context.issue_key,
         )
     session.commit()
+    clarification_presentation = build_decision_clarification_presentation(
+        decision_result=decision_result,
+        question_feedback=load_cycle_question_feedback(
+            session=session,
+            cycle_id=str(decision_result.cycle_id or ""),
+        ),
+    )
     return jira_webhook_response(
         context,
         enqueued=False,
         reason="decision_reply_recorded",
-        classification=decision_result.classification,
+        classification=clarification_presentation.classification,
         cycle_id=decision_result.cycle_id,
-        questions=list(getattr(decision_result.decision.pre_check.decision_gate, "questions", ()))
-        if decision_result.decision.pre_check is not None and getattr(decision_result.decision.pre_check, "decision_gate", None) is not None
-        else [],
-        question_feedback=list(
-            unresolved_question_feedback_for_cycle(
-                session=session,
-                cycle_id=str(decision_result.cycle_id or ""),
-            )
-        ) if decision_result.cycle_id else [],
+        questions=list(clarification_presentation.questions),
+        question_feedback=list(clarification_presentation.question_feedback),
         webhook_event=context.webhook_event,
     )
 

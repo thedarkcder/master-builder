@@ -16,12 +16,18 @@ from orchestrator.core.communications.enqueue_reason_contract import (
     enqueue_reason_guidance,
     format_enqueue_conflict_detail,
 )
+from orchestrator.core.communications.decision_clarification_presentation import (
+    build_decision_clarification_presentation,
+    load_cycle_question_feedback,
+    render_decision_gate_feedback_message,
+    render_decision_gate_remaining_questions_message,
+)
+from orchestrator.core.communications.execution_admission_format import (
+    format_discord_admission_conflict_detail,
+)
 from orchestrator.core.decision_engine import DecisionEventInput, DecisionSource
 from orchestrator.core.decision_clarification_port import DecisionClarificationPort
 from orchestrator.core.execution_admission import resolve_execution_admission
-from orchestrator.core.decision_reply_service import (
-    unresolved_question_feedback_for_cycle,
-)
 from orchestrator.core.followup_context_service import (
     FOLLOWUP_CONTEXT_DECISION_GATE,
     close_followup_contexts,
@@ -40,41 +46,6 @@ def _oauth_context_value(oauth_context: Any, field: str) -> Any:
     if isinstance(oauth_context, dict):
         return oauth_context.get(field)
     return getattr(oauth_context, field, None)
-
-
-def _decision_gate_remaining_questions_message(*, issue_key: str, reason: str, questions: list[str]) -> str:
-    lines = [
-        f"Decision Gate still needs clarification for `{issue_key}`.",
-        f"Reason: {reason}",
-    ]
-    if questions:
-        lines.append("Please reply with:")
-        lines.extend(f"- {question}" for question in questions[:5])
-    return "\n".join(lines)
-
-
-def _decision_gate_unresolved_feedback_message(
-    *,
-    issue_key: str,
-    reason: str,
-    question_feedback: list[dict[str, str]],
-) -> tuple[str, list[str]]:
-    lines = [
-        f"Decision Gate still needs clarification for `{issue_key}`.",
-        f"Reason: {reason}",
-    ]
-    questions: list[str] = []
-    if question_feedback:
-        lines.append("Please reply with:")
-    for item in question_feedback[:5]:
-        question_text = str(item.get("question_text") or "").strip()
-        note = str(item.get("note") or "").strip()
-        if question_text:
-            lines.append(f"- {question_text}")
-            questions.append(question_text)
-        if note:
-            lines.append(f"  Missing detail: {note}")
-    return "\n".join(lines), questions
 
 
 def _is_knowledge_enabled_for_project(*, tenant_policy: dict, project_overrides: dict) -> tuple[bool, str]:
@@ -130,7 +101,7 @@ def _queue_run_from_issue_context(
     if admission.blocked:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=admission.discord_conflict_detail(),
+            detail=format_discord_admission_conflict_detail(admission=admission),
         )
     enqueue_result = enqueue_issue_run_with_precheck(
         session,
@@ -162,12 +133,6 @@ def _queue_run_from_issue_context(
         message=success_message.format(run_id=enqueue_result.run.run_id, issue_key=issue_key),
         data={"run_id": enqueue_result.run.run_id, "issue_key": issue_key},
     )
-
-
-def _locked_decision_gate_reason(*, classification: str, decision_gate: Any | None) -> str | None:
-    if classification not in {"decision_gate", "both"}:
-        return None
-    return str(getattr(decision_gate, "reason", "") or "").strip() or None
 
 
 def dispatch_run_control_command(
@@ -482,49 +447,32 @@ def dispatch_run_control_command(
                 },
             )
         pre_check = precheck_decision.pre_check
-        classification = decision_result.classification
-        missing_slots = decision_result.missing_slots
-        auto_resolved_slots = list(decision_result.auto_resolved_slots)
-
-        if classification != "clear":
-            decision_gate = getattr(pre_check, "decision_gate", None)
-            locked_decision_gate_reason = _locked_decision_gate_reason(
-                classification=classification,
-                decision_gate=decision_gate,
-            )
-            decision_gate_questions = [
-                question.strip()
-                for question in getattr(decision_gate, "questions", ())
-                if str(question).strip()
-            ]
-            gtd_questions = [
-                question.strip()
-                for question in getattr(pre_check, "gtd_clarification_questions", ())
-                if str(question).strip()
-            ]
-            gtd_missing = [
-                item.strip()
-                for item in getattr(pre_check, "gtd_missing_criteria", ())
-                if str(item).strip()
-            ]
-            unresolved_question_feedback = list(
-                unresolved_question_feedback_for_cycle(
-                    session=session,
-                    cycle_id=str(decision_result.cycle_id or ""),
-                )
-            ) if decision_result.cycle_id else []
-            if classification in {"decision_gate", "both"} and unresolved_question_feedback:
-                message, generated_questions = _decision_gate_unresolved_feedback_message(
+        clarification_presentation = build_decision_clarification_presentation(
+            decision_result=decision_result,
+            question_feedback=load_cycle_question_feedback(
+                session=session,
+                cycle_id=str(decision_result.cycle_id or ""),
+            ),
+        )
+        classification = clarification_presentation.classification
+        if clarification_presentation.recheck_required:
+            if (
+                classification in {"decision_gate", "both"}
+                and clarification_presentation.question_feedback
+            ):
+                message = render_decision_gate_feedback_message(
                     issue_key=issue_key,
-                    reason=locked_decision_gate_reason or "clarification required",
-                    question_feedback=unresolved_question_feedback,
+                    reason=clarification_presentation.decision_gate_reason or "clarification required",
+                    question_feedback=clarification_presentation.question_feedback,
                 )
+                generated_questions = list(clarification_presentation.questions)
             elif classification in {"decision_gate", "both"}:
-                message, generated_questions = _decision_gate_remaining_questions_message(
+                message = render_decision_gate_remaining_questions_message(
                     issue_key=issue_key,
-                    reason=locked_decision_gate_reason or "clarification required",
-                    questions=decision_gate_questions,
-                ), decision_gate_questions
+                    reason=clarification_presentation.decision_gate_reason or "clarification required",
+                    questions=clarification_presentation.decision_gate_questions,
+                )
+                generated_questions = list(clarification_presentation.questions)
             else:
                 message, generated_questions = build_precheck_message(
                     runtime=runtime,
@@ -539,11 +487,11 @@ def dispatch_run_control_command(
                     ),
                     issue_key=issue_key,
                     classification=classification,
-                    decision_gate_reason=locked_decision_gate_reason,
-                    decision_gate_questions=decision_gate_questions,
-                    gtd_missing_criteria=gtd_missing,
-                    gtd_questions=gtd_questions,
-                    missing_slots=missing_slots,
+                    decision_gate_reason=clarification_presentation.decision_gate_reason or "",
+                    decision_gate_questions=list(clarification_presentation.decision_gate_questions),
+                    gtd_missing_criteria=list(clarification_presentation.gtd_missing_criteria),
+                    gtd_questions=list(clarification_presentation.gtd_questions),
+                    missing_slots=list(clarification_presentation.missing_slots),
                 )
             return DiscordCommandResponse(
                 ok=True,
@@ -553,12 +501,12 @@ def dispatch_run_control_command(
                     "issue_key": issue_key,
                     "recheck_required": True,
                     "classification": classification,
-                    "decision_gate_reason": locked_decision_gate_reason,
-                    "gtd_missing_criteria": gtd_missing,
-                    "questions": generated_questions or decision_gate_questions or gtd_questions,
-                    "question_feedback": unresolved_question_feedback,
-                    "missing_slots": missing_slots,
-                    "auto_resolved_slots": auto_resolved_slots,
+                    "decision_gate_reason": clarification_presentation.decision_gate_reason,
+                    "gtd_missing_criteria": list(clarification_presentation.gtd_missing_criteria),
+                    "questions": generated_questions or list(clarification_presentation.questions),
+                    "question_feedback": list(clarification_presentation.question_feedback),
+                    "missing_slots": list(clarification_presentation.missing_slots),
+                    "auto_resolved_slots": list(clarification_presentation.auto_resolved_slots),
                     "knowledge_mode": None,
                 },
             )

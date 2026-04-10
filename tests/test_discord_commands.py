@@ -754,15 +754,15 @@ class DiscordCommandApiTests(unittest.TestCase):
             ),
             patch("orchestrator.core.decision_engine.plan_decision_questions", return_value=planner_result),
             patch(
-                "orchestrator.api.discord.commands.run_controls.unresolved_question_feedback_for_cycle",
-                return_value=[
+                "orchestrator.api.discord.commands.run_controls.load_cycle_question_feedback",
+                return_value=(
                     {
                         "question_id": "dg_1",
                         "question_text": "What entitlement/capability values are required for production and staging?",
                         "note": "Config values were captured, but entitlement confirmation is still missing.",
                         "status": "open",
-                    }
-                ],
+                    },
+                ),
             ),
             patch("orchestrator.api.discord.commands.run_controls.build_precheck_message") as build_message_mock,
         ):
@@ -824,15 +824,15 @@ class DiscordCommandApiTests(unittest.TestCase):
                 "orchestrator.api.discord.ingress.executor._default_decision_clarification_port.capture_decision_reply_and_recheck"
             ) as reply_recheck_mock,
             patch(
-                "orchestrator.api.discord.commands.run_controls.unresolved_question_feedback_for_cycle",
-                return_value=[
+                "orchestrator.api.discord.commands.run_controls.load_cycle_question_feedback",
+                return_value=(
                     {
                         "question_id": "dg_1",
                         "question_text": "What entitlement/capability values are required for production and staging?",
                         "note": "Config values were captured, but entitlement confirmation is still missing.",
                         "status": "open",
-                    }
-                ],
+                    },
+                ),
             ),
         ):
             reply_recheck_mock.return_value = SimpleNamespace(

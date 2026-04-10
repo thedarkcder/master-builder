@@ -95,8 +95,26 @@ class ExecutionSnapshotMigrationTests(unittest.TestCase):
                     status="queued",
                     last_error=None,
                     plan={
-                        "trigger_context": {"source": "manual"},
-                        "pre_check": {"outcome": "ready_for_agent"},
+                        "version": 1,
+                        "context": {
+                            "trigger_context": {"source": "manual"},
+                            "execution_context": {"pre_check_outcome": "ready_for_agent"},
+                        },
+                        "workflow": {
+                            "outcome": None,
+                            "attempts": 0,
+                            "summary": [],
+                            "blocker_message": None,
+                            "requeue_target": None,
+                            "requeue_reason": None,
+                        },
+                        "events": {
+                            "stage_updates": [],
+                            "live_stage_updates": [],
+                            "stage_trace": [],
+                            "workstream_trace": [],
+                        },
+                        "stages": {},
                     },
                     created_at=now,
                     started_at=None,
@@ -113,7 +131,26 @@ class ExecutionSnapshotMigrationTests(unittest.TestCase):
                     checkpoint_kind="execution",
                     stage="execution",
                     payload_json={
-                        "trigger_context": {"source": "manual"},
+                        "version": 1,
+                        "context": {
+                            "trigger_context": {"source": "manual"},
+                            "execution_context": {},
+                        },
+                        "workflow": {
+                            "outcome": None,
+                            "attempts": 0,
+                            "summary": [],
+                            "blocker_message": None,
+                            "requeue_target": None,
+                            "requeue_reason": None,
+                        },
+                        "events": {
+                            "stage_updates": [],
+                            "live_stage_updates": [],
+                            "stage_trace": [],
+                            "workstream_trace": [],
+                        },
+                        "stages": {},
                     },
                     codex_session_id=None,
                     created_at=now,
@@ -126,43 +163,33 @@ class ExecutionSnapshotMigrationTests(unittest.TestCase):
         self.assertIsNone(canonicalize_snapshot_payload(None))
         self.assertIsNone(canonicalize_snapshot_payload("invalid"))
 
-    def test_canonicalize_snapshot_payload_converts_legacy_trigger_context(self) -> None:
+    def test_canonicalize_snapshot_payload_rejects_non_canonical_dict(self) -> None:
         snapshot = canonicalize_snapshot_payload(
             {
                 "trigger_context": {"source": "manual_fix_request", "pr_number": 42},
                 "pre_check": {"outcome": "ready_for_agent"},
             }
         )
-        self.assertIsNotNone(snapshot)
-        assert snapshot is not None
-        dumped = snapshot.dump()
-        self.assertEqual(
-            dumped["context"]["trigger_context"],
-            {"source": "manual_fix_request", "pr_number": 42},
-        )
-        self.assertEqual(
-            dumped["context"]["execution_context"]["pre_check_outcome"],
-            "ready_for_agent",
-        )
+        self.assertIsNone(snapshot)
 
     def test_migrate_execution_snapshots_dry_run_reports_conversions_without_persisting(self) -> None:
         with self.session_factory() as session:
             report = migrate_execution_snapshots(session=session, apply=False)
-            self.assertEqual(report.converted_runs, 1)
-            self.assertEqual(report.converted_checkpoints, 1)
+            self.assertEqual(report.converted_runs, 0)
+            self.assertEqual(report.converted_checkpoints, 0)
 
         with self.session_factory() as session:
             run = session.get(Run, "run-1")
             assert run is not None
-            self.assertEqual(run.plan["trigger_context"]["source"], "manual")
+            self.assertEqual(run.plan["context"]["trigger_context"]["source"], "manual")
 
     def test_migrate_execution_snapshots_apply_persists_canonical_shape(self) -> None:
         with self.session_factory() as session:
             report = migrate_execution_snapshots(session=session, apply=True)
             self.assertEqual(report.invalid_runs, 0)
             self.assertEqual(report.invalid_checkpoints, 0)
-            self.assertEqual(report.converted_runs, 1)
-            self.assertEqual(report.converted_checkpoints, 1)
+            self.assertEqual(report.converted_runs, 0)
+            self.assertEqual(report.converted_checkpoints, 0)
 
         with self.session_factory() as session:
             run = session.get(Run, "run-1")
