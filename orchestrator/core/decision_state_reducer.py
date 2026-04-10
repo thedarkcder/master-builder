@@ -2,12 +2,23 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from typing import Any
 
+from orchestrator.core.decision_snapshot_codec import (
+    PrecheckSnapshot,
+    apply_frozen_cycle_questions,
+)
+from orchestrator.core.decision_gate import DecisionGateResult
 from orchestrator.core.decision_types import (
     DecisionClassification,
     IngressDecision,
     PrecheckOutcome,
+    blocking_reason_for_precheck,
+    guidance_for_precheck_block_reason,
 )
+from orchestrator.core.gtd import GoodToDoValidationResult
+from orchestrator.core.pre_run_check import PreRunCheckResult
+from orchestrator.storage.models import DecisionCase, DecisionCycle
 
 
 class DecisionStateTransition(str, Enum):
@@ -90,3 +101,87 @@ def is_question_driven_state(*, classification: DecisionClassification | str, bl
         PrecheckOutcome.DECISION_GATE_REQUIRED,
         PrecheckOutcome.GTD_REQUIRED,
     }
+
+
+def decision_from_snapshot(
+    *,
+    snapshot: dict[str, Any],
+    source: str,
+    classification: str,
+    cycle: DecisionCycle | None,
+    case: DecisionCase,
+) -> IngressDecision:
+    pre_check_snapshot = PrecheckSnapshot.load(snapshot.get("pre_check"))
+    pre_check = pre_check_snapshot.to_precheck() if pre_check_snapshot is not None else None
+    if pre_check is not None and cycle is not None and cycle.status == "open":
+        pre_check = apply_frozen_cycle_questions(
+            pre_check=pre_check,
+            cycle_question_set=list(cycle.question_set_json),
+            unresolved_question_ids=list(cycle.unresolved_question_ids_json),
+            cycle_reason=cycle.reason,
+            classification=DecisionClassification.parse(classification),
+        )
+
+    if DecisionClassification.parse(classification) is DecisionClassification.CLEAR:
+        normalized_pre_check = pre_check
+        if normalized_pre_check is None:
+            ready_label = str(case.ready_label or "").strip() or None
+            ready_label_present = bool(case.ready_label_present)
+            outcome = (
+                PrecheckOutcome.MISSING_READY_LABEL.value
+                if ready_label and not ready_label_present
+                else PrecheckOutcome.READY_FOR_AGENT.value
+            )
+            normalized_pre_check = PreRunCheckResult(
+                outcome=outcome,
+                ready_label=ready_label,
+                ready_label_present=ready_label_present,
+                required_worker_capability=str(case.required_worker_capability or "").strip(),
+                required_worker_label=str(case.required_worker_label or "").strip(),
+                required_worker_label_present=bool(case.required_worker_label_present),
+                decision_gate=DecisionGateResult(
+                    triggered=False,
+                    reason="Decision Gate not required",
+                    missing_sections=(),
+                    questions=(),
+                    recommendation="Proceed with execution.",
+                    tags=(),
+                ),
+                gtd=GoodToDoValidationResult(
+                    valid=True,
+                    missing_criteria=(),
+                    clarification_questions=(),
+                ),
+            )
+        if PrecheckOutcome.parse(getattr(normalized_pre_check, "outcome", None)) is PrecheckOutcome.DECISION_GATE_REQUIRED:
+            normalized_pre_check = PreRunCheckResult(
+                outcome=PrecheckOutcome.READY_FOR_AGENT.value,
+                ready_label=normalized_pre_check.ready_label,
+                ready_label_present=normalized_pre_check.ready_label_present,
+                required_worker_capability=normalized_pre_check.required_worker_capability,
+                required_worker_label=normalized_pre_check.required_worker_label,
+                required_worker_label_present=normalized_pre_check.required_worker_label_present,
+                decision_gate=normalized_pre_check.decision_gate,
+                gtd=normalized_pre_check.gtd,
+            )
+        normalized_block_reason = blocking_reason_for_precheck(normalized_pre_check)
+        return IngressDecision(
+            source=source,  # type: ignore[arg-type]
+            pre_check=normalized_pre_check,
+            block_reason=normalized_block_reason,
+            guidance=guidance_for_precheck_block_reason(
+                block_reason=normalized_block_reason,
+                ready_label=str(getattr(normalized_pre_check, "ready_label", "") or "").strip() or None,
+            ),
+            policy_error=None,
+            label_actions=(),
+        )
+
+    return IngressDecision(
+        source=source,  # type: ignore[arg-type]
+        pre_check=pre_check,
+        block_reason=str(snapshot.get("block_reason") or case.blocked_reason or "").strip() or None,
+        guidance=str(snapshot.get("guidance") or "").strip() or None,
+        policy_error=str(snapshot.get("policy_error") or "").strip() or None,
+        label_actions=(),
+    )
