@@ -70,13 +70,16 @@ def resolve_ready_label_for_tenant(tenant) -> str | None:  # noqa: ANN001
 def build_jira_enqueue_skipped_notification_action(
     *,
     context,
-    reason: str,
+    reason: ExecutionAdmissionReason | str,
     extra_detail: str | None = None,
 ) -> DiscordTenantNotificationAction:
+    normalized_reason = (
+        reason.value if isinstance(reason, ExecutionAdmissionReason) else str(reason or "").strip()
+    )
     message = format_jira_enqueue_skipped_message(
         issue_key=context.issue_key,
         issue_status=context.issue_status,
-        reason=reason,
+        reason=normalized_reason,
         extra_detail=extra_detail,
     )
     return DiscordTenantNotificationAction(
@@ -442,7 +445,7 @@ def plan_jira_run_flow(
             actions=(
                 build_jira_enqueue_skipped_notification_action(
                     context=context,
-                    reason=content_admission.reason_code or ExecutionAdmissionReason.NO_RETRYABLE_RUN.value,
+                    reason=content_admission.reason or ExecutionAdmissionReason.NO_RETRYABLE_RUN,
                 ),
             ),
         )
@@ -480,7 +483,7 @@ def plan_jira_run_flow(
             actions=(
                 build_jira_enqueue_skipped_notification_action(
                     context=context,
-                    reason=content_admission.reason_code or ExecutionAdmissionReason.POLICY_EVAL_FAILED.value,
+                    reason=content_admission.reason or ExecutionAdmissionReason.POLICY_EVAL_FAILED,
                     extra_detail=precheck_decision.policy_error,
                 ),
             ),
@@ -506,7 +509,7 @@ def plan_jira_run_flow(
             actions=(
                 build_jira_enqueue_skipped_notification_action(
                     context=context,
-                    reason=admission.reason_code,
+                    reason=admission.reason or ExecutionAdmissionReason.EXECUTION_BLOCKED,
                     extra_detail=build_jira_admission_notification_detail(admission=admission),
                 ),
             ),

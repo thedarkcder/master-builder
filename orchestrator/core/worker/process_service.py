@@ -110,6 +110,10 @@ def process_next_queued_run(
         failed_status=run_status_failed,
         worker_service_instance_id=worker_service_instance_id,
         worker_capabilities=set(capability_context.available),
+        running_stale_timeout_seconds=max(
+            60,
+            int(getattr(settings, "worker_run_stale_timeout_seconds", 300)),
+        ),
     )
     if selection.terminal_run is not None:
         return selection.terminal_run

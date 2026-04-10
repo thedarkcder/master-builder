@@ -339,6 +339,10 @@ def _probe_claimable_run_once(
             queued_status="queued",
             running_status="running",
             worker_capabilities=set(capability_context.available),
+            running_stale_timeout_seconds=max(
+                60,
+                int(getattr(settings, "worker_run_stale_timeout_seconds", 300)),
+            ),
         )
 
 
