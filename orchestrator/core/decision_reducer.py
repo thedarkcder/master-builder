@@ -13,6 +13,7 @@ from orchestrator.core.decision_types import (
 )
 from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.pre_run_check import PreRunCheckResult
+from orchestrator.core.runtime_payload_models import PlannerGateStatus
 from orchestrator.storage.models import DecisionCase
 
 
@@ -24,20 +25,19 @@ class ReducedPlannerDecision:
     question_states: list[dict[str, object]]
 
 
-def planner_classification(*, gate_status: str) -> DecisionClassification:
-    normalized = str(gate_status or "").strip().lower()
-    if normalized == "blocked_decision_gate":
+def planner_classification(*, gate_status: PlannerGateStatus) -> DecisionClassification:
+    if gate_status is PlannerGateStatus.BLOCKED_DECISION_GATE:
         return DecisionClassification.DECISION_GATE
-    if normalized == "blocked_gtd":
+    if gate_status is PlannerGateStatus.BLOCKED_GTD:
         return DecisionClassification.GTD
-    if normalized == "blocked_both":
+    if gate_status is PlannerGateStatus.BLOCKED_BOTH:
         return DecisionClassification.BOTH
     return DecisionClassification.CLEAR
 
 
 def clear_planner_result() -> DecisionPlannerResult:
     return DecisionPlannerResult(
-        gate_status="clear",
+        gate_status=PlannerGateStatus.CLEAR,
         reason="",
         questions=(),
         question_states=(),

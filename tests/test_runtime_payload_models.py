@@ -4,6 +4,7 @@ import pytest
 
 from orchestrator.core.runtime_payload_models import (
     DecisionPlannerPayload,
+    PlannerGateStatus,
     PrecheckMessagePayload,
     PrecheckPolicyPayload,
 )
@@ -58,7 +59,7 @@ def test_decision_planner_payload_normalizes_questions_and_states() -> None:
         },
         classification="decision_gate",
     )
-    assert payload.gate_status == "blocked_decision_gate"
+    assert payload.gate_status is PlannerGateStatus.BLOCKED_DECISION_GATE
     assert len(payload.question_states) == 1
     assert payload.missing_items == ("decision_owner",)
 

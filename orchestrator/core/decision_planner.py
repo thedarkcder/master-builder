@@ -7,7 +7,7 @@ from orchestrator.core.agent_tools import allowed_tools_for_stage, execute_agent
 from orchestrator.core.runtime_invocation import AgentInvocationContext, invoke_runtime_json_with_tools
 from orchestrator.core.codex_runtime import CodexRuntimeError, build_codex_runtime
 from orchestrator.core.prompt_templates import render_prompt
-from orchestrator.core.runtime_payload_models import DecisionPlannerPayload
+from orchestrator.core.runtime_payload_models import DecisionPlannerPayload, PlannerGateStatus
 from orchestrator.storage.models import DecisionCase, DecisionCycle, Project, Tenant
 
 
@@ -22,13 +22,16 @@ class DecisionPlannerQuestion:
 
 @dataclass(frozen=True)
 class DecisionPlannerResult:
-    gate_status: str
+    gate_status: PlannerGateStatus
     reason: str
     questions: tuple[DecisionPlannerQuestion, ...]
     question_states: tuple[DecisionPlannerQuestion, ...]
     resolved_items: tuple[str, ...]
     missing_items: tuple[str, ...]
     captured_answer_summary: str | None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "gate_status", PlannerGateStatus.parse(self.gate_status))
 
 
 def plan_decision_questions(

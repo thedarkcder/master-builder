@@ -1,6 +1,22 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
+
+
+class PlannerGateStatus(str, Enum):
+    CLEAR = "clear"
+    BLOCKED_DECISION_GATE = "blocked_decision_gate"
+    BLOCKED_GTD = "blocked_gtd"
+    BLOCKED_BOTH = "blocked_both"
+
+    @classmethod
+    def parse(cls, value: object) -> PlannerGateStatus:
+        normalized = str(getattr(value, "value", value) or "").strip().lower()
+        for item in cls:
+            if normalized == item.value:
+                return item
+        raise ValueError(f"Unsupported planner gate_status: {value!r}")
 
 
 def _string_tuple(value: object) -> tuple[str, ...]:
@@ -51,7 +67,7 @@ class DecisionPlannerQuestionPayload:
 
 @dataclass(frozen=True)
 class DecisionPlannerPayload:
-    gate_status: str
+    gate_status: PlannerGateStatus
     reason: str
     questions: tuple[DecisionPlannerQuestionPayload, ...]
     question_states: tuple[DecisionPlannerQuestionPayload, ...]
@@ -63,11 +79,12 @@ class DecisionPlannerPayload:
     def from_payload(cls, payload: object, *, classification: str) -> DecisionPlannerPayload:
         if not isinstance(payload, dict):
             raise RuntimeError("Decision planner returned non-object payload")
-        gate_status = str(payload.get("gate_status") or "").strip().lower()
-        if gate_status not in {"clear", "blocked_decision_gate", "blocked_gtd", "blocked_both"}:
-            raise RuntimeError("Decision planner returned invalid gate_status")
+        try:
+            gate_status = PlannerGateStatus.parse(payload.get("gate_status"))
+        except ValueError as exc:
+            raise RuntimeError("Decision planner returned invalid gate_status") from exc
         reason = str(payload.get("reason") or "").strip()
-        if gate_status != "clear" and not reason:
+        if gate_status is not PlannerGateStatus.CLEAR and not reason:
             raise RuntimeError("Decision planner returned blocked state without reason")
 
         from orchestrator.core.decision_types import DecisionClassification
