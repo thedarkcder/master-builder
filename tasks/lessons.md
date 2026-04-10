@@ -159,3 +159,4 @@
 - Do not paper over a route-contract change with broad test stubs. If the real route can cheaply distinguish a linked integration from an unlinked placeholder, encode that in the production gate and let tests exercise the real branch.
 - When the user clarifies that a dependency is an external effect, stub that boundary in tests instead of forcing the owned route contract to absorb integration-state heuristics.
 - For external resource IDs persisted in product config, reinstall/reconcile flows must verify the resources still exist upstream before trusting the stored IDs. Preserve valid mappings, remap surviving resources when possible, and recreate only the missing pieces.
+- Do not add a new config knob when the required Discord category can be derived from live guild state. Query the guild, infer the authoritative category from upstream structure, and keep config limited to true operator inputs.

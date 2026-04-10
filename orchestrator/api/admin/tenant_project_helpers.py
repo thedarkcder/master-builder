@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections import Counter
 from datetime import datetime, timezone
 
 from sqlalchemy import select
@@ -9,7 +10,7 @@ from sqlalchemy.orm import Session
 from orchestrator.core.decision_types import jira_config_project_keys
 from orchestrator.core.platform_secret_service import PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF, resolve_platform_secret_ref
 from orchestrator.storage.models import Project, Tenant
-from orchestrator.tools.discord_api import DiscordApiClient, DiscordTextChannel, DiscordVoiceChannel
+from orchestrator.tools.discord_api import DiscordApiClient, DiscordCategoryChannel, DiscordTextChannel, DiscordVoiceChannel
 from orchestrator.tools.discord_api import DiscordApiError
 
 
@@ -87,7 +88,6 @@ def resolve_project_discord_channel_binding(
         raise ValueError("Discord guild ID is not configured")
 
     parent_id = settings.discord_channel_category_id.strip() or None
-    voice_parent_id = str(getattr(settings, "discord_voice_channel_category_id", "") or "").strip() or parent_id
     channel_name = resolve_project_discord_channel_name_fn(settings=settings, tenant=tenant, project=project)
     client = DiscordApiClient(bot_token=bot_token)
     existing_channel_id = str(normalized.get("channel_id") or "").strip()
@@ -119,6 +119,11 @@ def resolve_project_discord_channel_binding(
         live_voice_links[normalized_voice_channel_id] = normalized_linked_channel_id
 
     if not live_voice_links:
+        voice_parent_id = _resolve_voice_channel_parent_id(
+            client=client,
+            guild_id=guild_id,
+            fallback_parent_id=parent_id,
+        )
         voice_channel: DiscordVoiceChannel = client.ensure_voice_channel(
             guild_id=guild_id,
             name=f"{channel_name}-voice",
@@ -151,6 +156,60 @@ def _discord_channel_exists(*, client: DiscordApiClient, channel_id: str) -> boo
     except (DiscordApiError, ValueError):
         return False
     return str(channel.get("id") or "").strip() == normalized_channel_id
+
+
+def _resolve_voice_channel_parent_id(
+    *,
+    client: DiscordApiClient,
+    guild_id: str,
+    fallback_parent_id: str | None,
+) -> str | None:
+    categories = client.list_channel_categories(guild_id=guild_id)
+    if not categories:
+        return fallback_parent_id
+
+    voice_channels = client.list_voice_channels(guild_id=guild_id)
+    voice_parent_counts = Counter(channel.parent_id for channel in voice_channels if channel.parent_id)
+    voice_named_categories = [category for category in categories if _looks_like_voice_category_name(category.name)]
+    candidates = [
+        category
+        for category in voice_named_categories
+        if voice_parent_counts.get(category.channel_id, 0) > 0
+    ]
+    if candidates:
+        return _select_preferred_category_id(candidates=candidates, voice_parent_counts=voice_parent_counts)
+    if voice_named_categories:
+        return _select_preferred_category_id(candidates=voice_named_categories, voice_parent_counts=voice_parent_counts)
+    voice_backed_categories = [
+        category
+        for category in categories
+        if voice_parent_counts.get(category.channel_id, 0) > 0
+    ]
+    if voice_backed_categories:
+        return _select_preferred_category_id(candidates=voice_backed_categories, voice_parent_counts=voice_parent_counts)
+    return fallback_parent_id
+
+
+def _looks_like_voice_category_name(name: str) -> bool:
+    normalized = re.sub(r"[^a-z0-9]+", " ", name.strip().lower())
+    tokens = {token for token in normalized.split() if token}
+    return "voice" in tokens or {"live", "voice"}.issubset(tokens)
+
+
+def _select_preferred_category_id(
+    *,
+    candidates: list[DiscordCategoryChannel],
+    voice_parent_counts: Counter[str],
+) -> str:
+    selected = sorted(
+        candidates,
+        key=lambda category: (
+            -voice_parent_counts.get(category.channel_id, 0),
+            category.name.lower(),
+            category.channel_id,
+        ),
+    )[0]
+    return selected.channel_id
 
 
 def ensure_default_project_for_tenant(
