@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-import unittest
 from unittest.mock import patch
 
 from orchestrator.core.config import get_settings
@@ -1079,7 +1078,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
         self.assertIsNone(case.active_cycle_id)
         self.assertEqual(cycle_count, 1)
 
-    def test_existing_case_load_normalizes_stale_clear_snapshot(self) -> None:
+    def test_existing_case_load_does_not_mutate_stale_clear_snapshot(self) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-stateful")
             project = session.get(Project, "project-stateful")
@@ -1149,12 +1148,12 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
             session.refresh(case)
 
         assert loaded is not None
-        self.assertIsNone(case.blocked_reason)
+        self.assertEqual(case.blocked_reason, "policy_eval_failed")
         self.assertEqual(case.classification, "clear")
         snapshot = dict(case.metadata_json.get("result_snapshot") or {})
         self.assertEqual(snapshot.get("classification"), "clear")
-        self.assertIsNone(snapshot.get("block_reason"))
-        self.assertIsNone(snapshot.get("policy_error"))
+        self.assertEqual(snapshot.get("block_reason"), "policy_eval_failed")
+        self.assertEqual(snapshot.get("policy_error"), "Codex precheck policy evaluation failed")
 
     def test_jira_comment_effect_is_published_after_state_commit(self) -> None:
         precheck = _precheck_result(

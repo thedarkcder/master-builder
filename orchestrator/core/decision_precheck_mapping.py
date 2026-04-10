@@ -166,12 +166,6 @@ def decision_result_for_duplicate_event(
         cycle=cycle,
         case=case,
     )
-    if classification is DecisionClassification.CLEAR:
-        normalize_clear_case_snapshot(
-            case=case,
-            source=str(existing_event.source or "jira_webhook"),
-            occurred_at=getattr(existing_event, "occurred_at", None) or getattr(existing_event, "created_at", None),
-        )
     from sqlalchemy import select
 
     outbox_effect_ids = tuple(
@@ -265,53 +259,6 @@ def decision_from_snapshot(
         policy_error=str(snapshot.get("policy_error") or "").strip() or None,
         label_actions=(),
     )
-
-
-def normalize_clear_case_snapshot(
-    *,
-    case: DecisionCase,
-    source: str,
-    occurred_at: datetime | None = None,
-) -> bool:
-    classification = str(case.classification or "").strip() or "clear"
-    if classification != "clear":
-        return False
-    metadata = dict(case.metadata_json) if isinstance(case.metadata_json, dict) else {}
-    snapshot = metadata.get("result_snapshot") if isinstance(metadata.get("result_snapshot"), dict) else {}
-    decision = decision_from_snapshot(
-        snapshot=snapshot,
-        source=source,
-        classification="clear",
-        cycle=None,
-        case=case,
-    )
-    issue_labels = [
-        str(label).strip()
-        for label in snapshot.get("issue_labels", [])
-        if str(label).strip()
-    ]
-    auto_resolved_slots = list(string_tuple(snapshot.get("auto_resolved_slots")))
-    normalized_snapshot = serialize_result_snapshot(
-        decision=decision,
-        classification="clear",
-        issue_labels=issue_labels,
-        missing_slots=[],
-        auto_resolved_slots=auto_resolved_slots,
-    )
-    changed = (
-        str(case.blocked_reason or "").strip() != ""
-        or snapshot != normalized_snapshot
-        or str(case.state or "").strip() == "blocked_decision_gate"
-        or str(case.state or "").strip() == "blocked_gtd"
-    )
-    if not changed:
-        return False
-    metadata["result_snapshot"] = normalized_snapshot
-    case.blocked_reason = None
-    case.classification = "clear"
-    case.metadata_json = metadata
-    case.updated_at = occurred_at or datetime.now(timezone.utc)
-    return True
 
 
 def string_tuple(value: object) -> tuple[str, ...]:
