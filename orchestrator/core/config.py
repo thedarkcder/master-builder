@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     discord_oauth_client_secret: str = ""
     discord_oauth_redirect_url: str = "http://localhost:4000/api/public/discord/oauth/callback"
     discord_install_state_secret: str = "local-dev-discord-install-secret"
-    discord_bot_permissions: int = 277025574912
+    discord_bot_permissions: int = 3224728621023057
     email_delivery_provider: Literal["smtp", "resend"] = "smtp"
     email_from_name: str = "Master Builder"
     email_from_address: str = "no-reply@masterbuilder.local"
@@ -122,6 +122,7 @@ class Settings(BaseSettings):
     discord_live_voice_lock_key: int = 947102033129
     discord_live_voice_poll_seconds: int = 3
     auto_migrate_on_startup: bool = True
+    execution_snapshot_startup_bootstrap_enabled: bool = True
     sentry_dsn: str = ""
     sentry_environment: str = "dev"
     sentry_release: str = ""

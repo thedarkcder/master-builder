@@ -39,6 +39,9 @@ from orchestrator.core.worker.queue_listener import (
 from orchestrator.core.worker.runtime_factory import build_workflow_runner_for_session
 from orchestrator.core.worker_capabilities import resolve_worker_capability_context
 from orchestrator.core.workflow.runner import WorkflowRunner
+from orchestrator.core.workflow.execution_snapshot_startup import (
+    run_execution_snapshot_startup_bootstrap,
+)
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.run_queue_events import (
     RUN_QUEUE_NOTIFY_CHANNEL,
@@ -560,6 +563,12 @@ def run_worker_child_once(*, mode: str = WORKER_MODE_RUNS) -> int:
         default_agent_id=str(settings.agent_id or "").strip() or "worker",
     )
     session_factory = create_session_factory()
+    if bool(getattr(settings, "execution_snapshot_startup_bootstrap_enabled", True)):
+        run_execution_snapshot_startup_bootstrap(
+            session_factory=session_factory,
+            database_url=str(getattr(settings, "database_url", "") or ""),
+            actor=f"worker-child:{mode}",
+        )
     try:
         normalized_mode = str(mode or "").strip().lower()
         if normalized_mode == WORKER_MODE_RUNS:
@@ -590,6 +599,12 @@ async def run_worker(*, mode: str = WORKER_MODE_RUNS) -> None:
         default_agent_id=str(settings.agent_id or "").strip() or "worker",
     )
     session_factory = create_session_factory()
+    if bool(getattr(settings, "execution_snapshot_startup_bootstrap_enabled", True)):
+        run_execution_snapshot_startup_bootstrap(
+            session_factory=session_factory,
+            database_url=str(getattr(settings, "database_url", "") or ""),
+            actor=f"worker:{mode}",
+        )
 
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
