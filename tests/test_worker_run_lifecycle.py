@@ -1,7 +1,6 @@
 import os
 import unittest
 from datetime import datetime, timezone
-from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from orchestrator.core.runs import RUN_DEDUPE_SCOPE_ISSUE_EXECUTION, enqueue_run
@@ -26,28 +25,17 @@ from orchestrator.core.workflow.runner import (
     WorkflowStageCheckpoint,
 )
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
-from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import Project, Run, Tenant, WorkflowExecution
+from tests.test_support.db_harness import SqliteTemplateDbTestCase
 from tests.workflow_test_support import add_workflow_attempt
 
 
-class WorkerRunLifecycleTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self.temp_dir = TemporaryDirectory()
-        self.database_url = f"sqlite:///{self.temp_dir.name}/worker_lifecycle.db"
-        os.environ["ORCHESTRATOR_DATABASE_URL"] = self.database_url
-        reset_db_engine_cache()
-        run_migrations(database_url=self.database_url)
-        self.session_factory = create_session_factory(database_url=self.database_url)
-        self._seed_tenants_projects()
-
-    def tearDown(self) -> None:
-        self.temp_dir.cleanup()
-        reset_db_engine_cache()
-
-    def _seed_tenants_projects(self) -> None:
+class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
+    @classmethod
+    def bootstrap_template_database(cls) -> None:
+        session_factory = create_session_factory(database_url=cls._template_database_url)
         now = datetime.now(timezone.utc)
-        with self.session_factory() as session:
+        with session_factory() as session:
             session.add(
                 Tenant(
                     tenant_id="tenant-a",
@@ -101,6 +89,21 @@ class WorkerRunLifecycleTests(unittest.TestCase):
                 )
             )
             session.commit()
+
+    def setUp(self) -> None:
+        self._original_database_url = os.environ.get("ORCHESTRATOR_DATABASE_URL")
+        self.database_url = self._prepare_test_database(name_prefix="worker-lifecycle")
+        os.environ["ORCHESTRATOR_DATABASE_URL"] = self.database_url
+        reset_db_engine_cache()
+        self.session_factory = create_session_factory(database_url=self.database_url)
+
+    def tearDown(self) -> None:
+        self._cleanup_test_database()
+        if self._original_database_url is None:
+            os.environ.pop("ORCHESTRATOR_DATABASE_URL", None)
+        else:
+            os.environ["ORCHESTRATOR_DATABASE_URL"] = self._original_database_url
+        reset_db_engine_cache()
 
     def _get_workflow(self, session, *, issue_key: str, dedupe_scope: str = RUN_DEDUPE_SCOPE_ISSUE_EXECUTION):
         return session.query(WorkflowExecution).filter_by(
