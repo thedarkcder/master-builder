@@ -5,7 +5,6 @@ import hmac
 import hashlib
 import unittest
 from datetime import datetime, timedelta, timezone
-from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -42,16 +41,16 @@ from orchestrator.core.precheck_question_lock import build_precheck_questions_bl
 from orchestrator.core.worker.webhook_job_service import process_next_webhook_job
 from orchestrator.core.webhook_health import reset_webhook_health_tracker_for_tests, webhook_health_tracker
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
-from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import FollowupContext, Project, Run, Tenant, WebhookJob
 from orchestrator.tools.discord_api import DiscordApiError
 from orchestrator.tools.jira_oauth import JiraIssueDetail, JiraIssuePreview, JiraOAuthError
+from tests.test_support.db_harness import SqliteTemplateDbTestCase
 from tests.workflow_test_support import add_run_with_workflow, make_run
 
 pytestmark = pytest.mark.contract
 
 
-class JiraWebhookTests(unittest.TestCase):
+class JiraWebhookTests(SqliteTemplateDbTestCase):
     @staticmethod
     def _pre_run_check(*, outcome: str = "ready_for_agent", capability: str = "linux") -> PreRunCheckResult:
         return PreRunCheckResult(
@@ -113,8 +112,7 @@ class JiraWebhookTests(unittest.TestCase):
         )
 
     def setUp(self) -> None:
-        self.temp_dir = TemporaryDirectory()
-        self.database_url = f"sqlite:///{self.temp_dir.name}/webhook_test.db"
+        self.database_url = self._prepare_test_database(name_prefix="webhook")
         self.webhook_secret_env = "ORCHESTRATOR_TEST_WEBHOOK_SECRET"
         self.webhook_secret_value = "super-secret-token"
         self.github_webhook_secret_env = "ORCHESTRATOR_TEST_GITHUB_WEBHOOK_SECRET"
@@ -131,7 +129,6 @@ class JiraWebhookTests(unittest.TestCase):
         reset_db_engine_cache()
         invalidate_discord_channel_tenant_index()
         reset_webhook_health_tracker_for_tests()
-        run_migrations(database_url=self.database_url)
         self.session_factory = create_session_factory(database_url=self.database_url)
 
         self.client = TestClient(create_app())
@@ -149,7 +146,9 @@ class JiraWebhookTests(unittest.TestCase):
         self._default_precheck_decision_patch.start()
 
     def tearDown(self) -> None:
-        self.temp_dir.cleanup()
+        self.client.close()
+        self._cleanup_test_database()
+        os.environ.pop("ORCHESTRATOR_DATABASE_URL", None)
         os.environ.pop(self.webhook_secret_env, None)
         os.environ.pop(self.github_webhook_secret_env, None)
         os.environ.pop("ORCHESTRATOR_GITHUB_WEBHOOK_SECRET_REF", None)

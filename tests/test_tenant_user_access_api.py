@@ -1,7 +1,6 @@
 import os
 import unittest
 from datetime import datetime, timedelta, timezone
-from tempfile import TemporaryDirectory
 from unittest.mock import Mock, patch
 from urllib.parse import parse_qs, urlparse
 
@@ -12,15 +11,14 @@ from orchestrator.api.main import create_app
 from orchestrator.core.config import get_settings
 from orchestrator.core.email_delivery import EmailDeliveryError
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
-from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import Project, Run, Tenant, WebhookJob, WorkflowCheckpoint, WorkflowExecution
+from tests.test_support.db_harness import SqliteTemplateDbTestCase
 from tests.workflow_test_support import add_run_with_workflow, add_workflow_attempt, make_run
 
 
-class TenantUserAccessApiTests(unittest.TestCase):
+class TenantUserAccessApiTests(SqliteTemplateDbTestCase):
     def setUp(self) -> None:
-        self.temp_dir = TemporaryDirectory()
-        self.database_url = f"sqlite:///{self.temp_dir.name}/tenant_user_access.db"
+        self.database_url = self._prepare_test_database(name_prefix="tenant-user-access")
 
         os.environ["ORCHESTRATOR_DATABASE_URL"] = self.database_url
         os.environ["ORCHESTRATOR_ADMIN_USERNAME"] = "admin"
@@ -40,11 +38,11 @@ class TenantUserAccessApiTests(unittest.TestCase):
 
         get_settings.cache_clear()
         reset_db_engine_cache()
-        run_migrations(database_url=self.database_url)
         self.client = TestClient(create_app())
 
     def tearDown(self) -> None:
-        self.temp_dir.cleanup()
+        self.client.close()
+        self._cleanup_test_database()
         for key in (
             "ORCHESTRATOR_DATABASE_URL",
             "ORCHESTRATOR_ADMIN_USERNAME",

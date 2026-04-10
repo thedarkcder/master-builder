@@ -1,7 +1,6 @@
 import os
 import unittest
 from datetime import datetime, timedelta, timezone
-from tempfile import TemporaryDirectory
 from urllib.parse import parse_qs, quote_plus, urlparse
 from unittest.mock import patch
 from types import SimpleNamespace
@@ -22,7 +21,6 @@ from orchestrator.core.run_logs import record_run_log_event
 from orchestrator.core.secrets import encrypt_value
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
-from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import (
     DiscordCommandSyncRuntimeState,
     JiraOAuthConnection,
@@ -52,13 +50,13 @@ from orchestrator.storage.models import (
     WorkerRuntimeState,
 )
 from orchestrator.tools.github_app import InstallationRepository
+from tests.test_support.db_harness import SqliteTemplateDbTestCase
 from tests.workflow_test_support import add_human_input_request, add_run_with_workflow, add_workflow_attempt, make_run
 
 
-class AdminApiTests(unittest.TestCase):
+class AdminApiTests(SqliteTemplateDbTestCase):
     def setUp(self) -> None:
-        self.temp_dir = TemporaryDirectory()
-        self.database_url = f"sqlite:///{self.temp_dir.name}/admin_test.db"
+        self.database_url = self._prepare_test_database(name_prefix="admin-api")
 
         os.environ["ORCHESTRATOR_DATABASE_URL"] = self.database_url
         os.environ["ORCHESTRATOR_ADMIN_USERNAME"] = "admin"
@@ -76,7 +74,6 @@ class AdminApiTests(unittest.TestCase):
         get_settings.cache_clear()
         reset_db_engine_cache()
         reset_agent_observability_for_tests()
-        run_migrations(database_url=self.database_url)
 
         self.client = TestClient(create_app())
         seed_slug_secret_response = self.client.put(
@@ -111,7 +108,8 @@ class AdminApiTests(unittest.TestCase):
         )
 
     def tearDown(self) -> None:
-        self.temp_dir.cleanup()
+        self.client.close()
+        self._cleanup_test_database()
         os.environ.pop("ORCHESTRATOR_DATABASE_URL", None)
         os.environ.pop("ORCHESTRATOR_ADMIN_USERNAME", None)
         os.environ.pop("ORCHESTRATOR_ADMIN_PASSWORD", None)
