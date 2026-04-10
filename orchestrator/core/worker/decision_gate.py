@@ -112,6 +112,19 @@ def apply_decision_gate(
     if worker_decision.allowed:
         return None, None
 
+    if worker_decision.decision_gate is None:
+        error_text = (
+            worker_decision.configuration_error
+            or "Execution readiness check failed: worker decision rejected run without decision-gate details"
+        )
+        terminal_run = terminalizer(
+            session=session,
+            run_id=run.run_id,
+            terminal_status=failed_status,
+            last_error=error_text,
+        )
+        return terminal_run, None
+
     try:
         run_not_ready = derive_run_not_ready_outcome(worker_decision=worker_decision)
     except ValueError as exc:

@@ -46,6 +46,7 @@ from orchestrator.storage.models import (
     TenantUserCredential,
     TenantUserDiscordIdentity,
     WebhookJob,
+    WorkflowCheckpoint,
     WorkflowExecution,
     WorkerRuntimeState,
 )
@@ -238,7 +239,7 @@ class AdminApiTests(SqliteTemplateApiTestCase):
         session_factory = create_session_factory(self.database_url)
         now = datetime.now(timezone.utc)
         with session_factory() as session:
-            add_workflow_attempt(
+            _workflow, run_row, checkpoint_row = add_workflow_attempt(
                 session,
                 workflow_id=workflow_id,
                 run_id=run_id,
@@ -258,9 +259,21 @@ class AdminApiTests(SqliteTemplateApiTestCase):
                 checkpoint_session_id="checkpoint-session" if checkpoint_kind == "pm" else None,
                 blocked_reason="human_input_expired" if workflow_status == "blocked" else None,
                 last_error=None if workflow_status != "failed" and run_status not in {"failed", "blocked"} else "run failed",
-                plan={"source": "test"} if checkpoint_id else None,
+                plan=(
+                    ExecutionSnapshot.empty(trigger_context={"source": "test"}).dump()
+                    if checkpoint_id
+                    else None
+                ),
                 now=now,
             )
+            if checkpoint_id:
+                run_snapshot = ExecutionSnapshot.require(run_row.plan, allow_empty=True)
+                run_snapshot.context.execution_context["pre_check_outcome"] = "ready_for_agent"
+                run_row.plan = run_snapshot.dump()
+                assert checkpoint_row is not None
+                checkpoint_snapshot = ExecutionSnapshot.empty(trigger_context={"source": "test"})
+                checkpoint_snapshot.context.execution_context["pre_check_outcome"] = "ready_for_agent"
+                checkpoint_row.payload_json = checkpoint_snapshot.dump()
             if pending_request_id:
                 request_status = "pending" if workflow_status == "waiting_for_input" else "answered"
                 add_human_input_request(
@@ -2068,6 +2081,39 @@ class AdminApiTests(SqliteTemplateApiTestCase):
             auth=("admin", "secret"),
         )
         self.assertEqual(response.status_code, 409, response.text)
+
+    def test_create_workflow_attempt_rejects_non_ready_precheck_plan(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201)
+
+        self._seed_workflow_attempt(
+            workflow_id="workflow-non-ready-checkpoint-1",
+            run_id="run-non-ready-checkpoint-1",
+            issue_key="TP-1000C",
+            issue_summary="Non-ready checkpoint workflow",
+            workflow_status="waiting_for_input",
+            run_status="waiting_for_input",
+            checkpoint_id="checkpoint-non-ready-1",
+            checkpoint_kind="pm",
+        )
+
+        with create_session_factory(self.database_url)() as session:
+            checkpoint = session.get(WorkflowCheckpoint, "checkpoint-non-ready-1")
+            assert checkpoint is not None
+            checkpoint_snapshot = ExecutionSnapshot.require(checkpoint.payload_json, allow_empty=True)
+            checkpoint_snapshot.context.execution_context["pre_check_outcome"] = "gtd_required"
+            checkpoint.payload_json = checkpoint_snapshot.dump()
+            session.commit()
+
+        response = self.client.post(
+            "/api/admin/workflows/workflow-non-ready-checkpoint-1/attempts",
+            json={"mode": "resume", "checkpoint_kind": "pm"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertIn("pre_check_outcome must be 'ready_for_agent'", response.json()["detail"])
 
     def test_create_workflow_attempt_from_terminal_workflow_creates_new_workflow_lineage(self) -> None:
         payload = self._tenant_payload()
