@@ -70,7 +70,10 @@ class DecisionPlannerPayload:
         if gate_status != "clear" and not reason:
             raise RuntimeError("Decision planner returned blocked state without reason")
 
-        default_kind = "gtd" if classification == "gtd" else "decision_gate"
+        from orchestrator.core.decision_types import DecisionClassification
+
+        parsed_classification = DecisionClassification.parse(classification)
+        default_kind = "gtd" if parsed_classification is DecisionClassification.GTD else "decision_gate"
         questions = tuple(
             item
             for raw_item in (payload.get("questions") if isinstance(payload.get("questions"), list) else [])
