@@ -12,6 +12,7 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 
 from cryptography.fernet import Fernet
+from fastapi.testclient import TestClient
 
 from orchestrator.core.config import get_settings
 from orchestrator.core.platform_secret_service import platform_secret_service
@@ -19,6 +20,7 @@ from orchestrator.core.secrets import encrypt_value
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import JiraOAuthConnection, Project, Tenant
+from tests.test_support.db_harness import SqliteTemplateDbTestCase
 
 
 _FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
@@ -162,6 +164,88 @@ def clear_runtime_environment() -> None:
 
 def session_factory_for(database_url: str):
     return create_session_factory(database_url=database_url)
+
+
+class ProductionPathApiTestCase(SqliteTemplateDbTestCase):
+    """Production-path API tests with one seeded runtime template per class."""
+
+    _class_client: TestClient
+    _runtime_workspace: TemporaryDirectory[str]
+    _runtime_checkout_dir: str
+    _class_env_originals: dict[str, str | None]
+    _secrets_encryption_key: str
+
+    @classmethod
+    def include_admin_env(cls) -> bool:
+        return False
+
+    @classmethod
+    def include_checkout_dir(cls) -> bool:
+        return True
+
+    @classmethod
+    def bootstrap_template_state(cls) -> None:
+        """Optional hook for one-time runtime/bootstrap work on the template DB."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls._runtime_workspace = TemporaryDirectory()
+        cls._runtime_checkout_dir = os.path.join(cls._runtime_workspace.name, "checkouts")
+        cls._secrets_encryption_key = Fernet.generate_key().decode("utf-8")
+        super().setUpClass()
+
+        cls._class_env_originals = {}
+        env_updates = {
+            "ORCHESTRATOR_DATABASE_URL": cls._template_database_url,
+            "ORCHESTRATOR_SECRETS_ENCRYPTION_KEY": cls._secrets_encryption_key,
+        }
+        if cls.include_checkout_dir():
+            env_updates["ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR"] = cls._runtime_checkout_dir
+        if cls.include_admin_env():
+            env_updates["ORCHESTRATOR_ADMIN_USERNAME"] = "admin"
+            env_updates["ORCHESTRATOR_ADMIN_PASSWORD"] = "secret"
+
+        for key, value in env_updates.items():
+            cls._class_env_originals[key] = os.environ.get(key)
+            os.environ[key] = value
+
+        get_settings.cache_clear()
+        reset_db_engine_cache()
+        from orchestrator.api.main import create_app
+
+        cls._class_client = TestClient(create_app())
+        cls.bootstrap_template_state()
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        try:
+            cls._class_client.close()
+        finally:
+            for key, original_value in cls._class_env_originals.items():
+                if original_value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = original_value
+            get_settings.cache_clear()
+            reset_db_engine_cache()
+            cls._runtime_workspace.cleanup()
+            super().tearDownClass()
+
+    def _start_test_runtime(self, *, name_prefix: str) -> str:
+        database_url = self._prepare_test_database(name_prefix=name_prefix)
+        os.environ["ORCHESTRATOR_DATABASE_URL"] = database_url
+        get_settings.cache_clear()
+        reset_db_engine_cache()
+        self.database_url = database_url
+        self.session_factory = session_factory_for(database_url)
+        self.client = self.__class__._class_client
+        return database_url
+
+    def _stop_test_runtime(self) -> None:
+        self._cleanup_test_database()
+        os.environ["ORCHESTRATOR_DATABASE_URL"] = self._template_database_url
+        get_settings.cache_clear()
+        reset_db_engine_cache()
 
 
 def seed_core_runtime_state(

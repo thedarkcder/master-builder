@@ -1,20 +1,16 @@
 from __future__ import annotations
 
-from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
 import pytest
-from fastapi.testclient import TestClient
 
-from orchestrator.api.main import create_app
 from orchestrator.core.config import get_settings
 from orchestrator.core.worker.webhook_job_service import process_next_webhook_job
 from tests.production_path_support import (
-    clear_runtime_environment,
-    configure_runtime_environment,
     load_json_fixture,
+    ProductionPathApiTestCase,
     seed_core_runtime_state,
     session_factory_for,
 )
@@ -110,21 +106,16 @@ class _FakeGitHubClient:
         return SimpleNamespace(comment_id=comment_id)
 
 
-class GitHubWebhookProductionPathTests(unittest.TestCase):
+class GitHubWebhookProductionPathTests(ProductionPathApiTestCase):
+    @classmethod
+    def bootstrap_template_state(cls) -> None:
+        seed_core_runtime_state(session_factory_for(cls._template_database_url))
+
     def setUp(self) -> None:
-        self.temp_dir = TemporaryDirectory()
-        self.database_url, _ = configure_runtime_environment(
-            temp_dir=self.temp_dir,
-            database_name="github_webhook_production.db",
-        )
-        self.session_factory = session_factory_for(self.database_url)
-        seed_core_runtime_state(self.session_factory)
-        self.client = TestClient(create_app())
+        self._start_test_runtime(name_prefix="github-webhook-production")
 
     def tearDown(self) -> None:
-        self.client.close()
-        self.temp_dir.cleanup()
-        clear_runtime_environment()
+        self._stop_test_runtime()
 
     def _process_one_webhook_job(self):
         with self.session_factory() as session:
