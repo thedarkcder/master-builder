@@ -41,6 +41,7 @@ class AdminDiscordCommandsRouteTests(unittest.TestCase):
 
         with (
             patch("orchestrator.api.main.run_migrations"),
+            patch("orchestrator.api.main.ensure_execution_snapshot_startup_bootstrap"),
             patch("orchestrator.api.main.register_discord_command_executor"),
             patch("orchestrator.api.main.sync_discord_guild_commands"),
             patch(
@@ -84,6 +85,7 @@ class AdminDiscordCommandsRouteTests(unittest.TestCase):
 
         with (
             patch("orchestrator.api.main.run_migrations"),
+            patch("orchestrator.api.main.ensure_execution_snapshot_startup_bootstrap"),
             patch("orchestrator.api.main.register_discord_command_executor"),
             patch("orchestrator.api.main.sync_discord_guild_commands"),
             patch("orchestrator.api.routes.admin_discord_commands.sync_discord_guild_commands") as sync_mock,

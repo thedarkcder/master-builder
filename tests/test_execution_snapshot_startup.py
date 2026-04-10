@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from orchestrator.core.workflow.execution_snapshot_migration import ExecutionSnapshotMigrationReport
 from orchestrator.core.workflow.execution_snapshot_startup import (
+    ensure_execution_snapshot_startup_bootstrap,
     run_execution_snapshot_startup_bootstrap,
 )
 
@@ -131,6 +132,43 @@ class ExecutionSnapshotStartupBootstrapTests(unittest.TestCase):
         self.assertEqual(report, invalid_report)
         self.assertTrue(any("execution_snapshot_startup_bootstrap_invalid_rows" in line for line in captured.output))
         self.assertEqual(session.calls[-1][0], "commit")
+
+    def test_ensure_startup_bootstrap_passes_when_report_clean(self) -> None:
+        session = _FakeSession(calls=[])
+        factory = _FakeSessionFactory(session)
+        with patch(
+            "orchestrator.core.workflow.execution_snapshot_startup.run_execution_snapshot_startup_bootstrap",
+            return_value=_ok_report(),
+        ):
+            ensure_execution_snapshot_startup_bootstrap(
+                session_factory=factory,  # type: ignore[arg-type]
+                database_url="postgresql://user:pass@localhost/db",
+                actor="api",
+            )
+
+    def test_ensure_startup_bootstrap_raises_on_invalid_rows(self) -> None:
+        session = _FakeSession(calls=[])
+        factory = _FakeSessionFactory(session)
+        invalid_report = ExecutionSnapshotMigrationReport(
+            scanned_runs=1,
+            converted_runs=0,
+            invalid_runs=1,
+            scanned_checkpoints=1,
+            converted_checkpoints=0,
+            invalid_checkpoints=1,
+            invalid_run_ids=("run-1",),
+            invalid_checkpoint_ids=("cp-1",),
+        )
+        with patch(
+            "orchestrator.core.workflow.execution_snapshot_startup.run_execution_snapshot_startup_bootstrap",
+            return_value=invalid_report,
+        ):
+            with self.assertRaises(RuntimeError):
+                ensure_execution_snapshot_startup_bootstrap(
+                    session_factory=factory,  # type: ignore[arg-type]
+                    database_url="postgresql://user:pass@localhost/db",
+                    actor="worker",
+                )
 
 if __name__ == "__main__":
     unittest.main()

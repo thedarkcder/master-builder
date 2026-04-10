@@ -47,6 +47,7 @@ class StreamSubscriber:
     queue: Queue[str]
     match_fn: Callable[[RunStreamEvent], bool]
     render_fn: Callable[[RunStreamEvent], str | None]
+    min_stream_offset_exclusive: int = 0
     disconnected: bool = False
 
 
@@ -351,11 +352,13 @@ class RunStreamBroker:
         buffer_size: int,
         match_fn: Callable[[RunStreamEvent], bool],
         render_fn: Callable[[RunStreamEvent], str | None],
+        min_stream_offset_exclusive: int = 0,
     ) -> StreamSubscriber:
         subscriber = StreamSubscriber(
             queue=Queue(maxsize=max(1, buffer_size)),
             match_fn=match_fn,
             render_fn=render_fn,
+            min_stream_offset_exclusive=max(0, int(min_stream_offset_exclusive)),
         )
         with self._lock:
             self._subscribers[subscriber_id] = subscriber
@@ -477,6 +480,8 @@ class RunStreamBroker:
             if subscriber.disconnected:
                 continue
             for row in rows:
+                if int(row.stream_offset or 0) <= int(subscriber.min_stream_offset_exclusive):
+                    continue
                 if not subscriber.match_fn(row):
                     continue
                 payload = subscriber.render_fn(row)

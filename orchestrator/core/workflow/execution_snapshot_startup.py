@@ -68,3 +68,23 @@ def run_execution_snapshot_startup_bootstrap(
         report.converted_checkpoints,
     )
     return report
+
+
+def ensure_execution_snapshot_startup_bootstrap(
+    *,
+    session_factory: sessionmaker[Session],
+    database_url: str,
+    actor: str,
+) -> None:
+    report = run_execution_snapshot_startup_bootstrap(
+        session_factory=session_factory,
+        database_url=database_url,
+        actor=actor,
+    )
+    if report is None:
+        return
+    if report.invalid_runs or report.invalid_checkpoints:
+        raise RuntimeError(
+            "Execution snapshot startup migration found incompatible rows; "
+            f"invalid_runs={report.invalid_runs} invalid_checkpoints={report.invalid_checkpoints}"
+        )
