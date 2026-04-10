@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     discord_guild_id: str = ""
     discord_channel_name_template: str = "{project_name}"
     discord_channel_category_id: str = ""
+    discord_voice_channel_category_id: str = ""
     voice_stt_provider: Literal["disabled", "openai", "whisper"] = "disabled"
     voice_tts_provider: Literal["disabled", "pocket_tts"] = "disabled"
     voice_transcription_model: str = "gpt-4o-mini-transcribe"

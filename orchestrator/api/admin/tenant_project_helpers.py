@@ -87,6 +87,7 @@ def resolve_project_discord_channel_binding(
         raise ValueError("Discord guild ID is not configured")
 
     parent_id = settings.discord_channel_category_id.strip() or None
+    voice_parent_id = str(getattr(settings, "discord_voice_channel_category_id", "") or "").strip() or parent_id
     channel_name = resolve_project_discord_channel_name_fn(settings=settings, tenant=tenant, project=project)
     client = DiscordApiClient(bot_token=bot_token)
     existing_channel_id = str(normalized.get("channel_id") or "").strip()
@@ -121,7 +122,7 @@ def resolve_project_discord_channel_binding(
         voice_channel: DiscordVoiceChannel = client.ensure_voice_channel(
             guild_id=guild_id,
             name=f"{channel_name}-voice",
-            parent_id=parent_id,
+            parent_id=voice_parent_id,
         )
         live_voice_links = {voice_channel.channel_id: existing_channel_id}
         normalized["live_voice_enabled"] = True
