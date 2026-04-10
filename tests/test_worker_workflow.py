@@ -22,10 +22,10 @@ from orchestrator.core.workflow.runner import (
 )
 from orchestrator.core.discord.notifications import DiscordSendResult
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
-from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import JiraOAuthConnection, Project, Tenant, WorkflowExecution
 from orchestrator.worker import process_next_queued_run
 from orchestrator.tools.project_repo_checkout import ProjectRepoCheckoutError
+from tests.test_support.db_harness import SqliteTemplateDbTestCase
 
 
 class _SuccessRunner:
@@ -124,66 +124,12 @@ class _CapabilityMismatchRunner:
         )
 
 
-class WorkerWorkflowTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self.temp_dir = TemporaryDirectory()
-        self.database_url = f"sqlite:///{self.temp_dir.name}/worker_test.db"
-        self.repo_checkout_base_dir = f"{self.temp_dir.name}/project-repos"
-
-        os.environ["ORCHESTRATOR_DATABASE_URL"] = self.database_url
-        os.environ["ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR"] = self.repo_checkout_base_dir
-        os.environ["ORCHESTRATOR_WORKER_WORKSPACE_KEY"] = "worker-a"
-        os.environ["ORCHESTRATOR_WORKER_CAPABILITIES"] = "linux"
-        get_settings.cache_clear()
-        reset_db_engine_cache()
-        reset_agent_observability_for_tests()
-        run_migrations(database_url=self.database_url)
-        self.session_factory = create_session_factory(database_url=self.database_url)
-        self._jira_issue_details: dict[str, dict[str, object]] = {}
-        self.checkout_patcher = patch(
-            "orchestrator.core.worker.execution_service.ensure_project_repository_checkout"
-        )
-        self.checkout_mock = self.checkout_patcher.start()
-        self.worktree_patcher = patch(
-            "orchestrator.core.worker.workflow_request_service.ensure_run_worktree",
-            side_effect=self._ensure_run_worktree_stub,
-        )
-        self.worktree_patcher.start()
-        self.worktree_validate_patcher = patch(
-            "orchestrator.core.worker.workflow_request_service.validate_run_worktree",
-            return_value=None,
-        )
-        self.worktree_validate_patcher.start()
-        self.freshness_patcher = patch(
-            "orchestrator.core.worker.execution_service.check_run_snapshot_freshness",
-            return_value=SimpleNamespace(stale=False, message=None),
-        )
-        self.freshness_patcher.start()
-        self.jira_oauth_patcher = patch(
-            "orchestrator.core.worker.execution_service.tenant_jira_oauth_context",
-            side_effect=self._tenant_jira_oauth_context_stub,
-        )
-        self.jira_oauth_patcher.start()
-        self._create_tenant()
-        self._seed_checked_out_repo()
-
-    def tearDown(self) -> None:
-        self.checkout_patcher.stop()
-        self.worktree_patcher.stop()
-        self.worktree_validate_patcher.stop()
-        self.freshness_patcher.stop()
-        self.temp_dir.cleanup()
-        os.environ.pop("ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR", None)
-        os.environ.pop("ORCHESTRATOR_WORKER_WORKSPACE_KEY", None)
-        os.environ.pop("ORCHESTRATOR_WORKER_CAPABILITIES", None)
-        self.jira_oauth_patcher.stop()
-        get_settings.cache_clear()
-        reset_db_engine_cache()
-        reset_agent_observability_for_tests()
-
-    def _create_tenant(self) -> None:
+class WorkerWorkflowTests(SqliteTemplateDbTestCase):
+    @classmethod
+    def bootstrap_template_database(cls) -> None:
         now = datetime.now(timezone.utc)
-        with self.session_factory() as session:
+        session_factory = create_session_factory(database_url=cls._template_database_url)
+        with session_factory() as session:
             session.add(
                 Tenant(
                     tenant_id="tenant-worker",
@@ -236,6 +182,66 @@ class WorkerWorkflowTests(unittest.TestCase):
                 )
             )
             session.commit()
+
+    def setUp(self) -> None:
+        self.temp_dir = TemporaryDirectory()
+        self._original_database_url = os.environ.get("ORCHESTRATOR_DATABASE_URL")
+        self.database_url = self._prepare_test_database(name_prefix="worker-workflow")
+        self.repo_checkout_base_dir = f"{self.temp_dir.name}/project-repos"
+
+        os.environ["ORCHESTRATOR_DATABASE_URL"] = self.database_url
+        os.environ["ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR"] = self.repo_checkout_base_dir
+        os.environ["ORCHESTRATOR_WORKER_WORKSPACE_KEY"] = "worker-a"
+        os.environ["ORCHESTRATOR_WORKER_CAPABILITIES"] = "linux"
+        get_settings.cache_clear()
+        reset_db_engine_cache()
+        reset_agent_observability_for_tests()
+        self.session_factory = create_session_factory(database_url=self.database_url)
+        self._jira_issue_details: dict[str, dict[str, object]] = {}
+        self.checkout_patcher = patch(
+            "orchestrator.core.worker.execution_service.ensure_project_repository_checkout"
+        )
+        self.checkout_mock = self.checkout_patcher.start()
+        self.worktree_patcher = patch(
+            "orchestrator.core.worker.workflow_request_service.ensure_run_worktree",
+            side_effect=self._ensure_run_worktree_stub,
+        )
+        self.worktree_patcher.start()
+        self.worktree_validate_patcher = patch(
+            "orchestrator.core.worker.workflow_request_service.validate_run_worktree",
+            return_value=None,
+        )
+        self.worktree_validate_patcher.start()
+        self.freshness_patcher = patch(
+            "orchestrator.core.worker.execution_service.check_run_snapshot_freshness",
+            return_value=SimpleNamespace(stale=False, message=None),
+        )
+        self.freshness_patcher.start()
+        self.jira_oauth_patcher = patch(
+            "orchestrator.core.worker.execution_service.tenant_jira_oauth_context",
+            side_effect=self._tenant_jira_oauth_context_stub,
+        )
+        self.jira_oauth_patcher.start()
+        self._seed_checked_out_repo()
+
+    def tearDown(self) -> None:
+        self.checkout_patcher.stop()
+        self.worktree_patcher.stop()
+        self.worktree_validate_patcher.stop()
+        self.freshness_patcher.stop()
+        self.temp_dir.cleanup()
+        self._cleanup_test_database()
+        if self._original_database_url is None:
+            os.environ.pop("ORCHESTRATOR_DATABASE_URL", None)
+        else:
+            os.environ["ORCHESTRATOR_DATABASE_URL"] = self._original_database_url
+        os.environ.pop("ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR", None)
+        os.environ.pop("ORCHESTRATOR_WORKER_WORKSPACE_KEY", None)
+        os.environ.pop("ORCHESTRATOR_WORKER_CAPABILITIES", None)
+        self.jira_oauth_patcher.stop()
+        get_settings.cache_clear()
+        reset_db_engine_cache()
+        reset_agent_observability_for_tests()
 
     def _tenant_jira_oauth_context_stub(self, *, session, tenant, settings):  # noqa: ANN001
         _ = session, tenant, settings
