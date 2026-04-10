@@ -643,6 +643,31 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             msg=f"decision_engine must consume reducer boundary semantics directly: {violations}",
         )
 
+    def test_api_and_worker_bootstrap_execution_snapshot_startup_migration(self) -> None:
+        api_path = ROOT / "orchestrator" / "api" / "main.py"
+        worker_path = ROOT / "orchestrator" / "worker.py"
+        expected_module = "orchestrator.core.workflow.execution_snapshot_startup"
+        expected_symbol = "ensure_execution_snapshot_startup_bootstrap"
+
+        for module_path in (api_path, worker_path):
+            tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
+            imports_ok = False
+            call_ok = False
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom) and node.module == expected_module:
+                    imports_ok = any(alias.name == expected_symbol for alias in node.names)
+                if isinstance(node, ast.Call):
+                    if isinstance(node.func, ast.Name) and node.func.id == expected_symbol:
+                        call_ok = True
+            self.assertTrue(
+                imports_ok,
+                msg=f"{module_path.relative_to(ROOT).as_posix()} must import shared execution snapshot startup bootstrap.",
+            )
+            self.assertTrue(
+                call_ok,
+                msg=f"{module_path.relative_to(ROOT).as_posix()} must invoke shared execution snapshot startup bootstrap.",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
