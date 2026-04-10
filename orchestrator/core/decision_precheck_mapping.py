@@ -349,38 +349,6 @@ def build_question_set(*, pre_check: object, classification: str) -> list[dict]:
     return build_question_set_codec(pre_check=pre_check, classification=classification)
 
 
-def case_state_for_decision(*, decision: IngressDecision) -> str:
-    pre_check = decision.pre_check
-    parsed_block_reason = PrecheckOutcome.parse(decision.block_reason)
-    if parsed_block_reason is PrecheckOutcome.DECISION_GATE_REQUIRED:
-        return "blocked_decision_gate"
-    if parsed_block_reason in {PrecheckOutcome.GTD_REQUIRED, PrecheckOutcome.EXECUTION_BLOCKED}:
-        return "blocked_gtd"
-    if pre_check is not None and PrecheckOutcome.parse(getattr(pre_check, "outcome", None)) is PrecheckOutcome.READY_FOR_AGENT:
-        return "ready_for_execution"
-    return "clear"
-
-
-def decision_reason(*, pre_check: object, classification: str) -> str | None:
-    if pre_check is None:
-        return None
-    parsed_classification = DecisionClassification.parse(classification)
-    if parsed_classification.includes_decision_gate:
-        decision_gate = getattr(pre_check, "decision_gate", None)
-        reason = str(getattr(decision_gate, "reason", "") or "").strip() if decision_gate is not None else ""
-        if reason:
-            return reason
-    if parsed_classification.includes_gtd:
-        missing = [
-            str(item).strip()
-            for item in getattr(pre_check, "gtd_missing_criteria", ())
-            if str(item).strip()
-        ]
-        if missing:
-            return "Missing GTD criteria: " + ", ".join(missing)
-    return None
-
-
 def issue_fingerprint(
     *,
     issue_summary: str | None,

@@ -43,7 +43,7 @@ from orchestrator.core.decision_state_repository import (
     existing_case_for_issue as existing_case_for_issue_state,
     persist_decision_state as persist_decision_state_repo,
 )
-from orchestrator.core.decision_state_machine import (
+from orchestrator.core.decision_state_reducer import (
     DecisionStateReducerInput,
     DecisionStateTransition,
     reduce_decision_state_transition,

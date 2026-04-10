@@ -10,11 +10,10 @@ from orchestrator.core.decision_effect_service import enqueue_cycle_comment_effe
 from orchestrator.core.decision_precheck_mapping import (
     BLOCKED_CLASSIFICATIONS,
     build_question_set,
-    case_state_for_decision,
-    decision_reason,
     merge_case_metadata,
     serialize_result_snapshot,
 )
+from orchestrator.core.decision_state_reducer import case_state_for_decision, decision_reason
 from orchestrator.core.decision_resolution_service import serialize_slot_resolution
 from orchestrator.core.precheck_decision import precheck_missing_slots
 from orchestrator.storage.models import DecisionCase, DecisionCycle, DecisionEvent

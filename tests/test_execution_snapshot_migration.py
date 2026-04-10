@@ -163,14 +163,19 @@ class ExecutionSnapshotMigrationTests(unittest.TestCase):
         self.assertIsNone(canonicalize_snapshot_payload(None))
         self.assertIsNone(canonicalize_snapshot_payload("invalid"))
 
-    def test_canonicalize_snapshot_payload_rejects_non_canonical_dict(self) -> None:
+    def test_canonicalize_snapshot_payload_converts_partial_legacy_dict(self) -> None:
         snapshot = canonicalize_snapshot_payload(
             {
                 "trigger_context": {"source": "manual_fix_request", "pr_number": 42},
                 "pre_check": {"outcome": "ready_for_agent"},
+                "live_stage_updates": [{"stage": "lock_acquired"}],
             }
         )
-        self.assertIsNone(snapshot)
+        self.assertIsNotNone(snapshot)
+        assert snapshot is not None
+        self.assertEqual(snapshot.context.trigger_context["source"], "manual_fix_request")
+        self.assertEqual(snapshot.context.execution_context["pre_check_outcome"], "ready_for_agent")
+        self.assertEqual(len(snapshot.events.live_stage_updates), 1)
 
     def test_migrate_execution_snapshots_dry_run_reports_conversions_without_persisting(self) -> None:
         with self.session_factory() as session:
