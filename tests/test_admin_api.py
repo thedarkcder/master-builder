@@ -56,6 +56,7 @@ from tests.workflow_test_support import add_human_input_request, add_run_with_wo
 
 class AdminApiTests(SqliteTemplateApiTestCase):
     _secrets_encryption_key: str
+    _provision_jira_webhook_patcher: object
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -118,7 +119,23 @@ class AdminApiTests(SqliteTemplateApiTestCase):
         reset_db_engine_cache()
         reset_agent_observability_for_tests()
 
+        def _stub_provision_jira_webhook(**kwargs: object) -> SimpleNamespace:
+            _ = kwargs
+            return SimpleNamespace(
+                ok=True,
+                action="provision",
+                details="Provisioned 0 Jira webhook(s).",
+                webhook_ids=[],
+            )
+
+        self._provision_jira_webhook_patcher = patch(
+            "orchestrator.api.routes.admin_tenants.provision_jira_webhook",
+            side_effect=_stub_provision_jira_webhook,
+        )
+        self._provision_jira_webhook_patcher.start()
+
     def tearDown(self) -> None:
+        self._provision_jira_webhook_patcher.stop()
         self._cleanup_test_database()
         os.environ.pop("ORCHESTRATOR_WORKER_CAPABILITIES", None)
 
@@ -839,7 +856,6 @@ class AdminApiTests(SqliteTemplateApiTestCase):
 
     def test_create_tenant_auto_provisions_jira_webhook_when_jira_is_configured(self) -> None:
         payload = self._tenant_payload()
-        payload["setup_state"] = {"auto_provision_jira_webhook_on_create": True}
         self._insert_jira_connection(connection_id="conn-1")
 
         def _fake_provision_jira_webhook(**kwargs: object) -> SimpleNamespace:
@@ -893,13 +909,21 @@ class AdminApiTests(SqliteTemplateApiTestCase):
 
     def test_create_tenant_rejects_unknown_jira_connection_before_persisting(self) -> None:
         payload = self._tenant_payload()
-        payload["setup_state"] = {"auto_provision_jira_webhook_on_create": True}
 
-        response = self.client.post(
-            "/api/admin/tenants",
-            json=payload,
-            auth=("admin", "secret"),
-        )
+        with patch(
+            "orchestrator.api.routes.admin_tenants.provision_jira_webhook",
+            return_value=SimpleNamespace(
+                ok=False,
+                action="provision",
+                details="Configured Jira connection was not found",
+                webhook_ids=[],
+            ),
+        ):
+            response = self.client.post(
+                "/api/admin/tenants",
+                json=payload,
+                auth=("admin", "secret"),
+            )
 
         self.assertEqual(response.status_code, 400, response.text)
         self.assertEqual(response.json()["detail"], "Configured Jira connection was not found")
@@ -912,7 +936,6 @@ class AdminApiTests(SqliteTemplateApiTestCase):
 
     def test_create_tenant_rolls_back_when_jira_webhook_provision_fails(self) -> None:
         payload = self._tenant_payload()
-        payload["setup_state"] = {"auto_provision_jira_webhook_on_create": True}
         self._insert_jira_connection(connection_id="conn-1")
 
         with patch(
