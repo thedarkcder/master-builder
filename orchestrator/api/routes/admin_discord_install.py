@@ -109,7 +109,7 @@ def discord_install_callback(
             redirect_url = f"{settings.admin_ui_base_url.rstrip('/')}/tenants/new/discord?{urlencode(query_params)}"
         else:
             redirect_url = (
-                f"{settings.admin_ui_base_url.rstrip('/')}/tenants/{quote(tenant.tenant_id, safe='')}/settings/discord"
+                f"{settings.admin_ui_base_url.rstrip('/')}/{quote(tenant.tenant_id, safe='')}/settings/discord"
                 f"?{urlencode(query_params)}"
             )
         return RedirectResponse(url=redirect_url, status_code=status.HTTP_302_FOUND)
@@ -134,7 +134,7 @@ def discord_install_callback(
         )
     else:
         redirect_url = (
-            f"{settings.admin_ui_base_url.rstrip('/')}/tenants/{quote(tenant.tenant_id, safe='')}/settings/discord"
+            f"{settings.admin_ui_base_url.rstrip('/')}/{quote(tenant.tenant_id, safe='')}/settings/discord"
             "?discord_install=success"
         )
     return RedirectResponse(url=redirect_url, status_code=status.HTTP_302_FOUND)
