@@ -11,10 +11,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 from cryptography.fernet import Fernet
 from fastapi import HTTPException
-from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from orchestrator.api.main import create_app
 from orchestrator.api.discord.interactions.followup import (
     _build_command_followup_message,
     _run_discord_command_followup,
@@ -44,13 +42,37 @@ from orchestrator.storage.db import create_session_factory, reset_db_engine_cach
 from orchestrator.storage.models import FollowupContext, Project, Run, Tenant, WebhookJob
 from orchestrator.tools.discord_api import DiscordApiError
 from orchestrator.tools.jira_oauth import JiraIssueDetail, JiraIssuePreview, JiraOAuthError
-from tests.test_support.db_harness import SqliteTemplateDbTestCase
+from tests.test_support.db_harness import SqliteTemplateApiTestCase
 from tests.workflow_test_support import add_run_with_workflow, make_run
 
 pytestmark = pytest.mark.contract
 
 
-class JiraWebhookTests(SqliteTemplateDbTestCase):
+class JiraWebhookTests(SqliteTemplateApiTestCase):
+    _secrets_encryption_key: str
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls._secrets_encryption_key = Fernet.generate_key().decode("utf-8")
+        super().setUpClass()
+
+    @classmethod
+    def class_environment_overrides(cls) -> dict[str, str]:
+        return {
+            "ORCHESTRATOR_ADMIN_USERNAME": "admin",
+            "ORCHESTRATOR_ADMIN_PASSWORD": "secret",
+            "ORCHESTRATOR_SECRETS_ENCRYPTION_KEY": cls._secrets_encryption_key,
+            "ORCHESTRATOR_TEST_WEBHOOK_SECRET": "super-secret-token",
+            "ORCHESTRATOR_TEST_GITHUB_WEBHOOK_SECRET": "github-super-secret-token",
+        }
+
+    @classmethod
+    def bootstrap_template_state(cls) -> None:
+        cls._create_tenant_with_client(
+            client=cls._class_client,
+            tenant_id="tenant-webhook",
+        )
+
     @staticmethod
     def _pre_run_check(*, outcome: str = "ready_for_agent", capability: str = "linux") -> PreRunCheckResult:
         return PreRunCheckResult(
@@ -112,27 +134,17 @@ class JiraWebhookTests(SqliteTemplateDbTestCase):
         )
 
     def setUp(self) -> None:
-        self.database_url = self._prepare_test_database(name_prefix="webhook")
+        self.database_url = self._start_test_database(name_prefix="webhook")
         self.webhook_secret_env = "ORCHESTRATOR_TEST_WEBHOOK_SECRET"
         self.webhook_secret_value = "super-secret-token"
         self.github_webhook_secret_env = "ORCHESTRATOR_TEST_GITHUB_WEBHOOK_SECRET"
         self.github_webhook_secret_value = "github-super-secret-token"
-
-        os.environ["ORCHESTRATOR_DATABASE_URL"] = self.database_url
-        os.environ["ORCHESTRATOR_ADMIN_USERNAME"] = "admin"
-        os.environ["ORCHESTRATOR_ADMIN_PASSWORD"] = "secret"
-        os.environ["ORCHESTRATOR_SECRETS_ENCRYPTION_KEY"] = Fernet.generate_key().decode("utf-8")
-        os.environ[self.webhook_secret_env] = self.webhook_secret_value
-        os.environ[self.github_webhook_secret_env] = self.github_webhook_secret_value
 
         get_settings.cache_clear()
         reset_db_engine_cache()
         invalidate_discord_channel_tenant_index()
         reset_webhook_health_tracker_for_tests()
         self.session_factory = create_session_factory(database_url=self.database_url)
-
-        self.client = TestClient(create_app())
-        self._create_tenant("tenant-webhook")
 
         self._default_pre_run_check_patch = patch(
             "orchestrator.api.webhooks.jira_webhook_precheck.evaluate_pre_run_check",
@@ -146,14 +158,11 @@ class JiraWebhookTests(SqliteTemplateDbTestCase):
         self._default_precheck_decision_patch.start()
 
     def tearDown(self) -> None:
-        self.client.close()
         self._cleanup_test_database()
-        os.environ.pop("ORCHESTRATOR_DATABASE_URL", None)
         os.environ.pop(self.webhook_secret_env, None)
         os.environ.pop(self.github_webhook_secret_env, None)
         os.environ.pop("ORCHESTRATOR_GITHUB_WEBHOOK_SECRET_REF", None)
         os.environ.pop("ORCHESTRATOR_WEBHOOK_MAX_BODY_BYTES", None)
-        os.environ.pop("ORCHESTRATOR_SECRETS_ENCRYPTION_KEY", None)
         get_settings.cache_clear()
         reset_db_engine_cache()
         invalidate_discord_channel_tenant_index()
@@ -224,6 +233,29 @@ class JiraWebhookTests(SqliteTemplateDbTestCase):
         max_concurrent_runs: int = 2,
         ready_trigger_mode: str = "status_recheck",
     ) -> None:
+        self._create_tenant_with_client(
+            client=self.client,
+            tenant_id=tenant_id,
+            webhook_secret_ref=webhook_secret_ref,
+            github_webhook_secret_ref=github_webhook_secret_ref,
+            github_installation_id=github_installation_id,
+            is_enabled=is_enabled,
+            max_concurrent_runs=max_concurrent_runs,
+            ready_trigger_mode=ready_trigger_mode,
+        )
+
+    @staticmethod
+    def _create_tenant_with_client(
+        *,
+        client,
+        tenant_id: str,
+        webhook_secret_ref: str | None = None,
+        github_webhook_secret_ref: str | None = None,
+        github_installation_id: str = "12345",
+        is_enabled: bool = True,
+        max_concurrent_runs: int = 2,
+        ready_trigger_mode: str = "status_recheck",
+    ) -> None:
         payload = {
             "name": tenant_id,
             "is_enabled": is_enabled,
@@ -262,9 +294,11 @@ class JiraWebhookTests(SqliteTemplateDbTestCase):
             },
             "discord": None,
         }
-        response = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
-        self.assertEqual(response.status_code, 201)
-        self.assertEqual(response.json()["tenant_id"], tenant_id)
+        response = client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        if response.status_code != 201:
+            raise AssertionError(f"Failed to create tenant `{tenant_id}`: {response.status_code} {response.text}")
+        if response.json()["tenant_id"] != tenant_id:
+            raise AssertionError(f"Unexpected tenant id for `{tenant_id}`: {response.json()['tenant_id']}")
 
     def _sign_github_payload(self, payload_bytes: bytes, secret: str) -> str:
         digest = hmac.new(secret.encode("utf-8"), payload_bytes, hashlib.sha256).hexdigest()

@@ -6,10 +6,8 @@ from unittest.mock import patch
 
 import pytest
 from cryptography.fernet import Fernet
-from fastapi.testclient import TestClient
 from fastapi import HTTPException
 
-from orchestrator.api.main import create_app
 from orchestrator.api.discord.bug.service import build_discord_bug_description
 from orchestrator.api.discord.ask.context import project_filter_jql
 from orchestrator.api.discord.ingress.ask_runtime import ask_board_message, collect_ask_context, collect_github_ask_context
@@ -35,32 +33,45 @@ from orchestrator.tools.jira_oauth import (
     JiraIssuePreview,
     JiraOAuthError,
 )
-from tests.test_support.db_harness import SqliteTemplateDbTestCase
+from tests.test_support.db_harness import SqliteTemplateApiTestCase
 
 
 pytestmark = pytest.mark.contract
 
 
-class DiscordCommandApiTestHarness(SqliteTemplateDbTestCase):
-    def setUp(self) -> None:
-        self.database_url = self._prepare_test_database(name_prefix="discord-commands")
+class DiscordCommandApiTestHarness(SqliteTemplateApiTestCase):
+    _template_tenant_id: str
+    _template_default_project_id: str
+    _secrets_encryption_key: str
 
-        os.environ["ORCHESTRATOR_DATABASE_URL"] = self.database_url
-        os.environ["ORCHESTRATOR_ADMIN_USERNAME"] = "admin"
-        os.environ["ORCHESTRATOR_ADMIN_PASSWORD"] = "secret"
-        os.environ["ORCHESTRATOR_SECRETS_ENCRYPTION_KEY"] = Fernet.generate_key().decode("utf-8")
-
-        get_settings.cache_clear()
-        reset_db_engine_cache()
-        self._project_checkout_patcher = patch(
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls._secrets_encryption_key = Fernet.generate_key().decode("utf-8")
+        cls._project_checkout_patcher = patch(
             "orchestrator.api.admin.route_helpers.ensure_project_repository_checkout",
             return_value=None,
         )
-        self._project_checkout_patcher.start()
-        self.client = TestClient(create_app())
-        self.session_factory = create_session_factory(database_url=self.database_url)
+        cls._project_checkout_patcher.start()
+        super().setUpClass()
 
-        create_response = self.client.post(
+    @classmethod
+    def tearDownClass(cls) -> None:
+        try:
+            super().tearDownClass()
+        finally:
+            cls._project_checkout_patcher.stop()
+
+    @classmethod
+    def class_environment_overrides(cls) -> dict[str, str]:
+        return {
+            "ORCHESTRATOR_ADMIN_USERNAME": "admin",
+            "ORCHESTRATOR_ADMIN_PASSWORD": "secret",
+            "ORCHESTRATOR_SECRETS_ENCRYPTION_KEY": cls._secrets_encryption_key,
+        }
+
+    @classmethod
+    def bootstrap_template_state(cls) -> None:
+        create_response = cls._class_client.post(
             "/api/admin/tenants",
             json={
                 "name": "Discord Tenant",
@@ -100,22 +111,37 @@ class DiscordCommandApiTestHarness(SqliteTemplateDbTestCase):
             },
             auth=("admin", "secret"),
         )
-        self.assertEqual(create_response.status_code, 201)
-        self.tenant_id = create_response.json()["tenant_id"]
-        self.default_project_id = f"{self.tenant_id}-default"
-        self._set_project_allowed_users(project_id=self.default_project_id, user_ids=["u-admin"])
+        assert create_response.status_code == 201, create_response.text
+        cls._template_tenant_id = create_response.json()["tenant_id"]
+        cls._template_default_project_id = f"{cls._template_tenant_id}-default"
+        cls._set_project_allowed_users_for_database(
+            database_url=cls._template_database_url,
+            project_id=cls._template_default_project_id,
+            user_ids=["u-admin"],
+        )
+
+    def setUp(self) -> None:
+        self.database_url = self._start_test_database(name_prefix="discord-commands")
+        self.session_factory = create_session_factory(database_url=self.database_url)
+        self.tenant_id = self._template_tenant_id
+        self.default_project_id = self._template_default_project_id
 
     def tearDown(self) -> None:
-        self._project_checkout_patcher.stop()
-        self.client.close()
         self._cleanup_test_database()
-        os.environ.pop("ORCHESTRATOR_DATABASE_URL", None)
-        os.environ.pop("ORCHESTRATOR_SECRETS_ENCRYPTION_KEY", None)
         get_settings.cache_clear()
         reset_db_engine_cache()
 
     def _set_project_allowed_users(self, *, project_id: str, user_ids: list[str]) -> None:
-        with self.session_factory() as session:
+        self._set_project_allowed_users_for_database(
+            database_url=self.database_url,
+            project_id=project_id,
+            user_ids=user_ids,
+        )
+
+    @staticmethod
+    def _set_project_allowed_users_for_database(*, database_url: str, project_id: str, user_ids: list[str]) -> None:
+        session_factory = create_session_factory(database_url=database_url)
+        with session_factory() as session:
             project = session.get(Project, project_id)
             assert project is not None
             discord_config = dict(project.discord_config or {})

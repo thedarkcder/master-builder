@@ -1,70 +1,81 @@
 import os
 import unittest
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from unittest.mock import Mock, patch
 from urllib.parse import parse_qs, urlparse
 
 from cryptography.fernet import Fernet
-from fastapi.testclient import TestClient
 
-from orchestrator.api.main import create_app
 from orchestrator.core.config import get_settings
 from orchestrator.core.email_delivery import EmailDeliveryError
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.models import Project, Run, Tenant, WebhookJob, WorkflowCheckpoint, WorkflowExecution
-from tests.test_support.db_harness import SqliteTemplateDbTestCase
+from tests.test_support.db_harness import SqliteTemplateApiTestCase
 from tests.workflow_test_support import add_run_with_workflow, add_workflow_attempt, make_run
 
 
-class TenantUserAccessApiTests(SqliteTemplateDbTestCase):
-    def setUp(self) -> None:
-        self.database_url = self._prepare_test_database(name_prefix="tenant-user-access")
+class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
+    _secrets_encryption_key: str
+    _baseline_registration: dict
+    _baseline_token: str
 
-        os.environ["ORCHESTRATOR_DATABASE_URL"] = self.database_url
-        os.environ["ORCHESTRATOR_ADMIN_USERNAME"] = "admin"
-        os.environ["ORCHESTRATOR_ADMIN_PASSWORD"] = "secret"
-        os.environ["ORCHESTRATOR_ADMIN_TOKEN_SECRET"] = "admin-token-secret-for-tests-0123456789"
-        os.environ["ORCHESTRATOR_AUTH_TOKEN_SECRET"] = "tenant-auth-token-secret-for-tests-0123456789"
-        os.environ["ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET"] = "unit-test-secret"
-        os.environ["ORCHESTRATOR_ADMIN_UI_BASE_URL"] = "http://localhost:4100"
-        os.environ["ORCHESTRATOR_PUBLIC_API_BASE_URL"] = "http://localhost:4000"
-        os.environ["ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET"] = "jira-oauth-state-secret"
-        os.environ["ORCHESTRATOR_GITHUB_APP_SLUG"] = "master-builder-app"
-        os.environ["ORCHESTRATOR_DISCORD_OAUTH_CLIENT_ID"] = "discord-client-id-123"
-        os.environ["ORCHESTRATOR_DISCORD_INSTALL_STATE_SECRET"] = "discord-install-state-secret"
-        os.environ["ORCHESTRATOR_SECRETS_ENCRYPTION_KEY"] = Fernet.generate_key().decode("utf-8")
-        os.environ["ORCHESTRATOR_CODEX_MODEL"] = "gpt-5.4"
-        os.environ["ORCHESTRATOR_CODEX_SUPPORTED_MODELS"] = "gpt-5.4,gpt-5.3-codex,gpt-5.3-codex-spark"
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls._secrets_encryption_key = Fernet.generate_key().decode("utf-8")
+        super().setUpClass()
+
+    @classmethod
+    def class_environment_overrides(cls) -> dict[str, str]:
+        return {
+            "ORCHESTRATOR_ADMIN_USERNAME": "admin",
+            "ORCHESTRATOR_ADMIN_PASSWORD": "secret",
+            "ORCHESTRATOR_ADMIN_TOKEN_SECRET": "admin-token-secret-for-tests-0123456789",
+            "ORCHESTRATOR_AUTH_TOKEN_SECRET": "tenant-auth-token-secret-for-tests-0123456789",
+            "ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET": "unit-test-secret",
+            "ORCHESTRATOR_ADMIN_UI_BASE_URL": "http://localhost:4100",
+            "ORCHESTRATOR_PUBLIC_API_BASE_URL": "http://localhost:4000",
+            "ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET": "jira-oauth-state-secret",
+            "ORCHESTRATOR_GITHUB_APP_SLUG": "master-builder-app",
+            "ORCHESTRATOR_DISCORD_OAUTH_CLIENT_ID": "discord-client-id-123",
+            "ORCHESTRATOR_DISCORD_INSTALL_STATE_SECRET": "discord-install-state-secret",
+            "ORCHESTRATOR_SECRETS_ENCRYPTION_KEY": cls._secrets_encryption_key,
+            "ORCHESTRATOR_CODEX_MODEL": "gpt-5.4",
+            "ORCHESTRATOR_CODEX_SUPPORTED_MODELS": "gpt-5.4,gpt-5.3-codex,gpt-5.3-codex-spark",
+        }
+
+    @classmethod
+    def bootstrap_template_state(cls) -> None:
+        registration_response = cls._class_client.post(
+            "/api/public/register",
+            json={
+                "full_name": "Owner Example",
+                "email": "owner@example.com",
+                "password": "S3cret-passphrase",
+                "tenant_name": "Acme Delivery",
+            },
+        )
+        if registration_response.status_code != 201:
+            raise AssertionError(
+                f"Failed to bootstrap baseline registration: {registration_response.status_code} {registration_response.text}"
+            )
+        cls._baseline_registration = registration_response.json()
+        cls._baseline_token = cls._baseline_registration["access_token"]
+
+    def setUp(self) -> None:
+        self.database_url = self._start_test_database(name_prefix="tenant-user-access")
 
         get_settings.cache_clear()
         reset_db_engine_cache()
-        self.client = TestClient(create_app())
 
     def tearDown(self) -> None:
-        self.client.close()
         self._cleanup_test_database()
-        for key in (
-            "ORCHESTRATOR_DATABASE_URL",
-            "ORCHESTRATOR_ADMIN_USERNAME",
-            "ORCHESTRATOR_ADMIN_PASSWORD",
-            "ORCHESTRATOR_ADMIN_TOKEN_SECRET",
-            "ORCHESTRATOR_AUTH_TOKEN_SECRET",
-            "ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET",
-            "ORCHESTRATOR_ADMIN_UI_BASE_URL",
-            "ORCHESTRATOR_PUBLIC_API_BASE_URL",
-            "ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET",
-            "ORCHESTRATOR_GITHUB_APP_SLUG",
-            "ORCHESTRATOR_DISCORD_OAUTH_CLIENT_ID",
-            "ORCHESTRATOR_DISCORD_INSTALL_STATE_SECRET",
-            "ORCHESTRATOR_SECRETS_ENCRYPTION_KEY",
-            "ORCHESTRATOR_CODEX_MODEL",
-            "ORCHESTRATOR_CODEX_SUPPORTED_MODELS",
-        ):
-            os.environ.pop(key, None)
         get_settings.cache_clear()
         reset_db_engine_cache()
 
     def _register(self, *, email: str = "owner@example.com", tenant_name: str = "Acme Delivery") -> dict:
+        if email == "owner@example.com" and tenant_name == "Acme Delivery":
+            return deepcopy(self._baseline_registration)
         response = self.client.post(
             "/api/public/register",
             json={
@@ -78,6 +89,8 @@ class TenantUserAccessApiTests(SqliteTemplateDbTestCase):
         return response.json()
 
     def _login(self, *, email: str = "owner@example.com", password: str = "S3cret-passphrase") -> str:
+        if email == "owner@example.com" and password == "S3cret-passphrase":
+            return self._baseline_token
         response = self.client.post(
             "/api/app/auth/login",
             json={
