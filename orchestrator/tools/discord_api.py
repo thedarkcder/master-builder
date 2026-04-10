@@ -26,6 +26,12 @@ class DiscordVoiceChannel:
     parent_id: str | None
 
 
+@dataclass(frozen=True)
+class DiscordCategoryChannel:
+    channel_id: str
+    name: str
+
+
 class DiscordApiClient:
     def __init__(self, *, bot_token: str):
         token = bot_token.strip()
@@ -173,6 +179,26 @@ class DiscordApiClient:
             normalized_parent = parent_id if isinstance(parent_id, str) and parent_id.strip() else None
             channels.append(DiscordVoiceChannel(channel_id=channel_id, name=name, parent_id=normalized_parent))
         return channels
+
+    def list_channel_categories(self, *, guild_id: str) -> list[DiscordCategoryChannel]:
+        payload = self._request_json(method="GET", path=f"/guilds/{guild_id}/channels")
+        if not isinstance(payload, list):
+            raise DiscordApiError("Discord list channels response was not a list")
+
+        categories: list[DiscordCategoryChannel] = []
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") != 4:
+                continue
+            channel_id = item.get("id")
+            name = item.get("name")
+            if not isinstance(channel_id, str) or not channel_id:
+                continue
+            if not isinstance(name, str) or not name:
+                continue
+            categories.append(DiscordCategoryChannel(channel_id=channel_id, name=name))
+        return categories
 
     def create_text_channel(self, *, guild_id: str, name: str, parent_id: str | None = None) -> DiscordTextChannel:
         payload: dict = {"name": name, "type": 0}

@@ -10,7 +10,6 @@ from orchestrator.tools.discord_api import DiscordApiError
 def _settings() -> SimpleNamespace:
     return SimpleNamespace(
         discord_channel_category_id="text-category-1",
-        discord_voice_channel_category_id="voice-category-1",
         secrets_encryption_key="test-key",
     )
 
@@ -95,6 +94,11 @@ def test_resolve_project_discord_channel_binding_recreates_text_and_voice_channe
     fake_client.get_channel.side_effect = [DiscordApiError("missing text")]
     fake_client.ensure_text_channel.return_value = SimpleNamespace(channel_id="text-2")
     fake_client.ensure_voice_channel.return_value = SimpleNamespace(channel_id="voice-2")
+    fake_client.list_channel_categories.return_value = [
+        SimpleNamespace(channel_id="voice-category-1", name="Voice Rooms"),
+        SimpleNamespace(channel_id="text-category-1", name="Projects"),
+    ]
+    fake_client.list_voice_channels.return_value = []
 
     with (
         patch("orchestrator.api.admin.tenant_project_helpers.resolve_platform_secret_ref", return_value="discord-bot-token"),
@@ -126,15 +130,14 @@ def test_resolve_project_discord_channel_binding_recreates_text_and_voice_channe
     )
 
 
-def test_resolve_project_discord_channel_binding_falls_back_to_text_category_when_voice_category_missing() -> None:
+def test_resolve_project_discord_channel_binding_falls_back_to_text_category_when_no_voice_category_is_discoverable() -> None:
     fake_client = Mock()
     fake_client.ensure_text_channel.return_value = SimpleNamespace(channel_id="text-2")
     fake_client.ensure_voice_channel.return_value = SimpleNamespace(channel_id="voice-2")
-    settings = SimpleNamespace(
-        discord_channel_category_id="text-category-1",
-        discord_voice_channel_category_id="",
-        secrets_encryption_key="test-key",
-    )
+    fake_client.list_channel_categories.return_value = [
+        SimpleNamespace(channel_id="text-category-1", name="Projects"),
+    ]
+    fake_client.list_voice_channels.return_value = []
 
     with (
         patch("orchestrator.api.admin.tenant_project_helpers.resolve_platform_secret_ref", return_value="discord-bot-token"),
@@ -142,7 +145,7 @@ def test_resolve_project_discord_channel_binding_falls_back_to_text_category_whe
     ):
         resolve_project_discord_channel_binding(
             session=Mock(),
-            settings=settings,
+            settings=_settings(),
             tenant=_tenant(),
             project=_project(),
             discord_config={},
