@@ -78,7 +78,7 @@ def evaluate_worker_decision(
             allowed=False,
             decision_gate=None,
             configuration_error="Execution readiness check failed: unsupported execution snapshot version/shape",
-            block_reason="policy_eval_failed",
+            block_reason=PrecheckOutcome.POLICY_EVAL_FAILED.value,
         )
 
     persisted_outcome_raw = resolve_precheck_outcome_for_enqueue(
@@ -96,7 +96,7 @@ def evaluate_worker_decision(
             allowed=False,
             decision_gate=None,
             configuration_error="Execution readiness check failed: missing persisted pre_check_outcome",
-            block_reason="policy_eval_failed",
+            block_reason=PrecheckOutcome.POLICY_EVAL_FAILED.value,
         )
 
     if persisted_outcome is PrecheckOutcome.READY_FOR_AGENT:
@@ -124,9 +124,9 @@ def evaluate_worker_decision(
             or None
         )
         guidance = (
-            f"{enqueue_reason_guidance('missing_ready_label')} ({ready_label})"
+            f"{enqueue_reason_guidance(PrecheckOutcome.MISSING_READY_LABEL.value)} ({ready_label})"
             if ready_label
-            else enqueue_reason_guidance("missing_ready_label")
+            else enqueue_reason_guidance(PrecheckOutcome.MISSING_READY_LABEL.value)
         )
         return WorkerDecision(
             allowed=False,
@@ -170,7 +170,7 @@ def evaluate_worker_decision(
             allowed=False,
             decision_gate=None,
             configuration_error="Execution readiness check failed: persisted policy evaluation failure",
-            block_reason="policy_eval_failed",
+            block_reason=PrecheckOutcome.POLICY_EVAL_FAILED.value,
         )
 
     return WorkerDecision(
@@ -179,7 +179,7 @@ def evaluate_worker_decision(
         configuration_error=(
             f"Execution readiness check failed: unsupported persisted outcome '{persisted_outcome.value}'"
         ),
-        block_reason="policy_eval_failed",
+        block_reason=PrecheckOutcome.POLICY_EVAL_FAILED.value,
         classification=DecisionClassification.CLEAR,
     )
 

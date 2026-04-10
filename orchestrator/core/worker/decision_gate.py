@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from types import SimpleNamespace
 from orchestrator.core.dashboard_links import admin_run_url
+from orchestrator.core.decision_types import WorkerStageEvent
 from orchestrator.core.jira_links import tenant_jira_issue_url
 from orchestrator.core.runs import mark_run_terminal
 from orchestrator.core.worker.run_not_ready import derive_run_not_ready_outcome
@@ -166,7 +167,7 @@ def apply_decision_gate(
             project=project,
             message=stage_update["discord_message"],
             settings=settings,
-            event="decision_gate_required",
+            event=WorkerStageEvent.DECISION_GATE_REQUIRED.value,
             open_thread=False,
         )
         send_jira_message_fn(

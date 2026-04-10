@@ -837,6 +837,107 @@ class AdminApiTests(SqliteTemplateApiTestCase):
         self.assertEqual(repo_bootstrap.status_code, 200)
         self.assertEqual(repo_bootstrap.json(), [])
 
+    def test_create_tenant_auto_provisions_jira_webhook_when_jira_is_configured(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+
+        def _fake_provision_jira_webhook(**kwargs: object) -> SimpleNamespace:
+            tenant = kwargs["tenant"]
+            jira_config = dict(tenant.jira_config)
+            jira_config["managed_webhook_ids"] = [2002]
+            jira_config["webhook_last_provisioned_at"] = "2026-04-10T14:00:00+00:00"
+            jira_config["webhook_last_error"] = None
+            tenant.jira_config = jira_config
+            return SimpleNamespace(
+                ok=True,
+                action="provision",
+                details="Provisioned 1 Jira webhook(s).",
+                webhook_ids=[2002],
+            )
+
+        with patch(
+            "orchestrator.api.routes.admin_tenants.provision_jira_webhook",
+            side_effect=_fake_provision_jira_webhook,
+        ) as provision_mock:
+            response = self.client.post(
+                "/api/admin/tenants",
+                json=payload,
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(response.status_code, 201, response.text)
+        self.assertEqual(response.json()["jira"]["managed_webhook_ids"], [2002])
+        self.assertEqual(
+            response.json()["jira"]["webhook_last_provisioned_at"],
+            "2026-04-10T14:00:00+00:00",
+        )
+        provision_mock.assert_called_once()
+        self.assertFalse(provision_mock.call_args.kwargs["replace_existing"])
+
+    def test_create_tenant_skips_jira_webhook_provision_without_project_keys(self) -> None:
+        payload = self._tenant_payload()
+        payload["jira"]["project_keys"] = []
+        self._insert_jira_connection(connection_id="conn-1")
+
+        with patch("orchestrator.api.routes.admin_tenants.provision_jira_webhook") as provision_mock:
+            response = self.client.post(
+                "/api/admin/tenants",
+                json=payload,
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(response.status_code, 201, response.text)
+        provision_mock.assert_not_called()
+        self.assertEqual(response.json()["jira"]["managed_webhook_ids"], [])
+
+    def test_create_tenant_rejects_unknown_jira_connection_before_persisting(self) -> None:
+        payload = self._tenant_payload()
+
+        response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+
+        self.assertEqual(response.status_code, 400, response.text)
+        self.assertEqual(response.json()["detail"], "Configured Jira connection was not found")
+
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            self.assertIsNone(session.get(Tenant, "tenant-a"))
+            self.assertIsNone(session.get(Project, "tenant-a-default"))
+            self.assertIsNone(session.get(TenantRunClaim, "tenant-a"))
+
+    def test_create_tenant_rolls_back_when_jira_webhook_provision_fails(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+
+        with patch(
+            "orchestrator.api.routes.admin_tenants.provision_jira_webhook",
+            return_value=SimpleNamespace(
+                ok=False,
+                action="provision",
+                details="Failed to provision Jira webhook: missing Jira admin permission",
+                webhook_ids=[],
+            ),
+        ) as provision_mock:
+            response = self.client.post(
+                "/api/admin/tenants",
+                json=payload,
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(response.status_code, 502, response.text)
+        self.assertIn("missing Jira admin permission", response.json()["detail"])
+        provision_mock.assert_called_once()
+        self.assertFalse(provision_mock.call_args.kwargs["replace_existing"])
+
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            self.assertIsNone(session.get(Tenant, "tenant-a"))
+            self.assertIsNone(session.get(Project, "tenant-a-default"))
+            self.assertIsNone(session.get(TenantRunClaim, "tenant-a"))
+
     def test_update_tenant_preserves_ready_trigger_mode_when_omitted(self) -> None:
         payload = self._tenant_payload()
         payload["jira"]["ready_trigger_mode"] = "transition_only"

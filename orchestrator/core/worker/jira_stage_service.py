@@ -5,14 +5,18 @@ import logging
 from sqlalchemy.orm import Session
 
 from orchestrator.api.jira_oauth.service import jira_oauth_client, refresh_jira_connection_tokens
-from orchestrator.core.decision_types import JiraConfigKey, tenant_jira_config_text
+from orchestrator.core.decision_types import (
+    JiraConfigKey,
+    WorkerStageEvent,
+    tenant_jira_config_text,
+)
 from orchestrator.storage.models import JiraOAuthConnection, Tenant
 from orchestrator.tools.jira_oauth import JiraOAuthError
 
 logger = logging.getLogger(__name__)
 
 JIRA_STAGE_COMMENT_EVENTS = {
-    "decision_gate_required",
+    WorkerStageEvent.DECISION_GATE_REQUIRED.value,
     "run_not_ready",
     "run_failed",
     "test_feedback",
