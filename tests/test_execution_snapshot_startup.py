@@ -95,7 +95,7 @@ class ExecutionSnapshotStartupBootstrapTests(unittest.TestCase):
         self.assertTrue(any("pg_advisory_unlock" in stmt for stmt, _ in session.calls))
         self.assertEqual(session.calls[-1][0], "commit")
 
-    def test_startup_bootstrap_raises_on_invalid_rows(self) -> None:
+    def test_startup_bootstrap_logs_and_returns_report_on_invalid_rows(self) -> None:
         session = _FakeSession(calls=[])
         factory = _FakeSessionFactory(session)
         invalid_report = ExecutionSnapshotMigrationReport(
@@ -118,12 +118,19 @@ class ExecutionSnapshotStartupBootstrapTests(unittest.TestCase):
                 side_effect=lambda **_: invalid_report,
             ),
         ):
-            with self.assertRaisesRegex(RuntimeError, "Execution snapshot startup migration failed"):
-                run_execution_snapshot_startup_bootstrap(
+            with self.assertLogs(
+                "orchestrator.core.workflow.execution_snapshot_startup",
+                level="ERROR",
+            ) as captured:
+                report = run_execution_snapshot_startup_bootstrap(
                     session_factory=factory,  # type: ignore[arg-type]
                     database_url="postgresql://user:pass@localhost/db",
                     actor="api",
                 )
+
+        self.assertEqual(report, invalid_report)
+        self.assertTrue(any("execution_snapshot_startup_bootstrap_invalid_rows" in line for line in captured.output))
+        self.assertEqual(session.calls[-1][0], "commit")
 
 if __name__ == "__main__":
     unittest.main()
