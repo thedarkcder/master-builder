@@ -482,12 +482,14 @@ class WorkerTests(unittest.TestCase):
             sentry_environment="test",
             sentry_release=None,
             agent_id="worker-test",
+            database_url="postgresql://user:pass@localhost/test",
         )
 
         with (
             patch.object(worker_module, "get_settings", return_value=fake_settings),
             patch.object(worker_module, "configure_logging"),
             patch.object(worker_module, "create_session_factory", return_value=MagicMock()),
+            patch.object(worker_module, "ensure_execution_snapshot_startup_bootstrap"),
             patch.object(worker_module, "_process_next_run_once", return_value=object()),
         ):
             self.assertEqual(
@@ -499,6 +501,7 @@ class WorkerTests(unittest.TestCase):
             patch.object(worker_module, "get_settings", return_value=fake_settings),
             patch.object(worker_module, "configure_logging"),
             patch.object(worker_module, "create_session_factory", return_value=MagicMock()),
+            patch.object(worker_module, "ensure_execution_snapshot_startup_bootstrap"),
             patch.object(worker_module, "_resolve_webhook_owner_id", return_value="worker:webhooks:child:test"),
             patch.object(worker_module, "_process_next_webhook_job_once", return_value=None) as process_webhook_once,
         ):

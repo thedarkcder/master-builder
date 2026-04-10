@@ -7,7 +7,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from cryptography.fernet import Fernet
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from orchestrator.core.agent_observability import record_agent_lifecycle_event
 from orchestrator.core.config import get_settings
@@ -204,6 +204,71 @@ class RunStreamJournalTests(unittest.TestCase):
             first = subscriber.queue.get(timeout=2.0)
             self.assertIn('"run_id":"run-3"', first)
             self.assertTrue(subscriber.disconnected)
+        finally:
+            broker.stop()
+
+    def test_subscriber_min_offset_excludes_snapshot_rows(self) -> None:
+        broker = RunStreamBroker()
+        broker.start()
+        try:
+            with self.session_factory() as session:
+                record_run_log_event(
+                    session=session,
+                    tenant_id="tenant-a",
+                    project_id="project-a",
+                    run_id="run-4",
+                    issue_key="TP-4",
+                    agent_id="worker-1",
+                    invocation_id="inv-4",
+                    channel="worker",
+                    command="workflow.dev",
+                    working_dir="/tmp/repo",
+                    stage="dev",
+                    attempt=1,
+                    stream="stdout",
+                    message="snapshot-row",
+                )
+                session.commit()
+
+            with self.session_factory() as session:
+                snapshot_offset = int(
+                    session.execute(
+                        select(func.max(RunStreamEvent.stream_offset)).where(RunStreamEvent.run_id == "run-4")
+                    ).scalar_one()
+                    or 0
+                )
+
+            subscriber = broker.subscribe(
+                subscriber_id="sub-min-offset",
+                buffer_size=8,
+                match_fn=build_run_stream_matcher(run_id="run-4"),
+                render_fn=encode_stream_row,
+                min_stream_offset_exclusive=snapshot_offset,
+            )
+
+            with self.session_factory() as session:
+                record_run_log_event(
+                    session=session,
+                    tenant_id="tenant-a",
+                    project_id="project-a",
+                    run_id="run-4",
+                    issue_key="TP-4",
+                    agent_id="worker-1",
+                    invocation_id="inv-4b",
+                    channel="worker",
+                    command="workflow.dev",
+                    working_dir="/tmp/repo",
+                    stage="dev",
+                    attempt=1,
+                    stream="stdout",
+                    message="post-snapshot-row",
+                )
+                session.commit()
+
+            broker.request_catchup()
+            message = subscriber.queue.get(timeout=2.0)
+            self.assertIn('"message":"post-snapshot-row"', message)
+            self.assertNotIn('"message":"snapshot-row"', message)
         finally:
             broker.stop()
 
