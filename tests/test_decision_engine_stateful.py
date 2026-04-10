@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -13,8 +12,8 @@ from orchestrator.core.decision_gate import DecisionGateResult
 from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.pre_run_check import PreRunCheckResult
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
-from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import DecisionCase, DecisionCycle, DecisionEffectOutbox, DecisionEvent, Project, Tenant
+from tests.test_support.db_harness import SqliteTemplateDbTestCase
 
 
 def _precheck_result(
@@ -98,21 +97,11 @@ def _planner_result(
     )
 
 
-class DecisionEngineStatefulTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self._tmp = tempfile.TemporaryDirectory()
-        self.database_url = f"sqlite:///{self._tmp.name}/decision_stateful.db"
-        reset_db_engine_cache()
-        run_migrations(database_url=self.database_url)
-        self.session_factory = create_session_factory(database_url=self.database_url)
-        self.settings = get_settings()
-        self._codex_resolution_patcher = patch(
-            "orchestrator.core.decision_engine.resolve_slots_with_codex_resolution",
-            return_value={},
-        )
-        self._codex_resolution_patcher.start()
-
-        with self.session_factory() as session:
+class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
+    @classmethod
+    def bootstrap_template_database(cls) -> None:
+        session_factory = create_session_factory(database_url=cls._template_database_url)
+        with session_factory() as session:
             tenant = Tenant(
                 tenant_id="tenant-stateful",
                 name="Tenant",
@@ -143,9 +132,20 @@ class DecisionEngineStatefulTests(unittest.TestCase):
             session.add(project)
             session.commit()
 
+    def setUp(self) -> None:
+        self.database_url = self._prepare_test_database(name_prefix="decision-stateful")
+        reset_db_engine_cache()
+        self.session_factory = create_session_factory(database_url=self.database_url)
+        self.settings = get_settings()
+        self._codex_resolution_patcher = patch(
+            "orchestrator.core.decision_engine.resolve_slots_with_codex_resolution",
+            return_value={},
+        )
+        self._codex_resolution_patcher.start()
+
     def tearDown(self) -> None:
         self._codex_resolution_patcher.stop()
-        self._tmp.cleanup()
+        self._cleanup_test_database()
         reset_db_engine_cache()
 
     def _tenant_and_project(self):
