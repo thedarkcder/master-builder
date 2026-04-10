@@ -538,6 +538,28 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             msg=f"Transport modules must consume typed domain outcomes instead of branching on decision strings: {violations}",
         )
 
+    def test_transport_modules_do_not_import_split_decision_runtime_modules(self) -> None:
+        modules = [
+            ROOT / "orchestrator" / "api" / "webhooks" / "jira_admission_flow.py",
+            ROOT / "orchestrator" / "api" / "webhooks" / "jira_webhook_comment_flow.py",
+            ROOT / "orchestrator" / "api" / "discord" / "commands" / "run_controls.py",
+            ROOT / "orchestrator" / "core" / "worker" / "run_not_ready.py",
+        ]
+        forbidden_imports = {
+            "orchestrator.core.execution_admission",
+            "orchestrator.core.decision_state_reducer",
+        }
+        violations: list[str] = []
+        for module_path in modules:
+            for module_name in _imported_modules(module_path):
+                if module_name in forbidden_imports:
+                    violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{module_name}")
+        self.assertEqual(
+            violations,
+            [],
+            msg=f"Transport modules must import unified decision_state_machine boundary only: {violations}",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
