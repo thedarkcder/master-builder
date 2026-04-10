@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import replace
 import logging
 from typing import Any, Callable
 
@@ -8,7 +7,6 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestrator.core.communications.enqueue_reason_contract import enqueue_reason_guidance
-from orchestrator.core.decision_gate import DecisionGateResult
 from orchestrator.core.decision_precheck_mapping import (
     apply_frozen_cycle_to_precheck as apply_frozen_cycle_to_precheck_state,
     decision_from_snapshot as decision_from_snapshot_state,
@@ -35,7 +33,11 @@ from orchestrator.core.decision_reply_service import (
     serialize_recorded_answers_for_policy,
     unresolved_question_ids_for_cycle,
 )
-from orchestrator.core.decision_planner import DecisionPlannerResult, plan_decision_questions
+from orchestrator.core.decision_planner import plan_decision_questions
+from orchestrator.core.decision_reducer import (
+    coerce_clear_decision as coerce_clear_decision_reducer,
+    reduce_planner_result as reduce_planner_result_reducer,
+)
 from orchestrator.core.decision_state_repository import (
     decision_gate_closed_cycle_id as decision_gate_closed_cycle_id_state,
     decision_gate_closed_permanently as decision_gate_closed_permanently_state,
@@ -61,7 +63,6 @@ from orchestrator.core.decision_types import (
     resolve_execution_gate_state,
     tenant_ready_label,
 )
-from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.knowledge_base import SlotResolution, resolve_missing_slots_from_knowledge
 from orchestrator.core.pre_run_check import (
     evaluate_execution_readiness_only,
@@ -80,233 +81,6 @@ from orchestrator.storage.models import (
     Tenant,
 )
 from orchestrator.tools.project_repo_checkout import project_repo_dir
-
-def _planner_classification(gate_status: str) -> DecisionClassification:
-    normalized = str(gate_status or "").strip().lower()
-    if normalized == "blocked_decision_gate":
-        return DecisionClassification.DECISION_GATE
-    if normalized == "blocked_gtd":
-        return DecisionClassification.GTD
-    if normalized == "blocked_both":
-        return DecisionClassification.BOTH
-    return DecisionClassification.CLEAR
-
-
-def _planner_block_reason(classification: DecisionClassification) -> str | None:
-    if classification.includes_decision_gate:
-        return PrecheckOutcome.DECISION_GATE_REQUIRED.value
-    if classification is DecisionClassification.GTD:
-        return PrecheckOutcome.GTD_REQUIRED.value
-    return None
-
-
-def _planner_question_set(planner_result: DecisionPlannerResult) -> list[dict[str, object]]:
-    open_question_overrides = {
-        item.question_id: item
-        for item in planner_result.questions
-        if str(item.question_id or "").strip()
-    }
-    states = planner_result.question_states or planner_result.questions
-    question_set: list[dict[str, object]] = []
-    seen: set[str] = set()
-    for item in states:
-        if item.question_id in seen:
-            continue
-        seen.add(item.question_id)
-        override = open_question_overrides.get(item.question_id)
-        question_set.append(
-            {
-                "id": item.question_id,
-                "kind": override.kind if override is not None else item.kind,
-                "text": override.question if override is not None else item.question,
-                "status": item.status,
-                "detail": override.detail if override is not None else item.detail,
-            }
-        )
-    return question_set
-
-
-def _planner_question_state_payload(planner_result: DecisionPlannerResult) -> list[dict[str, object]]:
-    open_question_overrides = {
-        item.question_id: item
-        for item in planner_result.questions
-        if str(item.question_id or "").strip()
-    }
-    return [
-        {
-            "question_id": item.question_id,
-            "kind": (
-                open_question_overrides[item.question_id].kind
-                if item.question_id in open_question_overrides
-                else item.kind
-            ),
-            "question": (
-                open_question_overrides[item.question_id].question
-                if item.question_id in open_question_overrides
-                else item.question
-            ),
-            "status": item.status,
-            "detail": (
-                open_question_overrides[item.question_id].detail
-                if item.question_id in open_question_overrides
-                else item.detail
-            ),
-        }
-        for item in (planner_result.question_states or planner_result.questions)
-    ]
-
-
-def _decision_with_planner_result(
-    *,
-    decision: IngressDecision,
-    planner_result: DecisionPlannerResult,
-) -> IngressDecision:
-    pre_check = decision.pre_check
-    if not isinstance(pre_check, PreRunCheckResult):
-        return decision
-    classification = _planner_classification(planner_result.gate_status)
-    reason = planner_result.reason
-    decision_gate_questions = tuple(
-        item.question
-        for item in planner_result.questions
-        if item.kind == "decision_gate"
-    )
-    gtd_questions = tuple(
-        item.question
-        for item in planner_result.questions
-        if item.kind == "gtd"
-    )
-    missing_items = tuple(planner_result.missing_items)
-    if classification is DecisionClassification.CLEAR:
-        outcome = (
-            PrecheckOutcome.MISSING_READY_LABEL.value
-            if pre_check.ready_label_missing
-            else PrecheckOutcome.READY_FOR_AGENT.value
-        )
-        updated_pre_check = replace(
-            pre_check,
-            outcome=outcome,
-            decision_gate=DecisionGateResult(
-                triggered=False,
-                reason="Decision Gate not required",
-                missing_sections=(),
-                questions=(),
-                recommendation="Proceed with execution.",
-                tags=(),
-            ),
-            gtd=GoodToDoValidationResult(
-                valid=True,
-                missing_criteria=(),
-                clarification_questions=(),
-            ),
-        )
-        updated_block_reason = blocking_reason_for_precheck(updated_pre_check)
-        return IngressDecision(
-            source=decision.source,
-            pre_check=updated_pre_check,
-            block_reason=updated_block_reason,
-            guidance=enqueue_reason_guidance(updated_block_reason) if updated_block_reason else None,
-            policy_error=None,
-            label_actions=decision.label_actions,
-        )
-
-    updated_pre_check = replace(
-        pre_check,
-        outcome=(
-            PrecheckOutcome.DECISION_GATE_REQUIRED.value
-            if classification.includes_decision_gate
-            else PrecheckOutcome.GTD_REQUIRED.value
-        ),
-        decision_gate=DecisionGateResult(
-            triggered=classification.includes_decision_gate,
-            reason=reason if classification.includes_decision_gate else "Decision Gate not required",
-            missing_sections=missing_items if classification.includes_decision_gate else (),
-            questions=decision_gate_questions,
-            recommendation=(
-                "Clarification required before execution."
-                if classification.includes_decision_gate
-                else pre_check.decision_gate.recommendation
-            ),
-            tags=pre_check.decision_gate.tags,
-        ),
-        gtd=GoodToDoValidationResult(
-            valid=not classification.includes_gtd,
-            missing_criteria=missing_items if classification.includes_gtd else (),
-            clarification_questions=gtd_questions,
-        ),
-    )
-    block_reason = _planner_block_reason(classification)
-    return IngressDecision(
-        source=decision.source,
-        pre_check=updated_pre_check,
-        block_reason=block_reason,
-        guidance=enqueue_reason_guidance(block_reason) if block_reason else None,
-        policy_error=decision.policy_error,
-        label_actions=decision.label_actions,
-    )
-
-
-def _clear_planner_result() -> DecisionPlannerResult:
-    return DecisionPlannerResult(
-        gate_status="clear",
-        reason="",
-        questions=(),
-        question_states=(),
-        resolved_items=(),
-        missing_items=(),
-        captured_answer_summary=None,
-    )
-
-
-def _synthetic_clear_pre_check(*, case: DecisionCase) -> PreRunCheckResult:
-    ready_label = str(case.ready_label or "").strip() or None
-    ready_label_present = bool(case.ready_label_present)
-    outcome = (
-        PrecheckOutcome.MISSING_READY_LABEL.value
-        if ready_label and not ready_label_present
-        else PrecheckOutcome.READY_FOR_AGENT.value
-    )
-    return PreRunCheckResult(
-        outcome=outcome,
-        ready_label=ready_label,
-        ready_label_present=ready_label_present,
-        required_worker_capability=str(case.required_worker_capability or "").strip(),
-        required_worker_label=str(case.required_worker_label or "").strip(),
-        required_worker_label_present=bool(case.required_worker_label_present),
-        decision_gate=DecisionGateResult(
-            triggered=False,
-            reason="Decision Gate not required",
-            missing_sections=(),
-            questions=(),
-            recommendation="Proceed with execution.",
-            tags=(),
-        ),
-        gtd=GoodToDoValidationResult(
-            valid=True,
-            missing_criteria=(),
-            clarification_questions=(),
-        ),
-    )
-
-
-def _coerce_clear_decision(*, decision: IngressDecision, case: DecisionCase) -> IngressDecision:
-    normalized_pre_check = (
-        decision.pre_check
-        if isinstance(decision.pre_check, PreRunCheckResult)
-        else _synthetic_clear_pre_check(case=case)
-    )
-    return _decision_with_planner_result(
-        decision=IngressDecision(
-            source=decision.source,
-            pre_check=normalized_pre_check,
-            block_reason=blocking_reason_for_precheck(normalized_pre_check),
-            guidance=None,
-            policy_error=None,
-            label_actions=decision.label_actions,
-        ),
-        planner_result=_clear_planner_result(),
-    )
-
 
 def _terminally_closed_gate_decision(
     *,
@@ -552,12 +326,13 @@ def evaluate_decision_event(
                 cycle_id=existing_cycle.cycle_id,
             )
             if planner_result is not None:
-                decision = _decision_with_planner_result(
+                reduced = reduce_planner_result_reducer(
                     decision=decision,
                     planner_result=planner_result,
                 )
-                classification = _planner_classification(planner_result.gate_status)
-                question_set_override = _planner_question_set(planner_result)
+                decision = reduced.decision
+                classification = reduced.classification
+                question_set_override = reduced.question_set
                 question_reason_override = planner_result.reason
                 accepted_ids, _, effect_ids = sync_cycle_answers_from_planner(
                     session=session,
@@ -565,7 +340,7 @@ def evaluate_decision_event(
                     project=project,
                     case=existing_case,
                     cycle=existing_cycle,
-                    planner_question_states=_planner_question_state_payload(planner_result),
+                    planner_question_states=reduced.question_states,
                     now=occurred_at,
                 )
                 accepted_question_ids = set(accepted_ids)
@@ -733,7 +508,7 @@ def evaluate_decision_event(
             and isinstance(existing_case.metadata_json.get("result_snapshot"), dict)
             else {}
         )
-        decision = _coerce_clear_decision(
+        decision = coerce_clear_decision_reducer(
             decision=decision_from_snapshot_state(
                 snapshot=snapshot,
                 source=event.source,
@@ -881,12 +656,13 @@ def evaluate_decision_event(
             cycle=existing_cycle,
         )
         if planner_result is not None:
-            decision = _decision_with_planner_result(
+            reduced = reduce_planner_result_reducer(
                 decision=decision,
                 planner_result=planner_result,
             )
-            classification = _planner_classification(planner_result.gate_status)
-            question_set_override = _planner_question_set(planner_result)
+            decision = reduced.decision
+            classification = reduced.classification
+            question_set_override = reduced.question_set
             question_reason_override = planner_result.reason
             if existing_case is not None and existing_cycle is not None:
                 accepted_ids, _, extra_effect_ids = sync_cycle_answers_from_planner(
@@ -895,7 +671,7 @@ def evaluate_decision_event(
                     project=project,
                     case=existing_case,
                     cycle=existing_cycle,
-                    planner_question_states=_planner_question_state_payload(planner_result),
+                    planner_question_states=reduced.question_states,
                     now=occurred_at,
                 )
                 accepted_question_ids = set(accepted_ids)

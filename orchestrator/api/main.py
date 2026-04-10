@@ -48,7 +48,11 @@ from orchestrator.core.logging import configure_logging
 from orchestrator.core.platform_metrics import platform_metrics
 from orchestrator.core.observability import reset_log_context, set_log_context
 from orchestrator.core.sentry import initialize_sentry
+from orchestrator.core.workflow.execution_snapshot_startup import (
+    run_execution_snapshot_startup_bootstrap,
+)
 from orchestrator.storage.database_support import ensure_postgres_database_url
+from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.migrations import run_migrations
 
 logger = logging.getLogger(__name__)
@@ -77,6 +81,12 @@ def create_app() -> FastAPI:
     async def lifespan(_: FastAPI):
         if settings.auto_migrate_on_startup:
             run_migrations()
+        if bool(getattr(settings, "execution_snapshot_startup_bootstrap_enabled", True)):
+            run_execution_snapshot_startup_bootstrap(
+                session_factory=create_session_factory(),
+                database_url=settings.database_url,
+                actor="api",
+            )
         # Best-effort: failures are logged by sync_discord_guild_commands and must not block API startup.
         sync_discord_guild_commands(settings=settings)
         initialize_run_streaming()
