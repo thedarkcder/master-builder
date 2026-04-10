@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any, Iterable, Mapping
 
 from sqlalchemy.orm import Session
@@ -9,9 +10,16 @@ from orchestrator.core.decision_engine import DecisionEngineResult
 from orchestrator.core.decision_reply_service import unresolved_question_feedback_for_cycle
 
 
+class ClarificationMode(str, Enum):
+    CLEAR = "clear"
+    DECISION_GATE = "decision_gate"
+    GTD = "gtd"
+    BOTH = "both"
+
+
 @dataclass(frozen=True)
 class DecisionClarificationPresentation:
-    classification: str
+    mode: ClarificationMode
     recheck_required: bool
     decision_gate_reason: str | None
     decision_gate_questions: tuple[str, ...]
@@ -21,6 +29,14 @@ class DecisionClarificationPresentation:
     question_feedback: tuple[dict[str, str], ...]
     missing_slots: tuple[str, ...]
     auto_resolved_slots: tuple[str, ...]
+
+    @property
+    def classification(self) -> str:
+        return self.mode.value
+
+    @property
+    def requires_decision_gate_feedback(self) -> bool:
+        return self.mode in {ClarificationMode.DECISION_GATE, ClarificationMode.BOTH}
 
 
 def load_cycle_question_feedback(*, session: Session, cycle_id: str | None) -> tuple[dict[str, str], ...]:
@@ -35,7 +51,11 @@ def build_decision_clarification_presentation(
     decision_result: DecisionEngineResult,
     question_feedback: Iterable[Mapping[str, Any]] = (),
 ) -> DecisionClarificationPresentation:
-    classification = str(getattr(decision_result, "classification", "") or "").strip().lower() or "clear"
+    raw_classification = str(getattr(decision_result, "classification", "") or "").strip().lower()
+    try:
+        mode = ClarificationMode(raw_classification or ClarificationMode.CLEAR.value)
+    except ValueError:
+        mode = ClarificationMode.CLEAR
     pre_check = getattr(getattr(decision_result, "decision", None), "pre_check", None)
     normalized_feedback = _normalize_question_feedback(question_feedback)
     missing_slots = tuple(
@@ -54,9 +74,9 @@ def build_decision_clarification_presentation(
         )
         if slot
     )
-    if pre_check is None or classification == "clear":
+    if pre_check is None or mode is ClarificationMode.CLEAR:
         return DecisionClarificationPresentation(
-            classification="clear",
+            mode=ClarificationMode.CLEAR,
             recheck_required=False,
             decision_gate_reason=None,
             decision_gate_questions=(),
@@ -95,7 +115,7 @@ def build_decision_clarification_presentation(
         if question
     )
 
-    if classification in {"decision_gate", "both"} and normalized_feedback:
+    if mode in {ClarificationMode.DECISION_GATE, ClarificationMode.BOTH} and normalized_feedback:
         questions = _dedupe(
             tuple(
                 question_text
@@ -109,10 +129,10 @@ def build_decision_clarification_presentation(
         questions = _dedupe((*decision_gate_questions, *gtd_questions))
 
     return DecisionClarificationPresentation(
-        classification=classification,
+        mode=mode,
         recheck_required=True,
         decision_gate_reason=(
-            decision_gate_reason if classification in {"decision_gate", "both"} else None
+            decision_gate_reason if mode in {ClarificationMode.DECISION_GATE, ClarificationMode.BOTH} else None
         ),
         decision_gate_questions=decision_gate_questions,
         gtd_missing_criteria=gtd_missing_criteria,

@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from orchestrator.core.decision_gate import DecisionGateResult
 from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.precheck_policy import evaluate_precheck_policy
-from orchestrator.core.execution_readiness_state_machine import resolve_precheck_outcome
 from orchestrator.core.worker_capability_normalization import WorkerCapability
 from orchestrator.core.worker_capabilities import (
     infer_required_worker_capability,
@@ -66,6 +65,22 @@ class PreRunCheckResult:
             decision_gate=self.decision_gate,
             gtd=self.gtd,
         )
+
+
+def resolve_precheck_outcome(
+    *,
+    decision_gate_triggered: bool,
+    gtd_valid: bool,
+    ready_label_present: bool,
+    ready_label_required: bool,
+) -> str:
+    if decision_gate_triggered:
+        return "decision_gate_required"
+    if not gtd_valid:
+        return "gtd_required"
+    if ready_label_required and not ready_label_present:
+        return "missing_ready_label"
+    return "ready_for_agent"
 
 
 def evaluate_execution_readiness_only(

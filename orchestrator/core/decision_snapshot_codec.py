@@ -2,15 +2,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 import hashlib
-from typing import Any
 
 from orchestrator.core.decision_gate import DecisionGateResult
-from orchestrator.core.decision_types import IngressDecision
+from orchestrator.core.decision_types import (
+    DecisionClassification,
+    DecisionQuestionKind,
+    IngressDecision,
+)
 from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.pre_run_check import PreRunCheckResult
 
-QUESTION_KIND_DECISION_GATE = "decision_gate"
-QUESTION_KIND_GTD = "gtd"
+QUESTION_KIND_DECISION_GATE = DecisionQuestionKind.DECISION_GATE.value
+QUESTION_KIND_GTD = DecisionQuestionKind.GTD.value
 
 
 def _string_tuple(value: object) -> tuple[str, ...]:
@@ -22,7 +25,7 @@ def _string_tuple(value: object) -> tuple[str, ...]:
 @dataclass(frozen=True)
 class DecisionQuestionSnapshot:
     question_id: str
-    kind: str
+    kind: DecisionQuestionKind
     text: str
     status: str | None = None
     detail: str | None = None
@@ -120,7 +123,7 @@ class PrecheckSnapshot:
 
 @dataclass(frozen=True)
 class DecisionResultSnapshot:
-    classification: str
+    classification: DecisionClassification
     issue_labels: tuple[str, ...]
     missing_slots: tuple[str, ...]
     auto_resolved_slots: tuple[str, ...]
@@ -140,7 +143,7 @@ class DecisionResultSnapshot:
         auto_resolved_slots: list[str],
     ) -> DecisionResultSnapshot:
         return cls(
-            classification=classification,
+            classification=DecisionClassification.parse(classification),
             issue_labels=tuple(str(label).strip() for label in issue_labels if str(label).strip()),
             missing_slots=tuple(str(slot).strip() for slot in missing_slots if str(slot).strip()),
             auto_resolved_slots=tuple(
@@ -161,7 +164,7 @@ class DecisionResultSnapshot:
         if not isinstance(payload, dict):
             return None
         return cls(
-            classification=str(payload.get("classification") or "").strip() or "clear",
+            classification=DecisionClassification.parse(payload.get("classification")),
             issue_labels=tuple(str(label).strip() for label in payload.get("issue_labels", []) if str(label).strip()),
             missing_slots=tuple(str(slot).strip() for slot in payload.get("missing_slots", []) if str(slot).strip()),
             auto_resolved_slots=tuple(
@@ -175,7 +178,7 @@ class DecisionResultSnapshot:
 
     def dump(self) -> dict[str, object]:
         return {
-            "classification": self.classification,
+            "classification": self.classification.value,
             "issue_labels": list(self.issue_labels),
             "missing_slots": list(self.missing_slots),
             "auto_resolved_slots": list(self.auto_resolved_slots),
@@ -194,7 +197,8 @@ def build_question_set(*, pre_check: object, classification: str) -> list[dict]:
     if pre_check is None:
         return []
     items: list[dict[str, str]] = []
-    if classification in {"decision_gate", "both"}:
+    parsed_classification = DecisionClassification.parse(classification)
+    if parsed_classification.includes_decision_gate:
         decision_gate = getattr(pre_check, "decision_gate", None)
         questions = getattr(decision_gate, "questions", ()) if decision_gate is not None else ()
         for question in questions:
@@ -204,11 +208,11 @@ def build_question_set(*, pre_check: object, classification: str) -> list[dict]:
             items.append(
                 {
                     "id": f"dg_{stable_short_hash(text)}",
-                    "kind": QUESTION_KIND_DECISION_GATE,
+                    "kind": DecisionQuestionKind.DECISION_GATE.value,
                     "text": text,
                 }
             )
-    if classification in {"gtd", "both"}:
+    if parsed_classification.includes_gtd:
         for question in getattr(pre_check, "gtd_clarification_questions", ()):
             text = str(question or "").strip()
             if not text:
@@ -216,7 +220,7 @@ def build_question_set(*, pre_check: object, classification: str) -> list[dict]:
             items.append(
                 {
                     "id": f"gtd_{stable_short_hash(text)}",
-                    "kind": QUESTION_KIND_GTD,
+                    "kind": DecisionQuestionKind.GTD.value,
                     "text": text,
                 }
             )
@@ -237,14 +241,15 @@ def apply_frozen_cycle_questions(
     cycle_question_set: list[dict[str, object]],
     unresolved_question_ids: list[str],
     cycle_reason: str | None,
-    classification: str,
+    classification: DecisionClassification | object,
 ) -> object:
+    parsed_classification = DecisionClassification.parse(classification)
     unresolved_ids = {str(question_id).strip() for question_id in unresolved_question_ids if str(question_id).strip()}
     decision_gate_questions = [
         str(item.get("text") or "").strip()
         for item in cycle_question_set
         if (
-            str(item.get("kind") or "").strip() == QUESTION_KIND_DECISION_GATE
+            DecisionQuestionKind.parse(item.get("kind")) is DecisionQuestionKind.DECISION_GATE
             and str(item.get("text") or "").strip()
             and (
                 not str(item.get("id") or "").strip()
@@ -256,7 +261,7 @@ def apply_frozen_cycle_questions(
         str(item.get("text") or "").strip()
         for item in cycle_question_set
         if (
-            str(item.get("kind") or "").strip() == QUESTION_KIND_GTD
+            DecisionQuestionKind.parse(item.get("kind")) is DecisionQuestionKind.GTD
             and str(item.get("text") or "").strip()
             and (
                 not str(item.get("id") or "").strip()
@@ -267,12 +272,12 @@ def apply_frozen_cycle_questions(
     resolved = pre_check
     decision_gate = getattr(resolved, "decision_gate", None)
     gtd = getattr(resolved, "gtd", None)
-    if classification in {"decision_gate", "both"} and decision_gate is not None:
+    if parsed_classification.includes_decision_gate and decision_gate is not None:
         next_decision_gate = decision_gate
         if cycle_reason:
             next_decision_gate = replace(next_decision_gate, reason=cycle_reason)
         next_decision_gate = replace(next_decision_gate, questions=tuple(decision_gate_questions))
         resolved = replace(resolved, decision_gate=next_decision_gate)
-    if classification in {"gtd", "both"} and gtd is not None:
+    if parsed_classification.includes_gtd and gtd is not None:
         resolved = replace(resolved, gtd=replace(gtd, clarification_questions=tuple(gtd_questions)))
     return resolved

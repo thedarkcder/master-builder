@@ -8,7 +8,11 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
+from orchestrator.core.workflow.execution_snapshot import (
+    ExecutionSnapshot,
+    load_parsed_trigger_context_from_plan,
+)
+from orchestrator.core.workflow.trigger_context import GithubPrRemediationTriggerContext
 from orchestrator.core.workflow.transitions import ACTIVE_WORKFLOW_STATUSES as WORKFLOW_ACTIVE_STATUSES, is_workflow_terminal
 from orchestrator.storage.models import Run, WebhookDelivery, WorkflowExecution
 from orchestrator.storage.run_queue_events import notify_run_enqueued
@@ -99,6 +103,31 @@ def resolve_precheck_outcome_for_enqueue(
     if normalized_outcome is not None:
         return normalized_outcome
     return resolve_precheck_outcome_from_plan(precheck_source_plan)
+
+
+def is_pr_remediation_run(
+    *,
+    run_plan: object | None,
+) -> bool:
+    trigger_context = load_parsed_trigger_context_from_plan(run_plan)
+    return isinstance(trigger_context, GithubPrRemediationTriggerContext)
+
+
+def resolve_enqueue_precheck_outcome(
+    *,
+    source: str,
+    precheck_outcome: str | None = None,
+    precheck_source_plan: object | None = None,
+) -> str | None:
+    _ = source
+    if is_pr_remediation_run(
+        run_plan=precheck_source_plan,
+    ):
+        return "ready_for_agent"
+    return resolve_precheck_outcome_for_enqueue(
+        precheck_outcome=precheck_outcome,
+        precheck_source_plan=precheck_source_plan,
+    )
 
 
 def is_ready_for_agent_precheck(plan: object | None) -> bool:

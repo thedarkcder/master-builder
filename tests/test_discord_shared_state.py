@@ -140,6 +140,19 @@ class DiscordSharedStateTests(unittest.TestCase):
         self.assertEqual(exc_ctx.exception.status_code, 403)
         self.assertEqual(exc_ctx.exception.detail, "denied")
 
+    def test_assert_sensitive_command_permission_allows_tenant_allowlisted_user(self) -> None:
+        session = MagicMock()
+        tenant = SimpleNamespace(tenant_id="t1", discord_config={"allowed_user_ids": ["u1"]})
+
+        with patch("orchestrator.api.discord.shared.state.resolve_project_for_discord_channel", return_value=None):
+            state_module.assert_sensitive_command_permission(
+                session=session,
+                tenant=tenant,
+                command_name="run",
+                user_id="u1",
+                channel_id="c1",
+            )
+
     def test_assert_channel_scope(self) -> None:
         session = MagicMock()
         tenant = SimpleNamespace(tenant_id="t1", discord_config={})

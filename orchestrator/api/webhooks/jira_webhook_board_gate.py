@@ -8,7 +8,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from orchestrator.api.jira_oauth.connection_service import tenant_jira_oauth_context
-from orchestrator.api.webhooks.jira_webhook_precheck import (
+from orchestrator.api.webhooks.jira_admission_flow import (
     build_backlog_pre_run_check,
     evaluate_precheck_decision_with_labels,
 )

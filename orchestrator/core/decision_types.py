@@ -7,11 +7,6 @@ from typing import Literal
 
 from orchestrator.core.communications.enqueue_reason_contract import enqueue_reason_guidance
 from orchestrator.core.decision_gate import DecisionGateResult
-from orchestrator.core.execution_readiness_state_machine import (
-    ReadinessState,
-    blocking_reason_for_outcome,
-    resolve_readiness_decision,
-)
 from orchestrator.core.pre_run_check import PreRunCheckResult
 
 DecisionSource = Literal[
@@ -84,7 +79,7 @@ class WorkerDecision:
     decision_gate: DecisionGateResult | None
     configuration_error: str | None
     block_reason: str | None = None
-    classification: str | None = None
+    classification: DecisionClassification | None = None
     pre_check: PreRunCheckResult | None = None
 
 
@@ -93,6 +88,128 @@ class DecisionClassification(str, Enum):
     DECISION_GATE = "decision_gate"
     GTD = "gtd"
     BOTH = "both"
+
+    @classmethod
+    def parse(cls, value: object) -> DecisionClassification:
+        normalized = str(getattr(value, "value", value) or "").strip().lower()
+        if normalized == cls.DECISION_GATE.value:
+            return cls.DECISION_GATE
+        if normalized == cls.GTD.value:
+            return cls.GTD
+        if normalized == cls.BOTH.value:
+            return cls.BOTH
+        return cls.CLEAR
+
+    @property
+    def blocks_execution(self) -> bool:
+        return self in {self.DECISION_GATE, self.GTD, self.BOTH}
+
+    @property
+    def includes_decision_gate(self) -> bool:
+        return self in {self.DECISION_GATE, self.BOTH}
+
+    @property
+    def includes_gtd(self) -> bool:
+        return self in {self.GTD, self.BOTH}
+
+
+class DecisionQuestionKind(str, Enum):
+    DECISION_GATE = "decision_gate"
+    GTD = "gtd"
+
+    @classmethod
+    def parse(cls, value: object) -> DecisionQuestionKind:
+        normalized = str(getattr(value, "value", value) or "").strip().lower()
+        if normalized == cls.GTD.value:
+            return cls.GTD
+        return cls.DECISION_GATE
+
+
+class PrecheckOutcome(str, Enum):
+    READY_FOR_AGENT = "ready_for_agent"
+    DECISION_GATE_REQUIRED = "decision_gate_required"
+    GTD_REQUIRED = "gtd_required"
+    EXECUTION_BLOCKED = "execution_blocked"
+    MISSING_READY_LABEL = "missing_ready_label"
+    POLICY_EVAL_FAILED = "policy_eval_failed"
+
+    @classmethod
+    def parse(cls, value: object) -> PrecheckOutcome | None:
+        normalized = str(getattr(value, "value", value) or "").strip().lower()
+        for item in cls:
+            if normalized == item.value:
+                return item
+        return None
+
+    @property
+    def is_decision_block(self) -> bool:
+        return self in {self.DECISION_GATE_REQUIRED, self.GTD_REQUIRED, self.EXECUTION_BLOCKED}
+
+
+class ReadinessState(str, Enum):
+    READY = "ready"
+    BLOCKED_DECISION = "blocked_decision"
+    BLOCKED_READY_LABEL = "blocked_ready_label"
+    POLICY_ERROR = "policy_error"
+
+
+@dataclass(frozen=True)
+class ReadinessDecision:
+    state: ReadinessState
+    reason_code: PrecheckOutcome | None = None
+
+
+def blocking_reason_for_outcome(outcome: object) -> str | None:
+    parsed = PrecheckOutcome.parse(outcome)
+    if parsed is None or not parsed.is_decision_block and parsed is not PrecheckOutcome.MISSING_READY_LABEL:
+        return None
+    return parsed.value
+
+
+def resolve_readiness_decision(
+    *,
+    policy_error: str | None,
+    block_reason: str | None,
+    classification: object,
+) -> ReadinessDecision:
+    if str(policy_error or "").strip():
+        return ReadinessDecision(
+            state=ReadinessState.POLICY_ERROR,
+            reason_code=PrecheckOutcome.POLICY_EVAL_FAILED,
+        )
+
+    parsed_block_reason = PrecheckOutcome.parse(block_reason)
+    if parsed_block_reason is PrecheckOutcome.MISSING_READY_LABEL:
+        return ReadinessDecision(
+            state=ReadinessState.BLOCKED_READY_LABEL,
+            reason_code=PrecheckOutcome.MISSING_READY_LABEL,
+        )
+    if parsed_block_reason is not None and parsed_block_reason.is_decision_block:
+        return ReadinessDecision(
+            state=ReadinessState.BLOCKED_DECISION,
+            reason_code=parsed_block_reason,
+        )
+
+    normalized_classification = DecisionClassification.parse(classification)
+    if normalized_classification.blocks_execution:
+        return ReadinessDecision(
+            state=ReadinessState.BLOCKED_DECISION,
+            reason_code=PrecheckOutcome.DECISION_GATE_REQUIRED,
+        )
+    return ReadinessDecision(state=ReadinessState.READY)
+
+
+def tenant_ready_label(tenant: object | None) -> str | None:
+    if tenant is None:
+        return None
+    jira_config = getattr(tenant, "jira_config", None)
+    if not isinstance(jira_config, dict):
+        return None
+    raw_value = jira_config.get("ready_label")
+    if not isinstance(raw_value, str):
+        return None
+    normalized = raw_value.strip()
+    return normalized or None
 
 
 class DecisionQuestionStatus(str, Enum):
@@ -138,7 +255,7 @@ class DecisionEventInput:
 class DecisionEngineResult:
     decision: IngressDecision
     issue_labels: list[str]
-    classification: str
+    classification: DecisionClassification
     missing_slots: list[str]
     auto_resolved_slots: list[str]
     case_id: str
@@ -158,11 +275,15 @@ class DecisionEngineResult:
     def execution_gate_reason(self) -> ExecutionGateReason | None:
         return self.execution_gate.reason
 
+    @property
+    def classification_code(self) -> str:
+        return self.classification.value
+
 
 def resolve_execution_gate_state(
     *,
     decision: IngressDecision,
-    classification: str,
+    classification: object,
 ) -> ExecutionGateResolution:
     readiness = resolve_readiness_decision(
         policy_error=decision.policy_error,
@@ -197,7 +318,7 @@ def resolve_execution_gate_state(
 
     if readiness.state == ReadinessState.BLOCKED_DECISION:
         detail = str(getattr(decision.pre_check, "decision_gate_reason", "") or "").strip() or None
-        reason_code = str(readiness.reason_code or "").strip() or "decision_gate_required"
+        reason_code = (readiness.reason_code or PrecheckOutcome.DECISION_GATE_REQUIRED).value
         return ExecutionGateResolution(
             state=ExecutionGateState.BLOCK_DECISION,
             reason=ExecutionGateReason(

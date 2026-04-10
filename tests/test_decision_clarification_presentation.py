@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from orchestrator.core.communications.decision_clarification_presentation import (
+    ClarificationMode,
     build_decision_clarification_presentation,
     render_decision_gate_feedback_message,
     render_decision_gate_remaining_questions_message,
@@ -49,6 +50,7 @@ def test_build_decision_clarification_presentation_prefers_feedback_questions_fo
         ),
     )
     assert presentation.recheck_required is True
+    assert presentation.mode is ClarificationMode.DECISION_GATE
     assert presentation.classification == "decision_gate"
     assert presentation.questions == ("What is the owner?",)
 
@@ -63,6 +65,7 @@ def test_build_decision_clarification_presentation_uses_gtd_questions_when_no_fe
         ),
     )
     assert presentation.recheck_required is True
+    assert presentation.mode is ClarificationMode.GTD
     assert presentation.classification == "gtd"
     assert presentation.decision_gate_reason is None
     assert presentation.questions == ("Which dependencies or risks may impact delivery?",)

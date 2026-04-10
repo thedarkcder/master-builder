@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from orchestrator.core.decision_types import DecisionClassification
 from orchestrator.core.precheck_slot_registry import canonical_slot_id
 from orchestrator.core.runtime_payload_models import PrecheckMessagePayload
 from orchestrator.core.runtime_invocation import AgentInvocationContext, invoke_runtime_json
@@ -10,7 +11,7 @@ from orchestrator.core.codex_runtime import CodexRuntime, CodexRuntimeError
 from orchestrator.core.prompt_templates import render_prompt
 
 
-def precheck_classification(pre_check: object) -> str:
+def precheck_classification(pre_check: object) -> DecisionClassification:
     decision_gate = bool(getattr(pre_check, "decision_gate_triggered", False))
     gtd_valid_raw = getattr(pre_check, "gtd_valid", None)
     if isinstance(gtd_valid_raw, bool):
@@ -18,12 +19,12 @@ def precheck_classification(pre_check: object) -> str:
     else:
         gtd_missing = bool(getattr(pre_check, "gtd_missing_criteria", ()) or getattr(pre_check, "gtd_clarification_questions", ()))
     if decision_gate and gtd_missing:
-        return "both"
+        return DecisionClassification.BOTH
     if decision_gate:
-        return "decision_gate"
+        return DecisionClassification.DECISION_GATE
     if gtd_missing:
-        return "gtd"
-    return "clear"
+        return DecisionClassification.GTD
+    return DecisionClassification.CLEAR
 
 
 def _canonical_slot_name(raw_value: object) -> str:
@@ -54,7 +55,7 @@ def build_precheck_message(
     runtime: CodexRuntime,
     invocation_context: AgentInvocationContext,
     issue_key: str,
-    classification: str,
+    classification: DecisionClassification,
     decision_gate_reason: str,
     decision_gate_questions: list[str],
     gtd_missing_criteria: list[str],
@@ -70,7 +71,7 @@ def build_precheck_message(
             user_prompt=render_prompt(
                 "policy/precheck_message_user.j2",
                 issue_key=issue_key,
-                classification=classification,
+                classification=classification.value,
                 decision_gate_reason=decision_gate_reason,
                 decision_gate_questions_json=json.dumps(decision_gate_questions),
                 gtd_missing_criteria_json=json.dumps(gtd_missing_criteria),
@@ -105,16 +106,16 @@ def build_precheck_message(
 def _fallback_precheck_message(
     *,
     issue_key: str,
-    classification: str,
+    classification: DecisionClassification,
     decision_gate_reason: str,
     decision_gate_questions: list[str],
     gtd_missing_criteria: list[str],
     gtd_questions: list[str],
 ) -> tuple[str, list[str]]:
     lines = [f"Clarification is still needed for `{issue_key}`."]
-    if classification in {"decision_gate", "both"}:
+    if classification.includes_decision_gate:
         lines.append(f"Decision Gate reason: {decision_gate_reason or 'clarification required'}")
-    if classification in {"gtd", "both"} and gtd_missing_criteria:
+    if classification.includes_gtd and gtd_missing_criteria:
         lines.append("Missing GTD criteria: " + ", ".join(gtd_missing_criteria))
     questions = [*decision_gate_questions, *gtd_questions]
     questions = [item for item in questions if item.strip()]

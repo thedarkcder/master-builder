@@ -7,6 +7,7 @@ from orchestrator.core.decision_state_reducer import (
     DecisionStateTransition,
     reduce_decision_state_transition,
 )
+from orchestrator.core.decision_types import DecisionClassification
 
 
 class DecisionStateReducerTests(unittest.TestCase):
@@ -17,7 +18,7 @@ class DecisionStateReducerTests(unittest.TestCase):
                 has_open_cycle=True,
                 unresolved_question_count=2,
                 decision_gate_closed_permanently=False,
-                case_classification="decision_gate",
+                case_classification=DecisionClassification.DECISION_GATE,
                 case_issue_fingerprint="f1",
                 current_issue_fingerprint="f2",
             )
@@ -31,7 +32,7 @@ class DecisionStateReducerTests(unittest.TestCase):
                 has_open_cycle=True,
                 unresolved_question_count=0,
                 decision_gate_closed_permanently=False,
-                case_classification="decision_gate",
+                case_classification=DecisionClassification.DECISION_GATE,
                 case_issue_fingerprint="f1",
                 current_issue_fingerprint="f2",
             )
@@ -45,7 +46,7 @@ class DecisionStateReducerTests(unittest.TestCase):
                 has_open_cycle=False,
                 unresolved_question_count=0,
                 decision_gate_closed_permanently=True,
-                case_classification="clear",
+                case_classification=DecisionClassification.CLEAR,
                 case_issue_fingerprint="f1",
                 current_issue_fingerprint="f1",
             )
@@ -59,7 +60,7 @@ class DecisionStateReducerTests(unittest.TestCase):
                 has_open_cycle=False,
                 unresolved_question_count=0,
                 decision_gate_closed_permanently=False,
-                case_classification="clear",
+                case_classification=DecisionClassification.CLEAR,
                 case_issue_fingerprint="f1",
                 current_issue_fingerprint="f1",
             )
@@ -73,7 +74,7 @@ class DecisionStateReducerTests(unittest.TestCase):
                 has_open_cycle=False,
                 unresolved_question_count=0,
                 decision_gate_closed_permanently=False,
-                case_classification="",
+                case_classification=DecisionClassification.CLEAR,
                 case_issue_fingerprint="",
                 current_issue_fingerprint="f1",
             )
@@ -83,4 +84,3 @@ class DecisionStateReducerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
