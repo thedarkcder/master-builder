@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from orchestrator.core.communications.enqueue_reason_contract import enqueue_reason_guidance
+from orchestrator.core.decision_types import PrecheckOutcome
 
 
 def normalize_backlog_pre_run_check_text(raw_value: str | None, *, max_chars: int = 240) -> str | None:
@@ -40,7 +41,7 @@ def format_backlog_pre_run_check_message(
     issue_status: str | None,
     pre_run_check: dict[str, object],
 ) -> str:
-    outcome = str(pre_run_check.get("outcome") or "").strip()
+    outcome = PrecheckOutcome.parse(pre_run_check.get("outcome"))
     ready_label = pre_run_check.get("ready_label")
     decision_gate_reason = normalize_backlog_pre_run_check_text(
         pre_run_check.get("decision_gate_reason")
@@ -58,20 +59,20 @@ def format_backlog_pre_run_check_message(
     ]
     if issue_status:
         lines.append(f"Issue status: `{issue_status}`")
-    if outcome == "ready_for_agent":
+    if outcome is PrecheckOutcome.READY_FOR_AGENT:
         if isinstance(ready_label, str) and ready_label.strip():
             lines.append(f"Pre-run check: labeled `{ready_label.strip()}` and ready for agent.")
         else:
             lines.append("Pre-run check: ready for agent.")
-    elif outcome == "decision_gate_required":
+    elif outcome is PrecheckOutcome.DECISION_GATE_REQUIRED:
         lines.append("Pre-run check: Decision Gate required before execution.")
         if decision_gate_reason:
             lines.append(f"Decision Gate reason: {decision_gate_reason}")
-    elif outcome == "gtd_required":
+    elif outcome is PrecheckOutcome.GTD_REQUIRED:
         lines.append("Pre-run check: Good To Do details are incomplete.")
         if gtd_missing_criteria:
             lines.append("Missing GTD criteria: " + ", ".join(gtd_missing_criteria))
-    elif outcome == "missing_ready_label":
+    elif outcome is PrecheckOutcome.MISSING_READY_LABEL:
         if isinstance(ready_label, str) and ready_label.strip():
             lines.append(f"Pre-run check: missing ready label `{ready_label.strip()}`.")
         else:
