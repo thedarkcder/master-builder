@@ -72,6 +72,21 @@ def parse_execution_admission_reason(raw_value: object) -> ExecutionAdmissionRea
     return _parse_admission_reason(str(getattr(raw_value, "value", raw_value) or ""))
 
 
+def admission_from_enqueue_reason(
+    *,
+    raw_reason: object,
+    fallback_reason: ExecutionAdmissionReason = ExecutionAdmissionReason.EXECUTION_BLOCKED,
+) -> ExecutionAdmissionDecision:
+    parsed_reason = parse_execution_admission_reason(raw_reason)
+    if parsed_reason is not None:
+        return build_execution_admission_block(reason=parsed_reason)
+    detail = str(getattr(raw_reason, "value", raw_reason) or "").strip() or None
+    return build_execution_admission_block(
+        reason=fallback_reason,
+        detail=detail,
+    )
+
+
 def build_execution_admission_block(
     *,
     reason: ExecutionAdmissionReason,
