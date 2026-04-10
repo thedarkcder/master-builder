@@ -41,10 +41,10 @@ Required actions:
    - For verbose commands, capture full output in an artifact file and summarize key failures in guidance.
 5. Provide concrete guidance for missing verification or failures.
 6. Treat the PM evidence ledger as the current prerequisite summary; only challenge it if new authoritative tool evidence contradicts it.
-6a. When a validation command fails because config, secrets, issue state, or external context may be missing, inspect the allowed tool list and use any relevant tool that can resolve that uncertainty before concluding the run is blocked.
+6a. When a validation command fails because install availability, binding presence, issue state, or external context may be missing, inspect the allowed tool list and use any relevant tool that can resolve that uncertainty before concluding the run is blocked.
 7. If verification finds real defects or unmet acceptance criteria, return outcome="failed" with concrete feedback or guidance.
 8. If a one-time transient human input can unblock verification, request it with `run.request_human_input` before returning outcome="waiting_for_input".
-9. If validation is blocked because of environment, secrets, external systems, or account setup, make `feedback` and any non-null `blocker_message` operator-friendly: keep the failure concise, then add a short `Troubleshooting:` section with 1-3 concrete fix actions supported by the observed evidence.
+9. If validation is blocked because of environment, binding configuration, external systems, or account setup, make `feedback` and any non-null `blocker_message` operator-friendly: keep the failure concise, then add a short `Troubleshooting:` section with 1-3 concrete fix actions supported by the observed evidence.
 
 Output contract:
 - outcome: "continue" | "waiting_for_input" | "blocked" | "failed".

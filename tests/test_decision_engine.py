@@ -287,7 +287,6 @@ class DecisionEngineTests(unittest.TestCase):
         self.assertEqual(worker_decision.block_reason, "gtd_required")
         self.assertEqual(worker_decision.classification, "gtd")
 
-
 class LabelActionServiceTests(unittest.TestCase):
     def test_apply_issue_label_actions_respects_policy_and_dedupes(self) -> None:
         oauth_client = SimpleNamespace(add_issue_labels=mock.MagicMock())

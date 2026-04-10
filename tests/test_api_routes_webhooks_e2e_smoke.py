@@ -760,6 +760,59 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                     "is_archived": False,
                 },
             ),
+            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/installs"): RouteScenario(
+                path="/api/admin/tenants/example/projects/example-default/installs",
+                auth=admin,
+            ),
+            ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/installs"): RouteScenario(
+                path="/api/admin/tenants/example/projects/example-default/installs",
+                auth=admin,
+                json={
+                    "kind": "fastlane_lane",
+                    "label": "Smoke Fastlane",
+                    "enabled": True,
+                    "config": {
+                        "working_dir": ".",
+                        "platform": "ios",
+                        "lane": "beta",
+                        "use_bundle_exec": True,
+                    },
+                    "binding_names": ["FASTLANE_SESSION"],
+                },
+                expected_statuses=(201,),
+            ),
+            ("PUT", "/api/admin/tenants/{tenant_id}/projects/{project_id}/installs/{install_id}"): RouteScenario(
+                path="/api/admin/tenants/example/projects/example-default/installs/install-missing",
+                auth=admin,
+                json={
+                    "kind": "fastlane_lane",
+                    "label": "Missing Install",
+                    "enabled": True,
+                    "config": {
+                        "working_dir": ".",
+                        "platform": "ios",
+                        "lane": "beta",
+                        "use_bundle_exec": True,
+                    },
+                    "binding_names": ["FASTLANE_SESSION"],
+                },
+                expected_statuses=(404,),
+            ),
+            ("DELETE", "/api/admin/tenants/{tenant_id}/projects/{project_id}/installs/{install_id}"): RouteScenario(
+                path="/api/admin/tenants/example/projects/example-default/installs/install-missing",
+                auth=admin,
+                expected_statuses=(404, 204),
+            ),
+            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/install-requests"): RouteScenario(
+                path="/api/admin/tenants/example/projects/example-default/install-requests",
+                auth=admin,
+            ),
+            ("PUT", "/api/admin/tenants/{tenant_id}/projects/{project_id}/install-requests/{request_id}"): RouteScenario(
+                path="/api/admin/tenants/example/projects/example-default/install-requests/request-missing",
+                auth=admin,
+                json={"status": "rejected"},
+                expected_statuses=(404,),
+            ),
             ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/automations"): RouteScenario(
                 path="/api/admin/tenants/example/projects/example-default/automations",
                 auth=admin,

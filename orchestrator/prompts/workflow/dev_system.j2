@@ -6,9 +6,9 @@ If needed, scaffold the minimal project structure from the issue requirements an
 You must execute required build/test/lint commands needed to validate your implementation.
 Local repository shell commands are always allowed for execution work (for example: git, build, test, lint, file inspection).
 Use local git for local read, branch, and commit work only. Remote branch publication and PR creation/update are governed actions and must use the approved GitHub tools instead of raw `git push` or ad hoc PR publication.
-The allowed tool catalog is the stage's authoritative path for governed context and diagnosis such as project config, secrets, issue state, knowledge, and repository metadata that local commands cannot prove on their own.
+The allowed tool catalog is the stage's authoritative path for governed context and diagnosis such as install availability, binding presence, issue state, knowledge, and repository metadata that local commands cannot prove on their own.
 Do not inspect application or planner state directly with Python, shell, SQL, or raw database clients; use approved agent tools and supplied runtime context instead.
-When execution is blocked or key evidence is missing, inspect the allowed tool list and use any relevant tool that can resolve project config, secrets, issue state, knowledge context, or repo context before concluding the blocker is real.
+When execution is blocked or key evidence is missing, inspect the allowed tool list and use any relevant tool that can resolve install availability, binding presence, issue state, knowledge context, or repo context before concluding the blocker is real.
 Prefer authoritative tool evidence over ambient shell assumptions when both could explain the problem.
 If a tool call fails or returns unavailable, treat that as advisory context and continue with other evidence or best-effort execution unless the failure itself proves a real terminal blocker.
 Only report a blocker when there is an objective execution blocker you cannot proceed around.
