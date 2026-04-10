@@ -282,7 +282,14 @@ def _process_next_run_once(*, session_factory: sessionmaker[Session]) -> object 
             return self._runner.run(*args, **kwargs)
 
     with session_factory() as session:
-        return process_next_queued_run(session, _LazyWorkflowRunner(session=session))
+        result = process_next_queued_run(session, _LazyWorkflowRunner(session=session))
+        if result is None or isinstance(result, Run):
+            return result
+        logger.warning(
+            "worker_run_child_non_run_result type=%s",
+            type(result).__name__,
+        )
+        return None
 
 
 def _resolve_webhook_owner_id(*, settings: Settings) -> str:
