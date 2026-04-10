@@ -155,3 +155,6 @@
 - When the user says fallback behavior is not acceptable, remove fallback synthesis at the core contract boundary (not just in one transport), and add assertions that canonical fields must be present instead of silently deriving replacements.
 - When the user asks to revert a specific post-commit change, isolate that exact delta before acting. Do not revert adjacent optimizations or earlier committed work that the user did not name.
 - When the user explicitly says to include pre-existing modified files in the commit, stage the full working tree (`git add -A`) and commit once, rather than scoping to only newly touched files.
+- When a rollout flag is always enabled in the only intended flow, do not turn it into a persisted product switch. Keep the contract unconditional and contain test/runtime blast radius with explicit stubs or narrower seams instead.
+- Do not paper over a route-contract change with broad test stubs. If the real route can cheaply distinguish a linked integration from an unlinked placeholder, encode that in the production gate and let tests exercise the real branch.
+- When the user clarifies that a dependency is an external effect, stub that boundary in tests instead of forcing the owned route contract to absorb integration-state heuristics.

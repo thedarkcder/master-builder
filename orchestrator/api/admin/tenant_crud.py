@@ -26,12 +26,9 @@ _CREATE_TENANT_JIRA_CONFIGURATION_ERROR_DETAILS = {
     "Configured Jira connection was not found",
     "Jira OAuth connection is not linked for this tenant",
 }
-_SETUP_STATE_AUTO_PROVISION_JIRA_WEBHOOK_ON_CREATE = "auto_provision_jira_webhook_on_create"
 
 
-def _should_provision_jira_webhook_on_create(*, jira_config: dict, setup_state: dict) -> bool:
-    if not bool(setup_state.get(_SETUP_STATE_AUTO_PROVISION_JIRA_WEBHOOK_ON_CREATE)):
-        return False
+def _should_provision_jira_webhook_on_create(*, jira_config: dict) -> bool:
     connection_id = jira_config_text(jira_config=jira_config, key=JiraConfigKey.CONNECTION_ID)
     if not connection_id:
         return False
@@ -96,7 +93,6 @@ def create_tenant(
     reconcile_tenant_projects_fn(session, tenant=tenant)
     if _should_provision_jira_webhook_on_create(
         jira_config=dict(tenant.jira_config or {}),
-        setup_state=dict(tenant.setup_state or {}),
     ):
         provision_result = provision_jira_webhook_fn(
             session=session,
