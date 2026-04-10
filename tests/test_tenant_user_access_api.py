@@ -980,6 +980,7 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
         self.assertEqual(parsed.netloc, "discord.com")
         self.assertIn("state", query)
         self.assertEqual(query["client_id"], ["discord-client-id-123"])
+        self.assertEqual(query["permissions"], ["3224728621023057"])
 
         callback_response = self.client.get(
             f"/api/admin/discord/install/callback?state={query['state'][0]}&guild_id=987654321&code=oauth-code",
