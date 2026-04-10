@@ -50,33 +50,37 @@ from orchestrator.storage.models import (
     WorkerRuntimeState,
 )
 from orchestrator.tools.github_app import InstallationRepository
-from tests.test_support.db_harness import SqliteTemplateDbTestCase
+from tests.test_support.db_harness import SqliteTemplateApiTestCase
 from tests.workflow_test_support import add_human_input_request, add_run_with_workflow, add_workflow_attempt, make_run
 
 
-class AdminApiTests(SqliteTemplateDbTestCase):
-    def setUp(self) -> None:
-        self.database_url = self._prepare_test_database(name_prefix="admin-api")
+class AdminApiTests(SqliteTemplateApiTestCase):
+    _secrets_encryption_key: str
 
-        os.environ["ORCHESTRATOR_DATABASE_URL"] = self.database_url
-        os.environ["ORCHESTRATOR_ADMIN_USERNAME"] = "admin"
-        os.environ["ORCHESTRATOR_ADMIN_PASSWORD"] = "secret"
-        os.environ["ORCHESTRATOR_ADMIN_TOKEN_SECRET"] = "admin-token-secret-for-tests-0123456789"
-        os.environ["ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET"] = "unit-test-secret"
-        os.environ["ORCHESTRATOR_ADMIN_UI_BASE_URL"] = "http://localhost:4100"
-        os.environ["ORCHESTRATOR_PUBLIC_API_BASE_URL"] = "http://localhost:4000"
-        os.environ["ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET"] = "jira-oauth-state-secret"
-        os.environ["ORCHESTRATOR_GITHUB_APP_SLUG"] = "master-builder-app"
-        os.environ["ORCHESTRATOR_SECRETS_ENCRYPTION_KEY"] = Fernet.generate_key().decode("utf-8")
-        os.environ["ORCHESTRATOR_CODEX_MODEL"] = "gpt-5.4"
-        os.environ["ORCHESTRATOR_CODEX_SUPPORTED_MODELS"] = "gpt-5.4,gpt-5.3-codex,gpt-5.3-codex-spark"
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls._secrets_encryption_key = Fernet.generate_key().decode("utf-8")
+        super().setUpClass()
 
-        get_settings.cache_clear()
-        reset_db_engine_cache()
-        reset_agent_observability_for_tests()
+    @classmethod
+    def class_environment_overrides(cls) -> dict[str, str]:
+        return {
+            "ORCHESTRATOR_ADMIN_USERNAME": "admin",
+            "ORCHESTRATOR_ADMIN_PASSWORD": "secret",
+            "ORCHESTRATOR_ADMIN_TOKEN_SECRET": "admin-token-secret-for-tests-0123456789",
+            "ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET": "unit-test-secret",
+            "ORCHESTRATOR_ADMIN_UI_BASE_URL": "http://localhost:4100",
+            "ORCHESTRATOR_PUBLIC_API_BASE_URL": "http://localhost:4000",
+            "ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET": "jira-oauth-state-secret",
+            "ORCHESTRATOR_GITHUB_APP_SLUG": "master-builder-app",
+            "ORCHESTRATOR_SECRETS_ENCRYPTION_KEY": cls._secrets_encryption_key,
+            "ORCHESTRATOR_CODEX_MODEL": "gpt-5.4",
+            "ORCHESTRATOR_CODEX_SUPPORTED_MODELS": "gpt-5.4,gpt-5.3-codex,gpt-5.3-codex-spark",
+        }
 
-        self.client = TestClient(create_app())
-        seed_slug_secret_response = self.client.put(
+    @classmethod
+    def bootstrap_template_state(cls) -> None:
+        seed_slug_secret_response = cls._class_client.put(
             "/api/admin/secrets/platform%2FGITHUB_APP_SLUG",
             json={"value": "master-builder-app"},
             auth=("admin", "secret"),
@@ -86,42 +90,36 @@ class AdminApiTests(SqliteTemplateDbTestCase):
                 f"Failed to seed GITHUB_APP_SLUG secret for tests: {seed_slug_secret_response.text}"
             )
 
-        self.client.put(
+        cls._class_client.put(
             "/api/admin/secrets/platform%2FGITHUB_APP_ID",
             json={"value": "12345"},
             auth=("admin", "secret"),
         )
-        self.client.put(
+        cls._class_client.put(
             "/api/admin/secrets/platform%2FGITHUB_APP_PRIVATE_KEY",
             json={"value": "not-a-real-key-for-tests"},
             auth=("admin", "secret"),
         )
-        self.client.put(
+        cls._class_client.put(
             "/api/admin/secrets/platform%2FJIRA_OAUTH_CLIENT_ID",
             json={"value": "jira-client-id"},
             auth=("admin", "secret"),
         )
-        self.client.put(
+        cls._class_client.put(
             "/api/admin/secrets/platform%2FJIRA_OAUTH_CLIENT_SECRET",
             json={"value": "jira-client-secret"},
             auth=("admin", "secret"),
         )
 
+    def setUp(self) -> None:
+        self.database_url = self._start_test_database(name_prefix="admin-api")
+
+        get_settings.cache_clear()
+        reset_db_engine_cache()
+        reset_agent_observability_for_tests()
+
     def tearDown(self) -> None:
-        self.client.close()
         self._cleanup_test_database()
-        os.environ.pop("ORCHESTRATOR_DATABASE_URL", None)
-        os.environ.pop("ORCHESTRATOR_ADMIN_USERNAME", None)
-        os.environ.pop("ORCHESTRATOR_ADMIN_PASSWORD", None)
-        os.environ.pop("ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET", None)
-        os.environ.pop("ORCHESTRATOR_ADMIN_TOKEN_SECRET", None)
-        os.environ.pop("ORCHESTRATOR_ADMIN_UI_BASE_URL", None)
-        os.environ.pop("ORCHESTRATOR_PUBLIC_API_BASE_URL", None)
-        os.environ.pop("ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET", None)
-        os.environ.pop("ORCHESTRATOR_GITHUB_APP_SLUG", None)
-        os.environ.pop("ORCHESTRATOR_SECRETS_ENCRYPTION_KEY", None)
-        os.environ.pop("ORCHESTRATOR_CODEX_MODEL", None)
-        os.environ.pop("ORCHESTRATOR_CODEX_SUPPORTED_MODELS", None)
         os.environ.pop("ORCHESTRATOR_WORKER_CAPABILITIES", None)
 
         get_settings.cache_clear()
@@ -4504,72 +4502,41 @@ class AdminApiTests(SqliteTemplateDbTestCase):
         )
         self.assertEqual(create_response.status_code, 201)
 
-        now = datetime.now(timezone.utc)
-        session_factory = create_session_factory(self.database_url)
-        with session_factory() as session:
-            session.add(
-                KnowledgeAsset(
+        with patch(
+            "orchestrator.api.routes.admin_knowledge.search_knowledge_debug",
+            return_value=[
+                SimpleNamespace(
+                    layer="knowledge_fact",
+                    score=0.98,
                     asset_id="debug-asset-1",
-                    tenant_id="tenant-a",
-                    project_id="tenant-a-default",
                     source_type="file_upload",
                     title="Apple auth rollout",
-                    mime_type="text/plain",
                     source_ref="notes/apple.txt",
-                    source_timestamp=now,
-                    checksum="debug-1",
-                    text_content="Production Bundle ID is com.example.girlpower",
-                    binary_content=None,
-                    chunk_count=1,
-                    status="ready",
-                    metadata_json={},
-                    created_at=now,
-                    updated_at=now,
-                )
-            )
-            session.add(
-                KnowledgeChunk(
-                    chunk_id="debug-chunk-1",
-                    asset_id="debug-asset-1",
-                    tenant_id="tenant-a",
-                    project_id="tenant-a-default",
-                    chunk_index=0,
-                    content="Production Bundle ID is com.example.girlpower",
-                    token_count=6,
-                    embedding=None,
-                    source_timestamp=now,
-                    created_at=now,
-                    updated_at=now,
-                )
-            )
-            session.add(
-                KnowledgeFact(
+                    source_timestamp="2026-01-01T00:00:00+00:00",
                     fact_id="debug-fact-1",
-                    asset_id="debug-asset-1",
                     chunk_id=None,
-                    tenant_id="tenant-a",
-                    project_id="tenant-a-default",
-                    fact_type="configuration",
-                    fact_key="production_bundle_id",
-                    fact_value="com.example.girlpower",
-                    approval_state="approved",
-                    slot_name="production_bundle_id",
-                    slot_value="com.example.girlpower",
-                    confidence=0.9,
-                    is_inferred=False,
-                    metadata_json={},
-                    source_timestamp=now,
-                    superseded_at=None,
-                    created_at=now,
-                    updated_at=now,
-                )
+                    snippet="com.example.girlpower",
+                    metadata={},
+                ),
+                SimpleNamespace(
+                    layer="knowledge_chunk",
+                    score=0.95,
+                    asset_id="debug-asset-1",
+                    source_type="file_upload",
+                    title="Apple auth rollout",
+                    source_ref="notes/apple.txt",
+                    source_timestamp="2026-01-01T00:00:00+00:00",
+                    fact_id=None,
+                    chunk_id="debug-chunk-1",
+                    snippet="Production Bundle ID is com.example.girlpower",
+                    metadata={},
+                ),
+            ],
+        ):
+            response = self.client.get(
+                "/api/admin/tenants/tenant-a/projects/tenant-a-default/knowledge/debug-search?query=production%20bundle%20id",
+                auth=("admin", "secret"),
             )
-            session.commit()
-
-        response = self.client.get(
-            "/api/admin/tenants/tenant-a/projects/tenant-a-default/knowledge/debug-search?query=production%20bundle%20id",
-            auth=("admin", "secret"),
-        )
 
         self.assertEqual(response.status_code, 200)
         body = response.json()
