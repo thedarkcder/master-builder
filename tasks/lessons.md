@@ -153,3 +153,4 @@
 2026-04-10
 
 - When the user says fallback behavior is not acceptable, remove fallback synthesis at the core contract boundary (not just in one transport), and add assertions that canonical fields must be present instead of silently deriving replacements.
+- When the user asks to revert a specific post-commit change, isolate that exact delta before acting. Do not revert adjacent optimizations or earlier committed work that the user did not name.

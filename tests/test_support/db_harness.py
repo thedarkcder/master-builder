@@ -22,6 +22,10 @@ class SqliteTemplateDbTestCase(unittest.TestCase):
     _template_database_url: str
 
     @classmethod
+    def bootstrap_template_database(cls) -> None:
+        """Optional hook for one-time DB bootstrap work on the template DB."""
+
+    @classmethod
     def setUpClass(cls) -> None:
         super().setUpClass()
         cls._db_workspace = TemporaryDirectory()
@@ -30,6 +34,7 @@ class SqliteTemplateDbTestCase(unittest.TestCase):
         get_settings.cache_clear()
         reset_db_engine_cache()
         run_migrations(database_url=cls._template_database_url)
+        cls.bootstrap_template_database()
         reset_db_engine_cache()
 
     @classmethod
