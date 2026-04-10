@@ -1315,6 +1315,44 @@ class AdminApiTests(SqliteTemplateApiTestCase):
             self.assertIsNone(session.get(ManagedSecret, f"project/tenant-a/{project_id}/RAILWAY_TOKEN"))
             self.assertIsNone(session.get(ManagedSecret, f"project/tenant-a/{project_id}/SUPABASE_SERVICE_ROLE_KEY"))
 
+    def test_project_create_auto_provisions_discord_channel_when_tenant_discord_is_installed(self) -> None:
+        payload = self._tenant_payload()
+        payload["discord"] = None
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_tenant.status_code, 201)
+
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            self.assertIsNotNone(tenant)
+            assert tenant is not None
+            tenant.discord_config = {"guild_id": "discord-guild-1", "notify_events": []}
+            tenant.updated_at = datetime.now(timezone.utc)
+            session.commit()
+
+        with patch(
+            "orchestrator.api.admin.route_helpers.resolve_project_discord_channel_binding",
+            return_value={"channel_id": "discord-project-channel-1"},
+        ) as resolve_channel_mock:
+            create_project = self.client.post(
+                "/api/admin/tenants/tenant-a/projects",
+                json={
+                    "name": "mobile-app",
+                    "github_repository": "https://github.com/example/mobile-app",
+                    "jira_project_key": "MBAPP",
+                },
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(create_project.status_code, 201, create_project.text)
+        self.assertEqual(create_project.json()["discord"], {"channel_id": "discord-project-channel-1"})
+        resolve_channel_mock.assert_called_once()
+
     def test_project_installs_crud_and_request_surfaces_round_trip(self) -> None:
         payload = self._tenant_payload()
         self._insert_jira_connection(connection_id="conn-1")
