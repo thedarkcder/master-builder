@@ -40,6 +40,8 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
             "ORCHESTRATOR_GITHUB_APP_SLUG": "master-builder-app",
             "ORCHESTRATOR_DISCORD_OAUTH_CLIENT_ID": "discord-client-id-123",
             "ORCHESTRATOR_DISCORD_INSTALL_STATE_SECRET": "discord-install-state-secret",
+            "ORCHESTRATOR_DISCORD_CHANNEL_CATEGORY_ID": "text-category-1",
+            "ORCHESTRATOR_DISCORD_VOICE_CHANNEL_CATEGORY_ID": "voice-category-1",
             "ORCHESTRATOR_SECRETS_ENCRYPTION_KEY": cls._secrets_encryption_key,
             "ORCHESTRATOR_CODEX_MODEL": "gpt-5.4",
             "ORCHESTRATOR_CODEX_SUPPORTED_MODELS": "gpt-5.4,gpt-5.3-codex,gpt-5.3-codex-spark",
@@ -1105,7 +1107,7 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
         fake_client.ensure_voice_channel.assert_called_once_with(
             guild_id="987654321",
             name="alpha-project-voice",
-            parent_id=None,
+            parent_id="voice-category-1",
         )
         sync_mock.assert_called_once()
 
@@ -1176,12 +1178,12 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
         fake_client.ensure_text_channel.assert_called_once_with(
             guild_id="987654321",
             name="beta-project",
-            parent_id=None,
+            parent_id="text-category-1",
         )
         fake_client.ensure_voice_channel.assert_called_once_with(
             guild_id="987654321",
             name="beta-project-voice",
-            parent_id=None,
+            parent_id="voice-category-1",
         )
         sync_mock.assert_called_once()
 

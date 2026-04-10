@@ -8,7 +8,11 @@ from orchestrator.tools.discord_api import DiscordApiError
 
 
 def _settings() -> SimpleNamespace:
-    return SimpleNamespace(discord_channel_category_id="", secrets_encryption_key="test-key")
+    return SimpleNamespace(
+        discord_channel_category_id="text-category-1",
+        discord_voice_channel_category_id="voice-category-1",
+        secrets_encryption_key="test-key",
+    )
 
 
 def _tenant() -> SimpleNamespace:
@@ -81,7 +85,7 @@ def test_resolve_project_discord_channel_binding_remaps_existing_voice_channel_t
     fake_client.ensure_text_channel.assert_called_once_with(
         guild_id="guild-1",
         name="alpha-project",
-        parent_id=None,
+        parent_id="text-category-1",
     )
     fake_client.ensure_voice_channel.assert_not_called()
 
@@ -113,10 +117,45 @@ def test_resolve_project_discord_channel_binding_recreates_text_and_voice_channe
     fake_client.ensure_text_channel.assert_called_once_with(
         guild_id="guild-1",
         name="alpha-project",
-        parent_id=None,
+        parent_id="text-category-1",
     )
     fake_client.ensure_voice_channel.assert_called_once_with(
         guild_id="guild-1",
         name="alpha-project-voice",
-        parent_id=None,
+        parent_id="voice-category-1",
+    )
+
+
+def test_resolve_project_discord_channel_binding_falls_back_to_text_category_when_voice_category_missing() -> None:
+    fake_client = Mock()
+    fake_client.ensure_text_channel.return_value = SimpleNamespace(channel_id="text-2")
+    fake_client.ensure_voice_channel.return_value = SimpleNamespace(channel_id="voice-2")
+    settings = SimpleNamespace(
+        discord_channel_category_id="text-category-1",
+        discord_voice_channel_category_id="",
+        secrets_encryption_key="test-key",
+    )
+
+    with (
+        patch("orchestrator.api.admin.tenant_project_helpers.resolve_platform_secret_ref", return_value="discord-bot-token"),
+        patch("orchestrator.api.admin.tenant_project_helpers.DiscordApiClient", return_value=fake_client),
+    ):
+        resolve_project_discord_channel_binding(
+            session=Mock(),
+            settings=settings,
+            tenant=_tenant(),
+            project=_project(),
+            discord_config={},
+            resolve_project_discord_channel_name_fn=lambda **_: "alpha-project",
+        )
+
+    fake_client.ensure_text_channel.assert_called_once_with(
+        guild_id="guild-1",
+        name="alpha-project",
+        parent_id="text-category-1",
+    )
+    fake_client.ensure_voice_channel.assert_called_once_with(
+        guild_id="guild-1",
+        name="alpha-project-voice",
+        parent_id="text-category-1",
     )
