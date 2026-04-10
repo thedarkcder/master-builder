@@ -27,7 +27,7 @@ from orchestrator.core.communications.execution_admission_format import (
 )
 from orchestrator.core.decision_engine import DecisionEventInput, DecisionSource
 from orchestrator.core.decision_clarification_port import DecisionClarificationPort
-from orchestrator.core.execution_admission import resolve_execution_admission
+from orchestrator.core.decision_state_machine import resolve_execution_admission
 from orchestrator.core.followup_context_service import (
     FOLLOWUP_CONTEXT_DECISION_GATE,
     close_followup_contexts,

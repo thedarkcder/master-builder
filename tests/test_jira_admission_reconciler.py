@@ -8,7 +8,10 @@ from orchestrator.core.communications.execution_admission_format import (
     format_discord_admission_conflict_detail,
 )
 from orchestrator.core.decision_types import ExecutionGateReason, ExecutionGateResolution, ExecutionGateState
-from orchestrator.core.execution_admission import ExecutionAdmissionReason, resolve_execution_admission
+from orchestrator.core.decision_state_machine import (
+    ExecutionAdmissionReason,
+    resolve_execution_admission,
+)
 
 
 def _decision_result(*, state: ExecutionGateState, reason_code: str | None) -> object:
