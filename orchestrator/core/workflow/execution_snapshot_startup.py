@@ -48,12 +48,16 @@ def run_execution_snapshot_startup_bootstrap(
             session.commit()
 
     if report.invalid_runs or report.invalid_checkpoints:
-        raise RuntimeError(
-            "Execution snapshot startup migration failed: "
-            f"invalid_runs={report.invalid_runs} invalid_checkpoints={report.invalid_checkpoints} "
-            f"invalid_run_ids={list(report.invalid_run_ids)} "
-            f"invalid_checkpoint_ids={list(report.invalid_checkpoint_ids)}"
+        logger.error(
+            "execution_snapshot_startup_bootstrap_invalid_rows "
+            "actor=%s invalid_runs=%s invalid_checkpoints=%s invalid_run_ids=%s invalid_checkpoint_ids=%s",
+            actor,
+            report.invalid_runs,
+            report.invalid_checkpoints,
+            list(report.invalid_run_ids),
+            list(report.invalid_checkpoint_ids),
         )
+        return report
 
     logger.info(
         "execution_snapshot_startup_bootstrap_applied actor=%s scanned_runs=%s converted_runs=%s scanned_checkpoints=%s converted_checkpoints=%s",
