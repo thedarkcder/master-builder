@@ -543,6 +543,7 @@ def provision_jira_webhook(
     session: Session,
     tenant: Tenant,
     settings,  # noqa: ANN001
+    commit: bool = True,
     replace_existing: bool,
     refresh_jira_connection_tokens_fn=refresh_jira_connection_tokens,
     jira_oauth_client_fn=jira_oauth_client,
@@ -554,6 +555,7 @@ def provision_jira_webhook(
         session=session,
         tenant=tenant,
         settings=settings,
+        commit=commit,
         replace_existing=replace_existing,
         jira_webhook_events=JIRA_WEBHOOK_EVENTS,
         delete_jira_webhooks_fn=delete_jira_webhooks,

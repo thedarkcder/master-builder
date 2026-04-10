@@ -151,6 +151,7 @@ class JiraConfigKey(str, Enum):
     READY_STATUSES = "ready_statuses"
     READY_LABEL = "ready_label"
     READY_TRIGGER_MODE = "ready_trigger_mode"
+    WEBHOOK_SECRET_REF = "webhook_secret_ref"
 
 
 class ReadinessState(str, Enum):
@@ -208,6 +209,10 @@ def resolve_readiness_decision(
 
 def tenant_ready_label(tenant: object | None) -> str | None:
     return tenant_jira_config_text(tenant=tenant, key=JiraConfigKey.READY_LABEL)
+
+
+def tenant_jira_webhook_secret_ref(tenant: object | None) -> str | None:
+    return tenant_jira_config_text(tenant=tenant, key=JiraConfigKey.WEBHOOK_SECRET_REF)
 
 
 def jira_config_text(*, jira_config: object, key: JiraConfigKey) -> str | None:
@@ -288,6 +293,17 @@ class ExecutionGateState(str, Enum):
     BLOCK_DECISION = "block_decision"
     BLOCK_READY_LABEL = "block_ready_label"
     POLICY_ERROR = "policy_error"
+
+
+class WorkerStageEvent(str, Enum):
+    DECISION_GATE_REQUIRED = "decision_gate_required"
+    RUN_NOT_READY = "run_not_ready"
+    LOCK_ACQUIRED = "lock_acquired"
+    PLAN_POSTED = "plan_posted"
+    PR_OPENED = "pr_opened"
+    RUN_FAILED = "run_failed"
+    RUN_REQUEUED_CAPABILITY_MISMATCH = "run_requeued_capability_mismatch"
+    RUN_REQUEUED_STALE_SNAPSHOT = "run_requeued_stale_snapshot"
 
 
 @dataclass(frozen=True)

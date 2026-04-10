@@ -344,7 +344,7 @@ def worker_blocking_gate(
         )
         reason = (
             decision_reason(pre_check=pre_check, classification=classification)
-            or enqueue_reason_guidance("execution_blocked")
+            or enqueue_reason_guidance(PrecheckOutcome.EXECUTION_BLOCKED.value)
         )
         return DecisionGateResult(
             triggered=True,

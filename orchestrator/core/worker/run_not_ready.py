@@ -25,9 +25,9 @@ def derive_run_not_ready_outcome(*, worker_decision: object) -> RunNotReadyOutco
 
     if parsed_block_reason is PrecheckOutcome.MISSING_READY_LABEL:
         reason = (
-            f"{enqueue_reason_guidance('missing_ready_label')} ({ready_label})"
+            f"{enqueue_reason_guidance(PrecheckOutcome.MISSING_READY_LABEL.value)} ({ready_label})"
             if ready_label
-            else enqueue_reason_guidance("missing_ready_label")
+            else enqueue_reason_guidance(PrecheckOutcome.MISSING_READY_LABEL.value)
         )
         next_steps = (
             (f"Apply ready label `{ready_label}` to the Jira issue, then retry the run.",)

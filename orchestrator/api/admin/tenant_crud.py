@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import HTTPException, Response, status
 from sqlalchemy import delete, select
 
+from orchestrator.core.decision_types import JiraConfigKey, jira_config_text
 from orchestrator.storage.models import (
     ManagedSecret,
     Project,
@@ -21,14 +22,43 @@ from orchestrator.storage.models import (
 )
 
 
+_CREATE_TENANT_JIRA_CONFIGURATION_ERROR_DETAILS = {
+    "Configured Jira connection was not found",
+    "Jira OAuth connection is not linked for this tenant",
+}
+_SETUP_STATE_AUTO_PROVISION_JIRA_WEBHOOK_ON_CREATE = "auto_provision_jira_webhook_on_create"
+
+
+def _should_provision_jira_webhook_on_create(*, jira_config: dict, setup_state: dict) -> bool:
+    if not bool(setup_state.get(_SETUP_STATE_AUTO_PROVISION_JIRA_WEBHOOK_ON_CREATE)):
+        return False
+    connection_id = jira_config_text(jira_config=jira_config, key=JiraConfigKey.CONNECTION_ID)
+    if not connection_id:
+        return False
+    project_keys = [str(value).strip() for value in jira_config.get("project_keys") or [] if str(value).strip()]
+    return len(project_keys) > 0
+
+
+def _raise_create_tenant_jira_webhook_error(*, session, details: str) -> None:  # noqa: ANN001
+    session.rollback()
+    status_code = (
+        status.HTTP_400_BAD_REQUEST
+        if details in _CREATE_TENANT_JIRA_CONFIGURATION_ERROR_DETAILS
+        else status.HTTP_502_BAD_GATEWAY
+    )
+    raise HTTPException(status_code=status_code, detail=details)
+
+
 def create_tenant(
     *,
     session,
     payload,
+    settings,
     allocate_tenant_id_fn,
     with_preserved_jira_system_fields_fn,
     with_managed_github_refs_fn,
     with_preserved_discord_system_fields_fn,
+    provision_jira_webhook_fn,
     reconcile_tenant_projects_fn,
     tenant_to_schema_fn,
 ):  # noqa: ANN001
@@ -64,6 +94,22 @@ def create_tenant(
         )
     )
     reconcile_tenant_projects_fn(session, tenant=tenant)
+    if _should_provision_jira_webhook_on_create(
+        jira_config=dict(tenant.jira_config or {}),
+        setup_state=dict(tenant.setup_state or {}),
+    ):
+        provision_result = provision_jira_webhook_fn(
+            session=session,
+            tenant=tenant,
+            settings=settings,
+            commit=False,
+            replace_existing=False,
+        )
+        if not provision_result.ok:
+            _raise_create_tenant_jira_webhook_error(
+                session=session,
+                details=str(provision_result.details or "Failed to provision Jira webhook"),
+            )
     session.commit()
     session.refresh(tenant)
     return tenant_to_schema_fn(tenant)
