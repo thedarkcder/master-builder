@@ -158,3 +158,4 @@
 - When a rollout flag is always enabled in the only intended flow, do not turn it into a persisted product switch. Keep the contract unconditional and contain test/runtime blast radius with explicit stubs or narrower seams instead.
 - Do not paper over a route-contract change with broad test stubs. If the real route can cheaply distinguish a linked integration from an unlinked placeholder, encode that in the production gate and let tests exercise the real branch.
 - When the user clarifies that a dependency is an external effect, stub that boundary in tests instead of forcing the owned route contract to absorb integration-state heuristics.
+- For external resource IDs persisted in product config, reinstall/reconcile flows must verify the resources still exist upstream before trusting the stored IDs. Preserve valid mappings, remap surviving resources when possible, and recreate only the missing pieces.

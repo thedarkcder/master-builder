@@ -11,6 +11,7 @@ from orchestrator.core.config import get_settings
 from orchestrator.core.email_delivery import EmailDeliveryError
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.models import Project, Run, Tenant, WebhookJob, WorkflowCheckpoint, WorkflowExecution
+from orchestrator.tools.discord_api import DiscordApiError
 from tests.test_support.db_harness import SqliteTemplateApiTestCase
 from tests.workflow_test_support import add_run_with_workflow, add_workflow_attempt, make_run
 
@@ -1085,6 +1086,7 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
         state_token = parse_qs(urlparse(start_response.json()["install_url"]).query)["state"][0]
 
         fake_client = Mock()
+        fake_client.get_channel.return_value = {"id": "project-text-123"}
         fake_client.ensure_voice_channel.return_value = Mock(channel_id="voice-room-123")
 
         with (
@@ -1120,6 +1122,76 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
             )
             self.assertEqual(discord_config["voice_room_channel_ids"], ["voice-room-123"])
             self.assertEqual(discord_config["voice_room_channel_id"], "voice-room-123")
+
+    def test_discord_install_callback_recreates_missing_project_text_channel_before_voice_room(self) -> None:
+        registration = self._register()
+        token = self._login()
+        tenant_id = registration["tenant"]["tenant_id"]
+
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            tenant = session.get(Tenant, tenant_id)
+            self.assertIsNotNone(tenant)
+            assert tenant is not None
+            project = Project(
+                project_id=f"{tenant_id}-project-stale",
+                tenant_id=tenant_id,
+                name="Beta Project",
+                github_repository="https://github.com/example/repo",
+                jira_project_key="TP",
+                policy_overrides={},
+                environment={},
+                secret_refs={},
+                discord_config={"channel_id": "deleted-text-123"},
+                is_archived=False,
+                created_at=datetime.now(timezone.utc),
+                updated_at=datetime.now(timezone.utc),
+            )
+            session.add(project)
+            session.commit()
+
+        start_response = self.client.post(
+            f"/api/admin/tenants/{tenant_id}/discord/install/start?return_to=edit",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        self.assertEqual(start_response.status_code, 200, start_response.text)
+        state_token = parse_qs(urlparse(start_response.json()["install_url"]).query)["state"][0]
+
+        fake_client = Mock()
+        fake_client.get_channel.side_effect = [DiscordApiError("missing text")]
+        fake_client.ensure_text_channel.return_value = Mock(channel_id="project-text-456")
+        fake_client.ensure_voice_channel.return_value = Mock(channel_id="voice-room-456")
+
+        with (
+            patch("orchestrator.api.admin.tenant_project_helpers.resolve_platform_secret_ref", return_value="discord-bot-token"),
+            patch("orchestrator.api.admin.tenant_project_helpers.DiscordApiClient", return_value=fake_client),
+            patch("orchestrator.api.routes.admin_discord_install.sync_discord_guild_commands") as sync_mock,
+        ):
+            callback_response = self.client.get(
+                f"/api/admin/discord/install/callback?state={state_token}&guild_id=987654321&code=oauth-code",
+                follow_redirects=False,
+            )
+
+        self.assertEqual(callback_response.status_code, 302, callback_response.text)
+        fake_client.ensure_text_channel.assert_called_once_with(
+            guild_id="987654321",
+            name="beta-project",
+            parent_id=None,
+        )
+        fake_client.ensure_voice_channel.assert_called_once_with(
+            guild_id="987654321",
+            name="beta-project-voice",
+            parent_id=None,
+        )
+        sync_mock.assert_called_once()
+
+        with session_factory() as session:
+            project = session.get(Project, f"{tenant_id}-project-stale")
+            self.assertIsNotNone(project)
+            assert project is not None
+            discord_config = dict(project.discord_config or {})
+            self.assertEqual(discord_config["channel_id"], "project-text-456")
+            self.assertEqual(discord_config["live_voice_room_links"], {"voice-room-456": "project-text-456"})
 
     def test_discord_install_callback_handles_access_denied_without_422(self) -> None:
         registration = self._register()

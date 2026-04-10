@@ -10,6 +10,7 @@ from orchestrator.core.decision_types import jira_config_project_keys
 from orchestrator.core.platform_secret_service import PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF, resolve_platform_secret_ref
 from orchestrator.storage.models import Project, Tenant
 from orchestrator.tools.discord_api import DiscordApiClient, DiscordTextChannel, DiscordVoiceChannel
+from orchestrator.tools.discord_api import DiscordApiError
 
 
 def slugify_tenant_name(name: str) -> str:
@@ -71,30 +72,6 @@ def resolve_project_discord_channel_binding(
     resolve_project_discord_channel_name_fn,
 ) -> dict:
     normalized = dict(discord_config or {})
-    existing_channel_id = str(normalized.get("channel_id") or "").strip()
-    if existing_channel_id:
-        normalized["channel_id"] = existing_channel_id
-    live_voice_links = {
-        str(voice_channel_id).strip(): str(linked_channel_id).strip()
-        for voice_channel_id, linked_channel_id in dict(normalized.get("live_voice_room_links") or {}).items()
-        if str(voice_channel_id).strip() and str(linked_channel_id).strip()
-    }
-    if live_voice_links:
-        normalized["live_voice_room_links"] = live_voice_links
-        voice_room_channel_ids = [
-            channel_id
-            for channel_id in [str(value).strip() for value in normalized.get("voice_room_channel_ids", [])]
-            if channel_id
-        ]
-        for voice_channel_id in live_voice_links:
-            if voice_channel_id not in voice_room_channel_ids:
-                voice_room_channel_ids.append(voice_channel_id)
-        if voice_room_channel_ids:
-            normalized["voice_room_channel_ids"] = voice_room_channel_ids
-            normalized["voice_room_channel_id"] = voice_room_channel_ids[0]
-    if existing_channel_id and live_voice_links:
-        return normalized
-
     token_ref = PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF
     bot_token = resolve_platform_secret_ref(
         session,
@@ -112,13 +89,33 @@ def resolve_project_discord_channel_binding(
     parent_id = settings.discord_channel_category_id.strip() or None
     channel_name = resolve_project_discord_channel_name_fn(settings=settings, tenant=tenant, project=project)
     client = DiscordApiClient(bot_token=bot_token)
+    existing_channel_id = str(normalized.get("channel_id") or "").strip()
+    if existing_channel_id and not _discord_channel_exists(client=client, channel_id=existing_channel_id):
+        existing_channel_id = ""
+        normalized.pop("channel_id", None)
     if not existing_channel_id:
         channel: DiscordTextChannel = client.ensure_text_channel(
             guild_id=guild_id,
             name=channel_name,
             parent_id=parent_id,
         )
-        normalized["channel_id"] = channel.channel_id
+        existing_channel_id = channel.channel_id
+    normalized["channel_id"] = existing_channel_id
+
+    live_voice_links: dict[str, str] = {}
+    for voice_channel_id, linked_channel_id in dict(normalized.get("live_voice_room_links") or {}).items():
+        normalized_voice_channel_id = str(voice_channel_id).strip()
+        normalized_linked_channel_id = str(linked_channel_id).strip()
+        if not normalized_voice_channel_id or not normalized_linked_channel_id:
+            continue
+        if not _discord_channel_exists(client=client, channel_id=normalized_voice_channel_id):
+            continue
+        if normalized_linked_channel_id != existing_channel_id and not _discord_channel_exists(
+            client=client,
+            channel_id=normalized_linked_channel_id,
+        ):
+            normalized_linked_channel_id = existing_channel_id
+        live_voice_links[normalized_voice_channel_id] = normalized_linked_channel_id
 
     if not live_voice_links:
         voice_channel: DiscordVoiceChannel = client.ensure_voice_channel(
@@ -126,7 +123,7 @@ def resolve_project_discord_channel_binding(
             name=f"{channel_name}-voice",
             parent_id=parent_id,
         )
-        live_voice_links = {voice_channel.channel_id: normalized["channel_id"]}
+        live_voice_links = {voice_channel.channel_id: existing_channel_id}
         normalized["live_voice_enabled"] = True
 
     normalized["live_voice_room_links"] = live_voice_links
@@ -142,6 +139,17 @@ def resolve_project_discord_channel_binding(
         normalized["voice_room_channel_ids"] = voice_room_channel_ids
         normalized["voice_room_channel_id"] = voice_room_channel_ids[0]
     return normalized
+
+
+def _discord_channel_exists(*, client: DiscordApiClient, channel_id: str) -> bool:
+    normalized_channel_id = str(channel_id or "").strip()
+    if not normalized_channel_id:
+        return False
+    try:
+        channel = client.get_channel(channel_id=normalized_channel_id)
+    except (DiscordApiError, ValueError):
+        return False
+    return str(channel.get("id") or "").strip() == normalized_channel_id
 
 
 def ensure_default_project_for_tenant(
