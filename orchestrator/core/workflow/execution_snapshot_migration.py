@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -100,6 +101,97 @@ def canonicalize_snapshot_payload(payload: object | None) -> ExecutionSnapshot |
         return loaded
     if not isinstance(payload, dict):
         return None
-    if not payload:
-        return ExecutionSnapshot.empty()
+    return _legacy_to_canonical_snapshot(payload)
+
+
+def _legacy_to_canonical_snapshot(payload: dict[str, Any]) -> ExecutionSnapshot:
+    snapshot = ExecutionSnapshot.empty(
+        trigger_context=_coerce_dict(payload.get("trigger_context")),
+    )
+    snapshot.context.execution_context = _derive_execution_context(payload)
+    snapshot.workflow.outcome = _derive_outcome(payload)
+    snapshot.workflow.attempts = _coerce_non_negative_int(payload.get("attempts"))
+    snapshot.workflow.summary = _coerce_string_list(payload.get("summary"))
+    snapshot.workflow.blocker_message = _derive_blocker_message(payload)
+    snapshot.events.stage_updates = _coerce_dict_list(payload.get("stage_updates"))
+    snapshot.events.live_stage_updates = _coerce_dict_list(payload.get("live_stage_updates"))
+    snapshot.events.stage_trace = _coerce_dict_list(payload.get("stage_trace"))
+    snapshot.events.workstream_trace = _coerce_dict_list(payload.get("workstream_trace"))
+    return snapshot
+
+
+def _derive_execution_context(payload: dict[str, Any]) -> dict[str, Any]:
+    context: dict[str, Any] = _coerce_dict(payload.get("execution_context"))
+    pre_check = payload.get("pre_check")
+    if isinstance(pre_check, dict):
+        outcome = pre_check.get("outcome")
+        if isinstance(outcome, str) and outcome.strip():
+            context.setdefault("pre_check_outcome", outcome.strip())
+    orchestration_mode = payload.get("orchestration_mode")
+    if isinstance(orchestration_mode, str) and orchestration_mode.strip():
+        context.setdefault("orchestration_mode", orchestration_mode.strip())
+    return context
+
+
+def _derive_outcome(payload: dict[str, Any]) -> str | None:
+    explicit_outcome = payload.get("outcome")
+    if isinstance(explicit_outcome, str):
+        normalized = explicit_outcome.strip().lower()
+        if normalized in {"success", "requeue", "waiting_for_input", "blocked", "failed"}:
+            return normalized
+    succeeded = payload.get("succeeded")
+    if succeeded is True:
+        return "success"
+    if succeeded is False:
+        decision_gate = payload.get("decision_gate")
+        if isinstance(decision_gate, dict) and decision_gate.get("triggered") is True:
+            return "blocked"
+        return "failed"
     return None
+
+
+def _derive_blocker_message(payload: dict[str, Any]) -> str | None:
+    blocker_message = payload.get("blocker_message")
+    if isinstance(blocker_message, str) and blocker_message.strip():
+        return blocker_message.strip()
+    decision_gate = payload.get("decision_gate")
+    if isinstance(decision_gate, dict):
+        reason = decision_gate.get("reason")
+        if isinstance(reason, str) and reason.strip():
+            return reason.strip()
+    return None
+
+
+def _coerce_non_negative_int(value: object) -> int:
+    if isinstance(value, int) and value >= 0:
+        return value
+    return 0
+
+
+def _coerce_string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    normalized: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        text = item.strip()
+        if text:
+            normalized.append(text)
+    return normalized
+
+
+def _coerce_dict_list(value: object) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    normalized: list[dict[str, Any]] = []
+    for item in value:
+        if isinstance(item, dict):
+            normalized.append(dict(item))
+    return normalized
+
+
+def _coerce_dict(value: object) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    return dict(value)

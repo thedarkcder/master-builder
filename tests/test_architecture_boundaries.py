@@ -584,6 +584,59 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             msg=f"Transport modules must import unified decision_state_machine boundary only: {violations}",
         )
 
+    def test_decision_transition_logic_lives_in_decision_state_reducer_only(self) -> None:
+        reducer_module = ROOT / "orchestrator" / "core" / "decision_state_reducer.py"
+        self.assertTrue(reducer_module.exists(), msg="decision_state_reducer.py must exist as the transition boundary")
+
+        forbidden_modules = [
+            ROOT / "orchestrator" / "core" / "decision_state_machine.py",
+            ROOT / "orchestrator" / "core" / "decision_precheck_mapping.py",
+            ROOT / "orchestrator" / "core" / "decision_state_repository.py",
+        ]
+        forbidden_symbols = {
+            "DecisionStateTransition",
+            "DecisionStateReducerInput",
+            "reduce_decision_state_transition",
+            "case_state_for_decision",
+            "decision_reason",
+        }
+        violations: list[str] = []
+        for module_path in forbidden_modules:
+            tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.FunctionDef, ast.ClassDef)) and node.name in forbidden_symbols:
+                    violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{node.lineno}:{node.name}")
+        self.assertEqual(
+            violations,
+            [],
+            msg=f"Decision transition/classification semantics must only live in decision_state_reducer: {violations}",
+        )
+
+    def test_decision_engine_uses_reducer_boundary_for_transition_semantics(self) -> None:
+        module_path = ROOT / "orchestrator" / "core" / "decision_engine.py"
+        imports = _imported_modules(module_path)
+        self.assertIn(
+            "orchestrator.core.decision_state_reducer",
+            imports,
+            msg="decision_engine must import transition semantics from decision_state_reducer",
+        )
+
+        tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
+        violations: list[str] = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ImportFrom):
+                continue
+            if node.module != "orchestrator.core.decision_state_machine":
+                continue
+            for alias in node.names:
+                if alias.name in {"DecisionStateTransition", "DecisionStateReducerInput", "reduce_decision_state_transition"}:
+                    violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{node.lineno}:{alias.name}")
+        self.assertEqual(
+            violations,
+            [],
+            msg=f"decision_engine must not import transition semantics from decision_state_machine: {violations}",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
