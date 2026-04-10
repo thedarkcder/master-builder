@@ -46,6 +46,7 @@ from orchestrator.core.decision_state_repository import (
 from orchestrator.core.decision_state_reducer import (
     DecisionStateReducerInput,
     DecisionStateTransition,
+    is_question_driven_state,
     reduce_decision_state_transition,
 )
 from orchestrator.core.decision_effect_service import publish_decision_effects as publish_decision_effects_repo
@@ -296,8 +297,9 @@ def _handle_open_cycle_blocked_transition(
         issue_description=issue_description,
         decision=decision,
         classification=classification.value,
+        question_driven=True,
         question_set_override=question_set_override,
-        question_reason_override=question_reason_override,
+        question_reason=question_reason_override,
         auto_resolved_answers={},
         accepted_question_ids=accepted_question_ids,
         issue_fingerprint_fn=issue_fingerprint_state,
@@ -350,8 +352,9 @@ def _persist_terminal_clear_result(
         issue_description=issue_description,
         decision=decision,
         classification=DecisionClassification.CLEAR.value,
+        question_driven=False,
         question_set_override=None,
-        question_reason_override=None,
+        question_reason=None,
         auto_resolved_answers={},
         accepted_question_ids=accepted_question_ids,
         issue_fingerprint_fn=issue_fingerprint_state,
@@ -727,8 +730,12 @@ def evaluate_decision_event(
         issue_description=issue_description,
         decision=decision,
         classification=classification.value,
+        question_driven=is_question_driven_state(
+            classification=classification,
+            block_reason=decision.block_reason,
+        ),
         question_set_override=question_set_override,
-        question_reason_override=question_reason_override,
+        question_reason=question_reason_override,
         auto_resolved_answers=auto_resolved_answers,
         accepted_question_ids=accepted_question_ids,
         issue_fingerprint_fn=issue_fingerprint_state,

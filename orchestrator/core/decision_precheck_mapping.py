@@ -34,7 +34,6 @@ from orchestrator.core.decision_types import (
 )
 from orchestrator.storage.models import DecisionCase, DecisionCycle
 
-BLOCKED_CLASSIFICATIONS = {"decision_gate", "gtd", "both"}
 logger = logging.getLogger(__name__)
 
 
