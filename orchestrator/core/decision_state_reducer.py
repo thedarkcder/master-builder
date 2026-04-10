@@ -79,3 +79,14 @@ def decision_reason(*, pre_check: object, classification: str) -> str | None:
         if missing:
             return "Missing GTD criteria: " + ", ".join(missing)
     return None
+
+
+def is_question_driven_state(*, classification: DecisionClassification | str, block_reason: str | None) -> bool:
+    parsed_classification = (
+        classification if isinstance(classification, DecisionClassification) else DecisionClassification.parse(classification)
+    )
+    parsed_block_reason = PrecheckOutcome.parse(block_reason)
+    return parsed_classification.blocks_execution and parsed_block_reason in {
+        PrecheckOutcome.DECISION_GATE_REQUIRED,
+        PrecheckOutcome.GTD_REQUIRED,
+    }
