@@ -7,6 +7,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import desc, or_, select
 from sqlalchemy.exc import IntegrityError
 
+from orchestrator.core.runs import RunStateTransitionError, require_ready_for_agent_enqueue
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.core.workflow.transitions import ATTEMPT_ENTRY_MODES, attempt_creation_policy
 from orchestrator.storage.models import Project, Run, RunHumanInputRequest, WorkflowCheckpoint, WorkflowExecution
@@ -139,6 +140,16 @@ def _fresh_start_plan(*, source_run: Run | None) -> dict[str, object] | None:
     if source_snapshot.context.execution_context:
         next_snapshot.context.execution_context = dict(source_snapshot.context.execution_context)
     return next_snapshot.dump()
+
+
+def _require_ready_for_queue(*, source: str, plan: object | None) -> None:
+    try:
+        require_ready_for_agent_enqueue(
+            source=source,
+            precheck_source_plan=plan,
+        )
+    except RunStateTransitionError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
 
 def _cancel_open_input_requests(*, session, workflow_id: str) -> None:  # noqa: ANN001
@@ -336,6 +347,10 @@ def create_workflow_attempt(
         last_heartbeat_at=None,
         worker_service_instance_id=None,
         finished_at=None,
+    )
+    _require_ready_for_queue(
+        source="admin_workflow_attempt",
+        plan=next_run.plan,
     )
     session.add(next_run)
     next_workflow.active_run_id = next_run.run_id

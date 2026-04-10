@@ -6,13 +6,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from orchestrator.core.decision_gate import DecisionGateResult
-from orchestrator.core.decision_types import (
-    DecisionClassification,
-    PrecheckOutcome,
-    WorkerDecision,
-    execution_gate_reason_for_precheck_outcome,
-    tenant_ready_label,
-)
+from orchestrator.core.decision_types import DecisionClassification, PrecheckOutcome, WorkerDecision
 from orchestrator.core.pre_run_check import PreRunCheckResult, evaluate_pre_run_check
 from orchestrator.core.runs import is_ready_for_agent_precheck, resolve_precheck_outcome_for_enqueue
 from orchestrator.core.workflow.execution_snapshot import (
@@ -21,29 +15,6 @@ from orchestrator.core.workflow.execution_snapshot import (
 )
 from orchestrator.core.workflow.trigger_context import GithubPrRemediationTriggerContext
 from orchestrator.storage.models import Project, Tenant
-
-
-def _blocked_worker_decision(
-    *,
-    outcome: PrecheckOutcome,
-    reason: str,
-    recommendation: str,
-    classification: DecisionClassification | None = None,
-) -> WorkerDecision:
-    return WorkerDecision(
-        allowed=False,
-        decision_gate=DecisionGateResult(
-            triggered=True,
-            reason=reason,
-            missing_sections=(),
-            questions=(),
-            recommendation=recommendation,
-            tags=(),
-        ),
-        configuration_error=None,
-        block_reason=outcome.value,
-        classification=classification,
-    )
 
 
 def is_pr_remediation_run(
@@ -110,11 +81,6 @@ def evaluate_worker_decision(
     )
     persisted_outcome = PrecheckOutcome.parse(persisted_outcome_raw)
     if persisted_outcome is None:
-        persisted_outcome = _resolve_live_precheck_outcome(
-            tenant=tenant,
-            issue_labels=issue_labels,
-        )
-    if persisted_outcome is None:
         return WorkerDecision(
             allowed=False,
             decision_gate=None,
@@ -130,49 +96,6 @@ def evaluate_worker_decision(
             classification=DecisionClassification.CLEAR,
         )
 
-    execution_context = snapshot.context.execution_context
-    run_not_ready = execution_context.get("run_not_ready")
-    run_not_ready_payload = run_not_ready if isinstance(run_not_ready, dict) else {}
-    configured_ready_label = (
-        tenant_ready_label(tenant)
-        or ""
-        if tenant is not None
-        else ""
-    )
-
-    if persisted_outcome is PrecheckOutcome.MISSING_READY_LABEL:
-        ready_label = (
-            str(run_not_ready_payload.get("ready_label") or "").strip()
-            or configured_ready_label
-            or None
-        )
-        guidance = execution_gate_reason_for_precheck_outcome(
-            outcome=PrecheckOutcome.MISSING_READY_LABEL,
-            ready_label=ready_label,
-        ).guidance
-        return _blocked_worker_decision(
-            outcome=PrecheckOutcome.MISSING_READY_LABEL,
-            reason=guidance,
-            recommendation="Apply the configured ready label before execution.",
-            classification=DecisionClassification.CLEAR,
-        )
-
-    if persisted_outcome.is_decision_block:
-        guidance = execution_gate_reason_for_precheck_outcome(
-            outcome=persisted_outcome,
-        ).guidance
-        reason = str(run_not_ready_payload.get("reason") or "").strip() or guidance
-        return _blocked_worker_decision(
-            outcome=persisted_outcome,
-            reason=reason,
-            recommendation="Resolve the open clarification topics before execution.",
-            classification=(
-                DecisionClassification.DECISION_GATE
-                if persisted_outcome is PrecheckOutcome.DECISION_GATE_REQUIRED
-                else DecisionClassification.GTD
-            ),
-        )
-
     if persisted_outcome is PrecheckOutcome.POLICY_EVAL_FAILED:
         return WorkerDecision(
             allowed=False,
@@ -185,31 +108,8 @@ def evaluate_worker_decision(
         allowed=False,
         decision_gate=None,
         configuration_error=(
-            f"Execution readiness check failed: unsupported persisted outcome '{persisted_outcome.value}'"
+            f"Execution readiness check failed: run was queued with non-ready pre_check_outcome '{persisted_outcome.value}'"
         ),
         block_reason=PrecheckOutcome.POLICY_EVAL_FAILED.value,
         classification=DecisionClassification.CLEAR,
-    )
-
-
-def _resolve_live_precheck_outcome(
-    *,
-    tenant: Tenant | None,
-    issue_labels: list[str] | None,
-) -> PrecheckOutcome | None:
-    if tenant is None:
-        return None
-    if not isinstance(issue_labels, list):
-        return None
-    ready_label = (
-        tenant_ready_label(tenant)
-        or ""
-    )
-    if not ready_label:
-        return None
-    label_set = {str(label).strip().casefold() for label in issue_labels if str(label).strip()}
-    return (
-        PrecheckOutcome.READY_FOR_AGENT
-        if ready_label.casefold() in label_set
-        else PrecheckOutcome.MISSING_READY_LABEL
     )

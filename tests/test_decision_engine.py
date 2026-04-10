@@ -209,8 +209,9 @@ class DecisionEngineTests(unittest.TestCase):
             evaluate_decision_gate_fn=lambda **_: (_ for _ in ()).throw(RuntimeError("should not call")),
         )
         self.assertFalse(worker_decision.allowed)
-        self.assertEqual(worker_decision.block_reason, "gtd_required")
-        self.assertIsNotNone(worker_decision.decision_gate)
+        self.assertEqual(worker_decision.block_reason, "policy_eval_failed")
+        self.assertIsNone(worker_decision.decision_gate)
+        self.assertIn("non-ready pre_check_outcome", str(worker_decision.configuration_error or ""))
 
     def test_worker_decision_returns_configuration_error_when_snapshot_missing(self) -> None:
         worker_decision = evaluate_worker_decision(
@@ -259,9 +260,9 @@ class DecisionEngineTests(unittest.TestCase):
         )
 
         self.assertFalse(worker_decision.allowed)
-        self.assertEqual(worker_decision.block_reason, "missing_ready_label")
-        assert worker_decision.decision_gate is not None
-        self.assertTrue(worker_decision.decision_gate.triggered)
+        self.assertEqual(worker_decision.block_reason, "policy_eval_failed")
+        self.assertIsNone(worker_decision.decision_gate)
+        self.assertIn("non-ready pre_check_outcome", str(worker_decision.configuration_error or ""))
 
     def test_worker_decision_blocks_on_gtd_required_from_persisted_outcome(self) -> None:
         plan = _run_plan(pre_check_outcome="gtd_required")
@@ -278,9 +279,10 @@ class DecisionEngineTests(unittest.TestCase):
             issue_description="desc",
         )
         self.assertFalse(worker_decision.allowed)
-        self.assertIsNotNone(worker_decision.decision_gate)
-        self.assertEqual(worker_decision.block_reason, "gtd_required")
-        self.assertEqual(worker_decision.classification, "gtd")
+        self.assertIsNone(worker_decision.decision_gate)
+        self.assertEqual(worker_decision.block_reason, "policy_eval_failed")
+        self.assertEqual(worker_decision.classification, "clear")
+        self.assertIn("non-ready pre_check_outcome", str(worker_decision.configuration_error or ""))
 
 class LabelActionServiceTests(unittest.TestCase):
     def test_apply_issue_label_actions_respects_policy_and_dedupes(self) -> None:

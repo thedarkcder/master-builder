@@ -129,6 +129,25 @@ def resolve_enqueue_precheck_outcome(
     )
 
 
+def require_ready_for_agent_enqueue(
+    *,
+    source: str,
+    precheck_outcome: str | None = None,
+    precheck_source_plan: object | None = None,
+) -> str:
+    resolved_outcome = resolve_enqueue_precheck_outcome(
+        source=source,
+        precheck_outcome=precheck_outcome,
+        precheck_source_plan=precheck_source_plan,
+    )
+    parsed_outcome = PrecheckOutcome.parse(resolved_outcome)
+    if parsed_outcome is not PrecheckOutcome.READY_FOR_AGENT:
+        raise RunStateTransitionError(
+            "Run enqueue rejected: pre_check_outcome must be 'ready_for_agent' before queueing"
+        )
+    return parsed_outcome.value
+
+
 def is_ready_for_agent_precheck(plan: object | None) -> bool:
     return PrecheckOutcome.parse(resolve_precheck_outcome_from_plan(plan)) is PrecheckOutcome.READY_FOR_AGENT
 
@@ -466,6 +485,10 @@ def _enqueue_attempt_for_workflow(
         raise RunStateTransitionError(
             f"Workflow {workflow_id} is terminal; create a new workflow execution instead of reusing it"
         )
+    require_ready_for_agent_enqueue(
+        source="workflow_attempt",
+        precheck_source_plan=bootstrap.plan,
+    )
     now = _now()
     run = Run(
         run_id=str(uuid4()),
