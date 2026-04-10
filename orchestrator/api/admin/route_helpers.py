@@ -70,6 +70,7 @@ from orchestrator.api.schemas import (
     JiraWebhookActionResult,
 )
 from orchestrator.core.config import get_settings
+from orchestrator.core.decision_types import JiraConfigKey, tenant_jira_config_text
 from orchestrator.core.project_policy import normalize_project_policy_overrides
 from orchestrator.core.platform_secret_service import resolve_platform_secret_ref
 from orchestrator.core.platform_secret_service import (
@@ -351,7 +352,7 @@ def discover_project_run_board_id(
     jira_project_key: str,
     settings,  # noqa: ANN001
 ) -> int | None:
-    connection_id = str((tenant.jira_config or {}).get("connection_id") or "").strip()
+    connection_id = tenant_jira_config_text(tenant=tenant, key=JiraConfigKey.CONNECTION_ID)
     if not connection_id:
         return None
     connection = session.get(JiraOAuthConnection, connection_id)

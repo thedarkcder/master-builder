@@ -210,10 +210,7 @@ def tenant_ready_label(tenant: object | None) -> str | None:
     return tenant_jira_config_text(tenant=tenant, key=JiraConfigKey.READY_LABEL)
 
 
-def tenant_jira_config_text(*, tenant: object | None, key: JiraConfigKey) -> str | None:
-    if tenant is None:
-        return None
-    jira_config = getattr(tenant, "jira_config", None)
+def jira_config_text(*, jira_config: object, key: JiraConfigKey) -> str | None:
     if not isinstance(jira_config, dict):
         return None
     raw_value = jira_config.get(key.value)
@@ -223,10 +220,14 @@ def tenant_jira_config_text(*, tenant: object | None, key: JiraConfigKey) -> str
     return normalized or None
 
 
-def tenant_jira_project_keys(tenant: object | None) -> tuple[str, ...]:
+def tenant_jira_config_text(*, tenant: object | None, key: JiraConfigKey) -> str | None:
     if tenant is None:
-        return ()
+        return None
     jira_config = getattr(tenant, "jira_config", None)
+    return jira_config_text(jira_config=jira_config, key=key)
+
+
+def jira_config_project_keys(*, jira_config: object) -> tuple[str, ...]:
     if not isinstance(jira_config, dict):
         return ()
     raw_project_keys = jira_config.get(JiraConfigKey.PROJECT_KEYS.value)
@@ -239,10 +240,14 @@ def tenant_jira_project_keys(tenant: object | None) -> tuple[str, ...]:
     )
 
 
-def tenant_jira_ready_statuses(tenant: object | None) -> tuple[str, ...]:
+def tenant_jira_project_keys(tenant: object | None) -> tuple[str, ...]:
     if tenant is None:
         return ()
     jira_config = getattr(tenant, "jira_config", None)
+    return jira_config_project_keys(jira_config=jira_config)
+
+
+def jira_config_ready_statuses(*, jira_config: object) -> tuple[str, ...]:
     if not isinstance(jira_config, dict):
         return ()
     raw_ready_statuses = jira_config.get(JiraConfigKey.READY_STATUSES.value)
@@ -253,6 +258,13 @@ def tenant_jira_ready_statuses(tenant: object | None) -> tuple[str, ...]:
         for normalized in (str(value).strip() for value in raw_ready_statuses)
         if normalized
     )
+
+
+def tenant_jira_ready_statuses(tenant: object | None) -> tuple[str, ...]:
+    if tenant is None:
+        return ()
+    jira_config = getattr(tenant, "jira_config", None)
+    return jira_config_ready_statuses(jira_config=jira_config)
 
 
 def tenant_ready_trigger_mode(tenant: object | None) -> str:
