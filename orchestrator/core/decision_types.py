@@ -356,26 +356,28 @@ def resolve_execution_gate_state(
         classification=classification,
     )
     if decision.pre_check is None or readiness.state == ReadinessState.POLICY_ERROR:
+        policy_eval_failed = PrecheckOutcome.POLICY_EVAL_FAILED.value
         return ExecutionGateResolution(
             state=ExecutionGateState.POLICY_ERROR,
             reason=ExecutionGateReason(
-                reason_code="policy_eval_failed",
-                guidance=enqueue_reason_guidance("policy_eval_failed"),
+                reason_code=policy_eval_failed,
+                guidance=enqueue_reason_guidance(policy_eval_failed),
                 detail=str(decision.policy_error or "").strip() or None,
             ),
         )
 
     if readiness.state == ReadinessState.BLOCKED_READY_LABEL:
         ready_label = str(getattr(decision.pre_check, "ready_label", "") or "").strip() or None
+        missing_ready_label = PrecheckOutcome.MISSING_READY_LABEL.value
         guidance = (
-            f"{enqueue_reason_guidance('missing_ready_label')} ({ready_label})"
+            f"{enqueue_reason_guidance(missing_ready_label)} ({ready_label})"
             if ready_label
-            else enqueue_reason_guidance("missing_ready_label")
+            else enqueue_reason_guidance(missing_ready_label)
         )
         return ExecutionGateResolution(
             state=ExecutionGateState.BLOCK_READY_LABEL,
             reason=ExecutionGateReason(
-                reason_code="missing_ready_label",
+                reason_code=missing_ready_label,
                 guidance=guidance,
                 ready_label=ready_label,
             ),
