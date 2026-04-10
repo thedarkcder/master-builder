@@ -8,7 +8,7 @@ from orchestrator.core.communications.execution_admission_format import (
     format_discord_admission_conflict_detail,
 )
 from orchestrator.core.decision_types import ExecutionGateReason, ExecutionGateResolution, ExecutionGateState
-from orchestrator.core.execution_admission import resolve_execution_admission
+from orchestrator.core.execution_admission import ExecutionAdmissionReason, resolve_execution_admission
 
 
 def _decision_result(*, state: ExecutionGateState, reason_code: str | None) -> object:
@@ -39,6 +39,7 @@ def test_resolve_execution_admission_blocks_when_execution_gate_blocks() -> None
         )
     )
     assert decision.can_enqueue is False
+    assert decision.reason is ExecutionAdmissionReason.DECISION_GATE_REQUIRED
     assert decision.reason_code == "decision_gate_required"
     assert decision.blocked is True
 
@@ -62,6 +63,7 @@ def test_resolve_execution_admission_formats_discord_missing_ready_label_detail(
             reason_code="missing_ready_label",
         )
     )
+    assert decision.reason is ExecutionAdmissionReason.MISSING_READY_LABEL
     assert format_discord_admission_conflict_detail(admission=decision) == "Guidance (agent:ready)"
 
 

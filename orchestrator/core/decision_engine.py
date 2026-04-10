@@ -58,6 +58,7 @@ from orchestrator.core.decision_types import (
     WorkerDecision,
     blocking_reason_for_precheck,
     resolve_execution_gate_state,
+    tenant_ready_label,
 )
 from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.knowledge_base import SlotResolution, resolve_missing_slots_from_knowledge
@@ -79,21 +80,21 @@ from orchestrator.storage.models import (
 )
 from orchestrator.tools.project_repo_checkout import project_repo_dir
 
-def _planner_classification(gate_status: str) -> str:
+def _planner_classification(gate_status: str) -> DecisionClassification:
     normalized = str(gate_status or "").strip().lower()
     if normalized == "blocked_decision_gate":
-        return "decision_gate"
+        return DecisionClassification.DECISION_GATE
     if normalized == "blocked_gtd":
-        return "gtd"
+        return DecisionClassification.GTD
     if normalized == "blocked_both":
-        return DecisionClassification.BOTH.value
-    return DecisionClassification.CLEAR.value
+        return DecisionClassification.BOTH
+    return DecisionClassification.CLEAR
 
 
-def _planner_block_reason(classification: str) -> str | None:
-    if classification in {"decision_gate", "both"}:
+def _planner_block_reason(classification: DecisionClassification) -> str | None:
+    if classification.includes_decision_gate:
         return "decision_gate_required"
-    if classification == "gtd":
+    if classification is DecisionClassification.GTD:
         return "gtd_required"
     return None
 
@@ -175,7 +176,7 @@ def _decision_with_planner_result(
         if item.kind == "gtd"
     )
     missing_items = tuple(planner_result.missing_items)
-    if classification == "clear":
+    if classification is DecisionClassification.CLEAR:
         outcome = "missing_ready_label" if pre_check.ready_label_missing else "ready_for_agent"
         updated_pre_check = replace(
             pre_check,
@@ -206,22 +207,22 @@ def _decision_with_planner_result(
 
     updated_pre_check = replace(
         pre_check,
-        outcome="decision_gate_required" if classification in {"decision_gate", "both"} else "gtd_required",
+        outcome="decision_gate_required" if classification.includes_decision_gate else "gtd_required",
         decision_gate=DecisionGateResult(
-            triggered=classification in {"decision_gate", "both"},
-            reason=reason if classification in {"decision_gate", "both"} else "Decision Gate not required",
-            missing_sections=missing_items if classification in {"decision_gate", "both"} else (),
+            triggered=classification.includes_decision_gate,
+            reason=reason if classification.includes_decision_gate else "Decision Gate not required",
+            missing_sections=missing_items if classification.includes_decision_gate else (),
             questions=decision_gate_questions,
             recommendation=(
                 "Clarification required before execution."
-                if classification in {"decision_gate", "both"}
+                if classification.includes_decision_gate
                 else pre_check.decision_gate.recommendation
             ),
             tags=pre_check.decision_gate.tags,
         ),
         gtd=GoodToDoValidationResult(
-            valid=classification not in {"gtd", "both"},
-            missing_criteria=missing_items if classification in {"gtd", "both"} else (),
+            valid=not classification.includes_gtd,
+            missing_criteria=missing_items if classification.includes_gtd else (),
             clarification_questions=gtd_questions,
         ),
     )
@@ -389,7 +390,7 @@ def _build_decision_engine_result(
     *,
     decision: IngressDecision,
     issue_labels: list[str],
-    classification: str,
+    classification: DecisionClassification,
     missing_slots: list[str],
     auto_resolved_slots: list[str],
     case_id: str,
@@ -492,7 +493,9 @@ def evaluate_decision_event(
             has_open_cycle=existing_cycle is not None,
             unresolved_question_count=len(unresolved_question_ids),
             decision_gate_closed_permanently=decision_gate_closed_permanently_state(case=existing_case),
-            case_classification=str(getattr(existing_case, "classification", "") or "").strip(),
+            case_classification=DecisionClassification.parse(
+                str(getattr(existing_case, "classification", "") or "").strip()
+            ),
             case_issue_fingerprint=str(getattr(existing_case, "issue_fingerprint", "") or "").strip(),
             current_issue_fingerprint=current_issue_fingerprint,
         )
@@ -572,7 +575,7 @@ def evaluate_decision_event(
                 issue_labels=issue_labels,
                 issue_description=issue_description,
                 decision=decision,
-                classification=classification,
+                classification=classification.value,
                 question_set_override=question_set_override,
                 question_reason_override=question_reason_override,
                 auto_resolved_answers={},
@@ -614,7 +617,7 @@ def evaluate_decision_event(
             issue_summary=event.issue_summary,
             issue_description=event.issue_description,
             issue_labels=event.issue_labels,
-            ready_label=(tenant.jira_config or {}).get("ready_label"),
+            ready_label=tenant_ready_label(tenant),
         )
         issue_labels = [str(label).strip() for label in event.issue_labels or [] if str(label).strip()]
         issue_description = event.issue_description
@@ -628,7 +631,7 @@ def evaluate_decision_event(
             issue_labels=issue_labels,
             issue_description=issue_description,
             decision=resolved_decision,
-            classification="clear",
+            classification=DecisionClassification.CLEAR.value,
             question_set_override=None,
             question_reason_override=None,
             auto_resolved_answers={},
@@ -649,7 +652,7 @@ def evaluate_decision_event(
         return _build_decision_engine_result(
             decision=resolved_decision,
             issue_labels=issue_labels,
-            classification="clear",
+            classification=DecisionClassification.CLEAR,
             missing_slots=[],
             auto_resolved_slots=[],
             case_id=case.case_id,
@@ -668,7 +671,7 @@ def evaluate_decision_event(
             issue_summary=event.issue_summary,
             issue_description=event.issue_description,
             issue_labels=event.issue_labels,
-            ready_label=(tenant.jira_config or {}).get("ready_label"),
+            ready_label=tenant_ready_label(tenant),
         )
         issue_labels = [str(label).strip() for label in event.issue_labels or [] if str(label).strip()]
         issue_description = event.issue_description
@@ -682,7 +685,7 @@ def evaluate_decision_event(
             issue_labels=issue_labels,
             issue_description=issue_description,
             decision=decision,
-            classification="clear",
+            classification=DecisionClassification.CLEAR.value,
             question_set_override=None,
             question_reason_override=None,
             auto_resolved_answers={},
@@ -700,7 +703,7 @@ def evaluate_decision_event(
         return _build_decision_engine_result(
             decision=decision,
             issue_labels=issue_labels,
-            classification="clear",
+            classification=DecisionClassification.CLEAR,
             missing_slots=[],
             auto_resolved_slots=[],
             case_id=case.case_id,
@@ -721,7 +724,7 @@ def evaluate_decision_event(
             decision=decision_from_snapshot_state(
                 snapshot=snapshot,
                 source=event.source,
-                classification="clear",
+                classification=DecisionClassification.CLEAR.value,
                 cycle=None,
                 case=existing_case,
             ),
@@ -739,7 +742,7 @@ def evaluate_decision_event(
             issue_labels=issue_labels,
             issue_description=issue_description,
             decision=decision,
-            classification="clear",
+            classification=DecisionClassification.CLEAR.value,
             question_set_override=None,
             question_reason_override=None,
             auto_resolved_answers={},
@@ -756,7 +759,7 @@ def evaluate_decision_event(
         return _build_decision_engine_result(
             decision=decision,
             issue_labels=issue_labels,
-            classification="clear",
+            classification=DecisionClassification.CLEAR,
             missing_slots=[],
             auto_resolved_slots=[],
             case_id=case.case_id,
@@ -840,11 +843,15 @@ def evaluate_decision_event(
             issue_labels = reevaluated.issue_labels
             missing_slots = precheck_missing_slots(decision.pre_check) if decision.pre_check is not None else []
 
-    classification = precheck_classification(decision.pre_check) if decision.pre_check is not None else "clear"
+    classification = (
+        precheck_classification(decision.pre_check)
+        if decision.pre_check is not None
+        else DecisionClassification.CLEAR
+    )
     question_set_override = None
     question_reason_override = None
     extra_effect_ids: tuple[str, ...] = ()
-    if classification in {"decision_gate", "gtd", "both"}:
+    if classification.blocks_execution:
         planner_result = plan_decision_questions(
             session=session,
             settings=settings,
@@ -852,7 +859,7 @@ def evaluate_decision_event(
             project=project,
             issue_key=event.issue_key,
             source=event.source,
-            classification=classification,
+            classification=classification.value,
             block_reason=decision.block_reason,
             case=existing_case,
             cycle=existing_cycle,
@@ -887,7 +894,7 @@ def evaluate_decision_event(
         issue_labels=issue_labels,
         issue_description=issue_description,
         decision=decision,
-        classification=classification,
+        classification=classification.value,
         question_set_override=question_set_override,
         question_reason_override=question_reason_override,
         auto_resolved_answers=auto_resolved_answers,
@@ -907,7 +914,7 @@ def evaluate_decision_event(
         pre_check_with_cycle = apply_frozen_cycle_to_precheck_state(
             pre_check=decision.pre_check,
             cycle=cycle,
-            classification=classification,
+            classification=classification.value,
         )
         decision = IngressDecision(
             source=decision.source,

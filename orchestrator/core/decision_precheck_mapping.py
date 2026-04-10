@@ -22,12 +22,14 @@ from orchestrator.core.pre_run_check import PreRunCheckResult, evaluate_pre_run_
 from orchestrator.core.precheck_decision import precheck_missing_slots
 from orchestrator.core.communications.enqueue_reason_contract import enqueue_reason_guidance
 from orchestrator.core.decision_types import (
+    DecisionClassification,
     DecisionSource,
     DecisionEventInput,
     DecisionLabelAction,
     IngressDecision,
     blocking_reason_for_precheck,
     resolve_execution_gate_state,
+    tenant_ready_label,
 )
 from orchestrator.storage.models import DecisionCase, DecisionCycle
 
@@ -69,7 +71,7 @@ def evaluate_with_labels(
         issue_description=issue_description,
         recorded_answers=recorded_answers,
         issue_labels=issue_labels,
-        ready_label=(tenant.jira_config or {}).get("ready_label"),
+        ready_label=tenant_ready_label(tenant),
         evaluate_pre_run_check_fn=evaluate_pre_run_check_fn,
     )
     normalized_labels = [str(label).strip() for label in (issue_labels or []) if str(label).strip()]
@@ -148,7 +150,7 @@ def decision_result_for_duplicate_event(
         for label in snapshot.get("issue_labels", payload.get("issue_labels", []))
         if str(label).strip()
     ]
-    classification = str(snapshot.get("classification") or "").strip() or "clear"
+    classification = DecisionClassification.parse(snapshot.get("classification"))
     missing_slots = string_tuple(snapshot.get("missing_slots"))
     auto_resolved_slots = string_tuple(snapshot.get("auto_resolved_slots"))
 
@@ -159,11 +161,11 @@ def decision_result_for_duplicate_event(
     decision = decision_from_snapshot(
         snapshot=snapshot,
         source=str(existing_event.source or "jira_webhook"),
-        classification=classification,
+        classification=classification.value,
         cycle=cycle,
         case=case,
     )
-    if classification == "clear":
+    if classification is DecisionClassification.CLEAR:
         normalize_clear_case_snapshot(
             case=case,
             source=str(existing_event.source or "jira_webhook"),
@@ -180,10 +182,7 @@ def decision_result_for_duplicate_event(
             )
         ).scalars()
     )
-    execution_gate = resolve_execution_gate_state(
-        decision=decision,
-        classification=classification,
-    )
+    execution_gate = resolve_execution_gate_state(decision=decision, classification=classification)
     return decision_result_type(
         decision=decision,
         issue_labels=issue_labels,
@@ -214,7 +213,7 @@ def decision_from_snapshot(
             cycle=cycle,
             classification=classification,
         )
-    if classification == "clear":
+    if DecisionClassification.parse(classification) is DecisionClassification.CLEAR:
         normalized_pre_check = pre_check
         if normalized_pre_check is None:
             ready_label = str(case.ready_label or "").strip() or None
@@ -324,9 +323,10 @@ def worker_blocking_gate(
 ) -> DecisionGateResult | None:
     if not isinstance(pre_check, PreRunCheckResult):
         return None
-    if classification in {"decision_gate", "both"} and pre_check.decision_gate.triggered:
+    parsed_classification = DecisionClassification.parse(classification)
+    if parsed_classification.includes_decision_gate and pre_check.decision_gate.triggered:
         return pre_check.decision_gate
-    if classification in {"gtd", "both"} and str(block_reason or "").strip() == "execution_blocked":
+    if parsed_classification.includes_gtd and str(block_reason or "").strip() == "execution_blocked":
         questions = tuple(
             str(question).strip()
             for question in pre_check.gtd.clarification_questions
@@ -386,7 +386,7 @@ def apply_frozen_cycle_to_precheck(*, pre_check: object, cycle: DecisionCycle, c
         cycle_question_set=list(cycle.question_set_json),
         unresolved_question_ids=list(cycle.unresolved_question_ids_json),
         cycle_reason=cycle.reason,
-        classification=classification,
+        classification=DecisionClassification.parse(classification),
     )
 
 
@@ -408,12 +408,13 @@ def case_state_for_decision(*, decision: IngressDecision) -> str:
 def decision_reason(*, pre_check: object, classification: str) -> str | None:
     if pre_check is None:
         return None
-    if classification in {"decision_gate", "both"}:
+    parsed_classification = DecisionClassification.parse(classification)
+    if parsed_classification.includes_decision_gate:
         decision_gate = getattr(pre_check, "decision_gate", None)
         reason = str(getattr(decision_gate, "reason", "") or "").strip() if decision_gate is not None else ""
         if reason:
             return reason
-    if classification in {"gtd", "both"}:
+    if parsed_classification.includes_gtd:
         missing = [
             str(item).strip()
             for item in getattr(pre_check, "gtd_missing_criteria", ())

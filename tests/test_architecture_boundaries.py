@@ -485,6 +485,59 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             msg=f"Workflow core modules must not import API-layer modules: {violations}",
         )
 
+    def test_transport_modules_do_not_branch_on_decision_classification_or_reason_strings(self) -> None:
+        modules = [
+            ROOT / "orchestrator" / "api" / "discord" / "commands" / "run_controls.py",
+            ROOT / "orchestrator" / "api" / "webhooks" / "jira_admission_flow.py",
+            ROOT / "orchestrator" / "api" / "webhooks" / "jira_webhook_comment_flow.py",
+        ]
+        banned_values = {
+            "decision_gate",
+            "gtd",
+            "both",
+            "clear",
+            "decision_gate_required",
+            "gtd_required",
+            "missing_ready_label",
+            "policy_eval_failed",
+        }
+        banned_names = {"classification", "reason_code", "block_reason"}
+        violations: list[str] = []
+        for module_path in modules:
+            tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Compare):
+                    compare_targets = [node.left, *node.comparators]
+                    compare_names = {
+                        subnode.id
+                        for target in compare_targets
+                        for subnode in ast.walk(target)
+                        if isinstance(subnode, ast.Name)
+                    }
+                    compare_attrs = {
+                        subnode.attr
+                        for target in compare_targets
+                        for subnode in ast.walk(target)
+                        if isinstance(subnode, ast.Attribute)
+                    }
+                    if not (banned_names & (compare_names | compare_attrs)):
+                        continue
+                    constants = {
+                        value_node.value
+                        for target in compare_targets
+                        for value_node in ast.walk(target)
+                        if isinstance(value_node, ast.Constant) and isinstance(value_node.value, str)
+                    }
+                    if constants & banned_values:
+                        violations.append(
+                            f"{module_path.relative_to(ROOT).as_posix()}:{node.lineno}:{sorted(constants & banned_values)!r}"
+                        )
+        self.assertEqual(
+            violations,
+            [],
+            msg=f"Transport modules must consume typed domain outcomes instead of branching on decision strings: {violations}",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

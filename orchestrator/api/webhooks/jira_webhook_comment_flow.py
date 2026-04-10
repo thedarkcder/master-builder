@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from orchestrator.api.commands.entrypoint import execute_tenant_jira_comment_command
 from orchestrator.api.discord.ask.context import remove_issue_key_from_tenant_ask_history
 from orchestrator.api.discord.shared.state import remove_issue_key_from_seed_followups
+from orchestrator.api.jira_oauth.connection_service import tenant_jira_oauth_context
 from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.api.webhooks.contracts import (
     JIRA_COMMENT_EVENTS,
@@ -15,7 +16,6 @@ from orchestrator.api.webhooks.contracts import (
     extract_jira_comment_text,
     post_jira_comment,
 )
-from orchestrator.api.webhooks import jira_webhook_precheck
 from orchestrator.api.webhooks.jira_parent_child_sync import (
     handle_engineering_clarification_command,
     handle_engineering_clarification_reply,
@@ -37,6 +37,7 @@ from orchestrator.core.followup_context_service import (
     FOLLOWUP_CONTEXT_DECISION_GATE,
     close_followup_contexts,
 )
+from orchestrator.core.pre_run_check import evaluate_pre_run_check
 
 logger = logging.getLogger(__name__)
 
@@ -192,8 +193,8 @@ def stage_handle_comment_decision_reply(
                 issue_description=context.issue_description,
                 issue_labels=context.issue_labels,
             ),
-            tenant_jira_oauth_context_fn=jira_webhook_precheck.tenant_jira_oauth_context,
-            evaluate_pre_run_check_fn=jira_webhook_precheck.evaluate_pre_run_check,
+            tenant_jira_oauth_context_fn=tenant_jira_oauth_context,
+            evaluate_pre_run_check_fn=evaluate_pre_run_check,
             publish_jira_comment_fn=lambda comment: post_jira_comment(
                 session=session,
                 tenant=context.tenant,
@@ -217,14 +218,6 @@ def stage_handle_comment_decision_reply(
             reason="decision_reply_failed",
             webhook_event=context.webhook_event,
         )
-    if str(getattr(decision_result, "classification", "") or "").strip().lower() == "clear":
-        close_followup_contexts(
-            session=session,
-            tenant_id=context.tenant_id,
-            context_type=FOLLOWUP_CONTEXT_DECISION_GATE,
-            issue_key=context.issue_key,
-        )
-    session.commit()
     clarification_presentation = build_decision_clarification_presentation(
         decision_result=decision_result,
         question_feedback=load_cycle_question_feedback(
@@ -232,6 +225,14 @@ def stage_handle_comment_decision_reply(
             cycle_id=str(decision_result.cycle_id or ""),
         ),
     )
+    if not clarification_presentation.recheck_required:
+        close_followup_contexts(
+            session=session,
+            tenant_id=context.tenant_id,
+            context_type=FOLLOWUP_CONTEXT_DECISION_GATE,
+            issue_key=context.issue_key,
+        )
+    session.commit()
     return jira_webhook_response(
         context,
         enqueued=False,

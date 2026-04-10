@@ -9,7 +9,8 @@
     "build": "next build",
     "start": "next start -p 4100",
     "test:e2e": "playwright test",
-    "test:e2e:headed": "playwright test --headed"
+    "test:e2e:headed": "playwright test --headed",
+    "test:e2e:live": "PLAYWRIGHT_RUN_LIVE=1 playwright test --project=chromium-live"
   },
   "engines": {
     "node": ">=20"

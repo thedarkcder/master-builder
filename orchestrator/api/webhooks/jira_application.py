@@ -9,7 +9,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from orchestrator.api.webhooks.jira_comment_planner import plan_jira_comment_flow
-from orchestrator.api.webhooks.jira_enqueue_planner import (
+from orchestrator.api.webhooks.jira_admission_flow import (
     build_jira_enqueue_skipped_notification_action,
     plan_jira_run_flow,
 )

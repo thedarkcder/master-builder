@@ -454,10 +454,9 @@ def dispatch_run_control_command(
                 cycle_id=str(decision_result.cycle_id or ""),
             ),
         )
-        classification = clarification_presentation.classification
         if clarification_presentation.recheck_required:
             if (
-                classification in {"decision_gate", "both"}
+                clarification_presentation.requires_decision_gate_feedback
                 and clarification_presentation.question_feedback
             ):
                 message = render_decision_gate_feedback_message(
@@ -466,7 +465,7 @@ def dispatch_run_control_command(
                     question_feedback=clarification_presentation.question_feedback,
                 )
                 generated_questions = list(clarification_presentation.questions)
-            elif classification in {"decision_gate", "both"}:
+            elif clarification_presentation.requires_decision_gate_feedback:
                 message = render_decision_gate_remaining_questions_message(
                     issue_key=issue_key,
                     reason=clarification_presentation.decision_gate_reason or "clarification required",
@@ -486,7 +485,7 @@ def dispatch_run_control_command(
                         issue_key=issue_key,
                     ),
                     issue_key=issue_key,
-                    classification=classification,
+                    classification=clarification_presentation.mode.value,
                     decision_gate_reason=clarification_presentation.decision_gate_reason or "",
                     decision_gate_questions=list(clarification_presentation.decision_gate_questions),
                     gtd_missing_criteria=list(clarification_presentation.gtd_missing_criteria),
@@ -500,7 +499,7 @@ def dispatch_run_control_command(
                 data={
                     "issue_key": issue_key,
                     "recheck_required": True,
-                    "classification": classification,
+                    "classification": clarification_presentation.mode.value,
                     "decision_gate_reason": clarification_presentation.decision_gate_reason,
                     "gtd_missing_criteria": list(clarification_presentation.gtd_missing_criteria),
                     "questions": generated_questions or list(clarification_presentation.questions),

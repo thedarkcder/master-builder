@@ -317,11 +317,12 @@ def assert_sensitive_command_permission(
         channel_id=channel_id,
     )
     project_allowlist = project_allowlisted_user_ids(project) if project is not None else set()
+    tenant_allowlist = normalize_allowlisted_user_ids(tenant.discord_config or {})
     permitted, reason = can_execute_sensitive_command(
         command_name=command_name,
         user_id=user_id,
         has_project_mapping=project is not None,
-        tenant_allowlist=set(),
+        tenant_allowlist=tenant_allowlist,
         project_allowlist=project_allowlist,
     )
     if permitted:
