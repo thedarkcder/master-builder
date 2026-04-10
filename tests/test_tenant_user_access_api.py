@@ -1073,6 +1073,51 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
         self.assertEqual(redirect_query["tenant_id"], [tenant_id])
         self.assertEqual(redirect_query["discord_error"], ["access_denied"])
 
+    def test_discord_install_callback_redirects_edit_mode_to_tenant_settings_section(self) -> None:
+        registration = self._register()
+        token = self._login()
+        tenant_id = registration["tenant"]["tenant_id"]
+
+        start_response = self.client.post(
+            f"/api/admin/tenants/{tenant_id}/discord/install/start?return_to=edit",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        self.assertEqual(start_response.status_code, 200, start_response.text)
+        state_token = parse_qs(urlparse(start_response.json()["install_url"]).query)["state"][0]
+
+        callback_response = self.client.get(
+            f"/api/admin/discord/install/callback?state={state_token}&guild_id=987654321&code=oauth-code",
+            follow_redirects=False,
+        )
+        self.assertEqual(callback_response.status_code, 302, callback_response.text)
+        self.assertEqual(
+            callback_response.headers["location"],
+            f"http://localhost:4100/{tenant_id}/settings/discord?discord_install=success",
+        )
+
+        cancel_start_response = self.client.post(
+            f"/api/admin/tenants/{tenant_id}/discord/install/start?return_to=edit",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        self.assertEqual(cancel_start_response.status_code, 200, cancel_start_response.text)
+        cancel_state_token = parse_qs(urlparse(cancel_start_response.json()["install_url"]).query)["state"][0]
+
+        cancel_response = self.client.get(
+            (
+                "/api/admin/discord/install/callback"
+                f"?state={cancel_state_token}&error=access_denied&error_description=Rejected"
+            ),
+            follow_redirects=False,
+        )
+        self.assertEqual(cancel_response.status_code, 302, cancel_response.text)
+        self.assertEqual(
+            cancel_response.headers["location"],
+            (
+                f"http://localhost:4100/{tenant_id}/settings/discord"
+                "?discord_install=cancelled&discord_error=access_denied&discord_error_description=Rejected"
+            ),
+        )
+
     def test_discord_install_uses_platform_secret_client_id_when_env_missing(self) -> None:
         registration = self._register()
         token = self._login()
