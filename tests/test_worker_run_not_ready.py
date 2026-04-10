@@ -28,7 +28,7 @@ def test_derive_run_not_ready_outcome_missing_ready_label() -> None:
     outcome = derive_run_not_ready_outcome(
         worker_decision=_worker_decision(
             block_reason="missing_ready_label",
-            decision_gate_reason="ignored",
+            decision_gate_reason="Issue is missing the configured ready label. (agent:ready)",
             pre_check_outcome="missing_ready_label",
         )
     )

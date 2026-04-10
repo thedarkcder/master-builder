@@ -14,10 +14,13 @@ from orchestrator.api.webhooks.jira_admission_flow import (
 )
 from orchestrator.api.webhooks.jira_webhook_types import JiraWebhookContext, jira_webhook_response
 from orchestrator.core.communications import DiscordTenantNotificationAction, TransportAction
-from orchestrator.core.communications.enqueue_reason_contract import enqueue_reason_guidance
 from orchestrator.core.communications.jira_enqueue_presentation import (
     format_backlog_pre_run_check_message,
     format_jira_enqueue_skipped_message,
+)
+from orchestrator.core.decision_state_machine import (
+    ExecutionAdmissionReason,
+    build_execution_admission_block,
 )
 from orchestrator.tools.jira_oauth import JiraOAuthError
 from orchestrator.tools.jira_oauth_http import JiraOAuthHttpClient
@@ -140,12 +143,15 @@ def stage_handle_run_board_gate(
             context.issue_key,
             raw_board_id,
         )
+        admission = build_execution_admission_block(
+            reason=ExecutionAdmissionReason.BOARD_GATE_UNCONFIGURED,
+        )
         return JiraBoardGatePlan(
             response=jira_webhook_response(
                 context,
                 enqueued=False,
-                reason="board_gate_unconfigured",
-                guidance=enqueue_reason_guidance("board_gate_unconfigured"),
+                reason=admission.reason_code,
+                guidance=admission.guidance,
                 board_id=raw_board_id,
                 webhook_event=context.webhook_event,
             )
@@ -159,7 +165,7 @@ def stage_handle_run_board_gate(
     if location == "board":
         return None
     if location == "backlog":
-        reason = "issue_in_backlog"
+        reason = ExecutionAdmissionReason.ISSUE_IN_BACKLOG
         decision_result = evaluate_precheck_decision_with_labels(
             context=context,
             session=session,
@@ -190,8 +196,8 @@ def stage_handle_run_board_gate(
             response=jira_webhook_response(
                 context,
                 enqueued=False,
-                reason=reason,
-                guidance=enqueue_reason_guidance(reason),
+                reason=reason.value,
+                guidance=build_execution_admission_block(reason=reason).guidance,
                 board_id=board_id,
                 webhook_event=context.webhook_event,
                 detail=detail,
@@ -199,13 +205,17 @@ def stage_handle_run_board_gate(
             ),
             actions=actions,
         )
-    reason = "issue_not_on_board" if location == "not_on_board" else "board_gate_check_failed"
+    reason = (
+        ExecutionAdmissionReason.ISSUE_NOT_ON_BOARD
+        if location == "not_on_board"
+        else ExecutionAdmissionReason.BOARD_GATE_CHECK_FAILED
+    )
     logger.info(
         "jira_webhook_not_started request_id=%s tenant_id=%s issue_key=%s reason=%s board_id=%s detail=%s",
         context.request_id,
         context.tenant_id,
         context.issue_key,
-        reason,
+        reason.value,
         board_id,
         detail,
     )
@@ -213,8 +223,8 @@ def stage_handle_run_board_gate(
         response=jira_webhook_response(
             context,
             enqueued=False,
-            reason=reason,
-            guidance=enqueue_reason_guidance(reason),
+            reason=reason.value,
+            guidance=build_execution_admission_block(reason=reason).guidance,
             board_id=board_id,
             webhook_event=context.webhook_event,
             detail=detail,
@@ -222,7 +232,7 @@ def stage_handle_run_board_gate(
         actions=(
             _build_enqueue_skipped_notification_action(
                 context=context,
-                reason=reason,
+                reason=reason.value,
                 extra_detail=f"board_id={board_id}" if detail is None else f"board_id={board_id}; detail={detail}",
             ),
         ),

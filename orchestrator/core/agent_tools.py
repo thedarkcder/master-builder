@@ -228,8 +228,6 @@ class AgentToolContext:
 
 
 def _knowledge_embedding_access_mode_for_context(context: AgentToolContext) -> KnowledgeEmbeddingAccessMode:
-    if context.run_id:
-        return KnowledgeEmbeddingAccessMode.LOCAL_ONLY
     return KnowledgeEmbeddingAccessMode.BEST_EFFORT
 
 

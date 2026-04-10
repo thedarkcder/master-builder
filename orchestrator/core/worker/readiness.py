@@ -5,12 +5,12 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from orchestrator.core.communications.enqueue_reason_contract import enqueue_reason_guidance
 from orchestrator.core.decision_gate import DecisionGateResult
 from orchestrator.core.decision_types import (
     DecisionClassification,
     PrecheckOutcome,
     WorkerDecision,
+    execution_gate_reason_for_precheck_outcome,
     tenant_ready_label,
 )
 from orchestrator.core.pre_run_check import PreRunCheckResult, evaluate_pre_run_check
@@ -21,6 +21,29 @@ from orchestrator.core.workflow.execution_snapshot import (
 )
 from orchestrator.core.workflow.trigger_context import GithubPrRemediationTriggerContext
 from orchestrator.storage.models import Project, Tenant
+
+
+def _blocked_worker_decision(
+    *,
+    outcome: PrecheckOutcome,
+    reason: str,
+    recommendation: str,
+    classification: DecisionClassification | None = None,
+) -> WorkerDecision:
+    return WorkerDecision(
+        allowed=False,
+        decision_gate=DecisionGateResult(
+            triggered=True,
+            reason=reason,
+            missing_sections=(),
+            questions=(),
+            recommendation=recommendation,
+            tags=(),
+        ),
+        configuration_error=None,
+        block_reason=outcome.value,
+        classification=classification,
+    )
 
 
 def is_pr_remediation_run(
@@ -123,41 +146,26 @@ def evaluate_worker_decision(
             or configured_ready_label
             or None
         )
-        guidance = (
-            f"{enqueue_reason_guidance(PrecheckOutcome.MISSING_READY_LABEL.value)} ({ready_label})"
-            if ready_label
-            else enqueue_reason_guidance(PrecheckOutcome.MISSING_READY_LABEL.value)
-        )
-        return WorkerDecision(
-            allowed=False,
-            decision_gate=DecisionGateResult(
-                triggered=True,
-                reason=guidance,
-                missing_sections=(),
-                questions=(),
-                recommendation="Apply the configured ready label before execution.",
-                tags=(),
-            ),
-            configuration_error=None,
-            block_reason=PrecheckOutcome.MISSING_READY_LABEL.value,
+        guidance = execution_gate_reason_for_precheck_outcome(
+            outcome=PrecheckOutcome.MISSING_READY_LABEL,
+            ready_label=ready_label,
+        ).guidance
+        return _blocked_worker_decision(
+            outcome=PrecheckOutcome.MISSING_READY_LABEL,
+            reason=guidance,
+            recommendation="Apply the configured ready label before execution.",
             classification=DecisionClassification.CLEAR,
         )
 
     if persisted_outcome.is_decision_block:
-        guidance = enqueue_reason_guidance(persisted_outcome.value)
+        guidance = execution_gate_reason_for_precheck_outcome(
+            outcome=persisted_outcome,
+        ).guidance
         reason = str(run_not_ready_payload.get("reason") or "").strip() or guidance
-        return WorkerDecision(
-            allowed=False,
-            decision_gate=DecisionGateResult(
-                triggered=True,
-                reason=reason,
-                missing_sections=(),
-                questions=(),
-                recommendation="Resolve the open clarification topics before execution.",
-                tags=(),
-            ),
-            configuration_error=None,
-            block_reason=persisted_outcome.value,
+        return _blocked_worker_decision(
+            outcome=persisted_outcome,
+            reason=reason,
+            recommendation="Resolve the open clarification topics before execution.",
             classification=(
                 DecisionClassification.DECISION_GATE
                 if persisted_outcome is PrecheckOutcome.DECISION_GATE_REQUIRED

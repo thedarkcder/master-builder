@@ -115,16 +115,18 @@ export default function SelectTenantPage() {
   }, [archivedPageCount]);
 
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center bg-background px-4 py-12">
-      {/* Header */}
-      <div className="mb-8 flex flex-col items-center gap-3 text-center">
-        <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-primary shadow-[0_0_24px_rgba(99,102,241,0.3)]">
-          <Zap className="h-6 w-6 text-white" />
+    <div className="flex min-h-screen flex-col items-center bg-background px-4 pt-[12vh] pb-12">
+      <div className="mb-10 flex flex-col items-center gap-4 text-center">
+        <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-primary shadow-[0_0_20px_rgba(99,102,241,0.25)]">
+          <Zap className="h-5 w-5 text-white" />
+        </div>
+        <div>
+          <h1 className="text-lg font-semibold tracking-tight">Switch workspace</h1>
+          <p className="mt-1 text-sm text-muted-foreground">Choose a workspace to continue</p>
         </div>
       </div>
 
-      {/* Tenant list */}
-      <div className="w-full max-w-md">
+      <div className="w-full max-w-lg">
         {errorMessage ? (
           <p className="mb-6 rounded-lg border border-destructive/30 bg-destructive/10 px-5 py-4 text-sm leading-relaxed text-destructive break-words">
             {errorMessage}
@@ -132,34 +134,34 @@ export default function SelectTenantPage() {
         ) : null}
 
         {loading ? (
-          <div className="overflow-hidden rounded-xl border bg-background shadow-sm">
+          <div className="overflow-hidden rounded-2xl border bg-background shadow-sm">
             <div className="divide-y">
               {[...Array(3)].map((_, i) => (
-                <div key={i} className="flex items-center gap-3 px-4 py-4">
-                  <Skeleton className="h-9 w-9 rounded-lg flex-shrink-0" />
-                  <div className="flex-1 space-y-1.5">
-                    <Skeleton className="h-4 w-32" />
-                    <Skeleton className="h-3 w-48" />
+                <div key={i} className="flex items-center gap-4 px-5 py-4">
+                  <Skeleton className="h-10 w-10 rounded-xl flex-shrink-0" />
+                  <div className="flex-1 space-y-2">
+                    <Skeleton className="h-4 w-36" />
+                    <Skeleton className="h-3 w-52" />
                   </div>
                 </div>
               ))}
             </div>
           </div>
         ) : (
-          <div className="space-y-4">
-            <div className="overflow-hidden rounded-xl border bg-background shadow-sm">
-              <div className="border-b px-4 py-3">
-                <p className="text-sm font-semibold">Active workspaces</p>
+          <div className="space-y-5">
+            <div className="overflow-hidden rounded-2xl border bg-background shadow-sm">
+              <div className="border-b px-5 py-3.5">
+                <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Active workspaces</p>
               </div>
               {activeTenants.length === 0 ? (
-                <div className="px-4 py-8 text-center">
+                <div className="px-5 py-10 text-center">
                   <p className="text-sm text-muted-foreground">No active workspaces found.</p>
                   <Link
                     href="/tenants/new"
-                    className="mt-3 inline-flex items-center gap-1.5 text-sm font-medium text-primary hover:underline"
+                    className="mt-4 inline-flex items-center gap-1.5 text-sm font-medium text-primary hover:underline"
                   >
                     <Plus className="h-3.5 w-3.5" />
-                    Create your first tenant
+                    Create your first workspace
                   </Link>
                 </div>
               ) : (
@@ -168,15 +170,15 @@ export default function SelectTenantPage() {
                     <li key={tenant.tenant_id}>
                       <Link
                         href={getTenantDashboardRoute(tenant.tenant_id)}
-                        className="flex items-center gap-3 px-4 py-3.5 transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:bg-muted/50"
+                        className="group flex items-center gap-4 px-5 py-4 transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:bg-muted/50"
                       >
                         <div
-                          className={`flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg text-xs font-bold text-white ${tenantAvatarColor(tenant.tenant_id)}`}
+                          className={`flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl text-xs font-bold text-white shadow-sm ${tenantAvatarColor(tenant.tenant_id)}`}
                         >
                           {tenantInitials(tenant.name)}
                         </div>
                         <div className="min-w-0 flex-1">
-                          <p className="truncate font-medium text-sm">{tenant.name}</p>
+                          <p className="truncate text-sm font-medium">{tenant.name}</p>
                           <p className="truncate text-xs text-muted-foreground">{tenant.tenant_id}</p>
                           {formatPurgeDate(tenant.purge_after_at) ? (
                             <p className="truncate text-xs text-muted-foreground">
@@ -184,31 +186,31 @@ export default function SelectTenantPage() {
                             </p>
                           ) : null}
                         </div>
-                        <ChevronRight className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
+                        <ChevronRight className="h-4 w-4 flex-shrink-0 text-muted-foreground/40 transition-colors group-hover:text-muted-foreground" />
                       </Link>
                     </li>
                   ))}
                   <li>
                     <Link
                       href="/tenants/new"
-                      className="flex items-center gap-3 px-4 py-3.5 transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:bg-muted/50"
+                      className="group flex items-center gap-4 px-5 py-4 transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:bg-muted/50"
                     >
-                      <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg border-2 border-dashed border-muted-foreground/30 text-muted-foreground">
+                      <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl border-2 border-dashed border-muted-foreground/25 text-muted-foreground">
                         <Plus className="h-4 w-4" />
                       </div>
                       <div className="min-w-0 flex-1">
                         <p className="text-sm font-medium text-muted-foreground">Create new workspace</p>
-                        <p className="text-xs text-muted-foreground/70">Add another tenant account</p>
+                        <p className="text-xs text-muted-foreground/60">Add another tenant account</p>
                       </div>
-                      <ChevronRight className="h-4 w-4 flex-shrink-0 text-muted-foreground/50" />
+                      <ChevronRight className="h-4 w-4 flex-shrink-0 text-muted-foreground/30 transition-colors group-hover:text-muted-foreground/50" />
                     </Link>
                   </li>
                 </ul>
               )}
               {activeTenants.length > WORKSPACES_PER_PAGE ? (
-                <div className="flex items-center justify-between border-t px-4 py-3">
+                <div className="flex items-center justify-between border-t px-5 py-3">
                   <span className="text-xs text-muted-foreground">
-                    {activeTenants.length} active workspace{activeTenants.length === 1 ? "" : "s"} • Page {activePage} of{" "}
+                    {activeTenants.length} active workspace{activeTenants.length === 1 ? "" : "s"} &middot; Page {activePage} of{" "}
                     {activePageCount}
                   </span>
                   <div className="flex items-center gap-2">
@@ -219,7 +221,7 @@ export default function SelectTenantPage() {
                       onClick={() => setActivePage((current) => Math.max(1, current - 1))}
                       disabled={activePage <= 1}
                     >
-                      ← Prev
+                      Prev
                     </Button>
                     <Button
                       variant="outline"
@@ -228,7 +230,7 @@ export default function SelectTenantPage() {
                       onClick={() => setActivePage((current) => Math.min(activePageCount, current + 1))}
                       disabled={activePage >= activePageCount}
                     >
-                      Next →
+                      Next
                     </Button>
                   </div>
                 </div>
@@ -236,11 +238,11 @@ export default function SelectTenantPage() {
             </div>
 
             {archivedTenants.length > 0 ? (
-              <div className="overflow-hidden rounded-xl border bg-background shadow-sm">
-                <div className="border-b px-4 py-3">
-                  <p className="text-sm font-semibold">Archived workspaces</p>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    Archived workspaces no longer open the dashboard. Open settings to review or unarchive them.
+              <div className="overflow-hidden rounded-2xl border bg-background shadow-sm">
+                <div className="border-b px-5 py-3.5">
+                  <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Archived workspaces</p>
+                  <p className="mt-1.5 text-xs text-muted-foreground">
+                    Archived workspaces are read-only. Open settings to review or restore them.
                   </p>
                 </div>
                 <ul className="divide-y">
@@ -248,16 +250,16 @@ export default function SelectTenantPage() {
                     <li key={tenant.tenant_id}>
                       <Link
                         href={`/${encodeURIComponent(tenant.tenant_id)}/settings/integrations`}
-                        className="flex items-center gap-3 px-4 py-3.5 transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:bg-muted/50"
+                        className="group flex items-center gap-4 px-5 py-4 transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:bg-muted/50"
                       >
-                        <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+                        <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-muted text-muted-foreground">
                           <Archive className="h-4 w-4" />
                         </div>
                         <div className="min-w-0 flex-1">
-                          <p className="truncate font-medium text-sm">{tenant.name}</p>
+                          <p className="truncate text-sm font-medium">{tenant.name}</p>
                           <p className="truncate text-xs text-muted-foreground">{tenant.tenant_id}</p>
                         </div>
-                        <span className="rounded-full border px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+                        <span className="rounded-full border px-2.5 py-0.5 text-[11px] font-medium text-muted-foreground">
                           Archived
                         </span>
                       </Link>
@@ -265,9 +267,9 @@ export default function SelectTenantPage() {
                   ))}
                 </ul>
                 {archivedTenants.length > WORKSPACES_PER_PAGE ? (
-                  <div className="flex items-center justify-between border-t px-4 py-3">
+                  <div className="flex items-center justify-between border-t px-5 py-3">
                     <span className="text-xs text-muted-foreground">
-                      {archivedTenants.length} archived workspace{archivedTenants.length === 1 ? "" : "s"} • Page{" "}
+                      {archivedTenants.length} archived workspace{archivedTenants.length === 1 ? "" : "s"} &middot; Page{" "}
                       {archivedPage} of {archivedPageCount}
                     </span>
                     <div className="flex items-center gap-2">
@@ -278,7 +280,7 @@ export default function SelectTenantPage() {
                         onClick={() => setArchivedPage((current) => Math.max(1, current - 1))}
                         disabled={archivedPage <= 1}
                       >
-                        ← Prev
+                        Prev
                       </Button>
                       <Button
                         variant="outline"
@@ -287,7 +289,7 @@ export default function SelectTenantPage() {
                         onClick={() => setArchivedPage((current) => Math.min(archivedPageCount, current + 1))}
                         disabled={archivedPage >= archivedPageCount}
                       >
-                        Next →
+                        Next
                       </Button>
                     </div>
                   </div>

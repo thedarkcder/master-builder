@@ -118,7 +118,7 @@ function AuthProviderInner({ children }: { children: React.ReactNode }) {
           throw new Error(normalizeAuthErrorMessage(result?.error || "Invalid credentials"));
         }
         if (typeof window !== "undefined") {
-          window.location.assign("/dashboard");
+          window.location.assign("/platform/dashboard");
         }
       },
       logout: async () => {

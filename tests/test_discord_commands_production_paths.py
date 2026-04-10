@@ -17,7 +17,11 @@ from orchestrator.core.config import get_settings
 from orchestrator.core.codex_runtime import CodexRuntime, CodexRuntimeError
 from orchestrator.core.decision_engine import DecisionEngineResult
 from orchestrator.core.decision_gate import DecisionGateResult
-from orchestrator.core.decision_types import ExecutionGateReason, ExecutionGateResolution, ExecutionGateState
+from orchestrator.core.decision_types import (
+    DecisionClassification,
+    IngressDecision,
+    resolve_execution_gate_state,
+)
 from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.pre_run_check import PreRunCheckResult
 from orchestrator.core.secrets import encrypt_value
@@ -346,15 +350,18 @@ class DiscordCommandProductionPathTests(SqliteTemplateDbTestCase):
                 clarification_questions=(),
             ),
         )
+        decision = IngressDecision(
+            source="discord_run",
+            pre_check=pre_check,
+            block_reason="missing_ready_label",
+            policy_error=None,
+            guidance="Issue is missing the configured ready label. (agent:ready)",
+            label_actions=(),
+        )
         return DecisionEngineResult(
-            decision=SimpleNamespace(
-                pre_check=pre_check,
-                block_reason="missing_ready_label",
-                policy_error=None,
-                guidance="Issue is missing the configured ready label.",
-            ),
+            decision=decision,
             issue_labels=[],
-            classification="clear",
+            classification=DecisionClassification.CLEAR,
             missing_slots=[],
             auto_resolved_slots=[],
             case_id="case-missing-ready",
@@ -362,13 +369,9 @@ class DiscordCommandProductionPathTests(SqliteTemplateDbTestCase):
             cycle_id=None,
             outbox_effect_ids=(),
             duplicate_event=False,
-            execution_gate=ExecutionGateResolution(
-                state=ExecutionGateState.BLOCK_READY_LABEL,
-                reason=ExecutionGateReason(
-                    reason_code="missing_ready_label",
-                    guidance="Issue is missing the configured ready label.",
-                    ready_label="agent:ready",
-                ),
+            execution_gate=resolve_execution_gate_state(
+                decision=decision,
+                classification=DecisionClassification.CLEAR,
             ),
         )
 

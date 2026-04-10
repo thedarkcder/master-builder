@@ -203,7 +203,7 @@ export async function mockCredentialSignIn(
     const principal = seed.principal;
     const redirectUrl =
       principal.principal_type === "platform_super_admin"
-        ? `${APP_BASE_URL}/dashboard`
+        ? `${APP_BASE_URL}/platform/dashboard`
         : principal.memberships[0]
           ? `${APP_BASE_URL}/${encodeURIComponent(principal.memberships[0].tenant_id)}/dashboard`
           : `${APP_BASE_URL}/tenants/select`;

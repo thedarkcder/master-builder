@@ -6,7 +6,6 @@ from typing import Any, Callable
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from orchestrator.core.communications.enqueue_reason_contract import enqueue_reason_guidance
 from orchestrator.core.decision_precheck_mapping import (
     apply_frozen_cycle_to_precheck as apply_frozen_cycle_to_precheck_state,
     decision_from_snapshot as decision_from_snapshot_state,
@@ -60,6 +59,7 @@ from orchestrator.core.decision_types import (
     PrecheckOutcome,
     WorkerDecision,
     blocking_reason_for_precheck,
+    guidance_for_precheck_block_reason,
     resolve_execution_gate_state,
     tenant_ready_label,
 )
@@ -107,7 +107,7 @@ def _terminally_closed_gate_decision(
         source=source,
         pre_check=pre_check,
         block_reason=block_reason,
-        guidance=enqueue_reason_guidance(block_reason) if block_reason else None,
+        guidance=guidance_for_precheck_block_reason(block_reason=block_reason),
         policy_error=None,
         label_actions=derive_label_actions(pre_check),
     )
@@ -141,8 +141,10 @@ def evaluate_ingress_precheck(
         return IngressDecision(
             source=source,
             pre_check=None,
-            block_reason="policy_eval_failed",
-            guidance=enqueue_reason_guidance("policy_eval_failed"),
+            block_reason=PrecheckOutcome.POLICY_EVAL_FAILED.value,
+            guidance=guidance_for_precheck_block_reason(
+                block_reason=PrecheckOutcome.POLICY_EVAL_FAILED.value,
+            ),
             policy_error=str(exc),
             label_actions=(),
         )
@@ -153,7 +155,7 @@ def evaluate_ingress_precheck(
         source=source,
         pre_check=pre_check,
         block_reason=block_reason,
-        guidance=enqueue_reason_guidance(block_reason) if block_reason else None,
+        guidance=guidance_for_precheck_block_reason(block_reason=block_reason),
         policy_error=None,
         label_actions=actions,
     )
@@ -203,6 +205,296 @@ def _build_decision_engine_result(
         duplicate_event=duplicate_event,
         execution_gate=execution_gate,
     )
+
+
+def _handle_open_cycle_blocked_transition(
+    *,
+    session: Session,
+    settings,  # noqa: ANN001
+    tenant: Tenant,
+    project: Project,
+    event: DecisionEventInput,
+    occurred_at,
+    idempotency_key: str,
+    existing_case: DecisionCase,
+    existing_cycle: DecisionCycle,
+    unresolved_question_ids: set[str],
+    publish_jira_comment_fn: Callable[[str], tuple[bool, str | None]] | None,
+) -> DecisionEngineResult:
+    snapshot_classification = classification_for_cycle_questions(
+        cycle=existing_cycle,
+        unresolved_question_ids=unresolved_question_ids,
+    )
+    snapshot = (
+        existing_case.metadata_json.get("result_snapshot")
+        if isinstance(existing_case.metadata_json, dict)
+        and isinstance(existing_case.metadata_json.get("result_snapshot"), dict)
+        else {}
+    )
+    decision = decision_from_snapshot_state(
+        snapshot=snapshot,
+        source=event.source,
+        classification=snapshot_classification,
+        cycle=existing_cycle,
+        case=existing_case,
+    )
+    planner_result = plan_decision_questions(
+        session=session,
+        settings=settings,
+        tenant=tenant,
+        project=project,
+        issue_key=event.issue_key,
+        source=event.source,
+        classification=snapshot_classification,
+        block_reason=decision.block_reason,
+        case=existing_case,
+        cycle=existing_cycle,
+    )
+    question_set_override = None
+    question_reason_override = None
+    classification = snapshot_classification
+    accepted_question_ids: set[str] = accepted_question_ids_for_cycle(
+        session=session,
+        cycle_id=existing_cycle.cycle_id,
+    )
+    if planner_result is not None:
+        reduced = reduce_planner_result_reducer(
+            decision=decision,
+            planner_result=planner_result,
+        )
+        decision = reduced.decision
+        classification = reduced.classification
+        question_set_override = reduced.question_set
+        question_reason_override = planner_result.reason
+        accepted_ids, _, effect_ids = sync_cycle_answers_from_planner(
+            session=session,
+            tenant=tenant,
+            project=project,
+            case=existing_case,
+            cycle=existing_cycle,
+            planner_question_states=reduced.question_states,
+            now=occurred_at,
+        )
+        accepted_question_ids = set(accepted_ids)
+        outbox_effect_ids = tuple(effect_ids)
+    else:
+        outbox_effect_ids = ()
+    issue_labels = [
+        str(label).strip()
+        for label in event.issue_labels or []
+        if str(label).strip()
+    ]
+    issue_description = event.issue_description
+    case, cycle, persist_effect_ids = persist_decision_state_repo(
+        session=session,
+        tenant=tenant,
+        project=project,
+        event=event,
+        occurred_at=occurred_at,
+        idempotency_key=idempotency_key,
+        issue_labels=issue_labels,
+        issue_description=issue_description,
+        decision=decision,
+        classification=classification.value,
+        question_set_override=question_set_override,
+        question_reason_override=question_reason_override,
+        auto_resolved_answers={},
+        accepted_question_ids=accepted_question_ids,
+        issue_fingerprint_fn=issue_fingerprint_state,
+    )
+    outbox_effect_ids = tuple({*outbox_effect_ids, *persist_effect_ids})
+    if publish_jira_comment_fn is not None and outbox_effect_ids:
+        publish_decision_effects_repo(
+            session=session,
+            effect_ids=outbox_effect_ids,
+            publish_jira_comment_fn=publish_jira_comment_fn,
+            occurred_at=occurred_at,
+        )
+    return _build_decision_engine_result(
+        decision=decision,
+        issue_labels=issue_labels,
+        classification=classification,
+        missing_slots=[],
+        auto_resolved_slots=[],
+        case_id=case.case_id,
+        case_state=case.state,
+        cycle_id=cycle.cycle_id if cycle is not None else None,
+        outbox_effect_ids=outbox_effect_ids,
+        duplicate_event=False,
+    )
+
+
+def _persist_terminal_clear_result(
+    *,
+    session: Session,
+    tenant: Tenant,
+    project: Project,
+    event: DecisionEventInput,
+    occurred_at,
+    idempotency_key: str,
+    decision: IngressDecision,
+    accepted_question_ids: set[str],
+    terminal_gate_closed_cycle_id: str | None = None,
+    publish_jira_comment_fn: Callable[[str], tuple[bool, str | None]] | None,
+) -> DecisionEngineResult:
+    issue_labels = [str(label).strip() for label in event.issue_labels or [] if str(label).strip()]
+    issue_description = event.issue_description
+    case, cycle, outbox_effect_ids = persist_decision_state_repo(
+        session=session,
+        tenant=tenant,
+        project=project,
+        event=event,
+        occurred_at=occurred_at,
+        idempotency_key=idempotency_key,
+        issue_labels=issue_labels,
+        issue_description=issue_description,
+        decision=decision,
+        classification=DecisionClassification.CLEAR.value,
+        question_set_override=None,
+        question_reason_override=None,
+        auto_resolved_answers={},
+        accepted_question_ids=accepted_question_ids,
+        issue_fingerprint_fn=issue_fingerprint_state,
+        terminal_gate_closed_cycle_id=terminal_gate_closed_cycle_id,
+    )
+    if publish_jira_comment_fn is not None and outbox_effect_ids:
+        publish_decision_effects_repo(
+            session=session,
+            effect_ids=outbox_effect_ids,
+            publish_jira_comment_fn=publish_jira_comment_fn,
+            occurred_at=occurred_at,
+        )
+    return _build_decision_engine_result(
+        decision=decision,
+        issue_labels=issue_labels,
+        classification=DecisionClassification.CLEAR,
+        missing_slots=[],
+        auto_resolved_slots=[],
+        case_id=case.case_id,
+        case_state=case.state,
+        cycle_id=cycle.cycle_id if cycle is not None else None,
+        outbox_effect_ids=outbox_effect_ids,
+        duplicate_event=False,
+    )
+
+
+def _handle_transition_result_or_none(
+    *,
+    transition: DecisionStateTransition,
+    session: Session,
+    settings,  # noqa: ANN001
+    tenant: Tenant,
+    project: Project,
+    event: DecisionEventInput,
+    occurred_at,
+    idempotency_key: str,
+    existing_case: DecisionCase | None,
+    existing_cycle: DecisionCycle | None,
+    unresolved_question_ids: set[str],
+    publish_jira_comment_fn: Callable[[str], tuple[bool, str | None]] | None,
+) -> DecisionEngineResult | None:
+    if transition == DecisionStateTransition.OPEN_CYCLE_BLOCKED and existing_case is not None and existing_cycle is not None:
+        return _handle_open_cycle_blocked_transition(
+            session=session,
+            settings=settings,
+            tenant=tenant,
+            project=project,
+            event=event,
+            occurred_at=occurred_at,
+            idempotency_key=idempotency_key,
+            existing_case=existing_case,
+            existing_cycle=existing_cycle,
+            unresolved_question_ids=unresolved_question_ids,
+            publish_jira_comment_fn=publish_jira_comment_fn,
+        )
+
+    if transition == DecisionStateTransition.OPEN_CYCLE_CLEAR_AND_CLOSE and existing_case is not None and existing_cycle is not None:
+        existing_cycle.status = "resolved"
+        existing_cycle.closed_at = occurred_at
+        existing_cycle.updated_at = occurred_at
+        existing_case.active_cycle_id = None
+        existing_case.updated_at = occurred_at
+        decision = _terminally_closed_gate_decision(
+            source=event.source,
+            tenant_id=tenant.tenant_id,
+            project_id=project.project_id,
+            issue_key=event.issue_key,
+            issue_summary=event.issue_summary,
+            issue_description=event.issue_description,
+            issue_labels=event.issue_labels,
+            ready_label=tenant_ready_label(tenant),
+        )
+        return _persist_terminal_clear_result(
+            session=session,
+            tenant=tenant,
+            project=project,
+            event=event,
+            occurred_at=occurred_at,
+            idempotency_key=idempotency_key,
+            decision=decision,
+            accepted_question_ids=accepted_question_ids_for_cycle(
+                session=session,
+                cycle_id=existing_cycle.cycle_id,
+            ),
+            terminal_gate_closed_cycle_id=existing_cycle.cycle_id,
+            publish_jira_comment_fn=publish_jira_comment_fn,
+        )
+
+    if transition == DecisionStateTransition.TERMINAL_GATE_CLOSED_CLEAR and existing_case is not None:
+        decision = _terminally_closed_gate_decision(
+            source=event.source,
+            tenant_id=tenant.tenant_id,
+            project_id=project.project_id,
+            issue_key=event.issue_key,
+            issue_summary=event.issue_summary,
+            issue_description=event.issue_description,
+            issue_labels=event.issue_labels,
+            ready_label=tenant_ready_label(tenant),
+        )
+        return _persist_terminal_clear_result(
+            session=session,
+            tenant=tenant,
+            project=project,
+            event=event,
+            occurred_at=occurred_at,
+            idempotency_key=idempotency_key,
+            decision=decision,
+            accepted_question_ids=set(),
+            terminal_gate_closed_cycle_id=decision_gate_closed_cycle_id_state(case=existing_case),
+            publish_jira_comment_fn=publish_jira_comment_fn,
+        )
+
+    if transition == DecisionStateTransition.REUSE_CLEAR_FINGERPRINT and existing_case is not None:
+        snapshot = (
+            existing_case.metadata_json.get("result_snapshot")
+            if isinstance(existing_case.metadata_json, dict)
+            and isinstance(existing_case.metadata_json.get("result_snapshot"), dict)
+            else {}
+        )
+        decision = coerce_clear_decision_reducer(
+            decision=decision_from_snapshot_state(
+                snapshot=snapshot,
+                source=event.source,
+                classification=DecisionClassification.CLEAR.value,
+                cycle=None,
+                case=existing_case,
+            ),
+            case=existing_case,
+        )
+        return _persist_terminal_clear_result(
+            session=session,
+            tenant=tenant,
+            project=project,
+            event=event,
+            occurred_at=occurred_at,
+            idempotency_key=idempotency_key,
+            decision=decision,
+            accepted_question_ids=set(),
+            terminal_gate_closed_cycle_id=None,
+            publish_jira_comment_fn=publish_jira_comment_fn,
+        )
+
+    return None
 
 
 def evaluate_decision_event(
@@ -288,274 +580,22 @@ def evaluate_decision_event(
         )
     )
 
-    if transition == DecisionStateTransition.OPEN_CYCLE_BLOCKED and existing_case is not None and existing_cycle is not None:
-            snapshot_classification = classification_for_cycle_questions(
-                cycle=existing_cycle,
-                unresolved_question_ids=unresolved_question_ids,
-            )
-            snapshot = (
-                existing_case.metadata_json.get("result_snapshot")
-                if isinstance(existing_case.metadata_json, dict)
-                and isinstance(existing_case.metadata_json.get("result_snapshot"), dict)
-                else {}
-            )
-            decision = decision_from_snapshot_state(
-                snapshot=snapshot,
-                source=event.source,
-                classification=snapshot_classification,
-                cycle=existing_cycle,
-                case=existing_case,
-            )
-            planner_result = plan_decision_questions(
-                session=session,
-                settings=settings,
-                tenant=tenant,
-                project=project,
-                issue_key=event.issue_key,
-                source=event.source,
-                classification=snapshot_classification,
-                block_reason=decision.block_reason,
-                case=existing_case,
-                cycle=existing_cycle,
-            )
-            question_set_override = None
-            question_reason_override = None
-            classification = snapshot_classification
-            accepted_question_ids: set[str] = accepted_question_ids_for_cycle(
-                session=session,
-                cycle_id=existing_cycle.cycle_id,
-            )
-            if planner_result is not None:
-                reduced = reduce_planner_result_reducer(
-                    decision=decision,
-                    planner_result=planner_result,
-                )
-                decision = reduced.decision
-                classification = reduced.classification
-                question_set_override = reduced.question_set
-                question_reason_override = planner_result.reason
-                accepted_ids, _, effect_ids = sync_cycle_answers_from_planner(
-                    session=session,
-                    tenant=tenant,
-                    project=project,
-                    case=existing_case,
-                    cycle=existing_cycle,
-                    planner_question_states=reduced.question_states,
-                    now=occurred_at,
-                )
-                accepted_question_ids = set(accepted_ids)
-                outbox_effect_ids = tuple(effect_ids)
-            else:
-                outbox_effect_ids = ()
-            issue_labels = [
-                str(label).strip()
-                for label in event.issue_labels or []
-                if str(label).strip()
-            ]
-            issue_description = event.issue_description
-            case, cycle, persist_effect_ids = persist_decision_state_repo(
-                session=session,
-                tenant=tenant,
-                project=project,
-                event=event,
-                occurred_at=occurred_at,
-                idempotency_key=idempotency_key,
-                issue_labels=issue_labels,
-                issue_description=issue_description,
-                decision=decision,
-                classification=classification.value,
-                question_set_override=question_set_override,
-                question_reason_override=question_reason_override,
-                auto_resolved_answers={},
-                accepted_question_ids=accepted_question_ids,
-                issue_fingerprint_fn=issue_fingerprint_state,
-            )
-            outbox_effect_ids = tuple({*outbox_effect_ids, *persist_effect_ids})
-            if publish_jira_comment_fn is not None and outbox_effect_ids:
-                publish_decision_effects_repo(
-                    session=session,
-                    effect_ids=outbox_effect_ids,
-                    publish_jira_comment_fn=publish_jira_comment_fn,
-                    occurred_at=occurred_at,
-                )
-            return _build_decision_engine_result(
-                decision=decision,
-                issue_labels=issue_labels,
-                classification=classification,
-                missing_slots=[],
-                auto_resolved_slots=[],
-                case_id=case.case_id,
-                case_state=case.state,
-                cycle_id=cycle.cycle_id if cycle is not None else None,
-                outbox_effect_ids=outbox_effect_ids,
-                duplicate_event=False,
-            )
-
-    if transition == DecisionStateTransition.OPEN_CYCLE_CLEAR_AND_CLOSE and existing_case is not None and existing_cycle is not None:
-        existing_cycle.status = "resolved"
-        existing_cycle.closed_at = occurred_at
-        existing_cycle.updated_at = occurred_at
-        existing_case.active_cycle_id = None
-        existing_case.updated_at = occurred_at
-        resolved_decision = _terminally_closed_gate_decision(
-            source=event.source,
-            tenant_id=tenant.tenant_id,
-            project_id=project.project_id,
-            issue_key=event.issue_key,
-            issue_summary=event.issue_summary,
-            issue_description=event.issue_description,
-            issue_labels=event.issue_labels,
-            ready_label=tenant_ready_label(tenant),
-        )
-        issue_labels = [str(label).strip() for label in event.issue_labels or [] if str(label).strip()]
-        issue_description = event.issue_description
-        case, cycle, outbox_effect_ids = persist_decision_state_repo(
-            session=session,
-            tenant=tenant,
-            project=project,
-            event=event,
-            occurred_at=occurred_at,
-            idempotency_key=idempotency_key,
-            issue_labels=issue_labels,
-            issue_description=issue_description,
-            decision=resolved_decision,
-            classification=DecisionClassification.CLEAR.value,
-            question_set_override=None,
-            question_reason_override=None,
-            auto_resolved_answers={},
-            accepted_question_ids=accepted_question_ids_for_cycle(
-                session=session,
-                cycle_id=existing_cycle.cycle_id,
-            ),
-            issue_fingerprint_fn=issue_fingerprint_state,
-            terminal_gate_closed_cycle_id=existing_cycle.cycle_id,
-        )
-        if publish_jira_comment_fn is not None and outbox_effect_ids:
-            publish_decision_effects_repo(
-                session=session,
-                effect_ids=outbox_effect_ids,
-                publish_jira_comment_fn=publish_jira_comment_fn,
-                occurred_at=occurred_at,
-            )
-        return _build_decision_engine_result(
-            decision=resolved_decision,
-            issue_labels=issue_labels,
-            classification=DecisionClassification.CLEAR,
-            missing_slots=[],
-            auto_resolved_slots=[],
-            case_id=case.case_id,
-            case_state=case.state,
-            cycle_id=None,
-            outbox_effect_ids=outbox_effect_ids,
-            duplicate_event=False,
-        )
-
-    if transition == DecisionStateTransition.TERMINAL_GATE_CLOSED_CLEAR and existing_case is not None:
-        decision = _terminally_closed_gate_decision(
-            source=event.source,
-            tenant_id=tenant.tenant_id,
-            project_id=project.project_id,
-            issue_key=event.issue_key,
-            issue_summary=event.issue_summary,
-            issue_description=event.issue_description,
-            issue_labels=event.issue_labels,
-            ready_label=tenant_ready_label(tenant),
-        )
-        issue_labels = [str(label).strip() for label in event.issue_labels or [] if str(label).strip()]
-        issue_description = event.issue_description
-        case, cycle, outbox_effect_ids = persist_decision_state_repo(
-            session=session,
-            tenant=tenant,
-            project=project,
-            event=event,
-            occurred_at=occurred_at,
-            idempotency_key=idempotency_key,
-            issue_labels=issue_labels,
-            issue_description=issue_description,
-            decision=decision,
-            classification=DecisionClassification.CLEAR.value,
-            question_set_override=None,
-            question_reason_override=None,
-            auto_resolved_answers={},
-            accepted_question_ids=set(),
-            issue_fingerprint_fn=issue_fingerprint_state,
-            terminal_gate_closed_cycle_id=decision_gate_closed_cycle_id_state(case=existing_case),
-        )
-        if publish_jira_comment_fn is not None and outbox_effect_ids:
-            publish_decision_effects_repo(
-                session=session,
-                effect_ids=outbox_effect_ids,
-                publish_jira_comment_fn=publish_jira_comment_fn,
-                occurred_at=occurred_at,
-            )
-        return _build_decision_engine_result(
-            decision=decision,
-            issue_labels=issue_labels,
-            classification=DecisionClassification.CLEAR,
-            missing_slots=[],
-            auto_resolved_slots=[],
-            case_id=case.case_id,
-            case_state=case.state,
-            cycle_id=None,
-            outbox_effect_ids=outbox_effect_ids,
-            duplicate_event=False,
-        )
-
-    if transition == DecisionStateTransition.REUSE_CLEAR_FINGERPRINT and existing_case is not None:
-        snapshot = (
-            existing_case.metadata_json.get("result_snapshot")
-            if isinstance(existing_case.metadata_json, dict)
-            and isinstance(existing_case.metadata_json.get("result_snapshot"), dict)
-            else {}
-        )
-        decision = coerce_clear_decision_reducer(
-            decision=decision_from_snapshot_state(
-                snapshot=snapshot,
-                source=event.source,
-                classification=DecisionClassification.CLEAR.value,
-                cycle=None,
-                case=existing_case,
-            ),
-            case=existing_case,
-        )
-        issue_labels = [str(label).strip() for label in event.issue_labels or [] if str(label).strip()]
-        issue_description = event.issue_description
-        case, cycle, outbox_effect_ids = persist_decision_state_repo(
-            session=session,
-            tenant=tenant,
-            project=project,
-            event=event,
-            occurred_at=occurred_at,
-            idempotency_key=idempotency_key,
-            issue_labels=issue_labels,
-            issue_description=issue_description,
-            decision=decision,
-            classification=DecisionClassification.CLEAR.value,
-            question_set_override=None,
-            question_reason_override=None,
-            auto_resolved_answers={},
-            accepted_question_ids=set(),
-            issue_fingerprint_fn=issue_fingerprint_state,
-        )
-        if publish_jira_comment_fn is not None and outbox_effect_ids:
-            publish_decision_effects_repo(
-                session=session,
-                effect_ids=outbox_effect_ids,
-                publish_jira_comment_fn=publish_jira_comment_fn,
-                occurred_at=occurred_at,
-            )
-        return _build_decision_engine_result(
-            decision=decision,
-            issue_labels=issue_labels,
-            classification=DecisionClassification.CLEAR,
-            missing_slots=[],
-            auto_resolved_slots=[],
-            case_id=case.case_id,
-            case_state=case.state,
-            cycle_id=None,
-            outbox_effect_ids=outbox_effect_ids,
-            duplicate_event=False,
-        )
+    transition_result = _handle_transition_result_or_none(
+        transition=transition,
+        session=session,
+        settings=settings,
+        tenant=tenant,
+        project=project,
+        event=event,
+        occurred_at=occurred_at,
+        idempotency_key=idempotency_key,
+        existing_case=existing_case,
+        existing_cycle=existing_cycle,
+        unresolved_question_ids=unresolved_question_ids,
+        publish_jira_comment_fn=publish_jira_comment_fn,
+    )
+    if transition_result is not None:
+        return transition_result
 
     initial = evaluate_with_labels_state(
         session=session,

@@ -13,7 +13,6 @@ from orchestrator.core.runtime_invocation import AgentInvocationContext
 from orchestrator.core.codex_runtime import CodexRuntimeError
 from orchestrator.core.communications.command_pipeline import CommandScope
 from orchestrator.core.communications.enqueue_reason_contract import (
-    enqueue_reason_guidance,
     format_enqueue_conflict_detail,
 )
 from orchestrator.core.communications.decision_clarification_presentation import (
@@ -28,6 +27,10 @@ from orchestrator.core.communications.execution_admission_format import (
 from orchestrator.core.decision_engine import DecisionEventInput, DecisionSource
 from orchestrator.core.decision_clarification_port import DecisionClarificationPort
 from orchestrator.core.decision_state_machine import resolve_execution_admission
+from orchestrator.core.decision_state_machine import (
+    ExecutionAdmissionReason,
+    build_execution_admission_block,
+)
 from orchestrator.core.followup_context_service import (
     FOLLOWUP_CONTEXT_DECISION_GATE,
     close_followup_contexts,
@@ -436,10 +439,13 @@ def dispatch_run_control_command(
         decision_result = reply_result.decision_result
         precheck_decision = decision_result.decision
         if precheck_decision.pre_check is None:
+            admission = build_execution_admission_block(
+                reason=ExecutionAdmissionReason.POLICY_EVAL_FAILED,
+            )
             return DiscordCommandResponse(
                 ok=True,
                 command=command_name,
-                message=enqueue_reason_guidance("policy_eval_failed"),
+                message=admission.guidance or "Pre-run policy evaluation failed.",
                 data={
                     "issue_key": issue_key,
                     "recheck_required": True,

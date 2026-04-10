@@ -160,3 +160,4 @@
 - When the user clarifies that a dependency is an external effect, stub that boundary in tests instead of forcing the owned route contract to absorb integration-state heuristics.
 - For external resource IDs persisted in product config, reinstall/reconcile flows must verify the resources still exist upstream before trusting the stored IDs. Preserve valid mappings, remap surviving resources when possible, and recreate only the missing pieces.
 - Do not add a new config knob when the required Discord category can be derived from live guild state. Query the guild, infer the authoritative category from upstream structure, and keep config limited to true operator inputs.
+- When the user explicitly says “continue, but no more changes in this area,” treat that as a hard scope boundary. Keep progressing with verification/refactor work in other areas and update only tests/contracts needed to reflect already-applied upstream changes.

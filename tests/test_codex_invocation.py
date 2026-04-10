@@ -579,7 +579,7 @@ class CodexInvocationTests(unittest.TestCase):
         self.assertEqual(captured["model_override"], "gpt-5.3-codex-spark")
         self.assertEqual(captured["reasoning_effort"], "high")
 
-    def test_invoke_runtime_json_uses_local_only_knowledge_lookup_for_worker_execution(self) -> None:
+    def test_invoke_runtime_json_uses_best_effort_knowledge_lookup_for_worker_execution(self) -> None:
         class _Runtime:
             def run_json(self, **_kwargs):  # noqa: ANN003
                 return {"ok": True}
@@ -616,7 +616,7 @@ class CodexInvocationTests(unittest.TestCase):
         self.assertEqual(payload, {"ok": True})
         self.assertEqual(
             knowledge_mock.call_args.kwargs["embedding_access_mode"],
-            KnowledgeEmbeddingAccessMode.LOCAL_ONLY,
+            KnowledgeEmbeddingAccessMode.BEST_EFFORT,
         )
 
     def test_invoke_runtime_json_prefers_scoped_reasoning_override_over_context_default(self) -> None:

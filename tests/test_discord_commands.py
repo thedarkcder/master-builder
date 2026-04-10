@@ -19,7 +19,11 @@ from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.core.config import get_settings
 from orchestrator.core.decision_planner import DecisionPlannerQuestion, DecisionPlannerResult
 from orchestrator.core.decision_gate import DecisionGateResult
-from orchestrator.core.decision_types import ExecutionGateReason, ExecutionGateResolution, ExecutionGateState
+from orchestrator.core.decision_types import (
+    DecisionClassification,
+    IngressDecision,
+    resolve_execution_gate_state,
+)
 from orchestrator.core.decision_engine import DecisionEngineResult
 from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.pre_run_check import PreRunCheckResult
@@ -236,10 +240,18 @@ class DiscordCommandApiTests(DiscordCommandApiTestHarness):
 
     def _ready_decision_result(self) -> DecisionEngineResult:
         pre_check = self._ready_precheck_result()
+        decision = IngressDecision(
+            source="discord_run",
+            pre_check=pre_check,
+            block_reason=None,
+            guidance=None,
+            policy_error=None,
+            label_actions=(),
+        )
         return DecisionEngineResult(
-            decision=SimpleNamespace(pre_check=pre_check, block_reason=None, policy_error=None, guidance=None),
+            decision=decision,
             issue_labels=["agent:ready"],
-            classification="clear",
+            classification=DecisionClassification.CLEAR,
             missing_slots=[],
             auto_resolved_slots=[],
             case_id="case-ready",
@@ -247,20 +259,26 @@ class DiscordCommandApiTests(DiscordCommandApiTestHarness):
             cycle_id=None,
             outbox_effect_ids=(),
             duplicate_event=False,
-            execution_gate=ExecutionGateResolution(state=ExecutionGateState.ALLOW_EXECUTION),
+            execution_gate=resolve_execution_gate_state(
+                decision=decision,
+                classification=DecisionClassification.CLEAR,
+            ),
         )
 
     def _missing_ready_decision_result(self) -> DecisionEngineResult:
         pre_check = self._missing_ready_precheck_result()
+        decision = IngressDecision(
+            source="discord_run",
+            pre_check=pre_check,
+            block_reason="missing_ready_label",
+            policy_error=None,
+            guidance="Issue is missing the configured ready label. (agent:ready)",
+            label_actions=(),
+        )
         return DecisionEngineResult(
-            decision=SimpleNamespace(
-                pre_check=pre_check,
-                block_reason="missing_ready_label",
-                policy_error=None,
-                guidance="Issue is missing the configured ready label.",
-            ),
+            decision=decision,
             issue_labels=[],
-            classification="clear",
+            classification=DecisionClassification.CLEAR,
             missing_slots=[],
             auto_resolved_slots=[],
             case_id="case-missing-ready",
@@ -268,13 +286,9 @@ class DiscordCommandApiTests(DiscordCommandApiTestHarness):
             cycle_id=None,
             outbox_effect_ids=(),
             duplicate_event=False,
-            execution_gate=ExecutionGateResolution(
-                state=ExecutionGateState.BLOCK_READY_LABEL,
-                reason=ExecutionGateReason(
-                    reason_code="missing_ready_label",
-                    guidance="Issue is missing the configured ready label.",
-                    ready_label="agent:ready",
-                ),
+            execution_gate=resolve_execution_gate_state(
+                decision=decision,
+                classification=DecisionClassification.CLEAR,
             ),
         )
 
@@ -898,7 +912,7 @@ class DiscordCommandApiTests(DiscordCommandApiTestHarness):
                         ),
                         block_reason="decision_gate_required",
                     ),
-                    classification="decision_gate",
+                        classification="decision_gate",
                     missing_slots=[],
                     auto_resolved_slots=[],
                     cycle_id="cycle-1",

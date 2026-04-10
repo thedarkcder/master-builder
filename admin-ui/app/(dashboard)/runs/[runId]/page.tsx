@@ -1623,7 +1623,7 @@ export default function RunDetailPage() {
                           ? `/${encodeURIComponent(run.tenant_id)}/projects/${encodeURIComponent(projectContextId)}/runs`
                           : `/${encodeURIComponent(run.tenant_id)}/runs`
                       )
-                    : "/dashboard"
+                    : "/platform/dashboard"
                 }
               >
                 <ArrowLeft className="mr-1.5 h-3.5 w-3.5" />
