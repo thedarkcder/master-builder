@@ -1,7 +1,6 @@
 import os
 import unittest
 from datetime import datetime, timezone
-from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -27,7 +26,6 @@ from orchestrator.core.decision_engine import DecisionEngineResult
 from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.pre_run_check import PreRunCheckResult
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
-from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import JiraOAuthConnection, Project, Run, Tenant, WorkflowExecution
 from orchestrator.tools.github_app import GitHubApiError
 from orchestrator.tools.jira_oauth import (
@@ -37,15 +35,15 @@ from orchestrator.tools.jira_oauth import (
     JiraIssuePreview,
     JiraOAuthError,
 )
+from tests.test_support.db_harness import SqliteTemplateDbTestCase
 
 
 pytestmark = pytest.mark.contract
 
 
-class DiscordCommandApiTests(unittest.TestCase):
+class DiscordCommandApiTestHarness(SqliteTemplateDbTestCase):
     def setUp(self) -> None:
-        self.temp_dir = TemporaryDirectory()
-        self.database_url = f"sqlite:///{self.temp_dir.name}/discord_commands_test.db"
+        self.database_url = self._prepare_test_database(name_prefix="discord-commands")
 
         os.environ["ORCHESTRATOR_DATABASE_URL"] = self.database_url
         os.environ["ORCHESTRATOR_ADMIN_USERNAME"] = "admin"
@@ -54,7 +52,6 @@ class DiscordCommandApiTests(unittest.TestCase):
 
         get_settings.cache_clear()
         reset_db_engine_cache()
-        run_migrations(database_url=self.database_url)
         self._project_checkout_patcher = patch(
             "orchestrator.api.admin.route_helpers.ensure_project_repository_checkout",
             return_value=None,
@@ -98,7 +95,6 @@ class DiscordCommandApiTests(unittest.TestCase):
                 "discord": {
                     "channel_id": "discord-channel-1",
                     "notify_events": ["run_started"],
-                    "allowed_user_ids": ["u-admin"],
                     "command_secret_ref": None,
                 },
             },
@@ -107,14 +103,28 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertEqual(create_response.status_code, 201)
         self.tenant_id = create_response.json()["tenant_id"]
         self.default_project_id = f"{self.tenant_id}-default"
+        self._set_project_allowed_users(project_id=self.default_project_id, user_ids=["u-admin"])
 
     def tearDown(self) -> None:
         self._project_checkout_patcher.stop()
-        self.temp_dir.cleanup()
+        self.client.close()
+        self._cleanup_test_database()
+        os.environ.pop("ORCHESTRATOR_DATABASE_URL", None)
         os.environ.pop("ORCHESTRATOR_SECRETS_ENCRYPTION_KEY", None)
         get_settings.cache_clear()
         reset_db_engine_cache()
 
+    def _set_project_allowed_users(self, *, project_id: str, user_ids: list[str]) -> None:
+        with self.session_factory() as session:
+            project = session.get(Project, project_id)
+            assert project is not None
+            discord_config = dict(project.discord_config or {})
+            discord_config["allowed_user_ids"] = [str(value).strip() for value in user_ids if str(value).strip()]
+            project.discord_config = discord_config
+            session.commit()
+
+
+class DiscordCommandApiTests(DiscordCommandApiTestHarness):
     def _queue_run(self, *, run_id: str, issue_key: str, status: str, project_id: str | None = None) -> None:
         with self.session_factory() as session:
             now = datetime.now(timezone.utc)
@@ -966,6 +976,13 @@ class DiscordCommandApiTests(unittest.TestCase):
                 ),
             ),
             patch("orchestrator.core.decision_engine.plan_decision_questions", return_value=planner_result),
+            patch(
+                "orchestrator.api.discord.commands.run_controls.build_precheck_message",
+                return_value=(
+                    "Dependencies and risks identified. Which dependencies or risks may impact delivery?",
+                    ["Which dependencies or risks may impact delivery?"],
+                ),
+            ) as build_message_mock,
         ):
             response = self.client.post(
                 f"/discord/command/{self.tenant_id}",
@@ -985,6 +1002,7 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertIn("Which dependencies or risks may impact delivery?", response.json()["data"]["questions"])
         self.assertNotIn("Decision Gate reason:", response.json()["message"])
         oauth_client.update_issue_summary_and_description.assert_not_called()
+        build_message_mock.assert_called_once()
 
     def test_reply_without_retryable_run_queues_initial_run_after_clarification(self) -> None:
         oauth_client = SimpleNamespace(
@@ -1138,7 +1156,9 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertIn("outside the mapped project scope", response.json()["detail"])
 
     def test_run_rejects_issue_outside_mapped_project_scope(self) -> None:
-        self._create_project(project_id=f"{self.tenant_id}-other", jira_project_key="OTH", channel_id="discord-other-1")
+        other_project_id = f"{self.tenant_id}-other"
+        self._create_project(project_id=other_project_id, jira_project_key="OTH", channel_id="discord-other-1")
+        self._set_project_allowed_users(project_id=other_project_id, user_ids=["u-admin"])
         with patch(
             "orchestrator.api.discord.ingress.jira_runtime.fetch_jira_issue_preview",
             return_value=JiraIssuePreview(key="TP-20", summary="Do thing", status="To Do"),
@@ -1151,7 +1171,9 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertIn("outside the mapped project scope", response.json()["detail"])
 
     def test_retry_rejects_run_outside_mapped_project_scope(self) -> None:
-        self._create_project(project_id=f"{self.tenant_id}-other", jira_project_key="OTH", channel_id="discord-other-1")
+        other_project_id = f"{self.tenant_id}-other"
+        self._create_project(project_id=other_project_id, jira_project_key="OTH", channel_id="discord-other-1")
+        self._set_project_allowed_users(project_id=other_project_id, user_ids=["u-admin"])
         self._queue_run(run_id="run-tp-1", issue_key="TP-30", status="failed", project_id=f"{self.tenant_id}-default")
         with patch(
             "orchestrator.api.discord.ingress.jira_runtime.fetch_jira_issue_preview",
@@ -1165,7 +1187,9 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertIn("outside the mapped project scope", response.json()["detail"])
 
     def test_cancel_rejects_run_outside_mapped_project_scope(self) -> None:
-        self._create_project(project_id=f"{self.tenant_id}-other", jira_project_key="OTH", channel_id="discord-other-1")
+        other_project_id = f"{self.tenant_id}-other"
+        self._create_project(project_id=other_project_id, jira_project_key="OTH", channel_id="discord-other-1")
+        self._set_project_allowed_users(project_id=other_project_id, user_ids=["u-admin"])
         self._queue_run(run_id="run-tp-cancel", issue_key="TP-31", status="queued", project_id=f"{self.tenant_id}-default")
         response = self.client.post(
             f"/discord/command/{self.tenant_id}",
@@ -2689,12 +2713,13 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertIn("TP-77", response.json()["message"])
 
     def test_plain_text_in_seed_followup_thread_routes_to_issues_followup(self) -> None:
+        self._set_project_allowed_users(
+            project_id=self.default_project_id,
+            user_ids=["u-admin", "u-viewer"],
+        )
         with self.session_factory() as session:
             tenant = session.get(Tenant, self.tenant_id)
             self.assertIsNotNone(tenant)
-            discord_config = dict(tenant.discord_config or {})
-            discord_config["allowed_user_ids"] = ["u-viewer"]
-            tenant.discord_config = discord_config
             store_seed_followup_context(
                 session=session,
                 tenant=tenant,
