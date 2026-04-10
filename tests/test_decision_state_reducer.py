@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from orchestrator.core.decision_state_reducer import (
+from orchestrator.core.decision_state_machine import (
     DecisionStateReducerInput,
     DecisionStateTransition,
     reduce_decision_state_transition,

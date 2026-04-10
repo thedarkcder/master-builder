@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from orchestrator.core.execution_admission import ExecutionAdmissionDecision, ExecutionAdmissionReason
+from orchestrator.core.decision_state_machine import (
+    ExecutionAdmissionDecision,
+    ExecutionAdmissionReason,
+)
 
 
 def format_discord_admission_conflict_detail(*, admission: ExecutionAdmissionDecision) -> str:

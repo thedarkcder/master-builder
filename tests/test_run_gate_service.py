@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from orchestrator.core.decision_state_machine import resolve_run_gate_block
 from orchestrator.core.decision_engine import DecisionEngineResult
 from orchestrator.core.decision_gate import DecisionGateResult
 from orchestrator.core.decision_types import ExecutionGateReason, ExecutionGateResolution, ExecutionGateState
 from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.pre_run_check import PreRunCheckResult
-from orchestrator.core.run_gate_service import resolve_run_gate_block
 
 
 def _decision_result(*, outcome: str) -> DecisionEngineResult:
