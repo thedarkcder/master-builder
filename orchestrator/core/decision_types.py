@@ -21,8 +21,7 @@ DecisionSource = Literal[
 ]
 
 def blocking_reason_for_precheck(pre_check: object) -> str | None:
-    outcome = str(getattr(pre_check, "outcome", "") or "").strip()
-    return blocking_reason_for_outcome(outcome)
+    return blocking_reason_for_outcome(getattr(pre_check, "outcome", None))
 
 
 @dataclass(frozen=True)
@@ -146,6 +145,14 @@ class PrecheckOutcome(str, Enum):
         return self in {self.DECISION_GATE_REQUIRED, self.GTD_REQUIRED, self.EXECUTION_BLOCKED}
 
 
+class JiraConfigKey(str, Enum):
+    CONNECTION_ID = "connection_id"
+    PROJECT_KEYS = "project_keys"
+    READY_STATUSES = "ready_statuses"
+    READY_LABEL = "ready_label"
+    READY_TRIGGER_MODE = "ready_trigger_mode"
+
+
 class ReadinessState(str, Enum):
     READY = "ready"
     BLOCKED_DECISION = "blocked_decision"
@@ -200,16 +207,62 @@ def resolve_readiness_decision(
 
 
 def tenant_ready_label(tenant: object | None) -> str | None:
+    return tenant_jira_config_text(tenant=tenant, key=JiraConfigKey.READY_LABEL)
+
+
+def tenant_jira_config_text(*, tenant: object | None, key: JiraConfigKey) -> str | None:
     if tenant is None:
         return None
     jira_config = getattr(tenant, "jira_config", None)
     if not isinstance(jira_config, dict):
         return None
-    raw_value = jira_config.get("ready_label")
+    raw_value = jira_config.get(key.value)
     if not isinstance(raw_value, str):
         return None
     normalized = raw_value.strip()
     return normalized or None
+
+
+def tenant_jira_project_keys(tenant: object | None) -> tuple[str, ...]:
+    if tenant is None:
+        return ()
+    jira_config = getattr(tenant, "jira_config", None)
+    if not isinstance(jira_config, dict):
+        return ()
+    raw_project_keys = jira_config.get(JiraConfigKey.PROJECT_KEYS.value)
+    if not isinstance(raw_project_keys, list):
+        return ()
+    return tuple(
+        normalized
+        for normalized in (str(value).strip() for value in raw_project_keys)
+        if normalized
+    )
+
+
+def tenant_jira_ready_statuses(tenant: object | None) -> tuple[str, ...]:
+    if tenant is None:
+        return ()
+    jira_config = getattr(tenant, "jira_config", None)
+    if not isinstance(jira_config, dict):
+        return ()
+    raw_ready_statuses = jira_config.get(JiraConfigKey.READY_STATUSES.value)
+    if not isinstance(raw_ready_statuses, list):
+        return ()
+    return tuple(
+        normalized
+        for normalized in (str(value).strip() for value in raw_ready_statuses)
+        if normalized
+    )
+
+
+def tenant_ready_trigger_mode(tenant: object | None) -> str:
+    raw_mode = tenant_jira_config_text(tenant=tenant, key=JiraConfigKey.READY_TRIGGER_MODE)
+    if raw_mode is None:
+        return "status_recheck"
+    normalized_mode = raw_mode.lower()
+    if normalized_mode in {"status_recheck", "transition_only"}:
+        return normalized_mode
+    return "status_recheck"
 
 
 class DecisionQuestionStatus(str, Enum):

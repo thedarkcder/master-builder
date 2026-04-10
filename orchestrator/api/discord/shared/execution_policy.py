@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi import HTTPException, status
+from orchestrator.core.decision_types import tenant_jira_ready_statuses
 from orchestrator.storage.models import Tenant
 
 
@@ -12,11 +13,11 @@ def ensure_issue_is_executable(
     extra_executable_statuses: list[str] | tuple[str, ...] | None = None,
 ) -> None:  # noqa: ANN001
     executable_statuses = ["To Do"]
-    configured_ready_statuses = tenant.jira_config.get("ready_statuses")
-    if isinstance(configured_ready_statuses, list):
+    configured_ready_statuses = tenant_jira_ready_statuses(tenant)
+    if configured_ready_statuses:
         executable_statuses.extend(
             status_name.strip()
-            for status_name in (str(value) for value in configured_ready_statuses)
+            for status_name in configured_ready_statuses
             if status_name.strip()
         )
     if extra_executable_statuses:

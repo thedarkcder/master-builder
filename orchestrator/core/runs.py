@@ -8,6 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from orchestrator.core.decision_types import PrecheckOutcome
 from orchestrator.core.workflow.execution_snapshot import (
     ExecutionSnapshot,
     load_parsed_trigger_context_from_plan,
@@ -77,10 +78,8 @@ def normalize_run_dedupe_scope(raw_scope: object | None) -> str:
 
 
 def _normalize_precheck_outcome(raw_outcome: object | None) -> str | None:
-    if not isinstance(raw_outcome, str):
-        return None
-    normalized_outcome = raw_outcome.strip()
-    return normalized_outcome if normalized_outcome else None
+    parsed_outcome = PrecheckOutcome.parse(raw_outcome)
+    return parsed_outcome.value if parsed_outcome is not None else None
 
 
 def resolve_precheck_outcome_from_plan(plan: object | None) -> str | None:
@@ -90,8 +89,8 @@ def resolve_precheck_outcome_from_plan(plan: object | None) -> str | None:
     if snapshot is None:
         raise RunStateTransitionError("Unsupported execution snapshot version/shape")
     raw_outcome = snapshot.context.execution_context.get("pre_check_outcome")
-    normalized_outcome = str(raw_outcome or "").strip()
-    return normalized_outcome if normalized_outcome else None
+    parsed_outcome = PrecheckOutcome.parse(raw_outcome)
+    return parsed_outcome.value if parsed_outcome is not None else None
 
 
 def resolve_precheck_outcome_for_enqueue(
@@ -123,7 +122,7 @@ def resolve_enqueue_precheck_outcome(
     if is_pr_remediation_run(
         run_plan=precheck_source_plan,
     ):
-        return "ready_for_agent"
+        return PrecheckOutcome.READY_FOR_AGENT.value
     return resolve_precheck_outcome_for_enqueue(
         precheck_outcome=precheck_outcome,
         precheck_source_plan=precheck_source_plan,
@@ -131,7 +130,7 @@ def resolve_enqueue_precheck_outcome(
 
 
 def is_ready_for_agent_precheck(plan: object | None) -> bool:
-    return (resolve_precheck_outcome_from_plan(plan) or "").casefold() == "ready_for_agent"
+    return PrecheckOutcome.parse(resolve_precheck_outcome_from_plan(plan)) is PrecheckOutcome.READY_FOR_AGENT
 
 
 def _now() -> datetime:

@@ -3,6 +3,12 @@ from __future__ import annotations
 from fastapi import HTTPException, status
 
 from orchestrator.api.schemas import ReadyGatePreviewRead, ReadyIssuePreviewRead
+from orchestrator.core.decision_types import (
+    JiraConfigKey,
+    tenant_jira_config_text,
+    tenant_jira_project_keys,
+    tenant_jira_ready_statuses,
+)
 from orchestrator.storage.models import JiraOAuthConnection, Tenant
 from orchestrator.tools.jira_oauth import JiraOAuthError
 
@@ -21,26 +27,22 @@ def preview_tenant_ready_gate(
     if tenant is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
 
-    jira_config = tenant.jira_config
-    project_keys = jira_config.get("project_keys")
-    if not isinstance(project_keys, list) or not project_keys:
+    project_keys = list(tenant_jira_project_keys(tenant))
+    if not project_keys:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing Jira project_keys")
 
-    raw_ready_statuses = jira_config.get("ready_statuses")
-    if isinstance(raw_ready_statuses, list):
-        ready_statuses = [str(value).strip() for value in raw_ready_statuses if str(value).strip()]
-    else:
-        ready_statuses = []
+    ready_statuses = list(tenant_jira_ready_statuses(tenant))
     if not ready_statuses:
         ready_statuses = ["Ready for Agent"]
 
+    jira_config = tenant.jira_config
     raw_ready_jql = jira_config.get("ready_jql")
     ready_jql = raw_ready_jql.strip() if isinstance(raw_ready_jql, str) else ""
     if not ready_jql:
         ready_jql = default_ready_jql_fn(project_keys=project_keys, ready_statuses=ready_statuses)
 
-    connection_id = jira_config.get("connection_id")
-    if not isinstance(connection_id, str) or not connection_id:
+    connection_id = tenant_jira_config_text(tenant=tenant, key=JiraConfigKey.CONNECTION_ID)
+    if not connection_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Jira OAuth connection is not linked")
     connection = session.get(JiraOAuthConnection, connection_id)
     if connection is None:

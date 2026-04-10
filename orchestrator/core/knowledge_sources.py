@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestrator.api.admin.route_helpers import jira_oauth_client, refresh_jira_connection_tokens
+from orchestrator.core.decision_types import JiraConfigKey, tenant_jira_config_text
 from orchestrator.core.knowledge_base import KnowledgeSyncResult, sync_project_knowledge_from_jira
 from orchestrator.storage.models import JiraOAuthConnection, KnowledgeSource, Project, Tenant
 
@@ -159,7 +160,7 @@ def sync_project_knowledge_source(
         raise KnowledgeSourceSyncUnsupportedError(
             f"Connector '{connector_type}' does not provide a live sync adapter in this environment."
         )
-    connection_id = str((tenant.jira_config or {}).get("connection_id") or "").strip()
+    connection_id = tenant_jira_config_text(tenant=tenant, key=JiraConfigKey.CONNECTION_ID)
     if not connection_id:
         raise KnowledgeSourceValidationError("Tenant Jira connection is not configured")
     connection = session.get(JiraOAuthConnection, connection_id)
