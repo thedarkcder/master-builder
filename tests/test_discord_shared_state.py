@@ -31,15 +31,8 @@ class DiscordSharedStateTests(unittest.TestCase):
         self.assertFalse(state_module.command_matches("!issues followup text", command_name="issues", subcommand="seed"))
 
     def test_allowlist_helpers(self) -> None:
-        tenant = SimpleNamespace(discord_config={"allowed_user_ids": ["u1", " "]})
         project = SimpleNamespace(discord_config={"allowed_user_ids": ["u2", "u3"]})
-        self.assertEqual(state_module.tenant_allowlisted_user_ids(tenant), {"u1"})
         self.assertEqual(state_module.project_allowlisted_user_ids(project), {"u2", "u3"})
-
-        tenant_no_ts = SimpleNamespace(discord_config={"allowlist_requests": [{"user_id": "u1"}]})
-        tenant_requests = state_module.tenant_allowlist_requests(tenant_no_ts)
-        self.assertEqual(tenant_requests[0]["user_id"], "u1")
-        self.assertIn("requested_at", tenant_requests[0])
 
         project_no_ts = SimpleNamespace(discord_config={"allowlist_requests": [{"user_id": "u2"}]})
         project_requests = state_module.project_allowlist_requests(project_no_ts)
@@ -48,21 +41,20 @@ class DiscordSharedStateTests(unittest.TestCase):
 
     def test_create_allowlist_request_paths(self) -> None:
         session = MagicMock()
-        tenant = SimpleNamespace(tenant_id="t1", discord_config={"allowed_user_ids": ["u1"]})
-        project = SimpleNamespace(discord_config={"allowlist_requests": []})
-
-        created, msg = state_module.create_allowlist_request(
-            session=session,
-            tenant=tenant,
-            user_id="u1",
-            channel_id="c1",
-            permissions=["run_controls"],
-            reason=None,
-        )
+        tenant = SimpleNamespace(tenant_id="t1", discord_config={})
+        project = SimpleNamespace(discord_config={"allowed_user_ids": ["u1"], "allowlist_requests": []})
+        with patch("orchestrator.api.discord.shared.state.resolve_project_for_discord_channel", return_value=project):
+            created, msg = state_module.create_allowlist_request(
+                session=session,
+                tenant=tenant,
+                user_id="u1",
+                channel_id="c1",
+                permissions=["run_controls"],
+                reason=None,
+            )
         self.assertFalse(created)
         self.assertIn("already allowlisted", msg)
 
-        tenant = SimpleNamespace(tenant_id="t1", discord_config={})
         with patch("orchestrator.api.discord.shared.state.resolve_project_for_discord_channel", return_value=None):
             created, msg = state_module.create_allowlist_request(
                 session=session,
@@ -173,7 +165,7 @@ class DiscordSharedStateTests(unittest.TestCase):
         ):
             state_module.assert_channel_scope(session=session, tenant=tenant, channel_id="room-1")
 
-    def test_room_channel_helpers_support_general_and_legacy_keys(self) -> None:
+    def test_room_channel_helpers_support_general_and_room_keys(self) -> None:
         config = {
             "voice_room_channel_ids": ["voice-room-1", " "],
             "persona_room_thread_channel_id": "persona-thread-1",
@@ -358,7 +350,7 @@ class DiscordSharedStateTests(unittest.TestCase):
         self.assertIsNotNone(found)
         self.assertEqual(found["request_id"], "r1")
 
-    def test_find_seed_followup_context_fallback_requires_unique_match(self) -> None:
+    def test_find_seed_followup_context_requires_unique_match(self) -> None:
         tenant = SimpleNamespace(tenant_id="t1")
         session = MagicMock()
         session.execute.return_value.scalars.return_value.all.return_value = [

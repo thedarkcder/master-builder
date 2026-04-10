@@ -42,6 +42,11 @@ from orchestrator.core.decision_state_repository import (
     existing_case_for_issue as existing_case_for_issue_state,
     persist_decision_state as persist_decision_state_repo,
 )
+from orchestrator.core.decision_state_reducer import (
+    DecisionStateReducerInput,
+    DecisionStateTransition,
+    reduce_decision_state_transition,
+)
 from orchestrator.core.decision_effect_service import publish_decision_effects as publish_decision_effects_repo
 from orchestrator.core.decision_types import (
     DecisionClassification,
@@ -61,15 +66,9 @@ from orchestrator.core.pre_run_check import (
     PreRunCheckResult,
     evaluate_pre_run_check,
 )
-from orchestrator.core.workflow.execution_snapshot import (
-    ExecutionSnapshot,
-    load_parsed_trigger_context_from_plan,
-)
-from orchestrator.core.workflow.trigger_context import GithubPrRemediationTriggerContext
 from orchestrator.core.precheck_decision import precheck_classification, precheck_missing_slots
 from orchestrator.core.runtime_invocation import invoke_runtime_json
 from orchestrator.core.codex_runtime import CodexRuntimeError, build_codex_runtime
-from orchestrator.core.runs import is_ready_for_agent_precheck, resolve_precheck_outcome_for_enqueue
 from orchestrator.storage.models import (
     DecisionCase,
     DecisionCycle,
@@ -79,28 +78,6 @@ from orchestrator.storage.models import (
     Tenant,
 )
 from orchestrator.tools.project_repo_checkout import project_repo_dir
-
-_LEGACY_REMEDIATION_DESCRIPTION_PREFIX = "automated remediation run triggered from github pr #"
-_LEGACY_REMEDIATION_SUMMARY_MARKER = ": pr remediation for #"
-
-
-def is_pr_remediation_run(
-    *,
-    run_plan: object | None,
-    issue_summary: str | None,
-    issue_description: str | None,
-) -> bool:
-    trigger_context = load_parsed_trigger_context_from_plan(run_plan)
-    if isinstance(trigger_context, GithubPrRemediationTriggerContext):
-        return True
-
-    normalized_description = str(issue_description or "").strip().lower()
-    if normalized_description.startswith(_LEGACY_REMEDIATION_DESCRIPTION_PREFIX):
-        return True
-
-    normalized_summary = str(issue_summary or "").strip().lower()
-    return _LEGACY_REMEDIATION_SUMMARY_MARKER in normalized_summary
-
 
 def _planner_classification(gate_status: str) -> str:
     normalized = str(gate_status or "").strip().lower()
@@ -394,170 +371,6 @@ def evaluate_ingress_precheck(
     )
 
 
-def resolve_enqueue_precheck_outcome(
-    *,
-    source: DecisionSource,
-    precheck_outcome: str | None = None,
-    precheck_source_plan: object | None = None,
-    issue_summary: str | None = None,
-    issue_description: str | None = None,
-) -> str | None:
-    _ = source
-    if is_pr_remediation_run(
-        run_plan=precheck_source_plan,
-        issue_summary=issue_summary,
-        issue_description=issue_description,
-    ):
-        return "ready_for_agent"
-
-    normalized_outcome = resolve_precheck_outcome_for_enqueue(
-        precheck_outcome=precheck_outcome,
-        precheck_source_plan=precheck_source_plan,
-    )
-    return normalized_outcome
-
-
-def evaluate_worker_decision(
-    *,
-    run_plan: object | None,
-    tenant_id: str | None,
-    project_id: str | None,
-    issue_key: str | None,
-    run_id: str | None,
-    issue_summary: str | None,
-    issue_description: str | None,
-    session: Session | None = None,
-    tenant: Tenant | None = None,
-    project: Project | None = None,
-    issue_labels: list[str] | None = None,
-    settings=None,  # noqa: ANN001
-    tenant_jira_oauth_context_fn: Callable[..., Any] | None = None,
-    evaluate_pre_run_check_fn: Callable[..., PreRunCheckResult] = evaluate_pre_run_check,
-    evaluate_decision_gate_fn: Callable[..., DecisionGateResult] | None = None,
-) -> WorkerDecision:
-    _ = (
-        tenant_id,
-        project_id,
-        issue_key,
-        run_id,
-        issue_summary,
-        issue_description,
-        session,
-        project,
-        issue_labels,
-        settings,
-        tenant_jira_oauth_context_fn,
-        evaluate_pre_run_check_fn,
-        evaluate_decision_gate_fn,
-    )
-    if is_ready_for_agent_precheck(run_plan):
-        return WorkerDecision(allowed=True, decision_gate=None, configuration_error=None)
-
-    if is_pr_remediation_run(
-        run_plan=run_plan,
-        issue_summary=issue_summary,
-        issue_description=issue_description,
-    ):
-        return WorkerDecision(allowed=True, decision_gate=None, configuration_error=None)
-
-    snapshot = ExecutionSnapshot.load(run_plan)
-    if snapshot is None:
-        return WorkerDecision(
-            allowed=False,
-            decision_gate=None,
-            configuration_error="Execution readiness check failed: unsupported execution snapshot version/shape",
-            block_reason="policy_eval_failed",
-        )
-
-    persisted_outcome = resolve_precheck_outcome_for_enqueue(
-        precheck_outcome=None,
-        precheck_source_plan=run_plan,
-    )
-    if persisted_outcome is None:
-        return WorkerDecision(
-            allowed=False,
-            decision_gate=None,
-            configuration_error="Execution readiness check failed: missing persisted pre_check_outcome",
-            block_reason="policy_eval_failed",
-        )
-
-    if persisted_outcome == "ready_for_agent":
-        return WorkerDecision(
-            allowed=True,
-            decision_gate=None,
-            configuration_error=None,
-            classification="clear",
-        )
-
-    execution_context = snapshot.context.execution_context
-    run_not_ready = execution_context.get("run_not_ready")
-    run_not_ready_payload = run_not_ready if isinstance(run_not_ready, dict) else {}
-    configured_ready_label = (
-        str((tenant.jira_config or {}).get("ready_label") or "").strip()
-        if tenant is not None
-        else ""
-    )
-
-    if persisted_outcome == "missing_ready_label":
-        ready_label = (
-            str(run_not_ready_payload.get("ready_label") or "").strip()
-            or configured_ready_label
-            or None
-        )
-        guidance = (
-            f"{enqueue_reason_guidance('missing_ready_label')} ({ready_label})"
-            if ready_label
-            else enqueue_reason_guidance("missing_ready_label")
-        )
-        return WorkerDecision(
-            allowed=False,
-            decision_gate=DecisionGateResult(
-                triggered=True,
-                reason=guidance,
-                missing_sections=(),
-                questions=(),
-                recommendation="Apply the configured ready label before execution.",
-                tags=(),
-            ),
-            configuration_error=None,
-            block_reason="missing_ready_label",
-            classification="clear",
-        )
-
-    if persisted_outcome in {"decision_gate_required", "gtd_required", "execution_blocked"}:
-        guidance = enqueue_reason_guidance(persisted_outcome)
-        reason = str(run_not_ready_payload.get("reason") or "").strip() or guidance
-        return WorkerDecision(
-            allowed=False,
-            decision_gate=DecisionGateResult(
-                triggered=True,
-                reason=reason,
-                missing_sections=(),
-                questions=(),
-                recommendation="Resolve the open clarification topics before execution.",
-                tags=(),
-            ),
-            configuration_error=None,
-            block_reason=persisted_outcome,
-            classification="decision_gate" if persisted_outcome == "decision_gate_required" else "gtd",
-        )
-
-    if persisted_outcome == "policy_eval_failed":
-        return WorkerDecision(
-            allowed=False,
-            decision_gate=None,
-            configuration_error="Execution readiness check failed: persisted policy evaluation failure",
-            block_reason="policy_eval_failed",
-        )
-
-    return WorkerDecision(
-        allowed=False,
-        decision_gate=None,
-        configuration_error=f"Execution readiness check failed: unsupported persisted outcome '{persisted_outcome}'",
-        block_reason="policy_eval_failed",
-        classification="clear",
-    )
-
 logger = logging.getLogger(__name__)
 
 __all__ = [
@@ -569,8 +382,6 @@ __all__ = [
     "WorkerDecision",
     "evaluate_decision_event",
     "evaluate_ingress_precheck",
-    "evaluate_worker_decision",
-    "resolve_enqueue_precheck_outcome",
 ]
 
 
@@ -667,14 +478,27 @@ def evaluate_decision_event(
         issue_description=event.issue_description,
         issue_labels=event.issue_labels or [],
     )
-    if existing_case is not None and existing_cycle is not None:
+    unresolved_question_ids: set[str] = set()
+    if existing_cycle is not None:
         unresolved_question_ids = unresolved_question_ids_for_cycle(
             session=session,
             cycle=existing_cycle,
         )
         existing_cycle.unresolved_question_ids_json = list(unresolved_question_ids)
         existing_cycle.updated_at = occurred_at
-        if unresolved_question_ids:
+    transition = reduce_decision_state_transition(
+        input_state=DecisionStateReducerInput(
+            has_case=existing_case is not None,
+            has_open_cycle=existing_cycle is not None,
+            unresolved_question_count=len(unresolved_question_ids),
+            decision_gate_closed_permanently=decision_gate_closed_permanently_state(case=existing_case),
+            case_classification=str(getattr(existing_case, "classification", "") or "").strip(),
+            case_issue_fingerprint=str(getattr(existing_case, "issue_fingerprint", "") or "").strip(),
+            current_issue_fingerprint=current_issue_fingerprint,
+        )
+    )
+
+    if transition == DecisionStateTransition.OPEN_CYCLE_BLOCKED and existing_case is not None and existing_cycle is not None:
             snapshot_classification = classification_for_cycle_questions(
                 cycle=existing_cycle,
                 unresolved_question_ids=unresolved_question_ids,
@@ -775,6 +599,8 @@ def evaluate_decision_event(
                 outbox_effect_ids=outbox_effect_ids,
                 duplicate_event=False,
             )
+
+    if transition == DecisionStateTransition.OPEN_CYCLE_CLEAR_AND_CLOSE and existing_case is not None and existing_cycle is not None:
         existing_cycle.status = "resolved"
         existing_cycle.closed_at = occurred_at
         existing_cycle.updated_at = occurred_at
@@ -833,11 +659,7 @@ def evaluate_decision_event(
             duplicate_event=False,
         )
 
-    if (
-        existing_case is not None
-        and existing_cycle is None
-        and decision_gate_closed_permanently_state(case=existing_case)
-    ):
+    if transition == DecisionStateTransition.TERMINAL_GATE_CLOSED_CLEAR and existing_case is not None:
         decision = _terminally_closed_gate_decision(
             source=event.source,
             tenant_id=tenant.tenant_id,
@@ -888,12 +710,7 @@ def evaluate_decision_event(
             duplicate_event=False,
         )
 
-    if (
-        existing_case is not None
-        and existing_cycle is None
-        and str(existing_case.classification or "").strip() == "clear"
-        and str(existing_case.issue_fingerprint or "").strip() == current_issue_fingerprint
-    ):
+    if transition == DecisionStateTransition.REUSE_CLEAR_FINGERPRINT and existing_case is not None:
         snapshot = (
             existing_case.metadata_json.get("result_snapshot")
             if isinstance(existing_case.metadata_json, dict)

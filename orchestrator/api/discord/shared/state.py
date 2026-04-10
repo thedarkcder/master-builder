@@ -230,10 +230,6 @@ def command_matches(command_text: str, *, command_name: str, subcommand: str | N
     return arguments[0].strip().lower() == subcommand.strip().lower()
 
 
-def tenant_allowlisted_user_ids(tenant: Tenant) -> set[str]:
-    return normalize_allowlisted_user_ids(tenant.discord_config or {})
-
-
 def project_allowlisted_user_ids(project: Project) -> set[str]:
     return normalize_allowlisted_user_ids(project.discord_config or {})
 
@@ -263,10 +259,6 @@ def create_allowlist_request(
     permissions: list[str],
     reason: str | None,
 ) -> tuple[bool, str]:
-    legacy_tenant_allowlist = tenant_allowlisted_user_ids(tenant)
-    if user_id in legacy_tenant_allowlist:
-        return False, "You are already allowlisted for sensitive commands in this project."
-
     project = resolve_project_for_discord_channel(
         session=session,
         tenant_id=tenant.tenant_id,
@@ -324,13 +316,12 @@ def assert_sensitive_command_permission(
         tenant_id=tenant.tenant_id,
         channel_id=channel_id,
     )
-    legacy_tenant_allowlist = tenant_allowlisted_user_ids(tenant)
     project_allowlist = project_allowlisted_user_ids(project) if project is not None else set()
     permitted, reason = can_execute_sensitive_command(
         command_name=command_name,
         user_id=user_id,
         has_project_mapping=project is not None,
-        tenant_allowlist=legacy_tenant_allowlist,
+        tenant_allowlist=set(),
         project_allowlist=project_allowlist,
     )
     if permitted:

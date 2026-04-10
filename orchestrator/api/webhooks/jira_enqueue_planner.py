@@ -7,6 +7,13 @@ from datetime import datetime, timezone
 from orchestrator.api.webhooks import jira_webhook_board_gate, jira_webhook_precheck
 from orchestrator.core.communications import DiscordTenantNotificationAction, TransportAction
 from orchestrator.core.communications.enqueue_reason_contract import enqueue_reason_guidance
+from orchestrator.core.communications.execution_admission_format import (
+    build_jira_admission_notification_detail,
+    build_jira_admission_response_fields,
+)
+from orchestrator.core.communications.jira_enqueue_presentation import (
+    format_jira_enqueue_skipped_message,
+)
 from orchestrator.core.execution_admission import resolve_execution_admission
 from orchestrator.core.run_gate_service import enqueue_issue_run_with_precheck
 
@@ -259,19 +266,15 @@ def plan_jira_run_flow(
                 enqueued=False,
                 trigger_reason=trigger_reason,
                 webhook_event=context.webhook_event,
-                **admission.jira_response_fields(
-                    fallback_ready_label=(
-                        jira_webhook_precheck.resolve_ready_label_for_tenant(context.tenant)
-                        if admission.reason_code == "missing_ready_label"
-                        else None
-                    ),
+                **build_jira_admission_response_fields(
+                    admission=admission,
                 ),
             ),
             actions=(
                 build_jira_enqueue_skipped_notification_action(
                     context=context,
                     reason=admission.reason_code,
-                    extra_detail=admission.notification_extra_detail(),
+                    extra_detail=build_jira_admission_notification_detail(admission=admission),
                 ),
             ),
         )
@@ -336,13 +339,11 @@ def build_jira_enqueue_skipped_notification_action(
     reason: str,
     extra_detail: str | None = None,
 ) -> DiscordTenantNotificationAction:
-    detail = f" ({extra_detail})" if extra_detail else ""
-    guidance = enqueue_reason_guidance(reason)
-    message = (
-        f"Jira webhook did not queue a run for `{context.issue_key}`.\n"
-        f"Reason: `{reason}`{detail}\n"
-        f"Guidance: {guidance}\n"
-        f"Status: `{context.issue_status or 'unknown'}`"
+    message = format_jira_enqueue_skipped_message(
+        issue_key=context.issue_key,
+        issue_status=context.issue_status,
+        reason=reason,
+        extra_detail=extra_detail,
     )
     return DiscordTenantNotificationAction(
         tenant_id=context.tenant_id,

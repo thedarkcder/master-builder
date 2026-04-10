@@ -149,3 +149,7 @@
 - Worker execution must not block on GTD/decision state once execution readiness has been satisfied; worker-stage gating may only enforce live execution-readiness prerequisites, not PM clarification semantics.
 - When the user asks for dead-code cleanup or shim removal policy, implement enforceable repository gates (CI scripts/tests + fail conditions) in the same change instead of only describing manual review steps.
 - When a user asks for a boundary refactor, do not keep compatibility via module-level alias shims in the caller. Introduce a typed port/adapter and inject it through the wiring seam so command handlers depend on explicit contracts, not patched globals.
+
+2026-04-10
+
+- When the user says fallback behavior is not acceptable, remove fallback synthesis at the core contract boundary (not just in one transport), and add assertions that canonical fields must be present instead of silently deriving replacements.

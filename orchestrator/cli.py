@@ -10,7 +10,7 @@ from sqlalchemy import func, select
 
 from orchestrator.core.agent_tools import execute_agent_tool, print_tool_event
 from orchestrator.core.config import get_settings
-from orchestrator.core.decision_engine import resolve_enqueue_precheck_outcome
+from orchestrator.core.decision_execution_readiness import resolve_enqueue_precheck_outcome
 from orchestrator.core.discord.gateway_runtime import run_discord_gateway
 from orchestrator.core.discord.live_voice_gateway_runtime import run_discord_live_voice
 from orchestrator.core.knowledge_prewarm import prewarm_knowledge_dependencies
@@ -52,7 +52,7 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("migrate", help="Apply DB migrations")
     snapshot_migrate_parser = subparsers.add_parser(
         "migrate-execution-snapshots",
-        help="Canonicalize legacy run/checkpoint execution snapshot payloads",
+        help="Normalize run/checkpoint execution snapshots to canonical payload shape",
     )
     snapshot_migrate_parser.add_argument(
         "--apply",

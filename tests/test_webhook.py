@@ -1434,8 +1434,8 @@ class JiraWebhookTests(unittest.TestCase):
                 ),
             ) as capture_mock,
             patch(
-                "orchestrator.api.webhooks.jira_webhook_comment_flow.unresolved_question_feedback_for_cycle",
-                return_value=[{"question_id": "dg_1", "question_text": "Need entitlement confirmation"}],
+                "orchestrator.api.webhooks.jira_webhook_comment_flow.load_cycle_question_feedback",
+                return_value=({"question_id": "dg_1", "question_text": "Need entitlement confirmation"},),
             ),
         ):
             response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
