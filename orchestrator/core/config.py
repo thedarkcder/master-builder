@@ -122,7 +122,6 @@ class Settings(BaseSettings):
     discord_live_voice_lock_key: int = 947102033129
     discord_live_voice_poll_seconds: int = 3
     auto_migrate_on_startup: bool = True
-    execution_snapshot_startup_bootstrap_enabled: bool = True
     sentry_dsn: str = ""
     sentry_environment: str = "dev"
     sentry_release: str = ""

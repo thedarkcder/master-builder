@@ -10,7 +10,6 @@ import pytest
 def _isolate_test_environment() -> Iterator[None]:
     """Restore process env after every test to prevent cross-test leakage."""
     before = dict(os.environ)
-    os.environ.setdefault("ORCHESTRATOR_EXECUTION_SNAPSHOT_STARTUP_BOOTSTRAP_ENABLED", "0")
     from orchestrator.core.config import get_settings
 
     get_settings.cache_clear()
