@@ -389,7 +389,7 @@ export default function AgentRuntimesPage() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-6xl space-y-8">
+    <div className="w-full space-y-8">
       <div className="flex flex-wrap items-center justify-end gap-3">
         <Button
           variant="outline"

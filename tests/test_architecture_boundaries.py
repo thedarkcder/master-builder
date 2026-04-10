@@ -294,6 +294,30 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             msg=f"Webhook planner/classifier modules importing provider clients directly: {violations}",
         )
 
+    def test_transport_and_worker_adapters_do_not_call_enqueue_reason_guidance_directly(self) -> None:
+        roots = [
+            ROOT / "orchestrator" / "api" / "webhooks",
+            ROOT / "orchestrator" / "api" / "discord" / "commands",
+            ROOT / "orchestrator" / "core" / "worker",
+        ]
+        violations: list[str] = []
+        for root in roots:
+            for module_path in sorted(root.rglob("*.py")):
+                tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
+                for node in ast.walk(tree):
+                    if not isinstance(node, ast.Call):
+                        continue
+                    func = node.func
+                    if isinstance(func, ast.Name) and func.id == "enqueue_reason_guidance":
+                        violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{node.lineno}")
+                    if isinstance(func, ast.Attribute) and func.attr == "enqueue_reason_guidance":
+                        violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{node.lineno}")
+        self.assertEqual(
+            violations,
+            [],
+            msg=f"Direct enqueue_reason_guidance calls found in transport/worker adapters: {violations}",
+        )
+
     def test_github_and_jira_application_roots_do_not_import_provider_helpers_directly(self) -> None:
         banned_imports = {
             "orchestrator.api.webhooks.pr_review_comment_service",

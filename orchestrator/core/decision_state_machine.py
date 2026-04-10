@@ -61,6 +61,15 @@ class ExecutionAdmissionReason(str, Enum):
     NO_RETRYABLE_RUN = "no_retryable_run"
     RUN_ALREADY_ACTIVE = "run_already_active"
     DUPLICATE_RUN = "duplicate_run"
+    DUPLICATE_DELIVERY = "duplicate_delivery"
+    TENANT_CONCURRENCY_LIMIT_REACHED = "tenant_concurrency_limit_reached"
+    PR_REMEDIATION_ATTEMPT_LIMIT_REACHED = "pr_remediation_attempt_limit_reached"
+    PROJECT_NOT_MAPPED = "project_not_mapped"
+    READY_FOR_AGENT_BACKLOG = "ready_for_agent_backlog"
+    ISSUE_IN_BACKLOG = "issue_in_backlog"
+    ISSUE_NOT_ON_BOARD = "issue_not_on_board"
+    BOARD_GATE_CHECK_FAILED = "board_gate_check_failed"
+    BOARD_GATE_UNCONFIGURED = "board_gate_unconfigured"
 
 
 @dataclass(frozen=True)
@@ -97,6 +106,32 @@ def _parse_admission_reason(raw_value: str | None) -> ExecutionAdmissionReason |
         return ExecutionAdmissionReason(normalized)
     except ValueError:
         return None
+
+
+def parse_execution_admission_reason(raw_value: object) -> ExecutionAdmissionReason | None:
+    return _parse_admission_reason(str(getattr(raw_value, "value", raw_value) or ""))
+
+
+def build_execution_admission_block(
+    *,
+    reason: ExecutionAdmissionReason,
+    detail: str | None = None,
+    ready_label: str | None = None,
+    precheck_outcome: str | None = None,
+) -> ExecutionAdmissionDecision:
+    normalized_detail = str(detail or "").strip() or None
+    normalized_ready_label = str(ready_label or "").strip() or None
+    guidance = enqueue_reason_guidance(reason.value)
+    if reason is ExecutionAdmissionReason.MISSING_READY_LABEL and normalized_ready_label:
+        guidance = f"{guidance} ({normalized_ready_label})"
+    return ExecutionAdmissionDecision(
+        can_enqueue=False,
+        precheck_outcome=precheck_outcome,
+        reason=reason,
+        guidance=guidance,
+        detail=normalized_detail,
+        ready_label=normalized_ready_label,
+    )
 
 
 def _resolve_gate_reason(
@@ -156,4 +191,3 @@ def resolve_execution_admission(*, decision_result: DecisionEngineResult) -> Exe
         detail=gate_block.detail,
         ready_label=gate_block.ready_label,
     )
-

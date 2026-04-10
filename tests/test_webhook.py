@@ -31,7 +31,13 @@ from orchestrator.core.discord.channel_tenant_index import invalidate_discord_ch
 from orchestrator.core.config import get_settings
 from orchestrator.core.codex_runtime import CodexRuntimeError
 from orchestrator.core.decision_gate import DecisionGateResult
-from orchestrator.core.decision_types import DecisionEngineResult, IngressDecision, resolve_execution_gate_state
+from orchestrator.core.decision_types import (
+    DecisionClassification,
+    DecisionEngineResult,
+    IngressDecision,
+    PrecheckOutcome,
+    resolve_execution_gate_state,
+)
 from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.pre_run_check import PreRunCheckResult
 from orchestrator.core.precheck_question_lock import build_precheck_questions_block
@@ -108,8 +114,21 @@ class JiraWebhookTests(SqliteTemplateApiTestCase):
         cycle_id: str | None = None,
         auto_resolved_slots: list[str] | None = None,
     ) -> DecisionEngineResult:
-        block_reason = pre_check.outcome if pre_check.outcome in {"decision_gate_required", "gtd_required", "missing_ready_label"} else None
-        classification = "decision_gate" if pre_check.outcome in {"decision_gate_required", "gtd_required", "execution_blocked"} else "clear"
+        parsed_outcome = PrecheckOutcome.parse(pre_check.outcome)
+        block_reason = parsed_outcome.value if parsed_outcome in {
+            PrecheckOutcome.DECISION_GATE_REQUIRED,
+            PrecheckOutcome.GTD_REQUIRED,
+            PrecheckOutcome.MISSING_READY_LABEL,
+        } else None
+        classification = (
+            DecisionClassification.DECISION_GATE
+            if parsed_outcome in {
+                PrecheckOutcome.DECISION_GATE_REQUIRED,
+                PrecheckOutcome.GTD_REQUIRED,
+                PrecheckOutcome.EXECUTION_BLOCKED,
+            }
+            else DecisionClassification.CLEAR
+        )
         decision = IngressDecision(
             source="jira_webhook",
             pre_check=pre_check,
@@ -1443,7 +1462,7 @@ class JiraWebhookTests(SqliteTemplateApiTestCase):
             },
         }
         decision_result = SimpleNamespace(
-            classification="decision_gate",
+            classification=DecisionClassification.DECISION_GATE,
             cycle_id="cycle-1",
             decision=SimpleNamespace(
                 pre_check=SimpleNamespace(

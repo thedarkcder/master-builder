@@ -320,6 +320,40 @@ class ExecutionGateResolution:
     reason: ExecutionGateReason | None = None
 
 
+def execution_gate_reason_for_precheck_outcome(
+    *,
+    outcome: PrecheckOutcome,
+    detail: str | None = None,
+    ready_label: str | None = None,
+) -> ExecutionGateReason:
+    reason_code = outcome.value
+    normalized_detail = str(detail or "").strip() or None
+    normalized_ready_label = str(ready_label or "").strip() or None
+    guidance = enqueue_reason_guidance(reason_code)
+    if outcome is PrecheckOutcome.MISSING_READY_LABEL and normalized_ready_label:
+        guidance = f"{guidance} ({normalized_ready_label})"
+    return ExecutionGateReason(
+        reason_code=reason_code,
+        guidance=guidance,
+        detail=normalized_detail,
+        ready_label=normalized_ready_label,
+    )
+
+
+def guidance_for_precheck_block_reason(
+    *,
+    block_reason: str | None,
+    ready_label: str | None = None,
+) -> str | None:
+    parsed = PrecheckOutcome.parse(block_reason)
+    if parsed is None:
+        return None
+    return execution_gate_reason_for_precheck_outcome(
+        outcome=parsed,
+        ready_label=ready_label,
+    ).guidance
+
+
 @dataclass(frozen=True)
 class DecisionEventInput:
     source: DecisionSource
@@ -372,41 +406,30 @@ def resolve_execution_gate_state(
         classification=classification,
     )
     if decision.pre_check is None or readiness.state == ReadinessState.POLICY_ERROR:
-        policy_eval_failed = PrecheckOutcome.POLICY_EVAL_FAILED.value
         return ExecutionGateResolution(
             state=ExecutionGateState.POLICY_ERROR,
-            reason=ExecutionGateReason(
-                reason_code=policy_eval_failed,
-                guidance=enqueue_reason_guidance(policy_eval_failed),
+            reason=execution_gate_reason_for_precheck_outcome(
+                outcome=PrecheckOutcome.POLICY_EVAL_FAILED,
                 detail=str(decision.policy_error or "").strip() or None,
             ),
         )
 
     if readiness.state == ReadinessState.BLOCKED_READY_LABEL:
         ready_label = str(getattr(decision.pre_check, "ready_label", "") or "").strip() or None
-        missing_ready_label = PrecheckOutcome.MISSING_READY_LABEL.value
-        guidance = (
-            f"{enqueue_reason_guidance(missing_ready_label)} ({ready_label})"
-            if ready_label
-            else enqueue_reason_guidance(missing_ready_label)
-        )
         return ExecutionGateResolution(
             state=ExecutionGateState.BLOCK_READY_LABEL,
-            reason=ExecutionGateReason(
-                reason_code=missing_ready_label,
-                guidance=guidance,
+            reason=execution_gate_reason_for_precheck_outcome(
+                outcome=PrecheckOutcome.MISSING_READY_LABEL,
                 ready_label=ready_label,
             ),
         )
 
     if readiness.state == ReadinessState.BLOCKED_DECISION:
         detail = str(getattr(decision.pre_check, "decision_gate_reason", "") or "").strip() or None
-        reason_code = (readiness.reason_code or PrecheckOutcome.DECISION_GATE_REQUIRED).value
         return ExecutionGateResolution(
             state=ExecutionGateState.BLOCK_DECISION,
-            reason=ExecutionGateReason(
-                reason_code=reason_code,
-                guidance=enqueue_reason_guidance(reason_code),
+            reason=execution_gate_reason_for_precheck_outcome(
+                outcome=readiness.reason_code or PrecheckOutcome.DECISION_GATE_REQUIRED,
                 detail=detail,
             ),
         )

@@ -276,15 +276,15 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   const [tenant, setTenant] = useState<TenantRecord | null>(null);
   const [tenantProjects, setTenantProjects] = useState<ProjectRecord[]>([]);
   const tenantMatch = pathname.match(
-    /^\/(?!tenants(?:\/|$)|runs(?:\/|$)|dashboard(?:\/|$)|status(?:\/|$)|secrets(?:\/|$)|agent-runtimes(?:\/|$)|login(?:\/|$)|register(?:\/|$)|invite(?:\/|$)|get-started(?:\/|$)|forgot-password(?:\/|$)|reset-password(?:\/|$)|api(?:\/|$))([^/]+)\//,
+    /^\/(?!tenants(?:\/|$)|runs(?:\/|$)|platform(?:\/|$)|login(?:\/|$)|register(?:\/|$)|invite(?:\/|$)|get-started(?:\/|$)|forgot-password(?:\/|$)|reset-password(?:\/|$)|api(?:\/|$))([^/]+)\//,
   );
   const projectMatch = pathname.match(
-    /^\/(?!tenants(?:\/|$)|runs(?:\/|$)|dashboard(?:\/|$)|status(?:\/|$)|secrets(?:\/|$)|agent-runtimes(?:\/|$)|login(?:\/|$)|register(?:\/|$)|invite(?:\/|$)|get-started(?:\/|$)|forgot-password(?:\/|$)|reset-password(?:\/|$)|api(?:\/|$))([^/]+)\/projects\/([^/]+)(?:\/|$)/,
+    /^\/(?!tenants(?:\/|$)|runs(?:\/|$)|platform(?:\/|$)|login(?:\/|$)|register(?:\/|$)|invite(?:\/|$)|get-started(?:\/|$)|forgot-password(?:\/|$)|reset-password(?:\/|$)|api(?:\/|$))([^/]+)\/projects\/([^/]+)(?:\/|$)/,
   );
   const runContext = resolveRunRouteContext(pathname);
   const isWizardRoute =
     pathname.startsWith("/tenants/new") ||
-    /^\/(?!tenants(?:\/|$)|runs(?:\/|$)|dashboard(?:\/|$)|status(?:\/|$)|secrets(?:\/|$)|agent-runtimes(?:\/|$)|login(?:\/|$)|register(?:\/|$)|invite(?:\/|$)|get-started(?:\/|$)|forgot-password(?:\/|$)|reset-password(?:\/|$)|api(?:\/|$))[^/]+\/projects\/new(\/|$)/.test(pathname);
+    /^\/(?!tenants(?:\/|$)|runs(?:\/|$)|platform(?:\/|$)|login(?:\/|$)|register(?:\/|$)|invite(?:\/|$)|get-started(?:\/|$)|forgot-password(?:\/|$)|reset-password(?:\/|$)|api(?:\/|$))[^/]+\/projects\/new(\/|$)/.test(pathname);
   const [runTenantId, setRunTenantId] = useState<string | null>(null);
   const tenantId = tenantMatch ? tenantMatch[1] : runTenantId;
   const projectContextId = projectMatch?.[2] ? decodeURIComponent(projectMatch[2]) : runContext.projectId || null;
@@ -310,8 +310,8 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
     const onboardingAllowed =
       pathname === "/get-started" ||
       pathname.startsWith("/tenants/new") ||
-      pathname.startsWith("/agent-runtimes") ||
-      /^\/(?!tenants(?:\/|$)|runs(?:\/|$)|dashboard(?:\/|$)|status(?:\/|$)|secrets(?:\/|$)|agent-runtimes(?:\/|$)|login(?:\/|$)|register(?:\/|$)|invite(?:\/|$)|get-started(?:\/|$)|forgot-password(?:\/|$)|reset-password(?:\/|$)|api(?:\/|$))[^/]+\/settings(\/|$)/.test(pathname);
+      pathname.startsWith("/platform/agent-runtimes") ||
+      /^\/(?!tenants(?:\/|$)|runs(?:\/|$)|platform(?:\/|$)|login(?:\/|$)|register(?:\/|$)|invite(?:\/|$)|get-started(?:\/|$)|forgot-password(?:\/|$)|reset-password(?:\/|$)|api(?:\/|$))[^/]+\/settings(\/|$)/.test(pathname);
     if (ready && credentials && needsOnboarding && !onboardingAllowed) {
       router.replace("/get-started");
     }
@@ -396,8 +396,8 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
     needsOnboarding &&
     pathname !== "/get-started" &&
     !pathname.startsWith("/tenants/new") &&
-    !pathname.startsWith("/agent-runtimes") &&
-    !/^\/(?!tenants(?:\/|$)|runs(?:\/|$)|dashboard(?:\/|$)|status(?:\/|$)|secrets(?:\/|$)|agent-runtimes(?:\/|$)|login(?:\/|$)|register(?:\/|$)|invite(?:\/|$)|get-started(?:\/|$)|forgot-password(?:\/|$)|reset-password(?:\/|$)|api(?:\/|$))[^/]+\/settings(\/|$)/.test(pathname)
+    !pathname.startsWith("/platform/agent-runtimes") &&
+    !/^\/(?!tenants(?:\/|$)|runs(?:\/|$)|platform(?:\/|$)|login(?:\/|$)|register(?:\/|$)|invite(?:\/|$)|get-started(?:\/|$)|forgot-password(?:\/|$)|reset-password(?:\/|$)|api(?:\/|$))[^/]+\/settings(\/|$)/.test(pathname)
   ) {
     return <main className="p-8 text-sm text-muted-foreground">Redirecting to onboarding...</main>;
   }
@@ -418,11 +418,11 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   const tenantBaseRoute = decodedTenantId ? getTenantWorkspaceRoute(decodedTenantId) : null;
   const isPlatformSuperAdmin = canAccessPlatformAdmin(principal);
   const globalNavItems: NavItem[] = [
-    { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-    { href: "/status", label: "Status", icon: Activity },
-    ...(isPlatformSuperAdmin ? [{ href: "/agent-runtimes", label: "Agent runtimes", icon: Cpu }] : []),
+    { href: "/platform/dashboard", label: "Dashboard", icon: LayoutDashboard },
+    { href: "/platform/status", label: "Status", icon: Activity },
+    ...(isPlatformSuperAdmin ? [{ href: "/platform/agent-runtimes", label: "Agent runtimes", icon: Cpu }] : []),
     { href: "/tenants/select", label: "Tenants", icon: Building2 },
-    { href: "/secrets", label: "Secrets", icon: KeyRound }
+    { href: "/platform/secrets", label: "Secrets", icon: KeyRound }
   ];
   const tenantMembership = decodedTenantId ? getMembershipForTenant(principal, decodedTenantId) : null;
   const canManageWorkspaceTeam = decodedTenantId ? canManageTeam(principal, decodedTenantId) : false;

@@ -20,7 +20,6 @@ from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.knowledge_base import SlotResolution
 from orchestrator.core.pre_run_check import PreRunCheckResult, evaluate_pre_run_check
 from orchestrator.core.precheck_decision import precheck_missing_slots
-from orchestrator.core.communications.enqueue_reason_contract import enqueue_reason_guidance
 from orchestrator.core.decision_types import (
     DecisionClassification,
     DecisionSource,
@@ -29,6 +28,7 @@ from orchestrator.core.decision_types import (
     IngressDecision,
     PrecheckOutcome,
     blocking_reason_for_precheck,
+    guidance_for_precheck_block_reason,
     resolve_execution_gate_state,
     tenant_ready_label,
 )
@@ -245,9 +245,10 @@ def decision_from_snapshot(
             source=source,  # type: ignore[arg-type]
             pre_check=normalized_pre_check,
             block_reason=blocking_reason_for_precheck(normalized_pre_check),
-            guidance=enqueue_reason_guidance(blocking_reason_for_precheck(normalized_pre_check))
-            if blocking_reason_for_precheck(normalized_pre_check)
-            else None,
+            guidance=guidance_for_precheck_block_reason(
+                block_reason=blocking_reason_for_precheck(normalized_pre_check),
+                ready_label=str(getattr(normalized_pre_check, "ready_label", "") or "").strip() or None,
+            ),
             policy_error=None,
             label_actions=(),
         )
@@ -291,7 +292,9 @@ def worker_blocking_gate(
         )
         reason = (
             decision_reason(pre_check=pre_check, classification=classification)
-            or enqueue_reason_guidance(PrecheckOutcome.EXECUTION_BLOCKED.value)
+            or guidance_for_precheck_block_reason(
+                block_reason=PrecheckOutcome.EXECUTION_BLOCKED.value,
+            )
         )
         return DecisionGateResult(
             triggered=True,

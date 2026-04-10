@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
-from orchestrator.core.communications.enqueue_reason_contract import enqueue_reason_guidance
 from orchestrator.core.decision_gate import DecisionGateResult
 from orchestrator.core.decision_planner import DecisionPlannerResult
 from orchestrator.core.decision_types import (
@@ -10,6 +9,7 @@ from orchestrator.core.decision_types import (
     IngressDecision,
     PrecheckOutcome,
     blocking_reason_for_precheck,
+    guidance_for_precheck_block_reason,
 )
 from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.pre_run_check import PreRunCheckResult
@@ -194,7 +194,7 @@ def _decision_with_planner_result(
             source=decision.source,
             pre_check=updated_pre_check,
             block_reason=updated_block_reason,
-            guidance=enqueue_reason_guidance(updated_block_reason) if updated_block_reason else None,
+            guidance=guidance_for_precheck_block_reason(block_reason=updated_block_reason),
             policy_error=None,
             label_actions=decision.label_actions,
         )
@@ -229,7 +229,7 @@ def _decision_with_planner_result(
         source=decision.source,
         pre_check=updated_pre_check,
         block_reason=block_reason,
-        guidance=enqueue_reason_guidance(block_reason) if block_reason else None,
+        guidance=guidance_for_precheck_block_reason(block_reason=block_reason),
         policy_error=decision.policy_error,
         label_actions=decision.label_actions,
     )
