@@ -5,6 +5,7 @@ import logging
 from sqlalchemy.orm import Session
 
 from orchestrator.api.jira_oauth.service import jira_oauth_client, refresh_jira_connection_tokens
+from orchestrator.core.decision_types import JiraConfigKey, tenant_jira_config_text
 from orchestrator.storage.models import JiraOAuthConnection, Tenant
 from orchestrator.tools.jira_oauth import JiraOAuthError
 
@@ -35,8 +36,7 @@ def send_stage_update_to_jira(
     if stage not in JIRA_STAGE_COMMENT_EVENTS:
         return
 
-    jira_config = tenant.jira_config or {}
-    connection_id = str(jira_config.get("connection_id") or "").strip()
+    connection_id = tenant_jira_config_text(tenant=tenant, key=JiraConfigKey.CONNECTION_ID)
     if not connection_id:
         logger.info(
             "worker_jira_stage_update_not_sent tenant_id=%s issue_key=%s stage=%s reason=missing_connection",
@@ -93,8 +93,7 @@ def transition_issue_status(
     if not normalized_issue_key or not normalized_target_status:
         return
 
-    jira_config = tenant.jira_config or {}
-    connection_id = str(jira_config.get("connection_id") or "").strip()
+    connection_id = tenant_jira_config_text(tenant=tenant, key=JiraConfigKey.CONNECTION_ID)
     if not connection_id:
         logger.info(
             "worker_jira_transition_not_sent tenant_id=%s issue_key=%s target_status=%s reason=missing_connection",

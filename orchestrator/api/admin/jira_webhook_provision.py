@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from orchestrator.api.schemas import JiraWebhookActionResult
+from orchestrator.core.decision_types import JiraConfigKey, jira_config_text
 from orchestrator.storage.models import JiraOAuthConnection, Tenant
 from orchestrator.tools.jira_oauth import JiraOAuthError
 
@@ -30,8 +31,8 @@ def provision_jira_webhook(
 ) -> JiraWebhookActionResult:  # noqa: ANN001
     action_name = "reset" if replace_existing else "provision"
     jira_config = dict(tenant.jira_config)
-    connection_id = jira_config.get("connection_id")
-    if not isinstance(connection_id, str) or not connection_id:
+    connection_id = jira_config_text(jira_config=jira_config, key=JiraConfigKey.CONNECTION_ID)
+    if not connection_id:
         return JiraWebhookActionResult(
             ok=False,
             action=action_name,
