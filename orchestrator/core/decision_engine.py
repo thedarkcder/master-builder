@@ -55,6 +55,7 @@ from orchestrator.core.decision_types import (
     DecisionLabelAction,
     DecisionSource,
     IngressDecision,
+    PrecheckOutcome,
     WorkerDecision,
     blocking_reason_for_precheck,
     resolve_execution_gate_state,
@@ -93,9 +94,9 @@ def _planner_classification(gate_status: str) -> DecisionClassification:
 
 def _planner_block_reason(classification: DecisionClassification) -> str | None:
     if classification.includes_decision_gate:
-        return "decision_gate_required"
+        return PrecheckOutcome.DECISION_GATE_REQUIRED.value
     if classification is DecisionClassification.GTD:
-        return "gtd_required"
+        return PrecheckOutcome.GTD_REQUIRED.value
     return None
 
 
@@ -177,7 +178,11 @@ def _decision_with_planner_result(
     )
     missing_items = tuple(planner_result.missing_items)
     if classification is DecisionClassification.CLEAR:
-        outcome = "missing_ready_label" if pre_check.ready_label_missing else "ready_for_agent"
+        outcome = (
+            PrecheckOutcome.MISSING_READY_LABEL.value
+            if pre_check.ready_label_missing
+            else PrecheckOutcome.READY_FOR_AGENT.value
+        )
         updated_pre_check = replace(
             pre_check,
             outcome=outcome,
@@ -207,7 +212,11 @@ def _decision_with_planner_result(
 
     updated_pre_check = replace(
         pre_check,
-        outcome="decision_gate_required" if classification.includes_decision_gate else "gtd_required",
+        outcome=(
+            PrecheckOutcome.DECISION_GATE_REQUIRED.value
+            if classification.includes_decision_gate
+            else PrecheckOutcome.GTD_REQUIRED.value
+        ),
         decision_gate=DecisionGateResult(
             triggered=classification.includes_decision_gate,
             reason=reason if classification.includes_decision_gate else "Decision Gate not required",
@@ -252,7 +261,11 @@ def _clear_planner_result() -> DecisionPlannerResult:
 def _synthetic_clear_pre_check(*, case: DecisionCase) -> PreRunCheckResult:
     ready_label = str(case.ready_label or "").strip() or None
     ready_label_present = bool(case.ready_label_present)
-    outcome = "missing_ready_label" if ready_label and not ready_label_present else "ready_for_agent"
+    outcome = (
+        PrecheckOutcome.MISSING_READY_LABEL.value
+        if ready_label and not ready_label_present
+        else PrecheckOutcome.READY_FOR_AGENT.value
+    )
     return PreRunCheckResult(
         outcome=outcome,
         ready_label=ready_label,
@@ -797,7 +810,10 @@ def evaluate_decision_event(
         else set()
     )
 
-    if decision.pre_check is not None and decision.block_reason in {"decision_gate_required", "gtd_required"}:
+    if decision.pre_check is not None and PrecheckOutcome.parse(decision.block_reason) in {
+        PrecheckOutcome.DECISION_GATE_REQUIRED,
+        PrecheckOutcome.GTD_REQUIRED,
+    }:
         slot_answers = resolve_slots_before_block_resolution(
             session=session,
             tenant=tenant,

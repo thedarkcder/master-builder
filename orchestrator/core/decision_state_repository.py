@@ -5,6 +5,7 @@ from uuid import uuid4
 
 from sqlalchemy import select
 
+from orchestrator.core.decision_types import PrecheckOutcome
 from orchestrator.core.decision_effect_service import enqueue_cycle_comment_effect
 from orchestrator.core.decision_precheck_mapping import (
     BLOCKED_CLASSIFICATIONS,
@@ -148,10 +149,11 @@ def persist_decision_state(
     )
     pre_check = decision.pre_check
     case_state = case_state_for_decision(decision=decision)
-    question_driven = classification in BLOCKED_CLASSIFICATIONS and decision.block_reason in {
-        "decision_gate_required",
-        "gtd_required",
-    }
+    question_driven = (
+        classification in BLOCKED_CLASSIFICATIONS
+        and PrecheckOutcome.parse(decision.block_reason)
+        in {PrecheckOutcome.DECISION_GATE_REQUIRED, PrecheckOutcome.GTD_REQUIRED}
+    )
     question_set = (
         list(question_set_override)
         if question_driven and isinstance(question_set_override, list)

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from orchestrator.core.decision_engine import DecisionEngineResult
+from orchestrator.core.decision_types import PrecheckOutcome
 from orchestrator.core.run_gate_service import resolve_run_gate_block
 
 
@@ -48,9 +49,10 @@ def _parse_reason_code(raw_value: str | None) -> ExecutionAdmissionReason | None
 
 def resolve_execution_admission(*, decision_result: DecisionEngineResult) -> ExecutionAdmissionDecision:
     gate_block = resolve_run_gate_block(decision_result=decision_result)
-    precheck_outcome = (
-        str(getattr(decision_result.decision.pre_check, "outcome", "") or "").strip() or None
+    parsed_precheck_outcome = PrecheckOutcome.parse(
+        getattr(decision_result.decision.pre_check, "outcome", None)
     )
+    precheck_outcome = parsed_precheck_outcome.value if parsed_precheck_outcome is not None else None
     if gate_block is None:
         return ExecutionAdmissionDecision(
             can_enqueue=True,
