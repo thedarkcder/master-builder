@@ -839,6 +839,7 @@ class AdminApiTests(SqliteTemplateApiTestCase):
 
     def test_create_tenant_auto_provisions_jira_webhook_when_jira_is_configured(self) -> None:
         payload = self._tenant_payload()
+        payload["setup_state"] = {"auto_provision_jira_webhook_on_create": True}
         self._insert_jira_connection(connection_id="conn-1")
 
         def _fake_provision_jira_webhook(**kwargs: object) -> SimpleNamespace:
@@ -892,6 +893,7 @@ class AdminApiTests(SqliteTemplateApiTestCase):
 
     def test_create_tenant_rejects_unknown_jira_connection_before_persisting(self) -> None:
         payload = self._tenant_payload()
+        payload["setup_state"] = {"auto_provision_jira_webhook_on_create": True}
 
         response = self.client.post(
             "/api/admin/tenants",
@@ -910,6 +912,7 @@ class AdminApiTests(SqliteTemplateApiTestCase):
 
     def test_create_tenant_rolls_back_when_jira_webhook_provision_fails(self) -> None:
         payload = self._tenant_payload()
+        payload["setup_state"] = {"auto_provision_jira_webhook_on_create": True}
         self._insert_jira_connection(connection_id="conn-1")
 
         with patch(

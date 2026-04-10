@@ -135,6 +135,8 @@ export function toCreatePayload(
 ): TenantCreatePayload {
   const githubRepository = textFields.githubRepositoryText.trim();
   const projectKeys = splitCsv(textFields.projectKeysText);
+  const shouldAutoProvisionJiraWebhook =
+    Boolean(values.jira.connection_id?.trim()) && projectKeys.length > 0;
 
   return {
     name: values.name.trim(),
@@ -177,7 +179,10 @@ export function toCreatePayload(
             .map((value) => value.trim())
             .filter((value, index, array) => value.length > 0 && array.indexOf(value) === index)
         }
-      : null
+      : null,
+    setup_state: shouldAutoProvisionJiraWebhook
+      ? { auto_provision_jira_webhook_on_create: true }
+      : {}
   };
 }
 

@@ -67,6 +67,7 @@ export type TenantCreatePayload = {
   policy: PolicyConfig;
   discord: DiscordConfig | null;
   experience?: Record<string, unknown>;
+  setup_state?: Record<string, unknown>;
 };
 
 export type TenantUpdatePayload = {
