@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 
 from sqlalchemy import func, select
@@ -71,15 +71,26 @@ def coerce_positive_int(value: object, *, default: int) -> int:
     return max(1, parsed)
 
 
-def running_run_count(session: Session, *, tenant_id: str, running_status: str) -> int:
-    return int(
-        session.execute(
-            select(func.count(Run.run_id)).where(
-                Run.tenant_id == tenant_id,
-                Run.status == running_status,
-            )
-        ).scalar_one()
+def _effective_last_seen_expr():  # noqa: ANN202
+    return func.coalesce(Run.last_heartbeat_at, Run.started_at, Run.created_at)
+
+
+def running_run_count(
+    session: Session,
+    *,
+    tenant_id: str,
+    running_status: str,
+    running_stale_timeout_seconds: int | None = None,
+) -> int:
+    query = select(func.count(Run.run_id)).where(
+        Run.tenant_id == tenant_id,
+        Run.status == running_status,
     )
+    if running_stale_timeout_seconds is not None:
+        timeout_seconds = max(60, int(running_stale_timeout_seconds))
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=timeout_seconds)
+        query = query.where(_effective_last_seen_expr() > cutoff)
+    return int(session.execute(query).scalar_one())
 
 
 def _is_postgres(session: Session) -> bool:
@@ -203,6 +214,7 @@ def _claimability_for_selection(
     selection: QueueSelectionResult,
     running_status: str,
     lock_tenant_claim: bool,
+    running_stale_timeout_seconds: int | None = None,
 ) -> QueueCandidateClaimability:
     if selection.terminal_run is not None:
         return QueueCandidateClaimability(
@@ -220,6 +232,7 @@ def _claimability_for_selection(
         session,
         tenant_id=selection.tenant.tenant_id,
         running_status=running_status,
+        running_stale_timeout_seconds=running_stale_timeout_seconds,
     )
     if current_running >= max_concurrent_runs:
         return QueueCandidateClaimability(reason=QueueClaimabilityReason.CONCURRENCY_LIMIT)
@@ -263,6 +276,7 @@ def probe_claimable_queued_run(
     queued_status: str,
     running_status: str,
     worker_capabilities: set[WorkerCapability] | None = None,
+    running_stale_timeout_seconds: int | None = None,
 ) -> QueueClaimabilityProbe:
     allowed_capabilities = parse_worker_capabilities(worker_capabilities or [])
     queued_runs = session.execute(
@@ -299,6 +313,7 @@ def probe_claimable_queued_run(
             selection=selection,
             running_status=running_status,
             lock_tenant_claim=False,
+            running_stale_timeout_seconds=running_stale_timeout_seconds,
         )
         if claimability.reason == QueueClaimabilityReason.CONCURRENCY_LIMIT:
             saw_concurrency_limit = True
@@ -330,6 +345,7 @@ def claim_next_queued_run(
     failed_status: str,
     worker_service_instance_id: str | None,
     worker_capabilities: set[WorkerCapability] | None = None,
+    running_stale_timeout_seconds: int | None = None,
 ) -> QueueSelectionResult:
     allowed_capabilities = parse_worker_capabilities(worker_capabilities or [])
     candidate_run_ids = session.execute(
@@ -353,6 +369,7 @@ def claim_next_queued_run(
             selection=selection,
             running_status=running_status,
             lock_tenant_claim=True,
+            running_stale_timeout_seconds=running_stale_timeout_seconds,
         )
         if claimability.reason == QueueClaimabilityReason.TERMINAL:
             return selection
