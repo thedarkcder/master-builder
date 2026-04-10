@@ -599,6 +599,8 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             "reduce_decision_state_transition",
             "case_state_for_decision",
             "decision_reason",
+            "decision_from_snapshot",
+            "worker_blocking_gate",
         }
         violations: list[str] = []
         for module_path in forbidden_modules:
@@ -627,6 +629,10 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             if not isinstance(node, ast.ImportFrom):
                 continue
             if node.module != "orchestrator.core.decision_state_machine":
+                if node.module == "orchestrator.core.decision_precheck_mapping":
+                    for alias in node.names:
+                        if alias.name == "decision_from_snapshot":
+                            violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{node.lineno}:{alias.name}")
                 continue
             for alias in node.names:
                 if alias.name in {"DecisionStateTransition", "DecisionStateReducerInput", "reduce_decision_state_transition"}:
@@ -634,7 +640,7 @@ class ArchitectureBoundaryTests(unittest.TestCase):
         self.assertEqual(
             violations,
             [],
-            msg=f"decision_engine must not import transition semantics from decision_state_machine: {violations}",
+            msg=f"decision_engine must consume reducer boundary semantics directly: {violations}",
         )
 
 

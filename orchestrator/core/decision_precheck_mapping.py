@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -9,17 +9,16 @@ from typing import Any, Callable
 
 from sqlalchemy.orm import Session
 
-from orchestrator.core.decision_gate import DecisionGateResult
 from orchestrator.core.decision_snapshot_codec import (
     DecisionResultSnapshot,
     PrecheckSnapshot,
     apply_frozen_cycle_questions,
     build_question_set as build_question_set_codec,
 )
-from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.knowledge_base import SlotResolution
 from orchestrator.core.pre_run_check import PreRunCheckResult, evaluate_pre_run_check
 from orchestrator.core.precheck_decision import precheck_missing_slots
+from orchestrator.core.decision_state_reducer import decision_from_snapshot
 from orchestrator.core.decision_types import (
     DecisionClassification,
     DecisionSource,
@@ -27,12 +26,10 @@ from orchestrator.core.decision_types import (
     DecisionLabelAction,
     IngressDecision,
     PrecheckOutcome,
-    blocking_reason_for_precheck,
-    guidance_for_precheck_block_reason,
     resolve_execution_gate_state,
     tenant_ready_label,
 )
-from orchestrator.storage.models import DecisionCase, DecisionCycle
+from orchestrator.storage.models import DecisionCycle
 
 logger = logging.getLogger(__name__)
 
@@ -192,118 +189,10 @@ def decision_result_for_duplicate_event(
     )
 
 
-def decision_from_snapshot(
-    *,
-    snapshot: dict[str, Any],
-    source: str,
-    classification: str,
-    cycle: DecisionCycle | None,
-    case: DecisionCase,
-) -> IngressDecision:
-    pre_check = deserialize_precheck_result(snapshot.get("pre_check"))
-    if pre_check is not None and cycle is not None and cycle.status == "open":
-        pre_check = apply_frozen_cycle_to_precheck(
-            pre_check=pre_check,
-            cycle=cycle,
-            classification=classification,
-        )
-    if DecisionClassification.parse(classification) is DecisionClassification.CLEAR:
-        normalized_pre_check = pre_check
-        if normalized_pre_check is None:
-            ready_label = str(case.ready_label or "").strip() or None
-            ready_label_present = bool(case.ready_label_present)
-            outcome = (
-                PrecheckOutcome.MISSING_READY_LABEL.value
-                if ready_label and not ready_label_present
-                else PrecheckOutcome.READY_FOR_AGENT.value
-            )
-            normalized_pre_check = PreRunCheckResult(
-                outcome=outcome,
-                ready_label=ready_label,
-                ready_label_present=ready_label_present,
-                required_worker_capability=str(case.required_worker_capability or "").strip(),
-                required_worker_label=str(case.required_worker_label or "").strip(),
-                required_worker_label_present=bool(case.required_worker_label_present),
-                decision_gate=DecisionGateResult(
-                    triggered=False,
-                    reason="Decision Gate not required",
-                    missing_sections=(),
-                    questions=(),
-                    recommendation="Proceed with execution.",
-                    tags=(),
-                ),
-                gtd=GoodToDoValidationResult(
-                    valid=True,
-                    missing_criteria=(),
-                    clarification_questions=(),
-                ),
-            )
-        if PrecheckOutcome.parse(getattr(normalized_pre_check, "outcome", None)) is PrecheckOutcome.DECISION_GATE_REQUIRED:
-            normalized_pre_check = replace(normalized_pre_check, outcome=PrecheckOutcome.READY_FOR_AGENT.value)
-        return IngressDecision(
-            source=source,  # type: ignore[arg-type]
-            pre_check=normalized_pre_check,
-            block_reason=blocking_reason_for_precheck(normalized_pre_check),
-            guidance=guidance_for_precheck_block_reason(
-                block_reason=blocking_reason_for_precheck(normalized_pre_check),
-                ready_label=str(getattr(normalized_pre_check, "ready_label", "") or "").strip() or None,
-            ),
-            policy_error=None,
-            label_actions=(),
-        )
-    return IngressDecision(
-        source=source,  # type: ignore[arg-type]
-        pre_check=pre_check,
-        block_reason=str(snapshot.get("block_reason") or case.blocked_reason or "").strip() or None,
-        guidance=str(snapshot.get("guidance") or "").strip() or None,
-        policy_error=str(snapshot.get("policy_error") or "").strip() or None,
-        label_actions=(),
-    )
-
-
 def string_tuple(value: object) -> tuple[str, ...]:
     if not isinstance(value, (list, tuple)):
         return ()
     return tuple(str(item).strip() for item in value if str(item).strip())
-
-
-def worker_blocking_gate(
-    *,
-    pre_check: object | None,
-    classification: str,
-    block_reason: str | None,
-) -> DecisionGateResult | None:
-    if not isinstance(pre_check, PreRunCheckResult):
-        return None
-    parsed_classification = DecisionClassification.parse(classification)
-    if parsed_classification.includes_decision_gate and pre_check.decision_gate.triggered:
-        return pre_check.decision_gate
-    if parsed_classification.includes_gtd and PrecheckOutcome.parse(block_reason) is PrecheckOutcome.EXECUTION_BLOCKED:
-        questions = tuple(
-            str(question).strip()
-            for question in pre_check.gtd.clarification_questions
-            if str(question).strip()
-        )
-        missing = tuple(
-            str(item).strip()
-            for item in pre_check.gtd.missing_criteria
-            if str(item).strip()
-        )
-        reason = (
-            decision_reason(pre_check=pre_check, classification=classification)
-            or guidance_for_precheck_block_reason(
-                block_reason=PrecheckOutcome.EXECUTION_BLOCKED.value,
-            )
-        )
-        return DecisionGateResult(
-            triggered=True,
-            reason=reason,
-            missing_sections=missing,
-            questions=questions,
-            recommendation="Resolve execution-readiness blockers before execution.",
-            tags=(),
-        )
-    return None
 
 
 def serialize_result_snapshot(

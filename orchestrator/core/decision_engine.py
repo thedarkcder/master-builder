@@ -8,7 +8,6 @@ from sqlalchemy.orm import Session
 
 from orchestrator.core.decision_precheck_mapping import (
     apply_frozen_cycle_to_precheck as apply_frozen_cycle_to_precheck_state,
-    decision_from_snapshot as decision_from_snapshot_state,
     decision_result_for_duplicate_event as decision_result_for_duplicate_event_state,
     derive_label_actions,
     evaluate_with_labels as evaluate_with_labels_state,
@@ -46,6 +45,7 @@ from orchestrator.core.decision_state_repository import (
 from orchestrator.core.decision_state_reducer import (
     DecisionStateReducerInput,
     DecisionStateTransition,
+    decision_from_snapshot as decision_from_snapshot_state,
     is_question_driven_state,
     reduce_decision_state_transition,
 )
