@@ -24,8 +24,8 @@ from orchestrator.core.decision_engine import DecisionEngineResult, DecisionEven
 from orchestrator.core.decision_types import tenant_ready_label, tenant_ready_trigger_mode
 from orchestrator.core.decision_state_machine import (
     ExecutionAdmissionReason,
+    admission_from_enqueue_reason,
     build_execution_admission_block,
-    parse_execution_admission_reason,
     resolve_execution_admission,
 )
 from orchestrator.core.pre_run_check import evaluate_pre_run_check
@@ -530,39 +530,21 @@ def plan_jira_run_flow(
             enqueue_result.reason,
             enqueue_result.run.run_id,
         )
-        enqueue_admission_reason = parse_execution_admission_reason(enqueue_result.reason)
-        enqueue_admission = (
-            build_execution_admission_block(reason=enqueue_admission_reason)
-            if enqueue_admission_reason is not None
-            else None
-        )
+        enqueue_admission = admission_from_enqueue_reason(raw_reason=enqueue_result.reason)
         return JiraRunPlan(
-            content=(
-                jira_webhook_response_fn(
-                    context,
-                    enqueued=False,
-                    reason=enqueue_result.reason,
-                    guidance=enqueue_admission.guidance,
-                    run_id=enqueue_result.run.run_id,
-                    trigger_reason=trigger_reason,
-                    command=context.comment_command,
-                    webhook_event=context.webhook_event,
-                )
-                if enqueue_admission is not None
-                else jira_webhook_response_fn(
-                    context,
-                    enqueued=False,
-                    reason=enqueue_result.reason,
-                    run_id=enqueue_result.run.run_id,
-                    trigger_reason=trigger_reason,
-                    command=context.comment_command,
-                    webhook_event=context.webhook_event,
-                )
+            content=jira_webhook_response_fn(
+                context,
+                enqueued=False,
+                run_id=enqueue_result.run.run_id,
+                trigger_reason=trigger_reason,
+                command=context.comment_command,
+                webhook_event=context.webhook_event,
+                **build_jira_admission_response_fields(admission=enqueue_admission),
             ),
             actions=(
                 build_jira_enqueue_skipped_notification_action(
                     context=context,
-                    reason=enqueue_result.reason,
+                    reason=enqueue_admission.reason or ExecutionAdmissionReason.EXECUTION_BLOCKED,
                     extra_detail=f"run_id={enqueue_result.run.run_id}",
                 ),
             ),
