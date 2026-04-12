@@ -699,6 +699,56 @@ class WorkerQueueSelectorTests(unittest.TestCase):
             self.assertEqual(probe.tenant_id, "tenant-capabilities")
             self.assertEqual(probe.issue_key, "IOS-10")
 
+    def test_probe_claimable_queued_run_reports_runtime_unavailable_when_required_runtime_is_blocked(self) -> None:
+        now = datetime.now(timezone.utc)
+        with self.session_factory() as session:
+            session.add(
+                Tenant(
+                    tenant_id="tenant-runtime",
+                    name="Tenant Runtime",
+                    is_enabled=True,
+                    jira_config={},
+                    github_config={},
+                    repos_config={"github_repository": "https://github.com/example/runtime"},
+                    policy_config={"max_concurrent_runs": 1},
+                    discord_config=None,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            _add_run(
+                session,
+                now=now,
+                run_id="run-runtime",
+                tenant_id="tenant-runtime",
+                issue_key="MAB-940",
+                issue_summary="Runtime blocked",
+                issue_description="queued",
+                repo_url="https://github.com/example/runtime",
+                branch=None,
+                pr_url=None,
+                status="queued",
+                plan=_plan_for_capability("linux"),
+                required_runtime_kinds_json=["codex_cli"],
+                started_at=None,
+                finished_at=None,
+            )
+            session.commit()
+
+            probe = probe_claimable_queued_run(
+                session,
+                queued_status="queued",
+                running_status="running",
+                worker_capabilities={"linux"},
+                ready_runtime_kinds={"openai"},
+            )
+
+            self.assertFalse(probe.claimable)
+            self.assertEqual(probe.reason, QueueClaimabilityReason.RUNTIME_UNAVAILABLE)
+            self.assertEqual(probe.run_id, "run-runtime")
+            self.assertEqual(probe.tenant_id, "tenant-runtime")
+            self.assertEqual(probe.issue_key, "MAB-940")
+
     def test_probe_claimable_queued_run_reports_blocked_candidate_for_concurrency_limit(self) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:

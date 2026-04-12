@@ -7,7 +7,7 @@ import signal
 import sys
 from contextlib import suppress
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from sqlalchemy import and_, func, or_, select
@@ -48,6 +48,11 @@ from orchestrator.core.worker.execution_service import (
 from orchestrator.core.worker.queue_listener import (
     RunQueueNotificationBridge,
     wait_for_wake_or_stop,
+)
+from orchestrator.core.worker.runtime_dependencies import (
+    WorkerRuntimeDependencySnapshot,
+    registered_worker_runtime_kinds_from_settings,
+    worker_runtime_dependency_snapshot,
 )
 from orchestrator.core.worker.runtime_factory import build_workflow_runner_for_session
 from orchestrator.core.worker_capabilities import resolve_worker_capability_context
@@ -138,6 +143,10 @@ def _worker_runtime_capabilities(*, settings: Settings) -> list[str]:
     return list(context.available_values)
 
 
+def _worker_registered_runtime_kinds(*, settings: Settings) -> list[str]:
+    return registered_worker_runtime_kinds_from_settings(settings)
+
+
 def _worker_runtime_active_run_count(
     *,
     session: Session,
@@ -160,9 +169,11 @@ def _upsert_worker_runtime_state_once(
     service_instance_id: str,
     worker_mode: str,
     state: str,
+    runtime_dependencies_json: dict[str, dict[str, object]] | None = None,
 ) -> None:
     now = datetime.now(timezone.utc)
     capabilities = _worker_runtime_capabilities(settings=settings)
+    runtime_kinds = _worker_registered_runtime_kinds(settings=settings)
     with session_factory() as session:
         row = session.get(WorkerRuntimeState, service_instance_id)
         if row is None:
@@ -171,6 +182,8 @@ def _upsert_worker_runtime_state_once(
                 agent_id=agent_id,
                 worker_mode=worker_mode,
                 capabilities_json=capabilities,
+                runtime_kinds_json=runtime_kinds,
+                runtime_dependencies_json=dict(runtime_dependencies_json or {}),
                 state=state,
                 started_at=now,
                 last_heartbeat_at=now,
@@ -181,6 +194,9 @@ def _upsert_worker_runtime_state_once(
             row.agent_id = agent_id
             row.worker_mode = worker_mode
             row.capabilities_json = capabilities
+            row.runtime_kinds_json = runtime_kinds
+            if runtime_dependencies_json is not None:
+                row.runtime_dependencies_json = dict(runtime_dependencies_json)
             row.state = state
             row.last_heartbeat_at = now
             row.updated_at = now
@@ -217,7 +233,15 @@ def _refresh_worker_runtime_once(
 ) -> None:
     with session_factory() as session:
         active_run_count = _worker_runtime_active_run_count(session=session, service_instance_id=service_instance_id)
-    state = "busy" if active_run_count > 0 else "idle"
+        row = session.get(WorkerRuntimeState, service_instance_id)
+        existing_state = str(getattr(row, "state", "") or "").strip().lower() if row is not None else ""
+        runtime_dependencies_json = dict(getattr(row, "runtime_dependencies_json", {}) or {}) if row is not None else {}
+    if active_run_count > 0:
+        state = "busy"
+    elif existing_state == "degraded":
+        state = "degraded"
+    else:
+        state = "idle"
     _upsert_worker_runtime_state_once(
         session_factory=session_factory,
         settings=settings,
@@ -225,7 +249,32 @@ def _refresh_worker_runtime_once(
         service_instance_id=service_instance_id,
         worker_mode=worker_mode,
         state=state,
+        runtime_dependencies_json=runtime_dependencies_json,
     )
+
+
+def _sync_run_worker_runtime_dependencies_once(
+    *,
+    session_factory: sessionmaker[Session],
+    settings: Settings,
+    agent_id: str,
+    service_instance_id: str,
+) -> WorkerRuntimeDependencySnapshot:
+    snapshot = worker_runtime_dependency_snapshot(
+        session_factory=session_factory,
+        settings=settings,
+        service_instance_id=service_instance_id,
+    )
+    _upsert_worker_runtime_state_once(
+        session_factory=session_factory,
+        settings=settings,
+        agent_id=agent_id,
+        service_instance_id=service_instance_id,
+        worker_mode=WORKER_MODE_RUNS,
+        state="degraded" if snapshot.degraded else "idle",
+        runtime_dependencies_json=snapshot.to_json(),
+    )
+    return snapshot
 
 
 def _stop_worker_runtime_once(
@@ -340,6 +389,7 @@ def _claim_next_run_once(
     session_factory: sessionmaker[Session],
     settings: Settings,
     service_instance_id: str,
+    ready_runtime_kinds: set[str],
 ) -> ClaimedRunDispatch | None:
     capability_context = resolve_worker_capability_context(
         raw_value=getattr(settings, "worker_capabilities", None),
@@ -353,6 +403,7 @@ def _claim_next_run_once(
             failed_status="failed",
             worker_service_instance_id=service_instance_id,
             worker_capabilities=set(capability_context.available),
+            ready_runtime_kinds=ready_runtime_kinds,
             running_stale_timeout_seconds=max(
                 60,
                 int(getattr(settings, "worker_run_stale_timeout_seconds", 300)),
@@ -404,6 +455,7 @@ def _probe_claimable_run_once(
     *,
     session_factory: sessionmaker[Session],
     settings: Settings,
+    ready_runtime_kinds: set[str],
 ) -> QueueClaimabilityProbe:
     capability_context = resolve_worker_capability_context(
         raw_value=getattr(settings, "worker_capabilities", None),
@@ -415,6 +467,7 @@ def _probe_claimable_run_once(
             queued_status="queued",
             running_status="running",
             worker_capabilities=set(capability_context.available),
+            ready_runtime_kinds=ready_runtime_kinds,
             running_stale_timeout_seconds=max(
                 60,
                 int(getattr(settings, "worker_run_stale_timeout_seconds", 300)),
@@ -764,6 +817,10 @@ async def run_worker(*, mode: str = WORKER_MODE_RUNS) -> None:
     drain_requested = True
     poll_interval_seconds = max(1, int(getattr(settings, "worker_poll_interval_seconds", 5)))
     child_timeout_seconds = _resolve_worker_child_timeout_seconds(settings=settings)
+    runtime_dependency_snapshot = WorkerRuntimeDependencySnapshot(dependencies={})
+    readiness_refresh_seconds = max(5, int(getattr(settings, "worker_runtime_readiness_refresh_seconds", 30)))
+    next_readiness_refresh_at: datetime | None = None
+    runtime_block_logged_keys: tuple[str, ...] = ()
     try:
         listener.start()
         await asyncio.to_thread(
@@ -816,9 +873,40 @@ async def run_worker(*, mode: str = WORKER_MODE_RUNS) -> None:
                     stop_event=stop_event,
                 )
             )
+            runtime_dependency_snapshot = await asyncio.to_thread(
+                _sync_run_worker_runtime_dependencies_once,
+                session_factory=session_factory,
+                settings=settings,
+                agent_id=agent_id,
+                service_instance_id=service_instance_id,
+            )
+            next_readiness_refresh_at = datetime.now(timezone.utc)
 
         logger.info("worker_started mode=%s", mode)
         while not stop_event.is_set():
+            if mode == WORKER_MODE_RUNS:
+                now = datetime.now(timezone.utc)
+                if next_readiness_refresh_at is None or now >= next_readiness_refresh_at:
+                    runtime_dependency_snapshot = await asyncio.to_thread(
+                        _sync_run_worker_runtime_dependencies_once,
+                        session_factory=session_factory,
+                        settings=settings,
+                        agent_id=agent_id,
+                        service_instance_id=service_instance_id,
+                    )
+                    next_readiness_refresh_at = now + timedelta(seconds=readiness_refresh_seconds)
+                blocked_runtime_kinds = tuple(sorted(runtime_dependency_snapshot.blocked_runtime_kinds))
+                if blocked_runtime_kinds != runtime_block_logged_keys:
+                    if blocked_runtime_kinds:
+                        logger.error(
+                            "worker_runtime_dependencies_degraded mode=%s blocked_runtime_kinds=%s",
+                            mode,
+                            ",".join(blocked_runtime_kinds),
+                        )
+                    else:
+                        logger.info("worker_runtime_dependencies_ready mode=%s", mode)
+                    runtime_block_logged_keys = blocked_runtime_kinds
+
             completed_children = [task for task in active_children if task.done()]
             completed_count = 0
             any_processed = False
@@ -912,12 +1000,14 @@ async def run_worker(*, mode: str = WORKER_MODE_RUNS) -> None:
                         session_factory=session_factory,
                         settings=settings,
                         service_instance_id=service_instance_id,
+                        ready_runtime_kinds=runtime_dependency_snapshot.ready_runtime_kinds,
                     )
                     if claimed_run is None:
                         run_probe = await asyncio.to_thread(
                             _probe_claimable_run_once,
                             session_factory=session_factory,
                             settings=settings,
+                            ready_runtime_kinds=runtime_dependency_snapshot.ready_runtime_kinds,
                         )
                         logger.info(
                             "worker_no_claimable_run reason=%s run_id=%s tenant_id=%s issue_key=%s",

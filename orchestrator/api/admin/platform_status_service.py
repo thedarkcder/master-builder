@@ -44,6 +44,19 @@ def _worker_row_last_seen(row: WorkerRuntimeState) -> datetime | None:
     return _coerce_aware(row.last_heartbeat_at) or _coerce_aware(row.updated_at)
 
 
+def _runtime_dependencies_payload(row: WorkerRuntimeState) -> dict[str, dict[str, object]]:
+    raw_value = getattr(row, "runtime_dependencies_json", None)
+    if not isinstance(raw_value, dict):
+        return {}
+    payload: dict[str, dict[str, object]] = {}
+    for raw_kind, raw_entry in raw_value.items():
+        runtime_kind = str(raw_kind or "").strip().lower()
+        if not runtime_kind or not isinstance(raw_entry, dict):
+            continue
+        payload[runtime_kind] = dict(raw_entry)
+    return payload
+
+
 def _is_worker_row_fresh(*, row: WorkerRuntimeState, now: datetime) -> bool:
     last_seen = _worker_row_last_seen(row)
     if last_seen is None:
@@ -62,6 +75,8 @@ def _worker_instance_status(
         return "stopped", "Worker stopped cleanly."
     if not _is_worker_row_fresh(row=row, now=now):
         return "stale", "Last heartbeat is outside the worker freshness window."
+    if state == "degraded":
+        return "degraded", "Worker is online but blocked by a startup/runtime dependency."
     if active_run_count > 0 or state == "busy":
         run_label = "run" if active_run_count == 1 else "runs"
         return "busy", f"Processing {active_run_count} active {run_label}."
@@ -144,6 +159,7 @@ def _worker_instances(*, session, now: datetime) -> list[PlatformServiceInstance
                 updated_at=last_seen,
                 capabilities=_worker_row_capabilities(row),
                 active_run_count=active_run_count,
+                runtime_dependencies=_runtime_dependencies_payload(row),
             )
         )
     return instances
@@ -191,12 +207,22 @@ def _worker_status(*, session, settings: Settings) -> PlatformServiceStatusRead:
     )
     fresh_instances = [instance for instance in instances if instance.status not in {"stale", "stopped"}]
     stale_instances = [instance for instance in instances if instance.status == "stale"]
+    degraded_instances = [instance for instance in fresh_instances if instance.status == "degraded"]
     busy_instances = [instance for instance in fresh_instances if instance.status == "busy"]
     latest_heartbeat = max((instance.updated_at for instance in instances if instance.updated_at is not None), default=None)
     if fresh_instances:
-        if stale_instances:
+        if stale_instances or degraded_instances:
             status = "degraded"
-            summary = f"{len(stale_instances)} worker instance{'' if len(stale_instances) == 1 else 's'} have stale heartbeats."
+            parts: list[str] = []
+            if stale_instances:
+                parts.append(
+                    f"{len(stale_instances)} worker instance{'' if len(stale_instances) == 1 else 's'} have stale heartbeats."
+                )
+            if degraded_instances:
+                parts.append(
+                    f"{len(degraded_instances)} worker instance{'' if len(degraded_instances) == 1 else 's'} are blocked by startup/runtime dependencies."
+                )
+            summary = " ".join(parts)
         elif busy_instances:
             busy_count = sum(instance.active_run_count for instance in busy_instances)
             summary = (

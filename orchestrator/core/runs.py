@@ -9,6 +9,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from orchestrator.core.decision_types import PrecheckOutcome
+from orchestrator.core.config import get_settings
+from orchestrator.core.runtime_requirements import resolve_required_runtime_kinds_for_workflow
 from orchestrator.core.worker_capability_normalization import parse_worker_capability
 from orchestrator.core.workflow.execution_snapshot import (
     ExecutionSnapshot,
@@ -74,6 +76,7 @@ class RunBootstrap:
     entry_checkpoint_id: str | None = None
     precheck_outcome: str | None = None
     required_worker_capability: str | None = None
+    required_runtime_kinds_json: list[str] | None = None
 
 
 def normalize_run_dedupe_scope(raw_scope: object | None) -> str:
@@ -111,6 +114,23 @@ def resolve_required_worker_capability_from_plan(plan: object | None) -> str | N
     if snapshot is None:
         raise RunStateTransitionError("Unsupported execution snapshot version/shape")
     return _normalize_required_worker_capability(snapshot.workflow.requeue_target)
+
+
+def resolve_pr_url_from_plan(plan: object | None) -> str | None:
+    trigger_context = load_parsed_trigger_context_from_plan(plan)
+    normalized_pr_url = str(getattr(trigger_context, "pr_url", "") or "").strip()
+    return normalized_pr_url or None
+
+
+def resolve_pr_url_for_enqueue(
+    *,
+    pr_url: str | None = None,
+    pr_url_source_plan: object | None = None,
+) -> str | None:
+    normalized_pr_url = str(pr_url or "").strip()
+    if normalized_pr_url:
+        return normalized_pr_url
+    return resolve_pr_url_from_plan(pr_url_source_plan)
 
 
 def resolve_required_worker_capability_for_enqueue(
@@ -275,6 +295,34 @@ def _run_bootstrap_required_worker_capability(bootstrap: RunBootstrap | None) ->
     )
 
 
+def _run_bootstrap_required_runtime_kinds(bootstrap: RunBootstrap | None) -> list[str] | None:
+    if bootstrap is None:
+        return None
+    raw_value = getattr(bootstrap, "required_runtime_kinds_json", None)
+    if isinstance(raw_value, list):
+        return [str(item).strip().lower() for item in raw_value if str(item).strip()]
+    return None
+
+
+def _resolve_required_runtime_kinds(
+    *,
+    session: Session,
+    tenant_id: str,
+    project_id: str | None,
+    bootstrap: RunBootstrap | None,
+) -> list[str]:
+    bootstrap_runtime_kinds = _run_bootstrap_required_runtime_kinds(bootstrap)
+    if bootstrap_runtime_kinds is not None:
+        return bootstrap_runtime_kinds
+    settings = get_settings()
+    return resolve_required_runtime_kinds_for_workflow(
+        session=session,
+        settings=settings,
+        tenant_id=tenant_id,
+        project_id=project_id,
+    )
+
+
 def _next_attempt_number(session: Session, workflow_id: str) -> int:
     current = session.execute(
         select(func.max(Run.attempt_number)).where(Run.workflow_id == workflow_id)
@@ -372,9 +420,21 @@ def enqueue_run(
             bootstrap.plan if bootstrap is not None and isinstance(bootstrap.plan, dict) else precheck_source_plan
         ),
     )
+    normalized_pr_url = resolve_pr_url_for_enqueue(
+        pr_url=bootstrap.pr_url if bootstrap is not None else None,
+        pr_url_source_plan=(
+            bootstrap.plan if bootstrap is not None and isinstance(bootstrap.plan, dict) else precheck_source_plan
+        ),
+    )
     initial_plan = _build_initial_plan(
         bootstrap=bootstrap,
         normalized_precheck_outcome=normalized_precheck_outcome,
+    )
+    normalized_required_runtime_kinds = _resolve_required_runtime_kinds(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        bootstrap=bootstrap,
     )
     workflow_id = str(uuid4())
     run_id = str(uuid4())
@@ -387,7 +447,7 @@ def enqueue_run(
         issue_description=issue_description,
         repo_url=repo_url,
         branch=bootstrap.branch if bootstrap is not None else None,
-        pr_url=bootstrap.pr_url if bootstrap is not None else None,
+        pr_url=normalized_pr_url,
         dedupe_scope=normalized_dedupe_scope,
         status=RUN_STATUS_QUEUED,
         last_error=None,
@@ -411,7 +471,7 @@ def enqueue_run(
         issue_description=issue_description,
         repo_url=repo_url,
         branch=bootstrap.branch if bootstrap is not None else None,
-        pr_url=bootstrap.pr_url if bootstrap is not None else None,
+        pr_url=normalized_pr_url,
         attempt_number=1,
         parent_run_id=bootstrap.parent_run_id if bootstrap is not None else None,
         entry_mode=str(bootstrap.entry_mode or "fresh").strip() if bootstrap is not None else "fresh",
@@ -423,6 +483,7 @@ def enqueue_run(
         last_error=None,
         pre_check_outcome=normalized_precheck_outcome,
         required_worker_capability=normalized_required_worker_capability,
+        required_runtime_kinds_json=normalized_required_runtime_kinds,
         claim_id=None,
         created_at=now,
         dispatch_claimed_at=None,
@@ -551,6 +612,16 @@ def _enqueue_attempt_for_workflow(
         precheck_source_plan=bootstrap.plan,
     )
     normalized_required_worker_capability = _run_bootstrap_required_worker_capability(bootstrap)
+    normalized_pr_url = resolve_pr_url_for_enqueue(
+        pr_url=bootstrap.pr_url or workflow.pr_url,
+        pr_url_source_plan=bootstrap.plan,
+    )
+    normalized_required_runtime_kinds = _resolve_required_runtime_kinds(
+        session=session,
+        tenant_id=workflow.tenant_id,
+        project_id=workflow.project_id,
+        bootstrap=bootstrap,
+    )
     now = _now()
     run = Run(
         run_id=str(uuid4()),
@@ -562,7 +633,7 @@ def _enqueue_attempt_for_workflow(
         issue_description=workflow.issue_description,
         repo_url=workflow.repo_url,
         branch=bootstrap.branch or workflow.branch,
-        pr_url=bootstrap.pr_url or workflow.pr_url,
+        pr_url=normalized_pr_url,
         attempt_number=_next_attempt_number(session, workflow.workflow_id),
         parent_run_id=bootstrap.parent_run_id,
         entry_mode=str(bootstrap.entry_mode or "resume").strip() or "resume",
@@ -574,6 +645,7 @@ def _enqueue_attempt_for_workflow(
         last_error=None,
         pre_check_outcome=normalized_precheck_outcome,
         required_worker_capability=normalized_required_worker_capability,
+        required_runtime_kinds_json=normalized_required_runtime_kinds,
         claim_id=None,
         created_at=now,
         dispatch_claimed_at=None,
