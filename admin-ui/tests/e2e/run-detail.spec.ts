@@ -203,3 +203,41 @@ test("offers start from the start as a fresh rerun with no checkpoint payload", 
   expect(rerunPayload).toEqual({ mode: "fresh" });
   await expect(page).toHaveURL(/8e8957f2-79f8-4dc8-8deb-786b2c93828d$/, { timeout: 15000 });
 });
+
+test("force rerun cancels the active run and starts fresh with no checkpoint payload", async ({ page }) => {
+  const run = makeRun({
+    status: "running",
+    plan: makeExecutionSnapshotPlan({
+      stages: {
+        pm: {
+          status: "completed",
+          completed_at: "2026-03-27T16:55:00Z",
+          summary: "PM plan captured.",
+        },
+      },
+    }),
+  });
+  let rerunPayload: unknown = null;
+  let cancelCalled = false;
+
+  await seedAdminSession(page);
+  await mockRunDetailApis(page, {
+    run,
+    onCancelRun: () => {
+      cancelCalled = true;
+    },
+    onCreateAttempt: (payload) => {
+      rerunPayload = payload;
+    },
+  });
+
+  await page.goto(`/runs/${run.run_id}`);
+
+  await expect(page.getByText("Loading run details...")).toHaveCount(0, { timeout: 15000 });
+  await expect(page.getByRole("button", { name: "Force Rerun" })).toBeVisible();
+  await page.getByRole("button", { name: "Force Rerun" }).click();
+
+  expect(cancelCalled).toBe(true);
+  expect(rerunPayload).toEqual({ mode: "fresh" });
+  await expect(page).toHaveURL(/8e8957f2-79f8-4dc8-8deb-786b2c93828d$/, { timeout: 15000 });
+});

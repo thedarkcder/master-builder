@@ -24,7 +24,7 @@ class VoicePrewarmTests(unittest.TestCase):
             result = prewarm_voice_dependencies(settings=settings)
 
         transcription_mock.assert_not_called()
-        tts_mock.assert_called_once_with(settings=settings)
+        tts_mock.assert_called_once_with(settings=settings, allow_download=True)
         self.assertEqual(result.voice_stt_provider, "disabled")
         self.assertEqual(result.voice_tts_provider, "pocket_tts")
         self.assertFalse(result.transcription_ready)

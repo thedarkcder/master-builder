@@ -116,6 +116,7 @@ def _queue_run_from_issue_context(
         repo_url=project.github_repository,
         delivery_id=None,
         precheck_outcome=admission.precheck_outcome,
+        required_worker_capability=admission.required_worker_capability,
         max_concurrent_runs=resolve_effective_policy(
             tenant_policy=tenant.policy_config,
             project_overrides=project.policy_overrides,

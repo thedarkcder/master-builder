@@ -10,7 +10,7 @@ from orchestrator.core.decision_types import JiraConfigKey, jira_config_text
 from orchestrator.core.webhook_health import webhook_health_tracker
 from orchestrator.storage.models import Project, Run, Tenant
 
-ACTIVE_RUN_STATUSES = {"queued", "running"}
+ACTIVE_RUN_STATUSES = {"queued", "dispatching", "running"}
 
 
 def _to_aware(value: datetime | None) -> datetime | None:

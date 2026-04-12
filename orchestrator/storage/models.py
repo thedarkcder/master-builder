@@ -475,6 +475,9 @@ class Run(Base):
     __table_args__ = (
         Index("ix_runs_workflow_id", "workflow_id"),
         Index("ix_runs_workflow_attempt", "workflow_id", "attempt_number", unique=True),
+        Index("ix_runs_pre_check_outcome", "pre_check_outcome"),
+        Index("ix_runs_required_worker_capability", "required_worker_capability"),
+        Index("ix_runs_dispatch_claimed_at", "dispatch_claimed_at"),
     )
 
     run_id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -514,8 +517,11 @@ class Run(Base):
     dedupe_scope: Mapped[str] = mapped_column(String(32), nullable=False, default="issue_execution", index=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    pre_check_outcome: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    required_worker_capability: Mapped[str | None] = mapped_column(String(32), nullable=True)
     plan: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    dispatch_claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     worker_service_instance_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)

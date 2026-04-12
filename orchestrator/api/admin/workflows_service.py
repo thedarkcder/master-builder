@@ -7,10 +7,24 @@ from fastapi import HTTPException, status
 from sqlalchemy import desc, or_, select
 from sqlalchemy.exc import IntegrityError
 
-from orchestrator.core.runs import RunStateTransitionError, require_ready_for_agent_enqueue
+from orchestrator.core.worker_capabilities import infer_required_worker_capability
+from orchestrator.core.runs import (
+    RunStateTransitionError,
+    require_ready_for_agent_enqueue,
+    resolve_precheck_outcome_from_plan,
+    resolve_required_worker_capability_from_plan,
+)
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.core.workflow.transitions import ATTEMPT_ENTRY_MODES, attempt_creation_policy
-from orchestrator.storage.models import Project, Run, RunHumanInputRequest, WorkflowCheckpoint, WorkflowExecution
+from orchestrator.storage.models import (
+    DecisionCase,
+    DecisionEvent,
+    Project,
+    Run,
+    RunHumanInputRequest,
+    WorkflowCheckpoint,
+    WorkflowExecution,
+)
 from orchestrator.storage.run_queue_events import notify_run_enqueued
 
 
@@ -26,7 +40,7 @@ def _reconcile_workflow_status_with_active_attempt(*, session, workflow) -> None
     if active_run is None:
         return
     run_status = str(getattr(active_run, "status", "") or "").strip().lower()
-    if run_status in {"queued", "running"}:
+    if run_status in {"queued", "dispatching", "running"}:
         return
 
     now = _now()
@@ -137,15 +151,76 @@ def _fresh_start_plan(*, source_run: Run | None) -> dict[str, object] | None:
     if source_snapshot is None:
         return None
     next_snapshot = ExecutionSnapshot.empty(trigger_context=source_snapshot.context.trigger_context)
-    if source_snapshot.context.execution_context:
-        next_snapshot.context.execution_context = dict(source_snapshot.context.execution_context)
+    precheck_outcome = (
+        str(getattr(source_run, "pre_check_outcome", "") or "").strip()
+        or str(source_snapshot.context.execution_context.get("pre_check_outcome") or "").strip()
+    )
+    if precheck_outcome:
+        next_snapshot.context.execution_context["pre_check_outcome"] = precheck_outcome
     return next_snapshot.dump()
 
 
-def _require_ready_for_queue(*, source: str, plan: object | None) -> None:
+def _resolve_precheck_outcome_for_admin_attempt(*, source_run: Run | None, plan: object | None) -> str | None:
+    if source_run is not None:
+        persisted = str(getattr(source_run, "pre_check_outcome", "") or "").strip()
+        if persisted:
+            return persisted
+    return resolve_precheck_outcome_from_plan(plan)
+
+
+def _latest_decision_issue_labels_for_workflow(*, session, workflow) -> list[str]:  # noqa: ANN001
+    event = session.execute(
+        select(DecisionEvent)
+        .where(
+            DecisionEvent.tenant_id == workflow.tenant_id,
+            DecisionEvent.issue_key == workflow.issue_key,
+        )
+        .order_by(desc(DecisionEvent.created_at))
+        .limit(1)
+    ).scalar_one_or_none()
+    if event is None or not isinstance(event.payload_json, dict):
+        return []
+    labels = event.payload_json.get("issue_labels", [])
+    if not isinstance(labels, list):
+        return []
+    return [str(label).strip() for label in labels if str(label).strip()]
+
+
+def _resolve_required_worker_capability_for_admin_attempt(*, session, workflow, source_run: Run | None, plan: object | None) -> str | None:  # noqa: ANN001
+    if source_run is not None:
+        persisted = str(getattr(source_run, "required_worker_capability", "") or "").strip()
+        if persisted:
+            return persisted
+    plan_capability = resolve_required_worker_capability_from_plan(plan)
+    if plan_capability:
+        return plan_capability
+    case = session.execute(
+        select(DecisionCase)
+        .where(
+            DecisionCase.tenant_id == workflow.tenant_id,
+            DecisionCase.issue_key == workflow.issue_key,
+        )
+        .limit(1)
+    ).scalar_one_or_none()
+    case_capability = str(getattr(case, "required_worker_capability", "") or "").strip()
+    if case_capability:
+        return case_capability
+    inferred = infer_required_worker_capability(
+        issue_summary=workflow.issue_summary,
+        issue_description=workflow.issue_description,
+        issue_labels=_latest_decision_issue_labels_for_workflow(session=session, workflow=workflow),
+        tenant_id=workflow.tenant_id,
+        project_id=workflow.project_id,
+        issue_key=workflow.issue_key,
+    )
+    return str(inferred or "").strip() or None
+
+
+def _require_ready_for_queue(*, source: str, plan: object | None, precheck_outcome: str | None) -> None:
     try:
         require_ready_for_agent_enqueue(
             source=source,
+            precheck_outcome=precheck_outcome,
             precheck_source_plan=plan,
         )
     except RunStateTransitionError as exc:
@@ -322,6 +397,18 @@ def create_workflow_attempt(
         next_workflow.latest_checkpoint_id = selected_checkpoint.checkpoint_id if selected_checkpoint is not None else None
         next_workflow.updated_at = now
 
+    next_run_plan = _fresh_start_plan(source_run=source_run) if normalized_mode == "fresh" else dict(selected_checkpoint.payload_json or {})
+    next_run_precheck_outcome = _resolve_precheck_outcome_for_admin_attempt(
+        source_run=source_run,
+        plan=next_run_plan,
+    )
+    next_run_required_worker_capability = _resolve_required_worker_capability_for_admin_attempt(
+        session=session,
+        workflow=next_workflow,
+        source_run=source_run,
+        plan=next_run_plan,
+    )
+
     next_run = Run(
         run_id=str(uuid4()),
         workflow_id=next_workflow.workflow_id,
@@ -341,8 +428,11 @@ def create_workflow_attempt(
         dedupe_scope=next_workflow.dedupe_scope,
         status="queued",
         last_error=None,
-        plan=_fresh_start_plan(source_run=source_run) if normalized_mode == "fresh" else dict(selected_checkpoint.payload_json or {}),
+        pre_check_outcome=next_run_precheck_outcome,
+        required_worker_capability=next_run_required_worker_capability,
+        plan=next_run_plan,
         created_at=now,
+        dispatch_claimed_at=None,
         started_at=None,
         last_heartbeat_at=None,
         worker_service_instance_id=None,
@@ -351,6 +441,7 @@ def create_workflow_attempt(
     _require_ready_for_queue(
         source="admin_workflow_attempt",
         plan=next_run.plan,
+        precheck_outcome=next_run.pre_check_outcome,
     )
     session.add(next_run)
     next_workflow.active_run_id = next_run.run_id

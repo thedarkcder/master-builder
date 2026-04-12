@@ -65,6 +65,7 @@ def process_next_queued_run(
     fail_project_repository_checkout_fn,
     cleanup_run_workspaces_fn,
     build_run_heartbeat_controller_fn,
+    promote_run_to_running_fn=None,
     bind_run_project_fn,
     workflow_request_for_run_fn,
     fail_guardrail_violation_fn,
@@ -90,6 +91,7 @@ def process_next_queued_run(
     run_status_failed: str,
     run_status_blocked: str,
     run_status_cancelled: str,
+    run_status_dispatching: str = "dispatching",
 ):  # noqa: ANN001
     settings = settings_fn()
     try:
@@ -121,6 +123,13 @@ def process_next_queued_run(
         return None
     run = selection.run
     tenant = selection.tenant
+    logger.info(
+        "worker_run_dispatch_started run_id=%s tenant_id=%s issue_key=%s worker_service_instance_id=%s",
+        run.run_id,
+        run.tenant_id,
+        run.issue_key,
+        worker_service_instance_id,
+    )
 
     emit_agent_event_fn(
         event_type="ISSUE_ASSIGNED",
@@ -130,45 +139,6 @@ def process_next_queued_run(
         issue_key=run.issue_key,
         agent_id=agent_id,
     )
-
-    try:
-        decision_gate_run, decision_gate_meta = apply_decision_gate_fn(
-            session=session,
-            run=run,
-            tenant=tenant,
-            settings=settings,
-            send_discord_message_fn=send_discord_message_fn,
-            send_jira_message_fn=send_jira_message_fn,
-            ask_reply_components_fn=ask_reply_components_fn,
-            blocked_status=run_status_blocked,
-            failed_status=run_status_failed,
-        )
-    except Exception as exc:  # noqa: BLE001
-        logger.exception(
-            "worker_decision_gate_failed run_id=%s tenant_id=%s issue_key=%s error=%s",
-            run.run_id,
-            run.tenant_id,
-            run.issue_key,
-            exc,
-        )
-        return fail_guardrail_violation_fn(
-            session,
-            run=run,
-            error=f"Decision Gate evaluation failed: {exc}",
-        )
-    if decision_gate_run is not None:
-        if decision_gate_meta and isinstance(decision_gate_meta.get("send_result"), object):
-            send_result = decision_gate_meta["send_result"]
-            stage_update = decision_gate_meta["stage_update"]
-            if not send_result.sent:
-                logger.info(
-                    "worker_discord_stage_update_not_sent tenant_id=%s run_id=%s stage=%s reason=%s",
-                    run.tenant_id,
-                    run.run_id,
-                    stage_update["stage"],
-                    send_result.reason,
-                )
-        return decision_gate_run
 
     project = getattr(selection, "project", None)
     if project is None:
@@ -199,28 +169,6 @@ def process_next_queued_run(
             project_overrides=project.policy_overrides,
         )
     )
-    _emit_queue_wait_metric(
-        session=session,
-        run=run,
-        project_id=project.project_id,
-        agent_id=agent_id,
-    )
-    if bool(effective_policy.get("allow_jira_transitions")):
-        transition_issue_status_fn(
-            session=session,
-            tenant=tenant,
-            issue_key=run.issue_key,
-            target_status="In Progress",
-            settings=settings,
-        )
-    emit_agent_event_fn(
-        event_type="TASK_STARTED",
-        tenant_id=run.tenant_id,
-        project_id=project.project_id,
-        run_id=run.run_id,
-        issue_key=run.issue_key,
-        agent_id=agent_id,
-    )
 
     bind_run_project_fn(session, run=run, project=project)
 
@@ -233,6 +181,13 @@ def process_next_queued_run(
             effective_policy=effective_policy,
         )
     except (PermissionError, ValueError) as exc:
+        logger.warning(
+            "worker_workflow_request_build_failed run_id=%s tenant_id=%s issue_key=%s error=%s",
+            run.run_id,
+            run.tenant_id,
+            run.issue_key,
+            exc,
+        )
         _cleanup_run_workspaces_safe(
             cleanup_run_workspaces_fn=cleanup_run_workspaces_fn,
             logger=logger,
@@ -283,6 +238,43 @@ def process_next_queued_run(
         heartbeat_interval_seconds=max(5, int(getattr(settings, "worker_run_heartbeat_interval_seconds", 30))),
     )
     execution_context = _execution_context(workflow_request=workflow_request)
+    if promote_run_to_running_fn is not None:
+        promoted_run = promote_run_to_running_fn(
+            session,
+            run=run,
+            expected_worker_service_instance_id=worker_service_instance_id,
+        )
+        if promoted_run is None:
+            return run
+        run = promoted_run
+    elif getattr(run, "status", None) == run_status_dispatching:
+        return fail_guardrail_violation_fn(
+            session,
+            run=run,
+            error="Dispatching run reached execution without a running-state transition",
+        )
+    _emit_queue_wait_metric(
+        session=session,
+        run=run,
+        project_id=project.project_id,
+        agent_id=agent_id,
+    )
+    if bool(effective_policy.get("allow_jira_transitions")):
+        transition_issue_status_fn(
+            session=session,
+            tenant=tenant,
+            issue_key=run.issue_key,
+            target_status="In Progress",
+            settings=settings,
+        )
+    emit_agent_event_fn(
+        event_type="TASK_STARTED",
+        tenant_id=run.tenant_id,
+        project_id=project.project_id,
+        run_id=run.run_id,
+        issue_key=run.issue_key,
+        agent_id=agent_id,
+    )
     heartbeat_controller.start()
     try:
         workflow_result = runner.run(
@@ -354,6 +346,13 @@ def process_next_queued_run(
             )
             if freshness.stale:
                 error_text = freshness.message or "Branch snapshot stale; requeueing from latest snapshot."
+                logger.info(
+                    "worker_requeue_stale_snapshot run_id=%s tenant_id=%s issue_key=%s error=%s",
+                    run.run_id,
+                    run.tenant_id,
+                    run.issue_key,
+                    error_text,
+                )
                 notifier.append(
                     run_requeued_stale_snapshot_update_fn(
                         tenant_id=run.tenant_id,
@@ -405,6 +404,14 @@ def process_next_queued_run(
             if capability_requeue_target is not None:
                 required_worker_label = worker_label_for_capability(capability_requeue_target)
                 error_text = workflow_result.requeue_reason or "Execution capability mismatch"
+                logger.info(
+                    "worker_requeue_capability run_id=%s tenant_id=%s issue_key=%s required_worker_label=%s error=%s",
+                    run.run_id,
+                    run.tenant_id,
+                    run.issue_key,
+                    required_worker_label,
+                    error_text,
+                )
                 notifier.append(
                     run_requeued_capability_update_fn(
                         tenant_id=run.tenant_id,
@@ -468,6 +475,14 @@ def process_next_queued_run(
             stage_updates=notifier.stage_updates,
             execution_context=execution_context,
             expected_worker_service_instance_id=worker_service_instance_id,
+        )
+        logger.info(
+            "worker_run_finalized run_id=%s tenant_id=%s issue_key=%s outcome=%s final_status=%s",
+            finalization.run.run_id,
+            finalization.run.tenant_id,
+            finalization.run.issue_key,
+            workflow_result.outcome,
+            finalization.run.status,
         )
 
         for event_type in finalization.event_types:

@@ -15,7 +15,7 @@ from orchestrator.core.worker_capabilities import (
     parse_worker_capabilities,
     required_worker_capability_for_run,
 )
-from orchestrator.core.worker.run_lifecycle import resolve_project_for_run, start_run
+from orchestrator.core.worker.run_lifecycle import claim_run_for_dispatch, resolve_project_for_run
 from orchestrator.storage.models import Project, Run, Tenant, TenantRunClaim
 
 logger = logging.getLogger(__name__)
@@ -63,6 +63,15 @@ class QueueCandidateClaimability:
     selection: QueueSelectionResult | None = None
 
 
+@dataclass(frozen=True)
+class QueueScanResult:
+    selection: QueueSelectionResult
+    claimability: QueueCandidateClaimability
+    blocked_candidate: Run | None
+    saw_capability_mismatch: bool
+    saw_concurrency_limit: bool
+
+
 def coerce_positive_int(value: object, *, default: int) -> int:
     try:
         parsed = int(value)
@@ -72,19 +81,19 @@ def coerce_positive_int(value: object, *, default: int) -> int:
 
 
 def _effective_last_seen_expr():  # noqa: ANN202
-    return func.coalesce(Run.last_heartbeat_at, Run.started_at, Run.created_at)
+    return func.coalesce(Run.last_heartbeat_at, Run.started_at, Run.dispatch_claimed_at, Run.created_at)
 
 
 def running_run_count(
     session: Session,
     *,
     tenant_id: str,
-    running_status: str,
+    active_statuses: set[str],
     running_stale_timeout_seconds: int | None = None,
 ) -> int:
     query = select(func.count(Run.run_id)).where(
         Run.tenant_id == tenant_id,
-        Run.status == running_status,
+        Run.status.in_(tuple(sorted(active_statuses))),
     )
     if running_stale_timeout_seconds is not None:
         timeout_seconds = max(60, int(running_stale_timeout_seconds))
@@ -212,7 +221,7 @@ def _claimability_for_selection(
     session: Session,
     *,
     selection: QueueSelectionResult,
-    running_status: str,
+    active_statuses: set[str],
     lock_tenant_claim: bool,
     running_stale_timeout_seconds: int | None = None,
 ) -> QueueCandidateClaimability:
@@ -231,7 +240,7 @@ def _claimability_for_selection(
     current_running = running_run_count(
         session,
         tenant_id=selection.tenant.tenant_id,
-        running_status=running_status,
+        active_statuses=active_statuses,
         running_stale_timeout_seconds=running_stale_timeout_seconds,
     )
     if current_running >= max_concurrent_runs:
@@ -239,6 +248,116 @@ def _claimability_for_selection(
     return QueueCandidateClaimability(
         reason=QueueClaimabilityReason.CLAIMABLE,
         selection=selection,
+    )
+
+
+def _queued_run_ids(session: Session, *, queued_status: str) -> list[str]:
+    return session.execute(
+        select(Run.run_id).where(Run.status == queued_status).order_by(Run.created_at.asc())
+    ).scalars().all()
+
+
+def _scan_queued_candidates(
+    session: Session,
+    *,
+    queued_status: str,
+    failed_status: str,
+    allowed_capabilities: set[WorkerCapability],
+    active_statuses: set[str] | None = None,
+    lock_tenant_claim: bool = False,
+    running_stale_timeout_seconds: int | None = None,
+    lock_for_claim: bool = False,
+    terminalize_missing_tenant: bool = True,
+) -> QueueScanResult:
+    saw_capability_mismatch = False
+    saw_concurrency_limit = False
+    blocked_candidate: Run | None = None
+    candidate_run_ids = _queued_run_ids(session, queued_status=queued_status)
+
+    for run_id in candidate_run_ids:
+        candidate = (
+            _lock_queued_run_for_claim(session, run_id=run_id, queued_status=queued_status)
+            if lock_for_claim
+            else session.get(Run, run_id)
+        )
+        if candidate is None:
+            if lock_for_claim:
+                session.rollback()
+            continue
+
+        if terminalize_missing_tenant:
+            selection = _candidate_selection_details(
+                session,
+                candidate=candidate,
+                failed_status=failed_status,
+                allowed_capabilities=allowed_capabilities,
+            )
+        else:
+            evaluation = _evaluate_candidate(
+                session,
+                candidate=candidate,
+                allowed_capabilities=allowed_capabilities,
+            )
+            if not evaluation.capability_compatible:
+                selection = QueueSelectionResult()
+            elif evaluation.tenant_missing:
+                selection = QueueSelectionResult(terminal_run=candidate)
+            else:
+                selection = QueueSelectionResult(
+                    run=candidate,
+                    tenant=evaluation.tenant,
+                    project=evaluation.project,
+                    effective_policy=evaluation.effective_policy,
+                )
+        claimability = (
+            _claimability_for_selection(
+                session,
+                selection=selection,
+                active_statuses=active_statuses,
+                lock_tenant_claim=lock_tenant_claim,
+                running_stale_timeout_seconds=running_stale_timeout_seconds,
+            )
+            if active_statuses is not None
+            else (
+                QueueCandidateClaimability(reason=QueueClaimabilityReason.TERMINAL, selection=selection)
+                if selection.terminal_run is not None
+                else (
+                    QueueCandidateClaimability(reason=QueueClaimabilityReason.CLAIMABLE, selection=selection)
+                    if selection.run is not None and selection.tenant is not None
+                    else QueueCandidateClaimability(reason=QueueClaimabilityReason.CAPABILITY_MISMATCH)
+                )
+            )
+        )
+        if claimability.reason == QueueClaimabilityReason.TERMINAL:
+            return QueueScanResult(
+                selection=selection,
+                claimability=claimability,
+                blocked_candidate=candidate,
+                saw_capability_mismatch=saw_capability_mismatch,
+                saw_concurrency_limit=saw_concurrency_limit,
+            )
+        if claimability.reason == QueueClaimabilityReason.CLAIMABLE:
+            return QueueScanResult(
+                selection=claimability.selection or selection,
+                claimability=claimability,
+                blocked_candidate=candidate,
+                saw_capability_mismatch=saw_capability_mismatch,
+                saw_concurrency_limit=saw_concurrency_limit,
+            )
+        if claimability.reason == QueueClaimabilityReason.CONCURRENCY_LIMIT:
+            saw_concurrency_limit = True
+        elif claimability.reason == QueueClaimabilityReason.CAPABILITY_MISMATCH:
+            saw_capability_mismatch = True
+        blocked_candidate = blocked_candidate or candidate
+        if lock_for_claim:
+            session.rollback()
+
+    return QueueScanResult(
+        selection=QueueSelectionResult(),
+        claimability=QueueCandidateClaimability(reason=QueueClaimabilityReason.NO_QUEUED_RUNS),
+        blocked_candidate=blocked_candidate,
+        saw_capability_mismatch=saw_capability_mismatch,
+        saw_concurrency_limit=saw_concurrency_limit,
     )
 
 
@@ -251,23 +370,12 @@ def select_next_queued_run(
     worker_capabilities: set[WorkerCapability] | None = None,
 ) -> QueueSelectionResult:
     allowed_capabilities = parse_worker_capabilities(worker_capabilities or [])
-    queued_runs = session.execute(
-        select(Run).where(Run.status == queued_status).order_by(Run.created_at.asc())
-    ).scalars().all()
-
-    for candidate in queued_runs:
-        selection = _candidate_selection_details(
-            session,
-            candidate=candidate,
-            failed_status=failed_status,
-            allowed_capabilities=allowed_capabilities,
-        )
-        if selection.terminal_run is not None:
-            return selection
-        if selection.run is not None and selection.tenant is not None:
-            return selection
-
-    return QueueSelectionResult()
+    return _scan_queued_candidates(
+        session,
+        queued_status=queued_status,
+        failed_status=failed_status,
+        allowed_capabilities=allowed_capabilities,
+    ).selection
 
 
 def probe_claimable_queued_run(
@@ -275,66 +383,43 @@ def probe_claimable_queued_run(
     *,
     queued_status: str,
     running_status: str,
+    dispatching_status: str = "dispatching",
     worker_capabilities: set[WorkerCapability] | None = None,
     running_stale_timeout_seconds: int | None = None,
 ) -> QueueClaimabilityProbe:
     allowed_capabilities = parse_worker_capabilities(worker_capabilities or [])
-    queued_runs = session.execute(
-        select(Run).where(Run.status == queued_status).order_by(Run.created_at.asc())
-    ).scalars().all()
-
-    saw_capability_mismatch = False
-    saw_concurrency_limit = False
-    for candidate in queued_runs:
-        evaluation = _evaluate_candidate(
-            session,
-            candidate=candidate,
-            allowed_capabilities=allowed_capabilities,
+    scan = _scan_queued_candidates(
+        session,
+        queued_status=queued_status,
+        failed_status=running_status,
+        allowed_capabilities=allowed_capabilities,
+        active_statuses={running_status, dispatching_status},
+        lock_tenant_claim=False,
+        running_stale_timeout_seconds=running_stale_timeout_seconds,
+        terminalize_missing_tenant=False,
+    )
+    if scan.claimability.reason in {QueueClaimabilityReason.CLAIMABLE, QueueClaimabilityReason.TERMINAL}:
+        selected = scan.selection.terminal_run if scan.selection.terminal_run is not None else scan.selection.run
+        return QueueClaimabilityProbe(
+            claimable=True,
+            reason=scan.claimability.reason,
+            run_id=getattr(selected, "run_id", None),
+            tenant_id=getattr(selected, "tenant_id", None),
+            issue_key=getattr(selected, "issue_key", None),
         )
-        if not evaluation.capability_compatible:
-            saw_capability_mismatch = True
-            continue
-        if evaluation.tenant_missing:
-            return QueueClaimabilityProbe(
-                claimable=True,
-                reason=QueueClaimabilityReason.TERMINAL,
-                run_id=candidate.run_id,
-                tenant_id=candidate.tenant_id,
-                issue_key=candidate.issue_key,
-            )
-        selection = QueueSelectionResult(
-            run=candidate,
-            tenant=evaluation.tenant,
-            project=evaluation.project,
-            effective_policy=evaluation.effective_policy,
-        )
-        claimability = _claimability_for_selection(
-            session,
-            selection=selection,
-            running_status=running_status,
-            lock_tenant_claim=False,
-            running_stale_timeout_seconds=running_stale_timeout_seconds,
-        )
-        if claimability.reason == QueueClaimabilityReason.CONCURRENCY_LIMIT:
-            saw_concurrency_limit = True
-            continue
-        if claimability.reason == QueueClaimabilityReason.CLAIMABLE and claimability.selection is not None:
-            claimable = claimability.selection
-            assert claimable.run is not None
-            return QueueClaimabilityProbe(
-                claimable=True,
-                reason=QueueClaimabilityReason.CLAIMABLE,
-                run_id=claimable.run.run_id,
-                tenant_id=claimable.run.tenant_id,
-                issue_key=claimable.run.issue_key,
-            )
-    if saw_concurrency_limit:
+    if scan.saw_concurrency_limit:
         reason = QueueClaimabilityReason.CONCURRENCY_LIMIT
-    elif saw_capability_mismatch:
+    elif scan.saw_capability_mismatch:
         reason = QueueClaimabilityReason.CAPABILITY_MISMATCH
     else:
         reason = QueueClaimabilityReason.NO_QUEUED_RUNS
-    return QueueClaimabilityProbe(claimable=False, reason=reason)
+    return QueueClaimabilityProbe(
+        claimable=False,
+        reason=reason,
+        run_id=getattr(scan.blocked_candidate, "run_id", None),
+        tenant_id=getattr(scan.blocked_candidate, "tenant_id", None),
+        issue_key=getattr(scan.blocked_candidate, "issue_key", None),
+    )
 
 
 def claim_next_queued_run(
@@ -342,64 +427,57 @@ def claim_next_queued_run(
     *,
     queued_status: str,
     running_status: str,
+    dispatching_status: str = "dispatching",
     failed_status: str,
     worker_service_instance_id: str | None,
     worker_capabilities: set[WorkerCapability] | None = None,
     running_stale_timeout_seconds: int | None = None,
 ) -> QueueSelectionResult:
     allowed_capabilities = parse_worker_capabilities(worker_capabilities or [])
-    candidate_run_ids = session.execute(
-        select(Run.run_id).where(Run.status == queued_status).order_by(Run.created_at.asc())
-    ).scalars().all()
-
-    for run_id in candidate_run_ids:
-        candidate = _lock_queued_run_for_claim(session, run_id=run_id, queued_status=queued_status)
-        if candidate is None:
-            session.rollback()
-            continue
-
-        selection = _candidate_selection_details(
-            session,
-            candidate=candidate,
-            failed_status=failed_status,
-            allowed_capabilities=allowed_capabilities,
-        )
-        claimability = _claimability_for_selection(
-            session,
-            selection=selection,
-            running_status=running_status,
-            lock_tenant_claim=True,
-            running_stale_timeout_seconds=running_stale_timeout_seconds,
-        )
-        if claimability.reason == QueueClaimabilityReason.TERMINAL:
-            return selection
-        if claimability.reason != QueueClaimabilityReason.CLAIMABLE or selection.run is None or selection.tenant is None:
-            if claimability.reason == QueueClaimabilityReason.CONCURRENCY_LIMIT:
-                logger.info(
-                    "worker_skipping_run_due_to_concurrency_limit tenant_id=%s issue_key=%s",
-                    selection.tenant.tenant_id if selection.tenant is not None else None,
-                    selection.run.issue_key if selection.run is not None else None,
-                )
-            session.rollback()
-            continue
-
-        started_run = start_run(
-            session,
-            run=selection.run,
-            expected_status=queued_status,
-            worker_service_instance_id=worker_service_instance_id,
-        )
-        if started_run is None:
-            logger.info(
-                "worker_skipping_run_claim_conflict run_id=%s tenant_id=%s issue_key=%s",
-                selection.run.run_id,
-                selection.run.tenant_id,
-                selection.run.issue_key,
-            )
-            session.rollback()
-            continue
-
-        selection.run = started_run
+    scan = _scan_queued_candidates(
+        session,
+        queued_status=queued_status,
+        failed_status=failed_status,
+        allowed_capabilities=allowed_capabilities,
+        active_statuses={running_status, dispatching_status},
+        lock_tenant_claim=True,
+        running_stale_timeout_seconds=running_stale_timeout_seconds,
+        lock_for_claim=True,
+    )
+    selection = scan.selection
+    if scan.claimability.reason == QueueClaimabilityReason.TERMINAL:
         return selection
+    if scan.claimability.reason != QueueClaimabilityReason.CLAIMABLE or selection.run is None or selection.tenant is None:
+        if scan.claimability.reason == QueueClaimabilityReason.CONCURRENCY_LIMIT:
+            logger.info(
+                "worker_skipping_run_due_to_concurrency_limit tenant_id=%s issue_key=%s",
+                selection.tenant.tenant_id if selection.tenant is not None else None,
+                selection.run.issue_key if selection.run is not None else None,
+            )
+        return QueueSelectionResult()
 
-    return QueueSelectionResult()
+    dispatching_run = claim_run_for_dispatch(
+        session,
+        run=selection.run,
+        expected_status=queued_status,
+        worker_service_instance_id=worker_service_instance_id,
+    )
+    if dispatching_run is None:
+        logger.info(
+            "worker_skipping_run_claim_conflict run_id=%s tenant_id=%s issue_key=%s",
+            selection.run.run_id,
+            selection.run.tenant_id,
+            selection.run.issue_key,
+        )
+        session.rollback()
+        return QueueSelectionResult()
+
+    logger.info(
+        "worker_claimed_run run_id=%s tenant_id=%s issue_key=%s worker_service_instance_id=%s",
+        dispatching_run.run_id,
+        dispatching_run.tenant_id,
+        dispatching_run.issue_key,
+        worker_service_instance_id,
+    )
+    selection.run = dispatching_run
+    return selection

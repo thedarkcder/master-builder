@@ -11,11 +11,9 @@ from orchestrator.core.decision_types import (
     PrecheckOutcome,
     WorkerDecision,
     guidance_for_precheck_block_reason,
-    tenant_ready_label,
 )
 from orchestrator.core.pre_run_check import (
     PreRunCheckResult,
-    evaluate_execution_readiness_only,
     evaluate_pre_run_check,
 )
 from orchestrator.core.runs import is_ready_for_agent_precheck, resolve_precheck_outcome_for_enqueue
@@ -91,23 +89,12 @@ def evaluate_worker_decision(
     )
     persisted_outcome = PrecheckOutcome.parse(persisted_outcome_raw)
     if persisted_outcome is None:
-        live_pre_check = _resolve_live_precheck_outcome(
-            tenant_id=tenant_id,
-            project_id=project_id,
-            issue_key=issue_key,
-            issue_summary=issue_summary,
-            issue_description=issue_description,
-            issue_labels=issue_labels,
-            tenant=tenant,
+        return WorkerDecision(
+            allowed=False,
+            decision_gate=None,
+            configuration_error="Execution readiness check failed: missing persisted pre_check_outcome",
+            block_reason=PrecheckOutcome.POLICY_EVAL_FAILED.value,
         )
-        if live_pre_check is None:
-            return WorkerDecision(
-                allowed=False,
-                decision_gate=None,
-                configuration_error="Execution readiness check failed: missing persisted pre_check_outcome",
-                block_reason=PrecheckOutcome.POLICY_EVAL_FAILED.value,
-            )
-        return _worker_decision_from_precheck(pre_check=live_pre_check)
 
     if persisted_outcome is PrecheckOutcome.READY_FOR_AGENT:
         return WorkerDecision(
@@ -134,33 +121,6 @@ def evaluate_worker_decision(
         block_reason=PrecheckOutcome.POLICY_EVAL_FAILED.value,
         classification=DecisionClassification.CLEAR,
     )
-
-
-def _resolve_live_precheck_outcome(
-    *,
-    tenant_id: str | None,
-    project_id: str | None,
-    issue_key: str | None,
-    issue_summary: str | None,
-    issue_description: str | None,
-    issue_labels: list[str] | None,
-    tenant: Tenant | None,
-) -> PreRunCheckResult | None:
-    if not tenant_id or not issue_key:
-        return None
-    try:
-        return evaluate_execution_readiness_only(
-            tenant_id=tenant_id,
-            project_id=project_id,
-            issue_key=issue_key,
-            issue_summary=issue_summary,
-            issue_description=issue_description,
-            issue_labels=issue_labels,
-            ready_label=tenant_ready_label(tenant),
-        )
-    except Exception:  # noqa: BLE001
-        return None
-
 
 def _blocked_worker_decision_from_outcome(
     *,

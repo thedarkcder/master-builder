@@ -44,7 +44,7 @@ def test_build_knowledge_text_embedding_model_respects_cache_dir_and_offline_env
     assert captured["kwargs"] == {"cache_dir": "/tmp/hf-cache", "local_files_only": True}
 
 
-def test_embed_texts_uses_local_only_mode_without_network_bootstrap() -> None:
+def test_embed_texts_uses_local_cache_for_runtime_embedding_access() -> None:
     fake_model = SimpleNamespace(embed=lambda texts: [[0.1] for _ in texts])
 
     with patch(
@@ -53,7 +53,7 @@ def test_embed_texts_uses_local_only_mode_without_network_bootstrap() -> None:
     ) as model_mock:
         vectors = _embed_texts(
             ["bundle id"],
-            embedding_access_mode=KnowledgeEmbeddingAccessMode.LOCAL_ONLY,
+            embedding_access_mode=KnowledgeEmbeddingAccessMode.BEST_EFFORT,
         )
 
     model_mock.assert_called_once_with(True)

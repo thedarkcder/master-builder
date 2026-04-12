@@ -766,13 +766,11 @@ export default function RunDetailPage() {
     }
     setForceRerunBusy(true);
     try {
-      const restartCheckpointKind = hasPmCheckpoint ? "pm" : "execution";
       const cancelled = await cancelRun(credentials, run.run_id);
       const nextRun = await createWorkflowAttempt(credentials, cancelled.workflow_id, {
-        mode: "restart",
-        checkpoint_kind: restartCheckpointKind
+        mode: "fresh"
       });
-      setStatusLine(`Force-cancelled ${cancelled.run_id} and queued restart ${nextRun.run_id}.`);
+      setStatusLine(`Force-cancelled ${cancelled.run_id} and queued fresh run ${nextRun.run_id}.`);
       router.push(
         buildRunDetailPath({
           tenantId: run.tenant_id,

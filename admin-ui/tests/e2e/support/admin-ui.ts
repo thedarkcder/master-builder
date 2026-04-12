@@ -652,6 +652,7 @@ export async function mockRunDetailApis(
     projects?: ProjectRecord[];
     nextAttemptResponse?: RunRecord;
     onCreateAttempt?: (payload: WorkflowAttemptCreatePayload) => void;
+    onCancelRun?: () => void;
   },
 ): Promise<void> {
   const tenant = options.tenant ?? makeTenant({ tenant_id: options.run.tenant_id });
@@ -771,6 +772,14 @@ export async function mockRunDetailApis(
       method: "GET",
       pathname: `/api/bff/api/admin/tenants/${encodeURIComponent(options.run.tenant_id)}/projects`,
       handler: (route) => fulfillJson(route, projects),
+    },
+    {
+      method: "POST",
+      pathname: `/api/bff/api/admin/runs/${encodeURIComponent(options.run.run_id)}/cancel`,
+      handler: async (route) => {
+        options.onCancelRun?.();
+        await fulfillJson(route, { ...options.run, status: "cancelled" satisfies RunStatus });
+      },
     },
     {
       method: "POST",

@@ -17,9 +17,10 @@ from orchestrator.core.codex_runtime import CodexRuntimeError
 from orchestrator.core.config import Settings, get_settings
 from orchestrator.core.discord.notifications import send_tenant_discord_message
 from orchestrator.core.logging import configure_logging
+from orchestrator.core.knowledge_prewarm import prewarm_knowledge_dependencies
 from orchestrator.core.platform_metrics import platform_metrics
 from orchestrator.core.project_policy import resolve_effective_policy
-from orchestrator.core.runs import RUN_STATUS_RUNNING
+from orchestrator.core.runs import RUN_STATUS_DISPATCHING, RUN_STATUS_RUNNING
 from orchestrator.core.worker.run_health import (
     recover_stale_running_runs,
     worker_service_instance_id_for_mode,
@@ -112,7 +113,7 @@ def _worker_runtime_active_run_count(
 ) -> int:
     count = session.execute(
         select(func.count(Run.run_id)).where(
-            Run.status == RUN_STATUS_RUNNING,
+            Run.status.in_((RUN_STATUS_DISPATCHING, RUN_STATUS_RUNNING)),
             Run.worker_service_instance_id == service_instance_id,
         )
     ).scalar_one()
@@ -666,6 +667,10 @@ async def run_worker(*, mode: str = WORKER_MODE_RUNS) -> None:
         )
         if mode == WORKER_MODE_RUNS:
             await asyncio.to_thread(
+                prewarm_knowledge_dependencies,
+                settings=settings,
+            )
+            await asyncio.to_thread(
                 _recover_worker_run_health_once,
                 session_factory=session_factory,
                 settings=settings,
@@ -768,8 +773,11 @@ async def run_worker(*, mode: str = WORKER_MODE_RUNS) -> None:
                     )
                     if not run_probe.claimable:
                         logger.info(
-                            "worker_no_claimable_run reason=%s",
+                            "worker_no_claimable_run reason=%s run_id=%s tenant_id=%s issue_key=%s",
                             run_probe.reason.value,
+                            run_probe.run_id,
+                            run_probe.tenant_id,
+                            run_probe.issue_key,
                         )
                         drain_requested = False
                         break

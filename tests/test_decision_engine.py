@@ -228,6 +228,21 @@ class DecisionEngineTests(unittest.TestCase):
         self.assertIsNotNone(worker_decision.configuration_error)
         self.assertEqual(worker_decision.block_reason, "policy_eval_failed")
 
+    def test_worker_decision_fails_closed_when_persisted_precheck_outcome_missing(self) -> None:
+        worker_decision = evaluate_worker_decision(
+            run_plan=_run_plan(),
+            tenant_id="t1",
+            project_id="p1",
+            issue_key="TP-1",
+            run_id="run-1",
+            issue_summary="summary",
+            issue_description="desc",
+        )
+        self.assertFalse(worker_decision.allowed)
+        self.assertIsNone(worker_decision.decision_gate)
+        self.assertEqual(worker_decision.block_reason, "policy_eval_failed")
+        self.assertIn("missing persisted pre_check_outcome", str(worker_decision.configuration_error or ""))
+
     def test_worker_decision_uses_persisted_precheck_outcome_ready(self) -> None:
         worker_decision = evaluate_worker_decision(
             run_plan=_run_plan(pre_check_outcome="ready_for_agent"),

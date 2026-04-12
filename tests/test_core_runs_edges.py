@@ -143,6 +143,32 @@ class CoreRunsEdgeTests(unittest.TestCase):
         self.assertEqual(result.reason, "tenant_concurrency_limit_reached")
         self.assertEqual(result.run.run_id, "run-limited")
 
+    def test_enqueue_persists_precheck_and_required_worker_capability_on_run_row(self) -> None:
+        session = MagicMock()
+        added_rows: list[object] = []
+        session.add.side_effect = added_rows.append
+
+        with (
+            patch("orchestrator.core.runs._active_workflow_for_issue", return_value=None),
+            patch("orchestrator.core.runs._active_run_count_for_tenant", return_value=0),
+            patch("orchestrator.core.runs.notify_run_enqueued"),
+        ):
+            result = enqueue_run(
+                session,
+                tenant_id="tenant-a",
+                project_id="project-a",
+                issue_key="TP-8",
+                precheck_outcome="ready_for_agent",
+                required_worker_capability="macos",
+            )
+
+        run_rows = [row for row in added_rows if getattr(row, "__class__", type("", (), {})).__name__ == "Run"]
+        self.assertEqual(len(run_rows), 1)
+        run = run_rows[0]
+        self.assertTrue(result.enqueued)
+        self.assertEqual(run.pre_check_outcome, "ready_for_agent")
+        self.assertEqual(run.required_worker_capability, "macos")
+
     def test_mark_run_terminal_rejects_terminal_status_change(self) -> None:
         session = MagicMock()
         run = SimpleNamespace(

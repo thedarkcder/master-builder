@@ -36,6 +36,7 @@ class ExecutionAdmissionReason(str, Enum):
 class ExecutionAdmissionDecision:
     can_enqueue: bool
     precheck_outcome: str | None
+    required_worker_capability: str | None = None
     reason: ExecutionAdmissionReason | None = None
     guidance: str | None = None
     detail: str | None = None
@@ -102,6 +103,7 @@ def build_execution_admission_block(
     return ExecutionAdmissionDecision(
         can_enqueue=False,
         precheck_outcome=precheck_outcome,
+        required_worker_capability=None,
         reason=reason,
         guidance=guidance,
         detail=normalized_detail,
@@ -153,14 +155,19 @@ def resolve_execution_admission(*, decision_result: DecisionEngineResult) -> Exe
     gate_block = resolve_run_gate_block(decision_result=decision_result)
     parsed_precheck_outcome = PrecheckOutcome.parse(getattr(decision_result.decision.pre_check, "outcome", None))
     precheck_outcome = parsed_precheck_outcome.value if parsed_precheck_outcome is not None else None
+    required_worker_capability = str(
+        getattr(decision_result.decision.pre_check, "required_worker_capability", "") or ""
+    ).strip() or None
     if gate_block is None:
         return ExecutionAdmissionDecision(
             can_enqueue=True,
             precheck_outcome=precheck_outcome,
+            required_worker_capability=required_worker_capability,
         )
     return ExecutionAdmissionDecision(
         can_enqueue=False,
         precheck_outcome=precheck_outcome,
+        required_worker_capability=required_worker_capability,
         reason=_parse_admission_reason(gate_block.reason),
         guidance=gate_block.guidance,
         detail=gate_block.detail,
