@@ -1159,14 +1159,19 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             output_idx = args.index("--output-last-message") + 1
             return _FakePopen(args[output_idx], returncode=1, stderr_lines=["auth required\n"])
 
+        def fake_run_not_logged_in(args: list[str], **_kwargs: object):
+            self.assertEqual(args[1:], ["login", "status"])
+            return subprocess.CompletedProcess(args=args, returncode=1, stdout="Not logged in\n", stderr="")
+
         with (
             patch("orchestrator.core.codex_runtime.shutil.which", return_value="/usr/bin/codex"),
             patch("orchestrator.core.codex_runtime.subprocess.Popen", side_effect=fake_popen_auth),
+            patch("orchestrator.core.codex_runtime.subprocess.run", side_effect=fake_run_not_logged_in),
         ):
             runtime = build_codex_runtime(settings=settings)
             with self.assertRaises(CodexRuntimeError) as exc_info:
                 runtime.run_text(system_prompt="s", user_prompt="u")
-            self.assertIn("docker compose run --rm run-worker codex login --device-auth", str(exc_info.exception))
+            self.assertEqual(str(exc_info.exception), "Codex CLI is not authenticated.")
 
         def fake_popen_auth_with_link(args: list[str], **_kwargs: object):
             output_idx = args.index("--output-last-message") + 1
@@ -1176,22 +1181,97 @@ class BuildCodexRuntimeTests(unittest.TestCase):
                 stderr_lines=["auth required https://auth.openai.com/device/abc123\n"],
             )
 
+        def fake_run_device_auth(args: list[str], **_kwargs: object):
+            if args[1:] == ["login", "status"]:
+                return subprocess.CompletedProcess(args=args, returncode=1, stdout="Not logged in\n", stderr="")
+            self.assertEqual(args[1:], ["login", "--device-auth"])
+            raise subprocess.TimeoutExpired(
+                cmd=args,
+                timeout=5.0,
+                output=(
+                    "Open this link in your browser and sign in to your account\n"
+                    "https://auth.openai.com/device/abc123\n"
+                    "Enter this one-time code\n"
+                    "E6Z5-1GSQH\n"
+                ),
+                stderr="",
+            )
+
         with (
             patch("orchestrator.core.codex_runtime.shutil.which", return_value="/usr/bin/codex"),
             patch("orchestrator.core.codex_runtime.subprocess.Popen", side_effect=fake_popen_auth_with_link),
+            patch("orchestrator.core.codex_runtime.subprocess.run", side_effect=fake_run_device_auth),
+        ):
+            runtime = build_codex_runtime(settings=settings)
+            with self.assertRaises(CodexRuntimeError) as exc_info:
+                runtime.run_text(system_prompt="s", user_prompt="u")
+            self.assertIn("Open this link in your browser and sign in to your account", str(exc_info.exception))
+            self.assertIn("https://auth.openai.com/device/abc123", str(exc_info.exception))
+            self.assertIn("E6Z5-1GSQH", str(exc_info.exception))
+            self.assertNotIn("docker compose run --rm run-worker codex login --device-auth", str(exc_info.exception))
+
+        def fake_run_device_auth_bytes(args: list[str], **_kwargs: object):
+            if args[1:] == ["login", "status"]:
+                return subprocess.CompletedProcess(args=args, returncode=1, stdout="Not logged in\n", stderr="")
+            self.assertEqual(args[1:], ["login", "--device-auth"])
+            raise subprocess.TimeoutExpired(
+                cmd=args,
+                timeout=5.0,
+                output=(
+                    b"Open this link in your browser and sign in to your account\n"
+                    b"https://auth.openai.com/device/abc123\n"
+                    b"Enter this one-time code\n"
+                    b"E6Z5-1GSQH\n"
+                ),
+                stderr=b"",
+            )
+
+        with (
+            patch("orchestrator.core.codex_runtime.shutil.which", return_value="/usr/bin/codex"),
+            patch("orchestrator.core.codex_runtime.subprocess.Popen", side_effect=fake_popen_auth_with_link),
+            patch("orchestrator.core.codex_runtime.subprocess.run", side_effect=fake_run_device_auth_bytes),
         ):
             runtime = build_codex_runtime(settings=settings)
             with self.assertRaises(CodexRuntimeError) as exc_info:
                 runtime.run_text(system_prompt="s", user_prompt="u")
             self.assertIn("https://auth.openai.com/device/abc123", str(exc_info.exception))
+            self.assertNotIn("b\"", str(exc_info.exception))
+            self.assertNotIn("b'", str(exc_info.exception))
+
+        def fake_popen_auth_prefers_device_link(args: list[str], **_kwargs: object):
+            output_idx = args.index("--output-last-message") + 1
+            return _FakePopen(
+                args[output_idx],
+                returncode=1,
+                stderr_lines=[
+                    "Server returned error response: Server Error https://api.openai.com/v1/responses, "
+                    "authenticate here https://auth.openai.com/device/abc123.\n"
+                ],
+            )
+
+        with (
+            patch("orchestrator.core.codex_runtime.shutil.which", return_value="/usr/bin/codex"),
+            patch("orchestrator.core.codex_runtime.subprocess.Popen", side_effect=fake_popen_auth_prefers_device_link),
+            patch("orchestrator.core.codex_runtime.subprocess.run", side_effect=fake_run_device_auth),
+        ):
+            runtime = build_codex_runtime(settings=settings)
+            with self.assertRaises(CodexRuntimeError) as exc_info:
+                runtime.run_text(system_prompt="s", user_prompt="u")
+            self.assertIn("https://auth.openai.com/device/abc123", str(exc_info.exception))
+            self.assertNotIn("https://api.openai.com/v1/responses", str(exc_info.exception))
 
         def fake_popen_boom(args: list[str], **_kwargs: object):
             output_idx = args.index("--output-last-message") + 1
             return _FakePopen(args[output_idx], returncode=2, stderr_lines=["boom\n"])
 
+        def fake_run_logged_in(args: list[str], **_kwargs: object):
+            self.assertEqual(args[1:], ["login", "status"])
+            return subprocess.CompletedProcess(args=args, returncode=0, stdout="Logged in\n", stderr="")
+
         with (
             patch("orchestrator.core.codex_runtime.shutil.which", return_value="/usr/bin/codex"),
             patch("orchestrator.core.codex_runtime.subprocess.Popen", side_effect=fake_popen_boom),
+            patch("orchestrator.core.codex_runtime.subprocess.run", side_effect=fake_run_logged_in),
         ):
             runtime = build_codex_runtime(settings=settings)
             with self.assertRaises(CodexRuntimeError):

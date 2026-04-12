@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 from sqlalchemy.exc import IntegrityError
 
+from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.core.runs import (
     RUN_STATUS_FAILED,
     RUN_STATUS_RUNNING,
@@ -38,13 +39,14 @@ class CoreRunsEdgeTests(unittest.TestCase):
         session.get.side_effect = fake_get
 
         with self.assertRaises(RunStateTransitionError):
-            enqueue_run(
-                session,
-                tenant_id="tenant-a",
-                project_id=None,
-                issue_key="TP-1",
-                delivery_id="d-1",
-            )
+            with patch("orchestrator.core.runs._resolve_required_runtime_kinds", return_value=["codex_cli"]):
+                enqueue_run(
+                    session,
+                    tenant_id="tenant-a",
+                    project_id=None,
+                    issue_key="TP-1",
+                    delivery_id="d-1",
+                )
 
     def test_enqueue_raises_when_concurrency_limit_reached_without_active_run(self) -> None:
         session = MagicMock()
@@ -52,6 +54,7 @@ class CoreRunsEdgeTests(unittest.TestCase):
             patch("orchestrator.core.runs._active_workflow_for_issue", return_value=None),
             patch("orchestrator.core.runs._active_run_count_for_tenant", return_value=1),
             patch("orchestrator.core.runs._first_active_run_for_tenant", return_value=None),
+            patch("orchestrator.core.runs._resolve_required_runtime_kinds", return_value=["codex_cli"]),
         ):
             with self.assertRaises(RunStateTransitionError):
                 enqueue_run(
@@ -69,6 +72,7 @@ class CoreRunsEdgeTests(unittest.TestCase):
             patch("orchestrator.core.runs._active_workflow_for_issue", return_value=None),
             patch("orchestrator.core.runs._active_run_count_for_tenant", return_value=0),
             patch("orchestrator.core.runs.notify_run_enqueued"),
+            patch("orchestrator.core.runs._resolve_required_runtime_kinds", return_value=["codex_cli"]),
         ):
             with self.assertRaises(RunStateTransitionError):
                 enqueue_run(
@@ -93,7 +97,10 @@ class CoreRunsEdgeTests(unittest.TestCase):
             return None
 
         session.get.side_effect = fake_get
-        with patch("orchestrator.core.runs.notify_run_enqueued"):
+        with (
+            patch("orchestrator.core.runs.notify_run_enqueued"),
+            patch("orchestrator.core.runs._resolve_required_runtime_kinds", return_value=["codex_cli"]),
+        ):
             result = enqueue_run(
                 session,
                 tenant_id="tenant-a",
@@ -112,6 +119,7 @@ class CoreRunsEdgeTests(unittest.TestCase):
             patch("orchestrator.core.runs._active_workflow_for_issue", return_value=None),
             patch("orchestrator.core.runs._active_run_count_for_tenant", return_value=0),
             patch("orchestrator.core.runs.notify_run_enqueued"),
+            patch("orchestrator.core.runs._resolve_required_runtime_kinds", return_value=["codex_cli"]),
         ):
             with self.assertRaises(RunStateTransitionError):
                 enqueue_run(
@@ -131,6 +139,7 @@ class CoreRunsEdgeTests(unittest.TestCase):
             patch("orchestrator.core.runs._active_run_count_for_tenant", side_effect=[0, 1]),
             patch("orchestrator.core.runs._first_active_run_for_tenant", return_value=limited_run),
             patch("orchestrator.core.runs.notify_run_enqueued"),
+            patch("orchestrator.core.runs._resolve_required_runtime_kinds", return_value=["codex_cli"]),
         ):
             result = enqueue_run(
                 session,
@@ -153,6 +162,7 @@ class CoreRunsEdgeTests(unittest.TestCase):
             patch("orchestrator.core.runs._active_workflow_for_issue", return_value=None),
             patch("orchestrator.core.runs._active_run_count_for_tenant", return_value=0),
             patch("orchestrator.core.runs.notify_run_enqueued"),
+            patch("orchestrator.core.runs._resolve_required_runtime_kinds", return_value=["codex_cli"]),
         ):
             result = enqueue_run(
                 session,
@@ -169,6 +179,57 @@ class CoreRunsEdgeTests(unittest.TestCase):
         self.assertTrue(result.enqueued)
         self.assertEqual(run.pre_check_outcome, "ready_for_agent")
         self.assertEqual(run.required_worker_capability, "macos")
+        self.assertEqual(run.required_runtime_kinds_json, ["codex_cli"])
+
+    def test_enqueue_promotes_trigger_context_pr_url_to_run_row(self) -> None:
+        session = MagicMock()
+        added_rows: list[object] = []
+        session.add.side_effect = added_rows.append
+        snapshot = ExecutionSnapshot.empty(
+            trigger_context={
+                "source": "github_pr_review_feedback",
+                "pr_number": 26,
+                "pr_url": "https://github.com/example/repo/pull/26",
+            }
+        )
+        snapshot.context.execution_context["pre_check_outcome"] = "ready_for_agent"
+        bootstrap_plan = snapshot.dump()
+
+        with (
+            patch("orchestrator.core.runs._active_workflow_for_issue", return_value=None),
+            patch("orchestrator.core.runs._active_run_count_for_tenant", return_value=0),
+            patch("orchestrator.core.runs.notify_run_enqueued"),
+            patch("orchestrator.core.runs._resolve_required_runtime_kinds", return_value=["codex_cli"]),
+        ):
+            result = enqueue_run(
+                session,
+                tenant_id="tenant-a",
+                project_id="project-a",
+                issue_key="TP-8C",
+                precheck_outcome="ready_for_agent",
+                bootstrap=SimpleNamespace(
+                    plan=bootstrap_plan,
+                    branch=None,
+                    pr_url=None,
+                    workflow_id=None,
+                    parent_run_id=None,
+                    entry_mode="fresh",
+                    entry_stage=None,
+                    entry_checkpoint_id=None,
+                    precheck_outcome="ready_for_agent",
+                    required_worker_capability=None,
+                ),
+            )
+
+        run_rows = [row for row in added_rows if getattr(row, "__class__", type("", (), {})).__name__ == "Run"]
+        workflow_rows = [
+            row for row in added_rows if getattr(row, "__class__", type("", (), {})).__name__ == "WorkflowExecution"
+        ]
+        self.assertTrue(result.enqueued)
+        self.assertEqual(len(run_rows), 1)
+        self.assertEqual(len(workflow_rows), 1)
+        self.assertEqual(run_rows[0].pr_url, "https://github.com/example/repo/pull/26")
+        self.assertEqual(workflow_rows[0].pr_url, "https://github.com/example/repo/pull/26")
 
     def test_enqueue_rejects_missing_ready_precheck(self) -> None:
         session = MagicMock()
@@ -176,6 +237,7 @@ class CoreRunsEdgeTests(unittest.TestCase):
         with (
             patch("orchestrator.core.runs._active_workflow_for_issue", return_value=None),
             patch("orchestrator.core.runs._active_run_count_for_tenant", return_value=0),
+            patch("orchestrator.core.runs._resolve_required_runtime_kinds", return_value=["codex_cli"]),
             self.assertRaises(RunStateTransitionError),
         ):
             enqueue_run(

@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
 from orchestrator.core.project_policy import resolve_effective_policy
+from orchestrator.core.runtime_requirements import normalize_runtime_kinds, required_runtime_kinds_for_run
 from orchestrator.core.worker_capability_normalization import WorkerCapability
 from orchestrator.core.worker_capabilities import (
     parse_worker_capabilities,
@@ -35,6 +36,7 @@ class QueueClaimabilityReason(str, Enum):
     TERMINAL = "terminal"
     NO_QUEUED_RUNS = "no_queued_runs"
     CAPABILITY_MISMATCH = "capability_mismatch"
+    RUNTIME_UNAVAILABLE = "runtime_unavailable"
     CONCURRENCY_LIMIT = "concurrency_limit"
 
 
@@ -54,6 +56,7 @@ class QueueCandidateEvaluation:
     project: Project | None
     effective_policy: dict | None
     capability_compatible: bool
+    runtime_ready: bool
     tenant_missing: bool
 
 
@@ -69,6 +72,7 @@ class QueueScanResult:
     claimability: QueueCandidateClaimability
     blocked_candidate: Run | None
     saw_capability_mismatch: bool
+    saw_runtime_unavailable: bool
     saw_concurrency_limit: bool
 
 
@@ -141,6 +145,7 @@ def _evaluate_candidate(
     *,
     candidate: Run,
     allowed_capabilities: set[WorkerCapability],
+    ready_runtime_kinds: set[str],
 ) -> QueueCandidateEvaluation:
     required_capability = required_worker_capability_for_run(candidate)
     if required_capability is not None and required_capability not in allowed_capabilities:
@@ -158,6 +163,27 @@ def _evaluate_candidate(
             project=None,
             effective_policy=None,
             capability_compatible=False,
+            runtime_ready=True,
+            tenant_missing=False,
+        )
+
+    required_runtime_kinds = required_runtime_kinds_for_run(candidate)
+    if required_runtime_kinds and not required_runtime_kinds.issubset(set(ready_runtime_kinds or set())):
+        logger.info(
+            "worker_skipping_run_due_to_runtime_unavailable run_id=%s tenant_id=%s issue_key=%s required_runtime_kinds=%s ready_runtime_kinds=%s",
+            candidate.run_id,
+            candidate.tenant_id,
+            candidate.issue_key,
+            ",".join(sorted(required_runtime_kinds)),
+            ",".join(sorted(ready_runtime_kinds)),
+        )
+        return QueueCandidateEvaluation(
+            candidate=candidate,
+            tenant=None,
+            project=None,
+            effective_policy=None,
+            capability_compatible=True,
+            runtime_ready=False,
             tenant_missing=False,
         )
 
@@ -169,6 +195,7 @@ def _evaluate_candidate(
             project=None,
             effective_policy=None,
             capability_compatible=True,
+            runtime_ready=True,
             tenant_missing=True,
         )
 
@@ -184,6 +211,7 @@ def _evaluate_candidate(
         project=project,
         effective_policy=effective_policy,
         capability_compatible=True,
+        runtime_ready=True,
         tenant_missing=False,
     )
 
@@ -194,13 +222,15 @@ def _candidate_selection_details(
     candidate: Run,
     failed_status: str,
     allowed_capabilities: set[WorkerCapability],
+    ready_runtime_kinds: set[str],
 ) -> QueueSelectionResult:
     evaluation = _evaluate_candidate(
         session,
         candidate=candidate,
         allowed_capabilities=allowed_capabilities,
+        ready_runtime_kinds=ready_runtime_kinds,
     )
-    if not evaluation.capability_compatible:
+    if not evaluation.capability_compatible or not evaluation.runtime_ready:
         return QueueSelectionResult()
     if evaluation.tenant_missing:
         candidate.status = failed_status
@@ -263,6 +293,7 @@ def _scan_queued_candidates(
     queued_status: str,
     failed_status: str,
     allowed_capabilities: set[WorkerCapability],
+    ready_runtime_kinds: set[str],
     active_statuses: set[str] | None = None,
     lock_tenant_claim: bool = False,
     running_stale_timeout_seconds: int | None = None,
@@ -270,6 +301,7 @@ def _scan_queued_candidates(
     terminalize_missing_tenant: bool = True,
 ) -> QueueScanResult:
     saw_capability_mismatch = False
+    saw_runtime_unavailable = False
     saw_concurrency_limit = False
     blocked_candidate: Run | None = None
     candidate_run_ids = _queued_run_ids(session, queued_status=queued_status)
@@ -291,14 +323,16 @@ def _scan_queued_candidates(
                 candidate=candidate,
                 failed_status=failed_status,
                 allowed_capabilities=allowed_capabilities,
+                ready_runtime_kinds=ready_runtime_kinds,
             )
         else:
             evaluation = _evaluate_candidate(
                 session,
                 candidate=candidate,
                 allowed_capabilities=allowed_capabilities,
+                ready_runtime_kinds=ready_runtime_kinds,
             )
-            if not evaluation.capability_compatible:
+            if not evaluation.capability_compatible or not evaluation.runtime_ready:
                 selection = QueueSelectionResult()
             elif evaluation.tenant_missing:
                 selection = QueueSelectionResult(terminal_run=candidate)
@@ -334,6 +368,7 @@ def _scan_queued_candidates(
                 claimability=claimability,
                 blocked_candidate=candidate,
                 saw_capability_mismatch=saw_capability_mismatch,
+                saw_runtime_unavailable=saw_runtime_unavailable,
                 saw_concurrency_limit=saw_concurrency_limit,
             )
         if claimability.reason == QueueClaimabilityReason.CLAIMABLE:
@@ -342,12 +377,21 @@ def _scan_queued_candidates(
                 claimability=claimability,
                 blocked_candidate=candidate,
                 saw_capability_mismatch=saw_capability_mismatch,
+                saw_runtime_unavailable=saw_runtime_unavailable,
                 saw_concurrency_limit=saw_concurrency_limit,
             )
         if claimability.reason == QueueClaimabilityReason.CONCURRENCY_LIMIT:
             saw_concurrency_limit = True
         elif claimability.reason == QueueClaimabilityReason.CAPABILITY_MISMATCH:
-            saw_capability_mismatch = True
+            if not _evaluate_candidate(
+                session,
+                candidate=candidate,
+                allowed_capabilities=allowed_capabilities,
+                ready_runtime_kinds=ready_runtime_kinds,
+            ).runtime_ready:
+                saw_runtime_unavailable = True
+            else:
+                saw_capability_mismatch = True
         blocked_candidate = blocked_candidate or candidate
         if lock_for_claim:
             session.rollback()
@@ -357,6 +401,7 @@ def _scan_queued_candidates(
         claimability=QueueCandidateClaimability(reason=QueueClaimabilityReason.NO_QUEUED_RUNS),
         blocked_candidate=blocked_candidate,
         saw_capability_mismatch=saw_capability_mismatch,
+        saw_runtime_unavailable=saw_runtime_unavailable,
         saw_concurrency_limit=saw_concurrency_limit,
     )
 
@@ -368,6 +413,7 @@ def select_next_queued_run(
     running_status: str,
     failed_status: str,
     worker_capabilities: set[WorkerCapability] | None = None,
+    ready_runtime_kinds: set[str] | None = None,
 ) -> QueueSelectionResult:
     allowed_capabilities = parse_worker_capabilities(worker_capabilities or [])
     return _scan_queued_candidates(
@@ -375,6 +421,7 @@ def select_next_queued_run(
         queued_status=queued_status,
         failed_status=failed_status,
         allowed_capabilities=allowed_capabilities,
+        ready_runtime_kinds=set(normalize_runtime_kinds(ready_runtime_kinds or [])),
     ).selection
 
 
@@ -385,6 +432,7 @@ def probe_claimable_queued_run(
     running_status: str,
     dispatching_status: str = "dispatching",
     worker_capabilities: set[WorkerCapability] | None = None,
+    ready_runtime_kinds: set[str] | None = None,
     running_stale_timeout_seconds: int | None = None,
 ) -> QueueClaimabilityProbe:
     allowed_capabilities = parse_worker_capabilities(worker_capabilities or [])
@@ -393,6 +441,7 @@ def probe_claimable_queued_run(
         queued_status=queued_status,
         failed_status=running_status,
         allowed_capabilities=allowed_capabilities,
+        ready_runtime_kinds=set(normalize_runtime_kinds(ready_runtime_kinds or [])),
         active_statuses={running_status, dispatching_status},
         lock_tenant_claim=False,
         running_stale_timeout_seconds=running_stale_timeout_seconds,
@@ -409,6 +458,8 @@ def probe_claimable_queued_run(
         )
     if scan.saw_concurrency_limit:
         reason = QueueClaimabilityReason.CONCURRENCY_LIMIT
+    elif scan.saw_runtime_unavailable:
+        reason = QueueClaimabilityReason.RUNTIME_UNAVAILABLE
     elif scan.saw_capability_mismatch:
         reason = QueueClaimabilityReason.CAPABILITY_MISMATCH
     else:
@@ -431,6 +482,7 @@ def claim_next_queued_run(
     failed_status: str,
     worker_service_instance_id: str | None,
     worker_capabilities: set[WorkerCapability] | None = None,
+    ready_runtime_kinds: set[str] | None = None,
     running_stale_timeout_seconds: int | None = None,
 ) -> QueueSelectionResult:
     allowed_capabilities = parse_worker_capabilities(worker_capabilities or [])
@@ -439,6 +491,7 @@ def claim_next_queued_run(
         queued_status=queued_status,
         failed_status=failed_status,
         allowed_capabilities=allowed_capabilities,
+        ready_runtime_kinds=set(normalize_runtime_kinds(ready_runtime_kinds or [])),
         active_statuses={running_status, dispatching_status},
         lock_tenant_claim=True,
         running_stale_timeout_seconds=running_stale_timeout_seconds,

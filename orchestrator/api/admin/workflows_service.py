@@ -7,11 +7,14 @@ from fastapi import HTTPException, status
 from sqlalchemy import desc, or_, select
 from sqlalchemy.exc import IntegrityError
 
+from orchestrator.core.config import get_settings
+from orchestrator.core.runtime_requirements import resolve_required_runtime_kinds_for_workflow
 from orchestrator.core.worker_capabilities import infer_required_worker_capability
 from orchestrator.core.runs import (
     RunStateTransitionError,
     require_ready_for_agent_enqueue,
     resolve_enqueue_precheck_outcome,
+    resolve_pr_url_for_enqueue,
     resolve_precheck_outcome_from_plan,
     resolve_required_worker_capability_from_plan,
 )
@@ -222,6 +225,20 @@ def _resolve_required_worker_capability_for_admin_attempt(*, session, workflow, 
     return str(inferred or "").strip() or None
 
 
+def _resolve_pr_url_for_admin_attempt(
+    *,
+    workflow: WorkflowExecution,
+    source_run: Run | None,
+    plan: object | None,
+) -> str | None:
+    source_pr_url = str(getattr(source_run, "pr_url", "") or "").strip() or None
+    workflow_pr_url = str(getattr(workflow, "pr_url", "") or "").strip() or None
+    return resolve_pr_url_for_enqueue(
+        pr_url=source_pr_url or workflow_pr_url,
+        pr_url_source_plan=plan,
+    )
+
+
 def _require_ready_for_queue(*, source: str, plan: object | None, precheck_outcome: str | None) -> None:
     try:
         require_ready_for_agent_enqueue(
@@ -414,6 +431,18 @@ def create_workflow_attempt(
         source_run=source_run,
         plan=next_run_plan,
     )
+    next_run_required_runtime_kinds = resolve_required_runtime_kinds_for_workflow(
+        session=session,
+        settings=get_settings(),
+        tenant_id=next_workflow.tenant_id,
+        project_id=project.project_id,
+    )
+    next_run_pr_url = _resolve_pr_url_for_admin_attempt(
+        workflow=next_workflow,
+        source_run=source_run,
+        plan=next_run_plan,
+    )
+    next_workflow.pr_url = next_run_pr_url
 
     next_run = Run(
         run_id=str(uuid4()),
@@ -425,7 +454,7 @@ def create_workflow_attempt(
         issue_description=next_workflow.issue_description,
         repo_url=next_workflow.repo_url,
         branch=next_workflow.branch,
-        pr_url=next_workflow.pr_url,
+        pr_url=next_run_pr_url,
         attempt_number=1 if not same_workflow else _next_attempt_number(session=session, workflow_id=workflow.workflow_id),
         parent_run_id=(source_run.run_id if normalized_mode == "fresh" and source_run is not None else selected_checkpoint.run_id if selected_checkpoint is not None else None),
         entry_mode=normalized_mode,
@@ -436,6 +465,7 @@ def create_workflow_attempt(
         last_error=None,
         pre_check_outcome=next_run_precheck_outcome,
         required_worker_capability=next_run_required_worker_capability,
+        required_runtime_kinds_json=next_run_required_runtime_kinds,
         plan=next_run_plan,
         created_at=now,
         dispatch_claimed_at=None,

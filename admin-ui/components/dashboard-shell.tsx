@@ -33,7 +33,7 @@ import {
   getMembershipForTenant,
   getTenantWorkspaceRoute,
 } from "@/lib/auth-routing";
-import { resolveRunRouteContext } from "@/lib/dashboard-paths";
+import { buildProjectSectionPath, resolveRunRouteContext } from "@/lib/dashboard-paths";
 import { persistLastWorkspaceTenantId } from "@/lib/workspace-preference";
 import {
   Sidebar,
@@ -125,10 +125,10 @@ function DashboardNavPanel({
         </SidebarMenuButton>
       </SidebarMenuItem>
       {tenantProjects.map((project) => {
-        const projectHref = `${tenantBaseRoute}/projects/${encodeURIComponent(project.project_id)}`;
+        const projectHref = buildProjectSectionPath(decodedTenantId ?? project.tenant_id, project.project_id, "runs");
         const active =
-          pathname === projectHref ||
-          pathname.startsWith(`${projectHref}/`) ||
+          pathname === buildProjectSectionPath(decodedTenantId ?? project.tenant_id, project.project_id) ||
+          pathname.startsWith(`${buildProjectSectionPath(decodedTenantId ?? project.tenant_id, project.project_id)}/`) ||
           (Boolean(runContext.runId) && project.project_id === projectContextId);
         return (
           <SidebarMenuItem key={project.project_id}>

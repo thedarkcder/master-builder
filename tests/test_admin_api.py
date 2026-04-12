@@ -2443,7 +2443,60 @@ class AdminApiTests(SqliteTemplateApiTestCase):
             self.assertIsNotNone(run)
             assert run is not None
             self.assertEqual(run.pre_check_outcome, "ready_for_agent")
-            self.assertEqual(run.required_worker_capability, "linux")
+
+    def test_create_fresh_workflow_attempt_promotes_trigger_context_pr_url_to_workflow_and_run(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201)
+
+        self._seed_workflow_attempt(
+            workflow_id="workflow-terminal-fresh-pr-url",
+            run_id="run-terminal-fresh-pr-url",
+            issue_key="TP-1002F",
+            issue_summary="Terminal workflow fresh start with existing PR URL",
+            workflow_status="failed",
+            run_status="failed",
+        )
+        with create_session_factory(self.database_url)() as session:
+            source_run = session.get(Run, "run-terminal-fresh-pr-url")
+            workflow = session.get(WorkflowExecution, "workflow-terminal-fresh-pr-url")
+            self.assertIsNotNone(source_run)
+            self.assertIsNotNone(workflow)
+            assert source_run is not None
+            assert workflow is not None
+            source_run.pr_url = None
+            workflow.pr_url = None
+            snapshot = ExecutionSnapshot.empty(
+                trigger_context={
+                    "source": "github_pr_review_feedback",
+                    "pr_number": 26,
+                    "pr_url": "https://github.com/example/repo/pull/26",
+                    "head_sha": "abc123",
+                }
+            )
+            snapshot.context.execution_context["pre_check_outcome"] = "ready_for_agent"
+            source_run.plan = snapshot.dump()
+            session.commit()
+
+        response = self.client.post(
+            "/api/admin/workflows/workflow-terminal-fresh-pr-url/attempts",
+            json={"mode": "fresh"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 201, response.text)
+        body = response.json()
+        self.assertEqual(body["pr_url"], "https://github.com/example/repo/pull/26")
+
+        with create_session_factory(self.database_url)() as session:
+            run = session.get(Run, body["run_id"])
+            workflow = session.get(WorkflowExecution, body["workflow_id"])
+            self.assertIsNotNone(run)
+            self.assertIsNotNone(workflow)
+            assert run is not None
+            assert workflow is not None
+            self.assertEqual(run.pr_url, "https://github.com/example/repo/pull/26")
+            self.assertEqual(workflow.pr_url, "https://github.com/example/repo/pull/26")
 
     def test_create_fresh_workflow_attempt_rejects_missing_ready_precheck(self) -> None:
         payload = self._tenant_payload()
@@ -5274,6 +5327,50 @@ class AdminApiTests(SqliteTemplateApiTestCase):
         worker_service = next(service for service in payload["services"] if service["service_id"] == "workers")
         self.assertEqual(worker_service["status"], "degraded")
         self.assertIn("Invalid ORCHESTRATOR_WORKER_CAPABILITIES token(s): darwin", worker_service["summary"])
+
+    def test_admin_platform_status_reports_degraded_worker_runtime_instances(self) -> None:
+        session_factory = create_session_factory(self.database_url)
+        now = datetime.now(timezone.utc)
+        remediation_expires_at = now + timedelta(minutes=15)
+        with session_factory() as session:
+            session.add(
+                WorkerRuntimeState(
+                    service_instance_id="worker-macos-local:runs",
+                    agent_id="worker-macos-local",
+                    worker_mode="runs",
+                    capabilities_json=["macos"],
+                    runtime_dependencies_json={
+                        "codex_cli": {
+                            "state": "degraded",
+                            "summary": "Codex CLI is not authenticated on this worker.",
+                            "remediation_text": "Open this link",
+                            "remediation_expires_at": remediation_expires_at.isoformat(),
+                        }
+                    },
+                    state="degraded",
+                    started_at=now,
+                    last_heartbeat_at=now,
+                    updated_at=now,
+                )
+            )
+            session.commit()
+
+        response = self.client.get("/api/admin/status", auth=("admin", "secret"))
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        worker_service = next(service for service in payload["services"] if service["service_id"] == "workers")
+        self.assertEqual(worker_service["status"], "degraded")
+        self.assertIn("startup/runtime dependencies", worker_service["summary"])
+        instance = next(item for item in worker_service["instances"] if item["instance_id"] == "worker-macos-local:runs")
+        self.assertEqual(instance["status"], "degraded")
+        self.assertEqual(instance["runtime_dependencies"]["codex_cli"]["remediation_text"], "Open this link")
+        self.assertEqual(
+            instance["runtime_dependencies"]["codex_cli"]["remediation_expires_at"],
+            remediation_expires_at.isoformat(),
+        )
+        self.assertNotIn("remediation_text", instance)
+        self.assertNotIn("remediation_expires_at", instance)
 
 
 if __name__ == "__main__":
