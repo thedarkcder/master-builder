@@ -165,6 +165,7 @@ class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
                     "How to test: fail missing project mapping."
                 ),
                 repo_url="https://github.com/example/a",
+                precheck_outcome="ready_for_agent",
             )
             self.assertTrue(queued.enqueued)
             run = queued.run
@@ -193,6 +194,7 @@ class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
                     "How to test: fail repository checkout."
                 ),
                 repo_url="https://github.com/example/a",
+                precheck_outcome="ready_for_agent",
             )
             self.assertTrue(queued.enqueued)
             run = queued.run

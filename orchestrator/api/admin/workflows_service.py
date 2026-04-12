@@ -11,6 +11,7 @@ from orchestrator.core.worker_capabilities import infer_required_worker_capabili
 from orchestrator.core.runs import (
     RunStateTransitionError,
     require_ready_for_agent_enqueue,
+    resolve_enqueue_precheck_outcome,
     resolve_precheck_outcome_from_plan,
     resolve_required_worker_capability_from_plan,
 )
@@ -161,11 +162,16 @@ def _fresh_start_plan(*, source_run: Run | None) -> dict[str, object] | None:
 
 
 def _resolve_precheck_outcome_for_admin_attempt(*, source_run: Run | None, plan: object | None) -> str | None:
+    source_precheck = None
     if source_run is not None:
         persisted = str(getattr(source_run, "pre_check_outcome", "") or "").strip()
         if persisted:
-            return persisted
-    return resolve_precheck_outcome_from_plan(plan)
+            source_precheck = persisted
+    return resolve_enqueue_precheck_outcome(
+        source="admin_workflow_attempt",
+        precheck_outcome=source_precheck,
+        precheck_source_plan=plan,
+    )
 
 
 def _latest_decision_issue_labels_for_workflow(*, session, workflow) -> list[str]:  # noqa: ANN001

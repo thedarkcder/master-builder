@@ -361,6 +361,11 @@ def enqueue_run(
         precheck_outcome=precheck_outcome,
         precheck_source_plan=precheck_source_plan,
     )
+    require_ready_for_agent_enqueue(
+        source="enqueue_run",
+        precheck_outcome=normalized_precheck_outcome,
+        precheck_source_plan=precheck_source_plan,
+    )
     normalized_required_worker_capability = resolve_required_worker_capability_for_enqueue(
         required_worker_capability=required_worker_capability,
         required_worker_capability_source_plan=(
@@ -418,6 +423,7 @@ def enqueue_run(
         last_error=None,
         pre_check_outcome=normalized_precheck_outcome,
         required_worker_capability=normalized_required_worker_capability,
+        claim_id=None,
         created_at=now,
         dispatch_claimed_at=None,
         started_at=None,
@@ -568,6 +574,7 @@ def _enqueue_attempt_for_workflow(
         last_error=None,
         pre_check_outcome=normalized_precheck_outcome,
         required_worker_capability=normalized_required_worker_capability,
+        claim_id=None,
         created_at=now,
         dispatch_claimed_at=None,
         started_at=None,
@@ -610,6 +617,7 @@ def mark_run_running(session: Session, *, run_id: str) -> Run:
         raise RunStateTransitionError(f"Workflow not found for run {run_id}")
     now = _now()
     run.status = RUN_STATUS_RUNNING
+    run.claim_id = None
     run.dispatch_claimed_at = None
     run.started_at = now
     run.last_heartbeat_at = now
@@ -628,12 +636,18 @@ def mark_run_terminal(
     run_id: str,
     terminal_status: str,
     last_error: str | None = None,
+    expected_claim_id: str | None = None,
 ) -> Run:
     if terminal_status not in TERMINAL_RUN_STATUSES | {RUN_STATUS_BLOCKED}:
         raise RunStateTransitionError(f"Invalid terminal status: {terminal_status}")
     run = session.get(Run, run_id)
     if run is None:
         raise RunStateTransitionError(f"Run not found: {run_id}")
+    normalized_expected_claim_id = str(expected_claim_id or "").strip() or None
+    if normalized_expected_claim_id is not None and str(run.claim_id or "").strip() != normalized_expected_claim_id:
+        raise RunStateTransitionError(
+            f"Claim mismatch while terminalizing run {run_id}: expected {normalized_expected_claim_id} got {run.claim_id}"
+        )
     if run.status in TERMINAL_RUN_STATUSES | {RUN_STATUS_BLOCKED}:
         if run.status != terminal_status:
             raise RunStateTransitionError(
@@ -650,6 +664,7 @@ def mark_run_terminal(
     now = _now()
     run.status = terminal_status
     run.last_error = last_error
+    run.claim_id = None
     run.dispatch_claimed_at = None
     run.started_at = run.started_at or now
     run.finished_at = now
@@ -687,6 +702,7 @@ def cancel_run(
     now = _now()
     run.status = RUN_STATUS_CANCELLED
     run.last_error = f"Cancelled by {cancelled_by}"
+    run.claim_id = None
     run.dispatch_claimed_at = None
     run.started_at = run.started_at or now
     run.finished_at = now
@@ -745,6 +761,7 @@ def cancel_queued_issue_runs(
     for run in queued_runs:
         run.status = RUN_STATUS_CANCELLED
         run.last_error = cancellation_reason
+        run.claim_id = None
         run.dispatch_claimed_at = None
         run.started_at = run.started_at or now
         run.finished_at = now

@@ -137,6 +137,7 @@ class CoreRunsEdgeTests(unittest.TestCase):
                 tenant_id="tenant-a",
                 project_id=None,
                 issue_key="TP-3",
+                precheck_outcome="ready_for_agent",
                 max_concurrent_runs=1,
             )
         self.assertFalse(result.enqueued)
@@ -168,6 +169,25 @@ class CoreRunsEdgeTests(unittest.TestCase):
         self.assertTrue(result.enqueued)
         self.assertEqual(run.pre_check_outcome, "ready_for_agent")
         self.assertEqual(run.required_worker_capability, "macos")
+
+    def test_enqueue_rejects_missing_ready_precheck(self) -> None:
+        session = MagicMock()
+
+        with (
+            patch("orchestrator.core.runs._active_workflow_for_issue", return_value=None),
+            patch("orchestrator.core.runs._active_run_count_for_tenant", return_value=0),
+            self.assertRaises(RunStateTransitionError),
+        ):
+            enqueue_run(
+                session,
+                tenant_id="tenant-a",
+                project_id="project-a",
+                issue_key="TP-8B",
+                precheck_outcome=None,
+            )
+
+        session.add.assert_not_called()
+        session.commit.assert_not_called()
 
     def test_mark_run_terminal_rejects_terminal_status_change(self) -> None:
         session = MagicMock()

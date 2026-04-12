@@ -2399,6 +2399,52 @@ class AdminApiTests(SqliteTemplateApiTestCase):
             assert run is not None
             self.assertEqual(run.required_worker_capability, "macos")
 
+    def test_create_fresh_workflow_attempt_persists_ready_precheck_for_pr_remediation(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201)
+
+        self._seed_workflow_attempt(
+            workflow_id="workflow-terminal-fresh-pr-remediation",
+            run_id="run-terminal-fresh-pr-remediation",
+            issue_key="TP-1002E",
+            issue_summary="Terminal workflow fresh start with PR remediation trigger",
+            workflow_status="failed",
+            run_status="failed",
+        )
+        with create_session_factory(self.database_url)() as session:
+            source_run = session.get(Run, "run-terminal-fresh-pr-remediation")
+            self.assertIsNotNone(source_run)
+            assert source_run is not None
+            source_run.pre_check_outcome = None
+            source_run.required_worker_capability = "linux"
+            snapshot = ExecutionSnapshot.empty(
+                trigger_context={
+                    "kind": "github_pr_remediation",
+                    "repo": "example/repo",
+                    "pull_request_number": 42,
+                    "head_sha": "abc123",
+                }
+            )
+            source_run.plan = snapshot.dump()
+            session.commit()
+
+        response = self.client.post(
+            "/api/admin/workflows/workflow-terminal-fresh-pr-remediation/attempts",
+            json={"mode": "fresh"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 201, response.text)
+        body = response.json()
+
+        with create_session_factory(self.database_url)() as session:
+            run = session.get(Run, body["run_id"])
+            self.assertIsNotNone(run)
+            assert run is not None
+            self.assertEqual(run.pre_check_outcome, "ready_for_agent")
+            self.assertEqual(run.required_worker_capability, "linux")
+
     def test_create_fresh_workflow_attempt_rejects_missing_ready_precheck(self) -> None:
         payload = self._tenant_payload()
         self._insert_jira_connection(connection_id="conn-1")

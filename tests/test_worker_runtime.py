@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import sys
 import threading
 import unittest
 from datetime import datetime, timezone
@@ -217,7 +219,7 @@ class RuntimeFactoryTests(unittest.TestCase):
 
 
 class WorkerTests(unittest.TestCase):
-    def test_process_next_run_once_does_not_touch_webhook_queue(self) -> None:
+    def test_process_next_run_once_requires_claim_metadata(self) -> None:
         import orchestrator.worker as worker_module
 
         run_session = MagicMock(name="run-session")
@@ -235,16 +237,12 @@ class WorkerTests(unittest.TestCase):
         def _session_factory():  # noqa: ANN202
             return _SessionCtx(run_session)
 
-        with (
-            patch.object(worker_module, "_process_next_webhook_job_with_dependencies") as webhook_mock,
-            patch.object(worker_module, "build_workflow_runner_for_session", return_value=MagicMock()) as runner_mock,
-            patch.object(worker_module, "process_next_queued_run", return_value=None) as run_mock,
-        ):
-            worker_module._process_next_run_once(session_factory=_session_factory)
-
-        webhook_mock.assert_not_called()
-        runner_mock.assert_not_called()
-        run_mock.assert_called_once()
+        with self.assertRaisesRegex(RuntimeError, "without claimed_run_id"):
+            worker_module._process_next_run_once(
+                session_factory=_session_factory,
+                claimed_run_id="",
+                claim_id="claim-123",
+            )
 
     def test_process_next_run_once_builds_runner_lazily(self) -> None:
         import orchestrator.worker as worker_module
@@ -266,28 +264,90 @@ class WorkerTests(unittest.TestCase):
 
         runner = MagicMock()
 
-        def _run_next(session, lazy_runner):  # noqa: ANN001, ANN202
-            lazy_runner.run("request")
+        def _run_next(*, session, runner, run_id, claim_id, send_discord_message_fn):  # noqa: ANN001, ANN202
+            _ = session
+            _ = run_id
+            _ = claim_id
+            _ = send_discord_message_fn
+            runner.run("request")
             return object()
 
         with (
             patch.object(worker_module, "build_workflow_runner_for_session", return_value=runner) as runner_mock,
-            patch.object(worker_module, "process_next_queued_run", side_effect=_run_next) as run_mock,
+            patch.object(worker_module, "_process_claimed_run_with_dependencies", side_effect=_run_next) as run_mock,
         ):
-            worker_module._process_next_run_once(session_factory=_session_factory)
+            worker_module._process_next_run_once(
+                session_factory=_session_factory,
+                claimed_run_id="run-123",
+                claim_id="claim-123",
+            )
 
         runner_mock.assert_called_once_with(session=run_session)
         run_mock.assert_called_once()
         runner.run.assert_called_once_with("request")
 
-    def test_process_next_queued_run_passes_send_discord_fn(self) -> None:
+    def test_process_next_run_once_uses_preclaimed_run_id(self) -> None:
         import orchestrator.worker as worker_module
 
-        process_mock = MagicMock(return_value=None)
-        with patch.object(worker_module, "_process_next_queued_run_with_dependencies", new=process_mock):
-            result = worker_module.process_next_queued_run(MagicMock(), MagicMock())
-        self.assertIsNone(result)
-        self.assertIn("send_discord_message_fn", process_mock.call_args.kwargs)
+        run_session = MagicMock(name="run-session")
+
+        class _SessionCtx:
+            def __init__(self, current_session) -> None:  # noqa: ANN001
+                self._session = current_session
+
+            def __enter__(self):  # noqa: ANN204
+                return self._session
+
+            def __exit__(self, exc_type, exc, tb) -> bool:  # noqa: ANN001, ANN204
+                return False
+
+        def _session_factory():  # noqa: ANN202
+            return _SessionCtx(run_session)
+
+        with patch.object(worker_module, "_process_claimed_run_with_dependencies", return_value=MagicMock()) as claimed_mock:
+            worker_module._process_next_run_once(
+                session_factory=_session_factory,
+                claimed_run_id="run-123",
+                claim_id="claim-123",
+            )
+
+        claimed_mock.assert_called_once()
+        self.assertEqual(claimed_mock.call_args.kwargs["run_id"], "run-123")
+        self.assertEqual(claimed_mock.call_args.kwargs["claim_id"], "claim-123")
+
+    def test_reconcile_claimed_run_after_child_exit_terminalizes_dispatching_run(self) -> None:
+        import orchestrator.worker as worker_module
+
+        dispatching_run = SimpleNamespace(run_id="run-123", status="dispatching")
+        failed_run = SimpleNamespace(run_id="run-123", status="failed")
+        session = MagicMock()
+        session.get.return_value = dispatching_run
+
+        class _SessionCtx:
+            def __enter__(self):  # noqa: ANN204
+                return session
+
+            def __exit__(self, exc_type, exc, tb) -> bool:  # noqa: ANN001, ANN204
+                return False
+
+        def _session_factory():  # noqa: ANN202
+            return _SessionCtx()
+
+        with patch.object(worker_module, "mark_run_terminal", return_value=failed_run) as mark_terminal_mock:
+            status = worker_module._reconcile_claimed_run_after_child_exit(
+                session_factory=_session_factory,
+                run_id="run-123",
+                claim_id="claim-123",
+            )
+
+        self.assertEqual(status, "failed")
+        mark_terminal_mock.assert_called_once_with(
+            session,
+            run_id="run-123",
+            terminal_status="failed",
+            last_error=worker_module._CHILD_DISPATCH_STUCK_ERROR,
+            expected_claim_id="claim-123",
+        )
 
     def test_run_worker_webhooks_skips_stale_recovery(self) -> None:
         import orchestrator.worker as worker_module
@@ -317,9 +377,18 @@ class WorkerTests(unittest.TestCase):
             stop_event.set()
             return False
 
-        async def _spawn_worker_child_process(*, mode: str, wake_event: asyncio.Event, child_timeout_seconds: int):
+        async def _spawn_worker_child_process(
+            *,
+            mode: str,
+            wake_event: asyncio.Event,
+            child_timeout_seconds: int,
+            claimed_run_id: str | None = None,
+            claim_id: str | None = None,
+        ):
             _ = wake_event
             _ = child_timeout_seconds
+            self.assertIsNone(claimed_run_id)
+            self.assertIsNone(claim_id)
             spawned_modes.append(mode)
             child_result = worker_module.WorkerChildProcessResult(
                 return_code=worker_module.WORKER_CHILD_EXIT_IDLE,
@@ -393,9 +462,18 @@ class WorkerTests(unittest.TestCase):
             stop_event.set()
             return False
 
-        async def _spawn_worker_child_process(*, mode: str, wake_event: asyncio.Event, child_timeout_seconds: int):
+        async def _spawn_worker_child_process(
+            *,
+            mode: str,
+            wake_event: asyncio.Event,
+            child_timeout_seconds: int,
+            claimed_run_id: str | None = None,
+            claim_id: str | None = None,
+        ):
             _ = wake_event
             _ = child_timeout_seconds
+            self.assertEqual(claimed_run_id, "run-1")
+            self.assertEqual(claim_id, "claim-1")
             spawned_modes.append(mode)
             child_result = worker_module.WorkerChildProcessResult(
                 return_code=worker_module.WORKER_CHILD_EXIT_IDLE,
@@ -426,10 +504,23 @@ class WorkerTests(unittest.TestCase):
             patch.object(worker_module, "_resolve_worker_child_capacity", return_value=1),
             patch.object(
                 worker_module,
+                "_claim_next_run_once",
+                side_effect=[
+                    worker_module.ClaimedRunDispatch(
+                        run_id="run-1",
+                        claim_id="claim-1",
+                        tenant_id="tenant-1",
+                        issue_key="GP-1",
+                    ),
+                    None,
+                ],
+            ),
+            patch.object(
+                worker_module,
                 "_probe_claimable_run_once",
                 return_value=QueueClaimabilityProbe(
-                    claimable=True,
-                    reason=QueueClaimabilityReason.CLAIMABLE,
+                    claimable=False,
+                    reason=QueueClaimabilityReason.NO_QUEUED_RUNS,
                 ),
             ),
             patch.object(worker_module, "_spawn_worker_child_process", new=_spawn_worker_child_process),
@@ -495,6 +586,14 @@ class WorkerTests(unittest.TestCase):
             patch.object(worker_module, "create_session_factory", return_value=MagicMock()),
             patch.object(worker_module, "ensure_execution_snapshot_startup_bootstrap"),
             patch.object(worker_module, "_process_next_run_once", return_value=object()),
+            patch.dict(
+                os.environ,
+                {
+                    "ORCHESTRATOR_WORKER_CLAIMED_RUN_ID": "run-abc",
+                    "ORCHESTRATOR_WORKER_CLAIM_ID": "claim-abc",
+                },
+                clear=False,
+            ),
         ):
             self.assertEqual(
                 worker_module.run_worker_child_once(mode="runs"),
@@ -515,6 +614,172 @@ class WorkerTests(unittest.TestCase):
             )
         process_webhook_once.assert_called_once()
         self.assertEqual(process_webhook_once.call_args.kwargs["owner_id"], "worker:webhooks:child:test")
+
+    def test_run_worker_child_once_uses_claimed_run_env(self) -> None:
+        import orchestrator.worker as worker_module
+
+        fake_settings = SimpleNamespace(
+            log_level="INFO",
+            sentry_environment="test",
+            sentry_release=None,
+            agent_id="worker-test",
+            database_url="postgresql://user:pass@localhost/test",
+        )
+
+        with (
+            patch.object(worker_module, "get_settings", return_value=fake_settings),
+            patch.object(worker_module, "configure_logging"),
+            patch.object(worker_module, "create_session_factory", return_value=MagicMock()),
+            patch.object(worker_module, "ensure_execution_snapshot_startup_bootstrap"),
+            patch.object(worker_module, "_process_next_run_once", return_value=object()) as process_run_once,
+            patch.dict(
+                os.environ,
+                {
+                    "ORCHESTRATOR_WORKER_CLAIMED_RUN_ID": "run-abc",
+                    "ORCHESTRATOR_WORKER_CLAIM_ID": "claim-abc",
+                },
+                clear=False,
+            ),
+        ):
+            self.assertEqual(
+                worker_module.run_worker_child_once(mode="runs"),
+                worker_module.WORKER_CHILD_EXIT_PROCESSED,
+            )
+
+        self.assertEqual(process_run_once.call_args.kwargs["claimed_run_id"], "run-abc")
+        self.assertEqual(process_run_once.call_args.kwargs["claim_id"], "claim-abc")
+
+    def test_run_worker_child_once_requires_claimed_run_env(self) -> None:
+        import orchestrator.worker as worker_module
+
+        fake_settings = SimpleNamespace(
+            log_level="INFO",
+            sentry_environment="test",
+            sentry_release=None,
+            agent_id="worker-test",
+            database_url="postgresql://user:pass@localhost/test",
+        )
+
+        with (
+            patch.object(worker_module, "get_settings", return_value=fake_settings),
+            patch.object(worker_module, "configure_logging"),
+            patch.object(worker_module, "create_session_factory", return_value=MagicMock()),
+            patch.object(worker_module, "ensure_execution_snapshot_startup_bootstrap"),
+            patch.dict(
+                os.environ,
+                {
+                    "ORCHESTRATOR_WORKER_CLAIMED_RUN_ID": "",
+                    "ORCHESTRATOR_WORKER_CLAIM_ID": "",
+                },
+                clear=False,
+            ),
+        ):
+            self.assertEqual(
+                worker_module.run_worker_child_once(mode="runs"),
+                worker_module.WORKER_CHILD_EXIT_RUNTIME_FAILURE,
+            )
+
+    def test_run_worker_runs_claims_before_spawning_child(self) -> None:
+        import orchestrator.worker as worker_module
+
+        fake_settings = SimpleNamespace(
+            database_url="postgresql://localhost/db",
+            log_level="INFO",
+            sentry_environment="test",
+            sentry_release=None,
+            agent_id="worker-test",
+        )
+        listener = MagicMock()
+        spawned_run_ids: list[str | None] = []
+        wait_calls = {"count": 0}
+
+        async def _wait_for_wake_or_stop(
+            *,
+            wake_event: asyncio.Event,
+            stop_event: asyncio.Event,
+            timeout_seconds: float | None = None,
+        ) -> bool:
+            _ = wake_event
+            _ = timeout_seconds
+            wait_calls["count"] += 1
+            if wait_calls["count"] == 1:
+                return False
+            stop_event.set()
+            return False
+
+        async def _spawn_worker_child_process(
+            *,
+            mode: str,
+            wake_event: asyncio.Event,
+            child_timeout_seconds: int,
+            claimed_run_id: str | None = None,
+            claim_id: str | None = None,
+        ):
+            _ = wake_event
+            _ = child_timeout_seconds
+            self.assertEqual(mode, "runs")
+            spawned_run_ids.append(claimed_run_id)
+            self.assertEqual(claim_id, "claim-claimed")
+            child_result = worker_module.WorkerChildProcessResult(
+                return_code=worker_module.WORKER_CHILD_EXIT_IDLE,
+                processed=False,
+                dependency_failure=False,
+            )
+            process = SimpleNamespace(pid=654, returncode=child_result.return_code, terminate=lambda: None)
+            return worker_module.WorkerChildProcessHandle(
+                process=process,
+                wait_task=asyncio.create_task(asyncio.sleep(0, result=child_result)),
+            )
+
+        async def _stale_recovery_loop(*, stop_event: asyncio.Event, **_kwargs: object) -> None:
+            await stop_event.wait()
+
+        async def _archived_tenant_purge_loop(*, stop_event: asyncio.Event, **_kwargs: object) -> None:
+            await stop_event.wait()
+
+        with (
+            patch.object(worker_module, "get_settings", return_value=fake_settings),
+            patch.object(worker_module, "configure_logging"),
+            patch.object(worker_module, "create_session_factory", return_value=MagicMock()),
+            patch.object(worker_module, "prewarm_knowledge_dependencies"),
+            patch.object(worker_module, "is_postgres_database_url", return_value=True),
+            patch.object(worker_module, "postgres_dsn_from_database_url", return_value="postgres://dsn"),
+            patch.object(worker_module, "RunQueueNotificationBridge", return_value=listener),
+            patch.object(worker_module, "wait_for_wake_or_stop", new=_wait_for_wake_or_stop),
+            patch.object(worker_module, "_resolve_worker_child_capacity", return_value=1),
+            patch.object(
+                worker_module,
+                "_claim_next_run_once",
+                side_effect=[
+                    worker_module.ClaimedRunDispatch(
+                        run_id="run-claimed",
+                        claim_id="claim-claimed",
+                        tenant_id="tenant-1",
+                        issue_key="GP-186",
+                    ),
+                    None,
+                ],
+            ) as claim_mock,
+            patch.object(
+                worker_module,
+                "_probe_claimable_run_once",
+                return_value=QueueClaimabilityProbe(
+                    claimable=False,
+                    reason=QueueClaimabilityReason.NO_QUEUED_RUNS,
+                ),
+            ) as probe_mock,
+            patch.object(worker_module, "_spawn_worker_child_process", new=_spawn_worker_child_process),
+            patch.object(worker_module, "_recover_worker_run_health_once"),
+            patch.object(worker_module, "_purge_archived_tenants_once"),
+            patch.object(worker_module, "_run_stale_recovery_loop", new=_stale_recovery_loop),
+            patch.object(worker_module, "_run_archived_tenant_purge_loop", new=_archived_tenant_purge_loop),
+            patch.object(worker_module, "worker_service_instance_id_for_mode", return_value="node-a:1234"),
+        ):
+            asyncio.run(worker_module.run_worker(mode="runs"))
+
+        self.assertEqual(spawned_run_ids, ["run-claimed"])
+        self.assertGreaterEqual(claim_mock.call_count, 1)
+        probe_mock.assert_not_called()
 
     def test_spawn_worker_child_process_times_out_and_terminates_child(self) -> None:
         import orchestrator.worker as worker_module
@@ -555,6 +820,40 @@ class WorkerTests(unittest.TestCase):
             self.assertTrue(result.timed_out)
             self.assertTrue(process.terminate_called)
             self.assertFalse(process.kill_called)
+
+        asyncio.run(_run())
+
+    def test_spawn_worker_child_process_uses_package_entrypoint(self) -> None:
+        import orchestrator.worker as worker_module
+
+        class _Process:
+            def __init__(self) -> None:
+                self.pid = 9876
+                self.returncode = 0
+
+            async def wait(self) -> int:
+                return self.returncode
+
+        process = _Process()
+
+        async def _run() -> None:
+            with patch("orchestrator.worker.asyncio.create_subprocess_exec", return_value=process) as spawn_mock:
+                handle = await worker_module._spawn_worker_child_process(
+                    mode="runs",
+                    wake_event=asyncio.Event(),
+                    child_timeout_seconds=30,
+                    claimed_run_id="run-123",
+                    claim_id="claim-456",
+                )
+                result = await handle.wait_task
+
+            self.assertEqual(result.return_code, 0)
+            self.assertTrue(result.processed)
+            spawn_args = spawn_mock.call_args.args
+            self.assertEqual(spawn_args[:4], (sys.executable, "-m", "orchestrator", "worker-child-runs"))
+            child_env = spawn_mock.call_args.kwargs["env"]
+            self.assertEqual(child_env["ORCHESTRATOR_WORKER_CLAIMED_RUN_ID"], "run-123")
+            self.assertEqual(child_env["ORCHESTRATOR_WORKER_CLAIM_ID"], "claim-456")
 
         asyncio.run(_run())
 
@@ -615,10 +914,19 @@ class WorkerTests(unittest.TestCase):
         async def _stale_recovery_loop(*, stop_event: asyncio.Event, **_kwargs: object) -> None:
             await stop_event.wait()
 
-        async def _spawn_worker_child_process(*, mode: str, wake_event: asyncio.Event, child_timeout_seconds: int):
+        async def _spawn_worker_child_process(
+            *,
+            mode: str,
+            wake_event: asyncio.Event,
+            child_timeout_seconds: int,
+            claimed_run_id: str | None = None,
+            claim_id: str | None = None,
+        ):
             _ = mode
             _ = wake_event
             _ = child_timeout_seconds
+            self.assertEqual(claimed_run_id, "run-1")
+            self.assertEqual(claim_id, "claim-1")
             token = process_mock()
             child_result = worker_module.WorkerChildProcessResult(
                 return_code=(
@@ -650,10 +958,23 @@ class WorkerTests(unittest.TestCase):
             patch.object(worker_module, "_resolve_worker_child_capacity", return_value=1),
             patch.object(
                 worker_module,
+                "_claim_next_run_once",
+                side_effect=[
+                    worker_module.ClaimedRunDispatch(
+                        run_id="run-1",
+                        claim_id="claim-1",
+                        tenant_id="tenant-1",
+                        issue_key="GP-1",
+                    ),
+                    None,
+                ],
+            ),
+            patch.object(
+                worker_module,
                 "_probe_claimable_run_once",
                 return_value=QueueClaimabilityProbe(
-                    claimable=True,
-                    reason=QueueClaimabilityReason.CLAIMABLE,
+                    claimable=False,
+                    reason=QueueClaimabilityReason.NO_QUEUED_RUNS,
                 ),
             ),
             patch.object(worker_module, "_spawn_worker_child_process", new=_spawn_worker_child_process),
@@ -663,10 +984,109 @@ class WorkerTests(unittest.TestCase):
         ):
             asyncio.run(worker_module.run_worker())
 
-        self.assertEqual(process_mock.call_count, 2)
+        self.assertEqual(process_mock.call_count, 1)
         recovery_mock.assert_called_once()
         listener.start.assert_called_once()
         listener.stop.assert_called_once()
+
+    def test_run_worker_reconciles_claimed_run_after_processed_child(self) -> None:
+        import orchestrator.worker as worker_module
+
+        fake_settings = SimpleNamespace(
+            database_url="postgresql://localhost/db",
+            log_level="INFO",
+            sentry_environment="test",
+            sentry_release=None,
+            agent_id="worker-test",
+        )
+        listener = MagicMock()
+        wait_calls = {"count": 0}
+
+        async def _wait_for_wake_or_stop(
+            *,
+            wake_event: asyncio.Event,
+            stop_event: asyncio.Event,
+            timeout_seconds: float | None = None,
+        ) -> bool:
+            _ = timeout_seconds
+            wait_calls["count"] += 1
+            if wait_calls["count"] == 1:
+                wake_event.set()
+                return False
+            stop_event.set()
+            return False
+
+        async def _stale_recovery_loop(*, stop_event: asyncio.Event, **_kwargs: object) -> None:
+            await stop_event.wait()
+
+        async def _spawn_worker_child_process(
+            *,
+            mode: str,
+            wake_event: asyncio.Event,
+            child_timeout_seconds: int,
+            claimed_run_id: str | None = None,
+            claim_id: str | None = None,
+        ):
+            _ = mode
+            _ = wake_event
+            _ = child_timeout_seconds
+            child_result = worker_module.WorkerChildProcessResult(
+                return_code=worker_module.WORKER_CHILD_EXIT_PROCESSED,
+                processed=True,
+                dependency_failure=False,
+            )
+            process = SimpleNamespace(pid=777, returncode=child_result.return_code, terminate=lambda: None)
+            return worker_module.WorkerChildProcessHandle(
+                process=process,
+                wait_task=asyncio.create_task(asyncio.sleep(0, result=child_result)),
+                claimed_run_id=claimed_run_id,
+                claim_id=claim_id,
+            )
+
+        with (
+            patch.object(worker_module, "get_settings", return_value=fake_settings),
+            patch.object(worker_module, "configure_logging"),
+            patch.object(worker_module, "create_session_factory", return_value=MagicMock()),
+            patch.object(worker_module, "prewarm_knowledge_dependencies"),
+            patch.object(worker_module, "is_postgres_database_url", return_value=True),
+            patch.object(worker_module, "postgres_dsn_from_database_url", return_value="postgres://dsn"),
+            patch.object(worker_module, "RunQueueNotificationBridge", return_value=listener),
+            patch.object(worker_module, "wait_for_wake_or_stop", new=_wait_for_wake_or_stop),
+            patch.object(worker_module, "_resolve_worker_child_capacity", return_value=1),
+            patch.object(
+                worker_module,
+                "_claim_next_run_once",
+                side_effect=[
+                    worker_module.ClaimedRunDispatch(
+                        run_id="run-1",
+                        claim_id="claim-1",
+                        tenant_id="tenant-1",
+                        issue_key="GP-1",
+                    ),
+                    None,
+                ],
+            ),
+            patch.object(
+                worker_module,
+                "_probe_claimable_run_once",
+                return_value=QueueClaimabilityProbe(
+                    claimable=False,
+                    reason=QueueClaimabilityReason.NO_QUEUED_RUNS,
+                ),
+            ),
+            patch.object(worker_module, "_spawn_worker_child_process", new=_spawn_worker_child_process),
+            patch.object(worker_module, "_recover_worker_run_health_once"),
+            patch.object(worker_module, "_run_stale_recovery_loop", new=_stale_recovery_loop),
+            patch.object(worker_module, "worker_service_instance_id_for_mode", return_value="node-a:1234"),
+            patch.object(worker_module, "_reconcile_claimed_run_after_child_exit", return_value="failed") as reconcile_mock,
+        ):
+            asyncio.run(worker_module.run_worker(mode="runs"))
+
+        reconcile_mock.assert_called_once_with(
+            session_factory=unittest.mock.ANY,
+            run_id="run-1",
+            claim_id="claim-1",
+        )
 
     def test_run_worker_uses_policy_parallel_slots(self) -> None:
         import orchestrator.worker as worker_module
@@ -694,6 +1114,7 @@ class WorkerTests(unittest.TestCase):
         process_mock = MagicMock(return_value=None)
         recovery_mock = MagicMock()
         wait_calls = {"count": 0}
+        spawned_run_ids: list[str | None] = []
 
         async def _wait_for_wake_or_stop(
             *,
@@ -712,10 +1133,19 @@ class WorkerTests(unittest.TestCase):
         async def _stale_recovery_loop(*, stop_event: asyncio.Event, **_kwargs: object) -> None:
             await stop_event.wait()
 
-        async def _spawn_worker_child_process(*, mode: str, wake_event: asyncio.Event, child_timeout_seconds: int):
+        async def _spawn_worker_child_process(
+            *,
+            mode: str,
+            wake_event: asyncio.Event,
+            child_timeout_seconds: int,
+            claimed_run_id: str | None = None,
+            claim_id: str | None = None,
+        ):
             _ = mode
             _ = wake_event
             _ = child_timeout_seconds
+            spawned_run_ids.append(claimed_run_id)
+            self.assertEqual(claim_id, f"claim-{len(spawned_run_ids)}")
             token = process_mock()
             child_result = worker_module.WorkerChildProcessResult(
                 return_code=(
@@ -743,10 +1173,29 @@ class WorkerTests(unittest.TestCase):
             patch.object(worker_module, "_resolve_worker_child_capacity", return_value=2) as slots_mock,
             patch.object(
                 worker_module,
+                "_claim_next_run_once",
+                side_effect=[
+                    worker_module.ClaimedRunDispatch(
+                        run_id="run-1",
+                        claim_id="claim-1",
+                        tenant_id="tenant-1",
+                        issue_key="GP-1",
+                    ),
+                    worker_module.ClaimedRunDispatch(
+                        run_id="run-2",
+                        claim_id="claim-2",
+                        tenant_id="tenant-1",
+                        issue_key="GP-2",
+                    ),
+                    None,
+                ],
+            ),
+            patch.object(
+                worker_module,
                 "_probe_claimable_run_once",
                 return_value=QueueClaimabilityProbe(
-                    claimable=True,
-                    reason=QueueClaimabilityReason.CLAIMABLE,
+                    claimable=False,
+                    reason=QueueClaimabilityReason.NO_QUEUED_RUNS,
                 ),
             ),
             patch.object(worker_module, "_spawn_worker_child_process", new=_spawn_worker_child_process),
@@ -758,6 +1207,7 @@ class WorkerTests(unittest.TestCase):
 
         self.assertTrue(slots_mock.called)
         self.assertGreaterEqual(process_mock.call_count, 2)
+        self.assertEqual(spawned_run_ids, ["run-1", "run-2"])
         listener.start.assert_called_once()
         listener.stop.assert_called_once()
 
@@ -792,10 +1242,19 @@ class WorkerTests(unittest.TestCase):
         async def _stale_recovery_loop(*, stop_event: asyncio.Event, **_kwargs: object) -> None:
             await stop_event.wait()
 
-        async def _spawn_worker_child_process(*, mode: str, wake_event: asyncio.Event, child_timeout_seconds: int):
+        async def _spawn_worker_child_process(
+            *,
+            mode: str,
+            wake_event: asyncio.Event,
+            child_timeout_seconds: int,
+            claimed_run_id: str | None = None,
+            claim_id: str | None = None,
+        ):
             _ = mode
             _ = wake_event
             _ = child_timeout_seconds
+            self.assertEqual(claimed_run_id, f"run-{child_spawns['count'] + 1}")
+            self.assertEqual(claim_id, f"claim-{child_spawns['count'] + 1}")
             child_spawns["count"] += 1
             return_code = (
                 worker_module.WORKER_CHILD_EXIT_RUNTIME_FAILURE
@@ -824,10 +1283,29 @@ class WorkerTests(unittest.TestCase):
             patch.object(worker_module, "_resolve_worker_child_capacity", return_value=1),
             patch.object(
                 worker_module,
+                "_claim_next_run_once",
+                side_effect=[
+                    worker_module.ClaimedRunDispatch(
+                        run_id="run-1",
+                        claim_id="claim-1",
+                        tenant_id="tenant-1",
+                        issue_key="GP-1",
+                    ),
+                    worker_module.ClaimedRunDispatch(
+                        run_id="run-2",
+                        claim_id="claim-2",
+                        tenant_id="tenant-1",
+                        issue_key="GP-2",
+                    ),
+                    None,
+                ],
+            ),
+            patch.object(
+                worker_module,
                 "_probe_claimable_run_once",
                 return_value=QueueClaimabilityProbe(
-                    claimable=True,
-                    reason=QueueClaimabilityReason.CLAIMABLE,
+                    claimable=False,
+                    reason=QueueClaimabilityReason.NO_QUEUED_RUNS,
                 ),
             ),
             patch.object(worker_module, "_recover_worker_run_health_once", new=recovery_mock),
@@ -871,10 +1349,19 @@ class WorkerTests(unittest.TestCase):
         async def _stale_recovery_loop(*, stop_event: asyncio.Event, **_kwargs: object) -> None:
             await stop_event.wait()
 
-        async def _spawn_worker_child_process(*, mode: str, wake_event: asyncio.Event, child_timeout_seconds: int):
+        async def _spawn_worker_child_process(
+            *,
+            mode: str,
+            wake_event: asyncio.Event,
+            child_timeout_seconds: int,
+            claimed_run_id: str | None = None,
+            claim_id: str | None = None,
+        ):
             _ = mode
             _ = wake_event
             _ = child_timeout_seconds
+            self.assertEqual(claimed_run_id, "run-1")
+            self.assertEqual(claim_id, "claim-1")
             child_result = worker_module.WorkerChildProcessResult(
                 return_code=worker_module.WORKER_CHILD_EXIT_DEPENDENCY_FAILURE,
                 processed=False,
@@ -897,10 +1384,20 @@ class WorkerTests(unittest.TestCase):
             patch.object(worker_module, "_resolve_worker_child_capacity", return_value=1),
             patch.object(
                 worker_module,
+                "_claim_next_run_once",
+                return_value=worker_module.ClaimedRunDispatch(
+                    run_id="run-1",
+                    claim_id="claim-1",
+                    tenant_id="tenant-1",
+                    issue_key="GP-1",
+                ),
+            ),
+            patch.object(
+                worker_module,
                 "_probe_claimable_run_once",
                 return_value=QueueClaimabilityProbe(
-                    claimable=True,
-                    reason=QueueClaimabilityReason.CLAIMABLE,
+                    claimable=False,
+                    reason=QueueClaimabilityReason.NO_QUEUED_RUNS,
                 ),
             ),
             patch.object(worker_module, "_spawn_worker_child_process", new=_spawn_worker_child_process),
