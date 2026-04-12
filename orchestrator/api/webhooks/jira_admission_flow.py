@@ -95,6 +95,7 @@ def plan_jira_enqueue(
     context,
     issue_description: str | None,
     precheck_outcome: str | None,
+    required_worker_capability: str | None,
 ) -> object:  # noqa: ANN001
     return enqueue_issue_run_with_precheck(
         session,
@@ -106,6 +107,7 @@ def plan_jira_enqueue(
         repo_url=context.project.github_repository,
         delivery_id=context.delivery_id,
         precheck_outcome=precheck_outcome,
+        required_worker_capability=required_worker_capability,
         max_concurrent_runs=context.tenant.policy_config.get("max_concurrent_runs"),
     )
 
@@ -520,6 +522,7 @@ def plan_jira_run_flow(
         context=context,
         issue_description=resolved_issue_description,
         precheck_outcome=admission.precheck_outcome,
+        required_worker_capability=admission.required_worker_capability,
     )
     if not enqueue_result.enqueued:
         logger.info(

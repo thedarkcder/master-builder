@@ -588,6 +588,7 @@ class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
             self.assertIsNone(requeued.last_heartbeat_at)
             self.assertIsNone(requeued.finished_at)
             self.assertIsNone(requeued.worker_service_instance_id)
+            self.assertEqual(requeued.required_worker_capability, "macos")
             self.assertEqual(requeued.plan["workflow"]["requeue_target"], "macos")
             self.assertEqual(requeued.plan["context"]["execution_context"]["required_worker_label"], "macos")
             self.assertEqual(

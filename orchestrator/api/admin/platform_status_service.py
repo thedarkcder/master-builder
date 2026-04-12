@@ -12,7 +12,7 @@ from orchestrator.core.worker_capability_normalization import WorkerCapability
 from orchestrator.core.worker_capabilities import parse_worker_capabilities_diagnostics
 from orchestrator.storage.models import Run, WorkerRuntimeState
 
-ACTIVE_RUN_STATUSES = {"queued", "running"}
+ACTIVE_RUN_STATUSES = {"queued", "dispatching", "running"}
 WORKER_RUNTIME_HEARTBEAT_STALE_SECONDS = 120
 
 

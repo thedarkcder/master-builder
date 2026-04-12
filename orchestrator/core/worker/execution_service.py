@@ -12,7 +12,6 @@ from orchestrator.core.agent_observability import record_agent_lifecycle_event
 from orchestrator.core.discord.notifications import send_tenant_discord_message
 from orchestrator.core.jira_links import tenant_jira_issue_url
 from orchestrator.core.worker.webhook_job_service import process_next_webhook_job
-from orchestrator.core.worker.decision_gate import apply_decision_gate
 from orchestrator.core.worker.jira_stage_service import send_stage_update_to_jira as _send_stage_update_to_jira
 from orchestrator.core.worker.jira_stage_service import transition_issue_status as _transition_issue_status
 from orchestrator.core.worker.queue_selector import claim_next_queued_run
@@ -23,6 +22,7 @@ from orchestrator.core.worker.run_health import (
 from orchestrator.core.worker.run_lifecycle import (
     bind_run_project,
     block_archived_project,
+    promote_run_to_running,
     fail_guardrail_violation,
     fail_missing_project_mapping,
     fail_project_repository_checkout,
@@ -53,6 +53,7 @@ from orchestrator.tools.project_repo_checkout import cleanup_run_workspaces
 logger = logging.getLogger(__name__)
 
 RUN_STATUS_QUEUED = "queued"
+RUN_STATUS_DISPATCHING = "dispatching"
 RUN_STATUS_RUNNING = "running"
 RUN_STATUS_FAILED = "failed"
 RUN_STATUS_BLOCKED = "blocked"
@@ -125,31 +126,6 @@ def _process_next_queued_run_impl(
 ) -> Run | None:
     from orchestrator.core.worker.process_service import process_next_queued_run as _process_next_queued_run_impl
 
-    def _apply_decision_gate(
-        *,
-        session: Session,
-        run: Run,
-        tenant: Tenant,
-        settings: Settings,
-        send_discord_message_fn: TransportActionSender,
-        send_jira_message_fn: TransportActionSender,
-        ask_reply_components_fn: AskReplyComponentsFactory,
-        blocked_status: str,
-        failed_status: str,
-    ) -> tuple[object | None, dict | None]:
-        return apply_decision_gate(
-            session=session,
-            run=run,
-            tenant=tenant,
-            settings=settings,
-            tenant_jira_oauth_context_fn=tenant_jira_oauth_context,
-            send_discord_message_fn=send_discord_message_fn,
-            send_jira_message_fn=send_jira_message_fn,
-            ask_reply_components_fn=ask_reply_components_fn,
-            blocked_status=blocked_status,
-            failed_status=failed_status,
-        )
-
     def _emit_agent_event(
         *,
         event_type: str,
@@ -175,7 +151,7 @@ def _process_next_queued_run_impl(
         logger=logger,
         settings_fn=get_settings,
         claim_next_queued_run_fn=claim_next_queued_run,
-        apply_decision_gate_fn=_apply_decision_gate,
+        apply_decision_gate_fn=lambda **_: (None, None),
         send_discord_message_fn=send_discord_message_fn,
         send_jira_message_fn=_send_stage_update_to_jira,
         ask_reply_components_fn=_ask_reply_components,
@@ -191,6 +167,7 @@ def _process_next_queued_run_impl(
             worker_service_instance_id=worker_service_instance_id,
             heartbeat_interval_seconds=heartbeat_interval_seconds,
         ),
+        promote_run_to_running_fn=promote_run_to_running,
         bind_run_project_fn=bind_run_project,
         workflow_request_for_run_fn=_workflow_request_for_run,
         fail_guardrail_violation_fn=fail_guardrail_violation,
@@ -215,6 +192,7 @@ def _process_next_queued_run_impl(
             mode="runs",
         ),
         run_status_queued=RUN_STATUS_QUEUED,
+        run_status_dispatching=RUN_STATUS_DISPATCHING,
         run_status_running=RUN_STATUS_RUNNING,
         run_status_failed=RUN_STATUS_FAILED,
         run_status_blocked=RUN_STATUS_BLOCKED,

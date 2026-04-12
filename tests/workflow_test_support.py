@@ -26,7 +26,10 @@ def make_run(
     dedupe_scope: str = "issue_execution",
     status: str = "queued",
     last_error: str | None = None,
+    pre_check_outcome: str | None = None,
+    required_worker_capability: str | None = None,
     plan: dict | None = None,
+    dispatch_claimed_at: datetime | None = None,
     started_at: datetime | None = None,
     last_heartbeat_at: datetime | None = None,
     worker_service_instance_id: str | None = None,
@@ -51,8 +54,11 @@ def make_run(
         dedupe_scope=dedupe_scope,
         status=status,
         last_error=last_error,
+        pre_check_outcome=pre_check_outcome,
+        required_worker_capability=required_worker_capability,
         plan=plan,
         created_at=created_at,
+        dispatch_claimed_at=dispatch_claimed_at,
         started_at=started_at,
         last_heartbeat_at=last_heartbeat_at,
         worker_service_instance_id=worker_service_instance_id,
@@ -80,7 +86,7 @@ def add_run_with_workflow(
         run.entry_stage = "orchestrated"
     timestamp = run.created_at or datetime.now(timezone.utc)
     effective_workflow_status = workflow_status or run.status
-    active_run_id = run.run_id if effective_workflow_status in {"queued", "running", "waiting_for_input"} else None
+    active_run_id = run.run_id if effective_workflow_status in {"queued", "dispatching", "running", "waiting_for_input"} else None
     workflow = WorkflowExecution(
         workflow_id=run.workflow_id,
         tenant_id=run.tenant_id,
@@ -138,7 +144,10 @@ def add_workflow_attempt(
     checkpoint_session_id: str | None = None,
     blocked_reason: str | None = None,
     last_error: str | None = None,
+    pre_check_outcome: str | None = None,
+    required_worker_capability: str | None = None,
     plan: dict | None = None,
+    dispatch_claimed_at: datetime | None = None,
     worker_service_instance_id: str | None = None,
     source_workflow_id: str | None = None,
     source_run_id: str | None = None,
@@ -151,11 +160,11 @@ def add_workflow_attempt(
 ) -> tuple[WorkflowExecution, Run, WorkflowCheckpoint | None]:
     timestamp = now or created_at or datetime.now(timezone.utc)
     normalized_workflow_id = workflow_id or f"workflow-{run_id}"
-    workflow_started = started_at if started_at is not None else (timestamp if workflow_status != "queued" else None)
+    workflow_started = started_at if started_at is not None else (timestamp if workflow_status not in {"queued", "dispatching"} else None)
     workflow_finished = finished_at if finished_at is not None else (
         timestamp if workflow_status in {"succeeded", "failed", "cancelled"} else None
     )
-    run_started = started_at if started_at is not None else (timestamp if run_status != "queued" else None)
+    run_started = started_at if started_at is not None else (timestamp if run_status not in {"queued", "dispatching"} else None)
     run_finished = finished_at if finished_at is not None else (
         timestamp if run_status in {"succeeded", "failed", "cancelled", "blocked"} else None
     )
@@ -172,7 +181,7 @@ def add_workflow_attempt(
         dedupe_scope=dedupe_scope,
         status=workflow_status,
         last_error=last_error,
-        active_run_id=run_id if workflow_status in {"queued", "running", "waiting_for_input", "blocked"} else None,
+        active_run_id=run_id if workflow_status in {"queued", "dispatching", "running", "waiting_for_input", "blocked"} else None,
         latest_checkpoint_id=entry_checkpoint_id,
         source_workflow_id=source_workflow_id,
         source_run_id=source_run_id,
@@ -201,8 +210,11 @@ def add_workflow_attempt(
         dedupe_scope=dedupe_scope,
         status=run_status,
         last_error=last_error,
+        pre_check_outcome=pre_check_outcome,
+        required_worker_capability=required_worker_capability,
         plan=plan,
         created_at=created_at or timestamp,
+        dispatch_claimed_at=dispatch_claimed_at,
         started_at=run_started,
         last_heartbeat_at=last_heartbeat_at if last_heartbeat_at is not None else (timestamp if run_status == "running" else None),
         worker_service_instance_id=worker_service_instance_id,

@@ -22,6 +22,7 @@ from orchestrator.core.secrets import encrypt_value
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.models import (
+    DecisionCase,
     DiscordCommandSyncRuntimeState,
     JiraOAuthConnection,
     KnowledgeAsset,
@@ -2246,6 +2247,7 @@ class AdminApiTests(SqliteTemplateApiTestCase):
                 trigger_context={"source": "manual_fix_request", "pr_number": 42}
             )
             snapshot.context.execution_context["pre_check_outcome"] = "ready_for_agent"
+            snapshot.context.execution_context["human_input_request_id"] = "stale-request"
             source_run.plan = snapshot.dump()
             session.commit()
 
@@ -2286,8 +2288,9 @@ class AdminApiTests(SqliteTemplateApiTestCase):
                 run.plan["context"]["execution_context"]["pre_check_outcome"],
                 "ready_for_agent",
             )
+            self.assertNotIn("human_input_request_id", run.plan["context"]["execution_context"])
 
-    def test_create_fresh_workflow_attempt_from_blocked_workflow_creates_new_workflow_lineage(self) -> None:
+    def test_create_fresh_workflow_attempt_from_blocked_workflow_strips_stale_human_input_state(self) -> None:
         payload = self._tenant_payload()
         self._insert_jira_connection(connection_id="conn-1")
         create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
@@ -2303,6 +2306,13 @@ class AdminApiTests(SqliteTemplateApiTestCase):
             checkpoint_id="checkpoint-blocked-fresh-1",
             checkpoint_kind="execution",
         )
+        with create_session_factory(self.database_url)() as session:
+            source_run = session.get(Run, "run-blocked-fresh-1")
+            assert source_run is not None
+            snapshot = ExecutionSnapshot.require(source_run.plan, allow_empty=True)
+            snapshot.context.execution_context["human_input_request_id"] = "stale-request"
+            source_run.plan = snapshot.dump()
+            session.commit()
 
         response = self.client.post(
             "/api/admin/workflows/workflow-blocked-fresh-1/attempts",
@@ -2311,20 +2321,106 @@ class AdminApiTests(SqliteTemplateApiTestCase):
         )
         self.assertEqual(response.status_code, 201, response.text)
         body = response.json()
-        self.assertNotEqual(body["workflow_id"], "workflow-blocked-fresh-1")
-        self.assertEqual(body["attempt_number"], 1)
-        self.assertEqual(body["entry_mode"], "fresh")
-        self.assertEqual(body["entry_stage"], "orchestrated")
-        self.assertIsNone(body["entry_checkpoint_id"])
-
         session_factory = create_session_factory(self.database_url)
         with session_factory() as session:
-            workflow = session.get(WorkflowExecution, body["workflow_id"])
-            self.assertIsNotNone(workflow)
-            assert workflow is not None
-            self.assertEqual(workflow.source_workflow_id, "workflow-blocked-fresh-1")
-            self.assertEqual(workflow.source_run_id, "run-blocked-fresh-1")
-            self.assertEqual(workflow.status, "queued")
+            run = session.get(Run, body["run_id"])
+            self.assertIsNotNone(run)
+            assert run is not None
+            assert isinstance(run.plan, dict)
+            self.assertEqual(
+                run.plan["context"]["execution_context"]["pre_check_outcome"],
+                "ready_for_agent",
+            )
+            self.assertNotIn("human_input_request_id", run.plan["context"]["execution_context"])
+
+    def test_create_fresh_workflow_attempt_recovers_required_worker_capability_from_decision_case(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201)
+
+        self._seed_workflow_attempt(
+            workflow_id="workflow-terminal-fresh-capability",
+            run_id="run-terminal-fresh-capability",
+            issue_key="TP-1002D",
+            issue_summary="Terminal workflow fresh start with recovered capability",
+            workflow_status="failed",
+            run_status="failed",
+        )
+        with create_session_factory(self.database_url)() as session:
+            source_run = session.get(Run, "run-terminal-fresh-capability")
+            self.assertIsNotNone(source_run)
+            assert source_run is not None
+            source_run.pre_check_outcome = "ready_for_agent"
+            source_run.required_worker_capability = None
+            snapshot = ExecutionSnapshot.empty(trigger_context={"source": "manual_fix_request"})
+            snapshot.context.execution_context["pre_check_outcome"] = "ready_for_agent"
+            source_run.plan = snapshot.dump()
+            session.add(
+                DecisionCase(
+                    case_id="case-terminal-fresh-capability",
+                    tenant_id="tenant-a",
+                    project_id="tenant-a-default",
+                    issue_key="TP-1002D",
+                    state="clear",
+                    blocked_reason=None,
+                    classification="clear",
+                    issue_fingerprint="fingerprint-terminal-fresh-capability",
+                    active_cycle_id=None,
+                    last_source="jira",
+                    last_event_type="issue_updated",
+                    last_event_at=datetime.now(timezone.utc),
+                    required_worker_capability="macos",
+                    required_worker_label="worker:macos",
+                    required_worker_label_present=True,
+                    ready_label="agent:ready",
+                    ready_label_present=True,
+                    decision_gate_closed_permanently=True,
+                    decision_gate_closed_at=datetime.now(timezone.utc),
+                    decision_gate_closed_cycle_id="cycle-terminal-fresh-capability",
+                    metadata_json={"issue_labels": ["worker:macos", "agent:ready"]},
+                    created_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc),
+                )
+            )
+            session.commit()
+
+        response = self.client.post(
+            "/api/admin/workflows/workflow-terminal-fresh-capability/attempts",
+            json={"mode": "fresh"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 201, response.text)
+        body = response.json()
+
+        with create_session_factory(self.database_url)() as session:
+            run = session.get(Run, body["run_id"])
+            self.assertIsNotNone(run)
+            assert run is not None
+            self.assertEqual(run.required_worker_capability, "macos")
+
+    def test_create_fresh_workflow_attempt_rejects_missing_ready_precheck(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201)
+
+        self._seed_workflow_attempt(
+            workflow_id="workflow-fresh-missing-precheck-1",
+            run_id="run-fresh-missing-precheck-1",
+            issue_key="TP-1002C",
+            issue_summary="Fresh workflow missing precheck",
+            workflow_status="failed",
+            run_status="failed",
+        )
+
+        response = self.client.post(
+            "/api/admin/workflows/workflow-fresh-missing-precheck-1/attempts",
+            json={"mode": "fresh"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertIn("pre_check_outcome must be 'ready_for_agent'", response.json()["detail"])
 
     def test_fresh_workflow_attempt_rejects_checkpoint_kind(self) -> None:
         payload = self._tenant_payload()

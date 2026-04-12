@@ -336,6 +336,7 @@ class WorkerTests(unittest.TestCase):
             patch.object(worker_module, "get_settings", return_value=fake_settings),
             patch.object(worker_module, "configure_logging"),
             patch.object(worker_module, "create_session_factory", return_value=MagicMock()),
+            patch.object(worker_module, "prewarm_knowledge_dependencies") as prewarm_mock,
             patch.object(worker_module, "is_postgres_database_url", return_value=True),
             patch.object(worker_module, "postgres_dsn_from_database_url", return_value="postgres://dsn"),
             patch.object(worker_module, "RunQueueNotificationBridge", return_value=listener),
@@ -357,6 +358,7 @@ class WorkerTests(unittest.TestCase):
             asyncio.run(worker_module.run_worker(mode="webhooks"))
 
         self.assertIn("webhooks", spawned_modes)
+        prewarm_mock.assert_not_called()
         recovery_mock.assert_not_called()
         stale_loop_mock.assert_not_called()
         listener.start.assert_called_once()
@@ -416,6 +418,7 @@ class WorkerTests(unittest.TestCase):
             patch.object(worker_module, "get_settings", return_value=fake_settings),
             patch.object(worker_module, "configure_logging"),
             patch.object(worker_module, "create_session_factory", return_value=MagicMock()),
+            patch.object(worker_module, "prewarm_knowledge_dependencies") as prewarm_mock,
             patch.object(worker_module, "is_postgres_database_url", return_value=True),
             patch.object(worker_module, "postgres_dsn_from_database_url", return_value="postgres://dsn"),
             patch.object(worker_module, "RunQueueNotificationBridge", return_value=listener),
@@ -439,6 +442,7 @@ class WorkerTests(unittest.TestCase):
             asyncio.run(worker_module.run_worker(mode="runs"))
 
         self.assertIn("runs", spawned_modes)
+        prewarm_mock.assert_called_once_with(settings=fake_settings)
         recovery_mock.assert_called_once()
         purge_mock.assert_called_once()
         listener.start.assert_called_once()

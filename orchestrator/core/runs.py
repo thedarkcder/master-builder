@@ -9,6 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from orchestrator.core.decision_types import PrecheckOutcome
+from orchestrator.core.worker_capability_normalization import parse_worker_capability
 from orchestrator.core.workflow.execution_snapshot import (
     ExecutionSnapshot,
     load_parsed_trigger_context_from_plan,
@@ -22,6 +23,7 @@ RUN_DEDUPE_SCOPE_ISSUE_EXECUTION = "issue_execution"
 RUN_DEDUPE_SCOPE_PR_REMEDIATION = "pr_remediation"
 
 RUN_STATUS_QUEUED = "queued"
+RUN_STATUS_DISPATCHING = "dispatching"
 RUN_STATUS_RUNNING = "running"
 RUN_STATUS_WAITING_FOR_INPUT = "waiting_for_input"
 RUN_STATUS_BLOCKED = "blocked"
@@ -31,11 +33,13 @@ RUN_STATUS_CANCELLED = "cancelled"
 
 ACTIVE_RUN_STATUSES = {
     RUN_STATUS_QUEUED,
+    RUN_STATUS_DISPATCHING,
     RUN_STATUS_RUNNING,
 }
 ACTIVE_WORKFLOW_STATUSES = set(WORKFLOW_ACTIVE_STATUSES)
 NON_TERMINAL_RUN_STATUSES = {
     RUN_STATUS_QUEUED,
+    RUN_STATUS_DISPATCHING,
     RUN_STATUS_RUNNING,
     RUN_STATUS_WAITING_FOR_INPUT,
     RUN_STATUS_BLOCKED,
@@ -68,6 +72,8 @@ class RunBootstrap:
     entry_mode: str = "fresh"
     entry_stage: str | None = None
     entry_checkpoint_id: str | None = None
+    precheck_outcome: str | None = None
+    required_worker_capability: str | None = None
 
 
 def normalize_run_dedupe_scope(raw_scope: object | None) -> str:
@@ -91,6 +97,31 @@ def resolve_precheck_outcome_from_plan(plan: object | None) -> str | None:
     raw_outcome = snapshot.context.execution_context.get("pre_check_outcome")
     parsed_outcome = PrecheckOutcome.parse(raw_outcome)
     return parsed_outcome.value if parsed_outcome is not None else None
+
+
+def _normalize_required_worker_capability(raw_capability: object | None) -> str | None:
+    parsed_capability = parse_worker_capability(raw_capability)
+    return parsed_capability.value if parsed_capability is not None else None
+
+
+def resolve_required_worker_capability_from_plan(plan: object | None) -> str | None:
+    if plan is None or (isinstance(plan, dict) and not plan):
+        return None
+    snapshot = ExecutionSnapshot.load(plan)
+    if snapshot is None:
+        raise RunStateTransitionError("Unsupported execution snapshot version/shape")
+    return _normalize_required_worker_capability(snapshot.workflow.requeue_target)
+
+
+def resolve_required_worker_capability_for_enqueue(
+    *,
+    required_worker_capability: str | None = None,
+    required_worker_capability_source_plan: object | None = None,
+) -> str | None:
+    normalized_capability = _normalize_required_worker_capability(required_worker_capability)
+    if normalized_capability is not None:
+        return normalized_capability
+    return resolve_required_worker_capability_from_plan(required_worker_capability_source_plan)
 
 
 def resolve_precheck_outcome_for_enqueue(
@@ -235,6 +266,15 @@ def _build_initial_plan(
     return snapshot.dump()
 
 
+def _run_bootstrap_required_worker_capability(bootstrap: RunBootstrap | None) -> str | None:
+    if bootstrap is None:
+        return None
+    return resolve_required_worker_capability_for_enqueue(
+        required_worker_capability=bootstrap.required_worker_capability,
+        required_worker_capability_source_plan=bootstrap.plan,
+    )
+
+
 def _next_attempt_number(session: Session, workflow_id: str) -> int:
     current = session.execute(
         select(func.max(Run.attempt_number)).where(Run.workflow_id == workflow_id)
@@ -262,6 +302,7 @@ def enqueue_run(
     delivery_id: str | None = None,
     precheck_outcome: str | None = None,
     precheck_source_plan: object | None = None,
+    required_worker_capability: str | None = None,
     max_concurrent_runs: int | None = None,
     dedupe_scope: str | None = None,
     bootstrap: RunBootstrap | None = None,
@@ -320,6 +361,12 @@ def enqueue_run(
         precheck_outcome=precheck_outcome,
         precheck_source_plan=precheck_source_plan,
     )
+    normalized_required_worker_capability = resolve_required_worker_capability_for_enqueue(
+        required_worker_capability=required_worker_capability,
+        required_worker_capability_source_plan=(
+            bootstrap.plan if bootstrap is not None and isinstance(bootstrap.plan, dict) else precheck_source_plan
+        ),
+    )
     initial_plan = _build_initial_plan(
         bootstrap=bootstrap,
         normalized_precheck_outcome=normalized_precheck_outcome,
@@ -369,7 +416,10 @@ def enqueue_run(
         plan=initial_plan,
         status=RUN_STATUS_QUEUED,
         last_error=None,
+        pre_check_outcome=normalized_precheck_outcome,
+        required_worker_capability=normalized_required_worker_capability,
         created_at=now,
+        dispatch_claimed_at=None,
         started_at=None,
         last_heartbeat_at=None,
         worker_service_instance_id=None,
@@ -487,8 +537,14 @@ def _enqueue_attempt_for_workflow(
         )
     require_ready_for_agent_enqueue(
         source="workflow_attempt",
+        precheck_outcome=bootstrap.precheck_outcome,
         precheck_source_plan=bootstrap.plan,
     )
+    normalized_precheck_outcome = resolve_precheck_outcome_for_enqueue(
+        precheck_outcome=bootstrap.precheck_outcome,
+        precheck_source_plan=bootstrap.plan,
+    )
+    normalized_required_worker_capability = _run_bootstrap_required_worker_capability(bootstrap)
     now = _now()
     run = Run(
         run_id=str(uuid4()),
@@ -510,7 +566,10 @@ def _enqueue_attempt_for_workflow(
         plan=dict(bootstrap.plan) if isinstance(bootstrap.plan, dict) else None,
         status=RUN_STATUS_QUEUED,
         last_error=None,
+        pre_check_outcome=normalized_precheck_outcome,
+        required_worker_capability=normalized_required_worker_capability,
         created_at=now,
+        dispatch_claimed_at=None,
         started_at=None,
         last_heartbeat_at=None,
         worker_service_instance_id=None,
@@ -544,14 +603,16 @@ def mark_run_running(session: Session, *, run_id: str) -> Run:
         raise RunStateTransitionError(f"Run not found: {run_id}")
     if run.status == RUN_STATUS_RUNNING:
         return run
-    if run.status != RUN_STATUS_QUEUED:
+    if run.status not in {RUN_STATUS_QUEUED, RUN_STATUS_DISPATCHING}:
         raise RunStateTransitionError(f"Cannot move run {run_id} to running from status {run.status}")
     workflow = session.get(WorkflowExecution, run.workflow_id)
     if workflow is None:
         raise RunStateTransitionError(f"Workflow not found for run {run_id}")
     now = _now()
     run.status = RUN_STATUS_RUNNING
+    run.dispatch_claimed_at = None
     run.started_at = now
+    run.last_heartbeat_at = now
     workflow.status = RUN_STATUS_RUNNING
     workflow.started_at = workflow.started_at or now
     workflow.updated_at = now
@@ -589,8 +650,11 @@ def mark_run_terminal(
     now = _now()
     run.status = terminal_status
     run.last_error = last_error
+    run.dispatch_claimed_at = None
     run.started_at = run.started_at or now
     run.finished_at = now
+    run.last_heartbeat_at = None
+    run.worker_service_instance_id = None
     workflow.last_error = last_error
     workflow.updated_at = now
     workflow.active_run_id = run.run_id
@@ -623,8 +687,11 @@ def cancel_run(
     now = _now()
     run.status = RUN_STATUS_CANCELLED
     run.last_error = f"Cancelled by {cancelled_by}"
+    run.dispatch_claimed_at = None
     run.started_at = run.started_at or now
     run.finished_at = now
+    run.last_heartbeat_at = None
+    run.worker_service_instance_id = None
     workflow.status = RUN_STATUS_CANCELLED
     workflow.last_error = run.last_error
     workflow.finished_at = now
@@ -678,8 +745,11 @@ def cancel_queued_issue_runs(
     for run in queued_runs:
         run.status = RUN_STATUS_CANCELLED
         run.last_error = cancellation_reason
+        run.dispatch_claimed_at = None
         run.started_at = run.started_at or now
         run.finished_at = now
+        run.last_heartbeat_at = None
+        run.worker_service_instance_id = None
         workflow_active_counts[run.workflow_id] = max(0, workflow_active_counts.get(run.workflow_id, 0) - 1)
         workflow = session.get(WorkflowExecution, run.workflow_id)
         if workflow is None:

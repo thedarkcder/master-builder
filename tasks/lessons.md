@@ -153,6 +153,8 @@
 2026-04-10
 
 - When the user says fallback behavior is not acceptable, remove fallback synthesis at the core contract boundary (not just in one transport), and add assertions that canonical fields must be present instead of silently deriving replacements.
+- When the user says model downloads must complete before queue readiness, do not stop at prewarming the first model you observed. Audit every download-capable model path for the owning service, prewarm them explicitly during service startup, and keep runtime in offline/local-only mode so jobs cannot trigger network downloads lazily.
+- When the user corrects the problem framing, stop treating the observed symptom as the root cause. Re-trace the state transition that should have happened before the symptom, and verify where the authoritative routing or readiness signal was lost.
 - When the user asks to revert a specific post-commit change, isolate that exact delta before acting. Do not revert adjacent optimizations or earlier committed work that the user did not name.
 - When the user explicitly says to include pre-existing modified files in the commit, stage the full working tree (`git add -A`) and commit once, rather than scoping to only newly touched files.
 - When a rollout flag is always enabled in the only intended flow, do not turn it into a persisted product switch. Keep the contract unconditional and contain test/runtime blast radius with explicit stubs or narrower seams instead.

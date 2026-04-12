@@ -566,9 +566,8 @@ def _resolve_knowledge_embedding_local_files_only(local_files_only: bool | None)
 def _local_files_only_for_embedding_access_mode(
     embedding_access_mode: KnowledgeEmbeddingAccessMode,
 ) -> bool | None:
-    if embedding_access_mode is KnowledgeEmbeddingAccessMode.LOCAL_ONLY:
-        return True
-    return None
+    _ = embedding_access_mode
+    return True
 
 
 def _asset_checksum(*, text_content: str, binary_content: bytes | None) -> str | None:

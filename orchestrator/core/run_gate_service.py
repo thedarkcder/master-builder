@@ -16,6 +16,7 @@ def enqueue_issue_run_with_precheck(
     repo_url: str | None,
     delivery_id: str | None,
     precheck_outcome: str | None,
+    required_worker_capability: str | None,
     max_concurrent_runs: int | None,
 ) -> EnqueueRunResult:
     return enqueue_run(
@@ -28,5 +29,6 @@ def enqueue_issue_run_with_precheck(
         repo_url=repo_url,
         delivery_id=delivery_id,
         precheck_outcome=resolve_precheck_outcome_for_enqueue(precheck_outcome=precheck_outcome),
+        required_worker_capability=required_worker_capability,
         max_concurrent_runs=max_concurrent_runs,
     )
