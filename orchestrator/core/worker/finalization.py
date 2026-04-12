@@ -51,6 +51,7 @@ class WorkflowFinalizer:
         stage_updates: list[dict[str, str]],
         execution_context: dict[str, str] | None,
         expected_worker_service_instance_id: str | None,
+        expected_claim_id: str | None,
     ) -> FinalizationPlan:  # noqa: ANN001
         _record_completion_step_event(
             session=self._session,
@@ -67,6 +68,7 @@ class WorkflowFinalizer:
                 stage_updates=stage_updates,
                 execution_context=execution_context,
                 expected_worker_service_instance_id=expected_worker_service_instance_id,
+                expected_claim_id=expected_claim_id,
             )
         except Exception as exc:  # noqa: BLE001
             failure_message = f"Run finalization failed after workflow execution: {type(exc).__name__}: {exc}"
@@ -103,6 +105,7 @@ class WorkflowFinalizer:
                 run_id=run.run_id,
                 terminal_status=self._run_status_failed,
                 last_error=failure_message,
+                expected_claim_id=expected_claim_id,
             )
             return FinalizationPlan(
                 run=finalized_run,

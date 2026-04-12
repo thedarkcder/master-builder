@@ -12,6 +12,7 @@ from urllib import error as urllib_error
 from urllib import request as urllib_request
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -553,12 +554,22 @@ def _ensure_http_conversation_session(
     return session
 
 
-def _build_codex_subprocess_env(*, settings: Settings) -> dict[str, str]:
+def _codex_subprocess_home(*, working_dir: str | None) -> str:
+    normalized_working_dir = str(working_dir or "").strip()
+    if normalized_working_dir:
+        return normalized_working_dir
+    return str(Path(__file__).resolve().parents[2])
+
+
+def _build_codex_subprocess_env(*, settings: Settings, working_dir: str | None = None) -> dict[str, str]:
     env: dict[str, str] = {}
-    for key in ("HOME", "LANG", "LC_ALL", "PATH", "SHELL", "TERM", "TMPDIR", "USER"):
+    for key in ("LANG", "LC_ALL", "PATH", "SHELL", "TERM", "TMPDIR", "USER"):
         value = str(os.environ.get(key) or "").strip()
         if value:
             env[key] = value
+    subprocess_home = _codex_subprocess_home(working_dir=working_dir)
+    env["HOME"] = subprocess_home
+    env["XDG_CONFIG_HOME"] = str(Path(subprocess_home) / ".config")
     tool_database_url = _resolve_codex_tool_database_url(
         database_url=str(getattr(settings, "database_url", "") or "").strip(),
         tool_database_url=str(getattr(settings, "codex_tool_database_url", "") or "").strip(),
@@ -930,8 +941,6 @@ def build_cli_runtime(
         raise CodexRuntimeError(
             f"Codex CLI command '{codex_command}' was not found in PATH"
         )
-    subprocess_env = _build_codex_subprocess_env(settings=settings)
-
     def _request(
         system_prompt: str,
         user_prompt: str,
@@ -964,6 +973,7 @@ def build_cli_runtime(
         session_callback_invoked = False
         command: list[str]
         normalized_sandbox_mode = str(settings.codex_sandbox_mode or "").strip().lower()
+        subprocess_env = _build_codex_subprocess_env(settings=settings, working_dir=command_cwd)
         with tempfile.NamedTemporaryFile(mode="w+", encoding="utf-8", suffix=".txt") as output_file:
             if normalized_resume_session_id:
                 command = [

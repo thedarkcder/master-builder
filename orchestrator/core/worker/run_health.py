@@ -53,11 +53,13 @@ def touch_run_heartbeat(
     *,
     run_id: str,
     worker_service_instance_id: str,
+    claim_id: str,
     heartbeat_at: datetime | None = None,
 ) -> bool:
     timestamp = heartbeat_at or datetime.now(timezone.utc)
     normalized_owner = str(worker_service_instance_id or "").strip()
-    if not normalized_owner:
+    normalized_claim_id = str(claim_id or "").strip()
+    if not normalized_owner or not normalized_claim_id:
         return False
     result = session.execute(
         update(Run)
@@ -65,6 +67,7 @@ def touch_run_heartbeat(
             Run.run_id == run_id,
             Run.status.in_((RUN_STATUS_DISPATCHING, RUN_STATUS_RUNNING)),
             Run.worker_service_instance_id == normalized_owner,
+            Run.claim_id == normalized_claim_id,
         )
         .values(last_heartbeat_at=timestamp)
     )
@@ -125,6 +128,7 @@ def recover_stale_running_runs(
             .values(
                 status=RUN_STATUS_FAILED,
                 last_error=message,
+                claim_id=None,
                 dispatch_claimed_at=None,
                 started_at=func.coalesce(Run.started_at, recovered_at),
                 finished_at=recovered_at,
@@ -206,6 +210,7 @@ class WorkerRunHeartbeatController:
     database_url: str
     run_id: str
     worker_service_instance_id: str
+    claim_id: str
     heartbeat_interval_seconds: int
 
     def __post_init__(self) -> None:
@@ -238,6 +243,7 @@ class WorkerRunHeartbeatController:
                         session,
                         run_id=self.run_id,
                         worker_service_instance_id=self.worker_service_instance_id,
+                        claim_id=self.claim_id,
                     )
                 if not updated:
                     return

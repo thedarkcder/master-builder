@@ -477,6 +477,7 @@ class Run(Base):
         Index("ix_runs_workflow_attempt", "workflow_id", "attempt_number", unique=True),
         Index("ix_runs_pre_check_outcome", "pre_check_outcome"),
         Index("ix_runs_required_worker_capability", "required_worker_capability"),
+        Index("ix_runs_claim_id", "claim_id"),
         Index("ix_runs_dispatch_claimed_at", "dispatch_claimed_at"),
     )
 
@@ -519,6 +520,7 @@ class Run(Base):
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     pre_check_outcome: Mapped[str | None] = mapped_column(String(32), nullable=True)
     required_worker_capability: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    claim_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     plan: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     dispatch_claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

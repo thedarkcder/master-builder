@@ -473,11 +473,12 @@ def claim_next_queued_run(
         return QueueSelectionResult()
 
     logger.info(
-        "worker_claimed_run run_id=%s tenant_id=%s issue_key=%s worker_service_instance_id=%s",
+        "worker_claimed_run run_id=%s tenant_id=%s issue_key=%s worker_service_instance_id=%s claim_id=%s",
         dispatching_run.run_id,
         dispatching_run.tenant_id,
         dispatching_run.issue_key,
         worker_service_instance_id,
+        dispatching_run.claim_id,
     )
     selection.run = dispatching_run
     return selection

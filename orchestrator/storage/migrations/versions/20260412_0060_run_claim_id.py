@@ -1,0 +1,29 @@
+"""add explicit run claim id for dispatch ownership
+
+Revision ID: 20260412_0060
+Revises: 20260412_0059
+Create Date: 2026-04-12 17:15:00.000000
+"""
+
+from __future__ import annotations
+
+import sqlalchemy as sa
+from alembic import op
+
+
+revision = "20260412_0060"
+down_revision = "20260412_0059"
+branch_labels = None
+depends_on = None
+
+
+def upgrade() -> None:
+    with op.batch_alter_table("runs") as batch_op:
+        batch_op.add_column(sa.Column("claim_id", sa.String(length=64), nullable=True))
+    op.create_index("ix_runs_claim_id", "runs", ["claim_id"], unique=False)
+
+
+def downgrade() -> None:
+    op.drop_index("ix_runs_claim_id", table_name="runs")
+    with op.batch_alter_table("runs") as batch_op:
+        batch_op.drop_column("claim_id")

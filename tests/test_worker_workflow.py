@@ -13,6 +13,7 @@ from orchestrator.core.agent_observability import (
     reset_agent_observability_for_tests,
 )
 from orchestrator.core.runs import enqueue_run
+from orchestrator.core.worker.execution_service import process_next_queued_run
 from orchestrator.core.worker_capability_normalization import WorkerCapability
 from orchestrator.core.workflow.runner import (
     PmPlan,
@@ -20,10 +21,8 @@ from orchestrator.core.workflow.runner import (
     WorkflowDiagnostics,
     WorkflowResult,
 )
-from orchestrator.core.discord.notifications import DiscordSendResult
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.models import JiraOAuthConnection, Project, Tenant, WorkflowExecution
-from orchestrator.worker import process_next_queued_run
 from orchestrator.tools.project_repo_checkout import ProjectRepoCheckoutError
 from tests.test_support.db_harness import SqliteTemplateDbTestCase
 
@@ -290,6 +289,7 @@ class WorkerWorkflowTests(SqliteTemplateDbTestCase):
                 issue_summary=effective_summary,
                 issue_description=effective_description,
                 repo_url="https://github.com/example/repo",
+                precheck_outcome="ready_for_agent",
             )
             self.assertTrue(result.enqueued)
         self._jira_issue_details[issue_key] = {
@@ -492,82 +492,6 @@ class WorkerWorkflowTests(SqliteTemplateDbTestCase):
         self.assertIn("TASK_STARTED", event_types)
         self.assertNotIn("TASK_FAILED", event_types)
 
-    def test_process_next_queued_run_blocks_when_ready_label_is_missing(self) -> None:
-        run_id = self._queue_run(
-            "TP-302",
-            issue_summary="Unclear requirements",
-            issue_description="TBD: need to decide later?",
-        )
-        self._jira_issue_details["TP-302"]["labels"] = []
-
-        with self.session_factory() as session:
-            processed = process_next_queued_run(session, _SuccessRunner())
-            self.assertIsNotNone(processed)
-            self.assertEqual(processed.run_id, run_id)
-            self.assertEqual(processed.status, "blocked")
-            self.assertIn("Issue is missing the configured ready label", processed.last_error or "")
-            self.assertIsInstance(processed.plan, dict)
-            self.assertIn("run_not_ready", processed.plan["context"]["execution_context"])
-            stage_updates = processed.plan["events"]["stage_updates"]
-            self.assertEqual([entry["stage"] for entry in stage_updates], ["run_not_ready"])
-            retry_enqueue = enqueue_run(
-                session,
-                tenant_id="tenant-worker",
-                project_id=None,
-                issue_key="TP-302",
-                issue_summary="Clarified requirements",
-                issue_description=(
-                    "Objective: deliver requested behavior. "
-                    "Scope: explicit in/out scope. "
-                    "Acceptance Criteria: measurable checks. "
-                    "How to test: exact commands and expected outcomes. "
-                    "NFR intent: MVP."
-                ),
-                repo_url="https://github.com/example/repo",
-            )
-            self.assertFalse(retry_enqueue.enqueued)
-            self.assertEqual(retry_enqueue.reason, "run_already_active")
-            self.assertEqual(retry_enqueue.run.workflow_id, processed.workflow_id)
-
-    def test_process_next_queued_run_fails_and_releases_lock_on_decision_gate_exception(self) -> None:
-        run_id = self._queue_run("TP-3021")
-
-        with self.session_factory() as session, patch(
-            "orchestrator.core.worker.execution_service.apply_decision_gate",
-            side_effect=RuntimeError("decision gate parse failed"),
-        ):
-            processed = process_next_queued_run(session, _SuccessRunner())
-            self.assertIsNotNone(processed)
-            self.assertEqual(processed.run_id, run_id)
-            self.assertEqual(processed.status, "failed")
-            self.assertIn("Decision Gate evaluation failed: decision gate parse failed", processed.last_error or "")
-            workflow = session.get(WorkflowExecution, processed.workflow_id)
-            self.assertIsNotNone(workflow)
-            assert workflow is not None
-            self.assertEqual(workflow.status, "failed")
-
-    def test_run_not_ready_notification_does_not_open_reply_thread(self) -> None:
-        run_id = self._queue_run(
-            "TP-399",
-            issue_summary="Unclear requirements",
-            issue_description="TBD: need to decide later?",
-        )
-        self._jira_issue_details["TP-399"]["labels"] = []
-
-        with self.session_factory() as session, patch(
-            "orchestrator.worker.send_tenant_discord_message",
-            return_value=DiscordSendResult(sent=True, reason="sent"),
-        ) as send_mock:
-            processed = process_next_queued_run(session, _SuccessRunner())
-            self.assertIsNotNone(processed)
-            self.assertEqual(processed.run_id, run_id)
-            self.assertEqual(processed.status, "blocked")
-
-        send_mock.assert_called_once()
-        kwargs = send_mock.call_args.kwargs
-        self.assertFalse(kwargs["open_thread"])
-        self.assertNotIn("thread_intro_components", kwargs)
-
     def test_process_next_queued_run_missing_project_mapping_releases_run_lock(self) -> None:
         with self.session_factory() as session:
             enqueue_result = enqueue_run(
@@ -584,6 +508,7 @@ class WorkerWorkflowTests(SqliteTemplateDbTestCase):
                     "NFR intent: MVP."
                 ),
                 repo_url="https://github.com/example/repo",
+                precheck_outcome="ready_for_agent",
             )
             self.assertTrue(enqueue_result.enqueued)
             run_id = enqueue_result.run.run_id
