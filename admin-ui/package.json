@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev -p 4100",
+    "dev": "next dev --webpack -p 4100",
     "dev:turbo": "next dev --turbopack -p 4100",
     "lint": "next typegen && tsc --noEmit -p tsconfig.lint.json",
     "build": "next build",

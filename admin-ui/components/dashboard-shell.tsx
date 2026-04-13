@@ -25,7 +25,14 @@ import {
 import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/components/auth-provider";
-import { getRun, type TenantRecord, getTenant, listProjects, type ProjectRecord } from "@/lib/api";
+import {
+  getRun,
+  type TenantRecord,
+  getTenant,
+  listDiscordAllowlistRequests,
+  listProjects,
+  type ProjectRecord,
+} from "@/lib/api";
 import {
   canAccessPlatformAdmin,
   canAccessTechnicalSurface,
@@ -91,6 +98,7 @@ type DashboardNavPanelProps = {
   tenantBaseRoute: string | null;
   navItems: NavItem[];
   tenantProjects: ProjectRecord[];
+  projectNotificationCounts: Record<string, number>;
   pathname: string;
   runContext: RunRouteCtx;
   projectContextId: string | null;
@@ -106,6 +114,7 @@ function DashboardNavPanel({
   tenantBaseRoute,
   navItems,
   tenantProjects,
+  projectNotificationCounts,
   pathname,
   runContext,
   projectContextId,
@@ -135,7 +144,12 @@ function DashboardNavPanel({
             <SidebarMenuButton asChild isActive={active}>
               <Link href={projectHref} onClick={close}>
                 <FolderKanban className="h-4 w-4 flex-shrink-0" />
-                {project.name}
+                <span className="truncate">{project.name}</span>
+                {projectNotificationCounts[project.project_id] ? (
+                  <span className="ml-auto inline-flex min-w-5 items-center justify-center rounded-full bg-warning px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white">
+                    {projectNotificationCounts[project.project_id]}
+                  </span>
+                ) : null}
               </Link>
             </SidebarMenuButton>
           </SidebarMenuItem>
@@ -275,6 +289,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [tenant, setTenant] = useState<TenantRecord | null>(null);
   const [tenantProjects, setTenantProjects] = useState<ProjectRecord[]>([]);
+  const [projectNotificationCounts, setProjectNotificationCounts] = useState<Record<string, number>>({});
   const tenantMatch = pathname.match(
     /^\/(?!tenants(?:\/|$)|runs(?:\/|$)|platform(?:\/|$)|login(?:\/|$)|register(?:\/|$)|invite(?:\/|$)|get-started(?:\/|$)|forgot-password(?:\/|$)|reset-password(?:\/|$)|api(?:\/|$))([^/]+)\//,
   );
@@ -383,6 +398,32 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
       cancelled = true;
     };
   }, [credentials, isWizardRoute, tenantId]);
+
+  useEffect(() => {
+    if (!credentials || !decodedTenantIdForPersist || isWizardRoute || tenantProjects.length === 0) {
+      setProjectNotificationCounts({});
+      return;
+    }
+    let cancelled = false;
+    void Promise.all(
+      tenantProjects.map(async (project) => {
+        try {
+          const requests = await listDiscordAllowlistRequests(credentials, decodedTenantIdForPersist, project.project_id);
+          return [project.project_id, requests.length] as const;
+        } catch {
+          return [project.project_id, 0] as const;
+        }
+      }),
+    ).then((entries) => {
+      if (cancelled) {
+        return;
+      }
+      setProjectNotificationCounts(Object.fromEntries(entries));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [credentials, decodedTenantIdForPersist, isWizardRoute, tenantProjects]);
 
   if (!ready) {
     return <main className="p-8 text-sm text-muted-foreground">Loading session...</main>;
@@ -498,6 +539,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
     tenantBaseRoute,
     navItems,
     tenantProjects,
+    projectNotificationCounts,
     pathname,
     runContext,
     projectContextId,

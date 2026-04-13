@@ -18,6 +18,7 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { formatTimestamp } from "@/lib/datetime";
 import {
   getTenant,
   getTenantDeliverySummary,
@@ -259,7 +260,7 @@ export default function TenantDashboardPage() {
                         )}
                       </TableCell>
                       <TableCell className="text-muted-foreground text-sm">
-                        {new Date(run.created_at).toLocaleString()}
+                        {formatTimestamp(run.created_at)}
                       </TableCell>
                     </TableRow>
                   ))}
@@ -288,7 +289,7 @@ export default function TenantDashboardPage() {
                     </TableCell>
                     <TableCell><StatusBadge status={item.status} /></TableCell>
                     <TableCell className="text-sm text-muted-foreground">
-                      {item.completed_at ? new Date(item.completed_at).toLocaleString() : "—"}
+                      {formatTimestamp(item.completed_at, "—")}
                     </TableCell>
                   </TableRow>
                 ))}

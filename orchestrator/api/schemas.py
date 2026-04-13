@@ -1197,6 +1197,19 @@ class PlatformServiceInstanceRead(BaseModel):
     runtime_dependencies: dict[str, dict[str, object]] = Field(default_factory=dict)
 
 
+class WorkerRuntimeAuthRequestRead(BaseModel):
+    request_id: str
+    service_instance_id: str
+    runtime_kind: str
+    status: str
+    remediation_text: str | None = None
+    requested_at: datetime
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    expires_at: datetime | None = None
+    last_error: str | None = None
+
+
 class PlatformServiceStatusRead(BaseModel):
     service_id: str
     label: str

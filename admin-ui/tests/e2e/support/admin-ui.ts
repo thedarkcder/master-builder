@@ -12,6 +12,7 @@ import type {
   RunEventRecord,
   RunLogEventRecord,
   RunRecord,
+  RunStatus,
   WorkflowRecord,
   WorkflowAttemptCreatePayload,
   AuthenticatedPrincipalRecord,

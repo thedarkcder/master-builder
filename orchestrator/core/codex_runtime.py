@@ -111,13 +111,18 @@ def _strip_ansi(text: str | bytes | None) -> str:
     return _ANSI_ESCAPE_PATTERN.sub("", normalized)
 
 
-def _build_codex_command_env(
+def build_cli_command_env(
     *,
     settings: Settings,
     working_dir: str | None,
+    runtime_kind: str = "codex_cli",
 ) -> tuple[str | None, dict[str, str]]:
     command_cwd = str(working_dir).strip() if working_dir else None
-    return command_cwd, _build_codex_subprocess_env(settings=settings, working_dir=command_cwd)
+    return command_cwd, _build_codex_subprocess_env(
+        settings=settings,
+        working_dir=command_cwd,
+        runtime_kind=runtime_kind,
+    )
 
 
 def codex_login_status(
@@ -126,7 +131,7 @@ def codex_login_status(
     settings: Settings,
     working_dir: str | None,
 ) -> tuple[bool | None, str]:
-    command_cwd, env = _build_codex_command_env(settings=settings, working_dir=working_dir)
+    command_cwd, env = build_cli_command_env(settings=settings, working_dir=working_dir, runtime_kind="codex_cli")
     completed = subprocess.run(  # noqa: S603
         [codex_command, "login", "status"],
         capture_output=True,
@@ -143,35 +148,6 @@ def codex_login_status(
     if completed.returncode == 1 and "not logged in" in combined_output.lower():
         return False, combined_output
     return None, combined_output
-
-
-def codex_device_auth_instructions(
-    *,
-    codex_command: str,
-    settings: Settings,
-    working_dir: str | None,
-    timeout_seconds: float = 5.0,
-) -> str:
-    command_cwd, env = _build_codex_command_env(settings=settings, working_dir=working_dir)
-    captured_output = ""
-    try:
-        completed = subprocess.run(  # noqa: S603
-            [codex_command, "login", "--device-auth"],
-            capture_output=True,
-            text=True,
-            cwd=command_cwd or None,
-            env=env,
-            timeout=timeout_seconds,
-            check=False,
-        )
-        captured_output = "\n".join(
-            part for part in (_strip_ansi(completed.stdout), _strip_ansi(completed.stderr)) if part.strip()
-        ).strip()
-    except subprocess.TimeoutExpired as exc:
-        captured_output = "\n".join(
-            part for part in (_strip_ansi(exc.stdout), _strip_ansi(exc.stderr)) if str(part or "").strip()
-        ).strip()
-    return captured_output
 
 
 @dataclass
@@ -1241,15 +1217,10 @@ def build_cli_runtime(
                     working_dir=command_cwd,
                 )
                 if login_status is False:
-                    auth_output = codex_device_auth_instructions(
-                        codex_command=codex_command,
-                        settings=settings,
-                        working_dir=command_cwd,
+                    raise CodexRuntimeError(
+                        "Codex CLI is not authenticated on this worker. "
+                        "Start a worker runtime login session and retry."
                     )
-                    message = "Codex CLI is not authenticated."
-                    if auth_output:
-                        message += f"\n\n{auth_output}"
-                    raise CodexRuntimeError(message)
                 raise CodexRuntimeError(
                     f"Codex CLI command failed (exit={returncode}): {error_message}"
                 )

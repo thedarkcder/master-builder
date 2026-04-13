@@ -6,10 +6,12 @@ import os
 import sys
 import threading
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
+
+from sqlalchemy import select
 
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
@@ -556,7 +558,7 @@ class WorkerTests(unittest.TestCase):
         ):
             asyncio.run(worker_module.run_worker(mode="runs"))
 
-        self.assertIn("runs", spawned_modes)
+        self.assertEqual(spawned_modes, [])
         prewarm_mock.assert_called_once_with(settings=fake_settings)
         recovery_mock.assert_called_once()
         purge_mock.assert_called_once()
@@ -1656,6 +1658,9 @@ class WorkerRuntimeRegistryTests(unittest.TestCase):
         reset_db_engine_cache()
 
     def tearDown(self) -> None:
+        from orchestrator.core.worker.runtime_dependencies import stop_all_live_runtime_auth_sessions
+
+        stop_all_live_runtime_auth_sessions()
         self.temp_dir.cleanup()
         reset_db_engine_cache()
 
@@ -1778,13 +1783,40 @@ class WorkerRuntimeRegistryTests(unittest.TestCase):
             worker_mode=worker_module.WORKER_MODE_RUNS,
         )
 
+        fake_request = SimpleNamespace(
+            request_id="request-1",
+            status="active",
+            remediation_text="Open this link",
+            expires_at=datetime(2026, 4, 13, 0, 0, tzinfo=timezone.utc),
+        )
         with patch(
             "orchestrator.core.worker.runtime_dependencies.codex_login_status",
             return_value=(False, "Not logged in"),
         ), patch(
-            "orchestrator.core.worker.runtime_dependencies.codex_device_auth_instructions",
-            return_value="Open this link",
+            "orchestrator.core.worker.runtime_dependencies._start_codex_cli_login_session",
+            return_value=fake_request,
+        ), patch(
+            "orchestrator.core.worker.runtime_dependencies._refresh_live_runtime_auth_request",
+            return_value=fake_request,
         ):
+            with session_factory() as session:
+                from orchestrator.storage.models import WorkerRuntimeAuthRequest
+
+                session.add(
+                    WorkerRuntimeAuthRequest(
+                        request_id="request-1",
+                        service_instance_id=service_instance_id,
+                        runtime_kind="codex_cli",
+                        status="pending",
+                        remediation_text=None,
+                        requested_at=datetime(2026, 4, 13, 0, 0, tzinfo=timezone.utc),
+                        started_at=None,
+                        completed_at=None,
+                        expires_at=None,
+                        last_error=None,
+                    )
+                )
+                session.commit()
             snapshot = worker_module._sync_run_worker_runtime_dependencies_once(
                 session_factory=session_factory,
                 settings=settings,
@@ -1803,6 +1835,408 @@ class WorkerRuntimeRegistryTests(unittest.TestCase):
                 row.runtime_dependencies_json["codex_cli"]["remediation_text"],
                 "Open this link",
             )
+
+    def test_sync_run_worker_runtime_dependencies_starts_live_login_session_for_pending_request(self) -> None:
+        import orchestrator.worker as worker_module
+        from orchestrator.storage.models import WorkerRuntimeAuthRequest
+
+        session_factory = create_session_factory(self.database_url)
+        settings = SimpleNamespace(
+            worker_capabilities="linux",
+            worker_runtime_kinds="codex_cli",
+            codex_cli_command="codex",
+        )
+        service_instance_id = "worker-linux-local:runs"
+
+        worker_module._register_worker_runtime_once(
+            session_factory=session_factory,
+            settings=settings,
+            agent_id="worker-linux-local",
+            service_instance_id=service_instance_id,
+            worker_mode=worker_module.WORKER_MODE_RUNS,
+        )
+
+        requested_at = datetime(2026, 4, 13, 0, 0, tzinfo=timezone.utc)
+        with session_factory() as session:
+            session.add(
+                WorkerRuntimeAuthRequest(
+                    request_id="request-1",
+                    service_instance_id=service_instance_id,
+                    runtime_kind="codex_cli",
+                    status="pending",
+                    remediation_text=None,
+                    requested_at=requested_at,
+                    started_at=None,
+                    completed_at=None,
+                    expires_at=None,
+                    last_error=None,
+                )
+            )
+            session.commit()
+
+        class _FakePipe:
+            def __init__(self, lines: list[str]) -> None:
+                self._lines = list(lines)
+                self._index = 0
+
+            def readline(self) -> str:
+                if self._index >= len(self._lines):
+                    return ""
+                line = self._lines[self._index]
+                self._index += 1
+                return line
+
+            def close(self) -> None:
+                return None
+
+        class _FakeProcess:
+            def __init__(self) -> None:
+                self.stdout = _FakePipe(
+                    [
+                        "Open this link in your browser and sign in to your account\n",
+                        "https://auth.openai.com/codex/device\n",
+                    ]
+                )
+                self.pid = 4321
+                self._returncode: int | None = None
+
+            def poll(self) -> int | None:
+                return self._returncode
+
+            def terminate(self) -> None:
+                self._returncode = 0
+
+            def wait(self, timeout: float | None = None) -> int:  # noqa: ARG002
+                return self._returncode or 0
+
+            def kill(self) -> None:
+                self._returncode = -9
+
+        class _ImmediateThread:
+            def __init__(self, target=None, args=(), daemon=None) -> None:  # noqa: ANN001, ARG002
+                self._target = target
+                self._args = args
+
+            def start(self) -> None:
+                if self._target is not None:
+                    self._target(*self._args)
+
+        with patch(
+            "orchestrator.core.worker.runtime_dependencies.codex_login_status",
+            return_value=(False, "Not logged in"),
+        ), patch(
+            "orchestrator.core.worker.runtime_dependencies.subprocess.Popen",
+            return_value=_FakeProcess(),
+        ), patch(
+            "orchestrator.core.worker.runtime_dependencies.threading.Thread",
+            _ImmediateThread,
+        ):
+            snapshot = worker_module._sync_run_worker_runtime_dependencies_once(
+                session_factory=session_factory,
+                settings=settings,
+                agent_id="worker-linux-local",
+                service_instance_id=service_instance_id,
+            )
+
+        self.assertIn("codex_cli", snapshot.blocked_runtime_kinds)
+        with session_factory() as session:
+            row = session.get(WorkerRuntimeState, service_instance_id)
+            self.assertIsNotNone(row)
+            assert row is not None
+            self.assertEqual(row.state, "degraded")
+            self.assertIn(
+                "https://auth.openai.com/codex/device",
+                row.runtime_dependencies_json["codex_cli"]["remediation_text"],
+            )
+            request_row = session.get(WorkerRuntimeAuthRequest, "request-1")
+            self.assertIsNotNone(request_row)
+            assert request_row is not None
+            self.assertEqual(request_row.status, "active")
+            self.assertIn("https://auth.openai.com/codex/device", str(request_row.remediation_text or ""))
+
+    def test_sync_worker_runtime_auth_requests_starts_pending_session_without_readiness_sync(self) -> None:
+        from orchestrator.core.worker.runtime_dependencies import sync_worker_runtime_auth_requests
+        from orchestrator.storage.models import WorkerRuntimeAuthRequest
+
+        session_factory = create_session_factory(self.database_url)
+        settings = SimpleNamespace(
+            worker_runtime_kinds="codex_cli",
+            codex_cli_command="codex",
+            worker_runtime_auth_remediation_ttl_seconds=900,
+        )
+        service_instance_id = "worker-linux-local:runs"
+
+        import orchestrator.worker as worker_module
+
+        worker_module._register_worker_runtime_once(
+            session_factory=session_factory,
+            settings=SimpleNamespace(worker_capabilities="linux", worker_runtime_kinds="codex_cli"),
+            agent_id="worker-linux-local",
+            service_instance_id=service_instance_id,
+            worker_mode=worker_module.WORKER_MODE_RUNS,
+        )
+
+        requested_at = datetime(2026, 4, 13, 0, 0, tzinfo=timezone.utc)
+        with session_factory() as session:
+            session.add(
+                WorkerRuntimeAuthRequest(
+                    request_id="request-sync",
+                    service_instance_id=service_instance_id,
+                    runtime_kind="codex_cli",
+                    status="pending",
+                    remediation_text=None,
+                    requested_at=requested_at,
+                    started_at=None,
+                    completed_at=None,
+                    expires_at=None,
+                    last_error=None,
+                )
+            )
+            session.commit()
+
+        class _FakePipe:
+            def __init__(self, lines: list[str]) -> None:
+                self._lines = list(lines)
+                self._index = 0
+
+            def readline(self) -> str:
+                if self._index >= len(self._lines):
+                    return ""
+                line = self._lines[self._index]
+                self._index += 1
+                return line
+
+            def close(self) -> None:
+                return None
+
+        class _FakeProcess:
+            def __init__(self) -> None:
+                self.stdout = _FakePipe(
+                    [
+                        "Open this link in your browser and sign in to your account\n",
+                        "https://auth.openai.com/codex/device\n",
+                    ]
+                )
+                self._returncode: int | None = None
+
+            def poll(self) -> int | None:
+                return self._returncode
+
+            def terminate(self) -> None:
+                self._returncode = 0
+
+            def wait(self, timeout: float | None = None) -> int:  # noqa: ARG002
+                return self._returncode or 0
+
+            def kill(self) -> None:
+                self._returncode = -9
+
+        class _ImmediateThread:
+            def __init__(self, target=None, args=(), daemon=None) -> None:  # noqa: ANN001, ARG002
+                self._target = target
+                self._args = args
+
+            def start(self) -> None:
+                if self._target is not None:
+                    self._target(*self._args)
+
+        with patch(
+            "orchestrator.core.worker.runtime_dependencies.subprocess.Popen",
+            return_value=_FakeProcess(),
+        ), patch(
+            "orchestrator.core.worker.runtime_dependencies.threading.Thread",
+            _ImmediateThread,
+        ):
+            sync_worker_runtime_auth_requests(
+                session_factory=session_factory,
+                settings=settings,
+                service_instance_id=service_instance_id,
+            )
+
+        with session_factory() as session:
+            request_row = session.get(WorkerRuntimeAuthRequest, "request-sync")
+            self.assertIsNotNone(request_row)
+            assert request_row is not None
+            self.assertEqual(request_row.status, "active")
+            self.assertIn("https://auth.openai.com/codex/device", str(request_row.remediation_text or ""))
+
+    def test_sync_worker_runtime_auth_requests_completes_successful_session(self) -> None:
+        from orchestrator.core.worker.runtime_dependencies import sync_worker_runtime_auth_requests
+        from orchestrator.storage.models import WorkerRuntimeAuthRequest
+
+        session_factory = create_session_factory(self.database_url)
+        settings = SimpleNamespace(
+            worker_runtime_kinds="codex_cli",
+            codex_cli_command="codex",
+            worker_runtime_auth_remediation_ttl_seconds=900,
+        )
+        service_instance_id = "worker-linux-local:runs"
+
+        import orchestrator.worker as worker_module
+
+        worker_module._register_worker_runtime_once(
+            session_factory=session_factory,
+            settings=SimpleNamespace(worker_capabilities="linux", worker_runtime_kinds="codex_cli"),
+            agent_id="worker-linux-local",
+            service_instance_id=service_instance_id,
+            worker_mode=worker_module.WORKER_MODE_RUNS,
+        )
+
+        requested_at = datetime(2026, 4, 13, 0, 0, tzinfo=timezone.utc)
+        with session_factory() as session:
+            session.add(
+                WorkerRuntimeAuthRequest(
+                    request_id="request-complete",
+                    service_instance_id=service_instance_id,
+                    runtime_kind="codex_cli",
+                    status="active",
+                    remediation_text="Open this link\nhttps://auth.openai.com/codex/device",
+                    requested_at=requested_at,
+                    started_at=requested_at,
+                    completed_at=None,
+                    expires_at=requested_at + timedelta(minutes=15),
+                    last_error=None,
+                )
+            )
+            session.commit()
+
+        class _FakeProcess:
+            def __init__(self) -> None:
+                self._returncode: int | None = 0
+
+            def poll(self) -> int | None:
+                return self._returncode
+
+            def terminate(self) -> None:
+                return None
+
+            def wait(self, timeout: float | None = None) -> int:  # noqa: ARG002
+                return 0
+
+            def kill(self) -> None:
+                return None
+
+        from orchestrator.core.worker import runtime_dependencies as runtime_dependencies_module
+
+        runtime_dependencies_module._LIVE_RUNTIME_AUTH_SESSIONS[(service_instance_id, "codex_cli")] = (
+            runtime_dependencies_module._LiveRuntimeAuthSession(
+                request_id="request-complete",
+                process=_FakeProcess(),
+                started_at=requested_at,
+                expires_at=requested_at + timedelta(minutes=15),
+            )
+        )
+        runtime_dependencies_module._LIVE_RUNTIME_AUTH_SESSIONS[(service_instance_id, "codex_cli")].append(
+            "Open this link\nhttps://auth.openai.com/codex/device\n"
+        )
+
+        with patch(
+            "orchestrator.core.worker.runtime_dependencies.codex_login_status",
+            return_value=(True, "Logged in"),
+        ):
+            sync_worker_runtime_auth_requests(
+                session_factory=session_factory,
+                settings=settings,
+                service_instance_id=service_instance_id,
+            )
+
+        with session_factory() as session:
+            request_row = session.get(WorkerRuntimeAuthRequest, "request-complete")
+            self.assertIsNotNone(request_row)
+            assert request_row is not None
+            self.assertEqual(request_row.status, "completed")
+
+    def test_sync_run_worker_runtime_dependencies_does_not_create_login_request_when_missing(self) -> None:
+        import orchestrator.worker as worker_module
+        from orchestrator.storage.models import WorkerRuntimeAuthRequest
+
+        session_factory = create_session_factory(self.database_url)
+        settings = SimpleNamespace(
+            worker_capabilities="linux",
+            worker_runtime_kinds="codex_cli",
+            codex_cli_command="codex",
+        )
+        service_instance_id = "worker-linux-local:runs"
+
+        worker_module._register_worker_runtime_once(
+            session_factory=session_factory,
+            settings=settings,
+            agent_id="worker-linux-local",
+            service_instance_id=service_instance_id,
+            worker_mode=worker_module.WORKER_MODE_RUNS,
+        )
+
+        with patch(
+            "orchestrator.core.worker.runtime_dependencies.codex_login_status",
+            return_value=(False, "Not logged in"),
+        ):
+            snapshot = worker_module._sync_run_worker_runtime_dependencies_once(
+                session_factory=session_factory,
+                settings=settings,
+                agent_id="worker-linux-local",
+                service_instance_id=service_instance_id,
+            )
+
+        self.assertIn("codex_cli", snapshot.blocked_runtime_kinds)
+        with session_factory() as session:
+            rows = session.execute(select(WorkerRuntimeAuthRequest)).scalars().all()
+            self.assertEqual(len(rows), 0)
+            row = session.get(WorkerRuntimeState, service_instance_id)
+            self.assertIsNotNone(row)
+            assert row is not None
+            self.assertEqual(row.state, "degraded")
+            self.assertEqual(row.runtime_dependencies_json["codex_cli"]["summary"], "Codex CLI is not authenticated on this worker.")
+            self.assertNotIn("remediation_text", row.runtime_dependencies_json["codex_cli"])
+
+    def test_sync_run_worker_runtime_dependencies_clears_stale_remediation_without_open_request(self) -> None:
+        import orchestrator.worker as worker_module
+
+        session_factory = create_session_factory(self.database_url)
+        settings = SimpleNamespace(
+            worker_capabilities="linux",
+            worker_runtime_kinds="codex_cli",
+            codex_cli_command="codex",
+        )
+        service_instance_id = "worker-linux-local:runs"
+
+        worker_module._register_worker_runtime_once(
+            session_factory=session_factory,
+            settings=settings,
+            agent_id="worker-linux-local",
+            service_instance_id=service_instance_id,
+            worker_mode=worker_module.WORKER_MODE_RUNS,
+        )
+
+        with session_factory() as session:
+            row = session.get(WorkerRuntimeState, service_instance_id)
+            assert row is not None
+            row.runtime_dependencies_json = {
+                "codex_cli": {
+                    "state": "degraded",
+                    "summary": "Codex CLI is not authenticated on this worker.",
+                    "remediation_text": "stale instructions",
+                    "remediation_expires_at": datetime(2026, 4, 13, 12, 0, tzinfo=timezone.utc).isoformat(),
+                }
+            }
+            session.commit()
+
+        with patch(
+            "orchestrator.core.worker.runtime_dependencies.codex_login_status",
+            return_value=(False, "Not logged in"),
+        ):
+            snapshot = worker_module._sync_run_worker_runtime_dependencies_once(
+                session_factory=session_factory,
+                settings=settings,
+                agent_id="worker-linux-local",
+                service_instance_id=service_instance_id,
+            )
+
+        self.assertIn("codex_cli", snapshot.blocked_runtime_kinds)
+        with session_factory() as session:
+            row = session.get(WorkerRuntimeState, service_instance_id)
+            assert row is not None
+            self.assertNotIn("remediation_text", row.runtime_dependencies_json["codex_cli"])
+            self.assertNotIn("remediation_expires_at", row.runtime_dependencies_json["codex_cli"])
 
     def test_sync_run_worker_runtime_dependencies_marks_runtime_idle_when_codex_auth_ready(self) -> None:
         import orchestrator.worker as worker_module
