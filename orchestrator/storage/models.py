@@ -1153,6 +1153,30 @@ class WorkerRuntimeState(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
 
 
+class WorkerRuntimeAuthRequest(Base):
+    __tablename__ = "worker_runtime_auth_requests"
+    __table_args__ = (
+        Index("ix_worker_runtime_auth_requests_scope", "service_instance_id", "runtime_kind", "status"),
+        Index("ix_worker_runtime_auth_requests_requested_at", "requested_at"),
+    )
+
+    request_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    service_instance_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey("worker_runtime_states.service_instance_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    runtime_kind: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, index=True, default="pending")
+    remediation_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
 class KnowledgeJiraSyncProjectState(Base):
     __tablename__ = "knowledge_jira_sync_project_states"
     __table_args__ = (

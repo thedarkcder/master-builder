@@ -49,6 +49,7 @@ from orchestrator.storage.models import (
     WebhookJob,
     WorkflowCheckpoint,
     WorkflowExecution,
+    WorkerRuntimeAuthRequest,
     WorkerRuntimeState,
 )
 from orchestrator.tools.github_app import InstallationRepository
@@ -5371,6 +5372,86 @@ class AdminApiTests(SqliteTemplateApiTestCase):
         )
         self.assertNotIn("remediation_text", instance)
         self.assertNotIn("remediation_expires_at", instance)
+
+    def test_start_worker_runtime_login_session_creates_pending_request(self) -> None:
+        session_factory = create_session_factory(self.database_url)
+        now = datetime.now(timezone.utc)
+        with session_factory() as session:
+            session.add(
+                WorkerRuntimeState(
+                    service_instance_id="worker-macos-local:runs",
+                    agent_id="worker-macos-local",
+                    worker_mode="runs",
+                    capabilities_json=["macos"],
+                    runtime_kinds_json=["codex_cli"],
+                    runtime_dependencies_json={},
+                    state="degraded",
+                    started_at=now,
+                    last_heartbeat_at=now,
+                    updated_at=now,
+                )
+            )
+            session.commit()
+
+        response = self.client.post(
+            "/api/admin/workers/worker-macos-local:runs/runtime-dependencies/codex_cli/login-session",
+            auth=("admin", "secret"),
+        )
+
+        self.assertEqual(response.status_code, 202)
+        payload = response.json()
+        self.assertEqual(payload["service_instance_id"], "worker-macos-local:runs")
+        self.assertEqual(payload["runtime_kind"], "codex_cli")
+        self.assertEqual(payload["status"], "pending")
+        with session_factory() as session:
+            rows = session.execute(select(WorkerRuntimeAuthRequest)).scalars().all()
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0].status, "pending")
+
+    def test_get_worker_runtime_auth_request_returns_request(self) -> None:
+        session_factory = create_session_factory(self.database_url)
+        now = datetime.now(timezone.utc)
+        with session_factory() as session:
+            session.add(
+                WorkerRuntimeState(
+                    service_instance_id="worker-macos-local:runs",
+                    agent_id="worker-macos-local",
+                    worker_mode="runs",
+                    capabilities_json=["macos"],
+                    runtime_kinds_json=["codex_cli"],
+                    runtime_dependencies_json={},
+                    state="degraded",
+                    started_at=now,
+                    last_heartbeat_at=now,
+                    updated_at=now,
+                )
+            )
+            session.add(
+                WorkerRuntimeAuthRequest(
+                    request_id="request-lookup",
+                    service_instance_id="worker-macos-local:runs",
+                    runtime_kind="codex_cli",
+                    status="active",
+                    remediation_text="Open this link",
+                    requested_at=now,
+                    started_at=now,
+                    completed_at=None,
+                    expires_at=now,
+                    last_error=None,
+                )
+            )
+            session.commit()
+
+        response = self.client.get(
+            "/api/admin/workers/runtime-auth-requests/request-lookup",
+            auth=("admin", "secret"),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["request_id"], "request-lookup")
+        self.assertEqual(payload["status"], "active")
+        self.assertEqual(payload["remediation_text"], "Open this link")
 
 
 if __name__ == "__main__":

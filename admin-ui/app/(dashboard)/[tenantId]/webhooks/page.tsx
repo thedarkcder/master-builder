@@ -7,6 +7,7 @@ import { ArrowLeft, Check, CheckCircle2, Circle, Copy, RefreshCcw, XCircle } fro
 
 import { useAuth } from "@/components/auth-provider";
 import { DEFAULT_API_BASE_URL } from "@/lib/auth-constants";
+import { formatTimestamp } from "@/lib/datetime";
 import { Button } from "@/components/ui/button";
 import {
   getJiraWebhookDiagnostics,
@@ -148,7 +149,7 @@ export default function TenantWebhooksPage() {
         <div className="min-w-0">
           {lastRefreshedAt ? (
             <p className="text-sm text-muted-foreground">
-              Last refreshed {new Date(lastRefreshedAt).toLocaleString()}.
+              Last refreshed {formatTimestamp(lastRefreshedAt)}.
             </p>
           ) : null}
         </div>

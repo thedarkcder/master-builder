@@ -27,9 +27,11 @@ import { Input } from "@/components/ui/input";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
+import { formatTimestamp } from "@/lib/datetime";
 import {
   getProject,
   getTenant,
+  listDiscordAllowlistRequests,
   listCodexModels,
   listGitHubRepositories,
   listJiraProjects,
@@ -240,6 +242,7 @@ export function TenantProjectDetailsPage() {
   const [runToDate, setRunToDate] = useState("");
   const [runPage, setRunPage] = useState(1);
   const [runPageSize, setRunPageSize] = useState<25 | 50 | 100>(25);
+  const [notificationCount, setNotificationCount] = useState(0);
 
   // Secrets state
   const [secretRefs, setSecretRefs] = useState<Record<string, string>>({});
@@ -399,6 +402,28 @@ export function TenantProjectDetailsPage() {
       setActiveSettingsSection("general");
     }
   }, [activeTab]);
+
+  useEffect(() => {
+    if (!credentials || !allowProjectManagement) {
+      setNotificationCount(0);
+      return;
+    }
+    let cancelled = false;
+    void listDiscordAllowlistRequests(credentials, params.tenantId, params.projectId)
+      .then((requests) => {
+        if (!cancelled) {
+          setNotificationCount(requests.length);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setNotificationCount(0);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [allowProjectManagement, credentials, params.projectId, params.tenantId]);
 
   async function toggleArchive() {
     if (!credentials || !project) return;
@@ -695,7 +720,12 @@ export function TenantProjectDetailsPage() {
                         : "border-transparent text-muted-foreground hover:text-foreground",
                 ].join(" ")}
               >
-                {tab.label}
+                <span>{tab.label}</span>
+                {tab.id === "notifications" && notificationCount > 0 ? (
+                  <span className="ml-2 inline-flex min-w-5 items-center justify-center rounded-full bg-warning px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white">
+                    {notificationCount}
+                  </span>
+                ) : null}
               </Link>
             );
           })}
@@ -1514,7 +1544,7 @@ export function TenantProjectDetailsPage() {
                       <StatusBadge status={run.status} />
                     </TableCell>
                     <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
-                      {new Date(run.created_at).toLocaleString()}
+                      {formatTimestamp(run.created_at)}
                     </TableCell>
                     <TableCell>
                       {run.pr_url ? (
@@ -1641,6 +1671,7 @@ export function TenantProjectDetailsPage() {
           tenantId={params.tenantId}
           projectId={params.projectId}
           credentials={credentials}
+          onAllowlistRequestsChange={(requests) => setNotificationCount(requests.length)}
         />
       ) : null}
 

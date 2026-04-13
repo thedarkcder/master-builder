@@ -8,6 +8,7 @@ import { AlertCircle, CheckCircle2, Clock3, GitPullRequest } from "lucide-react"
 import { useAuth } from "@/components/auth-provider";
 import { Skeleton } from "@/components/ui/skeleton";
 import { getTenantDeliverySummary, type DeliverySummaryRecord } from "@/lib/api";
+import { formatTimestamp } from "@/lib/datetime";
 
 export default function BusinessAnalyticsPage() {
   const { credentials } = useAuth();
@@ -96,7 +97,7 @@ export default function BusinessAnalyticsPage() {
                   </div>
                   <div className="text-right text-sm text-muted-foreground">
                     <p className="font-medium capitalize text-foreground">{item.status.replace(/_/g, " ")}</p>
-                    <p>{item.completed_at ? new Date(item.completed_at).toLocaleString() : "Still in progress"}</p>
+                    <p>{formatTimestamp(item.completed_at, "Still in progress")}</p>
                   </div>
                 </div>
                 {item.pr_url ? (

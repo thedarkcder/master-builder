@@ -11,6 +11,10 @@ from orchestrator.api.admin.observability_service import (
     tenant_observability as tenant_observability_impl,
 )
 from orchestrator.api.admin.platform_status_service import platform_status as platform_status_impl
+from orchestrator.api.admin.worker_runtime_auth_service import (
+    get_worker_runtime_auth_request as get_worker_runtime_auth_request_impl,
+    start_worker_runtime_auth_request as start_worker_runtime_auth_request_impl,
+)
 from orchestrator.api.admin.webhook_queue_service import list_webhook_queue_jobs as list_webhook_queue_jobs_impl
 from orchestrator.api.admin.project_metrics_service import (
     project_execution_metrics as project_execution_metrics_impl,
@@ -28,6 +32,7 @@ from orchestrator.api.schemas import (
     TenantHealthRead,
     TenantObservabilityRead,
     WebhookQueueJobPageRead,
+    WorkerRuntimeAuthRequestRead,
 )
 from orchestrator.core.knowledge_jira_sync_runtime import get_knowledge_jira_sync_runtime_status
 from orchestrator.core.config import get_settings
@@ -153,6 +158,39 @@ def platform_status(
     session: Session = Depends(get_session),
 ) -> PlatformStatusRead:
     return platform_status_impl(session=session, settings=get_settings())
+
+
+@router.post(
+    "/workers/{service_instance_id}/runtime-dependencies/{runtime_kind}/login-session",
+    response_model=WorkerRuntimeAuthRequestRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def start_worker_runtime_login_session(
+    service_instance_id: str,
+    runtime_kind: str,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> WorkerRuntimeAuthRequestRead:
+    return start_worker_runtime_auth_request_impl(
+        session=session,
+        service_instance_id=service_instance_id,
+        runtime_kind=runtime_kind,
+    )
+
+
+@router.get(
+    "/workers/runtime-auth-requests/{request_id}",
+    response_model=WorkerRuntimeAuthRequestRead,
+)
+def get_worker_runtime_auth_request(
+    request_id: str,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> WorkerRuntimeAuthRequestRead:
+    return get_worker_runtime_auth_request_impl(
+        session=session,
+        request_id=request_id,
+    )
 
 
 @router.get("/observability/knowledge-jira-sync", response_model=KnowledgeJiraSyncRuntimeRead)

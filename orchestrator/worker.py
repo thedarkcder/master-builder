@@ -52,6 +52,8 @@ from orchestrator.core.worker.queue_listener import (
 from orchestrator.core.worker.runtime_dependencies import (
     WorkerRuntimeDependencySnapshot,
     registered_worker_runtime_kinds_from_settings,
+    sync_worker_runtime_auth_requests,
+    stop_all_live_runtime_auth_sessions,
     worker_runtime_dependency_snapshot,
 )
 from orchestrator.core.worker.runtime_factory import build_workflow_runner_for_session
@@ -819,7 +821,9 @@ async def run_worker(*, mode: str = WORKER_MODE_RUNS) -> None:
     child_timeout_seconds = _resolve_worker_child_timeout_seconds(settings=settings)
     runtime_dependency_snapshot = WorkerRuntimeDependencySnapshot(dependencies={})
     readiness_refresh_seconds = max(5, int(getattr(settings, "worker_runtime_readiness_refresh_seconds", 30)))
+    auth_request_refresh_seconds = 1
     next_readiness_refresh_at: datetime | None = None
+    next_auth_request_refresh_at: datetime | None = None
     runtime_block_logged_keys: tuple[str, ...] = ()
     try:
         listener.start()
@@ -881,11 +885,20 @@ async def run_worker(*, mode: str = WORKER_MODE_RUNS) -> None:
                 service_instance_id=service_instance_id,
             )
             next_readiness_refresh_at = datetime.now(timezone.utc)
+            next_auth_request_refresh_at = datetime.now(timezone.utc)
 
         logger.info("worker_started mode=%s", mode)
         while not stop_event.is_set():
             if mode == WORKER_MODE_RUNS:
                 now = datetime.now(timezone.utc)
+                if next_auth_request_refresh_at is None or now >= next_auth_request_refresh_at:
+                    await asyncio.to_thread(
+                        sync_worker_runtime_auth_requests,
+                        session_factory=session_factory,
+                        settings=settings,
+                        service_instance_id=service_instance_id,
+                    )
+                    next_auth_request_refresh_at = now + timedelta(seconds=auth_request_refresh_seconds)
                 if next_readiness_refresh_at is None or now >= next_readiness_refresh_at:
                     runtime_dependency_snapshot = await asyncio.to_thread(
                         _sync_run_worker_runtime_dependencies_once,
@@ -1083,6 +1096,8 @@ async def run_worker(*, mode: str = WORKER_MODE_RUNS) -> None:
         raise
     finally:
         await _terminate_worker_child_processes(active_children=active_children)
+        with suppress(Exception):
+            await asyncio.to_thread(stop_all_live_runtime_auth_sessions)
         if stale_recovery_task is not None:
             stale_recovery_task.cancel()
             with suppress(asyncio.CancelledError):
