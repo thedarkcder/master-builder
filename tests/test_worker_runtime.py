@@ -351,6 +351,33 @@ class WorkerTests(unittest.TestCase):
             expected_claim_id="claim-123",
         )
 
+    def test_reconcile_claimed_run_after_child_exit_returns_ownership_lost_on_claim_mismatch(self) -> None:
+        import orchestrator.worker as worker_module
+
+        dispatching_run = SimpleNamespace(run_id="run-123", status="dispatching", claim_id="claim-2")
+        session = MagicMock()
+        session.get.return_value = dispatching_run
+
+        class _SessionCtx:
+            def __enter__(self):  # noqa: ANN204
+                return session
+
+            def __exit__(self, exc_type, exc, tb) -> bool:  # noqa: ANN001, ANN204
+                return False
+
+        def _session_factory():  # noqa: ANN202
+            return _SessionCtx()
+
+        with patch.object(worker_module, "mark_run_terminal") as mark_terminal_mock:
+            status = worker_module._reconcile_claimed_run_after_child_exit(
+                session_factory=_session_factory,
+                run_id="run-123",
+                claim_id="claim-123",
+            )
+
+        self.assertEqual(status, "ownership_lost")
+        mark_terminal_mock.assert_not_called()
+
     def test_run_worker_webhooks_skips_stale_recovery(self) -> None:
         import orchestrator.worker as worker_module
 
