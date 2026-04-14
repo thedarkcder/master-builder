@@ -39,7 +39,7 @@ export default function HetznerInstallTutorialPage() {
               <li>Hetzner Cloud account, project, and API token</li>
               <li>An SSH key already registered in Hetzner Cloud</li>
               <li>Linux terminal with network access</li>
-              <li>Master Builder secrets for admin, state, encryption, and auth</li>
+              <li>Master Builder admin, state, auth, and secret-crypto provider settings</li>
             </ul>
           </article>
 
@@ -69,7 +69,8 @@ export default function HetznerInstallTutorialPage() {
                 <code>ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET</code>
               </li>
               <li>
-                <code>ORCHESTRATOR_SECRETS_ENCRYPTION_KEY</code>
+                <code>ORCHESTRATOR_SECRET_CRYPTO_PROVIDER</code> plus the matching Vault, AWS KMS, GCP KMS, or
+                legacy Fernet settings
               </li>
               <li>
                 <code>NEXTAUTH_SECRET</code>

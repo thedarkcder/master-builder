@@ -166,6 +166,7 @@ class JiraOAuthHelpersTests(unittest.TestCase):
         settings = SimpleNamespace(secrets_encryption_key="k")
 
         connection = SimpleNamespace(
+            connection_id="conn-1",
             access_token_expires_at=now + timedelta(minutes=5),
             access_token_encrypted="enc-access",
             refresh_token_encrypted="enc-refresh",
@@ -173,7 +174,7 @@ class JiraOAuthHelpersTests(unittest.TestCase):
             updated_at=now,
         )
 
-        with patch("orchestrator.api.admin.jira_oauth_helpers.decrypt_value", return_value="current-token"):
+        with patch("orchestrator.api.admin.jira_oauth_helpers.decrypt_secret_value", return_value="current-token"):
             token = jira_oauth_helpers.refresh_jira_connection_tokens(
                 session,
                 connection=connection,
@@ -182,6 +183,7 @@ class JiraOAuthHelpersTests(unittest.TestCase):
         self.assertEqual(token, "current-token")
 
         expired_connection = SimpleNamespace(
+            connection_id="conn-1",
             access_token_expires_at=now,
             access_token_encrypted="enc-access",
             refresh_token_encrypted="enc-refresh",
@@ -197,8 +199,8 @@ class JiraOAuthHelpersTests(unittest.TestCase):
         client = MagicMock()
         client.refresh_tokens.return_value = token_set
         with (
-            patch("orchestrator.api.admin.jira_oauth_helpers.decrypt_value", return_value="refresh"),
-            patch("orchestrator.api.admin.jira_oauth_helpers.encrypt_value", side_effect=["enc-new-access", "enc-new-refresh"]),
+            patch("orchestrator.api.admin.jira_oauth_helpers.decrypt_secret_value", return_value="refresh"),
+            patch("orchestrator.api.admin.jira_oauth_helpers.encrypt_secret_value", side_effect=["enc-new-access", "enc-new-refresh"]),
         ):
             token = jira_oauth_helpers.refresh_jira_connection_tokens(
                 session,

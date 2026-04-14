@@ -89,9 +89,9 @@ export default function DashboardPage() {
         iconBg: "bg-primary/10"
       },
       {
-        label: "Managed Secrets",
+        label: "Vault Entries",
         value: stats.totalSecrets,
-        sub: "Configured in secret store",
+        sub: "Configured in Vault-backed storage",
         icon: <KeyRound className="h-4 w-4 text-warning" />,
         iconBg: "bg-warning/10"
       }

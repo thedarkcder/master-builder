@@ -9,7 +9,12 @@ from sqlalchemy import text
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from orchestrator.core.secrets import decrypt_value, encrypt_value
+from orchestrator.core.config import get_settings
+from orchestrator.core.secret_crypto import (
+    decrypt_secret_value,
+    encrypt_secret_value,
+    managed_secret_crypto_context,
+)
 from orchestrator.storage.models import ManagedSecret
 
 _SECRET_REF_PATTERN = re.compile(r"^[A-Za-z0-9._:/-]{1,255}$")
@@ -80,7 +85,12 @@ def upsert_managed_secret(
         raise ValueError("Secret value is required")
 
     now = datetime.now(timezone.utc)
-    encrypted_value = encrypt_value(plaintext=normalized_value, encryption_key=encryption_key)
+    encrypted_value = encrypt_secret_value(
+        plaintext=normalized_value,
+        settings=get_settings(),
+        encryption_key=encryption_key,
+        context=managed_secret_crypto_context(normalized_ref),
+    )
     row = session.get(ManagedSecret, normalized_ref)
     if row is None:
         row = ManagedSecret(
@@ -110,7 +120,12 @@ def resolve_secret_ref(
     normalized_ref = normalize_secret_ref(secret_ref)
     row = session.get(ManagedSecret, normalized_ref)
     if row is not None:
-        return decrypt_value(ciphertext=row.value_encrypted, encryption_key=encryption_key)
+        return decrypt_secret_value(
+            ciphertext=row.value_encrypted,
+            settings=get_settings(),
+            encryption_key=encryption_key,
+            context=managed_secret_crypto_context(normalized_ref),
+        )
     if allow_environment_fallback:
         return os.environ.get(normalized_ref)
     return None

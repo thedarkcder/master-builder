@@ -196,7 +196,7 @@ test("registers a tenant admin through the real backend and lands in get started
     await expect(page).toHaveURL(/\/get-started$/, { timeout: 15000 });
     await expect(page.getByRole("heading", { name: "Set up workspace" })).toBeVisible();
     await expect(page.getByText("Credentials")).toHaveCount(0);
-    await expect(page.getByText("Open platform secrets")).toHaveCount(0);
+    await expect(page.getByText("Open platform Vault")).toHaveCount(0);
   } finally {
     await archiveTenantForCredentials(page.request, email, password);
   }

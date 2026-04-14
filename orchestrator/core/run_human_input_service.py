@@ -24,7 +24,7 @@ from orchestrator.core.runs import (
     resolve_required_worker_capability_from_plan,
     resolve_precheck_outcome_from_plan,
 )
-from orchestrator.core.secrets import decrypt_value, encrypt_value
+from orchestrator.core.secret_crypto import decrypt_secret_value
 from orchestrator.core.workflow.checkpoints import (
     checkpoint_kind_for_stage,
     normalize_checkpoint_stage,
@@ -201,6 +201,7 @@ def create_human_input_request(
         request_context_json=dict(request_context or {}),
         thread_channel_id=None,
         thread_message_id=None,
+        answer_text=None,
         answer_encrypted=None,
         answer_source_ref=None,
         answered_at=None,
@@ -327,17 +328,24 @@ def answered_human_inputs_for_attempt(
         .scalars()
         .all()
     )
-    encryption_key = str(getattr(settings, "secrets_encryption_key", "") or "").strip()
     values: list[dict[str, str]] = []
     for row in rows:
-        if not row.answer_encrypted:
+        if row.answer_text is None and not row.answer_encrypted:
             continue
+        value = row.answer_text
+        if value is None and row.answer_encrypted:
+            encryption_key = str(getattr(settings, "secrets_encryption_key", "") or "").strip()
+            value = decrypt_secret_value(
+                ciphertext=row.answer_encrypted,
+                settings=settings,
+                encryption_key=encryption_key,
+            )
         values.append(
             {
                 "request_id": row.request_id,
                 "request_type": row.request_type,
                 "prompt": row.prompt,
-                "value": decrypt_value(ciphertext=row.answer_encrypted, encryption_key=encryption_key),
+                "value": value,
             }
         )
     return values
@@ -394,9 +402,9 @@ def answer_human_input_request(
     if request.status != INPUT_STATUS_PENDING:
         raise ValueError("Human input request is not pending")
 
-    encryption_key = str(getattr(settings, "secrets_encryption_key", "") or "").strip()
     now = _now()
-    request.answer_encrypted = encrypt_value(plaintext=str(reply_text or "").strip(), encryption_key=encryption_key)
+    request.answer_text = str(reply_text or "").strip()
+    request.answer_encrypted = None
     request.answer_source_ref = str(source_ref or "").strip() or None
     request.status = INPUT_STATUS_ANSWERED
     request.answered_at = now

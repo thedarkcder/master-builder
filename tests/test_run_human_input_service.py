@@ -161,6 +161,7 @@ def test_resume_workflow_from_human_input_answer_creates_resume_attempt_and_cons
         status="pending",
         answered_at=None,
         updated_at=None,
+        answer_text=None,
         answer_encrypted=None,
         answer_source_ref=None,
         consumed_by_run_id=None,
@@ -198,7 +199,6 @@ def test_resume_workflow_from_human_input_answer_creates_resume_attempt_and_cons
     enqueue_result = SimpleNamespace(enqueued=True, reason=None, run=resumed_run)
 
     with (
-        patch("orchestrator.core.run_human_input_service.encrypt_value", return_value="encrypted"),
         patch(
             "orchestrator.core.run_human_input_service.enqueue_attempt_for_workflow_uncommitted",
             return_value=enqueue_result,
@@ -230,6 +230,8 @@ def test_resume_workflow_from_human_input_answer_creates_resume_attempt_and_cons
     assert bootstrap.required_worker_capability == "macos"
     snapshot = ExecutionSnapshot.require(bootstrap.plan, allow_empty=True)
     assert snapshot.context.execution_context.get("human_input_request_id") == "request-1"
+    assert request.answer_text == "use qa-apple@example.com"
+    assert request.answer_encrypted is None
     assert request.status == "consumed"
     assert request.consumed_by_run_id == "run-2"
 

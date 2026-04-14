@@ -590,6 +590,7 @@ class RunHumanInputRequest(Base):
     request_context_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     thread_channel_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     thread_message_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    answer_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     answer_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     answer_source_ref: Mapped[str | None] = mapped_column(String(128), nullable=True)
     answered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

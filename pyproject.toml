@@ -10,9 +10,11 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
   "alembic>=1.13.0",
+  "boto3>=1.39.0",
   "cryptography>=43.0.0",
   "fastembed>=0.3.6",
   "fastapi>=0.115.0",
+  "google-cloud-kms>=3.3.0",
   "hikari>=2.5.0",
   "hikari-wave>=0.7.0a1",
   "jinja2>=3.1.0",

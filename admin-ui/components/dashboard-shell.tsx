@@ -463,7 +463,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
     { href: "/platform/status", label: "Status", icon: Activity },
     ...(isPlatformSuperAdmin ? [{ href: "/platform/agent-runtimes", label: "Agent runtimes", icon: Cpu }] : []),
     { href: "/tenants/select", label: "Tenants", icon: Building2 },
-    { href: "/platform/secrets", label: "Secrets", icon: KeyRound }
+    { href: "/platform/secrets", label: "Vault", icon: KeyRound }
   ];
   const tenantMembership = decodedTenantId ? getMembershipForTenant(principal, decodedTenantId) : null;
   const canManageWorkspaceTeam = decodedTenantId ? canManageTeam(principal, decodedTenantId) : false;
@@ -521,7 +521,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
           ? [
               {
                 href: `${tenantBaseRoute}/secrets`,
-                label: "Secrets",
+                label: "Vault",
                 icon: KeyRound,
                 matchPrefix: `${tenantBaseRoute}/secrets`
               }

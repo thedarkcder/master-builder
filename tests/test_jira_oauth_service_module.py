@@ -53,6 +53,7 @@ class JiraOauthServiceModuleTests(unittest.TestCase):
         settings = SimpleNamespace(secrets_encryption_key="enc")
         future_expiry = datetime.now(timezone.utc) + timedelta(minutes=10)
         connection = SimpleNamespace(
+            connection_id="conn-1",
             access_token_expires_at=future_expiry,
             access_token_encrypted="enc-access",
             refresh_token_encrypted="enc-refresh",
@@ -60,12 +61,17 @@ class JiraOauthServiceModuleTests(unittest.TestCase):
             updated_at=None,
         )
 
-        with patch("orchestrator.api.jira_oauth.service.decrypt_value", return_value="cached-token") as decrypt_mock:
+        with patch("orchestrator.api.jira_oauth.service.decrypt_secret_value", return_value="cached-token") as decrypt_mock:
             token = refresh_jira_connection_tokens(session, connection=connection, settings=settings, tenant_id="t1")
         self.assertEqual(token, "cached-token")
         decrypt_mock.assert_called_once()
+        self.assertEqual(
+            decrypt_mock.call_args.kwargs["context"],
+            {"kind": "jira_oauth_token", "connection_id": connection.connection_id, "token_field": "access_token"},
+        )
 
         expired_connection = SimpleNamespace(
+            connection_id="conn-1",
             access_token_expires_at=datetime.now(timezone.utc) - timedelta(minutes=1),
             access_token_encrypted="enc-access",
             refresh_token_encrypted="enc-refresh",
@@ -83,8 +89,11 @@ class JiraOauthServiceModuleTests(unittest.TestCase):
 
         with (
             patch("orchestrator.api.jira_oauth.service.jira_oauth_client", return_value=client),
-            patch("orchestrator.api.jira_oauth.service.decrypt_value", return_value="refresh-token"),
-            patch("orchestrator.api.jira_oauth.service.encrypt_value", side_effect=lambda *, plaintext, encryption_key: f"enc::{plaintext}"),
+            patch("orchestrator.api.jira_oauth.service.decrypt_secret_value", return_value="refresh-token"),
+            patch(
+                "orchestrator.api.jira_oauth.service.encrypt_secret_value",
+                side_effect=lambda *, plaintext, settings, encryption_key="", context=None: f"enc::{plaintext}",
+            ),
         ):
             refreshed_token = refresh_jira_connection_tokens(
                 session,
@@ -104,6 +113,7 @@ class JiraOauthServiceModuleTests(unittest.TestCase):
         settings = SimpleNamespace(secrets_encryption_key="enc")
         future_expiry = datetime.now() + timedelta(minutes=10)
         connection = SimpleNamespace(
+            connection_id="conn-1",
             access_token_expires_at=future_expiry,
             access_token_encrypted="enc-access",
             refresh_token_encrypted="enc-refresh",
@@ -111,7 +121,7 @@ class JiraOauthServiceModuleTests(unittest.TestCase):
             updated_at=None,
         )
 
-        with patch("orchestrator.api.jira_oauth.service.decrypt_value", return_value="cached-token"):
+        with patch("orchestrator.api.jira_oauth.service.decrypt_secret_value", return_value="cached-token"):
             token = refresh_jira_connection_tokens(session, connection=connection, settings=settings, tenant_id="t1")
 
         self.assertEqual(token, "cached-token")

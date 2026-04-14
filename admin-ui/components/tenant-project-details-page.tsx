@@ -90,7 +90,7 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "webhooks", label: "Webhooks" },
   { id: "notifications", label: "Notifications" },
   { id: "automations", label: "Automations" },
-  { id: "secrets", label: "Secrets" },
+  { id: "secrets", label: "Vault" },
   { id: "danger", label: "Danger" },
 ];
 
@@ -966,7 +966,7 @@ export function TenantProjectDetailsPage() {
                       ) : null}
                     </div>
                     <div className="space-y-1">
-                      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Secrets</p>
+                      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Vault</p>
                       <p className="text-sm text-muted-foreground">
                         Runtime secret references are configured separately to keep settings focused.
                       </p>
@@ -1847,7 +1847,7 @@ export function TenantProjectDetailsPage() {
 
           <div className="overflow-hidden rounded-2xl border bg-background">
             <div className="flex items-center justify-between gap-2 p-6 pb-3">
-                <h2 className="text-base font-semibold">Stored Secrets</h2>
+                <h2 className="text-base font-semibold">Stored Vault Entries</h2>
                 {Object.keys(secretRefs).length > 0 ? (
                   <Badge variant="outline" className="text-xs">
                     {Object.keys(secretRefs).length} secret{Object.keys(secretRefs).length !== 1 ? "s" : ""}
@@ -1858,8 +1858,8 @@ export function TenantProjectDetailsPage() {
             {Object.keys(secretRefs).length === 0 ? (
               <div className="flex flex-col items-center justify-center gap-2 py-10 text-center">
                 <KeyRound className="h-6 w-6 text-muted-foreground" />
-                <p className="text-sm font-medium">No project secrets stored yet</p>
-                <p className="text-xs text-muted-foreground">Add a secret key and value above to get started.</p>
+                <p className="text-sm font-medium">No project Vault entries stored yet</p>
+                <p className="text-xs text-muted-foreground">Add a Vault key and value above to get started.</p>
               </div>
             ) : (
               <Table>

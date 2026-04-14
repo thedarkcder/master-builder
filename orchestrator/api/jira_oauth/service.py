@@ -5,7 +5,11 @@ from typing import Callable, TypeVar
 
 from sqlalchemy.orm import Session
 
-from orchestrator.core.secrets import decrypt_value, encrypt_value
+from orchestrator.core.secret_crypto import (
+    decrypt_secret_value,
+    encrypt_secret_value,
+    jira_oauth_token_crypto_context,
+)
 from orchestrator.core.platform_secret_service import (
     PLATFORM_SECRET_JIRA_OAUTH_CLIENT_ID_REF,
     PLATFORM_SECRET_JIRA_OAUTH_CLIENT_SECRET_REF,
@@ -84,24 +88,44 @@ def refresh_jira_connection_tokens(
     now = datetime.now(timezone.utc)
     expires_at = _normalize_utc_datetime(connection.access_token_expires_at)
     if not force_refresh and expires_at - now > timedelta(seconds=60):
-        return decrypt_value(
+        return decrypt_secret_value(
             ciphertext=connection.access_token_encrypted,
+            settings=settings,
             encryption_key=settings.secrets_encryption_key,
+            context=jira_oauth_token_crypto_context(
+                connection_id=connection.connection_id,
+                token_field="access_token",
+            ),
         )
 
     client = jira_oauth_client(session=session, settings=settings, tenant_id=tenant_id)
-    refresh_token = decrypt_value(
+    refresh_token = decrypt_secret_value(
         ciphertext=connection.refresh_token_encrypted,
+        settings=settings,
         encryption_key=settings.secrets_encryption_key,
+        context=jira_oauth_token_crypto_context(
+            connection_id=connection.connection_id,
+            token_field="refresh_token",
+        ),
     )
     token_set = client.refresh_tokens(refresh_token=refresh_token)
-    connection.access_token_encrypted = encrypt_value(
+    connection.access_token_encrypted = encrypt_secret_value(
         plaintext=token_set.access_token,
+        settings=settings,
         encryption_key=settings.secrets_encryption_key,
+        context=jira_oauth_token_crypto_context(
+            connection_id=connection.connection_id,
+            token_field="access_token",
+        ),
     )
-    connection.refresh_token_encrypted = encrypt_value(
+    connection.refresh_token_encrypted = encrypt_secret_value(
         plaintext=token_set.refresh_token,
+        settings=settings,
         encryption_key=settings.secrets_encryption_key,
+        context=jira_oauth_token_crypto_context(
+            connection_id=connection.connection_id,
+            token_field="refresh_token",
+        ),
     )
     connection.access_token_expires_at = _normalize_utc_datetime(token_set.expires_at)
     connection.scopes = token_set.scopes

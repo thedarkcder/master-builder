@@ -20,7 +20,15 @@ type FormState = {
   adminPassword: string;
   githubState: string;
   jiraState: string;
-  encKey: string;
+  secretCryptoProvider: string;
+  vaultAddr: string;
+  vaultToken: string;
+  vaultNamespace: string;
+  vaultTransitKey: string;
+  awsKmsRegion: string;
+  awsKmsKeyId: string;
+  gcpKmsKeyName: string;
+  legacyEncKey: string;
   nextAuthSecret: string;
   emailFrom: string;
   emailProvider: string;
@@ -45,23 +53,46 @@ const defaults: FormState = {
   adminPassword: "",
   githubState: "",
   jiraState: "",
-  encKey: "",
+  secretCryptoProvider: "vault_transit",
+  vaultAddr: "",
+  vaultToken: "",
+  vaultNamespace: "",
+  vaultTransitKey: "master-builder",
+  awsKmsRegion: "",
+  awsKmsKeyId: "",
+  gcpKmsKeyName: "",
+  legacyEncKey: "",
   nextAuthSecret: "",
   emailFrom: "no-reply@example.com",
   emailProvider: "resend",
   resendKey: "",
 };
 
-const requiredKeys: (keyof FormState)[] = [
+const baseRequiredKeys: (keyof FormState)[] = [
   "hcloudToken",
   "sshKey",
   "adminPassword",
   "githubState",
   "jiraState",
-  "encKey",
+  "secretCryptoProvider",
   "nextAuthSecret",
   "emailFrom",
 ];
+
+function providerRequiredKeys(provider: string): (keyof FormState)[] {
+  switch (provider) {
+    case "vault_transit":
+      return ["vaultAddr", "vaultToken", "vaultTransitKey"];
+    case "aws_kms":
+      return ["awsKmsRegion", "awsKmsKeyId"];
+    case "gcp_kms":
+      return ["gcpKmsKeyName"];
+    case "fernet_legacy":
+      return ["legacyEncKey"];
+    default:
+      return [];
+  }
+}
 
 function quote(value: string): string {
   return `'${value.replace(/'/g, `'\"'\"'`)}'`;
@@ -72,7 +103,10 @@ export function HetznerSetupForm() {
   const [status, setStatus] = useState<string>("");
 
   const missing = useMemo(
-    () => requiredKeys.filter((k) => state[k].trim() === ""),
+    () =>
+      [...baseRequiredKeys, ...providerRequiredKeys(state.secretCryptoProvider)].filter(
+        (key) => state[key].trim() === ""
+      ),
     [state]
   );
 
@@ -95,7 +129,15 @@ export function HetznerSetupForm() {
       `export ORCHESTRATOR_ADMIN_PASSWORD=${quote(state.adminPassword)}`,
       `export ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET=${quote(state.githubState)}`,
       `export ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET=${quote(state.jiraState)}`,
-      `export ORCHESTRATOR_SECRETS_ENCRYPTION_KEY=${quote(state.encKey)}`,
+      `export ORCHESTRATOR_SECRET_CRYPTO_PROVIDER=${quote(state.secretCryptoProvider)}`,
+      `export ORCHESTRATOR_VAULT_ADDR=${quote(state.vaultAddr)}`,
+      `export ORCHESTRATOR_VAULT_TOKEN=${quote(state.vaultToken)}`,
+      `export ORCHESTRATOR_VAULT_NAMESPACE=${quote(state.vaultNamespace)}`,
+      `export ORCHESTRATOR_VAULT_TRANSIT_KEY=${quote(state.vaultTransitKey)}`,
+      `export ORCHESTRATOR_AWS_KMS_REGION=${quote(state.awsKmsRegion)}`,
+      `export ORCHESTRATOR_AWS_KMS_KEY_ID=${quote(state.awsKmsKeyId)}`,
+      `export ORCHESTRATOR_GCP_KMS_KEY_NAME=${quote(state.gcpKmsKeyName)}`,
+      `export ORCHESTRATOR_SECRETS_ENCRYPTION_KEY=${quote(state.legacyEncKey)}`,
       `export NEXTAUTH_SECRET=${quote(state.nextAuthSecret)}`,
       `export ORCHESTRATOR_EMAIL_FROM_ADDRESS=${quote(state.emailFrom)}`,
       `export ORCHESTRATOR_EMAIL_DELIVERY_PROVIDER=${quote(state.emailProvider)}`,
@@ -121,7 +163,15 @@ export function HetznerSetupForm() {
       `  - export ORCHESTRATOR_ADMIN_PASSWORD=${quote(state.adminPassword)}`,
       `  - export ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET=${quote(state.githubState)}`,
       `  - export ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET=${quote(state.jiraState)}`,
-      `  - export ORCHESTRATOR_SECRETS_ENCRYPTION_KEY=${quote(state.encKey)}`,
+      `  - export ORCHESTRATOR_SECRET_CRYPTO_PROVIDER=${quote(state.secretCryptoProvider)}`,
+      `  - export ORCHESTRATOR_VAULT_ADDR=${quote(state.vaultAddr)}`,
+      `  - export ORCHESTRATOR_VAULT_TOKEN=${quote(state.vaultToken)}`,
+      `  - export ORCHESTRATOR_VAULT_NAMESPACE=${quote(state.vaultNamespace)}`,
+      `  - export ORCHESTRATOR_VAULT_TRANSIT_KEY=${quote(state.vaultTransitKey)}`,
+      `  - export ORCHESTRATOR_AWS_KMS_REGION=${quote(state.awsKmsRegion)}`,
+      `  - export ORCHESTRATOR_AWS_KMS_KEY_ID=${quote(state.awsKmsKeyId)}`,
+      `  - export ORCHESTRATOR_GCP_KMS_KEY_NAME=${quote(state.gcpKmsKeyName)}`,
+      `  - export ORCHESTRATOR_SECRETS_ENCRYPTION_KEY=${quote(state.legacyEncKey)}`,
       `  - export NEXTAUTH_SECRET=${quote(state.nextAuthSecret)}`,
       `  - export ORCHESTRATOR_EMAIL_FROM_ADDRESS=${quote(state.emailFrom)}`,
       `  - export ORCHESTRATOR_EMAIL_DELIVERY_PROVIDER=${quote(state.emailProvider)}`,
@@ -179,7 +229,41 @@ export function HetznerSetupForm() {
           {input("adminPassword", "ORCHESTRATOR_ADMIN_PASSWORD", "password")}
           {input("githubState", "ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET", "password")}
           {input("jiraState", "ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET", "password")}
-          {input("encKey", "ORCHESTRATOR_SECRETS_ENCRYPTION_KEY", "password")}
+          <label className="block">
+            <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.14em] text-[#8fa0ad]">
+              ORCHESTRATOR_SECRET_CRYPTO_PROVIDER
+            </span>
+            <select
+              value={state.secretCryptoProvider}
+              onChange={(e) => setState((prev) => ({ ...prev, secretCryptoProvider: e.target.value }))}
+              className="w-full rounded-md border border-white/[0.12] bg-[#0f1218] px-3 py-2 text-sm text-white outline-none focus:border-[#78d1ff]"
+            >
+              <option value="vault_transit">vault_transit</option>
+              <option value="aws_kms">aws_kms</option>
+              <option value="gcp_kms">gcp_kms</option>
+              <option value="fernet_legacy">fernet_legacy</option>
+            </select>
+          </label>
+          {state.secretCryptoProvider === "vault_transit" ? (
+            <>
+              {input("vaultAddr", "ORCHESTRATOR_VAULT_ADDR")}
+              {input("vaultToken", "ORCHESTRATOR_VAULT_TOKEN", "password")}
+              {input("vaultNamespace", "ORCHESTRATOR_VAULT_NAMESPACE")}
+              {input("vaultTransitKey", "ORCHESTRATOR_VAULT_TRANSIT_KEY")}
+            </>
+          ) : null}
+          {state.secretCryptoProvider === "aws_kms" ? (
+            <>
+              {input("awsKmsRegion", "ORCHESTRATOR_AWS_KMS_REGION")}
+              {input("awsKmsKeyId", "ORCHESTRATOR_AWS_KMS_KEY_ID")}
+            </>
+          ) : null}
+          {state.secretCryptoProvider === "gcp_kms" ? (
+            <>{input("gcpKmsKeyName", "ORCHESTRATOR_GCP_KMS_KEY_NAME")}</>
+          ) : null}
+          {state.secretCryptoProvider === "fernet_legacy" ? (
+            <>{input("legacyEncKey", "ORCHESTRATOR_SECRETS_ENCRYPTION_KEY", "password")}</>
+          ) : null}
           {input("nextAuthSecret", "NEXTAUTH_SECRET", "password")}
           {input("emailFrom", "ORCHESTRATOR_EMAIL_FROM_ADDRESS")}
           {input("emailProvider", "ORCHESTRATOR_EMAIL_DELIVERY_PROVIDER")}

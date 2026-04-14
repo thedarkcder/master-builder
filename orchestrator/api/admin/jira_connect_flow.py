@@ -13,7 +13,7 @@ from orchestrator.core.jira_oauth_state import (
     create_jira_oauth_state_token,
     parse_jira_oauth_state_token,
 )
-from orchestrator.core.secrets import encrypt_value
+from orchestrator.core.secret_crypto import encrypt_secret_value, jira_oauth_token_crypto_context
 from orchestrator.storage.models import JiraOAuthConnection, Tenant
 from orchestrator.tools.jira_oauth import JiraOAuthError
 
@@ -83,20 +83,31 @@ def handle_jira_connect_callback(
 
     resource = resources[0]
     now = datetime.now(timezone.utc)
+    connection_id = str(uuid4())
     connection = JiraOAuthConnection(
-        connection_id=str(uuid4()),
+        connection_id=connection_id,
         account_id="unknown",
         account_email=None,
         cloud_id=resource.cloud_id,
         site_url=resource.site_url,
         scopes=token_set.scopes,
-        access_token_encrypted=encrypt_value(
+        access_token_encrypted=encrypt_secret_value(
             plaintext=token_set.access_token,
+            settings=settings,
             encryption_key=settings.secrets_encryption_key,
+            context=jira_oauth_token_crypto_context(
+                connection_id=connection_id,
+                token_field="access_token",
+            ),
         ),
-        refresh_token_encrypted=encrypt_value(
+        refresh_token_encrypted=encrypt_secret_value(
             plaintext=token_set.refresh_token,
+            settings=settings,
             encryption_key=settings.secrets_encryption_key,
+            context=jira_oauth_token_crypto_context(
+                connection_id=connection_id,
+                token_field="refresh_token",
+            ),
         ),
         access_token_expires_at=token_set.expires_at,
         created_at=now,

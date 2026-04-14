@@ -45,7 +45,7 @@ export default function TenantSecretsPage() {
       setItems(refs);
       setStatusLine("");
     } catch (error) {
-      setStatusLine(`Failed to load secrets: ${(error as Error).message}`);
+      setStatusLine(`Failed to load Vault entries: ${(error as Error).message}`);
     } finally {
       setLoading(false);
     }
@@ -58,7 +58,7 @@ export default function TenantSecretsPage() {
   async function saveSecret() {
     if (!credentials) return;
     if (!secretKey.trim() || !secretValue.trim()) {
-      setStatusLine("Secret key and value are required.");
+      setStatusLine("Vault key and value are required.");
       return;
     }
     setSaving(true);
@@ -79,7 +79,7 @@ export default function TenantSecretsPage() {
   async function checkResolution() {
     if (!credentials) return;
     if (!secretKey.trim()) {
-      setStatusLine("Enter a secret key to resolve.");
+      setStatusLine("Enter a Vault key to resolve.");
       return;
     }
     setSaving(true);
@@ -154,7 +154,7 @@ export default function TenantSecretsPage() {
           <section className="p-6">
             <div>
               <h2 className="text-base font-semibold">
-                {editingSecretRef ? "Edit Secret" : "Add Secret"}
+                {editingSecretRef ? "Edit Vault Entry" : "Add Vault Entry"}
               </h2>
               {editingSecretRef ? (
                 <p className="mt-1 text-sm text-warning">
@@ -165,7 +165,7 @@ export default function TenantSecretsPage() {
             <div className="mt-4 space-y-4">
               <div className="grid gap-4 md:grid-cols-2">
                 <div className="space-y-1.5">
-                  <label className="text-sm font-medium">Secret key</label>
+                  <label className="text-sm font-medium">Vault key</label>
                   <Input
                     value={secretKey}
                     onChange={(e) => setSecretKey(e.target.value)}
@@ -176,12 +176,12 @@ export default function TenantSecretsPage() {
                 </div>
                 <div className="space-y-1.5">
                   <label className="text-sm font-medium">
-                    {editingSecretRef ? "New value" : "Secret value"}
+                    {editingSecretRef ? "New value" : "Vault value"}
                   </label>
                   <Textarea
                     value={secretValue}
                     onChange={(e) => setSecretValue(e.target.value)}
-                    placeholder="Paste secret value here"
+                    placeholder="Paste Vault value here"
                     className="min-h-[72px] font-mono text-xs"
                     disabled={saving}
                   />
@@ -190,7 +190,7 @@ export default function TenantSecretsPage() {
               <div className="flex items-center gap-2">
                 <Button size="sm" onClick={() => void saveSecret()} disabled={saving}>
                   <Save className="mr-1.5 h-3.5 w-3.5" />
-                  {editingSecretRef ? "Update" : "Save secret"}
+                  {editingSecretRef ? "Update" : "Save Vault entry"}
                 </Button>
                 <Button size="sm" variant="outline" onClick={() => void checkResolution()} disabled={saving}>
                   <SearchCheck className="mr-1.5 h-3.5 w-3.5" />
@@ -208,7 +208,7 @@ export default function TenantSecretsPage() {
 
           <section className="p-6 pb-0">
             <div className="flex items-center justify-between gap-2">
-              <h2 className="text-base font-semibold">Stored Secrets</h2>
+              <h2 className="text-base font-semibold">Stored Vault Entries</h2>
               {items.length > 0 ? (
                 <span className="text-xs text-muted-foreground">
                   {items.length} secret{items.length !== 1 ? "s" : ""}
@@ -221,8 +221,8 @@ export default function TenantSecretsPage() {
             {items.length === 0 ? (
               <div className="flex flex-col items-center justify-center gap-2 py-10 text-center">
                 <KeyRound className="h-6 w-6 text-muted-foreground" />
-                <p className="text-sm font-medium">No tenant secrets stored yet</p>
-                <p className="text-xs text-muted-foreground">Add a secret key and value above to get started.</p>
+                <p className="text-sm font-medium">No tenant Vault entries stored yet</p>
+                <p className="text-xs text-muted-foreground">Add a Vault key and value above to get started.</p>
               </div>
             ) : (
               <Table>

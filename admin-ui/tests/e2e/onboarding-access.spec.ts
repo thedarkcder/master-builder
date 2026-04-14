@@ -87,7 +87,7 @@ test("registers a tenant admin and redirects into the setup onboarding flow", as
   await expect(page.getByRole("heading", { name: "Set up workspace" })).toBeVisible();
   await expect(page.getByText("Connect Jira and choose at least one project")).toBeVisible();
   await expect(page.getByText("Credentials")).toHaveCount(0);
-  await expect(page.getByText("Open platform secrets")).toHaveCount(0);
+  await expect(page.getByText("Open platform Vault")).toHaveCount(0);
   await expect(page.getByText("What this controls")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Finish setup" })).toBeDisabled();
 });
@@ -245,7 +245,7 @@ test("redirects non-technical users away from technical analytics surfaces", asy
   await expect(page).toHaveURL(/\/route25\/analytics\/business$/, { timeout: 15000 });
   await expect(page.getByRole("link", { name: "Token Overview" })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Recent delivery timeline" })).toBeVisible();
-  await expect(page.getByRole("link", { name: "Secrets" })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Vault" })).toHaveCount(0);
 });
 
 test("lets a platform admin create a workspace through the setup wizard and blocks Jira step validation", async ({ page }) => {

@@ -22,7 +22,7 @@ function toPlatformRef(rawRef: string): string {
   const normalized = rawRef.trim();
   if (!normalized) return "";
   if (normalized.startsWith("tenant/") || normalized.startsWith("project/")) {
-    throw new Error("Platform secrets page only supports platform/* refs.");
+    throw new Error("Platform Vault page only supports platform/* refs.");
   }
   return normalized.startsWith("platform/") ? normalized : `platform/${normalized}`;
 }
@@ -50,7 +50,7 @@ export default function SecretsPage() {
       setItems(refs);
       setStatusLine("");
     } catch (error) {
-      setStatusLine(`Failed to load secrets: ${(error as Error).message}`);
+      setStatusLine(`Failed to load Vault entries: ${(error as Error).message}`);
     } finally {
       setLoading(false);
     }
@@ -63,14 +63,14 @@ export default function SecretsPage() {
   async function saveSecret() {
     if (!credentials) return;
     if (!secretRef.trim() || !secretValue.trim()) {
-      setStatusLine("Secret key and value are required.");
+      setStatusLine("Vault key and value are required.");
       return;
     }
     setSaving(true);
     try {
       const scopedRef = toPlatformRef(secretRef);
       if (!scopedRef) {
-        setStatusLine("Secret key and value are required.");
+        setStatusLine("Vault key and value are required.");
         return;
       }
       await upsertManagedSecret(credentials, scopedRef, secretValue);
@@ -89,14 +89,14 @@ export default function SecretsPage() {
   async function checkResolution() {
     if (!credentials) return;
     if (!secretRef.trim()) {
-      setStatusLine("Enter a secret key to resolve.");
+      setStatusLine("Enter a Vault key to resolve.");
       return;
     }
     setSaving(true);
     try {
       const scopedRef = toPlatformRef(secretRef);
       if (!scopedRef) {
-        setStatusLine("Enter a secret key to resolve.");
+        setStatusLine("Enter a Vault key to resolve.");
         return;
       }
       const result = await resolveManagedSecret(credentials, scopedRef);
@@ -134,7 +134,7 @@ export default function SecretsPage() {
     setSecretRef(fromPlatformRef(secretRefToEdit));
     setSecretValue("");
     setEditingSecretRef(secretRefToEdit);
-    setStatusLine(`Editing ${secretRefToEdit}. Enter a new value to replace the stored secret.`);
+      setStatusLine(`Editing ${secretRefToEdit}. Enter a new value to replace the stored Vault entry.`);
   }
 
   function cancelEditingSecret() {
@@ -171,7 +171,7 @@ export default function SecretsPage() {
           <section className="p-6">
             <div>
               <h2 className="text-base font-semibold">
-                {editingSecretRef ? "Edit Secret" : "Add Secret"}
+                {editingSecretRef ? "Edit Vault Entry" : "Add Vault Entry"}
               </h2>
               {editingSecretRef ? (
                 <p className="mt-1 text-sm text-warning">
@@ -182,7 +182,7 @@ export default function SecretsPage() {
             <div className="mt-4 space-y-4">
               <div className="grid gap-4 md:grid-cols-2">
                 <div className="space-y-1.5">
-                  <label className="text-sm font-medium">Secret key</label>
+                  <label className="text-sm font-medium">Vault key</label>
                   <Input
                     value={secretRef}
                     onChange={(e) => setSecretRef(e.target.value)}
@@ -193,12 +193,12 @@ export default function SecretsPage() {
                 </div>
                 <div className="space-y-1.5">
                   <label className="text-sm font-medium">
-                    {editingSecretRef ? "New value" : "Secret value"}
+                    {editingSecretRef ? "New value" : "Vault value"}
                   </label>
                   <Textarea
                     value={secretValue}
                     onChange={(e) => setSecretValue(e.target.value)}
-                    placeholder="Paste secret value here"
+                    placeholder="Paste Vault value here"
                     className="min-h-[72px] font-mono text-xs"
                     disabled={saving}
                   />
@@ -207,7 +207,7 @@ export default function SecretsPage() {
               <div className="flex items-center gap-2">
                 <Button size="sm" onClick={() => void saveSecret()} disabled={saving}>
                   <Save className="mr-1.5 h-3.5 w-3.5" />
-                  {editingSecretRef ? "Update" : "Save secret"}
+                  {editingSecretRef ? "Update" : "Save Vault entry"}
                 </Button>
                 <Button size="sm" variant="outline" onClick={() => void checkResolution()} disabled={saving}>
                   <SearchCheck className="mr-1.5 h-3.5 w-3.5" />
@@ -225,7 +225,7 @@ export default function SecretsPage() {
 
           <section className="p-6 pb-0">
             <div className="flex items-center justify-between gap-2">
-              <h2 className="text-base font-semibold">Stored Secrets</h2>
+              <h2 className="text-base font-semibold">Stored Vault Entries</h2>
               {items.length > 0 ? (
                 <span className="text-xs text-muted-foreground">
                   {managedCount} managed · {items.length - managedCount} inherited
@@ -238,8 +238,8 @@ export default function SecretsPage() {
             {items.length === 0 ? (
               <div className="flex flex-col items-center justify-center gap-2 py-10 text-center">
                 <KeyRound className="h-6 w-6 text-muted-foreground" />
-                <p className="text-sm font-medium">No platform secrets stored yet</p>
-                <p className="text-xs text-muted-foreground">Add a secret key and value above to get started.</p>
+                <p className="text-sm font-medium">No platform Vault entries stored yet</p>
+                <p className="text-xs text-muted-foreground">Add a Vault key and value above to get started.</p>
               </div>
             ) : (
               <Table>

@@ -524,7 +524,7 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
           </div>
           <div className="space-y-3 p-6 text-sm">
             <ol className="list-decimal space-y-2 pl-5">
-              <li>Manage required integration secrets.</li>
+              <li>Manage required integration vault entries.</li>
               <li>Connect integrations from the dedicated Jira and GitHub pages.</li>
               <li>Create project mappings (repo + Jira key) in Projects.</li>
               <li>Run health checks and preview ready gate.</li>
@@ -533,7 +533,7 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
               <Button asChild variant="outline">
                 <Link href={`/${encodeURIComponent(tenant.tenant_id)}/secrets`}>
                   <KeyRound className="mr-2 h-4 w-4" />
-                  Manage Secrets
+                  Open Vault
                 </Link>
               </Button>
               <Button asChild variant="outline">

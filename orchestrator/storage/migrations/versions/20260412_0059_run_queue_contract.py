@@ -11,6 +11,7 @@ from typing import Any
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy import inspect
 
 
 revision = "20260412_0059"
@@ -22,15 +23,24 @@ depends_on = None
 def upgrade() -> None:
     bind = op.get_bind()
     metadata = sa.MetaData()
+    inspector = inspect(bind)
+    existing_columns = {column.get("name") for column in inspector.get_columns("runs")}
+    existing_indexes = {index.get("name") for index in inspector.get_indexes("runs")}
 
     with op.batch_alter_table("runs") as batch_op:
-        batch_op.add_column(sa.Column("pre_check_outcome", sa.String(length=32), nullable=True))
-        batch_op.add_column(sa.Column("required_worker_capability", sa.String(length=32), nullable=True))
-        batch_op.add_column(sa.Column("dispatch_claimed_at", sa.DateTime(timezone=True), nullable=True))
+        if "pre_check_outcome" not in existing_columns:
+            batch_op.add_column(sa.Column("pre_check_outcome", sa.String(length=32), nullable=True))
+        if "required_worker_capability" not in existing_columns:
+            batch_op.add_column(sa.Column("required_worker_capability", sa.String(length=32), nullable=True))
+        if "dispatch_claimed_at" not in existing_columns:
+            batch_op.add_column(sa.Column("dispatch_claimed_at", sa.DateTime(timezone=True), nullable=True))
 
-    op.create_index("ix_runs_pre_check_outcome", "runs", ["pre_check_outcome"], unique=False)
-    op.create_index("ix_runs_required_worker_capability", "runs", ["required_worker_capability"], unique=False)
-    op.create_index("ix_runs_dispatch_claimed_at", "runs", ["dispatch_claimed_at"], unique=False)
+    if "ix_runs_pre_check_outcome" not in existing_indexes:
+        op.create_index("ix_runs_pre_check_outcome", "runs", ["pre_check_outcome"], unique=False)
+    if "ix_runs_required_worker_capability" not in existing_indexes:
+        op.create_index("ix_runs_required_worker_capability", "runs", ["required_worker_capability"], unique=False)
+    if "ix_runs_dispatch_claimed_at" not in existing_indexes:
+        op.create_index("ix_runs_dispatch_claimed_at", "runs", ["dispatch_claimed_at"], unique=False)
     runs = sa.Table("runs", metadata, autoload_with=bind)
 
     rows = bind.execute(

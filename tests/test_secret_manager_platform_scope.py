@@ -83,8 +83,8 @@ def test_resolve_scoped_secret_ref_project_falls_back_to_tenant_only() -> None:
 
     from orchestrator.core import secret_manager as module
 
-    original_decrypt = module.decrypt_value
-    module.decrypt_value = lambda ciphertext, encryption_key: "tenant-secret"  # type: ignore[assignment]
+    original_decrypt = module.decrypt_secret_value
+    module.decrypt_secret_value = lambda ciphertext, settings, encryption_key="", context=None: "tenant-secret"  # type: ignore[assignment]
     try:
         resolved = resolve_scoped_secret_ref(
             session,
@@ -94,7 +94,7 @@ def test_resolve_scoped_secret_ref_project_falls_back_to_tenant_only() -> None:
             project_id="p1",
         )
     finally:
-        module.decrypt_value = original_decrypt  # type: ignore[assignment]
+        module.decrypt_secret_value = original_decrypt  # type: ignore[assignment]
 
     assert resolved == "tenant-secret"
 
@@ -131,8 +131,8 @@ def test_resolve_platform_secret_ref_rejects_unscoped_ref() -> None:
 
     import orchestrator.core.secret_manager as module
 
-    original_decrypt = module.decrypt_value
-    module.decrypt_value = lambda ciphertext, encryption_key, **_: "managed"  # type: ignore[assignment]
+    original_decrypt = module.decrypt_secret_value
+    module.decrypt_secret_value = lambda ciphertext, settings, encryption_key="", context=None: "managed"  # type: ignore[assignment]
     try:
         with pytest.raises(ValueError, match="Platform secret refs must use platform"):
             resolve_platform_secret_ref(
@@ -149,7 +149,7 @@ def test_resolve_platform_secret_ref_rejects_unscoped_ref() -> None:
             == "managed"
         )
     finally:
-        module.decrypt_value = original_decrypt  # type: ignore[assignment]
+        module.decrypt_secret_value = original_decrypt  # type: ignore[assignment]
 
 
 def test_resolve_platform_secret_ref_rejects_invalid_scopes() -> None:
@@ -248,8 +248,8 @@ def test_resolve_tenant_secret_ref_builds_tenant_ref() -> None:
     session.get.side_effect = _session_get
     import orchestrator.core.secret_manager as module
 
-    original_decrypt = module.decrypt_value
-    module.decrypt_value = lambda ciphertext, encryption_key, **_: "tenant-value"  # type: ignore[assignment]
+    original_decrypt = module.decrypt_secret_value
+    module.decrypt_secret_value = lambda ciphertext, settings, encryption_key="", context=None: "tenant-value"  # type: ignore[assignment]
     try:
         assert (
             resolve_tenant_secret_ref(
@@ -270,7 +270,7 @@ def test_resolve_tenant_secret_ref_builds_tenant_ref() -> None:
             == "tenant-value"
         )
     finally:
-        module.decrypt_value = original_decrypt  # type: ignore[assignment]
+        module.decrypt_secret_value = original_decrypt  # type: ignore[assignment]
 
 
 def test_resolve_tenant_secret_ref_rejects_invalid_refs() -> None:

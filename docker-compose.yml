@@ -4,6 +4,13 @@ x-extra_hosts_host_gateway: &extra_hosts_host_gateway
   extra_hosts:
     - "host.docker.internal:host-gateway"
 
+x-secret_crypto_env: &secret_crypto_env
+  ORCHESTRATOR_SECRET_CRYPTO_PROVIDER: ${ORCHESTRATOR_SECRET_CRYPTO_PROVIDER:-vault_transit}
+  ORCHESTRATOR_VAULT_ADDR: ${ORCHESTRATOR_VAULT_ADDR:-http://vault:8200}
+  ORCHESTRATOR_VAULT_TOKEN: ${ORCHESTRATOR_VAULT_TOKEN:-master-builder-dev-root}
+  ORCHESTRATOR_VAULT_NAMESPACE: ${ORCHESTRATOR_VAULT_NAMESPACE:-}
+  ORCHESTRATOR_VAULT_TRANSIT_KEY: ${ORCHESTRATOR_VAULT_TRANSIT_KEY:-master-builder}
+
 services:
   postgres:
     image: pgvector/pgvector:pg16
@@ -45,6 +52,41 @@ services:
       timeout: 5s
       retries: 20
 
+  vault:
+    image: hashicorp/vault:1.18
+    container_name: master-builder-vault
+    cap_add:
+      - IPC_LOCK
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: ${ORCHESTRATOR_VAULT_TOKEN:-master-builder-dev-root}
+      VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+    ports:
+      - "48200:8200"
+    command: server -dev
+    healthcheck:
+      test: ["CMD-SHELL", "VAULT_ADDR=http://127.0.0.1:8200 VAULT_TOKEN=${ORCHESTRATOR_VAULT_TOKEN:-master-builder-dev-root} vault status >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  vault-init:
+    image: hashicorp/vault:1.18
+    container_name: master-builder-vault-init
+    depends_on:
+      vault:
+        condition: service_healthy
+    restart: "no"
+    environment:
+      VAULT_ADDR: ${ORCHESTRATOR_VAULT_ADDR:-http://vault:8200}
+      VAULT_TOKEN: ${ORCHESTRATOR_VAULT_TOKEN:-master-builder-dev-root}
+      ORCHESTRATOR_VAULT_TRANSIT_KEY: ${ORCHESTRATOR_VAULT_TRANSIT_KEY:-master-builder}
+    command:
+      - /bin/sh
+      - -ceu
+      - |
+        vault secrets enable transit >/dev/null 2>&1 || true
+        vault write -f "transit/keys/${ORCHESTRATOR_VAULT_TRANSIT_KEY}" >/dev/null
+
   api:
     <<: *extra_hosts_host_gateway
     build:
@@ -55,6 +97,7 @@ services:
         CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
     container_name: master-builder-api
     environment:
+      <<: *secret_crypto_env
       ORCHESTRATOR_ADMIN_USERNAME: ${ORCHESTRATOR_ADMIN_USERNAME:-admin}
       ORCHESTRATOR_ADMIN_PASSWORD: ${ORCHESTRATOR_ADMIN_PASSWORD:?Set ORCHESTRATOR_ADMIN_PASSWORD}
       ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
@@ -80,7 +123,6 @@ services:
       ORCHESTRATOR_SMTP_PASSWORD: ${ORCHESTRATOR_SMTP_PASSWORD:-}
       ORCHESTRATOR_SMTP_USE_TLS: ${ORCHESTRATOR_SMTP_USE_TLS:-false}
       ORCHESTRATOR_SMTP_USE_SSL: ${ORCHESTRATOR_SMTP_USE_SSL:-false}
-      ORCHESTRATOR_SECRETS_ENCRYPTION_KEY: ${ORCHESTRATOR_SECRETS_ENCRYPTION_KEY:?Set ORCHESTRATOR_SECRETS_ENCRYPTION_KEY}
       ORCHESTRATOR_SENTRY_DSN: ${ORCHESTRATOR_SENTRY_DSN:-}
       ORCHESTRATOR_SENTRY_ENVIRONMENT: ${ORCHESTRATOR_SENTRY_ENVIRONMENT:-dev}
       ORCHESTRATOR_SENTRY_RELEASE: ${ORCHESTRATOR_SENTRY_RELEASE:-}
@@ -99,6 +141,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      vault-init:
+        condition: service_completed_successfully
     healthcheck:
       test:
         - CMD-SHELL
@@ -137,7 +181,10 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      vault-init:
+        condition: service_completed_successfully
     environment:
+      <<: *secret_crypto_env
       ORCHESTRATOR_ADMIN_USERNAME: ${ORCHESTRATOR_ADMIN_USERNAME:-admin}
       ORCHESTRATOR_ADMIN_PASSWORD: ${ORCHESTRATOR_ADMIN_PASSWORD:?Set ORCHESTRATOR_ADMIN_PASSWORD}
       ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
@@ -149,7 +196,6 @@ services:
       ORCHESTRATOR_CODEX_TIMEOUT_SECONDS: ${ORCHESTRATOR_CODEX_TIMEOUT_SECONDS:-0}
       ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET: ${ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET:?Set ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET}
       ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET: ${ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET:?Set ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET}
-      ORCHESTRATOR_SECRETS_ENCRYPTION_KEY: ${ORCHESTRATOR_SECRETS_ENCRYPTION_KEY:?Set ORCHESTRATOR_SECRETS_ENCRYPTION_KEY}
       ORCHESTRATOR_SENTRY_DSN: ${ORCHESTRATOR_SENTRY_DSN:-}
       ORCHESTRATOR_SENTRY_ENVIRONMENT: ${ORCHESTRATOR_SENTRY_ENVIRONMENT:-dev}
       ORCHESTRATOR_SENTRY_RELEASE: ${ORCHESTRATOR_SENTRY_RELEASE:-}
@@ -189,7 +235,10 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
+      vault-init:
+        condition: service_completed_successfully
     environment:
+      <<: *secret_crypto_env
       ORCHESTRATOR_ADMIN_USERNAME: ${ORCHESTRATOR_ADMIN_USERNAME:-admin}
       ORCHESTRATOR_ADMIN_PASSWORD: ${ORCHESTRATOR_ADMIN_PASSWORD:?Set ORCHESTRATOR_ADMIN_PASSWORD}
       ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
@@ -210,7 +259,6 @@ services:
       ORCHESTRATOR_SMTP_PASSWORD: ${ORCHESTRATOR_SMTP_PASSWORD:-}
       ORCHESTRATOR_SMTP_USE_TLS: ${ORCHESTRATOR_SMTP_USE_TLS:-false}
       ORCHESTRATOR_SMTP_USE_SSL: ${ORCHESTRATOR_SMTP_USE_SSL:-false}
-      ORCHESTRATOR_SECRETS_ENCRYPTION_KEY: ${ORCHESTRATOR_SECRETS_ENCRYPTION_KEY:?Set ORCHESTRATOR_SECRETS_ENCRYPTION_KEY}
       ORCHESTRATOR_VOICE_STT_PROVIDER: ${ORCHESTRATOR_VOICE_STT_PROVIDER:-whisper}
       ORCHESTRATOR_VOICE_TTS_PROVIDER: ${ORCHESTRATOR_VOICE_TTS_PROVIDER:-pocket_tts}
       ORCHESTRATOR_SENTRY_DSN: ${ORCHESTRATOR_SENTRY_DSN:-}
@@ -255,7 +303,10 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      vault-init:
+        condition: service_completed_successfully
     environment:
+      <<: *secret_crypto_env
       ORCHESTRATOR_ADMIN_USERNAME: ${ORCHESTRATOR_ADMIN_USERNAME:-admin}
       ORCHESTRATOR_ADMIN_PASSWORD: ${ORCHESTRATOR_ADMIN_PASSWORD:?Set ORCHESTRATOR_ADMIN_PASSWORD}
       ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
@@ -267,7 +318,6 @@ services:
       ORCHESTRATOR_CODEX_TIMEOUT_SECONDS: ${ORCHESTRATOR_CODEX_TIMEOUT_SECONDS:-0}
       ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET: ${ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET:?Set ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET}
       ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET: ${ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET:?Set ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET}
-      ORCHESTRATOR_SECRETS_ENCRYPTION_KEY: ${ORCHESTRATOR_SECRETS_ENCRYPTION_KEY:?Set ORCHESTRATOR_SECRETS_ENCRYPTION_KEY}
       ORCHESTRATOR_SENTRY_DSN: ${ORCHESTRATOR_SENTRY_DSN:-}
       ORCHESTRATOR_SENTRY_ENVIRONMENT: ${ORCHESTRATOR_SENTRY_ENVIRONMENT:-dev}
       ORCHESTRATOR_SENTRY_RELEASE: ${ORCHESTRATOR_SENTRY_RELEASE:-}
@@ -299,10 +349,12 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      vault-init:
+        condition: service_completed_successfully
     environment:
+      <<: *secret_crypto_env
       ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
       POSTGRES_URL: ${POSTGRES_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
-      ORCHESTRATOR_SECRETS_ENCRYPTION_KEY: ${ORCHESTRATOR_SECRETS_ENCRYPTION_KEY:?Set ORCHESTRATOR_SECRETS_ENCRYPTION_KEY}
       ORCHESTRATOR_DISCORD_GATEWAY_LOCK_KEY: ${ORCHESTRATOR_DISCORD_GATEWAY_LOCK_KEY:-947102033127}
       ORCHESTRATOR_DISCORD_GATEWAY_POLL_SECONDS: ${ORCHESTRATOR_DISCORD_GATEWAY_POLL_SECONDS:-3}
       ORCHESTRATOR_VOICE_STT_PROVIDER: ${ORCHESTRATOR_VOICE_STT_PROVIDER:-whisper}
@@ -339,10 +391,12 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      vault-init:
+        condition: service_completed_successfully
     environment:
+      <<: *secret_crypto_env
       ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
       POSTGRES_URL: ${POSTGRES_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
-      ORCHESTRATOR_SECRETS_ENCRYPTION_KEY: ${ORCHESTRATOR_SECRETS_ENCRYPTION_KEY:?Set ORCHESTRATOR_SECRETS_ENCRYPTION_KEY}
       ORCHESTRATOR_DISCORD_LIVE_VOICE_LOCK_KEY: ${ORCHESTRATOR_DISCORD_LIVE_VOICE_LOCK_KEY:-947102033129}
       ORCHESTRATOR_DISCORD_LIVE_VOICE_POLL_SECONDS: ${ORCHESTRATOR_DISCORD_LIVE_VOICE_POLL_SECONDS:-3}
       ORCHESTRATOR_VOICE_STT_PROVIDER: ${ORCHESTRATOR_VOICE_STT_PROVIDER:-whisper}
@@ -381,10 +435,12 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      vault-init:
+        condition: service_completed_successfully
     environment:
+      <<: *secret_crypto_env
       ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
       POSTGRES_URL: ${POSTGRES_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
-      ORCHESTRATOR_SECRETS_ENCRYPTION_KEY: ${ORCHESTRATOR_SECRETS_ENCRYPTION_KEY:?Set ORCHESTRATOR_SECRETS_ENCRYPTION_KEY}
       ORCHESTRATOR_SENTRY_DSN: ${ORCHESTRATOR_SENTRY_DSN:-}
       ORCHESTRATOR_SENTRY_ENVIRONMENT: ${ORCHESTRATOR_SENTRY_ENVIRONMENT:-dev}
       ORCHESTRATOR_SENTRY_RELEASE: ${ORCHESTRATOR_SENTRY_RELEASE:-}
