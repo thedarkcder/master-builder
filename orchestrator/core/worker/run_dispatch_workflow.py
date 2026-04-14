@@ -5,6 +5,11 @@ from dataclasses import dataclass
 from uuid import uuid4
 
 from orchestrator.core.run_logs import record_run_log_event
+from orchestrator.core.worker.run_dispatch_gateways import RunExecutionGateway
+from orchestrator.core.worker.run_dispatch_gateways import RunDispatchIdentityGateway
+from orchestrator.core.worker.run_dispatch_gateways import RunProjectGateway
+from orchestrator.core.worker.run_dispatch_gateways import RunDispatchStatusConfig
+from orchestrator.core.worker.run_dispatch_gateways import RunStageUpdateGateway
 from orchestrator.core.worker.run_outcome_policy import RunOutcomePolicy
 from orchestrator.core.worker.run_preparation_service import RunPreparationService
 from orchestrator.core.worker_workspace import resolve_worker_workspace_key
@@ -12,46 +17,11 @@ from orchestrator.core.worker_workspace import resolve_worker_workspace_key
 
 @dataclass(frozen=True)
 class RunDispatchWorkflowDeps:
-    logger: object
-    send_discord_message_fn: object
-    send_jira_message_fn: object
-    resolve_project_for_run_fn: object
-    fail_missing_project_mapping_fn: object
-    block_archived_project_fn: object
-    cleanup_run_workspaces_fn: object
-    build_run_heartbeat_controller_fn: object
-    promote_run_to_running_fn: object | None
-    bind_run_project_fn: object
-    workflow_request_for_run_fn: object
-    fail_guardrail_violation_fn: object
-    tenant_jira_issue_url_fn: object
-    lock_acquired_update_fn: object
-    repo_setup_ready_update_fn: object | None
-    plan_posted_update_fn: object | None
-    pr_opened_update_fn: object | None
-    run_failed_update_fn: object | None
-    run_requeued_repo_setup_update_fn: object | None
-    run_requeued_capability_update_fn: object | None
-    run_requeued_stale_snapshot_update_fn: object | None
-    finalize_cancelled_run_fn: object
-    finalize_workflow_result_fn: object
-    persist_stage_checkpoint_fn: object
-    requeue_run_for_repo_setup_fn: object | None
-    requeue_workflow_result_for_capability_fn: object
-    requeue_workflow_result_for_stale_snapshot_fn: object
-    check_run_snapshot_freshness_fn: object
-    transition_issue_status_fn: object | None
-    emit_agent_event_fn: object
-    resolve_agent_id_fn: object
-    resolve_worker_service_instance_id_fn: object
-    ensure_project_repository_checkout_fn: object | None = None
-    fail_project_repository_checkout_fn: object | None = None
-    fail_project_repository_setup_fn: object | None = None
-    run_status_running: str = "running"
-    run_status_failed: str = "failed"
-    run_status_blocked: str = "blocked"
-    run_status_cancelled: str = "cancelled"
-    run_status_dispatching: str = "dispatching"
+    identity: RunDispatchIdentityGateway
+    project: RunProjectGateway
+    stage_updates: RunStageUpdateGateway
+    execution: RunExecutionGateway
+    statuses: RunDispatchStatusConfig = RunDispatchStatusConfig()
 
 
 class RunDispatchWorkflow:
@@ -82,7 +52,7 @@ class RunDispatchWorkflow:
             return prepared
 
         def _emit_test_feedback(attempt: int, feedback: str) -> None:
-            self._deps.send_jira_message_fn(
+            self._deps.stage_updates.send_jira_message_fn(
                 session=self._session,
                 tenant=prepared.tenant,
                 issue_key=prepared.run.issue_key,
@@ -94,7 +64,7 @@ class RunDispatchWorkflow:
                 settings=self._settings,
             )
 
-        heartbeat_controller = self._deps.build_run_heartbeat_controller_fn(
+        heartbeat_controller = self._deps.identity.build_run_heartbeat_controller_fn(
             run_id=prepared.run.run_id,
             worker_service_instance_id=prepared.worker_service_instance_id,
             claim_id=prepared.claim_id,
@@ -110,15 +80,15 @@ class RunDispatchWorkflow:
             project_id=prepared.project.project_id,
             agent_id=prepared.agent_id,
         )
-        if bool(prepared.effective_policy.get("allow_jira_transitions")):
-            self._deps.transition_issue_status_fn(
+        if bool(prepared.effective_policy.get("allow_jira_transitions")) and self._deps.project.transition_issue_status_fn is not None:
+            self._deps.project.transition_issue_status_fn(
                 session=self._session,
                 tenant=prepared.tenant,
                 issue_key=prepared.run.issue_key,
                 target_status="In Progress",
                 settings=self._settings,
             )
-        self._deps.emit_agent_event_fn(
+        self._deps.identity.emit_agent_event_fn(
             event_type="TASK_STARTED",
             tenant_id=prepared.run.tenant_id,
             project_id=prepared.project.project_id,
@@ -131,7 +101,7 @@ class RunDispatchWorkflow:
             workflow_result = self._runner.run(
                 prepared.workflow_request,
                 test_feedback_hook=_emit_test_feedback,
-                stage_checkpoint_hook=lambda checkpoint: self._deps.persist_stage_checkpoint_fn(
+                stage_checkpoint_hook=lambda checkpoint: self._deps.execution.persist_stage_checkpoint_fn(
                     self._session,
                     run=prepared.run,
                     checkpoint=checkpoint,
@@ -154,7 +124,7 @@ class RunDispatchWorkflow:
             heartbeat_controller.stop()
 
     def _emit_issue_assigned(self, *, run, agent_id: str) -> None:  # noqa: ANN001
-        self._deps.emit_agent_event_fn(
+        self._deps.identity.emit_agent_event_fn(
             event_type="ISSUE_ASSIGNED",
             tenant_id=run.tenant_id,
             project_id=run.project_id,

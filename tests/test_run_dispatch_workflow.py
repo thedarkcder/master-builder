@@ -6,6 +6,11 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from orchestrator.core.workflow.runner import WorkflowResult
+from orchestrator.core.worker.run_dispatch_gateways import RunDispatchIdentityGateway
+from orchestrator.core.worker.run_dispatch_gateways import RunDispatchStatusConfig
+from orchestrator.core.worker.run_dispatch_gateways import RunExecutionGateway
+from orchestrator.core.worker.run_dispatch_gateways import RunProjectGateway
+from orchestrator.core.worker.run_dispatch_gateways import RunStageUpdateGateway
 from orchestrator.core.worker.run_dispatch_workflow import (
     RunDispatchWorkflow,
     RunDispatchWorkflowDeps,
@@ -22,6 +27,72 @@ class _FakeHeartbeatController:
 
     def stop(self) -> None:
         self.stopped = True
+
+
+def _deps(**overrides) -> RunDispatchWorkflowDeps:
+    identity = overrides.pop(
+        "identity",
+        RunDispatchIdentityGateway(
+            logger=MagicMock(),
+            cleanup_run_workspaces_fn=MagicMock(),
+            build_run_heartbeat_controller_fn=lambda **_: _FakeHeartbeatController(),
+            emit_agent_event_fn=MagicMock(),
+            resolve_agent_id_fn=lambda: "worker-linux-local",
+            resolve_worker_service_instance_id_fn=lambda: "node-a:1234",
+        ),
+    )
+    project = overrides.pop(
+        "project",
+        RunProjectGateway(
+            resolve_project_for_run_fn=MagicMock(),
+            fail_missing_project_mapping_fn=MagicMock(),
+            block_archived_project_fn=MagicMock(),
+            bind_run_project_fn=MagicMock(),
+            tenant_jira_issue_url_fn=MagicMock(),
+            transition_issue_status_fn=MagicMock(),
+        ),
+    )
+    stage_updates = overrides.pop(
+        "stage_updates",
+        RunStageUpdateGateway(
+            send_discord_message_fn=MagicMock(return_value=SimpleNamespace(sent=True, reason=None)),
+            send_jira_message_fn=MagicMock(),
+            lock_acquired_update_fn=MagicMock(
+                return_value={"stage": "lock_acquired", "discord_message": None, "jira_message": None}
+            ),
+            repo_setup_ready_update_fn=MagicMock(),
+            plan_posted_update_fn=MagicMock(),
+            pr_opened_update_fn=MagicMock(),
+            run_failed_update_fn=MagicMock(),
+            run_requeued_repo_setup_update_fn=MagicMock(),
+            run_requeued_capability_update_fn=MagicMock(),
+            run_requeued_stale_snapshot_update_fn=MagicMock(),
+        ),
+    )
+    execution = overrides.pop(
+        "execution",
+        RunExecutionGateway(
+            promote_run_to_running_fn=MagicMock(),
+            workflow_request_for_run_fn=MagicMock(),
+            fail_guardrail_violation_fn=MagicMock(),
+            finalize_cancelled_run_fn=MagicMock(),
+            finalize_workflow_result_fn=MagicMock(),
+            persist_stage_checkpoint_fn=MagicMock(),
+            requeue_run_for_repo_setup_fn=MagicMock(),
+            requeue_workflow_result_for_capability_fn=MagicMock(),
+            requeue_workflow_result_for_stale_snapshot_fn=MagicMock(),
+            check_run_snapshot_freshness_fn=MagicMock(),
+        ),
+    )
+    statuses = overrides.pop("statuses", RunDispatchStatusConfig())
+    assert not overrides
+    return RunDispatchWorkflowDeps(
+        identity=identity,
+        project=project,
+        stage_updates=stage_updates,
+        execution=execution,
+        statuses=statuses,
+    )
 
 
 class RunDispatchWorkflowTests(unittest.TestCase):
@@ -49,41 +120,27 @@ class RunDispatchWorkflowTests(unittest.TestCase):
         fail_guardrail_violation_fn = MagicMock(
             return_value=SimpleNamespace(run_id="run-1", status="failed", last_error="failed")
         )
-        deps = RunDispatchWorkflowDeps(
-            logger=MagicMock(),
-            send_discord_message_fn=MagicMock(return_value=SimpleNamespace(sent=True, reason=None)),
-            send_jira_message_fn=MagicMock(),
-            resolve_project_for_run_fn=MagicMock(return_value=project),
-            fail_missing_project_mapping_fn=MagicMock(),
-            block_archived_project_fn=MagicMock(),
-            cleanup_run_workspaces_fn=MagicMock(),
-            build_run_heartbeat_controller_fn=lambda **_: _FakeHeartbeatController(),
-            promote_run_to_running_fn=MagicMock(return_value=None),
-            bind_run_project_fn=MagicMock(return_value=run),
-            workflow_request_for_run_fn=MagicMock(),
-            fail_guardrail_violation_fn=fail_guardrail_violation_fn,
-            tenant_jira_issue_url_fn=MagicMock(return_value="https://jira.example/browse/GP-122"),
-            lock_acquired_update_fn=MagicMock(
-                return_value={"stage": "lock_acquired", "discord_message": None, "jira_message": None}
+        deps = _deps(
+            project=RunProjectGateway(
+                resolve_project_for_run_fn=MagicMock(return_value=project),
+                fail_missing_project_mapping_fn=MagicMock(),
+                block_archived_project_fn=MagicMock(),
+                bind_run_project_fn=MagicMock(return_value=run),
+                tenant_jira_issue_url_fn=MagicMock(return_value="https://jira.example/browse/GP-122"),
+                transition_issue_status_fn=MagicMock(),
             ),
-            repo_setup_ready_update_fn=MagicMock(),
-            plan_posted_update_fn=MagicMock(),
-            pr_opened_update_fn=MagicMock(),
-            run_failed_update_fn=MagicMock(),
-            run_requeued_repo_setup_update_fn=MagicMock(),
-            run_requeued_capability_update_fn=MagicMock(),
-            run_requeued_stale_snapshot_update_fn=MagicMock(),
-            finalize_cancelled_run_fn=MagicMock(),
-            finalize_workflow_result_fn=MagicMock(),
-            persist_stage_checkpoint_fn=MagicMock(),
-            requeue_run_for_repo_setup_fn=MagicMock(),
-            requeue_workflow_result_for_capability_fn=MagicMock(),
-            requeue_workflow_result_for_stale_snapshot_fn=MagicMock(),
-            check_run_snapshot_freshness_fn=MagicMock(),
-            transition_issue_status_fn=MagicMock(),
-            emit_agent_event_fn=MagicMock(),
-            resolve_agent_id_fn=lambda: "worker-linux-local",
-            resolve_worker_service_instance_id_fn=lambda: "node-a:1234",
+            execution=RunExecutionGateway(
+                promote_run_to_running_fn=MagicMock(return_value=None),
+                workflow_request_for_run_fn=MagicMock(),
+                fail_guardrail_violation_fn=fail_guardrail_violation_fn,
+                finalize_cancelled_run_fn=MagicMock(),
+                finalize_workflow_result_fn=MagicMock(),
+                persist_stage_checkpoint_fn=MagicMock(),
+                requeue_run_for_repo_setup_fn=MagicMock(),
+                requeue_workflow_result_for_capability_fn=MagicMock(),
+                requeue_workflow_result_for_stale_snapshot_fn=MagicMock(),
+                check_run_snapshot_freshness_fn=MagicMock(),
+            ),
         )
 
         result = RunDispatchWorkflow(
@@ -145,63 +202,49 @@ class RunDispatchWorkflowTests(unittest.TestCase):
             run.last_heartbeat_at = now
             return run
 
-        deps = RunDispatchWorkflowDeps(
-            logger=MagicMock(),
-            send_discord_message_fn=MagicMock(return_value=SimpleNamespace(sent=True, reason=None)),
-            send_jira_message_fn=MagicMock(),
-            resolve_project_for_run_fn=lambda *_args, **_kwargs: (order.append("resolve_project") or project),
-            fail_missing_project_mapping_fn=MagicMock(),
-            block_archived_project_fn=MagicMock(),
-            cleanup_run_workspaces_fn=MagicMock(),
-            build_run_heartbeat_controller_fn=lambda **_: _FakeHeartbeatController(),
-            promote_run_to_running_fn=_promote,
-            bind_run_project_fn=MagicMock(return_value=run),
-            workflow_request_for_run_fn=MagicMock(
-                side_effect=lambda *_args, **_kwargs: (
-                    order.append("build_request")
-                    or SimpleNamespace(
-                        start_point_ref=None,
-                        start_point_sha=None,
-                        execution_repo_dir="/tmp/workdirs/repo",
-                        workspace_key="worker-a",
-                        execution_branch="feature/test",
-                        integration_branch="feature/test",
-                        base_branch="main",
+        deps = _deps(
+            project=RunProjectGateway(
+                resolve_project_for_run_fn=lambda *_args, **_kwargs: (order.append("resolve_project") or project),
+                fail_missing_project_mapping_fn=MagicMock(),
+                block_archived_project_fn=MagicMock(),
+                bind_run_project_fn=MagicMock(return_value=run),
+                tenant_jira_issue_url_fn=MagicMock(return_value="https://jira.example/browse/GP-122"),
+                transition_issue_status_fn=MagicMock(),
+            ),
+            execution=RunExecutionGateway(
+                promote_run_to_running_fn=_promote,
+                workflow_request_for_run_fn=MagicMock(
+                    side_effect=lambda *_args, **_kwargs: (
+                        order.append("build_request")
+                        or SimpleNamespace(
+                            start_point_ref=None,
+                            start_point_sha=None,
+                            execution_repo_dir="/tmp/workdirs/repo",
+                            workspace_key="worker-a",
+                            execution_branch="feature/test",
+                            integration_branch="feature/test",
+                            base_branch="main",
+                        )
                     )
-                )
+                ),
+                fail_guardrail_violation_fn=MagicMock(),
+                finalize_cancelled_run_fn=MagicMock(),
+                finalize_workflow_result_fn=MagicMock(
+                    return_value=SimpleNamespace(
+                        run_id=run.run_id,
+                        tenant_id=run.tenant_id,
+                        issue_key=run.issue_key,
+                        status="succeeded",
+                        last_error=None,
+                        plan=None,
+                    )
+                ),
+                persist_stage_checkpoint_fn=MagicMock(),
+                requeue_run_for_repo_setup_fn=MagicMock(),
+                requeue_workflow_result_for_capability_fn=MagicMock(),
+                requeue_workflow_result_for_stale_snapshot_fn=MagicMock(),
+                check_run_snapshot_freshness_fn=MagicMock(),
             ),
-            fail_guardrail_violation_fn=MagicMock(),
-            tenant_jira_issue_url_fn=MagicMock(return_value="https://jira.example/browse/GP-122"),
-            lock_acquired_update_fn=MagicMock(
-                return_value={"stage": "lock_acquired", "discord_message": None, "jira_message": None}
-            ),
-            repo_setup_ready_update_fn=MagicMock(),
-            plan_posted_update_fn=MagicMock(),
-            pr_opened_update_fn=MagicMock(),
-            run_failed_update_fn=MagicMock(),
-            run_requeued_repo_setup_update_fn=MagicMock(),
-            run_requeued_capability_update_fn=MagicMock(),
-            run_requeued_stale_snapshot_update_fn=MagicMock(),
-            finalize_cancelled_run_fn=MagicMock(),
-            finalize_workflow_result_fn=MagicMock(
-                return_value=SimpleNamespace(
-                    run_id=run.run_id,
-                    tenant_id=run.tenant_id,
-                    issue_key=run.issue_key,
-                    status="succeeded",
-                    last_error=None,
-                    plan=None,
-                )
-            ),
-            persist_stage_checkpoint_fn=MagicMock(),
-            requeue_run_for_repo_setup_fn=MagicMock(),
-            requeue_workflow_result_for_capability_fn=MagicMock(),
-            requeue_workflow_result_for_stale_snapshot_fn=MagicMock(),
-            check_run_snapshot_freshness_fn=MagicMock(),
-            transition_issue_status_fn=MagicMock(),
-            emit_agent_event_fn=MagicMock(),
-            resolve_agent_id_fn=lambda: "worker-linux-local",
-            resolve_worker_service_instance_id_fn=lambda: "node-a:1234",
         )
 
         result = RunDispatchWorkflow(
@@ -238,4 +281,3 @@ class RunDispatchWorkflowTests(unittest.TestCase):
         self.assertEqual(getattr(result, "status", None), "succeeded")
         self.assertEqual(order[:2], ["promote", "resolve_project"])
         self.assertIn("build_request", order)
-

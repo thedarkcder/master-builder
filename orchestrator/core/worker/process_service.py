@@ -2,6 +2,11 @@ from __future__ import annotations
 
 from orchestrator.core.run_logs import record_run_log_event
 import orchestrator.core.worker.run_dispatch_workflow as run_dispatch_workflow_module
+from orchestrator.core.worker.run_dispatch_gateways import RunDispatchIdentityGateway
+from orchestrator.core.worker.run_dispatch_gateways import RunDispatchStatusConfig
+from orchestrator.core.worker.run_dispatch_gateways import RunExecutionGateway
+from orchestrator.core.worker.run_dispatch_gateways import RunProjectGateway
+from orchestrator.core.worker.run_dispatch_gateways import RunStageUpdateGateway
 from orchestrator.core.worker_capabilities import resolve_worker_capability_context
 from orchestrator.core.worker.run_dispatch_workflow import (
     RunDispatchWorkflow,
@@ -174,47 +179,58 @@ def process_claimed_run(
     run_status_dispatching: str = "dispatching",
 ):  # noqa: ANN001
     run_dispatch_workflow_module.record_run_log_event = record_run_log_event
+    statuses = RunDispatchStatusConfig(
+        running=run_status_running,
+        failed=run_status_failed,
+        blocked=run_status_blocked,
+        cancelled=run_status_cancelled,
+        dispatching=run_status_dispatching,
+    )
     deps = RunDispatchWorkflowDeps(
-        logger=logger,
-        send_discord_message_fn=send_discord_message_fn,
-        send_jira_message_fn=send_jira_message_fn,
-        resolve_project_for_run_fn=resolve_project_for_run_fn,
-        fail_missing_project_mapping_fn=fail_missing_project_mapping_fn,
-        block_archived_project_fn=block_archived_project_fn,
-        ensure_project_repository_checkout_fn=ensure_project_repository_checkout_fn,
-        fail_project_repository_checkout_fn=fail_project_repository_checkout_fn,
-        fail_project_repository_setup_fn=fail_project_repository_setup_fn,
-        cleanup_run_workspaces_fn=cleanup_run_workspaces_fn,
-        build_run_heartbeat_controller_fn=build_run_heartbeat_controller_fn,
-        promote_run_to_running_fn=promote_run_to_running_fn,
-        bind_run_project_fn=bind_run_project_fn,
-        workflow_request_for_run_fn=workflow_request_for_run_fn,
-        fail_guardrail_violation_fn=fail_guardrail_violation_fn,
-        tenant_jira_issue_url_fn=tenant_jira_issue_url_fn,
-        lock_acquired_update_fn=lock_acquired_update_fn,
-        repo_setup_ready_update_fn=repo_setup_ready_update_fn,
-        plan_posted_update_fn=plan_posted_update_fn,
-        pr_opened_update_fn=pr_opened_update_fn,
-        run_failed_update_fn=run_failed_update_fn,
-        run_requeued_repo_setup_update_fn=run_requeued_repo_setup_update_fn,
-        run_requeued_capability_update_fn=run_requeued_capability_update_fn,
-        run_requeued_stale_snapshot_update_fn=run_requeued_stale_snapshot_update_fn,
-        finalize_cancelled_run_fn=finalize_cancelled_run_fn,
-        finalize_workflow_result_fn=finalize_workflow_result_fn,
-        persist_stage_checkpoint_fn=persist_stage_checkpoint_fn,
-        requeue_run_for_repo_setup_fn=requeue_run_for_repo_setup_fn,
-        requeue_workflow_result_for_capability_fn=requeue_workflow_result_for_capability_fn,
-        requeue_workflow_result_for_stale_snapshot_fn=requeue_workflow_result_for_stale_snapshot_fn,
-        check_run_snapshot_freshness_fn=check_run_snapshot_freshness_fn,
-        transition_issue_status_fn=transition_issue_status_fn,
-        emit_agent_event_fn=emit_agent_event_fn,
-        resolve_agent_id_fn=resolve_agent_id_fn,
-        resolve_worker_service_instance_id_fn=resolve_worker_service_instance_id_fn,
-        run_status_running=run_status_running,
-        run_status_failed=run_status_failed,
-        run_status_blocked=run_status_blocked,
-        run_status_cancelled=run_status_cancelled,
-        run_status_dispatching=run_status_dispatching,
+        identity=RunDispatchIdentityGateway(
+            logger=logger,
+            cleanup_run_workspaces_fn=cleanup_run_workspaces_fn,
+            build_run_heartbeat_controller_fn=build_run_heartbeat_controller_fn,
+            emit_agent_event_fn=emit_agent_event_fn,
+            resolve_agent_id_fn=resolve_agent_id_fn,
+            resolve_worker_service_instance_id_fn=resolve_worker_service_instance_id_fn,
+        ),
+        project=RunProjectGateway(
+            resolve_project_for_run_fn=resolve_project_for_run_fn,
+            fail_missing_project_mapping_fn=fail_missing_project_mapping_fn,
+            block_archived_project_fn=block_archived_project_fn,
+            bind_run_project_fn=bind_run_project_fn,
+            tenant_jira_issue_url_fn=tenant_jira_issue_url_fn,
+            transition_issue_status_fn=transition_issue_status_fn,
+        ),
+        stage_updates=RunStageUpdateGateway(
+            send_discord_message_fn=send_discord_message_fn,
+            send_jira_message_fn=send_jira_message_fn,
+            lock_acquired_update_fn=lock_acquired_update_fn,
+            repo_setup_ready_update_fn=repo_setup_ready_update_fn,
+            plan_posted_update_fn=plan_posted_update_fn,
+            pr_opened_update_fn=pr_opened_update_fn,
+            run_failed_update_fn=run_failed_update_fn,
+            run_requeued_repo_setup_update_fn=run_requeued_repo_setup_update_fn,
+            run_requeued_capability_update_fn=run_requeued_capability_update_fn,
+            run_requeued_stale_snapshot_update_fn=run_requeued_stale_snapshot_update_fn,
+        ),
+        execution=RunExecutionGateway(
+            promote_run_to_running_fn=promote_run_to_running_fn,
+            workflow_request_for_run_fn=workflow_request_for_run_fn,
+            fail_guardrail_violation_fn=fail_guardrail_violation_fn,
+            ensure_project_repository_checkout_fn=ensure_project_repository_checkout_fn,
+            fail_project_repository_checkout_fn=fail_project_repository_checkout_fn,
+            fail_project_repository_setup_fn=fail_project_repository_setup_fn,
+            finalize_cancelled_run_fn=finalize_cancelled_run_fn,
+            finalize_workflow_result_fn=finalize_workflow_result_fn,
+            persist_stage_checkpoint_fn=persist_stage_checkpoint_fn,
+            requeue_run_for_repo_setup_fn=requeue_run_for_repo_setup_fn,
+            requeue_workflow_result_for_capability_fn=requeue_workflow_result_for_capability_fn,
+            requeue_workflow_result_for_stale_snapshot_fn=requeue_workflow_result_for_stale_snapshot_fn,
+            check_run_snapshot_freshness_fn=check_run_snapshot_freshness_fn,
+        ),
+        statuses=statuses,
     )
     return RunDispatchWorkflow(
         session=session,
