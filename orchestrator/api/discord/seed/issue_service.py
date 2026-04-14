@@ -1,16 +1,14 @@
 from __future__ import annotations
 
-import hashlib
-import json
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import HTTPException, status
 
-from orchestrator.api.discord.seed.description import (
-    build_engineering_child_description,
-    build_parent_feature_description,
+from orchestrator.api.discord.seed.draft_assembly import (
+    parse_engineering_seed_drafts,
+    parse_parent_seed_drafts,
 )
 from orchestrator.api.discord.shared.response_format import build_issue_url_list, format_issue_markdown_list
 from orchestrator.core.runtime_invocation import AgentInvocationContext
@@ -18,122 +16,12 @@ from orchestrator.storage.models import Tenant
 from orchestrator.tools.jira_oauth import JiraIssueCreateInput, JiraIssuePreview, JiraOAuthError
 
 SEED_FOLLOWUP_CONTEXT_MAX_AGE = timedelta(hours=24)
-_MAX_ENGINEERING_CHILDREN = 12
 _PM_PARENT_LABEL = "pm-parent"
-_ENGINEERING_CHILD_LABEL = "engineering-child"
-_PM_COMPLETE_LABEL = "pm-complete"
-_PLANNING_COMPLETE_LABEL = "planning-complete"
-_SYNC_CURRENT_LABEL = "sync-current"
-_SYNC_STALE_LABEL = "sync-stale"
-_SYNC_BLOCKED_LABEL = "sync-blocked"
-_PM_COMPLETE_STATUSES = {"ready_to_write", "pm_completed"}
-_PLANNING_COMPLETE_STATUSES = {"planning_completed"}
-_PARENT_MULTI_STORY_HINTS = (
-    "multi-story",
-    "multi story",
-    "multi-step",
-    "multi step",
-    "cross-cutting",
-    "cross cutting",
-    "program",
-    "initiative",
-    "roadmap",
-)
-_PARENT_PRIMARY_ISSUE_TYPES = ("Story", "Feature", "Task", "Issue")
 
 
-def _string_list_field(*, issue_index: int, field_name: str, raw_value: object) -> list[str]:
-    if raw_value is None:
-        return []
-    if not isinstance(raw_value, list):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"Codex issue draft {issue_index} has invalid '{field_name}' (expected list of strings)",
-        )
-    values: list[str] = []
-    for entry in raw_value:
-        if not isinstance(entry, str):
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"Codex issue draft {issue_index} has invalid '{field_name}' entry type",
-            )
-        text = entry.strip()
-        if text:
-            values.append(text)
-    return values
-
-
-def _optional_string(*, issue_index: int, field_name: str, raw_value: object) -> str:
-    if raw_value is None:
-        return ""
-    if not isinstance(raw_value, str):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"Codex issue draft {issue_index} has invalid '{field_name}' (expected string)",
-        )
-    return raw_value.strip()
-
-
-def _normalize_issue_key(raw_value: object, *, field_name: str, issue_index: int, issue_key_pattern) -> str | None:  # noqa: ANN001
-    if raw_value is None:
-        return None
-    if not isinstance(raw_value, str):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"Codex issue draft {issue_index} has invalid '{field_name}' (expected string)",
-        )
-    issue_key = raw_value.strip().upper()
-    if not issue_key:
-        return None
-    if issue_key_pattern.match(issue_key) is None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"Codex issue draft {issue_index} has invalid {field_name} '{issue_key}'",
-        )
-    return issue_key
-
-
-def _normalize_label(raw_value: str, *, prefix: str = "") -> str:
-    normalized = re.sub(r"[^a-z0-9]+", "-", str(raw_value or "").strip().lower()).strip("-")
-    if not normalized:
-        return ""
-    if prefix:
-        normalized = f"{prefix}{normalized}"
-    return normalized[:64]
-
-
-def _dedupe_labels(*label_groups: list[str]) -> list[str]:
-    seen: set[str] = set()
-    labels: list[str] = []
-    for group in label_groups:
-        for raw_label in group:
-            label = str(raw_label or "").strip()
-            if not label:
-                continue
-            key = label.casefold()
-            if key in seen:
-                continue
-            seen.add(key)
-            labels.append(label)
-    return labels
-
-
-def _sync_label(sync_status: str) -> str:
-    normalized = str(sync_status or "").strip().lower()
-    if normalized == "children_current":
-        return _SYNC_CURRENT_LABEL
-    if normalized in {"sync_blocked", "planning_blocked"}:
-        return _SYNC_BLOCKED_LABEL
-    return _SYNC_STALE_LABEL
-
-
-def _normalized_status(value: object) -> str:
-    return str(value or "").strip().lower()
-
-
-def _is_pm_complete(pm_status: object) -> bool:
-    return _normalized_status(pm_status) in _PM_COMPLETE_STATUSES
-
+def _parent_label(parent_issue_key: str) -> str:
+    normalized = re.sub(r"[^a-z0-9]+", "-", str(parent_issue_key or "").strip().lower()).strip("-")
+    return f"parent-{normalized[:64]}" if normalized else "parent"
 
 def _assert_stage_spi_allows_parent_seed(
     *,
@@ -163,131 +51,6 @@ def _assert_stage_spi_allows_parent_seed(
         status_code=status.HTTP_409_CONFLICT,
         detail="Stage plugin has not approved implementation seeding (stage_ready_for_implementation is false)",
     )
-
-
-def _is_planning_complete(planning_state: object) -> bool:
-    return _normalized_status(planning_state) in _PLANNING_COMPLETE_STATUSES
-
-
-def _string_list_from_stage(*, stage_name: str, field_name: str, raw_value: object) -> list[str]:
-    if raw_value is None:
-        return []
-    if not isinstance(raw_value, list):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"Planning package stage '{stage_name}' has invalid '{field_name}' (expected list of strings)",
-        )
-    values: list[str] = []
-    for entry in raw_value:
-        if not isinstance(entry, str):
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"Planning package stage '{stage_name}' has invalid item type",
-            )
-        text = entry.strip()
-        if text:
-            values.append(text)
-    return values
-
-
-def _planning_stage_summary_lines(*, stage_name: str, raw_stage: object) -> list[str]:
-    if raw_stage is None:
-        return []
-    if not isinstance(raw_stage, dict):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"Planning package stage '{stage_name}' must be an object",
-        )
-    lines: list[str] = []
-    for field_name, label in (
-        ("findings", "Findings"),
-        ("recommendations", "Recommendations"),
-        ("required_tasks", "Required tasks"),
-        ("open_behavior_questions", "Open behavior questions"),
-        ("acceptance_impacts", "Acceptance impacts"),
-    ):
-        values = _string_list_from_stage(stage_name=stage_name, field_name=field_name, raw_value=raw_stage.get(field_name))
-        if values:
-            lines.append(f"{stage_name.title()} {label}: {'; '.join(values)}")
-    return lines
-
-
-def _normalize_planning_package(raw_planning_package: object) -> dict[str, Any]:
-    if raw_planning_package is None:
-        return {}
-    if not isinstance(raw_planning_package, dict):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Planning package must be an object",
-        )
-    specialist_outputs = raw_planning_package.get("specialist_outputs")
-    if specialist_outputs is not None and not isinstance(specialist_outputs, dict):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Planning package specialist_outputs must be an object",
-        )
-    child_issues = raw_planning_package.get("child_issues")
-    if child_issues is None:
-        child_issues = raw_planning_package.get("recommended_child_tickets")
-    if child_issues is None:
-        child_issues = raw_planning_package.get("engineering_children")
-    planning_state = _normalized_status(raw_planning_package.get("planning_state") or raw_planning_package.get("state"))
-    summary_lines: list[str] = []
-    architecture_summary_raw = raw_planning_package.get("architecture_summary")
-    if architecture_summary_raw is not None and not isinstance(architecture_summary_raw, list):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Planning package architecture_summary must be a list of strings",
-        )
-    architecture_diagram_raw = raw_planning_package.get("architecture_diagram")
-    if architecture_diagram_raw is not None and not isinstance(architecture_diagram_raw, str):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Planning package architecture_diagram must be a string",
-        )
-    architecture_summary: list[str] = [
-        str(value).strip() for value in (architecture_summary_raw or []) if str(value).strip()
-    ]
-    architecture_diagram = (
-        architecture_diagram_raw.strip()
-        if isinstance(architecture_diagram_raw, str) and architecture_diagram_raw.strip()
-        else None
-    )
-    if isinstance(specialist_outputs, dict):
-        for stage_name in ("architecture", "engineering", "security", "testing"):
-            summary_lines.extend(
-                _planning_stage_summary_lines(
-                    stage_name=stage_name,
-                    raw_stage=specialist_outputs.get(stage_name),
-                )
-            )
-        if not architecture_summary:
-            architecture_stage = specialist_outputs.get("architecture")
-            if isinstance(architecture_stage, dict):
-                for field_name in ("findings", "recommendations", "acceptance_impacts"):
-                    architecture_summary.extend(
-                        _string_list_from_stage(
-                            stage_name="architecture",
-                            field_name=field_name,
-                            raw_value=architecture_stage.get(field_name),
-                        )
-                    )
-                if architecture_diagram is None and isinstance(architecture_stage.get("mermaid_diagram"), str):
-                    architecture_diagram = architecture_stage.get("mermaid_diagram", "").strip() or None
-    if not isinstance(child_issues, list):
-        child_issues = []
-    return {
-        "planning_state": planning_state,
-        "specialist_summary": summary_lines,
-        "architecture_summary": architecture_summary,
-        "architecture_diagram": architecture_diagram,
-        "child_issues": child_issues,
-    }
-
-
-def _compute_parent_revision(parent_issue: dict[str, Any]) -> str:
-    payload = json.dumps(parent_issue, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:12]
 
 
 def _resolve_seed_oauth_context(*, session, tenant: Tenant, settings, tenant_jira_oauth_context_fn):  # noqa: ANN001
@@ -361,20 +124,6 @@ def validate_seed_followup_context(
     return True, None
 
 
-def _parse_questions(raw_questions: object) -> list[str]:
-    questions: list[str] = []
-    seen: set[str] = set()
-    if not isinstance(raw_questions, list):
-        return questions
-    for raw_question in raw_questions:
-        question = str(raw_question or "").strip()
-        if not question or question in seen:
-            continue
-        seen.add(question)
-        questions.append(question)
-    return questions
-
-
 def _project_issue_catalog(*, oauth: dict[str, Any], project_key: str) -> list[JiraIssuePreview]:
     return oauth["client"].search_issues_by_jql(
         access_token=oauth["access_token"],
@@ -385,7 +134,7 @@ def _project_issue_catalog(*, oauth: dict[str, Any], project_key: str) -> list[J
 
 
 def _child_issue_catalog(*, oauth: dict[str, Any], project_key: str, parent_issue_key: str) -> list[JiraIssuePreview]:
-    parent_label = _normalize_label(parent_issue_key, prefix="parent-")
+    parent_label = _parent_label(parent_issue_key)
     queries = [
         f'project = "{project_key}" AND parent = "{parent_issue_key}" ORDER BY updated DESC',
         f'project = "{project_key}" AND labels = "{parent_label}" ORDER BY updated DESC',
@@ -434,395 +183,6 @@ def _project_available_issue_types(*, oauth: dict[str, Any], project_key: str) -
             return []
         return [str(value).strip() for value in payload if str(value).strip()]
     return []
-
-
-def _first_present_issue_type(choices: tuple[str, ...], available_issue_types: list[str]) -> str | None:
-    if not available_issue_types:
-        return choices[0] if choices else None
-    by_lower = {name.casefold(): name for name in available_issue_types if str(name).strip()}
-    for choice in choices:
-        matched = by_lower.get(choice.casefold())
-        if matched:
-            return matched
-    return None
-
-
-def _parent_should_default_to_epic(*, parent_issue: dict[str, Any], engineering_children: list[dict[str, Any]]) -> bool:
-    del engineering_children
-    candidate_text = " ".join(
-        [
-            str(parent_issue.get("summary") or ""),
-            str(parent_issue.get("objective") or ""),
-            str(parent_issue.get("recommendation") or ""),
-            " ".join(str(value) for value in parent_issue.get("scope_in") or []),
-            " ".join(str(value) for value in parent_issue.get("success_outcomes") or []),
-        ]
-    ).casefold()
-    return any(hint in candidate_text for hint in _PARENT_MULTI_STORY_HINTS)
-
-
-def _normalize_parent_issue_type(
-    *,
-    parent_issue: dict[str, Any],
-    engineering_children: list[dict[str, Any]],
-    available_issue_types: list[str],
-) -> str:
-    requested_issue_type = str(parent_issue.get("issue_type") or "").strip()
-    if available_issue_types:
-        by_lower = {name.casefold(): name for name in available_issue_types if str(name).strip()}
-        requested_match = by_lower.get(requested_issue_type.casefold()) if requested_issue_type else None
-        if requested_match:
-            return requested_match
-
-    preferred_choices: tuple[str, ...]
-    if _parent_should_default_to_epic(parent_issue=parent_issue, engineering_children=engineering_children):
-        preferred_choices = ("Epic", *_PARENT_PRIMARY_ISSUE_TYPES)
-    else:
-        preferred_choices = (*_PARENT_PRIMARY_ISSUE_TYPES, "Epic")
-    normalized = _first_present_issue_type(preferred_choices, available_issue_types)
-    if normalized:
-        return normalized
-    if requested_issue_type:
-        return requested_issue_type
-    raise HTTPException(
-        status_code=status.HTTP_409_CONFLICT,
-        detail="No supported parent Jira issue type is available for this project",
-    )
-
-
-def _parse_parent_issue(
-    *,
-    raw_parent: object,
-    force_issue_keys: list[str],
-    issue_key_pattern,
-) -> dict[str, Any]:  # noqa: ANN001
-    if not isinstance(raw_parent, dict):
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Codex did not return parent_issue")
-    issue_index = 1
-    summary = _optional_string(issue_index=issue_index, field_name="summary", raw_value=raw_parent.get("summary"))
-    if not summary:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Codex parent_issue is missing summary")
-    issue_type = _optional_string(
-        issue_index=issue_index,
-        field_name="issue_type",
-        raw_value=raw_parent.get("issue_type"),
-    )
-    requested_issue_key = _normalize_issue_key(
-        raw_parent.get("issue_key"),
-        field_name="issue_key",
-        issue_index=issue_index,
-        issue_key_pattern=issue_key_pattern,
-    )
-    if requested_issue_key is None and force_issue_keys:
-        requested_issue_key = force_issue_keys[0]
-    labels = _string_list_field(issue_index=issue_index, field_name="labels", raw_value=raw_parent.get("labels"))
-    return {
-        "summary": summary[:90],
-        "issue_type": issue_type,
-        "objective": _optional_string(issue_index=issue_index, field_name="objective", raw_value=raw_parent.get("objective")),
-        "user_value": _optional_string(issue_index=issue_index, field_name="user_value", raw_value=raw_parent.get("user_value")),
-        "recommendation": _optional_string(
-            issue_index=issue_index,
-            field_name="recommendation",
-            raw_value=raw_parent.get("recommendation"),
-        ),
-        "scope_in": _string_list_field(issue_index=issue_index, field_name="scope_in", raw_value=raw_parent.get("scope_in")),
-        "scope_out": _string_list_field(issue_index=issue_index, field_name="scope_out", raw_value=raw_parent.get("scope_out")),
-        "acceptance_criteria": _string_list_field(
-            issue_index=issue_index,
-            field_name="acceptance_criteria",
-            raw_value=raw_parent.get("acceptance_criteria"),
-        ),
-        "ui_references": _string_list_field(
-            issue_index=issue_index,
-            field_name="ui_references",
-            raw_value=raw_parent.get("ui_references"),
-        ),
-        "success_outcomes": _string_list_field(
-            issue_index=issue_index,
-            field_name="success_outcomes",
-            raw_value=raw_parent.get("success_outcomes"),
-        ),
-        "dependencies": _string_list_field(
-            issue_index=issue_index,
-            field_name="dependencies",
-            raw_value=raw_parent.get("dependencies"),
-        ),
-        "risks": _string_list_field(issue_index=issue_index, field_name="risks", raw_value=raw_parent.get("risks")),
-        "open_questions": _string_list_field(
-            issue_index=issue_index,
-            field_name="open_questions",
-            raw_value=raw_parent.get("open_questions"),
-        ),
-        "labels": labels,
-        "requested_issue_key": requested_issue_key,
-    }
-
-
-def _parse_parent_issue_drafts(
-    *,
-    raw_issues: object,
-    force_issue_keys: list[str],
-    issue_key_pattern,
-) -> list[dict[str, Any]]:  # noqa: ANN001
-    if not isinstance(raw_issues, list):
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Codex did not return issue drafts")
-    issues: list[dict[str, Any]] = []
-    for issue_index, item in enumerate(raw_issues[:12], start=1):
-        if not isinstance(item, dict):
-            continue
-        summary = _optional_string(issue_index=issue_index, field_name="summary", raw_value=item.get("summary"))
-        if not summary:
-            continue
-        requested_issue_key = _normalize_issue_key(
-            item.get("issue_key"),
-            field_name="issue_key",
-            issue_index=issue_index,
-            issue_key_pattern=issue_key_pattern,
-        )
-        if requested_issue_key is None and len(force_issue_keys) >= issue_index:
-            requested_issue_key = force_issue_keys[issue_index - 1]
-        labels = _string_list_field(issue_index=issue_index, field_name="labels", raw_value=item.get("labels"))
-        issues.append(
-            {
-                "summary": summary[:90],
-                "issue_type": _optional_string(
-                    issue_index=issue_index,
-                    field_name="issue_type",
-                    raw_value=item.get("issue_type"),
-                ),
-                "objective": _optional_string(
-                    issue_index=issue_index,
-                    field_name="objective",
-                    raw_value=item.get("objective"),
-                ),
-                "user_value": _optional_string(
-                    issue_index=issue_index,
-                    field_name="user_value",
-                    raw_value=item.get("user_value"),
-                ),
-                "recommendation": _optional_string(
-                    issue_index=issue_index,
-                    field_name="recommendation",
-                    raw_value=item.get("recommendation"),
-                ),
-                "scope_in": _string_list_field(
-                    issue_index=issue_index,
-                    field_name="scope_in",
-                    raw_value=item.get("scope_in"),
-                ),
-                "scope_out": _string_list_field(
-                    issue_index=issue_index,
-                    field_name="scope_out",
-                    raw_value=item.get("scope_out"),
-                ),
-                "acceptance_criteria": _string_list_field(
-                    issue_index=issue_index,
-                    field_name="acceptance_criteria",
-                    raw_value=item.get("acceptance_criteria"),
-                ),
-                "ui_references": _string_list_field(
-                    issue_index=issue_index,
-                    field_name="ui_references",
-                    raw_value=item.get("ui_references"),
-                ),
-                "dependencies": _string_list_field(
-                    issue_index=issue_index,
-                    field_name="dependencies",
-                    raw_value=item.get("dependencies"),
-                ),
-                "risks": _string_list_field(
-                    issue_index=issue_index,
-                    field_name="risks",
-                    raw_value=item.get("risks"),
-                ),
-                "open_questions": _string_list_field(
-                    issue_index=issue_index,
-                    field_name="open_questions",
-                    raw_value=item.get("open_questions"),
-                ),
-                "success_outcomes": _string_list_field(
-                    issue_index=issue_index,
-                    field_name="success_outcomes",
-                    raw_value=item.get("success_outcomes"),
-                ),
-                "labels": labels,
-                "requested_issue_key": requested_issue_key,
-            }
-        )
-    if not issues:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Codex returned no valid parent issue drafts")
-    return issues
-
-
-def _parse_engineering_children(
-    *,
-    raw_children: object,
-    force_issue_keys: list[str],
-    issue_key_pattern,
-    allow_empty_children: bool = False,
-) -> list[dict[str, Any]]:  # noqa: ANN001
-    if not isinstance(raw_children, list):
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Codex did not return engineering_children")
-    children: list[dict[str, Any]] = []
-    remaining_force_keys = force_issue_keys[1:] if force_issue_keys else []
-    for issue_index, item in enumerate(raw_children[:_MAX_ENGINEERING_CHILDREN], start=2):
-        if not isinstance(item, dict):
-            continue
-        summary = _optional_string(issue_index=issue_index, field_name="summary", raw_value=item.get("summary"))
-        if not summary:
-            continue
-        raw_issue_type = _optional_string(issue_index=issue_index, field_name="issue_type", raw_value=item.get("issue_type"))
-        requested_issue_key = _normalize_issue_key(
-            item.get("issue_key"),
-            field_name="issue_key",
-            issue_index=issue_index,
-            issue_key_pattern=issue_key_pattern,
-        )
-        if requested_issue_key is None and len(remaining_force_keys) >= len(children) + 1:
-            requested_issue_key = remaining_force_keys[len(children)]
-        fallback_issue_type = (
-            raw_issue_type
-            if raw_issue_type and raw_issue_type.strip().casefold() not in {"sub-task", "subtask"}
-            else "Task"
-        )
-        children.append(
-            {
-                "summary": summary[:90],
-                "issue_type": "Sub-task",
-                "fallback_issue_type": fallback_issue_type,
-                "behavior_slice": _optional_string(
-                    issue_index=issue_index,
-                    field_name="behavior_slice",
-                    raw_value=item.get("behavior_slice"),
-                ),
-                "technical_objective": _optional_string(
-                    issue_index=issue_index,
-                    field_name="technical_objective",
-                    raw_value=item.get("technical_objective"),
-                ),
-                "implementation_plan": _string_list_field(
-                    issue_index=issue_index,
-                    field_name="implementation_plan",
-                    raw_value=item.get("implementation_plan"),
-                ),
-                "technical_dependencies": _string_list_field(
-                    issue_index=issue_index,
-                    field_name="technical_dependencies",
-                    raw_value=item.get("technical_dependencies"),
-                ),
-                "risks": _string_list_field(
-                    issue_index=issue_index,
-                    field_name="risks",
-                    raw_value=item.get("risks"),
-                ),
-                "how_to_test": _string_list_field(
-                    issue_index=issue_index,
-                    field_name="how_to_test",
-                    raw_value=item.get("how_to_test"),
-                ),
-                "implementation_decisions": _string_list_field(
-                    issue_index=issue_index,
-                    field_name="implementation_decisions",
-                    raw_value=item.get("implementation_decisions"),
-                ),
-                "done_criteria": _string_list_field(
-                    issue_index=issue_index,
-                    field_name="done_criteria",
-                    raw_value=item.get("done_criteria"),
-                ),
-                "labels": _string_list_field(
-                    issue_index=issue_index,
-                    field_name="labels",
-                    raw_value=item.get("labels"),
-                ),
-                "requested_issue_key": requested_issue_key,
-            }
-        )
-    if not children and not allow_empty_children:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Issue seeding returned no valid engineering_children")
-    return children
-
-
-def _build_parent_issue_input(
-    *,
-    parent_issue: dict[str, Any],
-    parent_revision: str,
-    sync_status: str,
-    pm_status: str | None = None,
-    planning_state: str | None = None,
-    architecture_summary: list[str] | None = None,
-    architecture_diagram: str | None = None,
-) -> JiraIssueCreateInput:
-    return JiraIssueCreateInput(
-        summary=parent_issue["summary"],
-        description=build_parent_feature_description(
-            objective=parent_issue["objective"],
-            user_value=parent_issue["user_value"],
-            recommendation=parent_issue["recommendation"],
-            scope_in=parent_issue["scope_in"],
-            scope_out=parent_issue["scope_out"],
-            acceptance_criteria=parent_issue["acceptance_criteria"],
-            ui_references=parent_issue["ui_references"],
-            success_outcomes=parent_issue["success_outcomes"],
-            dependencies_and_risks=[*parent_issue["dependencies"], *parent_issue["risks"]],
-            open_questions=parent_issue["open_questions"],
-            parent_revision=parent_revision,
-            sync_status=sync_status,
-            pm_status=pm_status,
-            planning_state=planning_state,
-            architecture_summary=architecture_summary,
-            architecture_diagram=architecture_diagram,
-        ),
-        labels=_dedupe_labels(
-            parent_issue["labels"],
-            [_PM_PARENT_LABEL, _sync_label(sync_status)],
-            [_PM_COMPLETE_LABEL] if _is_pm_complete(pm_status) else [],
-            [_PLANNING_COMPLETE_LABEL] if _is_planning_complete(planning_state) else [],
-        ),
-        issue_type=parent_issue["issue_type"],
-    )
-
-
-def _build_child_issue_input(
-    *,
-    child_issue: dict[str, Any],
-    parent_issue_key: str,
-    parent_summary: str,
-    parent_revision: str,
-    sync_status: str,
-    use_subtask: bool,
-    specialist_summary: list[str] | None = None,
-    planning_state: str | None = None,
-    pm_status: str | None = None,
-) -> JiraIssueCreateInput:
-    parent_label = _normalize_label(parent_issue_key, prefix="parent-")
-    return JiraIssueCreateInput(
-        summary=child_issue["summary"],
-        description=build_engineering_child_description(
-            parent_issue_key=parent_issue_key,
-            parent_summary=parent_summary,
-            parent_revision=parent_revision,
-            behavior_slice=child_issue["behavior_slice"],
-            technical_objective=child_issue["technical_objective"],
-            implementation_plan=child_issue["implementation_plan"],
-            how_to_test=child_issue["how_to_test"],
-            done_criteria=child_issue["done_criteria"],
-            dependencies_and_risks=[*child_issue["technical_dependencies"], *child_issue["risks"]],
-            implementation_decisions=child_issue["implementation_decisions"],
-            specialist_summary=specialist_summary,
-            planning_state=planning_state,
-        ),
-        labels=_dedupe_labels(
-            child_issue["labels"],
-            [_ENGINEERING_CHILD_LABEL, parent_label, _sync_label(sync_status)],
-            [_PM_COMPLETE_LABEL] if _is_pm_complete(pm_status) else [],
-            [_PLANNING_COMPLETE_LABEL] if _is_planning_complete(planning_state) else [],
-        ),
-        issue_type=child_issue["issue_type"] if use_subtask else child_issue["fallback_issue_type"],
-        parent_issue_key=parent_issue_key if use_subtask else None,
-        linked_parent_issue_key=parent_issue_key,
-    )
 
 
 def _upsert_issue(
@@ -933,41 +293,24 @@ def seed_issues_with_runtime(
         )
 
     normalized_force_issue_keys = [str(value).strip().upper() for value in (force_issue_keys or []) if str(value).strip()]
-    clarification_questions = _parse_questions(plan_payload.get("questions"))
-    effective_pm_status = _normalized_status(pm_status or plan_payload.get("pm_status") or plan_payload.get("interview_status"))
-    if pm_status is not None and not _is_pm_complete(effective_pm_status):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="PM interview is not ready to write Jira issues yet",
-        )
-    effective_planning_package = _normalize_planning_package(
-        planning_package
-        if planning_package is not None
-        else plan_payload.get("planning_package") or plan_payload.get("specialist_planning")
-    )
-    planning_package_supplied = planning_package is not None or "planning_package" in plan_payload or "specialist_planning" in plan_payload
-    planning_state = effective_planning_package.get("planning_state") or ""
-    specialist_summary = list(effective_planning_package.get("specialist_summary") or [])
-    architecture_summary = list(effective_planning_package.get("architecture_summary") or [])
-    architecture_diagram = effective_planning_package.get("architecture_diagram")
-    child_issue_drafts = effective_planning_package.get("child_issues")
-    if child_issue_drafts is None:
-        child_issue_drafts = plan_payload.get("engineering_children")
-    allow_empty_child_drafts = allow_empty_children or planning_package_supplied
-    planning_blocked = planning_package_supplied and not _is_planning_complete(planning_state)
-    planning_state_for_description = planning_state or ("planning_blocked" if planning_blocked else None)
-    parent_issue = _parse_parent_issue(
-        raw_parent=plan_payload.get("parent_issue"),
+    draft_set = parse_engineering_seed_drafts(
+        plan_payload=plan_payload,
         force_issue_keys=normalized_force_issue_keys,
         issue_key_pattern=issue_key_pattern,
+        allow_empty_children=allow_empty_children,
+        pm_status=pm_status,
+        planning_package=planning_package,
     )
-    engineering_children = _parse_engineering_children(
-        raw_children=child_issue_drafts,
-        force_issue_keys=normalized_force_issue_keys,
-        issue_key_pattern=issue_key_pattern,
-        allow_empty_children=allow_empty_child_drafts,
-    )
-    parent_revision = _compute_parent_revision(parent_issue)
+    clarification_questions = draft_set.clarification_questions
+    effective_pm_status = draft_set.pm_status
+    effective_planning_package = draft_set.planning_package
+    specialist_summary = list(effective_planning_package.specialist_summary)
+    architecture_summary = list(effective_planning_package.architecture_summary)
+    architecture_diagram = effective_planning_package.architecture_diagram
+    planning_blocked = effective_planning_package.blocked
+    planning_state_for_description = effective_planning_package.planning_state_for_description
+    parent_issue = draft_set.parent_issue
+    engineering_children = draft_set.engineering_children
 
     oauth = _resolve_seed_oauth_context(
         session=session,
@@ -977,18 +320,15 @@ def seed_issues_with_runtime(
     )
     browse_base_url = str(oauth["connection"].site_url or "").strip().rstrip("/")
     available_issue_types = _project_available_issue_types(oauth=oauth, project_key=project_key)
-    parent_issue["issue_type"] = _normalize_parent_issue_type(
-        parent_issue=parent_issue,
+    parent_issue = parent_issue.with_issue_type(parent_issue.normalized_issue_type(
         engineering_children=engineering_children,
         available_issue_types=available_issue_types,
-    )
+    ))
     try:
         all_project_issues = _project_issue_catalog(oauth=oauth, project_key=project_key)
         matched_issue_keys: set[str] = set()
         parent_sync_status = "planning_blocked" if planning_blocked else "children_syncing"
-        parent_issue_input = _build_parent_issue_input(
-            parent_issue=parent_issue,
-            parent_revision=parent_revision,
+        parent_issue_input = parent_issue.to_jira_input(
             sync_status=parent_sync_status,
             pm_status=effective_pm_status or None,
             planning_state=planning_state_for_description,
@@ -996,15 +336,15 @@ def seed_issues_with_runtime(
             architecture_diagram=architecture_diagram if isinstance(architecture_diagram, str) else None,
         )
         parent_issue_key, parent_created, parent_updated = _upsert_issue(
-            oauth=oauth,
-            project_key=project_key,
-            issue_input=parent_issue_input,
-            requested_issue_key=parent_issue["requested_issue_key"],
-            allow_create=allow_create,
-            existing_issues=all_project_issues,
-            matched_issue_keys=matched_issue_keys,
-            select_seed_match_fn=select_seed_match_fn,
-        )
+                oauth=oauth,
+                project_key=project_key,
+                issue_input=parent_issue_input,
+                requested_issue_key=parent_issue.requested_issue_key,
+                allow_create=allow_create,
+                existing_issues=all_project_issues,
+                matched_issue_keys=matched_issue_keys,
+                select_seed_match_fn=select_seed_match_fn,
+            )
         if not parent_issue_key:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -1012,9 +352,7 @@ def seed_issues_with_runtime(
             )
 
         if planning_blocked:
-            parent_final_input = _build_parent_issue_input(
-                parent_issue=parent_issue,
-                parent_revision=parent_revision,
+            parent_final_input = parent_issue.to_jira_input(
                 sync_status=parent_sync_status,
                 pm_status=effective_pm_status or None,
                 planning_state=planning_state_for_description,
@@ -1052,7 +390,7 @@ def seed_issues_with_runtime(
                     "questions": clarification_questions,
                     "prompt_markdown": prompt_markdown,
                     "parent_issue_key": parent_issue_key,
-                    "parent_revision": parent_revision,
+                    "parent_revision": parent_issue.revision,
                     "pm_status": effective_pm_status or None,
                     "planning_state": planning_state_for_description,
                     "planning_summary": specialist_summary,
@@ -1090,11 +428,10 @@ def seed_issues_with_runtime(
 
         final_sync_status = "sync_blocked" if clarification_questions else "children_current"
         for child_issue in engineering_children:
-            child_input = _build_child_issue_input(
-                child_issue=child_issue,
+            child_input = child_issue.to_jira_input(
                 parent_issue_key=parent_issue_key,
-                parent_summary=parent_issue["summary"],
-                parent_revision=parent_revision,
+                parent_summary=parent_issue.summary,
+                parent_revision=parent_issue.revision,
                 sync_status=final_sync_status,
                 use_subtask=True,
                 specialist_summary=specialist_summary,
@@ -1109,7 +446,7 @@ def seed_issues_with_runtime(
                     oauth=oauth,
                     project_key=project_key,
                     issue_input=child_input,
-                    requested_issue_key=child_issue["requested_issue_key"],
+                    requested_issue_key=child_issue.requested_issue_key,
                     allow_create=allow_create,
                     existing_issues=child_catalog,
                     matched_issue_keys=matched_child_keys,
@@ -1118,11 +455,10 @@ def seed_issues_with_runtime(
             except JiraOAuthError as exc:
                 if "Subtask issue type is not available" not in str(exc):
                     raise
-                fallback_input = _build_child_issue_input(
-                    child_issue=child_issue,
+                fallback_input = child_issue.to_jira_input(
                     parent_issue_key=parent_issue_key,
-                    parent_summary=parent_issue["summary"],
-                    parent_revision=parent_revision,
+                    parent_summary=parent_issue.summary,
+                    parent_revision=parent_issue.revision,
                     sync_status=final_sync_status,
                     use_subtask=False,
                     specialist_summary=specialist_summary,
@@ -1133,7 +469,7 @@ def seed_issues_with_runtime(
                     oauth=oauth,
                     project_key=project_key,
                     issue_input=fallback_input,
-                    requested_issue_key=child_issue["requested_issue_key"],
+                    requested_issue_key=child_issue.requested_issue_key,
                     allow_create=allow_create,
                     existing_issues=child_catalog,
                     matched_issue_keys=matched_child_keys,
@@ -1147,7 +483,7 @@ def seed_issues_with_runtime(
                         outward_issue_key=parent_issue_key,
                     )
             if not child_key:
-                create_errors.append(f"Engineering child '{child_issue['summary']}' was not matched and creation is disabled")
+                create_errors.append(f"Engineering child '{child_issue.summary}' was not matched and creation is disabled")
                 final_sync_status = "sync_blocked"
                 continue
             stale_child_keys.append(child_key)
@@ -1156,9 +492,7 @@ def seed_issues_with_runtime(
             if child_updated:
                 updated_child_keys.append(child_key)
 
-        parent_final_input = _build_parent_issue_input(
-            parent_issue=parent_issue,
-            parent_revision=parent_revision,
+        parent_final_input = parent_issue.to_jira_input(
             sync_status=final_sync_status,
             pm_status=effective_pm_status or None,
             planning_state=planning_state_for_description,
@@ -1220,7 +554,7 @@ def seed_issues_with_runtime(
             "questions": clarification_questions,
             "prompt_markdown": prompt_markdown,
             "parent_issue_key": parent_issue_key,
-            "parent_revision": parent_revision,
+            "parent_revision": parent_issue.revision,
             "pm_status": effective_pm_status or None,
             "planning_state": planning_state_for_description,
             "planning_summary": specialist_summary,
@@ -1319,18 +653,15 @@ def seed_parent_issues_with_runtime(
         )
 
     normalized_force_issue_keys = [str(value).strip().upper() for value in (force_issue_keys or []) if str(value).strip()]
-    clarification_questions = _parse_questions(plan_payload.get("questions"))
-    effective_pm_status = _normalized_status(pm_status or plan_payload.get("pm_status") or plan_payload.get("interview_status"))
-    if pm_status is not None and not _is_pm_complete(effective_pm_status):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="PM interview is not ready to write Jira parent issues yet",
-        )
-    parent_issues = _parse_parent_issue_drafts(
-        raw_issues=plan_payload.get("issues"),
+    draft_set = parse_parent_seed_drafts(
+        plan_payload=plan_payload,
         force_issue_keys=normalized_force_issue_keys,
         issue_key_pattern=issue_key_pattern,
+        pm_status=pm_status,
     )
+    clarification_questions = draft_set.clarification_questions
+    effective_pm_status = draft_set.pm_status
+    parent_issues = draft_set.parent_issues
 
     oauth = _resolve_seed_oauth_context(
         session=session,
@@ -1349,15 +680,11 @@ def seed_parent_issues_with_runtime(
         errors: list[str] = []
 
         for parent_issue in parent_issues:
-            parent_issue["issue_type"] = _normalize_parent_issue_type(
-                parent_issue=parent_issue,
+            parent_issue = parent_issue.with_issue_type(parent_issue.normalized_issue_type(
                 engineering_children=[],
                 available_issue_types=available_issue_types,
-            )
-            parent_revision = _compute_parent_revision(parent_issue)
-            parent_input = _build_parent_issue_input(
-                parent_issue=parent_issue,
-                parent_revision=parent_revision,
+            ))
+            parent_input = parent_issue.to_jira_input(
                 sync_status="children_stale",
                 pm_status=effective_pm_status or None,
             )
@@ -1365,14 +692,14 @@ def seed_parent_issues_with_runtime(
                 oauth=oauth,
                 project_key=project_key,
                 issue_input=parent_input,
-                requested_issue_key=parent_issue["requested_issue_key"],
+                requested_issue_key=parent_issue.requested_issue_key,
                 allow_create=allow_create,
                 existing_issues=all_project_issues,
                 matched_issue_keys=matched_issue_keys,
                 select_seed_match_fn=select_seed_match_fn,
             )
             if not parent_key:
-                errors.append(f"Parent issue '{parent_issue['summary']}' was not matched and creation is disabled")
+                errors.append(f"Parent issue '{parent_issue.summary}' was not matched and creation is disabled")
                 continue
             if parent_created:
                 created_parent_issue_keys.append(parent_key)
