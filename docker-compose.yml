@@ -1,0 +1,290 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: master-builder-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-orchestrator}
+      POSTGRES_USER: ${POSTGRES_USER:-orchestrator}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-orchestrator}
+    ports:
+      - "4402:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-orchestrator} -d ${POSTGRES_DB:-orchestrator}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  api:
+    build:
+      context: .
+      dockerfile: orchestrator/Dockerfile
+      args:
+        CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
+    container_name: master-builder-api
+    environment:
+      ORCHESTRATOR_ADMIN_USERNAME: ${ORCHESTRATOR_ADMIN_USERNAME:-admin}
+      ORCHESTRATOR_ADMIN_PASSWORD: ${ORCHESTRATOR_ADMIN_PASSWORD:?Set ORCHESTRATOR_ADMIN_PASSWORD}
+      ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
+      POSTGRES_URL: ${POSTGRES_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
+      ORCHESTRATOR_CORS_ORIGINS: ${ORCHESTRATOR_CORS_ORIGINS:-http://localhost:4100,http://127.0.0.1:4100}
+      ORCHESTRATOR_CORS_ORIGIN_REGEX: ${ORCHESTRATOR_CORS_ORIGIN_REGEX:-}
+      ORCHESTRATOR_PUBLIC_API_BASE_URL: ${ORCHESTRATOR_PUBLIC_API_BASE_URL:-http://localhost:4000}
+      ORCHESTRATOR_ADMIN_UI_BASE_URL: ${ORCHESTRATOR_ADMIN_UI_BASE_URL:-http://localhost:4100}
+      ORCHESTRATOR_CODEX_SANDBOX_MODE: ${ORCHESTRATOR_CODEX_SANDBOX_MODE:-danger-full-access}
+      ORCHESTRATOR_CODEX_MODEL: ${ORCHESTRATOR_CODEX_MODEL:-gpt-5-codex}
+      ORCHESTRATOR_CODEX_TIMEOUT_SECONDS: ${ORCHESTRATOR_CODEX_TIMEOUT_SECONDS:-0}
+      ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET: ${ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET:?Set ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET}
+      ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET: ${ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET:?Set ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET}
+      ORCHESTRATOR_SECRETS_ENCRYPTION_KEY: ${ORCHESTRATOR_SECRETS_ENCRYPTION_KEY:?Set ORCHESTRATOR_SECRETS_ENCRYPTION_KEY}
+      ORCHESTRATOR_SENTRY_DSN: ${ORCHESTRATOR_SENTRY_DSN:-}
+      ORCHESTRATOR_SENTRY_ENVIRONMENT: ${ORCHESTRATOR_SENTRY_ENVIRONMENT:-dev}
+      ORCHESTRATOR_SENTRY_RELEASE: ${ORCHESTRATOR_SENTRY_RELEASE:-}
+      ORCHESTRATOR_SENTRY_TRACES_SAMPLE_RATE: ${ORCHESTRATOR_SENTRY_TRACES_SAMPLE_RATE:-0.0}
+      ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR: /tmp/master-builder-project-repos
+      ORCHESTRATOR_WORKER_CAPABILITIES: ${ORCHESTRATOR_WORKER_CAPABILITIES:-linux}
+      ORCHESTRATOR_API_WORKERS: ${ORCHESTRATOR_API_WORKERS:-4}
+    ports:
+      - "4000:4000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - python -c "import json,sys,urllib.request; data=json.loads(urllib.request.urlopen('http://127.0.0.1:4000/health', timeout=5).read().decode()); sys.exit(0 if data.get('status') == 'ok' else 1)"
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+    command:
+      - /bin/sh
+      - -ceu
+      - |
+        mkdir -p /root/.codex
+        cp -a /app/.codex/. /root/.codex/
+        if [ -f /app/AGENTS.md ]; then cp /app/AGENTS.md /root/AGENTS.md; fi
+        python -m orchestrator migrate
+        uvicorn orchestrator.api.main:app --host 0.0.0.0 --port 4000 --workers "${ORCHESTRATOR_API_WORKERS:-4}"
+    volumes:
+      - codex-home:/root/.codex
+      - ./.workdirs:/tmp/master-builder-project-repos
+        
+  worker-runtime:
+    build:
+      context: .
+      dockerfile: orchestrator/Dockerfile
+      args:
+        CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
+    container_name: master-builder-worker
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+    environment:
+      ORCHESTRATOR_ADMIN_USERNAME: ${ORCHESTRATOR_ADMIN_USERNAME:-admin}
+      ORCHESTRATOR_ADMIN_PASSWORD: ${ORCHESTRATOR_ADMIN_PASSWORD:?Set ORCHESTRATOR_ADMIN_PASSWORD}
+      ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
+      POSTGRES_URL: ${POSTGRES_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
+      ORCHESTRATOR_PUBLIC_API_BASE_URL: ${ORCHESTRATOR_PUBLIC_API_BASE_URL:-http://localhost:4000}
+      ORCHESTRATOR_ADMIN_UI_BASE_URL: ${ORCHESTRATOR_ADMIN_UI_BASE_URL:-http://localhost:4100}
+      ORCHESTRATOR_CODEX_SANDBOX_MODE: ${ORCHESTRATOR_CODEX_SANDBOX_MODE:-danger-full-access}
+      ORCHESTRATOR_CODEX_MODEL: ${ORCHESTRATOR_CODEX_MODEL:-gpt-5-codex}
+      ORCHESTRATOR_CODEX_TIMEOUT_SECONDS: ${ORCHESTRATOR_CODEX_TIMEOUT_SECONDS:-0}
+      ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET: ${ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET:?Set ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET}
+      ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET: ${ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET:?Set ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET}
+      ORCHESTRATOR_SECRETS_ENCRYPTION_KEY: ${ORCHESTRATOR_SECRETS_ENCRYPTION_KEY:?Set ORCHESTRATOR_SECRETS_ENCRYPTION_KEY}
+      ORCHESTRATOR_SENTRY_DSN: ${ORCHESTRATOR_SENTRY_DSN:-}
+      ORCHESTRATOR_SENTRY_ENVIRONMENT: ${ORCHESTRATOR_SENTRY_ENVIRONMENT:-dev}
+      ORCHESTRATOR_SENTRY_RELEASE: ${ORCHESTRATOR_SENTRY_RELEASE:-}
+      ORCHESTRATOR_SENTRY_TRACES_SAMPLE_RATE: ${ORCHESTRATOR_SENTRY_TRACES_SAMPLE_RATE:-0.0}
+      ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR: /tmp/master-builder-project-repos
+    command:
+      - /bin/sh
+      - -ceu
+      - |
+        mkdir -p /root/.codex
+        cp -a /app/.codex/. /root/.codex/
+        if [ -f /app/AGENTS.md ]; then cp /app/AGENTS.md /root/AGENTS.md; fi
+        python -m orchestrator migrate
+        python -m orchestrator worker
+    volumes:
+      - codex-home:/root/.codex
+      - ./.workdirs:/tmp/master-builder-project-repos
+
+  discord-gateway:
+    build:
+      context: .
+      dockerfile: orchestrator/Dockerfile
+      args:
+        CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
+    container_name: master-builder-discord-gateway
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
+      POSTGRES_URL: ${POSTGRES_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
+      ORCHESTRATOR_SECRETS_ENCRYPTION_KEY: ${ORCHESTRATOR_SECRETS_ENCRYPTION_KEY:?Set ORCHESTRATOR_SECRETS_ENCRYPTION_KEY}
+      ORCHESTRATOR_DISCORD_GATEWAY_LOCK_KEY: ${ORCHESTRATOR_DISCORD_GATEWAY_LOCK_KEY:-947102033127}
+      ORCHESTRATOR_DISCORD_GATEWAY_POLL_SECONDS: ${ORCHESTRATOR_DISCORD_GATEWAY_POLL_SECONDS:-3}
+      ORCHESTRATOR_VOICE_TRANSCRIPTION_PROVIDER: ${ORCHESTRATOR_VOICE_TRANSCRIPTION_PROVIDER:-whisper}
+      ORCHESTRATOR_VOICE_TRANSCRIPTION_MODEL: ${ORCHESTRATOR_VOICE_TRANSCRIPTION_MODEL:-base}
+      ORCHESTRATOR_VOICE_TRANSCRIPTION_LANGUAGE: ${ORCHESTRATOR_VOICE_TRANSCRIPTION_LANGUAGE:-}
+      ORCHESTRATOR_VOICE_TRANSCRIPTION_DEVICE: ${ORCHESTRATOR_VOICE_TRANSCRIPTION_DEVICE:-auto}
+      ORCHESTRATOR_VOICE_TRANSCRIPTION_COMPUTE_TYPE: ${ORCHESTRATOR_VOICE_TRANSCRIPTION_COMPUTE_TYPE:-int8}
+      ORCHESTRATOR_VOICE_REPLY_PROVIDER: ${ORCHESTRATOR_VOICE_REPLY_PROVIDER:-pocket_tts}
+      ORCHESTRATOR_VOICE_REPLY_ENABLED_DEFAULT: ${ORCHESTRATOR_VOICE_REPLY_ENABLED_DEFAULT:-true}
+      ORCHESTRATOR_POCKET_TTS_VOICE: ${ORCHESTRATOR_POCKET_TTS_VOICE:-}
+      ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR: /tmp/master-builder-project-repos
+      HF_HOME: /root/.cache/huggingface
+      HF_HUB_OFFLINE: ${HF_HUB_OFFLINE:-1}
+    command:
+      - /bin/sh
+      - -ceu
+      - |
+        mkdir -p /root/.codex
+        cp -a /app/.codex/. /root/.codex/
+        if [ -f /app/AGENTS.md ]; then cp /app/AGENTS.md /root/AGENTS.md; fi
+        python -m orchestrator migrate
+        HF_HUB_OFFLINE=0 python -m orchestrator voice-prewarm
+        python -m orchestrator discord-gateway
+    volumes:
+      - codex-home:/root/.codex
+      - ./.workdirs:/tmp/master-builder-project-repos
+      - huggingface-cache:/root/.cache/huggingface
+      - pocket-tts-cache:/root/.cache/pocket_tts
+
+  discord-live-voice:
+    build:
+      context: .
+      dockerfile: orchestrator/Dockerfile
+      args:
+        CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
+    container_name: master-builder-discord-live-voice
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
+      POSTGRES_URL: ${POSTGRES_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
+      ORCHESTRATOR_SECRETS_ENCRYPTION_KEY: ${ORCHESTRATOR_SECRETS_ENCRYPTION_KEY:?Set ORCHESTRATOR_SECRETS_ENCRYPTION_KEY}
+      ORCHESTRATOR_DISCORD_GUILD_ID: ${ORCHESTRATOR_DISCORD_GUILD_ID:-}
+      ORCHESTRATOR_DISCORD_LIVE_VOICE_LOCK_KEY: ${ORCHESTRATOR_DISCORD_LIVE_VOICE_LOCK_KEY:-947102033129}
+      ORCHESTRATOR_DISCORD_LIVE_VOICE_POLL_SECONDS: ${ORCHESTRATOR_DISCORD_LIVE_VOICE_POLL_SECONDS:-3}
+      ORCHESTRATOR_VOICE_TRANSCRIPTION_PROVIDER: ${ORCHESTRATOR_VOICE_TRANSCRIPTION_PROVIDER:-whisper}
+      ORCHESTRATOR_VOICE_TRANSCRIPTION_MODEL: ${ORCHESTRATOR_VOICE_TRANSCRIPTION_MODEL:-base}
+      ORCHESTRATOR_VOICE_TRANSCRIPTION_LANGUAGE: ${ORCHESTRATOR_VOICE_TRANSCRIPTION_LANGUAGE:-}
+      ORCHESTRATOR_VOICE_TRANSCRIPTION_DEVICE: ${ORCHESTRATOR_VOICE_TRANSCRIPTION_DEVICE:-auto}
+      ORCHESTRATOR_VOICE_TRANSCRIPTION_COMPUTE_TYPE: ${ORCHESTRATOR_VOICE_TRANSCRIPTION_COMPUTE_TYPE:-int8}
+      ORCHESTRATOR_VOICE_REPLY_PROVIDER: ${ORCHESTRATOR_VOICE_REPLY_PROVIDER:-pocket_tts}
+      ORCHESTRATOR_POCKET_TTS_VOICE: ${ORCHESTRATOR_POCKET_TTS_VOICE:-}
+      ORCHESTRATOR_LIVE_VOICE_TRANSPORT_COMMAND: ${ORCHESTRATOR_LIVE_VOICE_TRANSPORT_COMMAND:-/usr/local/bin/live-voice-transport}
+      ORCHESTRATOR_LIVE_VOICE_TRANSPORT_STARTUP_TIMEOUT_SECONDS: ${ORCHESTRATOR_LIVE_VOICE_TRANSPORT_STARTUP_TIMEOUT_SECONDS:-10}
+      ORCHESTRATOR_LIVE_VOICE_TRANSPORT_REQUEST_TIMEOUT_SECONDS: ${ORCHESTRATOR_LIVE_VOICE_TRANSPORT_REQUEST_TIMEOUT_SECONDS:-10}
+      ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR: /tmp/master-builder-project-repos
+      HF_HOME: /root/.cache/huggingface
+      HF_HUB_OFFLINE: ${HF_HUB_OFFLINE:-1}
+    command:
+      - /bin/sh
+      - -ceu
+      - |
+        mkdir -p /root/.codex
+        cp -a /app/.codex/. /root/.codex/
+        if [ -f /app/AGENTS.md ]; then cp /app/AGENTS.md /root/AGENTS.md; fi
+        python -m orchestrator migrate
+        HF_HUB_OFFLINE=0 python -m orchestrator voice-prewarm
+        python -m orchestrator discord-live-voice
+    volumes:
+      - codex-home:/root/.codex
+      - ./.workdirs:/tmp/master-builder-project-repos
+      - huggingface-cache:/root/.cache/huggingface
+      - pocket-tts-cache:/root/.cache/pocket_tts
+
+  knowledge-sync:
+    build:
+      context: .
+      dockerfile: orchestrator/Dockerfile
+      args:
+        CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
+    container_name: master-builder-knowledge-sync
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
+      POSTGRES_URL: ${POSTGRES_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
+      ORCHESTRATOR_SECRETS_ENCRYPTION_KEY: ${ORCHESTRATOR_SECRETS_ENCRYPTION_KEY:?Set ORCHESTRATOR_SECRETS_ENCRYPTION_KEY}
+      ORCHESTRATOR_SENTRY_DSN: ${ORCHESTRATOR_SENTRY_DSN:-}
+      ORCHESTRATOR_SENTRY_ENVIRONMENT: ${ORCHESTRATOR_SENTRY_ENVIRONMENT:-dev}
+      ORCHESTRATOR_SENTRY_RELEASE: ${ORCHESTRATOR_SENTRY_RELEASE:-}
+      ORCHESTRATOR_SENTRY_TRACES_SAMPLE_RATE: ${ORCHESTRATOR_SENTRY_TRACES_SAMPLE_RATE:-0.0}
+      ORCHESTRATOR_KNOWLEDGE_JIRA_SYNC_INTERVAL_SECONDS: ${ORCHESTRATOR_KNOWLEDGE_JIRA_SYNC_INTERVAL_SECONDS:-3600}
+      ORCHESTRATOR_KNOWLEDGE_JIRA_SYNC_POLL_SECONDS: ${ORCHESTRATOR_KNOWLEDGE_JIRA_SYNC_POLL_SECONDS:-30}
+      ORCHESTRATOR_KNOWLEDGE_JIRA_SYNC_LOCK_KEY: ${ORCHESTRATOR_KNOWLEDGE_JIRA_SYNC_LOCK_KEY:-947102033128}
+      ORCHESTRATOR_KNOWLEDGE_JIRA_SYNC_MAX_ISSUES: ${ORCHESTRATOR_KNOWLEDGE_JIRA_SYNC_MAX_ISSUES:-500}
+      ORCHESTRATOR_KNOWLEDGE_JIRA_SYNC_INVALID_TOKEN_BACKOFF_SECONDS: ${ORCHESTRATOR_KNOWLEDGE_JIRA_SYNC_INVALID_TOKEN_BACKOFF_SECONDS:-21600}
+      ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR: /tmp/master-builder-project-repos
+      HF_HOME: /root/.cache/huggingface
+      HF_HUB_OFFLINE: ${HF_HUB_OFFLINE:-1}
+    command:
+      - /bin/sh
+      - -ceu
+      - |
+        mkdir -p /root/.codex
+        cp -a /app/.codex/. /root/.codex/
+        if [ -f /app/AGENTS.md ]; then cp /app/AGENTS.md /root/AGENTS.md; fi
+        python -m orchestrator migrate
+        HF_HUB_OFFLINE=0 python -m orchestrator knowledge-prewarm
+        python -m orchestrator knowledge-jira-sync
+    volumes:
+      - codex-home:/root/.codex
+      - ./.workdirs:/tmp/master-builder-project-repos
+      - huggingface-cache:/root/.cache/huggingface
+
+  admin-ui:
+    build:
+      context: ./admin-ui
+      dockerfile: Dockerfile
+    container_name: master-builder-admin-ui
+    depends_on:
+      - api
+    env_file:
+      - ./admin-ui/.env.local
+    ports:
+      - "4100:4100"
+
+  tailscale:
+    image: tailscale/tailscale:stable
+    container_name: master-builder-tailscale
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    network_mode: "service:api"
+    entrypoint:
+      - /bin/sh
+      - /etc/tailscale/funnel-bootstrap.sh
+    environment:
+      TS_AUTHKEY: ${TS_AUTHKEY:-}
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_USERSPACE: "true"
+      TS_EXTRA_ARGS: ${TS_EXTRA_ARGS:---accept-dns=false}
+      TS_FUNNEL_PORT: ${TS_FUNNEL_PORT:-4000}
+      TS_FUNNEL_HEALTH_URL: ${TS_FUNNEL_HEALTH_URL:-http://127.0.0.1:4000/health}
+      TS_FUNNEL_HEALTH_TIMEOUT_SECONDS: ${TS_FUNNEL_HEALTH_TIMEOUT_SECONDS:-60}
+    volumes:
+      - tailscale-state:/var/lib/tailscale
+      - ./scripts/tailscale/funnel-bootstrap.sh:/etc/tailscale/funnel-bootstrap.sh:ro
+
+
+volumes:
+  postgres-data:
+  tailscale-state:
+  runner-data:
+  codex-home:
+  huggingface-cache:
+  pocket-tts-cache:

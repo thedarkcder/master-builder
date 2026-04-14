@@ -1,0 +1,103 @@
+name: Release Train Sync
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: "Optional release version (vX.Y.Z). If empty, next version is computed from git tags."
+        required: false
+        default: ""
+      dry_run:
+        description: "Dry run only (no Jira writes)."
+        required: false
+        type: boolean
+        default: false
+  schedule:
+    - cron: "*/30 * * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-train-sync-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  assign-ready-to-release:
+    if: vars.ENABLE_JIRA_RELEASE_AUTOMATION == 'true'
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install package
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+
+      - name: Resolve release version
+        id: release
+        env:
+          WORKFLOW_RELEASE_VERSION: ${{ inputs.release_version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "${WORKFLOW_RELEASE_VERSION:-}" ]; then
+            release_version="${WORKFLOW_RELEASE_VERSION}"
+          else
+            release_version="$(python -c "from orchestrator.core.release_train import next_release_version_from_tags; import subprocess; result = subprocess.run(['git', 'tag', '--list', 'v*.*.*', '--sort=-v:refname'], check=True, capture_output=True, text=True); tags = [line.strip() for line in result.stdout.splitlines() if line.strip()]; print(next_release_version_from_tags(tags))")"
+          fi
+          echo "release_version=${release_version}" >> "$GITHUB_OUTPUT"
+
+      - name: Assign Ready to Release issues to next release
+        env:
+          JIRA_BASE_URL: ${{ vars.RELEASE_JIRA_BASE_URL }}
+          JIRA_CLOUD_ID: ${{ vars.RELEASE_JIRA_CLOUD_ID }}
+          JIRA_EMAIL: ${{ vars.RELEASE_JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.RELEASE_JIRA_API_TOKEN }}
+          JIRA_PROJECT_KEY: ${{ vars.RELEASE_JIRA_PROJECT_KEY }}
+          RELEASE_VERSION_INPUT: ${{ steps.release.outputs.release_version }}
+          DRY_RUN_INPUT: ${{ inputs.dry_run }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ -z "${JIRA_BASE_URL}" ] || [ -z "${JIRA_EMAIL}" ] || [ -z "${JIRA_API_TOKEN}" ] || [ -z "${JIRA_PROJECT_KEY}" ]; then
+            echo "Missing release automation Jira configuration. Check RELEASE_JIRA_* vars/secrets."
+            exit 1
+          fi
+
+          dry_run="false"
+          if [ "${DRY_RUN_INPUT:-false}" = "true" ]; then
+            dry_run="true"
+          fi
+          release_version="${RELEASE_VERSION_INPUT:-}"
+
+          args=(
+            "scripts/release_train_sync.py"
+            "assign"
+            "--jira-base-url" "${JIRA_BASE_URL}"
+            "--jira-email" "${JIRA_EMAIL}"
+            "--jira-api-token" "${JIRA_API_TOKEN}"
+            "--project-key" "${JIRA_PROJECT_KEY}"
+            "--ready-status" "READY TO RELEASE"
+            "--comment"
+          )
+          if [ -n "${JIRA_CLOUD_ID:-}" ]; then
+            args+=("--jira-cloud-id" "${JIRA_CLOUD_ID}")
+          fi
+          if [ "${dry_run}" = "true" ]; then
+            args+=("--dry-run")
+          fi
+          if [ -n "${release_version}" ]; then
+            args+=("--release-version" "${release_version}")
+          fi
+          python "${args[@]}"

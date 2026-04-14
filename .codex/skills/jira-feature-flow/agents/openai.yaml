@@ -1,0 +1,4 @@
+interface:
+  display_name: "Jira Feature Flow"
+  short_description: "Implement one Jira issue with full status flow."
+  default_prompt: "Use $jira-feature-flow to implement one Jira issue, post progress updates, and transition it to Testing, Done, or Blocked."

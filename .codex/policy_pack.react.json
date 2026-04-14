@@ -1,0 +1,46 @@
+{
+  "name": "react",
+  "primary_language": "react",
+  "stack_notes": [
+    "React frontend",
+    "Prefer behavior-driven tests (React Testing Library)",
+    "Avoid flaky waits; use condition-based assertions"
+  ],
+  "test_commands": [
+    "pnpm test",
+    "npm test",
+    "yarn test",
+    "pnpm test:ci",
+    "npm run test:ci",
+    "yarn test:ci"
+  ],
+  "lint_commands": [
+    "pnpm lint",
+    "npm run lint",
+    "yarn lint"
+  ],
+  "format_commands": [
+    "pnpm format",
+    "npm run format",
+    "yarn format"
+  ],
+  "preferred_patterns": [
+    "Complex UI flows use useReducer (state machine style) rather than scattered useState",
+    "Async UI tests use findBy*/waitFor with explicit timeouts",
+    "Use MSW for network mocking if present"
+  ],
+  "banned_patterns": [
+    "setTimeout\\s*\\(",
+    "await\\s+new\\s+Promise\\s*\\(\\s*.*setTimeout"
+  ],
+  "testing_rules": [
+    "Test user-visible behavior, not implementation details",
+    "Prefer getByRole/findByRole over fragile selectors",
+    "No real network calls in unit/component tests"
+  ],
+  "reviewer_quality_gates": [
+    "No setTimeout-based synchronization",
+    "Behavior changes must include tests",
+    "UI state transitions should be explicit for multi-step flows"
+  ]
+}

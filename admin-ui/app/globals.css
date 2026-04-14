@@ -1,0 +1,78 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: 220 20% 97%;
+  --foreground: 224 71% 4%;
+  --card: 0 0% 100%;
+  --card-foreground: 224 71% 4%;
+  --primary: 238 84% 62%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 220 14% 91%;
+  --secondary-foreground: 224 71% 4%;
+  --muted: 220 14% 93%;
+  --muted-foreground: 215 16% 47%;
+  --border: 220 13% 88%;
+  --input: 220 13% 88%;
+  --ring: 238 84% 62%;
+  --radius: 0.625rem;
+
+  /* Always-dark sidebar tokens */
+  --sidebar: 222 47% 11%;
+  --sidebar-foreground: 210 40% 96%;
+  --sidebar-border: 217 32% 20%;
+  --sidebar-accent: 238 50% 22%;
+  --sidebar-accent-foreground: 210 40% 96%;
+  --sidebar-muted-foreground: 215 20% 60%;
+
+  /* Semantic status tokens */
+  --success: 142 71% 45%;
+  --success-foreground: 0 0% 100%;
+  --warning: 38 92% 50%;
+  --warning-foreground: 20 14% 4%;
+  --destructive: 0 72% 51%;
+  --destructive-foreground: 0 0% 100%;
+  --info: 201 90% 52%;
+  --info-foreground: 0 0% 100%;
+}
+
+.dark {
+  --background: 222 47% 8%;
+  --foreground: 210 40% 95%;
+  --card: 222 47% 11%;
+  --card-foreground: 210 40% 95%;
+  --primary: 238 84% 70%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 217 32% 18%;
+  --secondary-foreground: 210 40% 95%;
+  --muted: 217 32% 15%;
+  --muted-foreground: 215 20% 60%;
+  --border: 217 32% 20%;
+  --input: 217 32% 20%;
+  --ring: 238 84% 70%;
+
+  --sidebar: 222 47% 5%;
+  --sidebar-foreground: 210 40% 96%;
+  --sidebar-border: 217 32% 15%;
+  --sidebar-accent: 238 50% 18%;
+  --sidebar-accent-foreground: 210 40% 96%;
+  --sidebar-muted-foreground: 215 20% 50%;
+
+  --success: 142 71% 50%;
+  --success-foreground: 0 0% 100%;
+  --warning: 38 92% 55%;
+  --warning-foreground: 20 14% 4%;
+  --destructive: 0 72% 60%;
+  --destructive-foreground: 0 0% 100%;
+  --info: 201 90% 58%;
+  --info-foreground: 0 0% 100%;
+}
+
+* {
+  @apply border-border;
+}
+
+body {
+  @apply bg-background text-foreground antialiased;
+}

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Codex Jira Backlog"
+  short_description: "Seed and sync Jira backlog issues from specs."
+  default_prompt: "Use $codex-jira-backlog to seed, deduplicate, or sync Jira backlog issues from specs without starting execution."

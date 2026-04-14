@@ -1,0 +1,47 @@
+Stage: test
+Tenant ID: {{ tenant_id }}
+Project ID: {{ project_id }}
+Project Name: {{ project_name }}
+GitHub Repository: {{ github_repository }}
+Jira Project Key: {{ jira_project_key }}
+Run ID: {{ run_id }}
+Issue key: {{ issue_key }}
+Execution worktree: {{ execution_repo_dir }}
+Execution branch: {{ execution_branch }}
+Base branch: {{ base_branch }}
+Integration branch: {{ integration_branch }}
+PR target branch: {{ pr_target_branch }}
+Attempt: {{ attempt }}
+Dev summary: {{ dev_summary_json }}
+PR URL: {{ pr_url }}
+Suggested test commands: {{ suggested_test_commands_json }}
+Resolved prerequisites: {{ resolved_prerequisites_json }}
+Unresolved prerequisites: {{ unresolved_prerequisites_json }}
+Confirmed external blockers: {{ confirmed_external_blockers_json }}
+Missing evidence sources: {{ missing_evidence_sources_json }}
+Answered transient human inputs for this run: {{ human_inputs_json }}
+Allowed tools for this stage: {{ allowed_tools_json }}
+Agent tool command: {{ agent_tool_command }}
+
+Required actions:
+1. Run validation in two steps:
+   - Step A: execute targeted tests/checks only for the code you changed first.
+   - Step A must stay narrowly scoped to the touched files, nearby test files, or the smallest command that proves the fix.
+   - Do not default to broad `xcodebuild test`, full repo suites, or repeated whole-project reruns.
+   - Step B: run broader/full-suite checks only when the targeted checks passed and you still lack acceptance evidence, or when the targeted failure proves likely cross-cutting regression risk.
+2. When attempt > 1, identify unchanged areas and skip redundant re-testing for those areas.
+3. If you cannot identify a targeted test, say that explicitly in `guidance` before escalating to anything broader.
+4. Keep command output lean:
+   - Use concise flags/reporters where possible.
+   - For verbose commands, capture full output in an artifact file and summarize key failures in guidance.
+5. Provide concrete guidance for missing verification or failures.
+6. Treat the PM evidence ledger as the current prerequisite summary; only challenge it if new authoritative tool evidence contradicts it.
+7. Fail closed when verification cannot be completed.
+8. If a one-time transient human input can unblock verification, request it with `run.request_human_input` before using blocker_category="awaiting_human_input".
+
+Output contract:
+- passed: boolean readiness signal.
+- guidance: array of concrete validation actions.
+- feedback: blocking reason string or null.
+- blocker_category: terminal blocker category or null.
+- blocker_message: terminal blocker detail or null.

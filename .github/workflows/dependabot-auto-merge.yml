@@ -1,0 +1,80 @@
+name: Dependabot Patch Assist
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: dependabot-patch-assist-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  patch-assist:
+    name: Approve and guide patch updates
+    if: github.actor == 'dependabot[bot]' && github.event.pull_request.draft == false
+    runs-on: self-hosted
+    steps:
+      - name: Fetch Dependabot metadata
+        id: metadata
+        uses: dependabot/fetch-metadata@v2
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Stop for non-patch updates
+        if: steps.metadata.outputs.update-type != 'version-update:semver-patch'
+        run: |
+          echo "Skipping non-patch update: ${{ steps.metadata.outputs.update-type }}"
+
+      - name: Approve pull request
+        if: steps.metadata.outputs.update-type == 'version-update:semver-patch'
+        uses: actions/github-script@v8
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const pull_number = context.payload.pull_request.number;
+
+            try {
+              await github.rest.pulls.createReview({
+                owner,
+                repo,
+                pull_number,
+                event: "APPROVE",
+                body: "Auto-approved patch dependency update from Dependabot."
+              });
+              core.info(`Approved PR #${pull_number}.`);
+            } catch (error) {
+              if (error.status === 422) {
+                core.info(`PR #${pull_number} is already approved or cannot be re-approved; continuing.`);
+              } else {
+                throw error;
+              }
+            }
+
+      - name: Add merge guidance comment
+        if: steps.metadata.outputs.update-type == 'version-update:semver-patch'
+        uses: actions/github-script@v8
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const pull_number = context.payload.pull_request.number;
+
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              pull_number,
+              body: [
+                "Dependabot patch update auto-approved.",
+                "",
+                "Merge remains manual.",
+                "Please merge only after required `CI` and `Security` checks are green."
+              ].join("\n")
+            });
+            core.info(`Posted merge guidance for PR #${pull_number}.`);

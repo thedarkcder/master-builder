@@ -1,0 +1,312 @@
+name: Release Train Close
+
+on:
+  release:
+    types:
+      - published
+
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: "Release version to close in Jira (vX.Y.Z)."
+        required: true
+      dry_run:
+        description: "Dry run only (no Jira writes)."
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: release-train-close-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  close-released-issues:
+    if: vars.ENABLE_JIRA_RELEASE_AUTOMATION == 'true'
+    runs-on: self-hosted
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install package
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+
+      - name: Resolve release version
+        id: release
+        shell: bash
+        env:
+          WORKFLOW_RELEASE_VERSION: ${{ inputs.release_version }}
+        run: |
+          set -euo pipefail
+
+          if [ "${{ github.event_name }}" = "release" ]; then
+            release_version="${{ github.event.release.tag_name }}"
+          elif [ -n "${WORKFLOW_RELEASE_VERSION:-}" ]; then
+            release_version="${WORKFLOW_RELEASE_VERSION}"
+          else
+            release_version="$(python -c "from orchestrator.core.release_train import next_release_version_from_tags; import subprocess; result = subprocess.run(['git', 'tag', '--list', 'v*.*.*', '--sort=-v:refname'], check=True, capture_output=True, text=True); tags = [line.strip() for line in result.stdout.splitlines() if line.strip()]; print(next_release_version_from_tags(tags))")"
+          fi
+
+          echo "release_version=${release_version}" >> "$GITHUB_OUTPUT"
+
+      - name: Collect release issue keys
+        id: issue-keys
+        shell: bash
+        env:
+          JIRA_BASE_URL: ${{ vars.RELEASE_JIRA_BASE_URL }}
+          JIRA_EMAIL: ${{ vars.RELEASE_JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.RELEASE_JIRA_API_TOKEN }}
+          JIRA_PROJECT_KEY: ${{ vars.RELEASE_JIRA_PROJECT_KEY }}
+          RELEASE_VERSION: ${{ steps.release.outputs.release_version }}
+        run: |
+          set -euo pipefail
+
+          python scripts/release_train_sync.py \
+            keys \
+            --jira-base-url "${JIRA_BASE_URL}" \
+            --jira-email "${JIRA_EMAIL}" \
+            --jira-api-token "${JIRA_API_TOKEN}" \
+            --project-key "${JIRA_PROJECT_KEY}" \
+            --release-version "${RELEASE_VERSION}" \
+            > /tmp/release_issue_keys.txt
+
+          issue_count="$(wc -l < /tmp/release_issue_keys.txt | tr -d '[:space:]')"
+          echo "issue_count=${issue_count}" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for checks and merge release issue PRs to main
+        if: steps.issue-keys.outputs.issue_count != '0' && inputs.dry_run != true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          pr_issue_pairs="$(mktemp)"
+
+          while IFS= read -r issue_key; do
+            [ -z "${issue_key}" ] && continue
+
+            while IFS= read -r pr_number; do
+              [ -z "${pr_number}" ] && continue
+              printf '%s\t%s\n' "${pr_number}" "${issue_key}" >> "${pr_issue_pairs}"
+            done < <(
+              gh pr list \
+                --state open \
+                --base main \
+                --search "${issue_key} in:title repo:${GITHUB_REPOSITORY}" \
+                --json number \
+                -q '.[].number'
+            )
+          done < /tmp/release_issue_keys.txt
+
+          if [ ! -s "${pr_issue_pairs}" ]; then
+            echo "No open PRs found for release issues."
+            exit 0
+          fi
+
+          pr_issue_pairs_unique="${pr_issue_pairs}.uniq"
+          sort -t $'\t' -k1,1n -u "${pr_issue_pairs}" > "${pr_issue_pairs_unique}"
+
+          merge_failures=()
+
+          while IFS=$'\t' read -r pr_number issue_key; do
+            [ -z "${pr_number}" ] && continue
+
+            if ! gh pr checks "${pr_number}" --required --watch --interval 20; then
+              merge_failures+=("${pr_number}:${issue_key}:checks")
+              continue
+            fi
+
+            if gh pr merge "${pr_number}" --merge --delete-branch; then
+              echo "Merged PR #${pr_number} for ${issue_key}"
+            else
+              merge_failures+=("${pr_number}:${issue_key}:merge")
+            fi
+          done < "${pr_issue_pairs_unique}"
+
+          rm -f "${pr_issue_pairs}" "${pr_issue_pairs_unique}"
+
+          if [ "${#merge_failures[@]}" -gt 0 ]; then
+            printf 'Failed merge/check operations: %s\n' "${merge_failures[*]}"
+            exit 1
+          fi
+
+      - name: Ensure GitHub release exists
+        if: github.event_name != 'release' && inputs.dry_run != true && steps.issue-keys.outputs.issue_count != '0'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ steps.release.outputs.release_version }}
+          JIRA_BASE_URL: ${{ vars.RELEASE_JIRA_BASE_URL }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${RELEASE_VERSION}" ]; then
+            echo "Missing release version."
+            exit 1
+          fi
+
+          if gh release view "${RELEASE_VERSION}" >/dev/null 2>&1; then
+            echo "GitHub release ${RELEASE_VERSION} already exists."
+            exit 0
+          fi
+
+          git fetch --tags origin main
+
+          previous_release_tag="$(git tag --list 'v*.*.*' --sort=-v:refname | awk -v current="${RELEASE_VERSION}" '$0 != current { print; exit }')"
+          release_range="origin/main"
+          if [ -n "${previous_release_tag}" ]; then
+            release_range="${previous_release_tag}..origin/main"
+          fi
+
+          mapfile -t release_issue_keys < <(sed '/^[[:space:]]*$/d' /tmp/release_issue_keys.txt)
+          mapfile -t release_commit_subjects < <(git log --first-parent --pretty=format:'%s' "${release_range}" | sed '/^[[:space:]]*$/d')
+
+          release_notes_file="$(mktemp)"
+          {
+            echo "## Release Train Issues"
+            if [ "${#release_issue_keys[@]}" -gt 0 ]; then
+              for issue_key in "${release_issue_keys[@]}"; do
+                if [ -n "${JIRA_BASE_URL:-}" ]; then
+                  jira_base_url="${JIRA_BASE_URL%/}"
+                  echo "- [${issue_key}](${jira_base_url}/browse/${issue_key})"
+                else
+                  echo "- ${issue_key}"
+                fi
+              done
+            else
+              echo "- No release-train Jira issues were detected for ${RELEASE_VERSION}."
+            fi
+            echo
+            echo "## What's Changed"
+            if [ "${#release_commit_subjects[@]}" -gt 0 ]; then
+              for subject in "${release_commit_subjects[@]}"; do
+                echo "- ${subject}"
+              done
+            else
+              echo "- No commit titles were found for this release range."
+            fi
+            echo
+            if [ -n "${previous_release_tag}" ]; then
+              echo "Full Changelog: https://github.com/${GITHUB_REPOSITORY}/compare/${previous_release_tag}...${RELEASE_VERSION}"
+            else
+              echo "Full Changelog: https://github.com/${GITHUB_REPOSITORY}/commits/${RELEASE_VERSION}"
+            fi
+          } > "${release_notes_file}"
+
+          gh release create "${RELEASE_VERSION}" \
+            --target main \
+            --title "${RELEASE_VERSION}" \
+            --notes-file "${release_notes_file}" \
+            --latest
+
+      - name: Ensure Jira release exists
+        shell: bash
+        env:
+          JIRA_BASE_URL: ${{ vars.RELEASE_JIRA_BASE_URL }}
+          JIRA_CLOUD_ID: ${{ vars.RELEASE_JIRA_CLOUD_ID }}
+          JIRA_EMAIL: ${{ vars.RELEASE_JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.RELEASE_JIRA_API_TOKEN }}
+          JIRA_PROJECT_KEY: ${{ vars.RELEASE_JIRA_PROJECT_KEY }}
+          RELEASE_VERSION: ${{ steps.release.outputs.release_version }}
+          DRY_RUN_INPUT: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${JIRA_BASE_URL}" ] || \
+             [ -z "${JIRA_EMAIL}" ] || \
+             [ -z "${JIRA_API_TOKEN}" ] || \
+             [ -z "${JIRA_PROJECT_KEY}" ]; then
+            echo "Missing release automation Jira configuration. Check RELEASE_JIRA_* vars/secrets."
+            exit 1
+          fi
+
+          if [ -z "${RELEASE_VERSION}" ]; then
+            echo "Missing release version."
+            exit 1
+          fi
+
+          args=(
+            scripts/release_train_sync.py
+            release
+            --jira-base-url "${JIRA_BASE_URL}"
+            --jira-email "${JIRA_EMAIL}"
+            --jira-api-token "${JIRA_API_TOKEN}"
+            --project-key "${JIRA_PROJECT_KEY}"
+            --release-version "${RELEASE_VERSION}"
+          )
+
+          if [ -n "${JIRA_CLOUD_ID:-}" ]; then
+            args+=(--jira-cloud-id "${JIRA_CLOUD_ID}")
+          fi
+
+          if [ "${DRY_RUN_INPUT:-false}" = "true" ]; then
+            args+=(--dry-run)
+          fi
+
+          python "${args[@]}"
+      - name: Transition release-train Jira issues to Done
+        if: steps.issue-keys.outputs.issue_count != '0'
+        shell: bash
+        env:
+          JIRA_BASE_URL: ${{ vars.RELEASE_JIRA_BASE_URL }}
+          JIRA_CLOUD_ID: ${{ vars.RELEASE_JIRA_CLOUD_ID }}
+          JIRA_EMAIL: ${{ vars.RELEASE_JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.RELEASE_JIRA_API_TOKEN }}
+          JIRA_PROJECT_KEY: ${{ vars.RELEASE_JIRA_PROJECT_KEY }}
+          DONE_STATUS: ${{ vars.RELEASE_DONE_STATUS }}
+          RELEASE_VERSION: ${{ steps.release.outputs.release_version }}
+          DRY_RUN_INPUT: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${JIRA_BASE_URL}" ] || \
+             [ -z "${JIRA_EMAIL}" ] || \
+             [ -z "${JIRA_API_TOKEN}" ] || \
+             [ -z "${JIRA_PROJECT_KEY}" ]; then
+            echo "Missing release automation Jira configuration. Check RELEASE_JIRA_* vars/secrets."
+            exit 1
+          fi
+
+          if [ -z "${RELEASE_VERSION}" ]; then
+            echo "Missing release version."
+            exit 1
+          fi
+
+          done_status="${DONE_STATUS:-Done}"
+
+          args=(
+            scripts/release_train_sync.py
+            close
+            --jira-base-url "${JIRA_BASE_URL}"
+            --jira-email "${JIRA_EMAIL}"
+            --jira-api-token "${JIRA_API_TOKEN}"
+            --project-key "${JIRA_PROJECT_KEY}"
+            --done-status "${done_status}"
+            --release-version "${RELEASE_VERSION}"
+            --comment
+          )
+
+          if [ -n "${JIRA_CLOUD_ID:-}" ]; then
+            args+=(--jira-cloud-id "${JIRA_CLOUD_ID}")
+          fi
+
+          if [ "${DRY_RUN_INPUT:-false}" = "true" ]; then
+            args+=(--dry-run)
+          fi
+
+          python "${args[@]}"

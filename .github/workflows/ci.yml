@@ -1,0 +1,305 @@
+
+name: CI
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  detect:
+    name: Detect project type
+    runs-on: self-hosted
+    outputs:
+      is_java: ${{ steps.detect.outputs.is_java }}
+      is_node: ${{ steps.detect.outputs.is_node }}
+      is_python: ${{ steps.detect.outputs.is_python }}
+      node_pm: ${{ steps.detect.outputs.node_pm }}
+      node_project_dir: ${{ steps.detect.outputs.node_project_dir }}
+      node_lockfile: ${{ steps.detect.outputs.node_lockfile }}
+      java_build_tool: ${{ steps.detect.outputs.java_build_tool }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - id: detect
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          is_java=false
+          is_node=false
+          is_python=false
+          node_pm="npm"
+          node_project_dir="."
+          node_lockfile=""
+          java_build_tool="maven"
+
+          has_file_named() {
+            local filename="$1"
+            [ -n "$(first_file_named "$filename")" ]
+          }
+
+          first_file_named() {
+            local filename="$1"
+            git ls-files | awk -F/ -v filename="$filename" '$NF==filename {print; exit}'
+          }
+
+          # Java detection
+          if has_file_named "pom.xml" || has_file_named "mvnw"; then
+            is_java=true
+            java_build_tool="maven"
+          elif has_file_named "build.gradle" || has_file_named "build.gradle.kts" || has_file_named "gradlew"; then
+            is_java=true
+            java_build_tool="gradle"
+          fi
+
+          # Node/React detection
+          if has_file_named "package.json"; then
+            is_node=true
+            package_json_path="$(first_file_named "package.json")"
+            node_project_dir="$(dirname "$package_json_path")"
+            if [ -f "${node_project_dir}/pnpm-lock.yaml" ]; then
+              node_pm="pnpm"
+              node_lockfile="${node_project_dir}/pnpm-lock.yaml"
+            elif [ -f "${node_project_dir}/yarn.lock" ]; then
+              node_pm="yarn"
+              node_lockfile="${node_project_dir}/yarn.lock"
+            else
+              node_pm="npm"
+              if [ -f "${node_project_dir}/package-lock.json" ]; then
+                node_lockfile="${node_project_dir}/package-lock.json"
+              elif [ -f "${node_project_dir}/npm-shrinkwrap.json" ]; then
+                node_lockfile="${node_project_dir}/npm-shrinkwrap.json"
+              elif has_file_named "pnpm-lock.yaml"; then
+                node_pm="pnpm"
+                node_lockfile="$(first_file_named "pnpm-lock.yaml")"
+              elif has_file_named "yarn.lock"; then
+                node_pm="yarn"
+                node_lockfile="$(first_file_named "yarn.lock")"
+              elif has_file_named "package-lock.json"; then
+                node_lockfile="$(first_file_named "package-lock.json")"
+              elif has_file_named "npm-shrinkwrap.json"; then
+                node_lockfile="$(first_file_named "npm-shrinkwrap.json")"
+              fi
+            fi
+          fi
+
+          # Python detection
+          if has_file_named "pyproject.toml" || has_file_named "requirements.txt"; then
+            is_python=true
+          fi
+
+          echo "is_java=$is_java" >> "$GITHUB_OUTPUT"
+          echo "is_node=$is_node" >> "$GITHUB_OUTPUT"
+          echo "is_python=$is_python" >> "$GITHUB_OUTPUT"
+          echo "node_pm=$node_pm" >> "$GITHUB_OUTPUT"
+          echo "node_project_dir=$node_project_dir" >> "$GITHUB_OUTPUT"
+          echo "node_lockfile=$node_lockfile" >> "$GITHUB_OUTPUT"
+          echo "java_build_tool=$java_build_tool" >> "$GITHUB_OUTPUT"
+
+  java:
+    name: Java (lint/test)
+    needs: detect
+    if: needs.detect.outputs.is_java == 'true'
+    runs-on: self-hosted
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: ${{ needs.detect.outputs.java_build_tool }}
+
+      - name: Maven test
+        if: needs.detect.outputs.java_build_tool == 'maven'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f "./mvnw" ]; then chmod +x ./mvnw && ./mvnw -q test; else mvn -q test; fi
+
+      - name: Gradle test
+        if: needs.detect.outputs.java_build_tool == 'gradle'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f "./gradlew" ]; then chmod +x ./gradlew && ./gradlew test; else gradle test; fi
+
+  node:
+    name: Node/React (lint/test/build)
+    needs: detect
+    if: needs.detect.outputs.is_node == 'true'
+    runs-on: self-hosted
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Node (npm/yarn)
+        if: needs.detect.outputs.node_pm != 'pnpm' && needs.detect.outputs.node_lockfile != ''
+        uses: actions/setup-node@v5
+        with:
+          node-version: "20"
+
+      - name: Setup Node (npm/yarn no-cache fallback)
+        if: needs.detect.outputs.node_pm != 'pnpm' && needs.detect.outputs.node_lockfile == ''
+        uses: actions/setup-node@v5
+        with:
+          node-version: "20"
+
+      - name: Setup Node (pnpm no cache)
+        if: needs.detect.outputs.node_pm == 'pnpm'
+        uses: actions/setup-node@v5
+        with:
+          node-version: "20"
+
+      - name: Setup pnpm
+        if: needs.detect.outputs.node_pm == 'pnpm'
+        uses: pnpm/action-setup@v4
+        with:
+          version: "9"
+
+      - name: Install dependencies
+        working-directory: ${{ needs.detect.outputs.node_project_dir }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${{ needs.detect.outputs.node_pm }}" in
+            pnpm) pnpm install --frozen-lockfile ;;
+            yarn) yarn install --frozen-lockfile ;;
+            npm)
+              if [ -f "package-lock.json" ] || [ -f "npm-shrinkwrap.json" ]; then
+                npm ci
+              else
+                npm install
+              fi
+              ;;
+          esac
+
+      - name: Lint
+        working-directory: ${{ needs.detect.outputs.node_project_dir }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # If no lint script, skip
+          if node -e "const p=require('./package.json'); process.exit(p.scripts && p.scripts.lint ? 0 : 1)"; then
+            case "${{ needs.detect.outputs.node_pm }}" in
+              pnpm) pnpm lint ;;
+              yarn) yarn lint ;;
+              npm)  npm run lint ;;
+            esac
+          else
+            echo "No lint script found; skipping."
+          fi
+
+      - name: Test
+        working-directory: ${{ needs.detect.outputs.node_project_dir }}
+        shell: bash
+        env:
+          CI: "true"
+        run: |
+          set -euo pipefail
+          if node -e "const p=require('./package.json'); process.exit(p.scripts && p.scripts.test ? 0 : 1)"; then
+            case "${{ needs.detect.outputs.node_pm }}" in
+              pnpm) pnpm test ;;
+              yarn) yarn test ;;
+              npm)  npm test ;;
+            esac
+          else
+            echo "No test script found; skipping."
+          fi
+
+      - name: Build (if script exists)
+        working-directory: ${{ needs.detect.outputs.node_project_dir }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if node -e "const p=require('./package.json'); process.exit(p.scripts && p.scripts.build ? 0 : 1)"; then
+            case "${{ needs.detect.outputs.node_pm }}" in
+              pnpm) pnpm build ;;
+              yarn) yarn build ;;
+              npm)  npm run build ;;
+            esac
+          else
+            echo "No build script found; skipping."
+          fi
+
+  python:
+    name: Python (ruff/pytest)
+    needs: detect
+    if: needs.detect.outputs.is_python == 'true'
+    runs-on: self-hosted
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install deps
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          if [ -f "pyproject.toml" ]; then
+            python -m pip install -e .[dev] || python -m pip install -e .
+            python -m pip install ruff pytest pytest-cov httpx
+          elif [ -f "requirements.txt" ]; then
+            python -m pip install -r requirements.txt
+            python -m pip install ruff pytest pytest-cov httpx
+          else
+            python -m pip install ruff pytest pytest-cov httpx
+          fi
+
+      - name: Ruff
+        shell: bash
+        run: |
+          set -euo pipefail
+          ruff check . || (echo "ruff failed" && exit 1)
+
+      - name: Pytest with coverage
+        shell: bash
+        run: |
+          set -euo pipefail
+          pytest -q --cov=orchestrator --cov-report=term-missing --cov-report=xml
+
+      - name: Upload Python coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-coverage-xml
+          path: coverage.xml
+          if-no-files-found: error
+
+      - name: Build package
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install build
+          python -m build
+
+  summary:
+    name: CI summary
+    needs: [detect, java, node, python]
+    runs-on: self-hosted
+    if: always()
+    steps:
+      - name: Result
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "CI completed."
