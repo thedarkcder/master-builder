@@ -202,3 +202,55 @@ def resolve_active_deployment_host(
             detail=f"Managed host '{host.label}' is not active",
         )
     return host
+
+
+def resolve_default_active_deployment_host(
+    *,
+    session,
+    provider: str = "internal_coolify",
+    infrastructure_provider: str | None = None,
+    region: str | None = None,
+) -> DeploymentHost:
+    hosts = session.execute(
+        select(DeploymentHost)
+        .where(DeploymentHost.provider == provider)
+        .order_by(DeploymentHost.created_at.asc())
+    ).scalars().all()
+
+    active_hosts = [host for host in hosts if _effective_host_state(host=host) in _ACTIVE_HOST_STATES]
+    normalized_provider = _normalize_optional_string(infrastructure_provider)
+    if normalized_provider is not None:
+        exact_provider_matches = [
+            host
+            for host in active_hosts
+            if _normalize_optional_string(host.infrastructure_provider) == normalized_provider
+        ]
+        if not exact_provider_matches:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"No active managed host matches infrastructure provider '{normalized_provider}'",
+            )
+        active_hosts = exact_provider_matches
+
+    normalized_region = _normalize_optional_string(region)
+    if normalized_region is not None:
+        exact_region_matches = [
+            host
+            for host in active_hosts
+            if _normalize_optional_string(host.region) == normalized_region
+        ]
+        if not exact_region_matches:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"No active managed host matches region '{normalized_region}'",
+            )
+        active_hosts = exact_region_matches
+
+    if not active_hosts:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="No active managed host is available for database restore")
+    if len(active_hosts) > 1:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Multiple managed hosts are available; set tenant deployment plane managed_host_id explicitly",
+        )
+    return active_hosts[0]

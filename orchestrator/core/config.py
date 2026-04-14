@@ -111,6 +111,7 @@ class Settings(BaseSettings):
     deployment_host_stale_timeout_seconds: int = 180
     deployment_host_agent_api_base_url: str = ""
     deployment_host_agent_bootstrap_token: str = ""
+    deployment_host_agent_bootstrap_token_path: str = ""
     deployment_host_agent_access_token: str = ""
     deployment_host_agent_access_token_path: str = ""
     deployment_host_agent_capabilities: str = "restore_database,postgres,mysql,mariadb"

@@ -237,6 +237,71 @@ services:
       - huggingface-cache:/root/.cache/huggingface
       - pocket-tts-cache:/root/.cache/pocket_tts
 
+  deployment-host-bootstrap:
+    build:
+      context: .
+      dockerfile: orchestrator/Dockerfile
+      target: app-runtime-base
+      args:
+        CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
+    container_name: master-builder-deployment-host-bootstrap
+    restart: "no"
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      ORCHESTRATOR_ADMIN_USERNAME: ${ORCHESTRATOR_ADMIN_USERNAME:-admin}
+      ORCHESTRATOR_ADMIN_PASSWORD: ${ORCHESTRATOR_ADMIN_PASSWORD:?Set ORCHESTRATOR_ADMIN_PASSWORD}
+      MASTER_BUILDER_DEPLOYMENT_HOST_LABEL: ${MASTER_BUILDER_DEPLOYMENT_HOST_LABEL:-}
+      MASTER_BUILDER_DEPLOYMENT_HOST_INFRASTRUCTURE_PROVIDER: ${MASTER_BUILDER_DEPLOYMENT_HOST_INFRASTRUCTURE_PROVIDER:-}
+      MASTER_BUILDER_DEPLOYMENT_HOST_REGION: ${MASTER_BUILDER_DEPLOYMENT_HOST_REGION:-}
+      MASTER_BUILDER_DEPLOYMENT_HOST_CAPABILITIES: ${MASTER_BUILDER_DEPLOYMENT_HOST_CAPABILITIES:-restore_database,postgres,mysql,mariadb}
+    command:
+      - python
+      - scripts/bootstrap_deployment_host_agent.py
+      - --api-base-url
+      - http://api:4000
+      - --admin-username
+      - ${ORCHESTRATOR_ADMIN_USERNAME:-admin}
+      - --admin-password
+      - ${ORCHESTRATOR_ADMIN_PASSWORD}
+      - --bootstrap-token-path
+      - /var/lib/master-builder/deployment-host/bootstrap-token
+      - --access-token-path
+      - /var/lib/master-builder/deployment-host/access-token
+    volumes:
+      - deployment-host-state:/var/lib/master-builder/deployment-host
+
+  deployment-host-agent:
+    build:
+      context: .
+      dockerfile: orchestrator/Dockerfile
+      target: app-runtime-base
+      args:
+        CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
+    container_name: master-builder-deployment-host-agent
+    restart: unless-stopped
+    depends_on:
+      deployment-host-bootstrap:
+        condition: service_completed_successfully
+    environment:
+      ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
+      POSTGRES_URL: ${POSTGRES_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
+      ORCHESTRATOR_SECRETS_ENCRYPTION_KEY: ${ORCHESTRATOR_SECRETS_ENCRYPTION_KEY:?Set ORCHESTRATOR_SECRETS_ENCRYPTION_KEY}
+      ORCHESTRATOR_DEPLOYMENT_HOST_AGENT_API_BASE_URL: http://api:4000
+      ORCHESTRATOR_DEPLOYMENT_HOST_AGENT_BOOTSTRAP_TOKEN_PATH: /var/lib/master-builder/deployment-host/bootstrap-token
+      ORCHESTRATOR_DEPLOYMENT_HOST_AGENT_ACCESS_TOKEN_PATH: /var/lib/master-builder/deployment-host/access-token
+      ORCHESTRATOR_DEPLOYMENT_HOST_AGENT_CAPABILITIES: ${MASTER_BUILDER_DEPLOYMENT_HOST_CAPABILITIES:-restore_database,postgres,mysql,mariadb}
+      ORCHESTRATOR_DEPLOYMENT_HOST_AGENT_CONTAINER_RUNTIME_COMMAND: docker
+    command:
+      - python
+      - -m
+      - orchestrator
+      - deployment-host-agent
+    volumes:
+      - deployment-host-state:/var/lib/master-builder/deployment-host
+      - /var/run/docker.sock:/var/run/docker.sock
+
 
   project-automation:
     <<: *extra_hosts_host_gateway
@@ -452,6 +517,7 @@ volumes:
   postgres-data:
   tailscale-state:
   runner-data:
+  deployment-host-state:
   codex-home:
   huggingface-cache:
   pocket-tts-cache:

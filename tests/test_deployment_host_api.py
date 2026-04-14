@@ -509,6 +509,166 @@ class DeploymentHostApiTests(SqliteTemplateApiTestCase):
         self.assertEqual(restore_response.status_code, 409, restore_response.text)
         self.assertIn("managed host", restore_response.json()["detail"].lower())
 
+    def test_restore_run_uses_single_active_host_when_plane_has_no_explicit_assignment(self) -> None:
+        self._insert_jira_connection()
+        create_tenant = self.client.post("/api/admin/tenants", json=self._tenant_payload(), auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201, create_tenant.text)
+
+        coolify_secret_response = self.client.put(
+            "/api/admin/secrets/platform%2FCOOLIFY_API_TOKEN",
+            json={"value": "coolify-token"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(coolify_secret_response.status_code, 200)
+
+        create_host_response = self.client.post(
+            "/api/admin/deployment-hosts",
+            json={
+                "label": "Builder EU West",
+                "provider": "internal_coolify",
+                "infrastructure_provider": "hetzner",
+                "region": "eu-west",
+                "capabilities": ["restore_database", "postgres", "mysql", "mariadb"],
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_host_response.status_code, 201, create_host_response.text)
+        host_id = create_host_response.json()["host"]["host_id"]
+        bootstrap_token = create_host_response.json()["bootstrap_token"]
+
+        register_response = self.client.post(
+            "/api/internal/deployment-hosts/register",
+            json={
+                "bootstrap_token": bootstrap_token,
+                "agent_version": "1.0.0",
+                "advertised_capabilities": ["restore_database", "postgres", "mysql", "mariadb"],
+            },
+        )
+        self.assertEqual(register_response.status_code, 200, register_response.text)
+
+        deployment_plane_response = self.client.put(
+            "/api/admin/tenants/tenant-a/deployment-plane",
+            json={
+                "provider": "internal_coolify",
+                "infrastructure_provider": "hetzner",
+                "region": "eu-west",
+                "base_domain": "apps.example.com",
+                "platform_subdomain": "builder",
+                "api_base_url": "https://builder.apps.example.com/api/v1",
+                "coolify_project_uuid": "project-uuid-1",
+                "coolify_environment_name": "production",
+                "coolify_server_uuid": "server-uuid-1",
+                "coolify_destination_uuid": "destination-uuid-1",
+                "secret_refs": {
+                    "coolify_api_token": "platform/COOLIFY_API_TOKEN",
+                },
+                "state": "active",
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(deployment_plane_response.status_code, 200, deployment_plane_response.text)
+
+        project_id, app_id = self._create_project_with_database_backup()
+        with patch(
+            "orchestrator.api.admin.deployment_restore_service.CoolifyApiClient.list_database_backup_executions",
+            return_value=[
+                {
+                    "id": "execution-uuid-1",
+                    "status": "completed",
+                    "created_at": "2026-04-14T12:00:00Z",
+                    "completed_at": "2026-04-14T12:05:00Z",
+                    "filename": "app.dump",
+                    "path": "/var/lib/coolify/backups/app.dump",
+                }
+            ],
+        ):
+            restore_response = self.client.post(
+                f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-backups/restore",
+                json={
+                    "backup_key": "db-daily",
+                    "resource_key": "db",
+                    "execution_uuid": "execution-uuid-1",
+                    "confirmation_value": "default",
+                },
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(restore_response.status_code, 201, restore_response.text)
+        self.assertEqual(restore_response.json()["host_id"], host_id)
+
+    def test_restore_run_rejects_default_host_with_region_mismatch(self) -> None:
+        self._insert_jira_connection()
+        create_tenant = self.client.post("/api/admin/tenants", json=self._tenant_payload(), auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201, create_tenant.text)
+
+        coolify_secret_response = self.client.put(
+            "/api/admin/secrets/platform%2FCOOLIFY_API_TOKEN",
+            json={"value": "coolify-token"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(coolify_secret_response.status_code, 200)
+
+        create_host_response = self.client.post(
+            "/api/admin/deployment-hosts",
+            json={
+                "label": "Builder US East",
+                "provider": "internal_coolify",
+                "infrastructure_provider": "hetzner",
+                "region": "us-east",
+                "capabilities": ["restore_database", "postgres"],
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_host_response.status_code, 201, create_host_response.text)
+        bootstrap_token = create_host_response.json()["bootstrap_token"]
+
+        register_response = self.client.post(
+            "/api/internal/deployment-hosts/register",
+            json={
+                "bootstrap_token": bootstrap_token,
+                "agent_version": "1.0.0",
+                "advertised_capabilities": ["restore_database", "postgres"],
+            },
+        )
+        self.assertEqual(register_response.status_code, 200, register_response.text)
+
+        deployment_plane_response = self.client.put(
+            "/api/admin/tenants/tenant-a/deployment-plane",
+            json={
+                "provider": "internal_coolify",
+                "infrastructure_provider": "hetzner",
+                "region": "eu-west",
+                "base_domain": "apps.example.com",
+                "platform_subdomain": "builder",
+                "api_base_url": "https://builder.apps.example.com/api/v1",
+                "coolify_project_uuid": "project-uuid-1",
+                "coolify_environment_name": "production",
+                "coolify_server_uuid": "server-uuid-1",
+                "coolify_destination_uuid": "destination-uuid-1",
+                "secret_refs": {
+                    "coolify_api_token": "platform/COOLIFY_API_TOKEN",
+                },
+                "state": "active",
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(deployment_plane_response.status_code, 200, deployment_plane_response.text)
+
+        project_id, app_id = self._create_project_with_database_backup()
+
+        restore_response = self.client.post(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-backups/restore",
+            json={
+                "backup_key": "db-daily",
+                "resource_key": "db",
+                "execution_uuid": "execution-uuid-1",
+                "confirmation_value": "default",
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(restore_response.status_code, 409, restore_response.text)
+        self.assertIn("region", restore_response.json()["detail"].lower())
+
 
 if __name__ == "__main__":
     unittest.main()

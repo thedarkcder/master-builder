@@ -134,7 +134,7 @@ test("platform admin can create and assign a managed host from deployments overv
     region: "eu-west",
     capabilities: ["restore_database", "postgres"],
   });
-  await expect(page.getByText("Created managed host Primary managed host. Copy the bootstrap token now.")).toBeVisible();
+  await expect(page.getByText("Created managed host Primary managed host. Bootstrap token is ready for manual agent bootstrap.")).toBeVisible();
   await expect(page.getByText("bootstrap-token-1")).toBeVisible();
 
   await page.getByLabel("Assigned host").selectOption("host-2");
