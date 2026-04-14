@@ -114,9 +114,11 @@ def start_deployment_host_command(
     host_id: str,
     command_id: str,
     claim_id: str,
+    lease_duration: timedelta | None = None,
     now: datetime | None = None,
 ) -> DeploymentHostCommand:
     timestamp = now or _now()
+    effective_lease_duration = lease_duration or _LEASE_DURATION
     command = session.get(DeploymentHostCommand, command_id)
     if command is None or command.host_id != host_id:
         raise RuntimeError("Deployment host command was not found")
@@ -127,10 +129,46 @@ def start_deployment_host_command(
     if command.status != "running":
         command.status = "running"
         command.started_at = timestamp
+        command.lease_expires_at = timestamp + effective_lease_duration
         command.updated_at = timestamp
         session.flush()
         session.refresh(command)
     return command
+
+
+def fail_stale_running_deployment_host_commands(
+    session: Session,
+    *,
+    host_id: str | None = None,
+    now: datetime | None = None,
+    error_message: str = "Deployment host command expired while running",
+) -> list[DeploymentHostCommand]:
+    timestamp = now or _now()
+    predicates = [
+        DeploymentHostCommand.status == "running",
+        DeploymentHostCommand.lease_expires_at.is_not(None),
+        DeploymentHostCommand.lease_expires_at <= timestamp,
+    ]
+    if host_id is not None:
+        predicates.append(DeploymentHostCommand.host_id == host_id)
+    query = select(DeploymentHostCommand).where(*predicates).order_by(
+        DeploymentHostCommand.lease_expires_at.asc(),
+        DeploymentHostCommand.created_at.asc(),
+    )
+    if _is_postgres(session):
+        query = query.with_for_update(skip_locked=True)
+    commands = list(session.execute(query).scalars().all())
+    for command in commands:
+        command.status = "failed"
+        command.completed_at = timestamp
+        command.updated_at = timestamp
+        command.lease_expires_at = None
+        command.last_error = error_message
+        if command.started_at is None:
+            command.started_at = timestamp
+    if commands:
+        session.flush()
+    return commands
 
 
 def complete_deployment_host_command(

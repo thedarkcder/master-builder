@@ -143,6 +143,13 @@ def persist_deployment_host_agent_access_token(path: Path, access_token: str) ->
     os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
 
 
+def clear_deployment_host_agent_access_token(path: Path) -> None:
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return
+
+
 class DeploymentHostControlPlaneClient:
     def __init__(
         self,
@@ -429,8 +436,6 @@ class DeploymentHostAgent:
             if registered_access_token is None:
                 raise DeploymentHostAgentError("Deployment host registration did not return an access token")
             persist_deployment_host_agent_access_token(self._config.access_token_path, registered_access_token)
-            if self._config.bootstrap_token_path is not None:
-                self._config.bootstrap_token_path.unlink(missing_ok=True)
             access_token = registered_access_token
             logger.info("deployment_host_agent_registered")
         self._client = self._client_factory(
@@ -439,24 +444,40 @@ class DeploymentHostAgent:
         )
         return self._client
 
+    def _reset_access_token(self) -> None:
+        clear_deployment_host_agent_access_token(self._config.access_token_path)
+        self._client = None
+
+    def _call_control_plane(self, callback, *, allow_reauth: bool = True):  # noqa: ANN001
+        try:
+            return callback(self._ensure_client())
+        except DeploymentHostControlPlaneError as exc:
+            if not allow_reauth or exc.status_code != 401:
+                raise
+            if self._load_bootstrap_token() is None:
+                raise
+            logger.warning("deployment_host_agent_reauth_requested status_code=%s", exc.status_code)
+            self._reset_access_token()
+            return callback(self._ensure_client())
+
     def _heartbeat_if_due(self, *, force: bool = False) -> None:
         now = monotonic()
         if not force and self._last_heartbeat_at is not None:
             elapsed = now - self._last_heartbeat_at
             if elapsed < float(self._config.heartbeat_interval_seconds):
                 return
-        client = self._ensure_client()
-        client.heartbeat(
-            agent_version=self._config.agent_version,
-            advertised_capabilities=self._config.capabilities,
-            state=self._health_state,
+        self._call_control_plane(
+            lambda client: client.heartbeat(
+                agent_version=self._config.agent_version,
+                advertised_capabilities=self._config.capabilities,
+                state=self._health_state,
+            )
         )
         self._last_heartbeat_at = now
 
     def process_once(self) -> DeploymentHostAgentResult:
         self._heartbeat_if_due(force=self._last_heartbeat_at is None)
-        client = self._ensure_client()
-        command = client.claim_command()
+        command = self._call_control_plane(lambda active_client: active_client.claim_command())
         if command is None:
             return DeploymentHostAgentResult(processed=False)
 
@@ -466,15 +487,17 @@ class DeploymentHostAgent:
         if command_id is None or claim_id is None or kind is None:
             raise DeploymentHostAgentError("Claimed deployment host command is missing identifiers")
 
-        client.start_command(command_id=command_id, claim_id=claim_id)
+        self._call_control_plane(lambda active_client: active_client.start_command(command_id=command_id, claim_id=claim_id))
         if kind != "restore_database":
             result = {"kind": kind}
-            client.complete_command(
-                command_id=command_id,
-                claim_id=claim_id,
-                status="failed",
-                result=result,
-                last_error=f"Unsupported deployment host command kind '{kind}'",
+            self._call_control_plane(
+                lambda active_client: active_client.complete_command(
+                    command_id=command_id,
+                    claim_id=claim_id,
+                    status="failed",
+                    result=result,
+                    last_error=f"Unsupported deployment host command kind '{kind}'",
+                )
             )
             self._health_state = "degraded"
             return DeploymentHostAgentResult(processed=True, command_id=command_id)
@@ -485,12 +508,14 @@ class DeploymentHostAgent:
             timeout_seconds=self._config.command_timeout_seconds,
             subprocess_run_fn=self._subprocess_run_fn,
         )
-        client.complete_command(
-            command_id=command_id,
-            claim_id=claim_id,
-            status=status,
-            result=result,
-            last_error=last_error,
+        self._call_control_plane(
+            lambda active_client: active_client.complete_command(
+                command_id=command_id,
+                claim_id=claim_id,
+                status=status,
+                result=result,
+                last_error=last_error,
+            )
         )
         self._health_state = "active" if status == "succeeded" else "degraded"
         return DeploymentHostAgentResult(processed=True, command_id=command_id)

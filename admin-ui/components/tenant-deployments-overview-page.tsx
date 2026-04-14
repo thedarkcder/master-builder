@@ -213,7 +213,7 @@ export function TenantDeploymentsOverviewPage() {
       const created = await createDeploymentHost(credentials, payload);
       setHosts((current) => [created.host, ...current.filter((host) => host.host_id !== created.host.host_id)]);
       setHostBootstrap(created);
-      setHostStatusLine(`Created managed host ${created.host.label}. Bootstrap token is ready for manual agent bootstrap.`);
+      setHostStatusLine(`Created managed host ${created.host.label}. Recovery token is ready for manual agent bootstrap.`);
       setHostDraft(emptyManagedHostDraft());
     } catch (error) {
       setHostStatusLine(`Failed to create managed host: ${(error as Error).message}`);
@@ -418,7 +418,7 @@ export function TenantDeploymentsOverviewPage() {
                   <ul className="mt-3 space-y-2 text-sm text-muted-foreground">
                     <li>Label, region, capabilities, and lifecycle state.</li>
                     <li>Last seen time and agent version after registration.</li>
-                    <li>One-time bootstrap token only for manual agent registration flows.</li>
+                    <li>Bootstrap recovery token for manual agent registration and re-registration flows.</li>
                   </ul>
                 </div>
 

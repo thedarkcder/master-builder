@@ -153,7 +153,6 @@ def register_deployment_host(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid deployment host bootstrap token")
     access_token = generate_deployment_host_token()
     now = _now()
-    host.bootstrap_token_hash = None
     host.access_token_hash = hash_deployment_host_token(access_token)
     host.agent_version = _normalize_optional_string(agent_version)
     host.capability_keys_json = list(advertised_capabilities)

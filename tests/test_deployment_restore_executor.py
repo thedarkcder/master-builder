@@ -67,9 +67,10 @@ def test_build_docker_exec_restore_command_wraps_postgres_restore() -> None:
         )
     )
 
-    assert command.startswith("docker exec -i coolify-db-container sh -lc ")
+    assert command.startswith("cat /var/lib/coolify/backups/app.dump | docker exec -i coolify-db-container sh -lc ")
     assert "PGPASSWORD=secret" in command
     assert "pg_restore" in command
+    assert "/var/lib/coolify/backups/app.dump" not in command.split("| docker exec -i ", 1)[1]
 
 
 def test_build_docker_exec_restore_command_text_uses_custom_container_reference() -> None:
@@ -87,7 +88,27 @@ def test_build_docker_exec_restore_command_text_uses_custom_container_reference(
         container_reference="'custom-container'",
     )
 
-    assert command.startswith("docker exec -i 'custom-container' sh -lc ")
+    assert command.startswith("gunzip -c /var/lib/coolify/backups/app.sql.gz | docker exec -i 'custom-container' sh -lc ")
     assert "MYSQL_PWD=secret" in command
     assert "gunzip -c" in command
     assert "mysql" in command
+
+
+def test_build_restore_command_can_read_from_stdin_for_container_exec() -> None:
+    command = build_restore_command(
+        DeploymentRestoreExecutionContext(
+            database_type="postgres",
+            container_name="coolify-db-container",
+            database_name="app",
+            username="app",
+            password="secret",
+            host="127.0.0.1",
+            port=5432,
+            artifact_path="/var/lib/coolify/backups/app.dump",
+        ),
+        artifact_via_stdin=True,
+    )
+
+    command_text = " ".join(command)
+    assert "pg_restore" in command_text
+    assert "/var/lib/coolify/backups/app.dump" not in command_text

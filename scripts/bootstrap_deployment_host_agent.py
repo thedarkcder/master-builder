@@ -49,13 +49,16 @@ class AdminApiClient:
         path: str,
         payload: dict[str, Any] | None = None,
         expected_statuses: set[int] | None = None,
+        auth_header: str | None = None,
     ) -> dict[str, Any] | list[Any]:
         url = f"{self._base_url}{path}"
         headers = {
             "Accept": "application/json",
-            "Authorization": self._auth_header,
             "User-Agent": "master-builder-deployment-host-bootstrap",
         }
+        effective_auth_header = _normalize_optional_string(auth_header) or self._auth_header
+        if effective_auth_header is not None:
+            headers["Authorization"] = effective_auth_header
         body = None
         if payload is not None:
             headers["Content-Type"] = "application/json"
@@ -147,6 +150,51 @@ class AdminApiClient:
             raise BootstrapApiError("Expected tenant deployment plane update response object")
         return response
 
+    def register_deployment_host(
+        self,
+        *,
+        bootstrap_token: str,
+        agent_version: str,
+        advertised_capabilities: tuple[str, ...],
+    ) -> dict[str, Any]:
+        response = self._request_json(
+            method="POST",
+            path="/api/internal/deployment-hosts/register",
+            payload={
+                "bootstrap_token": bootstrap_token,
+                "agent_version": agent_version,
+                "advertised_capabilities": list(advertised_capabilities),
+            },
+            expected_statuses={200},
+            auth_header=None,
+        )
+        if not isinstance(response, dict):
+            raise BootstrapApiError("Expected deployment host registration response object")
+        return response
+
+    def heartbeat_deployment_host(
+        self,
+        *,
+        access_token: str,
+        agent_version: str,
+        advertised_capabilities: tuple[str, ...],
+        state: str = "active",
+    ) -> dict[str, Any]:
+        response = self._request_json(
+            method="POST",
+            path="/api/internal/deployment-hosts/heartbeat",
+            payload={
+                "agent_version": agent_version,
+                "advertised_capabilities": list(advertised_capabilities),
+                "state": state,
+            },
+            expected_statuses={200},
+            auth_header=f"Bearer {access_token}",
+        )
+        if not isinstance(response, dict):
+            raise BootstrapApiError("Expected deployment host heartbeat response object")
+        return response
+
 
 def _normalize_base_url(value: str) -> str:
     normalized = str(value or "").strip().rstrip("/")
@@ -226,6 +274,13 @@ def _existing_bootstrap_token(path: Path) -> str | None:
         return None
 
 
+def _clear_secret_file(path: Path) -> None:
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return
+
+
 def _plane_is_configured_for_internal_coolify(plane: dict[str, Any]) -> bool:
     if _normalize_optional_string(plane.get("provider")) != "internal_coolify":
         return False
@@ -291,24 +346,65 @@ def _assign_host_to_tenants(
 
 
 def ensure_deployment_host_bootstrap(config: DeploymentHostBootstrapConfig) -> dict[str, object]:
+    client = AdminApiClient(base_url=config.api_base_url, auth_header=config.auth_header)
     if _has_access_token(config.access_token_path):
-        return {
-            "ok": True,
-            "action": "noop",
-            "reason": "access_token_present",
-            "host_label": config.host_label,
-        }
+        access_token = _normalize_optional_string(config.access_token_path.read_text(encoding="utf-8"))
+        if access_token is not None:
+            try:
+                heartbeat = client.heartbeat_deployment_host(
+                    access_token=access_token,
+                    agent_version="bootstrap",
+                    advertised_capabilities=config.capabilities,
+                )
+                host_id = _normalize_required_string(heartbeat.get("host_id"), field_name="host_id")
+                assigned_tenants = _assign_host_to_tenants(
+                    client=client,
+                    host_id=host_id,
+                    tenant_ids=config.tenant_ids,
+                    assign_configured_tenants=config.assign_configured_tenants,
+                )
+                return {
+                    "ok": True,
+                    "action": "noop",
+                    "reason": "access_token_valid",
+                    "host_id": host_id,
+                    "host_label": config.host_label,
+                    "assigned_tenants": assigned_tenants,
+                }
+            except BootstrapApiError:
+                _clear_secret_file(config.access_token_path)
 
     existing_bootstrap_token = _existing_bootstrap_token(config.bootstrap_token_path)
     if existing_bootstrap_token is not None:
-        return {
-            "ok": True,
-            "action": "noop",
-            "reason": "bootstrap_token_present",
-            "host_label": config.host_label,
-        }
+        try:
+            registration = client.register_deployment_host(
+                bootstrap_token=existing_bootstrap_token,
+                agent_version="bootstrap",
+                advertised_capabilities=config.capabilities,
+            )
+            access_token = _normalize_required_string(registration.get("access_token"), field_name="access_token")
+            host = dict(registration.get("host") or {})
+            host_id = _normalize_required_string(host.get("host_id"), field_name="host_id")
+            _write_secret_file(config.access_token_path, access_token)
+            assigned_tenants = _assign_host_to_tenants(
+                client=client,
+                host_id=host_id,
+                tenant_ids=config.tenant_ids,
+                assign_configured_tenants=config.assign_configured_tenants,
+            )
+            return {
+                "ok": True,
+                "action": "registered",
+                "reason": "bootstrap_token_valid",
+                "host_id": host_id,
+                "host_label": config.host_label,
+                "bootstrap_token_path": str(config.bootstrap_token_path),
+                "assigned_tenants": assigned_tenants,
+            }
+        except BootstrapApiError:
+            _clear_secret_file(config.bootstrap_token_path)
+            _clear_secret_file(config.access_token_path)
 
-    client = AdminApiClient(base_url=config.api_base_url, auth_header=config.auth_header)
     created = client.create_deployment_host(
         label=config.host_label,
         infrastructure_provider=config.infrastructure_provider,
@@ -317,9 +413,14 @@ def ensure_deployment_host_bootstrap(config: DeploymentHostBootstrapConfig) -> d
     )
     host = dict(created.get("host") or {})
     bootstrap_token = _normalize_required_string(created.get("bootstrap_token"), field_name="bootstrap_token")
-    action = "created"
-
     _write_secret_file(config.bootstrap_token_path, bootstrap_token)
+    registration = client.register_deployment_host(
+        bootstrap_token=bootstrap_token,
+        agent_version="bootstrap",
+        advertised_capabilities=config.capabilities,
+    )
+    access_token = _normalize_required_string(registration.get("access_token"), field_name="access_token")
+    _write_secret_file(config.access_token_path, access_token)
     host_id = _normalize_required_string(host.get("host_id"), field_name="host_id")
     assigned_tenants = _assign_host_to_tenants(
         client=client,
@@ -329,7 +430,7 @@ def ensure_deployment_host_bootstrap(config: DeploymentHostBootstrapConfig) -> d
     )
     return {
         "ok": True,
-        "action": action,
+        "action": "created",
         "host_id": host_id,
         "host_label": config.host_label,
         "bootstrap_token_path": str(config.bootstrap_token_path),
@@ -354,7 +455,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--bootstrap-token-path",
         required=True,
-        help="Private file path where the one-time bootstrap token should be written.",
+        help="Private file path where the bootstrap recovery token should be written.",
     )
     parser.add_argument(
         "--access-token-path",

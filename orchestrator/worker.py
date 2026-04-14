@@ -14,8 +14,10 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from orchestrator.api.admin.tenant_crud import purge_expired_archived_tenants
+from orchestrator.api.admin.deployment_restore_service import complete_project_deployment_restore_run
 from orchestrator.core.codex_runtime import CodexRuntimeError
 from orchestrator.core.config import Settings, get_settings
+from orchestrator.core.deployment_host_queue import fail_stale_running_deployment_host_commands
 from orchestrator.core.discord.notifications import send_tenant_discord_message
 from orchestrator.core.logging import configure_logging
 from orchestrator.core.knowledge_prewarm import prewarm_knowledge_dependencies
@@ -43,7 +45,6 @@ from orchestrator.core.worker.queue_selector import (
 from orchestrator.core.worker.execution_service import (
     process_claimed_run_with_dependencies as _process_claimed_run_with_dependencies,
     process_next_webhook_job_with_dependencies as _process_next_webhook_job_with_dependencies,
-    process_next_queued_run_with_dependencies as _process_next_queued_run_with_dependencies,
 )
 from orchestrator.core.worker.queue_listener import (
     RunQueueNotificationBridge,
@@ -483,6 +484,17 @@ def _has_available_webhook_job_once(
 ) -> bool:
     now = datetime.now(timezone.utc)
     with session_factory() as session:
+        stale_commands = fail_stale_running_deployment_host_commands(session=session, now=now)
+        for stale_command in stale_commands:
+            if stale_command.kind == "restore_database" and stale_command.restore_run_id:
+                complete_project_deployment_restore_run(
+                    session=session,
+                    restore_run_id=stale_command.restore_run_id,
+                    status="failed",
+                    last_error=stale_command.last_error,
+                )
+        if stale_commands:
+            session.commit()
         job_id = session.execute(
             select(WebhookJob.job_id)
             .where(
