@@ -369,6 +369,22 @@ class MigrationTests(unittest.TestCase):
         self.assertNotIn('server_default=sa.text("1")', contents)
         self.assertNotIn('server_default=sa.text("0")', contents)
 
+    def test_worker_runtime_state_migration_handles_postgres_duplicate_table_errors(self) -> None:
+        migration_file = (
+            Path(__file__).resolve().parents[1]
+            / "orchestrator"
+            / "storage"
+            / "migrations"
+            / "versions"
+            / "20260328_0045_worker_runtime_and_knowledge_fact_slot_name.py"
+        )
+        contents = migration_file.read_text(encoding="utf-8")
+
+        self.assertIn("ProgrammingError", contents)
+        self.assertIn('sqlstate == "42P07"', contents)
+        self.assertIn("except (IntegrityError, ProgrammingError) as exc:", contents)
+        self.assertIn("_is_duplicate_table_error(exc)", contents)
+
     def test_decision_state_migration_is_idempotent_when_tables_already_exist(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             database_url = f"sqlite:///{tmp_dir}/test.db"

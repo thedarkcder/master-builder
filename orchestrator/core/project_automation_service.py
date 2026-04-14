@@ -216,12 +216,18 @@ def upsert_project_automation(
         )
         session.add(existing)
     else:
+        existing_days = tuple(int(day) for day in (existing.days_of_week or []))
+        schedule_changed = (
+            existing.timezone != normalized.timezone
+            or existing_days != normalized.days_of_week
+            or existing.local_time != normalized.local_time
+        )
         existing.enabled = normalized.enabled
         existing.timezone = normalized.timezone
         existing.days_of_week = list(normalized.days_of_week)
         existing.local_time = normalized.local_time
         existing.fallback_lookback_hours = normalized.fallback_lookback_hours
-        if existing.next_run_at <= timestamp:
+        if schedule_changed or existing.next_run_at <= timestamp:
             existing.next_run_at = compute_next_run_at(
                 timezone_name=normalized.timezone,
                 days_of_week=normalized.days_of_week,
