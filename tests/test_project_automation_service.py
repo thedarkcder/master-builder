@@ -5,6 +5,7 @@ from tempfile import TemporaryDirectory
 import unittest
 
 from orchestrator.core.project_automation_service import (
+    compute_next_run_at,
     enqueue_project_automation_run_now,
     PROJECT_AUTOMATION_KIND_STANDUP,
     ProjectAutomationWrite,
@@ -123,6 +124,53 @@ class ProjectAutomationServiceTests(unittest.TestCase):
         self.assertEqual(len(first), 1)
         self.assertEqual(first[0].automation.automation_id, automation.automation_id)
         self.assertEqual(len(second), 0)
+
+    def test_upsert_recomputes_next_run_at_when_schedule_fields_change(self) -> None:
+        now = datetime(2026, 3, 28, 9, 0, tzinfo=UTC)
+        with self.session_factory() as session:
+            project = session.get(Project, "route25-default")
+            assert project is not None
+            automation = upsert_project_automation(
+                session=session,
+                tenant_id=project.tenant_id,
+                project_id=project.project_id,
+                payload=ProjectAutomationWrite(
+                    kind=PROJECT_AUTOMATION_KIND_STANDUP,
+                    enabled=True,
+                    timezone="UTC",
+                    days_of_week=(5,),
+                    local_time="22:30",
+                    fallback_lookback_hours=24,
+                ),
+                now=now,
+            )
+            original_next_run_at = automation.next_run_at
+
+            updated = upsert_project_automation(
+                session=session,
+                tenant_id=project.tenant_id,
+                project_id=project.project_id,
+                payload=ProjectAutomationWrite(
+                    kind=PROJECT_AUTOMATION_KIND_STANDUP,
+                    enabled=True,
+                    timezone="UTC",
+                    days_of_week=(0,),
+                    local_time="08:15",
+                    fallback_lookback_hours=24,
+                ),
+                now=now,
+            )
+
+        self.assertNotEqual(updated.next_run_at, original_next_run_at)
+        self.assertEqual(
+            updated.next_run_at.replace(tzinfo=UTC),
+            compute_next_run_at(
+                timezone_name="UTC",
+                days_of_week=(0,),
+                local_time="08:15",
+                after=now,
+            ),
+        )
 
     def test_enqueue_run_now_creates_execution_without_waiting_for_schedule(self) -> None:
         now = datetime(2026, 3, 28, 9, 0, tzinfo=UTC)
