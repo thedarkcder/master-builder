@@ -1388,3 +1388,19 @@ def seed_parent_issues_with_codex(
             "errors": [],
         },
     )
+
+
+def seed_issues_with_codex(**kwargs):  # type: ignore[no-untyped-def]
+    if "build_codex_runtime_fn" in kwargs:
+        kwargs["build_runtime_fn"] = kwargs.pop("build_codex_runtime_fn")
+    if "plan_seed_issues_with_codex_fn" in kwargs:
+        kwargs["plan_seed_issues_with_runtime_fn"] = kwargs.pop("plan_seed_issues_with_codex_fn")
+    return seed_issues_with_runtime(**kwargs)
+
+
+def seed_parent_issues_with_codex(**kwargs):  # type: ignore[no-untyped-def]
+    if "build_codex_runtime_fn" in kwargs:
+        kwargs["build_runtime_fn"] = kwargs.pop("build_codex_runtime_fn")
+    if "plan_pm_parent_issues_with_codex_fn" in kwargs:
+        kwargs["plan_pm_parent_issues_with_runtime_fn"] = kwargs.pop("plan_pm_parent_issues_with_codex_fn")
+    return seed_parent_issues_with_runtime(**kwargs)
