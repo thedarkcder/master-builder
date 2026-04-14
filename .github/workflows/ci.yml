@@ -263,6 +263,16 @@ jobs:
             echo "No build script found; skipping."
           fi
 
+      - name: Deterministic UI e2e gate (admin-ui)
+        if: needs.detect.outputs.node_project_dir == 'admin-ui'
+        working-directory: ${{ needs.detect.outputs.node_project_dir }}
+        shell: bash
+        env:
+          CI: "true"
+        run: |
+          set -euo pipefail
+          npm run test:e2e
+
   python-confidence:
     name: Python confidence
     needs: detect

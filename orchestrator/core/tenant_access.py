@@ -15,18 +15,6 @@ PERMISSION_PEOPLE_MANAGE = "people.manage"
 PERMISSION_PROJECTS_MANAGE = "projects.manage"
 PERMISSION_TECHNICAL_ACCESS = "technical.access"
 
-LEGACY_PERMISSION_ALIASES: dict[str, str | None] = {
-    "tenant.manage": PERMISSION_WORKSPACE_MANAGE,
-    "members.manage": PERMISSION_PEOPLE_MANAGE,
-    "teams.manage": PERMISSION_PEOPLE_MANAGE,
-    "analytics.business.view": None,
-    "runs.business.view": None,
-    "settings.business.view": None,
-    "analytics.technical.view": PERMISSION_TECHNICAL_ACCESS,
-    "runs.technical.view": PERMISSION_TECHNICAL_ACCESS,
-    "settings.technical.view": PERMISSION_TECHNICAL_ACCESS,
-}
-
 ALL_PERMISSION_KEYS = frozenset(
     {
         PERMISSION_WORKSPACE_MANAGE,
@@ -36,7 +24,7 @@ ALL_PERMISSION_KEYS = frozenset(
     }
 )
 
-KNOWN_PERMISSION_KEYS = frozenset(set(ALL_PERMISSION_KEYS) | set(LEGACY_PERMISSION_ALIASES))
+KNOWN_PERMISSION_KEYS = ALL_PERMISSION_KEYS
 
 ROLE_PERMISSION_KEYS: dict[str, frozenset[str]] = {
     ROLE_TENANT_ADMIN: ALL_PERMISSION_KEYS,
@@ -63,7 +51,7 @@ def normalize_permission_key(permission_key: str) -> str | None:
     normalized = str(permission_key).strip()
     if normalized in ALL_PERMISSION_KEYS:
         return normalized
-    return LEGACY_PERMISSION_ALIASES.get(normalized)
+    return None
 
 
 def normalize_permission_keys(permission_keys: list[str]) -> tuple[str, ...]:

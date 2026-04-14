@@ -26,6 +26,7 @@ import {
   type WorkflowAttemptCreatePayload,
   type TokenTimelineRecord
 } from "@/lib/api";
+import { formatTimestamp } from "@/lib/datetime";
 import { buildRunDetailPath, resolveRunRouteContext } from "@/lib/dashboard-paths";
 
 type InvocationTelemetry = {
@@ -533,7 +534,7 @@ function TimelineRow({
   const { icon, color } = TIMELINE_ICON[entry.kind] ?? TIMELINE_ICON.message;
   const stageLbl = stageDisplayLabelFn(entry.stage);
   const ts = relativeTime(entry.recordedAt);
-  const fullTs = new Date(entry.recordedAt).toLocaleString();
+  const fullTs = formatTimestamp(entry.recordedAt);
   const attempt = entry.attempt !== null ? ` #${entry.attempt}` : "";
 
   return (
@@ -766,13 +767,11 @@ export default function RunDetailPage() {
     }
     setForceRerunBusy(true);
     try {
-      const restartCheckpointKind = hasPmCheckpoint ? "pm" : "execution";
       const cancelled = await cancelRun(credentials, run.run_id);
       const nextRun = await createWorkflowAttempt(credentials, cancelled.workflow_id, {
-        mode: "restart",
-        checkpoint_kind: restartCheckpointKind
+        mode: "fresh"
       });
-      setStatusLine(`Force-cancelled ${cancelled.run_id} and queued restart ${nextRun.run_id}.`);
+      setStatusLine(`Force-cancelled ${cancelled.run_id} and queued fresh run ${nextRun.run_id}.`);
       router.push(
         buildRunDetailPath({
           tenantId: run.tenant_id,
@@ -1623,7 +1622,7 @@ export default function RunDetailPage() {
                           ? `/${encodeURIComponent(run.tenant_id)}/projects/${encodeURIComponent(projectContextId)}/runs`
                           : `/${encodeURIComponent(run.tenant_id)}/runs`
                       )
-                    : "/dashboard"
+                    : "/platform/dashboard"
                 }
               >
                 <ArrowLeft className="mr-1.5 h-3.5 w-3.5" />
@@ -1655,9 +1654,9 @@ export default function RunDetailPage() {
                 <code className="rounded bg-muted px-1">{executionContext.execution_branch}</code>
               </span>
             ) : null}
-            <span><span className="font-medium text-foreground">Created</span> {new Date(run.created_at).toLocaleString()}</span>
-            {run.started_at ? <span><span className="font-medium text-foreground">Started</span> {new Date(run.started_at).toLocaleString()}</span> : null}
-            {run.finished_at ? <span><span className="font-medium text-foreground">Finished</span> {new Date(run.finished_at).toLocaleString()}</span> : null}
+            <span><span className="font-medium text-foreground">Created</span> {formatTimestamp(run.created_at)}</span>
+            {run.started_at ? <span><span className="font-medium text-foreground">Started</span> {formatTimestamp(run.started_at)}</span> : null}
+            {run.finished_at ? <span><span className="font-medium text-foreground">Finished</span> {formatTimestamp(run.finished_at)}</span> : null}
             {run.status !== "queued" && run.status !== "running" ? (
               <span data-testid="run-not-active" className="rounded border border-border bg-muted px-1.5 py-0.5 text-[11px]">
                 Not active
@@ -2070,7 +2069,7 @@ export default function RunDetailPage() {
                               {row.status ? <span className="text-muted-foreground">{row.status}</span> : null}
                               {row.durationMs !== null ? <span className="ml-auto text-muted-foreground">{formatDuration(row.durationMs)}</span> : null}
                             </div>
-                            <p className="text-muted-foreground">start: {row.startedAt ? new Date(row.startedAt).toLocaleString() : "n/a"} · finish: {row.finishedAt ? new Date(row.finishedAt).toLocaleString() : "n/a"}</p>
+                            <p className="text-muted-foreground">start: {formatTimestamp(row.startedAt, "n/a")} · finish: {formatTimestamp(row.finishedAt, "n/a")}</p>
                             {row.codexSessionId ? <p className="break-all text-muted-foreground">session: {row.codexSessionId}</p> : null}
                           </li>
                         ))}
@@ -2090,7 +2089,7 @@ export default function RunDetailPage() {
                         {events.map((event, idx) => (
                           <li key={`${event.agent_id}-${event.recorded_at}-${idx}`} className="rounded-lg border bg-background p-2.5">
                             <p><span className="font-medium">{event.event_type}</span> by {event.agent_id}</p>
-                            <p className="text-muted-foreground">{new Date(event.recorded_at).toLocaleString()}</p>
+                            <p className="text-muted-foreground">{formatTimestamp(event.recorded_at)}</p>
                           </li>
                         ))}
                       </ul>
@@ -2127,7 +2126,7 @@ export default function RunDetailPage() {
                         {filteredLogs.map((entry, idx) => (
                           <li key={`${entry.recorded_at}-${idx}`} className="rounded-lg border bg-background p-2.5" style={{ borderLeft: `2px solid ${stageColor(entry.stage)}` }}>
                             <p className="mb-0.5 text-muted-foreground">
-                              <span className="font-medium text-foreground">{entry.agent_id}</span> · {entry.stage}{entry.attempt !== null ? ` #${entry.attempt}` : ""} [{entry.stream}] · {new Date(entry.recorded_at).toLocaleString()}
+                              <span className="font-medium text-foreground">{entry.agent_id}</span> · {entry.stage}{entry.attempt !== null ? ` #${entry.attempt}` : ""} [{entry.stream}] · {formatTimestamp(entry.recorded_at)}
                             </p>
                             <p className="whitespace-pre-wrap">{entry.message}</p>
                           </li>

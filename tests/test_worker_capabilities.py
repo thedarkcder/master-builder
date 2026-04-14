@@ -7,8 +7,6 @@ from orchestrator.core.worker_capabilities import (
     required_worker_capability_for_run,
     worker_label_for_capability,
 )
-from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
-
 
 def test_parse_worker_capabilities_defaults_and_requires_canonical_values() -> None:
     assert parse_worker_capabilities("") == {WorkerCapability.LINUX}
@@ -62,31 +60,23 @@ def test_infer_required_worker_capability_returns_empty_without_explicit_label()
     assert inferred == ""
 
 
-def test_required_worker_capability_for_run_prefers_plan() -> None:
-    snapshot = ExecutionSnapshot.empty()
-    snapshot.workflow.outcome = "requeue"
-    snapshot.workflow.requeue_target = "macos"
-    snapshot.workflow.requeue_reason = "Requires macOS worker"
+def test_required_worker_capability_for_run_reads_persisted_queue_contract() -> None:
     run = type(
         "RunStub",
         (),
         {
-            "plan": snapshot.dump(),
-            "issue_summary": "Build backend",
-            "issue_description": "",
+            "required_worker_capability": "macos",
         },
     )()
     assert required_worker_capability_for_run(run) == WorkerCapability.MACOS
 
 
-def test_required_worker_capability_for_run_is_none_without_plan_requirement() -> None:
+def test_required_worker_capability_for_run_is_none_without_persisted_requirement() -> None:
     run = type(
         "RunStub",
         (),
         {
-            "plan": {},
-            "issue_summary": "Build backend",
-            "issue_description": "",
+            "required_worker_capability": None,
         },
     )()
     assert required_worker_capability_for_run(run) is None

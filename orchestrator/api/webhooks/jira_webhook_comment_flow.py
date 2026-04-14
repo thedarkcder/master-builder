@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from orchestrator.api.commands.entrypoint import execute_tenant_jira_comment_command
 from orchestrator.api.discord.ask.context import remove_issue_key_from_tenant_ask_history
 from orchestrator.api.discord.shared.state import remove_issue_key_from_seed_followups
+from orchestrator.api.jira_oauth.connection_service import tenant_jira_oauth_context
 from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.api.webhooks.contracts import (
     JIRA_COMMENT_EVENTS,
@@ -15,25 +16,28 @@ from orchestrator.api.webhooks.contracts import (
     extract_jira_comment_text,
     post_jira_comment,
 )
-from orchestrator.api.webhooks import jira_webhook_precheck
 from orchestrator.api.webhooks.jira_parent_child_sync import (
     handle_engineering_clarification_command,
     handle_engineering_clarification_reply,
     is_system_generated_comment,
 )
 from orchestrator.api.webhooks.jira_webhook_types import JiraWebhookContext, jira_webhook_response
+from orchestrator.core.communications.decision_clarification_presentation import (
+    build_decision_clarification_presentation,
+    load_cycle_question_feedback,
+)
 from orchestrator.core.codex_runtime import CodexRuntimeError
 from orchestrator.core.decision_clarification_service import capture_decision_reply_and_recheck
 from orchestrator.core.decision_engine import DecisionEventInput
 from orchestrator.core.decision_reply_service import (
     active_case_and_cycle_for_issue,
     is_machine_generated_decision_comment,
-    unresolved_question_feedback_for_cycle,
 )
 from orchestrator.core.followup_context_service import (
     FOLLOWUP_CONTEXT_DECISION_GATE,
     close_followup_contexts,
 )
+from orchestrator.core.pre_run_check import evaluate_pre_run_check
 
 logger = logging.getLogger(__name__)
 
@@ -189,8 +193,8 @@ def stage_handle_comment_decision_reply(
                 issue_description=context.issue_description,
                 issue_labels=context.issue_labels,
             ),
-            tenant_jira_oauth_context_fn=jira_webhook_precheck.tenant_jira_oauth_context,
-            evaluate_pre_run_check_fn=jira_webhook_precheck.evaluate_pre_run_check,
+            tenant_jira_oauth_context_fn=tenant_jira_oauth_context,
+            evaluate_pre_run_check_fn=evaluate_pre_run_check,
             publish_jira_comment_fn=lambda comment: post_jira_comment(
                 session=session,
                 tenant=context.tenant,
@@ -214,7 +218,14 @@ def stage_handle_comment_decision_reply(
             reason="decision_reply_failed",
             webhook_event=context.webhook_event,
         )
-    if str(getattr(decision_result, "classification", "") or "").strip().lower() == "clear":
+    clarification_presentation = build_decision_clarification_presentation(
+        decision_result=decision_result,
+        question_feedback=load_cycle_question_feedback(
+            session=session,
+            cycle_id=str(decision_result.cycle_id or ""),
+        ),
+    )
+    if not clarification_presentation.recheck_required:
         close_followup_contexts(
             session=session,
             tenant_id=context.tenant_id,
@@ -226,17 +237,10 @@ def stage_handle_comment_decision_reply(
         context,
         enqueued=False,
         reason="decision_reply_recorded",
-        classification=decision_result.classification,
+        classification=clarification_presentation.classification,
         cycle_id=decision_result.cycle_id,
-        questions=list(getattr(decision_result.decision.pre_check.decision_gate, "questions", ()))
-        if decision_result.decision.pre_check is not None and getattr(decision_result.decision.pre_check, "decision_gate", None) is not None
-        else [],
-        question_feedback=list(
-            unresolved_question_feedback_for_cycle(
-                session=session,
-                cycle_id=str(decision_result.cycle_id or ""),
-            )
-        ) if decision_result.cycle_id else [],
+        questions=list(clarification_presentation.questions),
+        question_feedback=list(clarification_presentation.question_feedback),
         webhook_event=context.webhook_event,
     )
 

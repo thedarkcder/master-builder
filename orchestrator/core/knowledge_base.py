@@ -63,6 +63,8 @@ _INLINE_CONFIGURATION_ALIASES: dict[str, tuple[str, ...]] = {
 _KNOWLEDGE_EMBEDDING_MODEL_DEFAULT = "BAAI/bge-small-en-v1.5"
 _REFERENCE_FACT_SLOT_NAME = "reference_fact"
 _SLOT_NAME_MAX_LENGTH = 128
+_EMBEDDING_MODEL_RETRY_COOLDOWN_SECONDS = 300
+_embedding_model_unavailable_until_epoch: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -457,15 +459,19 @@ def _embed_texts(
 ) -> list[list[float] | None]:
     if not texts:
         return []
+    if _embedding_model_retry_suppressed():
+        return [None for _ in texts]
     try:
         model = _knowledge_text_embedding_model(
             _local_files_only_for_embedding_access_mode(embedding_access_mode)
         )
     except Exception:  # noqa: BLE001
+        _mark_embedding_model_unavailable()
         return [None for _ in texts]
     try:
         vectors = list(model.embed(texts))
     except Exception:  # noqa: BLE001
+        _mark_embedding_model_unavailable()
         return [None for _ in texts]
     normalized: list[list[float] | None] = []
     for vector in vectors:
@@ -476,6 +482,20 @@ def _embed_texts(
     while len(normalized) < len(texts):
         normalized.append(None)
     return normalized[: len(texts)]
+
+
+def _embedding_model_retry_suppressed(*, now_epoch: float | None = None) -> bool:
+    now_value = float(now_epoch) if now_epoch is not None else datetime.now(timezone.utc).timestamp()
+    return now_value < _embedding_model_unavailable_until_epoch
+
+
+def _mark_embedding_model_unavailable(*, now_epoch: float | None = None) -> None:
+    global _embedding_model_unavailable_until_epoch
+    now_value = float(now_epoch) if now_epoch is not None else datetime.now(timezone.utc).timestamp()
+    _embedding_model_unavailable_until_epoch = max(
+        _embedding_model_unavailable_until_epoch,
+        now_value + float(_EMBEDDING_MODEL_RETRY_COOLDOWN_SECONDS),
+    )
 
 
 def ensure_knowledge_embedding_model_ready(*, local_files_only: bool | None = None) -> str:
@@ -546,9 +566,8 @@ def _resolve_knowledge_embedding_local_files_only(local_files_only: bool | None)
 def _local_files_only_for_embedding_access_mode(
     embedding_access_mode: KnowledgeEmbeddingAccessMode,
 ) -> bool | None:
-    if embedding_access_mode is KnowledgeEmbeddingAccessMode.LOCAL_ONLY:
-        return True
-    return None
+    _ = embedding_access_mode
+    return True
 
 
 def _asset_checksum(*, text_content: str, binary_content: bytes | None) -> str | None:

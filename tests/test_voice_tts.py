@@ -118,7 +118,7 @@ class VoiceTtsTests(unittest.TestCase):
             patch("orchestrator.core.voice.tts._load_pocket_tts_runtime", return_value=runtime),
             patch(
                 "orchestrator.core.voice.tts._resolve_pocket_tts_audio_prompt_source",
-                side_effect=lambda voice: Path(f"/tmp/{voice}.safetensors"),
+                side_effect=lambda voice, **_: Path(f"/tmp/{voice}.safetensors"),
             ),
         ):
             audio = synthesize_reply_audio(
@@ -157,7 +157,7 @@ class VoiceTtsTests(unittest.TestCase):
             patch("orchestrator.core.voice.tts._load_pocket_tts_runtime", return_value=runtime),
             patch(
                 "orchestrator.core.voice.tts._resolve_pocket_tts_audio_prompt_source",
-                side_effect=lambda voice: Path(f"/tmp/{voice}.safetensors"),
+                side_effect=lambda voice, **_: Path(f"/tmp/{voice}.safetensors"),
             ),
         ):
             synthesize_reply_audio(
@@ -203,7 +203,7 @@ class VoiceTtsTests(unittest.TestCase):
             ),
             patch(
                 "orchestrator.core.voice.tts._resolve_pocket_tts_audio_prompt_source",
-                side_effect=lambda voice: Path(f"/tmp/{voice}.safetensors"),
+                side_effect=lambda voice, **_: Path(f"/tmp/{voice}.safetensors"),
             ),
         ):
             warmed_voice_ids = ensure_voice_reply_provider_ready(settings=settings)
@@ -246,6 +246,34 @@ class VoiceTtsTests(unittest.TestCase):
         self.assertEqual(len(recorded_calls), 1)
         self.assertTrue(recorded_calls[0]["local_files_only"])
         self.assertEqual(_FakeTTSModel.model.loaded_voices, [Path("/tmp/alba.safetensors")])
+
+    def test_predefined_voice_runtime_fails_when_hf_asset_not_cached(self) -> None:
+        huggingface_hub = type("Hub", (), {})()
+
+        def _fake_hf_hub_download(**kwargs):  # noqa: ANN003
+            raise RuntimeError(f"missing cache local_only={kwargs.get('local_files_only')}")
+
+        huggingface_hub.hf_hub_download = _fake_hf_hub_download
+        pocket_tts_utils = type("Utils", (), {"PREDEFINED_VOICES": {"alba": "hf://repo/name/path/alba.safetensors@rev"}})()
+
+        runtime = {
+            "TTSModel": _FakeTTSModel,
+            "numpy": np,
+            "signal": __import__("scipy.signal", fromlist=["resample"]),
+        }
+
+        with (
+            patch("orchestrator.core.voice.tts._load_pocket_tts_runtime", return_value=runtime),
+            patch("orchestrator.core.voice.tts._load_pocket_tts_utils_module", return_value=pocket_tts_utils),
+            patch("orchestrator.core.voice.tts.import_module", return_value=huggingface_hub),
+        ):
+            with self.assertRaisesRegex(VoiceReplyError, "not cached locally"):
+                synthesize_reply_audio(
+                    settings=Settings(voice_tts_provider="pocket_tts"),
+                    text="hello",
+                    persona_id="pm",
+                    room_config={"persona_voices": {"pm": "alba"}},
+                )
 
     def test_synthesize_reply_surfaces_missing_package(self) -> None:
         settings = Settings(voice_tts_provider="pocket_tts")

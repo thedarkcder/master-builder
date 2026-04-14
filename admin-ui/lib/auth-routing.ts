@@ -3,11 +3,11 @@ import type { AuthenticatedPrincipalRecord, MembershipRecord } from "@/lib/api";
 type PrincipalLike = Pick<AuthenticatedPrincipalRecord, "principal_type" | "memberships">;
 
 export function getPlatformAdminHomeRoute(): string {
-  return "/dashboard";
+  return "/platform/dashboard";
 }
 
 export function getPlatformStatusRoute(): string {
-  return "/status";
+  return "/platform/status";
 }
 
 export function getWorkspaceSelectorRoute(): string {

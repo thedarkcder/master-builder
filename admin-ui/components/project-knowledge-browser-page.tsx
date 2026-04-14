@@ -24,6 +24,7 @@ import {
   type ProjectKnowledgeDebugMatchRecord,
   type ProjectKnowledgeStatsRecord
 } from "@/lib/api";
+import { formatTimestamp } from "@/lib/datetime";
 
 type ProjectKnowledgeBrowserPageProps = {
   tenantId: string;
@@ -33,14 +34,6 @@ type ProjectKnowledgeBrowserPageProps = {
 
 const ASSET_PAGE_SIZE = 25;
 const CHUNK_PAGE_SIZE = 10;
-
-function formatTimestamp(value: string | null): string {
-  if (!value) {
-    return "—";
-  }
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
-}
 
 function summarizeSources(stats: ProjectKnowledgeStatsRecord | null): string {
   if (!stats) {

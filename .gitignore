@@ -26,3 +26,5 @@ mcp.json
 admin-ui/.next-playwright
 .runtime-home/
 .DS_Store
+.runtime-home/
+.codex/tmp/

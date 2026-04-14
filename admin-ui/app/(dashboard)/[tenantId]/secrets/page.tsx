@@ -17,12 +17,7 @@ import {
   upsertTenantManagedSecret,
   type ManagedSecretRecord,
 } from "@/lib/api";
-
-function formatTimestamp(value: string | null): string {
-  if (!value) return "—";
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
-}
+import { formatTimestamp } from "@/lib/datetime";
 
 export default function TenantSecretsPage() {
   const params = useParams<{ tenantId: string }>();

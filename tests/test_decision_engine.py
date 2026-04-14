@@ -7,8 +7,6 @@ from unittest import mock
 from orchestrator.core.decision_engine import (
     DecisionLabelAction,
     evaluate_ingress_precheck,
-    evaluate_worker_decision,
-    resolve_enqueue_precheck_outcome,
 )
 from orchestrator.core.decision_precheck_mapping import derive_label_actions
 from orchestrator.core.decision_gate import DecisionGateResult
@@ -16,6 +14,8 @@ from orchestrator.core.decision_types import ExecutionGateResolution, ExecutionG
 from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.label_action_service import apply_issue_label_actions
 from orchestrator.core.pre_run_check import PreRunCheckResult
+from orchestrator.core.runs import resolve_enqueue_precheck_outcome
+from orchestrator.core.worker.readiness import evaluate_worker_decision
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 
 
@@ -137,18 +137,13 @@ class DecisionEngineTests(unittest.TestCase):
             "ready_for_agent",
         )
 
-    def test_resolve_enqueue_precheck_outcome_forces_ready_for_legacy_remediation_marker(self) -> None:
+    def test_resolve_enqueue_precheck_outcome_does_not_force_ready_without_trigger_context(self) -> None:
         self.assertEqual(
             resolve_enqueue_precheck_outcome(
                 source="admin_rerun",
                 precheck_source_plan=_run_plan(pre_check_outcome="gtd_required"),
-                issue_summary="GP-115: PR remediation for #6",
-                issue_description=(
-                    "Automated remediation run triggered from GitHub PR #6 "
-                    "(https://github.com/org/repo/pull/6)."
-                ),
             ),
-            "ready_for_agent",
+            "gtd_required",
         )
 
     def test_resolve_execution_gate_state_returns_structured_resolution(self) -> None:
@@ -199,7 +194,7 @@ class DecisionEngineTests(unittest.TestCase):
         self.assertIsNone(worker_decision.decision_gate)
         self.assertIsNone(worker_decision.configuration_error)
 
-    def test_worker_decision_allows_pr_remediation_via_legacy_issue_markers(self) -> None:
+    def test_worker_decision_blocks_without_pr_remediation_trigger_context(self) -> None:
         worker_decision = evaluate_worker_decision(
             run_plan=_run_plan(pre_check_outcome="gtd_required"),
             tenant_id="t1",
@@ -213,9 +208,10 @@ class DecisionEngineTests(unittest.TestCase):
             ),
             evaluate_decision_gate_fn=lambda **_: (_ for _ in ()).throw(RuntimeError("should not call")),
         )
-        self.assertTrue(worker_decision.allowed)
+        self.assertFalse(worker_decision.allowed)
+        self.assertEqual(worker_decision.block_reason, "policy_eval_failed")
         self.assertIsNone(worker_decision.decision_gate)
-        self.assertIsNone(worker_decision.configuration_error)
+        self.assertIn("non-ready pre_check_outcome", str(worker_decision.configuration_error or ""))
 
     def test_worker_decision_returns_configuration_error_when_snapshot_missing(self) -> None:
         worker_decision = evaluate_worker_decision(
@@ -231,6 +227,21 @@ class DecisionEngineTests(unittest.TestCase):
         self.assertIsNone(worker_decision.decision_gate)
         self.assertIsNotNone(worker_decision.configuration_error)
         self.assertEqual(worker_decision.block_reason, "policy_eval_failed")
+
+    def test_worker_decision_fails_closed_when_persisted_precheck_outcome_missing(self) -> None:
+        worker_decision = evaluate_worker_decision(
+            run_plan=_run_plan(),
+            tenant_id="t1",
+            project_id="p1",
+            issue_key="TP-1",
+            run_id="run-1",
+            issue_summary="summary",
+            issue_description="desc",
+        )
+        self.assertFalse(worker_decision.allowed)
+        self.assertIsNone(worker_decision.decision_gate)
+        self.assertEqual(worker_decision.block_reason, "policy_eval_failed")
+        self.assertIn("missing persisted pre_check_outcome", str(worker_decision.configuration_error or ""))
 
     def test_worker_decision_uses_persisted_precheck_outcome_ready(self) -> None:
         worker_decision = evaluate_worker_decision(
@@ -264,9 +275,9 @@ class DecisionEngineTests(unittest.TestCase):
         )
 
         self.assertFalse(worker_decision.allowed)
-        self.assertEqual(worker_decision.block_reason, "missing_ready_label")
-        assert worker_decision.decision_gate is not None
-        self.assertTrue(worker_decision.decision_gate.triggered)
+        self.assertEqual(worker_decision.block_reason, "policy_eval_failed")
+        self.assertIsNone(worker_decision.decision_gate)
+        self.assertIn("non-ready pre_check_outcome", str(worker_decision.configuration_error or ""))
 
     def test_worker_decision_blocks_on_gtd_required_from_persisted_outcome(self) -> None:
         plan = _run_plan(pre_check_outcome="gtd_required")
@@ -283,9 +294,10 @@ class DecisionEngineTests(unittest.TestCase):
             issue_description="desc",
         )
         self.assertFalse(worker_decision.allowed)
-        self.assertIsNotNone(worker_decision.decision_gate)
-        self.assertEqual(worker_decision.block_reason, "gtd_required")
-        self.assertEqual(worker_decision.classification, "gtd")
+        self.assertIsNone(worker_decision.decision_gate)
+        self.assertEqual(worker_decision.block_reason, "policy_eval_failed")
+        self.assertEqual(worker_decision.classification, "clear")
+        self.assertIn("non-ready pre_check_outcome", str(worker_decision.configuration_error or ""))
 
 class LabelActionServiceTests(unittest.TestCase):
     def test_apply_issue_label_actions_respects_policy_and_dedupes(self) -> None:
