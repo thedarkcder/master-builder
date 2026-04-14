@@ -1,72 +1,84 @@
 import os
 import unittest
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
-from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 from urllib.parse import parse_qs, urlparse
 
 from cryptography.fernet import Fernet
-from fastapi.testclient import TestClient
 
-from orchestrator.api.main import create_app
 from orchestrator.core.config import get_settings
 from orchestrator.core.email_delivery import EmailDeliveryError
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
-from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import Project, Run, Tenant, WebhookJob, WorkflowCheckpoint, WorkflowExecution
+from orchestrator.tools.discord_api import DiscordApiError
+from tests.test_support.db_harness import SqliteTemplateApiTestCase
 from tests.workflow_test_support import add_run_with_workflow, add_workflow_attempt, make_run
 
 
-class TenantUserAccessApiTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self.temp_dir = TemporaryDirectory()
-        self.database_url = f"sqlite:///{self.temp_dir.name}/tenant_user_access.db"
+class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
+    _secrets_encryption_key: str
+    _baseline_registration: dict
+    _baseline_token: str
 
-        os.environ["ORCHESTRATOR_DATABASE_URL"] = self.database_url
-        os.environ["ORCHESTRATOR_ADMIN_USERNAME"] = "admin"
-        os.environ["ORCHESTRATOR_ADMIN_PASSWORD"] = "secret"
-        os.environ["ORCHESTRATOR_ADMIN_TOKEN_SECRET"] = "admin-token-secret-for-tests-0123456789"
-        os.environ["ORCHESTRATOR_AUTH_TOKEN_SECRET"] = "tenant-auth-token-secret-for-tests-0123456789"
-        os.environ["ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET"] = "unit-test-secret"
-        os.environ["ORCHESTRATOR_ADMIN_UI_BASE_URL"] = "http://localhost:4100"
-        os.environ["ORCHESTRATOR_PUBLIC_API_BASE_URL"] = "http://localhost:4000"
-        os.environ["ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET"] = "jira-oauth-state-secret"
-        os.environ["ORCHESTRATOR_GITHUB_APP_SLUG"] = "master-builder-app"
-        os.environ["ORCHESTRATOR_DISCORD_OAUTH_CLIENT_ID"] = "discord-client-id-123"
-        os.environ["ORCHESTRATOR_DISCORD_INSTALL_STATE_SECRET"] = "discord-install-state-secret"
-        os.environ["ORCHESTRATOR_SECRETS_ENCRYPTION_KEY"] = Fernet.generate_key().decode("utf-8")
-        os.environ["ORCHESTRATOR_CODEX_MODEL"] = "gpt-5.4"
-        os.environ["ORCHESTRATOR_CODEX_SUPPORTED_MODELS"] = "gpt-5.4,gpt-5.3-codex,gpt-5.3-codex-spark"
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls._secrets_encryption_key = Fernet.generate_key().decode("utf-8")
+        super().setUpClass()
+
+    @classmethod
+    def class_environment_overrides(cls) -> dict[str, str]:
+        return {
+            "ORCHESTRATOR_ADMIN_USERNAME": "admin",
+            "ORCHESTRATOR_ADMIN_PASSWORD": "secret",
+            "ORCHESTRATOR_ADMIN_TOKEN_SECRET": "admin-token-secret-for-tests-0123456789",
+            "ORCHESTRATOR_AUTH_TOKEN_SECRET": "tenant-auth-token-secret-for-tests-0123456789",
+            "ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET": "unit-test-secret",
+            "ORCHESTRATOR_ADMIN_UI_BASE_URL": "http://localhost:4100",
+            "ORCHESTRATOR_PUBLIC_API_BASE_URL": "http://localhost:4000",
+            "ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET": "jira-oauth-state-secret",
+            "ORCHESTRATOR_GITHUB_APP_SLUG": "master-builder-app",
+            "ORCHESTRATOR_DISCORD_OAUTH_CLIENT_ID": "discord-client-id-123",
+            "ORCHESTRATOR_DISCORD_INSTALL_STATE_SECRET": "discord-install-state-secret",
+            "ORCHESTRATOR_DISCORD_CHANNEL_CATEGORY_ID": "text-category-1",
+            "ORCHESTRATOR_SECRETS_ENCRYPTION_KEY": cls._secrets_encryption_key,
+            "ORCHESTRATOR_CODEX_MODEL": "gpt-5.4",
+            "ORCHESTRATOR_CODEX_SUPPORTED_MODELS": "gpt-5.4,gpt-5.3-codex,gpt-5.3-codex-spark",
+        }
+
+    @classmethod
+    def bootstrap_template_state(cls) -> None:
+        registration_response = cls._class_client.post(
+            "/api/public/register",
+            json={
+                "full_name": "Owner Example",
+                "email": "owner@example.com",
+                "password": "S3cret-passphrase",
+                "tenant_name": "Acme Delivery",
+            },
+        )
+        if registration_response.status_code != 201:
+            raise AssertionError(
+                f"Failed to bootstrap baseline registration: {registration_response.status_code} {registration_response.text}"
+            )
+        cls._baseline_registration = registration_response.json()
+        cls._baseline_token = cls._baseline_registration["access_token"]
+
+    def setUp(self) -> None:
+        self.database_url = self._start_test_database(name_prefix="tenant-user-access")
 
         get_settings.cache_clear()
         reset_db_engine_cache()
-        run_migrations(database_url=self.database_url)
-        self.client = TestClient(create_app())
 
     def tearDown(self) -> None:
-        self.temp_dir.cleanup()
-        for key in (
-            "ORCHESTRATOR_DATABASE_URL",
-            "ORCHESTRATOR_ADMIN_USERNAME",
-            "ORCHESTRATOR_ADMIN_PASSWORD",
-            "ORCHESTRATOR_ADMIN_TOKEN_SECRET",
-            "ORCHESTRATOR_AUTH_TOKEN_SECRET",
-            "ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET",
-            "ORCHESTRATOR_ADMIN_UI_BASE_URL",
-            "ORCHESTRATOR_PUBLIC_API_BASE_URL",
-            "ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET",
-            "ORCHESTRATOR_GITHUB_APP_SLUG",
-            "ORCHESTRATOR_DISCORD_OAUTH_CLIENT_ID",
-            "ORCHESTRATOR_DISCORD_INSTALL_STATE_SECRET",
-            "ORCHESTRATOR_SECRETS_ENCRYPTION_KEY",
-            "ORCHESTRATOR_CODEX_MODEL",
-            "ORCHESTRATOR_CODEX_SUPPORTED_MODELS",
-        ):
-            os.environ.pop(key, None)
+        self._cleanup_test_database()
         get_settings.cache_clear()
         reset_db_engine_cache()
 
     def _register(self, *, email: str = "owner@example.com", tenant_name: str = "Acme Delivery") -> dict:
+        if email == "owner@example.com" and tenant_name == "Acme Delivery":
+            return deepcopy(self._baseline_registration)
         response = self.client.post(
             "/api/public/register",
             json={
@@ -80,6 +92,8 @@ class TenantUserAccessApiTests(unittest.TestCase):
         return response.json()
 
     def _login(self, *, email: str = "owner@example.com", password: str = "S3cret-passphrase") -> str:
+        if email == "owner@example.com" and password == "S3cret-passphrase":
+            return self._baseline_token
         response = self.client.post(
             "/api/app/auth/login",
             json={
@@ -969,13 +983,16 @@ class TenantUserAccessApiTests(unittest.TestCase):
         self.assertEqual(parsed.netloc, "discord.com")
         self.assertIn("state", query)
         self.assertEqual(query["client_id"], ["discord-client-id-123"])
+        self.assertEqual(query["permissions"], ["3224728621023057"])
 
-        callback_response = self.client.get(
-            f"/api/admin/discord/install/callback?state={query['state'][0]}&guild_id=987654321&code=oauth-code",
-            follow_redirects=False,
-        )
+        with patch("orchestrator.api.routes.admin_discord_install.sync_discord_guild_commands") as sync_mock:
+            callback_response = self.client.get(
+                f"/api/admin/discord/install/callback?state={query['state'][0]}&guild_id=987654321&code=oauth-code",
+                follow_redirects=False,
+            )
         self.assertEqual(callback_response.status_code, 302, callback_response.text)
         self.assertIn("/tenants/new/discord", callback_response.headers["location"])
+        sync_mock.assert_called_once()
 
         tenant_response = self.client.get(
             f"/api/admin/tenants/{tenant_id}",
@@ -1036,6 +1053,156 @@ class TenantUserAccessApiTests(unittest.TestCase):
             self.assertEqual(project.jira_project_key, "TP")
             self.assertEqual(project.discord_config["channel_id"], "discord-channel-123")
 
+    def test_discord_install_callback_backfills_live_voice_room_for_existing_project_channel(self) -> None:
+        registration = self._register()
+        token = self._login()
+        tenant_id = registration["tenant"]["tenant_id"]
+
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            tenant = session.get(Tenant, tenant_id)
+            self.assertIsNotNone(tenant)
+            assert tenant is not None
+            project = Project(
+                project_id=f"{tenant_id}-project-1",
+                tenant_id=tenant_id,
+                name="Alpha Project",
+                github_repository="https://github.com/example/repo",
+                jira_project_key="TP",
+                policy_overrides={},
+                environment={},
+                secret_refs={},
+                discord_config={"channel_id": "project-text-123"},
+                is_archived=False,
+                created_at=datetime.now(timezone.utc),
+                updated_at=datetime.now(timezone.utc),
+            )
+            session.add(project)
+            session.commit()
+
+        start_response = self.client.post(
+            f"/api/admin/tenants/{tenant_id}/discord/install/start?return_to=edit",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        self.assertEqual(start_response.status_code, 200, start_response.text)
+        state_token = parse_qs(urlparse(start_response.json()["install_url"]).query)["state"][0]
+
+        fake_client = Mock()
+        fake_client.get_channel.return_value = {"id": "project-text-123"}
+        fake_client.list_channel_categories.return_value = [
+            SimpleNamespace(channel_id="voice-category-1", name="Voice Rooms"),
+        ]
+        fake_client.list_voice_channels.return_value = []
+        fake_client.ensure_voice_channel.return_value = Mock(channel_id="voice-room-123")
+
+        with (
+            patch("orchestrator.api.admin.tenant_project_helpers.resolve_platform_secret_ref", return_value="discord-bot-token"),
+            patch("orchestrator.api.admin.tenant_project_helpers.DiscordApiClient", return_value=fake_client) as client_mock,
+            patch("orchestrator.api.routes.admin_discord_install.sync_discord_guild_commands") as sync_mock,
+        ):
+            callback_response = self.client.get(
+                f"/api/admin/discord/install/callback?state={state_token}&guild_id=987654321&code=oauth-code",
+                follow_redirects=False,
+            )
+
+        self.assertEqual(callback_response.status_code, 302, callback_response.text)
+        client_mock.assert_called_once_with(bot_token="discord-bot-token")
+        fake_client.ensure_text_channel.assert_not_called()
+        fake_client.ensure_voice_channel.assert_called_once_with(
+            guild_id="987654321",
+            name="alpha-project-voice",
+            parent_id="voice-category-1",
+        )
+        sync_mock.assert_called_once()
+
+        with session_factory() as session:
+            project = session.get(Project, f"{tenant_id}-project-1")
+            self.assertIsNotNone(project)
+            assert project is not None
+            discord_config = dict(project.discord_config or {})
+            self.assertEqual(discord_config["channel_id"], "project-text-123")
+            self.assertTrue(discord_config["live_voice_enabled"])
+            self.assertEqual(
+                discord_config["live_voice_room_links"],
+                {"voice-room-123": "project-text-123"},
+            )
+            self.assertEqual(discord_config["voice_room_channel_ids"], ["voice-room-123"])
+            self.assertEqual(discord_config["voice_room_channel_id"], "voice-room-123")
+
+    def test_discord_install_callback_recreates_missing_project_text_channel_before_voice_room(self) -> None:
+        registration = self._register()
+        token = self._login()
+        tenant_id = registration["tenant"]["tenant_id"]
+
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            tenant = session.get(Tenant, tenant_id)
+            self.assertIsNotNone(tenant)
+            assert tenant is not None
+            project = Project(
+                project_id=f"{tenant_id}-project-stale",
+                tenant_id=tenant_id,
+                name="Beta Project",
+                github_repository="https://github.com/example/repo",
+                jira_project_key="TP",
+                policy_overrides={},
+                environment={},
+                secret_refs={},
+                discord_config={"channel_id": "deleted-text-123"},
+                is_archived=False,
+                created_at=datetime.now(timezone.utc),
+                updated_at=datetime.now(timezone.utc),
+            )
+            session.add(project)
+            session.commit()
+
+        start_response = self.client.post(
+            f"/api/admin/tenants/{tenant_id}/discord/install/start?return_to=edit",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        self.assertEqual(start_response.status_code, 200, start_response.text)
+        state_token = parse_qs(urlparse(start_response.json()["install_url"]).query)["state"][0]
+
+        fake_client = Mock()
+        fake_client.get_channel.side_effect = [DiscordApiError("missing text")]
+        fake_client.ensure_text_channel.return_value = Mock(channel_id="project-text-456")
+        fake_client.list_channel_categories.return_value = [
+            SimpleNamespace(channel_id="voice-category-1", name="Voice Rooms"),
+        ]
+        fake_client.list_voice_channels.return_value = []
+        fake_client.ensure_voice_channel.return_value = Mock(channel_id="voice-room-456")
+
+        with (
+            patch("orchestrator.api.admin.tenant_project_helpers.resolve_platform_secret_ref", return_value="discord-bot-token"),
+            patch("orchestrator.api.admin.tenant_project_helpers.DiscordApiClient", return_value=fake_client),
+            patch("orchestrator.api.routes.admin_discord_install.sync_discord_guild_commands") as sync_mock,
+        ):
+            callback_response = self.client.get(
+                f"/api/admin/discord/install/callback?state={state_token}&guild_id=987654321&code=oauth-code",
+                follow_redirects=False,
+            )
+
+        self.assertEqual(callback_response.status_code, 302, callback_response.text)
+        fake_client.ensure_text_channel.assert_called_once_with(
+            guild_id="987654321",
+            name="beta-project",
+            parent_id="text-category-1",
+        )
+        fake_client.ensure_voice_channel.assert_called_once_with(
+            guild_id="987654321",
+            name="beta-project-voice",
+            parent_id="voice-category-1",
+        )
+        sync_mock.assert_called_once()
+
+        with session_factory() as session:
+            project = session.get(Project, f"{tenant_id}-project-stale")
+            self.assertIsNotNone(project)
+            assert project is not None
+            discord_config = dict(project.discord_config or {})
+            self.assertEqual(discord_config["channel_id"], "project-text-456")
+            self.assertEqual(discord_config["live_voice_room_links"], {"voice-room-456": "project-text-456"})
+
     def test_discord_install_callback_handles_access_denied_without_422(self) -> None:
         registration = self._register()
         token = self._login()
@@ -1060,6 +1227,51 @@ class TenantUserAccessApiTests(unittest.TestCase):
         self.assertEqual(redirect_query["discord_install"], ["cancelled"])
         self.assertEqual(redirect_query["tenant_id"], [tenant_id])
         self.assertEqual(redirect_query["discord_error"], ["access_denied"])
+
+    def test_discord_install_callback_redirects_edit_mode_to_tenant_settings_section(self) -> None:
+        registration = self._register()
+        token = self._login()
+        tenant_id = registration["tenant"]["tenant_id"]
+
+        start_response = self.client.post(
+            f"/api/admin/tenants/{tenant_id}/discord/install/start?return_to=edit",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        self.assertEqual(start_response.status_code, 200, start_response.text)
+        state_token = parse_qs(urlparse(start_response.json()["install_url"]).query)["state"][0]
+
+        callback_response = self.client.get(
+            f"/api/admin/discord/install/callback?state={state_token}&guild_id=987654321&code=oauth-code",
+            follow_redirects=False,
+        )
+        self.assertEqual(callback_response.status_code, 302, callback_response.text)
+        self.assertEqual(
+            callback_response.headers["location"],
+            f"http://localhost:4100/{tenant_id}/settings/discord?discord_install=success",
+        )
+
+        cancel_start_response = self.client.post(
+            f"/api/admin/tenants/{tenant_id}/discord/install/start?return_to=edit",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        self.assertEqual(cancel_start_response.status_code, 200, cancel_start_response.text)
+        cancel_state_token = parse_qs(urlparse(cancel_start_response.json()["install_url"]).query)["state"][0]
+
+        cancel_response = self.client.get(
+            (
+                "/api/admin/discord/install/callback"
+                f"?state={cancel_state_token}&error=access_denied&error_description=Rejected"
+            ),
+            follow_redirects=False,
+        )
+        self.assertEqual(cancel_response.status_code, 302, cancel_response.text)
+        self.assertEqual(
+            cancel_response.headers["location"],
+            (
+                f"http://localhost:4100/{tenant_id}/settings/discord"
+                "?discord_install=cancelled&discord_error=access_denied&discord_error_description=Rejected"
+            ),
+        )
 
     def test_discord_install_uses_platform_secret_client_id_when_env_missing(self) -> None:
         registration = self._register()

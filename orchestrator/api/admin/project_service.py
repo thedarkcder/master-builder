@@ -109,6 +109,24 @@ class AdminProjectService:
         self._project_to_schema = project_to_schema
         self._settings_factory = settings_factory
 
+    def _should_bind_project_discord_channel(
+        self,
+        *,
+        tenant,
+        discord_config: dict,
+        is_archived: bool,
+        force_bind: bool = False,
+    ) -> bool:  # noqa: ANN001
+        if is_archived:
+            return False
+        existing_channel_id = str((discord_config or {}).get("channel_id") or "").strip()
+        if existing_channel_id:
+            return False
+        if force_bind:
+            return True
+        tenant_discord_config = dict(getattr(tenant, "discord_config", None) or {})
+        return bool(str(tenant_discord_config.get("guild_id") or "").strip())
+
     def _project_secret_ref(self, *, tenant_id: str, project_id: str, secret_key: str) -> str:
         normalized_key = normalize_secret_ref(secret_key)
         if normalized_key.startswith(("platform/", "tenant/", "project/")):
@@ -240,7 +258,12 @@ class AdminProjectService:
         normalized_discord = self._normalize_project_discord_config(
             payload.discord.model_dump(exclude_unset=True) if payload.discord else None
         )
-        if payload.discord is not None:
+        if self._should_bind_project_discord_channel(
+            tenant=tenant,
+            discord_config=normalized_discord,
+            is_archived=False,
+            force_bind=payload.discord is not None,
+        ):
             try:
                 normalized_discord = self._resolve_project_discord_channel_binding(
                     session=session,
@@ -889,7 +912,12 @@ class AdminProjectService:
                 payload.discord.model_dump(exclude_unset=True) if payload.discord else None
             ),
         )
-        if payload.discord is not None:
+        if self._should_bind_project_discord_channel(
+            tenant=tenant,
+            discord_config=normalized_discord,
+            is_archived=bool(payload.is_archived),
+            force_bind=payload.discord is not None,
+        ):
             try:
                 normalized_discord = self._resolve_project_discord_channel_binding(
                     session=session,

@@ -9,8 +9,6 @@ from orchestrator.core.worker_capability_normalization import WorkerCapabilities
 from orchestrator.core.worker_capability_normalization import parse_worker_capability
 from orchestrator.core.worker_capability_normalization import parse_worker_capabilities_or_raise
 from orchestrator.core.worker_capability_normalization import parse_worker_capabilities_with_diagnostics
-from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
-
 WORKER_CAPABILITY_LABEL_PREFIX = "worker:"
 
 
@@ -117,14 +115,8 @@ def infer_required_worker_capability(
     label_parse = parse_worker_capability_labels(normalized_labels)
     if label_parse.selected_capability is not None:
         return label_parse.selected_capability.value
-    return DEFAULT_WORKER_CAPABILITY.value
+    return ""
 
 
 def required_worker_capability_for_run(run) -> WorkerCapability | None:  # noqa: ANN001
-    snapshot = ExecutionSnapshot.load(getattr(run, "plan", None))
-    if snapshot is None:
-        return None
-    plan_required = parse_worker_capability(snapshot.workflow.requeue_target)
-    if plan_required is not None:
-        return plan_required
-    return None
+    return parse_worker_capability(getattr(run, "required_worker_capability", None))

@@ -24,6 +24,7 @@ import {
   type ProjectAutomationRecord,
   type ProjectRecord,
 } from "@/lib/api";
+import { formatTimestamp } from "@/lib/datetime";
 
 const PROJECT_AUTOMATION_KIND_STANDUP = "standup_voice_brief";
 const PROJECT_AUTOMATION_KIND_RETRO = "retro_voice_brief";
@@ -434,12 +435,14 @@ type ProjectNotificationsContentProps = {
   tenantId: string;
   projectId: string;
   credentials: Credentials | null;
+  onAllowlistRequestsChange?: (requests: DiscordAllowlistRequestRecord[]) => void;
 };
 
 export function ProjectNotificationsContent({
   tenantId,
   projectId,
   credentials,
+  onAllowlistRequestsChange,
 }: ProjectNotificationsContentProps) {
   const [project, setProject] = useState<ProjectRecord | null>(null);
   const [busy, setBusy] = useState(false);
@@ -468,6 +471,7 @@ export function ProjectNotificationsContent({
         setLiveVoiceChannelId(payload.discord?.live_voice_channel_id ?? "");
         setLinkedTextChannelId(payload.discord?.live_voice_linked_text_channel_id ?? "");
         setAllowlistRequests(requests);
+        onAllowlistRequestsChange?.(requests);
         setStatusLine("");
       } catch (error) {
         setStatusLine(`Failed to load project: ${(error as Error).message}`);
@@ -475,7 +479,7 @@ export function ProjectNotificationsContent({
         setBusy(false);
       }
     })();
-  }, [credentials, tenantId, projectId]);
+  }, [credentials, onAllowlistRequestsChange, tenantId, projectId]);
 
   function toggleNotifyEvent(eventValue: string, enabled: boolean): void {
     setNotifyEvents((current) =>
@@ -546,6 +550,7 @@ export function ProjectNotificationsContent({
       const result = await approveDiscordAllowlistRequest(credentials, tenantId, projectId, userId);
       const requests = await listDiscordAllowlistRequests(credentials, tenantId, projectId);
       setAllowlistRequests(requests);
+      onAllowlistRequestsChange?.(requests);
       setStatusLine(result.details);
     } catch (error) {
       setStatusLine(`Approve failed: ${(error as Error).message}`);
@@ -659,7 +664,7 @@ export function ProjectNotificationsContent({
                   {request.reason ? <p className="text-sm">{request.reason}</p> : null}
                   <p className="flex items-center gap-1 text-xs text-muted-foreground">
                     <Clock className="h-3 w-3" />
-                    {request.requested_at}
+                    {formatTimestamp(request.requested_at)}
                   </p>
                 </div>
                 <Button

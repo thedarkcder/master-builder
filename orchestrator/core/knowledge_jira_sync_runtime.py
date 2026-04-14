@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from orchestrator.api.jira_oauth.service import execute_jira_operation_with_refresh_retry
 from orchestrator.core.config import Settings, get_settings
+from orchestrator.core.decision_types import JiraConfigKey, tenant_jira_config_text
 from orchestrator.core.knowledge_base import sync_project_knowledge_from_jira
 from orchestrator.core.knowledge_jira_sync_status import (
     KnowledgeJiraSyncRuntimeStatus,
@@ -329,7 +330,7 @@ class KnowledgeJiraSyncRuntime:
             tenant = tenants.get(project.tenant_id)
             if tenant is None:
                 continue
-            connection_id = str((tenant.jira_config or {}).get("connection_id") or "").strip()
+            connection_id = tenant_jira_config_text(tenant=tenant, key=JiraConfigKey.CONNECTION_ID)
             if not connection_id:
                 continue
             jira_project_key = str(project.jira_project_key or "").strip().upper()

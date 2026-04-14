@@ -13,6 +13,7 @@ from orchestrator.core.agent_tools import (
     list_implemented_tools,
     tool_catalog_for_stage,
 )
+from orchestrator.core.knowledge_base import KnowledgeEmbeddingAccessMode
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.storage.models import DecisionCycle
 from orchestrator.tools.github_app import PullRequestSummary
@@ -1474,3 +1475,46 @@ def test_knowledge_exact_read_returns_stored_asset_payload() -> None:
 
     assert payload == {"ok": True, "connector": "stored_asset", "layer": "exact_read"}
     exact_read_mock.assert_called_once()
+
+
+def test_knowledge_read_uses_best_effort_embeddings_for_background_runs() -> None:
+    class _FakeTenant:
+        tenant_id = "example"
+        github_config = {}
+        policy_config = {}
+        jira_config = {}
+
+    class _FakeProject:
+        project_id = "example-default"
+        github_repository = "https://github.com/acme/repo"
+        policy_overrides = {}
+
+    class _FakeContext:
+        tenant = _FakeTenant()
+        project = _FakeProject()
+        stage = "pm"
+        issue_key = "MAB-1"
+        run_id = "run-1"
+        repo_dir = Path("/tmp/repo")
+
+    with (
+        patch("orchestrator.core.agent_tools._resolve_context", return_value=_FakeContext()),
+        patch(
+            "orchestrator.core.agent_tools.build_knowledge_prompt_context",
+            return_value=SimpleNamespace(text="facts", citations=[]),
+        ) as knowledge_mock,
+    ):
+        payload = execute_agent_tool(
+            session=object(),  # type: ignore[arg-type]
+            settings=SimpleNamespace(),
+            tenant_id="example",
+            project_id="example-default",
+            run_id="run-1",
+            issue_key="MAB-1",
+            stage="pm",
+            tool_name="knowledge.read",
+            tool_args={"query": "bundle id"},
+        )
+
+    assert payload == {"query": "bundle id", "text": "facts", "citations": []}
+    assert knowledge_mock.call_args.kwargs["embedding_access_mode"] is KnowledgeEmbeddingAccessMode.BEST_EFFORT

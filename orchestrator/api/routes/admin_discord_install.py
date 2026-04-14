@@ -11,6 +11,7 @@ from orchestrator.api.dependencies import get_session
 from orchestrator.api.schemas import DiscordInstallStart
 from orchestrator.api.admin.route_helpers import reconcile_tenant_projects
 from orchestrator.core.config import get_settings
+from orchestrator.core.discord.commands_sync import sync_discord_guild_commands
 from orchestrator.core.discord.oauth_config import resolve_discord_oauth_config
 from orchestrator.core.discord_install_state import (
     create_discord_install_state_token,
@@ -109,7 +110,7 @@ def discord_install_callback(
             redirect_url = f"{settings.admin_ui_base_url.rstrip('/')}/tenants/new/discord?{urlencode(query_params)}"
         else:
             redirect_url = (
-                f"{settings.admin_ui_base_url.rstrip('/')}/tenants/{quote(tenant.tenant_id, safe='')}/settings/discord"
+                f"{settings.admin_ui_base_url.rstrip('/')}/{quote(tenant.tenant_id, safe='')}/settings/discord"
                 f"?{urlencode(query_params)}"
             )
         return RedirectResponse(url=redirect_url, status_code=status.HTTP_302_FOUND)
@@ -126,6 +127,9 @@ def discord_install_callback(
     tenant.updated_at = datetime.now(timezone.utc)
     reconcile_tenant_projects(session, tenant=tenant)
     session.commit()
+    # Successful installs should refresh guild commands immediately instead of waiting
+    # for an API restart or a manual sync action.
+    sync_discord_guild_commands(settings=settings, session=session)
 
     if state.return_to == "wizard":
         redirect_url = (
@@ -134,7 +138,7 @@ def discord_install_callback(
         )
     else:
         redirect_url = (
-            f"{settings.admin_ui_base_url.rstrip('/')}/tenants/{quote(tenant.tenant_id, safe='')}/settings/discord"
+            f"{settings.admin_ui_base_url.rstrip('/')}/{quote(tenant.tenant_id, safe='')}/settings/discord"
             "?discord_install=success"
         )
     return RedirectResponse(url=redirect_url, status_code=status.HTTP_302_FOUND)

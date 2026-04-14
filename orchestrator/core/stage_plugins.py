@@ -125,6 +125,15 @@ def _merge_llm_plan_payload(normalized: dict[str, Any], llm: dict[str, Any] | No
         cleaned = [str(x).strip() for x in loq if str(x).strip()]
         if cleaned:
             normalized["stage_open_questions"] = cleaned
+
+
+def _should_replan_stage(state: dict[str, Any]) -> bool:
+    status = str(state.get("stage_status") or "").strip().lower()
+    if status == STAGE_STATUS_REVISING:
+        return True
+    return not bool(state.get("stage_artifacts"))
+
+
 def extract_stitch_tool_outputs(*, text: str, attachments: list[dict[str, str]] | None) -> list[dict[str, Any]]:
     outputs: list[dict[str, Any]] = []
     urls = set(_STITCH_URL_RE.findall(str(text or "")))
@@ -319,9 +328,11 @@ def evaluate_stage_plugin(
             dict(item) for item in explicit_tool_outputs if isinstance(item, dict)
         ]
 
-    planned_transition = not normalized["stage_artifacts"]
+    planned_transition = _should_replan_stage(normalized)
     planned_llm_payload = llm_plan_payload if planned_transition else None
     if planned_transition:
+        if from_status == STAGE_STATUS_REVISING:
+            normalized["stage_artifacts"] = {}
         normalized = plugin.plan(
             state=normalized,
             stakeholder_text=stakeholder_text,

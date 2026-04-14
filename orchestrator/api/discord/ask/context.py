@@ -13,6 +13,7 @@ from orchestrator.api.jira_oauth.connection_service import (
 from orchestrator.api.jira_oauth.service import jira_oauth_client as _jira_oauth_client
 from orchestrator.api.jira_oauth.service import refresh_jira_connection_tokens as _refresh_jira_connection_tokens
 from orchestrator.core.config import get_settings
+from orchestrator.core.decision_types import tenant_jira_project_keys
 from orchestrator.storage.models import Project, Tenant
 from orchestrator.tools.jira_oauth import JiraIssueDetail, JiraIssuePreview, JiraOAuthError
 
@@ -51,7 +52,7 @@ def tenant_project_keys(*, session: Session, tenant: Tenant) -> list[str]:
     keys = [project.jira_project_key for project in tenant_active_projects(session=session, tenant_id=tenant.tenant_id)]
     if keys:
         return keys
-    return [str(key).strip().upper() for key in tenant.jira_config.get("project_keys", []) if str(key).strip()]
+    return [key.upper() for key in tenant_jira_project_keys(tenant)]
 
 
 def project_filter_jql(*, session: Session, tenant: Tenant, channel_id: str | None = None) -> str:

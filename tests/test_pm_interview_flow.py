@@ -4,10 +4,10 @@ from unittest.mock import MagicMock, patch
 
 from orchestrator.api.discord.ingress.executor import execute_discord_command
 from orchestrator.api.schemas import DiscordCommandRequest
-from tests.test_discord_commands import DiscordCommandApiTests
+from tests.test_discord_commands import DiscordCommandApiTestHarness
 
 
-class PmInterviewFlowTests(DiscordCommandApiTests):
+class PmInterviewFlowTests(DiscordCommandApiTestHarness):
     def test_incomplete_pm_request_stays_in_interview_mode_and_does_not_seed_jira(self) -> None:
         with (
             self.session_factory() as session,

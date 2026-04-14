@@ -5,6 +5,7 @@ from typing import Any
 from uuid import uuid4
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from orchestrator.core.followup_context_service import (
@@ -15,10 +16,13 @@ from orchestrator.core.followup_context_service import (
 )
 from orchestrator.core.discord.notifications import send_tenant_discord_message
 from orchestrator.core.runs import (
+    NON_TERMINAL_RUN_STATUSES,
     RUN_STATUS_BLOCKED,
     RUN_STATUS_WAITING_FOR_INPUT,
     RunBootstrap,
     enqueue_attempt_for_workflow_uncommitted,
+    resolve_required_worker_capability_from_plan,
+    resolve_precheck_outcome_from_plan,
 )
 from orchestrator.core.secrets import decrypt_value, encrypt_value
 from orchestrator.core.workflow.checkpoints import (
@@ -126,12 +130,24 @@ def create_human_input_request(
     if not normalized_request_type:
         raise ValueError("Human input request_type is required")
 
+    workflow = (
+        session.execute(
+            select(WorkflowExecution)
+            .where(WorkflowExecution.workflow_id == run.workflow_id)
+            .with_for_update()
+        )
+        .scalars()
+        .one_or_none()
+    )
+    if workflow is None:
+        raise ValueError(f"Workflow for run {run.run_id} was not found")
     existing_request = session.execute(
         select(RunHumanInputRequest)
         .where(
             RunHumanInputRequest.workflow_id == run.workflow_id,
             RunHumanInputRequest.status == "pending",
         )
+        .with_for_update()
         .order_by(RunHumanInputRequest.created_at.desc())
         .limit(1)
     ).scalar_one_or_none()
@@ -193,17 +209,41 @@ def create_human_input_request(
         updated_at=now,
     )
     run.status = RUN_STATUS_WAITING_FOR_INPUT
+    run.dispatch_claimed_at = None
     run.last_heartbeat_at = None
     run.worker_service_instance_id = None
-    workflow = session.get(WorkflowExecution, run.workflow_id)
-    if workflow is not None:
-        workflow.status = RUN_STATUS_WAITING_FOR_INPUT
-        workflow.active_run_id = run.run_id
-        workflow.latest_checkpoint_id = checkpoint.checkpoint_id
-        workflow.blocked_reason = None
-        workflow.updated_at = now
+    workflow.status = RUN_STATUS_WAITING_FOR_INPUT
+    workflow.active_run_id = run.run_id
+    workflow.latest_checkpoint_id = checkpoint.checkpoint_id
+    workflow.blocked_reason = None
+    workflow.updated_at = now
     session.add(request)
-    session.commit()
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        existing_request = session.execute(
+            select(RunHumanInputRequest)
+            .where(
+                RunHumanInputRequest.workflow_id == run.workflow_id,
+                RunHumanInputRequest.status == INPUT_STATUS_PENDING,
+            )
+            .order_by(RunHumanInputRequest.created_at.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+        if existing_request is None:
+            raise
+        if str(existing_request.thread_channel_id or "").strip():
+            raise ValueError("A pending human input request already exists for this workflow")
+        _dispatch_human_input_request(
+            session=session,
+            settings=settings,
+            tenant=tenant,
+            project=project,
+            run=run,
+            request=existing_request,
+        )
+        return existing_request
     session.refresh(request)
     _dispatch_human_input_request(
         session=session,
@@ -389,12 +429,43 @@ def resume_workflow_from_human_input_answer(
             return existing_run
     if request.status != INPUT_STATUS_ANSWERED:
         raise ValueError("Human input request is not answered")
+    existing_resume_run = _existing_resume_run_for_request(session=session, request=request)
+    if existing_resume_run is not None:
+        request.status = INPUT_STATUS_CONSUMED
+        request.consumed_by_run_id = existing_resume_run.run_id
+        request.updated_at = _now()
+        close_followup_contexts(
+            session=session,
+            tenant_id=request.tenant_id,
+            context_type=FOLLOWUP_CONTEXT_HUMAN_INPUT,
+            request_id=request.request_id,
+            status=CLOSED_FOLLOWUP_CONTEXT_STATUS,
+        )
+        session.commit()
+        session.refresh(request)
+        session.refresh(existing_resume_run)
+        return existing_resume_run
     source_run = session.get(Run, request.source_run_id)
     if source_run is None:
         raise ValueError("Source run for human input request was not found")
     checkpoint = session.get(WorkflowCheckpoint, request.checkpoint_id)
     if checkpoint is None:
         raise ValueError("Checkpoint for human input request was not found")
+    checkpoint_plan_snapshot = ExecutionSnapshot.require(checkpoint.payload_json, allow_empty=True)
+    persisted_precheck_outcome = (
+        str(getattr(source_run, "pre_check_outcome", "") or "").strip()
+        or resolve_precheck_outcome_from_plan(checkpoint.payload_json)
+        or resolve_precheck_outcome_from_plan(getattr(source_run, "plan", None))
+    )
+    persisted_required_worker_capability = (
+        str(getattr(source_run, "required_worker_capability", "") or "").strip()
+        or resolve_required_worker_capability_from_plan(checkpoint.payload_json)
+        or resolve_required_worker_capability_from_plan(getattr(source_run, "plan", None))
+    )
+    if persisted_precheck_outcome is not None:
+        checkpoint_plan_snapshot.context.execution_context["pre_check_outcome"] = persisted_precheck_outcome
+    checkpoint_plan_snapshot.context.execution_context["human_input_request_id"] = request.request_id
+    checkpoint_plan = checkpoint_plan_snapshot.dump()
 
     enqueue_result = enqueue_attempt_for_workflow_uncommitted(
         session,
@@ -405,27 +476,31 @@ def resume_workflow_from_human_input_answer(
             entry_mode="resume",
             entry_stage=normalize_checkpoint_stage(request.source_stage),
             entry_checkpoint_id=request.checkpoint_id,
-            plan=dict(checkpoint.payload_json or {}),
+            plan=checkpoint_plan,
             branch=source_run.branch,
             pr_url=source_run.pr_url,
+            precheck_outcome=persisted_precheck_outcome,
+            required_worker_capability=persisted_required_worker_capability,
         ),
     )
     if not enqueue_result.enqueued:
         if enqueue_result.reason == "run_already_active":
-            request.status = INPUT_STATUS_CONSUMED
-            request.consumed_by_run_id = enqueue_result.run.run_id
-            request.updated_at = _now()
-            close_followup_contexts(
-                session=session,
-                tenant_id=request.tenant_id,
-                context_type=FOLLOWUP_CONTEXT_HUMAN_INPUT,
-                request_id=request.request_id,
-                status=CLOSED_FOLLOWUP_CONTEXT_STATUS,
-            )
-            session.commit()
-            session.refresh(request)
-            session.refresh(enqueue_result.run)
-            return enqueue_result.run
+            if _run_matches_human_input_request(run=enqueue_result.run, request_id=request.request_id):
+                request.status = INPUT_STATUS_CONSUMED
+                request.consumed_by_run_id = enqueue_result.run.run_id
+                request.updated_at = _now()
+                close_followup_contexts(
+                    session=session,
+                    tenant_id=request.tenant_id,
+                    context_type=FOLLOWUP_CONTEXT_HUMAN_INPUT,
+                    request_id=request.request_id,
+                    status=CLOSED_FOLLOWUP_CONTEXT_STATUS,
+                )
+                session.commit()
+                session.refresh(request)
+                session.refresh(enqueue_result.run)
+                return enqueue_result.run
+            raise ValueError("Workflow already has an active resume run that is unrelated to this human-input request")
         raise ValueError(f"Unable to enqueue resumed run: {enqueue_result.reason}")
 
     request.status = INPUT_STATUS_CONSUMED
@@ -442,6 +517,41 @@ def resume_workflow_from_human_input_answer(
     session.refresh(enqueue_result.run)
     session.refresh(request)
     return enqueue_result.run
+
+
+def _existing_resume_run_for_request(*, session: Session, request: RunHumanInputRequest) -> Run | None:
+    normalized_source_run_id = str(request.source_run_id or "").strip()
+    normalized_checkpoint_id = str(request.checkpoint_id or "").strip()
+    if not normalized_source_run_id or not normalized_checkpoint_id:
+        return None
+    candidates = (
+        session.execute(
+            select(Run)
+            .where(
+                Run.workflow_id == request.workflow_id,
+                Run.parent_run_id == normalized_source_run_id,
+                Run.entry_checkpoint_id == normalized_checkpoint_id,
+                Run.status.in_(NON_TERMINAL_RUN_STATUSES),
+            )
+            .order_by(Run.attempt_number.desc())
+        )
+        .scalars()
+        .all()
+    )
+    for candidate in candidates:
+        if _run_matches_human_input_request(run=candidate, request_id=request.request_id):
+            return candidate
+    return None
+
+
+def _run_matches_human_input_request(*, run: Run, request_id: str) -> bool:
+    if not str(request_id or "").strip():
+        return False
+    snapshot = ExecutionSnapshot.load(getattr(run, "plan", None))
+    if snapshot is None:
+        return False
+    value = str(snapshot.context.execution_context.get("human_input_request_id") or "").strip()
+    return value == str(request_id).strip()
 
 
 def _dispatch_human_input_request(

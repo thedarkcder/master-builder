@@ -6,6 +6,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from orchestrator.api.jira_oauth.service import jira_oauth_client, refresh_jira_connection_tokens
+from orchestrator.core.decision_types import JiraConfigKey, tenant_jira_config_text
 from orchestrator.storage.models import JiraOAuthConnection, Tenant
 from orchestrator.tools.jira_oauth import JiraOAuthClient
 
@@ -18,7 +19,7 @@ class JiraTenantOAuthContext:
 
 
 def resolve_tenant_jira_connection(*, session: Session, tenant: Tenant) -> JiraOAuthConnection:
-    connection_id = str((tenant.jira_config or {}).get("connection_id") or "").strip()
+    connection_id = tenant_jira_config_text(tenant=tenant, key=JiraConfigKey.CONNECTION_ID)
     if not connection_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

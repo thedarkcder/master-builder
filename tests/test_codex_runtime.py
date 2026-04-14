@@ -5,6 +5,7 @@ import unittest
 import json
 import os
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -607,7 +608,11 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             return _FakePopen(args[output_idx])
 
         original_secret = os.environ.get("UNRELATED_PARENT_SECRET")
+        original_home = os.environ.get("HOME")
+        original_xdg = os.environ.get("XDG_CONFIG_HOME")
         os.environ["UNRELATED_PARENT_SECRET"] = "should-not-leak"
+        os.environ["HOME"] = "/Users/example-user"
+        os.environ["XDG_CONFIG_HOME"] = "/Users/example-user/.config"
         try:
             with (
                 patch("orchestrator.core.codex_runtime.shutil.which", return_value="/usr/bin/codex"),
@@ -621,11 +626,76 @@ class BuildCodexRuntimeTests(unittest.TestCase):
                 popen_mock.call_args.kwargs["env"]["ORCHESTRATOR_DATABASE_URL"],
                 settings.database_url,
             )
+            self.assertNotEqual(popen_mock.call_args.kwargs["env"]["HOME"], "/Users/example-user")
+            self.assertNotEqual(
+                popen_mock.call_args.kwargs["env"]["XDG_CONFIG_HOME"],
+                "/Users/example-user/.config",
+            )
         finally:
             if original_secret is None:
                 os.environ.pop("UNRELATED_PARENT_SECRET", None)
             else:
                 os.environ["UNRELATED_PARENT_SECRET"] = original_secret
+            if original_home is None:
+                os.environ.pop("HOME", None)
+            else:
+                os.environ["HOME"] = original_home
+            if original_xdg is None:
+                os.environ.pop("XDG_CONFIG_HOME", None)
+            else:
+                os.environ["XDG_CONFIG_HOME"] = original_xdg
+
+    def test_cli_request_scopes_home_to_working_directory(self) -> None:
+        settings = self._settings()
+
+        class _FakePipe:
+            def readline(self) -> str:
+                return ""
+
+            def close(self) -> None:
+                return None
+
+        class _FakeStdin:
+            def write(self, _content: str) -> None:
+                return None
+
+            def close(self) -> None:
+                return None
+
+        class _FakePopen:
+            def __init__(self, output_path: str) -> None:
+                self.stdin = _FakeStdin()
+                self.stdout = _FakePipe()
+                self.stderr = _FakePipe()
+                Path(output_path).write_text("json-output", encoding="utf-8")
+
+            def wait(self, timeout: float | None = None) -> int:  # noqa: ARG002
+                return 0
+
+            def kill(self) -> None:
+                return None
+
+        def fake_popen(args: list[str], **_kwargs: object):
+            output_idx = args.index("--output-last-message") + 1
+            return _FakePopen(args[output_idx])
+
+        with TemporaryDirectory() as temp_dir:
+            working_dir = str(Path(temp_dir) / "checkout")
+            Path(working_dir).mkdir(parents=True, exist_ok=True)
+            with (
+                patch("orchestrator.core.codex_runtime.shutil.which", return_value="/usr/bin/codex"),
+                patch("orchestrator.core.codex_runtime.subprocess.Popen", side_effect=fake_popen) as popen_mock,
+            ):
+                runtime = build_codex_runtime(settings=settings)
+                self.assertEqual(
+                    runtime.run_text(system_prompt="s", user_prompt="u", working_dir=working_dir),
+                    "json-output",
+                )
+
+            child_env = popen_mock.call_args.kwargs["env"]
+            expected_runtime_home = str(Path.cwd() / ".runtime-home" / "codex_cli")
+            self.assertEqual(child_env["HOME"], expected_runtime_home)
+            self.assertEqual(child_env["XDG_CONFIG_HOME"], str(Path(expected_runtime_home) / ".config"))
 
     def test_cli_request_preserves_non_postgres_tool_database_url(self) -> None:
         settings = self._settings()
@@ -1090,39 +1160,41 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             output_idx = args.index("--output-last-message") + 1
             return _FakePopen(args[output_idx], returncode=1, stderr_lines=["auth required\n"])
 
-        with (
-            patch("orchestrator.core.codex_runtime.shutil.which", return_value="/usr/bin/codex"),
-            patch("orchestrator.core.codex_runtime.subprocess.Popen", side_effect=fake_popen_auth),
-        ):
-            runtime = build_codex_runtime(settings=settings)
-            with self.assertRaises(CodexRuntimeError) as exc_info:
-                runtime.run_text(system_prompt="s", user_prompt="u")
-            self.assertIn("docker compose run --rm run-worker codex login --device-auth", str(exc_info.exception))
-
-        def fake_popen_auth_with_link(args: list[str], **_kwargs: object):
-            output_idx = args.index("--output-last-message") + 1
-            return _FakePopen(
-                args[output_idx],
-                returncode=1,
-                stderr_lines=["auth required https://auth.openai.com/device/abc123\n"],
+        def fake_run_not_logged_in(args: list[str], **_kwargs: object):
+            if args[1:] == ["login", "status"]:
+                return subprocess.CompletedProcess(args=args, returncode=1, stdout="Not logged in\n", stderr="")
+            self.assertEqual(args[1:], ["login", "--device-auth"])
+            raise subprocess.TimeoutExpired(
+                cmd=args,
+                timeout=5.0,
+                output="Open this link to authenticate\n",
             )
 
         with (
             patch("orchestrator.core.codex_runtime.shutil.which", return_value="/usr/bin/codex"),
-            patch("orchestrator.core.codex_runtime.subprocess.Popen", side_effect=fake_popen_auth_with_link),
+            patch("orchestrator.core.codex_runtime.subprocess.Popen", side_effect=fake_popen_auth),
+            patch("orchestrator.core.codex_runtime.subprocess.run", side_effect=fake_run_not_logged_in),
         ):
             runtime = build_codex_runtime(settings=settings)
             with self.assertRaises(CodexRuntimeError) as exc_info:
                 runtime.run_text(system_prompt="s", user_prompt="u")
-            self.assertIn("https://auth.openai.com/device/abc123", str(exc_info.exception))
+            self.assertEqual(
+                str(exc_info.exception),
+                "Codex CLI is not authenticated on this worker. Start a worker runtime login session and retry.",
+            )
 
         def fake_popen_boom(args: list[str], **_kwargs: object):
             output_idx = args.index("--output-last-message") + 1
             return _FakePopen(args[output_idx], returncode=2, stderr_lines=["boom\n"])
 
+        def fake_run_logged_in(args: list[str], **_kwargs: object):
+            self.assertEqual(args[1:], ["login", "status"])
+            return subprocess.CompletedProcess(args=args, returncode=0, stdout="Logged in\n", stderr="")
+
         with (
             patch("orchestrator.core.codex_runtime.shutil.which", return_value="/usr/bin/codex"),
             patch("orchestrator.core.codex_runtime.subprocess.Popen", side_effect=fake_popen_boom),
+            patch("orchestrator.core.codex_runtime.subprocess.run", side_effect=fake_run_logged_in),
         ):
             runtime = build_codex_runtime(settings=settings)
             with self.assertRaises(CodexRuntimeError):
@@ -1143,6 +1215,7 @@ class BuildCodexRuntimeTests(unittest.TestCase):
         with (
             patch("orchestrator.core.codex_runtime.shutil.which", return_value="/usr/bin/codex"),
             patch("orchestrator.core.codex_runtime.subprocess.Popen", side_effect=fake_popen_structured_limit),
+            patch("orchestrator.core.codex_runtime.subprocess.run", side_effect=fake_run_logged_in),
         ):
             runtime = build_codex_runtime(settings=settings)
             with self.assertRaises(CodexRuntimeError) as exc_info:
@@ -1157,6 +1230,7 @@ class BuildCodexRuntimeTests(unittest.TestCase):
         with (
             patch("orchestrator.core.codex_runtime.shutil.which", return_value="/usr/bin/codex"),
             patch("orchestrator.core.codex_runtime.subprocess.Popen", side_effect=fake_popen_empty),
+            patch("orchestrator.core.codex_runtime.subprocess.run", side_effect=fake_run_logged_in),
         ):
             runtime = build_codex_runtime(settings=settings)
             with self.assertRaises(CodexRuntimeError):

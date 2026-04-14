@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestrator.api.jira_oauth.service import jira_oauth_client, refresh_jira_connection_tokens
+from orchestrator.core.decision_types import JiraConfigKey, tenant_jira_config_text
 from orchestrator.storage.models import JiraOAuthConnection, KnowledgeAsset, Project, Tenant
 
 
@@ -86,8 +87,7 @@ def _jira_exact_read(
     tenant: Tenant,
     asset: KnowledgeAsset,
 ) -> dict[str, Any] | None:
-    jira_config = tenant.jira_config or {}
-    connection_id = str(jira_config.get("connection_id") or "").strip()
+    connection_id = tenant_jira_config_text(tenant=tenant, key=JiraConfigKey.CONNECTION_ID)
     if not connection_id:
         return None
     connection = session.get(JiraOAuthConnection, connection_id)

@@ -50,7 +50,7 @@ class MigrationTests(unittest.TestCase):
 
         duplicates = {revision_id: count for revision_id, count in Counter(revision_ids).items() if count > 1}
         self.assertEqual(duplicates, {})
-        self.assertEqual(script.get_heads(), ["20260409_0058"])
+        self.assertEqual(script.get_heads(), ["20260410_0058"])
 
     def test_jira_feature_migrations_chain_after_staging_worker_head(self) -> None:
         """Branch-specific migrations chained after staging merge head (20260328_0045)."""
@@ -98,21 +98,21 @@ class MigrationTests(unittest.TestCase):
                 'revision = "20260407_0054"',
                 'down_revision = "20260407_0053"',
             ),
-            "20260409_0055_internal_coolify_deployment_config.py": (
+            "20260409_0055_project_installs.py": (
                 'revision = "20260409_0055"',
                 'down_revision = "20260407_0054"',
             ),
-            "20260409_0056_internal_coolify_deployment_releases.py": (
-                'revision = "20260409_0056"',
+            "20260410_0056_execution_snapshot_legacy_payload_backfill.py": (
+                'revision = "20260410_0056"',
                 'down_revision = "20260409_0055"',
             ),
-            "20260409_0057_project_apps_and_app_scoped_releases.py": (
-                'revision = "20260409_0057"',
-                'down_revision = "20260409_0056"',
+            "20260410_0057_run_plan_snapshot_followup_backfill.py": (
+                'revision = "20260410_0057"',
+                'down_revision = "20260410_0056"',
             ),
-            "20260409_0058_project_installs.py": (
-                'revision = "20260409_0058"',
-                'down_revision = "20260409_0057"',
+            "20260410_0058_execution_snapshot_checkpoint_backfill.py": (
+                'revision = "20260410_0058"',
+                'down_revision = "20260410_0057"',
             ),
         }
 
@@ -179,7 +179,7 @@ class MigrationTests(unittest.TestCase):
             self.assertIn("tenant_user_discord_identities", inspector.get_table_names())
             with engine.begin() as connection:
                 versions = connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
-            self.assertEqual(versions, ["20260409_0058"])
+            self.assertEqual(versions, ["20260410_0058"])
 
     def test_run_migrations_repairs_legacy_stream_only_0039_head(self) -> None:
         with TemporaryDirectory() as tmp_dir:
@@ -223,7 +223,7 @@ class MigrationTests(unittest.TestCase):
             self.assertIn("tenant_user_discord_identities", inspector.get_table_names())
             with engine.begin() as connection:
                 versions = connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
-            self.assertEqual(versions, ["20260409_0058"])
+            self.assertEqual(versions, ["20260410_0058"])
 
     def test_run_migrations_repairs_stamp_when_schema_0045_but_version_0044(self) -> None:
         with TemporaryDirectory() as tmp_dir:
@@ -237,7 +237,7 @@ class MigrationTests(unittest.TestCase):
 
             with engine.begin() as connection:
                 versions = connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
-            self.assertEqual(versions, ["20260409_0058"])
+            self.assertEqual(versions, ["20260410_0058"])
 
     def test_run_migrations_disables_alembic_logger_reconfiguration(self) -> None:
         fake_config = MagicMock()
@@ -536,7 +536,7 @@ class MigrationTests(unittest.TestCase):
             with engine.begin() as connection:
                 current_revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
 
-            self.assertEqual(current_revision, "20260409_0058")
+            self.assertEqual(current_revision, "20260410_0058")
 
     def test_run_migrations_rejects_sqlite_without_test_opt_in(self) -> None:
         previous = os.environ.get("ORCHESTRATOR_ALLOW_SQLITE_FOR_TESTS")
@@ -750,9 +750,9 @@ class MigrationTests(unittest.TestCase):
                 if isinstance(checkpoint_row["payload_json"], str)
                 else checkpoint_row["payload_json"]
             )
-            self.assertEqual(run_plan["trigger_context"], {"source": "manual"})
+            self.assertEqual(run_plan["context"]["trigger_context"], {"source": "manual"})
             self.assertEqual(request_context, {})
-            self.assertIn("trigger_context", checkpoint_payload)
+            self.assertEqual(checkpoint_payload.get("context", {}).get("trigger_context"), {"source": "manual"})
 
     def test_project_secret_migration_moves_existing_refs_to_project_managed_secrets(self) -> None:
         previous_key = os.environ.get("ORCHESTRATOR_SECRETS_ENCRYPTION_KEY")

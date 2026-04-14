@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { listProjects, type ProjectRecord } from "@/lib/api";
 import { canManageProjects } from "@/lib/auth-routing";
+import { buildProjectSectionPath } from "@/lib/dashboard-paths";
 
 function projectInitials(name: string): string {
   const words = name.trim().split(/\s+/);
@@ -130,7 +131,7 @@ export function TenantProjectsPage() {
             {activeProjects.map((project) => (
               <li key={project.project_id}>
                 <Link
-                  href={`/${encodeURIComponent(params.tenantId)}/projects/${encodeURIComponent(project.project_id)}`}
+                  href={buildProjectSectionPath(params.tenantId, project.project_id, "runs")}
                   className="flex items-center gap-3 px-5 py-3.5 transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:bg-muted/50"
                 >
                   <div

@@ -177,7 +177,59 @@ class StagePluginsTests(unittest.TestCase):
         self.assertTrue(approved.stage_ready_for_implementation)
         self.assertEqual(approved.stage_status, "stage_ready_for_implementation")
 
+    def test_revision_request_replans_with_updated_artifacts(self) -> None:
+        planned = evaluate_stage_plugin(
+            state=None,
+            stakeholder_text="Create a bright marketing hero with a long headline.",
+            assistant_summary="Initial design direction",
+            attachments=None,
+        )
+        revision_requested = evaluate_stage_plugin(
+            state={
+                "stage_plugin": planned.stage_plugin,
+                "stage_status": planned.stage_status,
+                "stage_artifacts": dict(planned.stage_artifacts),
+                "stage_open_questions": list(planned.stage_open_questions),
+                "stage_feedback_log": [dict(item) for item in planned.stage_feedback_log],
+                "stage_tool_outputs": [],
+                "stage_ready_for_implementation": planned.stage_ready_for_implementation,
+            },
+            stakeholder_text="Revisions required. Make it darker and much tighter.",
+            assistant_summary="Acknowledged revision request.",
+            attachments=None,
+            decision_state="revisions_required",
+        )
+        replanned = evaluate_stage_plugin(
+            state={
+                "stage_plugin": revision_requested.stage_plugin,
+                "stage_status": revision_requested.stage_status,
+                "stage_artifacts": dict(revision_requested.stage_artifacts),
+                "stage_open_questions": list(revision_requested.stage_open_questions),
+                "stage_feedback_log": [dict(item) for item in revision_requested.stage_feedback_log],
+                "stage_tool_outputs": [],
+                "stage_ready_for_implementation": revision_requested.stage_ready_for_implementation,
+            },
+            stakeholder_text="Use a dark palette and a short proof-led headline.",
+            assistant_summary="Updated design direction",
+            attachments=None,
+            llm_plan_payload={
+                "stage_artifacts": {"llm_hint": "dark palette"},
+                "message": "Updated direction ready for another review pass.",
+            },
+        )
+        self.assertEqual(replanned.stage_status, "stage_review_pending")
+        self.assertEqual(replanned.stage_artifacts.get("design_brief"), "Updated design direction")
+        self.assertEqual(
+            replanned.stage_artifacts.get("design_direction"),
+            "Use a dark palette and a short proof-led headline.",
+        )
+        self.assertEqual(replanned.stage_artifacts.get("llm_hint"), "dark palette")
+        self.assertNotEqual(
+            replanned.stage_artifacts.get("artifact_version"),
+            planned.stage_artifacts.get("artifact_version"),
+        )
+        self.assertEqual(replanned.message, "Updated direction ready for another review pass.")
+
 
 if __name__ == "__main__":
     unittest.main()
-

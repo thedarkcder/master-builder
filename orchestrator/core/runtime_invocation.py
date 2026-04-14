@@ -14,7 +14,7 @@ from uuid import uuid4
 from orchestrator.core.codex_models import normalize_codex_reasoning_effort
 from orchestrator.core.config import get_settings
 from orchestrator.core.guardrails import redact_sensitive_text
-from orchestrator.core.knowledge_base import build_knowledge_prompt_context
+from orchestrator.core.knowledge_base import KnowledgeEmbeddingAccessMode, build_knowledge_prompt_context
 from orchestrator.core.project_policy import resolve_effective_policy
 from orchestrator.core.codex_runtime import CodexRuntime, CodexRuntimeError
 from orchestrator.core.runtime_telemetry import build_runtime_log_sink
@@ -426,6 +426,7 @@ def _augment_prompt_with_knowledge_context(
                 query=query_text,
                 max_items=max(1, int(getattr(settings, "knowledge_context_top_k", 5))),
                 max_chars=max(500, int(getattr(settings, "knowledge_context_max_chars", 3200))),
+                embedding_access_mode=KnowledgeEmbeddingAccessMode.BEST_EFFORT,
             )
     except Exception as exc:  # noqa: BLE001
         logger.debug(

@@ -38,6 +38,7 @@ from orchestrator.core.codex_runtime import build_codex_runtime
 from orchestrator.core.codex_working_dir import resolve_codex_working_dir as _resolve_codex_working_dir_impl
 from orchestrator.core.communications.command_pipeline import CommandScope
 from orchestrator.core.config import get_settings
+from orchestrator.core.decision_clarification_port import DecisionClarificationPort, RuntimeDecisionClarificationPort
 from orchestrator.core.project_routing import find_active_project_for_issue_key
 from orchestrator.core.runs import RUN_STATUS_BLOCKED, RUN_STATUS_CANCELLED, RUN_STATUS_FAILED
 from orchestrator.core.platform_secret_service import resolve_platform_secret_ref
@@ -50,6 +51,7 @@ _channel_scope_repository = SqlAlchemyDiscordChannelScopeRepository()
 
 RETRYABLE_STATUSES = {RUN_STATUS_FAILED, RUN_STATUS_BLOCKED, RUN_STATUS_CANCELLED}
 ISSUE_KEY_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]+-\d+$")
+_default_decision_clarification_port: DecisionClarificationPort = RuntimeDecisionClarificationPort()
 
 
 def _normalize_scope_channel_id(channel_id: str | None) -> str | None:
@@ -135,6 +137,7 @@ def _build_ingress_dependencies():
     return build_discord_ingress_dependencies(
         issue_key_pattern=ISSUE_KEY_PATTERN,
         retryable_statuses=RETRYABLE_STATUSES,
+        decision_clarification_port=_default_decision_clarification_port,
         get_tenant_fn=lambda db, current_tenant_id: db.get(Tenant, current_tenant_id),
         assert_channel_scope_fn=lambda db, current_tenant, channel_id: _assert_channel_scope(
             session=db,

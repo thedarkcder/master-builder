@@ -13,6 +13,7 @@ WORKFLOW_STATUS_FAILED = "failed"
 WORKFLOW_STATUS_CANCELLED = "cancelled"
 
 ATTEMPT_STATUS_QUEUED = "queued"
+ATTEMPT_STATUS_DISPATCHING = "dispatching"
 ATTEMPT_STATUS_RUNNING = "running"
 ATTEMPT_STATUS_WAITING_FOR_INPUT = "waiting_for_input"
 ATTEMPT_STATUS_BLOCKED = "blocked"
@@ -39,6 +40,7 @@ TERMINAL_WORKFLOW_STATUSES = {
 }
 ACTIVE_ATTEMPT_STATUSES = {
     ATTEMPT_STATUS_QUEUED,
+    ATTEMPT_STATUS_DISPATCHING,
     ATTEMPT_STATUS_RUNNING,
 }
 TERMINAL_ATTEMPT_STATUSES = {
@@ -110,8 +112,12 @@ _WORKFLOW_TRANSITIONS: dict[str, TransitionRule] = {
 
 _ATTEMPT_TRANSITIONS: dict[str, TransitionRule] = {
     "attempt_created": TransitionRule(frozenset({ATTEMPT_STATUS_QUEUED}), ATTEMPT_STATUS_QUEUED),
-    "attempt_started": TransitionRule(
+    "attempt_claimed": TransitionRule(
         frozenset({ATTEMPT_STATUS_QUEUED}),
+        ATTEMPT_STATUS_DISPATCHING,
+    ),
+    "attempt_started": TransitionRule(
+        frozenset({ATTEMPT_STATUS_DISPATCHING}),
         ATTEMPT_STATUS_RUNNING,
     ),
     "human_input_requested": TransitionRule(
