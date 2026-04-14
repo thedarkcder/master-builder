@@ -16,6 +16,7 @@ from orchestrator.core.knowledge_base import (
     create_knowledge_asset,
     sync_project_knowledge_from_jira,
 )
+from orchestrator.core import knowledge_base as knowledge_base_module
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import KnowledgeAsset, KnowledgeFact, Project, Tenant
@@ -43,7 +44,7 @@ def test_build_knowledge_text_embedding_model_respects_cache_dir_and_offline_env
     assert captured["kwargs"] == {"cache_dir": "/tmp/hf-cache", "local_files_only": True}
 
 
-def test_embed_texts_uses_local_only_mode_without_network_bootstrap() -> None:
+def test_embed_texts_uses_local_cache_for_runtime_embedding_access() -> None:
     fake_model = SimpleNamespace(embed=lambda texts: [[0.1] for _ in texts])
 
     with patch(
@@ -52,11 +53,35 @@ def test_embed_texts_uses_local_only_mode_without_network_bootstrap() -> None:
     ) as model_mock:
         vectors = _embed_texts(
             ["bundle id"],
-            embedding_access_mode=KnowledgeEmbeddingAccessMode.LOCAL_ONLY,
+            embedding_access_mode=KnowledgeEmbeddingAccessMode.BEST_EFFORT,
         )
 
     model_mock.assert_called_once_with(True)
     assert vectors == [[0.1]]
+
+
+def test_embed_texts_suppresses_repeated_embedding_bootstrap_failures() -> None:
+    previous_unavailable_until = knowledge_base_module._embedding_model_unavailable_until_epoch
+    try:
+        knowledge_base_module._embedding_model_unavailable_until_epoch = 0.0
+        with patch(
+            "orchestrator.core.knowledge_base._knowledge_text_embedding_model",
+            side_effect=RuntimeError("embedding model unavailable"),
+        ) as model_mock:
+            first = _embed_texts(
+                ["query-a"],
+                embedding_access_mode=KnowledgeEmbeddingAccessMode.LOCAL_ONLY,
+            )
+            second = _embed_texts(
+                ["query-b"],
+                embedding_access_mode=KnowledgeEmbeddingAccessMode.LOCAL_ONLY,
+            )
+
+        assert first == [None]
+        assert second == [None]
+        model_mock.assert_called_once_with(True)
+    finally:
+        knowledge_base_module._embedding_model_unavailable_until_epoch = previous_unavailable_until
 
 
 def test_build_knowledge_prompt_context_requires_project_scope() -> None:

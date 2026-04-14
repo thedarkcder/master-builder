@@ -6,10 +6,11 @@ from fastapi import HTTPException, status
 from sqlalchemy import case, func, select
 
 from orchestrator.api.schemas import TenantHealthRead, TenantIntegrationHealthRead
+from orchestrator.core.decision_types import JiraConfigKey, jira_config_text
 from orchestrator.core.webhook_health import webhook_health_tracker
 from orchestrator.storage.models import Project, Run, Tenant
 
-ACTIVE_RUN_STATUSES = {"queued", "running"}
+ACTIVE_RUN_STATUSES = {"queued", "dispatching", "running"}
 
 
 def _to_aware(value: datetime | None) -> datetime | None:
@@ -78,8 +79,9 @@ def tenant_health(*, session, tenant_id: str) -> TenantHealthRead:  # noqa: ANN0
     webhook_rollup = webhook_health_tracker.rollup(tenant_id=tenant_id)
     jira_config = dict(tenant.jira_config or {})
     github_config = dict(tenant.github_config or {})
+    jira_connection_id = jira_config_text(jira_config=jira_config, key=JiraConfigKey.CONNECTION_ID)
     integrations = TenantIntegrationHealthRead(
-        jira_connected=bool(str(jira_config.get("connection_id") or "").strip()),
+        jira_connected=bool(jira_connection_id),
         github_connected=bool(str(github_config.get("installation_id") or "").strip()),
         jira_webhook_healthy=(
             _is_recent_timestamp(jira_config.get("webhook_last_received_at"), within_hours=24)

@@ -77,6 +77,7 @@ class WorkerRunHealthTests(unittest.TestCase):
                     started_at=now - timedelta(minutes=4),
                     last_heartbeat_at=now - timedelta(minutes=3),
                     worker_service_instance_id="node-a:1234",
+                    claim_id="claim-1",
                 ),
                 workflow_status="running",
             )
@@ -86,6 +87,7 @@ class WorkerRunHealthTests(unittest.TestCase):
                 session,
                 run_id="run-heartbeat",
                 worker_service_instance_id="node-a:1234",
+                claim_id="claim-1",
                 heartbeat_at=now,
             )
             self.assertTrue(updated)
@@ -98,6 +100,7 @@ class WorkerRunHealthTests(unittest.TestCase):
                 session,
                 run_id="run-heartbeat",
                 worker_service_instance_id="node-b:9999",
+                claim_id="claim-1",
                 heartbeat_at=now + timedelta(seconds=10),
             )
             self.assertFalse(rejected)

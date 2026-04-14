@@ -16,6 +16,7 @@ from sqlalchemy import select
 
 from orchestrator.api.jira_oauth.service import jira_oauth_client, refresh_jira_connection_tokens
 from orchestrator.core.binding_resolution_service import check_project_bindings
+from orchestrator.core.decision_types import JiraConfigKey, tenant_jira_config_text
 from orchestrator.core.install_registry_service import get_project_install, list_project_installs
 from orchestrator.core.install_request_service import ProjectInstallRequestWrite, create_install_request, request_kind_for_install
 from orchestrator.core.knowledge_exact_read import ExactReadRequest, exact_read_knowledge_source
@@ -227,8 +228,6 @@ class AgentToolContext:
 
 
 def _knowledge_embedding_access_mode_for_context(context: AgentToolContext) -> KnowledgeEmbeddingAccessMode:
-    if context.run_id:
-        return KnowledgeEmbeddingAccessMode.LOCAL_ONLY
     return KnowledgeEmbeddingAccessMode.BEST_EFFORT
 
 
@@ -503,8 +502,7 @@ def _execute_jira_tool(
     tool_name: str,
     args: dict[str, Any],  # noqa: ANN401
 ) -> dict[str, Any]:
-    jira_config = context.tenant.jira_config or {}
-    connection_id = str(jira_config.get("connection_id") or "").strip()
+    connection_id = tenant_jira_config_text(tenant=context.tenant, key=JiraConfigKey.CONNECTION_ID)
     if not connection_id:
         raise ValueError("Tenant Jira connection is not configured")
     connection = session.get(JiraOAuthConnection, connection_id)

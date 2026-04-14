@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from orchestrator.core.workflow.transitions import (
+    ATTEMPT_STATUS_DISPATCHING,
     ATTEMPT_STATUS_QUEUED,
     INPUT_STATUS_ANSWERED,
     INPUT_STATUS_PENDING,
@@ -16,6 +17,15 @@ from orchestrator.core.workflow.transitions import (
 
 
 class WorkflowTransitionTests(unittest.TestCase):
+    def test_attempt_moves_to_dispatching_when_claimed(self) -> None:
+        self.assertEqual(
+            transition_attempt_state(
+                current_state=ATTEMPT_STATUS_QUEUED,
+                event="attempt_claimed",
+            ),
+            ATTEMPT_STATUS_DISPATCHING,
+        )
+
     def test_workflow_moves_to_running_when_attempt_starts(self) -> None:
         self.assertEqual(
             transition_workflow_state(
@@ -46,6 +56,13 @@ class WorkflowTransitionTests(unittest.TestCase):
             transition_attempt_state(
                 current_state=ATTEMPT_STATUS_QUEUED,
                 event="attempt_succeeded",
+            )
+
+    def test_attempt_requires_dispatching_before_running(self) -> None:
+        with self.assertRaises(WorkflowTransitionError):
+            transition_attempt_state(
+                current_state=ATTEMPT_STATUS_QUEUED,
+                event="attempt_started",
             )
 
     def test_input_request_moves_from_answered_to_consumed(self) -> None:

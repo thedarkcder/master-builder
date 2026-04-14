@@ -10,6 +10,7 @@ from orchestrator.core.alerting import (
     alert_dedup_registry,
     utcnow,
 )
+from orchestrator.core.decision_types import JiraConfigKey, jira_config_text
 from orchestrator.storage.models import Run, Tenant
 
 
@@ -24,7 +25,8 @@ def _tenant_candidates(*, tenant: Tenant, runs: list[Run], now: datetime) -> lis
     jira_config = dict(tenant.jira_config or {})
     github_config = dict(tenant.github_config or {})
 
-    if not str(jira_config.get("connection_id") or "").strip():
+    connection_id = jira_config_text(jira_config=jira_config, key=JiraConfigKey.CONNECTION_ID)
+    if not connection_id:
         candidates.append(
             AlertCandidate(
                 alert_key=f"tenant:{tenant.tenant_id}:jira_disconnected",
@@ -58,7 +60,7 @@ def _tenant_candidates(*, tenant: Tenant, runs: list[Run], now: datetime) -> lis
         )
 
     received_at_raw = str(jira_config.get("webhook_last_received_at") or "").strip()
-    if str(jira_config.get("connection_id") or "").strip() and not webhook_error:
+    if connection_id and not webhook_error:
         stale = True
         if received_at_raw:
             try:

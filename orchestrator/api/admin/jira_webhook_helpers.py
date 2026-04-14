@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from urllib.parse import quote
 
+from orchestrator.core.decision_types import jira_config_project_keys
+
 
 def default_ready_jql(*, project_keys: list[str], ready_statuses: list[str]) -> str:
     quoted_projects = ", ".join(f'"{key}"' for key in project_keys)
@@ -58,10 +60,10 @@ def jira_webhook_callback_url(*, settings, tenant_id: str) -> str:  # noqa: ANN0
 
 
 def jira_webhook_filter_jql(jira_config: dict) -> str:
-    project_keys = jira_config.get("project_keys")
-    if not isinstance(project_keys, list) or not project_keys:
+    project_keys = jira_config_project_keys(jira_config=jira_config)
+    if not project_keys:
         raise ValueError("Missing Jira project_keys")
-    quoted_projects = ", ".join(f"\"{str(key).strip()}\"" for key in project_keys if str(key).strip())
+    quoted_projects = ", ".join(f"\"{key}\"" for key in project_keys)
     if not quoted_projects:
         raise ValueError("Missing Jira project_keys")
     return f"project in ({quoted_projects}) ORDER BY updated DESC"

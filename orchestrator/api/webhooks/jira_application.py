@@ -9,7 +9,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from orchestrator.api.webhooks.jira_comment_planner import plan_jira_comment_flow
-from orchestrator.api.webhooks.jira_enqueue_planner import (
+from orchestrator.api.webhooks.jira_admission_flow import (
     build_jira_enqueue_skipped_notification_action,
     plan_jira_run_flow,
 )
@@ -27,8 +27,11 @@ from orchestrator.core.webhook_job_queue import (
     WebhookJobEnqueueRequest,
     enqueue_webhook_job,
 )
-from orchestrator.core.communications.enqueue_reason_contract import enqueue_reason_guidance
 from orchestrator.core.communications import HttpJsonResponseAction, IngressResult, TransportAction, TransportEnvelope
+from orchestrator.core.decision_state_machine import (
+    ExecutionAdmissionReason,
+    build_execution_admission_block,
+)
 from orchestrator.core.observability import reset_log_context, set_log_context
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import Tenant
@@ -181,12 +184,15 @@ def _process_jira_webhook_context(
             context.tenant_id,
             context.issue_key,
         )
+        admission = build_execution_admission_block(
+            reason=ExecutionAdmissionReason.PROJECT_NOT_MAPPED,
+        )
         return JiraWebhookPlan(
             content=jira_webhook_response(
                 context,
                 enqueued=False,
-                reason="project_not_mapped",
-                guidance=enqueue_reason_guidance("project_not_mapped"),
+                reason=admission.reason_code,
+                guidance=admission.guidance,
                 command=context.comment_command,
                 webhook_event=context.webhook_event,
             ),

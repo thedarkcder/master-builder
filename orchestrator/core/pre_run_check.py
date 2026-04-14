@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-
 from orchestrator.core.decision_gate import DecisionGateResult
 from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.precheck_policy import evaluate_precheck_policy
@@ -12,6 +11,12 @@ from orchestrator.core.worker_capabilities import (
     WorkerLabelParseResult,
     worker_label_for_capability,
 )
+
+
+def _precheck_outcome_enum(value: object):
+    from orchestrator.core.decision_types import PrecheckOutcome
+
+    return PrecheckOutcome.parse(value)
 
 
 @dataclass(frozen=True)
@@ -50,11 +55,13 @@ class PreRunCheckResult:
         return bool(self.ready_label and not self.ready_label_present)
 
     def with_ready_label_present(self) -> PreRunCheckResult:
+        from orchestrator.core.decision_types import PrecheckOutcome
+
         if not self.ready_label_missing:
             return self
         outcome = self.outcome
-        if outcome == "missing_ready_label":
-            outcome = "ready_for_agent"
+        if _precheck_outcome_enum(outcome) is PrecheckOutcome.MISSING_READY_LABEL:
+            outcome = PrecheckOutcome.READY_FOR_AGENT.value
         return PreRunCheckResult(
             outcome=outcome,
             ready_label=self.ready_label,
@@ -67,6 +74,24 @@ class PreRunCheckResult:
         )
 
 
+def resolve_precheck_outcome(
+    *,
+    decision_gate_triggered: bool,
+    gtd_valid: bool,
+    ready_label_present: bool,
+    ready_label_required: bool,
+) -> str:
+    from orchestrator.core.decision_types import PrecheckOutcome
+
+    if decision_gate_triggered:
+        return PrecheckOutcome.DECISION_GATE_REQUIRED.value
+    if not gtd_valid:
+        return PrecheckOutcome.GTD_REQUIRED.value
+    if ready_label_required and not ready_label_present:
+        return PrecheckOutcome.MISSING_READY_LABEL.value
+    return PrecheckOutcome.READY_FOR_AGENT.value
+
+
 def evaluate_execution_readiness_only(
     *,
     tenant_id: str | None = None,
@@ -77,6 +102,8 @@ def evaluate_execution_readiness_only(
     issue_labels: list[str] | None,
     ready_label: str | None,
 ) -> PreRunCheckResult:
+    from orchestrator.core.decision_types import PrecheckOutcome
+
     normalized_labels = {str(label).strip().casefold() for label in issue_labels or []}
     normalized_ready_label = str(ready_label or "").strip() or None
     ready_label_present = bool(
@@ -99,9 +126,16 @@ def evaluate_execution_readiness_only(
     invalid_label_guard = _invalid_worker_label_guard(invalid_worker_labels)
     conflicting_capability_guard = _conflicting_worker_capability_guard(conflicting_worker_capabilities)
     gtd_guard = invalid_label_guard or conflicting_capability_guard
-    outcome = "execution_blocked" if gtd_guard is not None else "ready_for_agent"
-    if gtd_guard is None and normalized_ready_label is not None and not ready_label_present:
-        outcome = "missing_ready_label"
+    outcome = (
+        PrecheckOutcome.EXECUTION_BLOCKED.value
+        if gtd_guard is not None
+        else resolve_precheck_outcome(
+            decision_gate_triggered=False,
+            gtd_valid=True,
+            ready_label_present=ready_label_present,
+            ready_label_required=normalized_ready_label is not None,
+        )
+    )
     return PreRunCheckResult(
         outcome=outcome,
         ready_label=normalized_ready_label,
@@ -152,6 +186,8 @@ def evaluate_pre_run_check(
     issue_labels: list[str] | None,
     ready_label: str | None,
 ) -> PreRunCheckResult:
+    from orchestrator.core.decision_types import PrecheckOutcome
+
     normalized_labels = {str(label).strip().casefold() for label in issue_labels or []}
     normalized_ready_label = str(ready_label or "").strip() or None
     ready_label_present = bool(
@@ -175,7 +211,7 @@ def evaluate_pre_run_check(
     conflicting_capability_guard = _conflicting_worker_capability_guard(conflicting_worker_capabilities)
     if invalid_label_guard is not None:
         return PreRunCheckResult(
-            outcome="gtd_required",
+            outcome=PrecheckOutcome.GTD_REQUIRED.value,
             ready_label=normalized_ready_label,
             ready_label_present=ready_label_present,
             required_worker_capability=required_worker_capability,
@@ -193,7 +229,7 @@ def evaluate_pre_run_check(
         )
     if conflicting_capability_guard is not None:
         return PreRunCheckResult(
-            outcome="gtd_required",
+            outcome=PrecheckOutcome.GTD_REQUIRED.value,
             ready_label=normalized_ready_label,
             ready_label_present=ready_label_present,
             required_worker_capability=required_worker_capability,
@@ -221,14 +257,12 @@ def evaluate_pre_run_check(
     decision_gate = precheck_policy.decision_gate
     gtd = precheck_policy.gtd
 
-    if decision_gate.triggered:
-        outcome = "decision_gate_required"
-    elif not gtd.valid:
-        outcome = "gtd_required"
-    elif normalized_ready_label is None or ready_label_present:
-        outcome = "ready_for_agent"
-    else:
-        outcome = "missing_ready_label"
+    outcome = resolve_precheck_outcome(
+        decision_gate_triggered=decision_gate.triggered,
+        gtd_valid=gtd.valid,
+        ready_label_present=ready_label_present,
+        ready_label_required=normalized_ready_label is not None,
+    )
 
     return PreRunCheckResult(
         outcome=outcome,

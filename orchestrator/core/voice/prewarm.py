@@ -20,12 +20,12 @@ def prewarm_voice_dependencies(*, settings: Settings) -> VoiceDependencyPrewarmR
     voice_tts_provider = str(settings.voice_tts_provider or "").strip().lower()
     transcription_ready = False
     if voice_stt_provider in {"openai", "whisper"}:
-        ensure_transcription_provider_ready(settings=settings)
+        ensure_transcription_provider_ready(settings=settings, allow_download=True)
         transcription_ready = True
 
     prewarmed_voice_ids: tuple[str, ...] = ()
     if voice_tts_provider == "pocket_tts":
-        prewarmed_voice_ids = tuple(ensure_voice_reply_provider_ready(settings=settings))
+        prewarmed_voice_ids = tuple(ensure_voice_reply_provider_ready(settings=settings, allow_download=True))
 
     return VoiceDependencyPrewarmResult(
         voice_stt_provider=voice_stt_provider or "disabled",

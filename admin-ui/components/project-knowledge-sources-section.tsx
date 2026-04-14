@@ -19,6 +19,7 @@ import {
   type ProjectKnowledgeSourceCreatePayload,
   type ProjectKnowledgeSourceRecord,
 } from "@/lib/api";
+import { formatTimestamp } from "@/lib/datetime";
 
 type ProjectKnowledgeSourcesSectionProps = {
   credentials: Credentials | null;
@@ -27,14 +28,6 @@ type ProjectKnowledgeSourcesSectionProps = {
 };
 
 type ConnectorType = "jira" | "google_drive" | "discord";
-
-function formatTimestamp(value: string | null): string {
-  if (!value) {
-    return "—";
-  }
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
-}
 
 function splitLines(value: string): string[] {
   return value

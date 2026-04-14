@@ -178,6 +178,8 @@ def test_resume_workflow_from_human_input_answer_creates_resume_attempt_and_cons
         repo_url="https://github.com/example/repo",
         branch="feature/GP-122",
         pr_url="https://github.com/example/repo/pull/123",
+        pre_check_outcome="ready_for_agent",
+        required_worker_capability="macos",
         plan=ExecutionSnapshot.empty(trigger_context={"source": "manual"}).dump(),
     )
     checkpoint = SimpleNamespace(
@@ -224,10 +226,69 @@ def test_resume_workflow_from_human_input_answer_creates_resume_attempt_and_cons
     assert bootstrap.entry_stage == "review"
     assert bootstrap.entry_checkpoint_id == "checkpoint-1"
     assert bootstrap.branch == "feature/GP-122"
+    assert bootstrap.precheck_outcome == "ready_for_agent"
+    assert bootstrap.required_worker_capability == "macos"
     snapshot = ExecutionSnapshot.require(bootstrap.plan, allow_empty=True)
     assert snapshot.context.execution_context.get("human_input_request_id") == "request-1"
     assert request.status == "consumed"
     assert request.consumed_by_run_id == "run-2"
+
+
+def test_resume_workflow_from_human_input_answer_carries_precheck_from_source_run_when_checkpoint_missing() -> None:
+    session = MagicMock()
+    request = SimpleNamespace(
+        request_id="request-1",
+        workflow_id="workflow-1",
+        checkpoint_id="checkpoint-1",
+        source_run_id="run-1",
+        status="answered",
+        consumed_by_run_id=None,
+        tenant_id="route25",
+        source_stage="review",
+    )
+    source_snapshot = ExecutionSnapshot.empty(trigger_context={"source": "manual"})
+    source_snapshot.context.execution_context["pre_check_outcome"] = "ready_for_agent"
+    source_run = SimpleNamespace(
+        run_id="run-1",
+        branch="feature/GP-122",
+        pr_url="https://github.com/example/repo/pull/123",
+        required_worker_capability="macos",
+        plan=source_snapshot.dump(),
+    )
+    checkpoint = SimpleNamespace(
+        checkpoint_id="checkpoint-1",
+        payload_json=ExecutionSnapshot.empty(trigger_context={"source": "manual"}).dump(),
+    )
+    resumed_run = SimpleNamespace(run_id="run-2")
+    lock_query = MagicMock()
+    lock_query.scalars.return_value.one_or_none.return_value = request
+    existing_resume_query = MagicMock()
+    existing_resume_query.scalars.return_value.all.return_value = []
+    session.execute.side_effect = [lock_query, existing_resume_query]
+    session.get.side_effect = lambda model, key: (
+        source_run if key == "run-1" else checkpoint if key == "checkpoint-1" else None
+    )
+    enqueue_result = SimpleNamespace(enqueued=True, reason=None, run=resumed_run)
+
+    with (
+        patch(
+            "orchestrator.core.run_human_input_service.enqueue_attempt_for_workflow_uncommitted",
+            return_value=enqueue_result,
+        ) as enqueue_run_mock,
+        patch("orchestrator.core.run_human_input_service.close_followup_contexts"),
+    ):
+        result = resume_workflow_from_human_input_answer(
+            session=session,
+            settings=SimpleNamespace(secrets_encryption_key="secret-key"),
+            request=request,
+        )
+
+    assert result is resumed_run
+    bootstrap = enqueue_run_mock.call_args.kwargs["bootstrap"]
+    snapshot = ExecutionSnapshot.require(bootstrap.plan, allow_empty=True)
+    assert snapshot.context.execution_context.get("human_input_request_id") == "request-1"
+    assert snapshot.context.execution_context.get("pre_check_outcome") == "ready_for_agent"
+    assert bootstrap.required_worker_capability == "macos"
 
 
 def test_resume_workflow_from_human_input_answer_reuses_existing_resume_run() -> None:

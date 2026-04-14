@@ -74,6 +74,44 @@ class SignalTemplateTests(unittest.TestCase):
         self.assertIn("3) t3", message)
         self.assertNotIn("4) t4", message)
 
+    def test_stage_discord_update_preserves_multiline_auth_error_block(self) -> None:
+        error = """PM stage failed: Codex CLI is not authenticated.
+
+Welcome to Codex [v0.118.0]
+OpenAI's command-line coding agent
+
+Follow these steps to sign in with ChatGPT using device code authorization:
+
+1. Open this link in your browser and sign in to your account
+   https://auth.openai.com/codex/device
+
+2. Enter this one-time code (expires in 15 minutes)
+   E7ED-5X2IG
+
+Device codes are a common phishing target. Never share this code.
+"""
+
+        discord_message = format_stage_discord_update(
+            tenant_id="route25",
+            issue_key="GP-186",
+            run_id="run-123",
+            stage="run_failed",
+            run_url="https://admin.example.test/runs/run-123",
+            error=error,
+            next_steps=(
+                "Review diagnostics and follow-up issue payload.",
+                "Apply fix and move issue back to To Do when ready.",
+            ),
+        )
+
+        self.assertIn("Error: PM stage failed: Codex CLI is not authenticated.", discord_message)
+        self.assertIn("\n\nWelcome to Codex [v0.118.0]\nOpenAI's command-line coding agent\n\n", discord_message)
+        self.assertIn("https://auth.openai.com/codex/device", discord_message)
+        self.assertIn("E7ED-5X2IG", discord_message)
+        self.assertIn("Device codes are a common phishing target. Never share this code.", discord_message)
+        self.assertIn("Next steps:\n- Review diagnostics and follow-up issue payload.", discord_message)
+        self.assertNotIn('Error: PM stage failed: Codex CLI is not authenticated. Welcome to Codex', discord_message)
+
     def test_jira_comment_template_contains_required_sections(self) -> None:
         comment = format_jira_final_comment(
             pr_url="https://github.com/example/repo/pull/2",

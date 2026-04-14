@@ -1,16 +1,13 @@
 import os
 import unittest
 from datetime import datetime, timezone
-from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 from cryptography.fernet import Fernet
-from fastapi.testclient import TestClient
 from fastapi import HTTPException
 
-from orchestrator.api.main import create_app
 from orchestrator.api.discord.bug.service import build_discord_bug_description
 from orchestrator.api.discord.ask.context import project_filter_jql
 from orchestrator.api.discord.ingress.ask_runtime import ask_board_message, collect_ask_context, collect_github_ask_context
@@ -22,12 +19,15 @@ from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.core.config import get_settings
 from orchestrator.core.decision_planner import DecisionPlannerQuestion, DecisionPlannerResult
 from orchestrator.core.decision_gate import DecisionGateResult
-from orchestrator.core.decision_types import ExecutionGateReason, ExecutionGateResolution, ExecutionGateState
+from orchestrator.core.decision_types import (
+    DecisionClassification,
+    IngressDecision,
+    resolve_execution_gate_state,
+)
 from orchestrator.core.decision_engine import DecisionEngineResult
 from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.pre_run_check import PreRunCheckResult
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
-from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import JiraOAuthConnection, Project, Run, Tenant, WorkflowExecution
 from orchestrator.tools.github_app import GitHubApiError
 from orchestrator.tools.jira_oauth import (
@@ -37,33 +37,45 @@ from orchestrator.tools.jira_oauth import (
     JiraIssuePreview,
     JiraOAuthError,
 )
+from tests.test_support.db_harness import SqliteTemplateApiTestCase
 
 
 pytestmark = pytest.mark.contract
 
 
-class DiscordCommandApiTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self.temp_dir = TemporaryDirectory()
-        self.database_url = f"sqlite:///{self.temp_dir.name}/discord_commands_test.db"
+class DiscordCommandApiTestHarness(SqliteTemplateApiTestCase):
+    _template_tenant_id: str
+    _template_default_project_id: str
+    _secrets_encryption_key: str
 
-        os.environ["ORCHESTRATOR_DATABASE_URL"] = self.database_url
-        os.environ["ORCHESTRATOR_ADMIN_USERNAME"] = "admin"
-        os.environ["ORCHESTRATOR_ADMIN_PASSWORD"] = "secret"
-        os.environ["ORCHESTRATOR_SECRETS_ENCRYPTION_KEY"] = Fernet.generate_key().decode("utf-8")
-
-        get_settings.cache_clear()
-        reset_db_engine_cache()
-        run_migrations(database_url=self.database_url)
-        self._project_checkout_patcher = patch(
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls._secrets_encryption_key = Fernet.generate_key().decode("utf-8")
+        cls._project_checkout_patcher = patch(
             "orchestrator.api.admin.route_helpers.ensure_project_repository_checkout",
             return_value=None,
         )
-        self._project_checkout_patcher.start()
-        self.client = TestClient(create_app())
-        self.session_factory = create_session_factory(database_url=self.database_url)
+        cls._project_checkout_patcher.start()
+        super().setUpClass()
 
-        create_response = self.client.post(
+    @classmethod
+    def tearDownClass(cls) -> None:
+        try:
+            super().tearDownClass()
+        finally:
+            cls._project_checkout_patcher.stop()
+
+    @classmethod
+    def class_environment_overrides(cls) -> dict[str, str]:
+        return {
+            "ORCHESTRATOR_ADMIN_USERNAME": "admin",
+            "ORCHESTRATOR_ADMIN_PASSWORD": "secret",
+            "ORCHESTRATOR_SECRETS_ENCRYPTION_KEY": cls._secrets_encryption_key,
+        }
+
+    @classmethod
+    def bootstrap_template_state(cls) -> None:
+        create_response = cls._class_client.post(
             "/api/admin/tenants",
             json={
                 "name": "Discord Tenant",
@@ -98,23 +110,51 @@ class DiscordCommandApiTests(unittest.TestCase):
                 "discord": {
                     "channel_id": "discord-channel-1",
                     "notify_events": ["run_started"],
-                    "allowed_user_ids": ["u-admin"],
                     "command_secret_ref": None,
                 },
             },
             auth=("admin", "secret"),
         )
-        self.assertEqual(create_response.status_code, 201)
-        self.tenant_id = create_response.json()["tenant_id"]
-        self.default_project_id = f"{self.tenant_id}-default"
+        assert create_response.status_code == 201, create_response.text
+        cls._template_tenant_id = create_response.json()["tenant_id"]
+        cls._template_default_project_id = f"{cls._template_tenant_id}-default"
+        cls._set_project_allowed_users_for_database(
+            database_url=cls._template_database_url,
+            project_id=cls._template_default_project_id,
+            user_ids=["u-admin"],
+        )
+
+    def setUp(self) -> None:
+        self.database_url = self._start_test_database(name_prefix="discord-commands")
+        self.session_factory = create_session_factory(database_url=self.database_url)
+        self.tenant_id = self._template_tenant_id
+        self.default_project_id = self._template_default_project_id
 
     def tearDown(self) -> None:
-        self._project_checkout_patcher.stop()
-        self.temp_dir.cleanup()
-        os.environ.pop("ORCHESTRATOR_SECRETS_ENCRYPTION_KEY", None)
+        self._cleanup_test_database()
         get_settings.cache_clear()
         reset_db_engine_cache()
 
+    def _set_project_allowed_users(self, *, project_id: str, user_ids: list[str]) -> None:
+        self._set_project_allowed_users_for_database(
+            database_url=self.database_url,
+            project_id=project_id,
+            user_ids=user_ids,
+        )
+
+    @staticmethod
+    def _set_project_allowed_users_for_database(*, database_url: str, project_id: str, user_ids: list[str]) -> None:
+        session_factory = create_session_factory(database_url=database_url)
+        with session_factory() as session:
+            project = session.get(Project, project_id)
+            assert project is not None
+            discord_config = dict(project.discord_config or {})
+            discord_config["allowed_user_ids"] = [str(value).strip() for value in user_ids if str(value).strip()]
+            project.discord_config = discord_config
+            session.commit()
+
+
+class DiscordCommandApiTests(DiscordCommandApiTestHarness):
     def _queue_run(self, *, run_id: str, issue_key: str, status: str, project_id: str | None = None) -> None:
         with self.session_factory() as session:
             now = datetime.now(timezone.utc)
@@ -200,10 +240,18 @@ class DiscordCommandApiTests(unittest.TestCase):
 
     def _ready_decision_result(self) -> DecisionEngineResult:
         pre_check = self._ready_precheck_result()
+        decision = IngressDecision(
+            source="discord_run",
+            pre_check=pre_check,
+            block_reason=None,
+            guidance=None,
+            policy_error=None,
+            label_actions=(),
+        )
         return DecisionEngineResult(
-            decision=SimpleNamespace(pre_check=pre_check, block_reason=None, policy_error=None, guidance=None),
+            decision=decision,
             issue_labels=["agent:ready"],
-            classification="clear",
+            classification=DecisionClassification.CLEAR,
             missing_slots=[],
             auto_resolved_slots=[],
             case_id="case-ready",
@@ -211,20 +259,26 @@ class DiscordCommandApiTests(unittest.TestCase):
             cycle_id=None,
             outbox_effect_ids=(),
             duplicate_event=False,
-            execution_gate=ExecutionGateResolution(state=ExecutionGateState.ALLOW_EXECUTION),
+            execution_gate=resolve_execution_gate_state(
+                decision=decision,
+                classification=DecisionClassification.CLEAR,
+            ),
         )
 
     def _missing_ready_decision_result(self) -> DecisionEngineResult:
         pre_check = self._missing_ready_precheck_result()
+        decision = IngressDecision(
+            source="discord_run",
+            pre_check=pre_check,
+            block_reason="missing_ready_label",
+            policy_error=None,
+            guidance="Issue is missing the configured ready label. (agent:ready)",
+            label_actions=(),
+        )
         return DecisionEngineResult(
-            decision=SimpleNamespace(
-                pre_check=pre_check,
-                block_reason="missing_ready_label",
-                policy_error=None,
-                guidance="Issue is missing the configured ready label.",
-            ),
+            decision=decision,
             issue_labels=[],
-            classification="clear",
+            classification=DecisionClassification.CLEAR,
             missing_slots=[],
             auto_resolved_slots=[],
             case_id="case-missing-ready",
@@ -232,13 +286,9 @@ class DiscordCommandApiTests(unittest.TestCase):
             cycle_id=None,
             outbox_effect_ids=(),
             duplicate_event=False,
-            execution_gate=ExecutionGateResolution(
-                state=ExecutionGateState.BLOCK_READY_LABEL,
-                reason=ExecutionGateReason(
-                    reason_code="missing_ready_label",
-                    guidance="Issue is missing the configured ready label.",
-                    ready_label="agent:ready",
-                ),
+            execution_gate=resolve_execution_gate_state(
+                decision=decision,
+                classification=DecisionClassification.CLEAR,
             ),
         )
 
@@ -363,7 +413,7 @@ class DiscordCommandApiTests(unittest.TestCase):
                 description="Objective: run command should carry Jira detail context.",
             ),
         ), patch(
-            "orchestrator.api.discord.commands.run_controls.evaluate_issue_clarification_state",
+            "orchestrator.api.discord.ingress.executor._default_decision_clarification_port.evaluate_issue_clarification_state",
             return_value=self._ready_decision_result(),
         ):
             response = self.client.post(
@@ -404,7 +454,7 @@ class DiscordCommandApiTests(unittest.TestCase):
                 ],
             ),
             patch(
-                "orchestrator.api.discord.commands.run_controls.evaluate_issue_clarification_state",
+                "orchestrator.api.discord.ingress.executor._default_decision_clarification_port.evaluate_issue_clarification_state",
                 return_value=self._ready_decision_result(),
             ) as decision_mock,
         ):
@@ -435,7 +485,7 @@ class DiscordCommandApiTests(unittest.TestCase):
                 ),
             ),
             patch(
-                "orchestrator.api.discord.commands.run_controls.evaluate_issue_clarification_state",
+                "orchestrator.api.discord.ingress.executor._default_decision_clarification_port.evaluate_issue_clarification_state",
                 return_value=self._missing_ready_decision_result(),
             ),
         ):
@@ -454,7 +504,7 @@ class DiscordCommandApiTests(unittest.TestCase):
             "orchestrator.api.discord.ingress.jira_runtime.fetch_jira_issue_preview",
             return_value=JiraIssuePreview(key="TP-20", summary="Do thing", status="To Do"),
         ), patch(
-            "orchestrator.api.discord.commands.run_controls.evaluate_issue_clarification_state",
+            "orchestrator.api.discord.ingress.executor._default_decision_clarification_port.evaluate_issue_clarification_state",
             return_value=self._ready_decision_result(),
         ):
             response = self.client.post(
@@ -480,7 +530,7 @@ class DiscordCommandApiTests(unittest.TestCase):
                 description="Objective: refreshed from Jira for retry.",
             ),
         ), patch(
-            "orchestrator.api.discord.commands.run_controls.evaluate_issue_clarification_state",
+            "orchestrator.api.discord.ingress.executor._default_decision_clarification_port.evaluate_issue_clarification_state",
             return_value=self._ready_decision_result(),
         ):
             response = self.client.post(
@@ -510,7 +560,7 @@ class DiscordCommandApiTests(unittest.TestCase):
                 description="Objective: refreshed from Jira for retry.",
             ),
         ), patch(
-            "orchestrator.api.discord.commands.run_controls.evaluate_issue_clarification_state",
+            "orchestrator.api.discord.ingress.executor._default_decision_clarification_port.evaluate_issue_clarification_state",
             return_value=self._ready_decision_result(),
         ):
             response = self.client.post(
@@ -529,7 +579,7 @@ class DiscordCommandApiTests(unittest.TestCase):
             "orchestrator.api.discord.ingress.jira_runtime.fetch_jira_issue_preview",
             return_value=JiraIssuePreview(key="TP-30", summary="Retry thing", status="To Do"),
         ), patch(
-            "orchestrator.api.discord.commands.run_controls.evaluate_issue_clarification_state",
+            "orchestrator.api.discord.ingress.executor._default_decision_clarification_port.evaluate_issue_clarification_state",
             return_value=self._ready_decision_result(),
         ):
             response = self.client.post(
@@ -591,7 +641,7 @@ class DiscordCommandApiTests(unittest.TestCase):
             patch("orchestrator.api.discord.ingress.jira_runtime.tenant_jira_oauth_context", return_value=oauth_context),
             patch("orchestrator.api.discord.ingress.executor.build_codex_runtime", return_value=runtime),
             patch(
-                "orchestrator.api.discord.commands.run_controls.capture_decision_reply_and_recheck",
+                "orchestrator.api.discord.ingress.executor._default_decision_clarification_port.capture_decision_reply_and_recheck",
                 return_value=SimpleNamespace(
                     capture=SimpleNamespace(
                         cycle=SimpleNamespace(cycle_id="cycle-1"),
@@ -630,7 +680,7 @@ class DiscordCommandApiTests(unittest.TestCase):
                 ),
             ),
             patch(
-                "orchestrator.api.discord.commands.run_controls.evaluate_issue_clarification_state",
+                "orchestrator.api.discord.ingress.executor._default_decision_clarification_port.evaluate_issue_clarification_state",
                 return_value=self._ready_decision_result(),
             ),
         ):
@@ -718,7 +768,7 @@ class DiscordCommandApiTests(unittest.TestCase):
             ) as preview_mock,
             patch("orchestrator.api.discord.ingress.jira_runtime.tenant_jira_oauth_context", return_value=oauth_context),
             patch(
-                "orchestrator.api.discord.commands.run_controls.capture_decision_reply_and_recheck",
+                "orchestrator.api.discord.ingress.executor._default_decision_clarification_port.capture_decision_reply_and_recheck",
                 return_value=SimpleNamespace(
                     capture=SimpleNamespace(evidence_id="evidence-2"),
                     decision_result=SimpleNamespace(
@@ -754,15 +804,15 @@ class DiscordCommandApiTests(unittest.TestCase):
             ),
             patch("orchestrator.core.decision_engine.plan_decision_questions", return_value=planner_result),
             patch(
-                "orchestrator.api.discord.commands.run_controls.unresolved_question_feedback_for_cycle",
-                return_value=[
+                "orchestrator.api.discord.commands.run_controls.load_cycle_question_feedback",
+                return_value=(
                     {
                         "question_id": "dg_1",
                         "question_text": "What entitlement/capability values are required for production and staging?",
                         "note": "Config values were captured, but entitlement confirmation is still missing.",
                         "status": "open",
-                    }
-                ],
+                    },
+                ),
             ),
             patch("orchestrator.api.discord.commands.run_controls.build_precheck_message") as build_message_mock,
         ):
@@ -821,18 +871,18 @@ class DiscordCommandApiTests(unittest.TestCase):
         with (
             patch("orchestrator.api.discord.ingress.jira_runtime.tenant_jira_oauth_context", return_value=oauth_context),
             patch(
-                "orchestrator.api.discord.commands.run_controls.capture_decision_reply_and_recheck"
+                "orchestrator.api.discord.ingress.executor._default_decision_clarification_port.capture_decision_reply_and_recheck"
             ) as reply_recheck_mock,
             patch(
-                "orchestrator.api.discord.commands.run_controls.unresolved_question_feedback_for_cycle",
-                return_value=[
+                "orchestrator.api.discord.commands.run_controls.load_cycle_question_feedback",
+                return_value=(
                     {
                         "question_id": "dg_1",
                         "question_text": "What entitlement/capability values are required for production and staging?",
                         "note": "Config values were captured, but entitlement confirmation is still missing.",
                         "status": "open",
-                    }
-                ],
+                    },
+                ),
             ),
         ):
             reply_recheck_mock.return_value = SimpleNamespace(
@@ -862,7 +912,7 @@ class DiscordCommandApiTests(unittest.TestCase):
                         ),
                         block_reason="decision_gate_required",
                     ),
-                    classification="decision_gate",
+                        classification="decision_gate",
                     missing_slots=[],
                     auto_resolved_slots=[],
                     cycle_id="cycle-1",
@@ -931,7 +981,7 @@ class DiscordCommandApiTests(unittest.TestCase):
         with (
             patch("orchestrator.api.discord.ingress.jira_runtime.tenant_jira_oauth_context", return_value=oauth_context),
             patch(
-                "orchestrator.api.discord.commands.run_controls.capture_decision_reply_and_recheck",
+                "orchestrator.api.discord.ingress.executor._default_decision_clarification_port.capture_decision_reply_and_recheck",
                 return_value=SimpleNamespace(
                     capture=SimpleNamespace(evidence_id="evidence-3"),
                     decision_result=SimpleNamespace(
@@ -966,6 +1016,13 @@ class DiscordCommandApiTests(unittest.TestCase):
                 ),
             ),
             patch("orchestrator.core.decision_engine.plan_decision_questions", return_value=planner_result),
+            patch(
+                "orchestrator.api.discord.commands.run_controls.build_precheck_message",
+                return_value=(
+                    "Dependencies and risks identified. Which dependencies or risks may impact delivery?",
+                    ["Which dependencies or risks may impact delivery?"],
+                ),
+            ) as build_message_mock,
         ):
             response = self.client.post(
                 f"/discord/command/{self.tenant_id}",
@@ -985,6 +1042,7 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertIn("Which dependencies or risks may impact delivery?", response.json()["data"]["questions"])
         self.assertNotIn("Decision Gate reason:", response.json()["message"])
         oauth_client.update_issue_summary_and_description.assert_not_called()
+        build_message_mock.assert_called_once()
 
     def test_reply_without_retryable_run_queues_initial_run_after_clarification(self) -> None:
         oauth_client = SimpleNamespace(
@@ -1029,7 +1087,7 @@ class DiscordCommandApiTests(unittest.TestCase):
         with (
             patch("orchestrator.api.discord.ingress.jira_runtime.tenant_jira_oauth_context", return_value=oauth_context),
             patch(
-                "orchestrator.api.discord.commands.run_controls.capture_decision_reply_and_recheck",
+                "orchestrator.api.discord.ingress.executor._default_decision_clarification_port.capture_decision_reply_and_recheck",
                 return_value=SimpleNamespace(
                     capture=SimpleNamespace(evidence_id="evidence-4"),
                     decision_result=SimpleNamespace(
@@ -1060,7 +1118,7 @@ class DiscordCommandApiTests(unittest.TestCase):
                 return_value=enqueue_result,
             ) as enqueue_mock,
             patch(
-                "orchestrator.api.discord.commands.run_controls.evaluate_issue_clarification_state",
+                "orchestrator.api.discord.ingress.executor._default_decision_clarification_port.evaluate_issue_clarification_state",
                 return_value=self._ready_decision_result(),
             ) as decision_mock,
         ):
@@ -1110,7 +1168,7 @@ class DiscordCommandApiTests(unittest.TestCase):
         with (
             patch("orchestrator.api.discord.ingress.jira_runtime.tenant_jira_oauth_context", return_value=oauth_context),
             patch(
-                "orchestrator.api.discord.commands.run_controls.capture_decision_reply_and_recheck",
+                "orchestrator.api.discord.ingress.executor._default_decision_clarification_port.capture_decision_reply_and_recheck",
                 side_effect=ValueError("No active decision cycle exists for TP-92"),
             ),
         ):
@@ -1138,7 +1196,9 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertIn("outside the mapped project scope", response.json()["detail"])
 
     def test_run_rejects_issue_outside_mapped_project_scope(self) -> None:
-        self._create_project(project_id=f"{self.tenant_id}-other", jira_project_key="OTH", channel_id="discord-other-1")
+        other_project_id = f"{self.tenant_id}-other"
+        self._create_project(project_id=other_project_id, jira_project_key="OTH", channel_id="discord-other-1")
+        self._set_project_allowed_users(project_id=other_project_id, user_ids=["u-admin"])
         with patch(
             "orchestrator.api.discord.ingress.jira_runtime.fetch_jira_issue_preview",
             return_value=JiraIssuePreview(key="TP-20", summary="Do thing", status="To Do"),
@@ -1151,7 +1211,9 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertIn("outside the mapped project scope", response.json()["detail"])
 
     def test_retry_rejects_run_outside_mapped_project_scope(self) -> None:
-        self._create_project(project_id=f"{self.tenant_id}-other", jira_project_key="OTH", channel_id="discord-other-1")
+        other_project_id = f"{self.tenant_id}-other"
+        self._create_project(project_id=other_project_id, jira_project_key="OTH", channel_id="discord-other-1")
+        self._set_project_allowed_users(project_id=other_project_id, user_ids=["u-admin"])
         self._queue_run(run_id="run-tp-1", issue_key="TP-30", status="failed", project_id=f"{self.tenant_id}-default")
         with patch(
             "orchestrator.api.discord.ingress.jira_runtime.fetch_jira_issue_preview",
@@ -1165,7 +1227,9 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertIn("outside the mapped project scope", response.json()["detail"])
 
     def test_cancel_rejects_run_outside_mapped_project_scope(self) -> None:
-        self._create_project(project_id=f"{self.tenant_id}-other", jira_project_key="OTH", channel_id="discord-other-1")
+        other_project_id = f"{self.tenant_id}-other"
+        self._create_project(project_id=other_project_id, jira_project_key="OTH", channel_id="discord-other-1")
+        self._set_project_allowed_users(project_id=other_project_id, user_ids=["u-admin"])
         self._queue_run(run_id="run-tp-cancel", issue_key="TP-31", status="queued", project_id=f"{self.tenant_id}-default")
         response = self.client.post(
             f"/discord/command/{self.tenant_id}",
@@ -2689,12 +2753,13 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertIn("TP-77", response.json()["message"])
 
     def test_plain_text_in_seed_followup_thread_routes_to_issues_followup(self) -> None:
+        self._set_project_allowed_users(
+            project_id=self.default_project_id,
+            user_ids=["u-admin", "u-viewer"],
+        )
         with self.session_factory() as session:
             tenant = session.get(Tenant, self.tenant_id)
             self.assertIsNotNone(tenant)
-            discord_config = dict(tenant.discord_config or {})
-            discord_config["allowed_user_ids"] = ["u-viewer"]
-            tenant.discord_config = discord_config
             store_seed_followup_context(
                 session=session,
                 tenant=tenant,

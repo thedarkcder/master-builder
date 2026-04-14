@@ -12,12 +12,14 @@ def create_tenant(
     *,
     session,
     payload,
+    settings,
     validate_codex_assets_for_tenant_init_fn,
     create_tenant_fn,
     allocate_tenant_id_fn,
     with_preserved_jira_system_fields_fn,
     with_managed_github_refs_fn,
     with_preserved_discord_system_fields_fn,
+    provision_jira_webhook_fn,
     reconcile_tenant_projects_fn,
     tenant_to_schema_fn,
 ):  # noqa: ANN001
@@ -25,10 +27,12 @@ def create_tenant(
     return create_tenant_fn(
         session=session,
         payload=payload,
+        settings=settings,
         allocate_tenant_id_fn=allocate_tenant_id_fn,
         with_preserved_jira_system_fields_fn=with_preserved_jira_system_fields_fn,
         with_managed_github_refs_fn=with_managed_github_refs_fn,
         with_preserved_discord_system_fields_fn=with_preserved_discord_system_fields_fn,
+        provision_jira_webhook_fn=provision_jira_webhook_fn,
         reconcile_tenant_projects_fn=reconcile_tenant_projects_fn,
         tenant_to_schema_fn=tenant_to_schema_fn,
     )

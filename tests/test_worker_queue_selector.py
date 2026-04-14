@@ -1,6 +1,6 @@
 import os
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
@@ -11,6 +11,7 @@ from orchestrator.core.worker.queue_selector import (
     probe_claimable_queued_run,
     select_next_queued_run,
 )
+from orchestrator.core.runs import resolve_required_worker_capability_from_plan
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
@@ -19,6 +20,8 @@ from tests.workflow_test_support import add_run_with_workflow, make_run
 
 
 def _add_run(session, *, now: datetime, **kwargs) -> None:
+    if "required_worker_capability" not in kwargs and isinstance(kwargs.get("plan"), dict):
+        kwargs["required_worker_capability"] = resolve_required_worker_capability_from_plan(kwargs["plan"])
     add_run_with_workflow(session, make_run(created_at=now, **kwargs))
 
 
@@ -179,9 +182,75 @@ class WorkerQueueSelectorTests(unittest.TestCase):
             self.assertIsNotNone(result.tenant)
             self.assertEqual(result.run.run_id, "run-b-queued")
             self.assertEqual(result.tenant.tenant_id, "tenant-b")
-            self.assertEqual(result.run.status, "running")
+            self.assertEqual(result.run.status, "dispatching")
             claim_row = session.get(TenantRunClaim, "tenant-b")
             self.assertIsNotNone(claim_row)
+
+    def test_claim_next_queued_run_ignores_stale_running_run_for_concurrency(self) -> None:
+        now = datetime.now(timezone.utc)
+        stale_heartbeat = now - timedelta(minutes=10)
+        with self.session_factory() as session:
+            session.add(
+                Tenant(
+                    tenant_id="tenant-a",
+                    name="Tenant A",
+                    is_enabled=True,
+                    jira_config={},
+                    github_config={},
+                    repos_config={"github_repository": "https://github.com/example/a"},
+                    policy_config={"max_concurrent_runs": 1},
+                    discord_config=None,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            _add_run(
+                session,
+                now=now,
+                run_id="run-a-running-stale",
+                tenant_id="tenant-a",
+                issue_key="MAB-920",
+                issue_summary="Tenant A stale running",
+                issue_description="running",
+                repo_url="https://github.com/example/a",
+                branch=None,
+                pr_url=None,
+                status="running",
+                plan=_plan_for_capability("linux"),
+                started_at=stale_heartbeat,
+                finished_at=None,
+                last_heartbeat_at=stale_heartbeat,
+            )
+            _add_run(
+                session,
+                now=now,
+                run_id="run-a-queued-fresh",
+                tenant_id="tenant-a",
+                issue_key="MAB-921",
+                issue_summary="Tenant A queued",
+                issue_description="queued",
+                repo_url="https://github.com/example/a",
+                branch=None,
+                pr_url=None,
+                status="queued",
+                plan=_plan_for_capability("linux"),
+                started_at=None,
+                finished_at=None,
+            )
+            session.commit()
+
+            result = claim_next_queued_run(
+                session,
+                queued_status="queued",
+                running_status="running",
+                failed_status="failed",
+                worker_service_instance_id="node-a:1234",
+                running_stale_timeout_seconds=300,
+            )
+
+            self.assertIsNotNone(result.run)
+            self.assertEqual(result.run.run_id, "run-a-queued-fresh")
+            self.assertEqual(result.run.status, "dispatching")
 
     def test_claim_next_queued_run_recovers_when_claim_row_is_inserted_concurrently(self) -> None:
         now = datetime.now(timezone.utc)
@@ -241,7 +310,7 @@ class WorkerQueueSelectorTests(unittest.TestCase):
 
             self.assertIsNotNone(result.run)
             self.assertEqual(result.run.run_id, "run-race-queued")
-            self.assertEqual(result.run.status, "running")
+            self.assertEqual(result.run.status, "dispatching")
 
     def test_select_next_queued_run_applies_project_overrides_when_project_id_unset(self) -> None:
         now = datetime.now(timezone.utc)
@@ -517,6 +586,71 @@ class WorkerQueueSelectorTests(unittest.TestCase):
             self.assertEqual(probe.tenant_id, "tenant-b")
             self.assertEqual(probe.issue_key, "MAB-912")
 
+    def test_probe_claimable_queued_run_ignores_stale_running_run_for_concurrency(self) -> None:
+        now = datetime.now(timezone.utc)
+        stale_heartbeat = now - timedelta(minutes=10)
+        with self.session_factory() as session:
+            session.add(
+                Tenant(
+                    tenant_id="tenant-a",
+                    name="Tenant A",
+                    is_enabled=True,
+                    jira_config={},
+                    github_config={},
+                    repos_config={"github_repository": "https://github.com/example/a"},
+                    policy_config={"max_concurrent_runs": 1},
+                    discord_config=None,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            _add_run(
+                session,
+                now=now,
+                run_id="run-a-running-stale",
+                tenant_id="tenant-a",
+                issue_key="MAB-930",
+                issue_summary="Tenant A stale running",
+                issue_description="running",
+                repo_url="https://github.com/example/a",
+                branch=None,
+                pr_url=None,
+                status="running",
+                plan=_plan_for_capability("linux"),
+                started_at=stale_heartbeat,
+                finished_at=None,
+                last_heartbeat_at=stale_heartbeat,
+            )
+            _add_run(
+                session,
+                now=now,
+                run_id="run-a-queued-fresh",
+                tenant_id="tenant-a",
+                issue_key="MAB-931",
+                issue_summary="Tenant A queued",
+                issue_description="queued",
+                repo_url="https://github.com/example/a",
+                branch=None,
+                pr_url=None,
+                status="queued",
+                plan=_plan_for_capability("linux"),
+                started_at=None,
+                finished_at=None,
+            )
+            session.commit()
+
+            probe = probe_claimable_queued_run(
+                session,
+                queued_status="queued",
+                running_status="running",
+                worker_capabilities={"linux"},
+                running_stale_timeout_seconds=300,
+            )
+
+            self.assertTrue(probe.claimable)
+            self.assertEqual(probe.reason, QueueClaimabilityReason.CLAIMABLE)
+            self.assertEqual(probe.run_id, "run-a-queued-fresh")
+
     def test_probe_claimable_queued_run_reports_capability_mismatch_when_no_worker_match(self) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
@@ -561,4 +695,120 @@ class WorkerQueueSelectorTests(unittest.TestCase):
 
             self.assertFalse(probe.claimable)
             self.assertEqual(probe.reason, QueueClaimabilityReason.CAPABILITY_MISMATCH)
-            self.assertIsNone(probe.run_id)
+            self.assertEqual(probe.run_id, "run-macos")
+            self.assertEqual(probe.tenant_id, "tenant-capabilities")
+            self.assertEqual(probe.issue_key, "IOS-10")
+
+    def test_probe_claimable_queued_run_reports_runtime_unavailable_when_required_runtime_is_blocked(self) -> None:
+        now = datetime.now(timezone.utc)
+        with self.session_factory() as session:
+            session.add(
+                Tenant(
+                    tenant_id="tenant-runtime",
+                    name="Tenant Runtime",
+                    is_enabled=True,
+                    jira_config={},
+                    github_config={},
+                    repos_config={"github_repository": "https://github.com/example/runtime"},
+                    policy_config={"max_concurrent_runs": 1},
+                    discord_config=None,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            _add_run(
+                session,
+                now=now,
+                run_id="run-runtime",
+                tenant_id="tenant-runtime",
+                issue_key="MAB-940",
+                issue_summary="Runtime blocked",
+                issue_description="queued",
+                repo_url="https://github.com/example/runtime",
+                branch=None,
+                pr_url=None,
+                status="queued",
+                plan=_plan_for_capability("linux"),
+                required_runtime_kinds_json=["codex_cli"],
+                started_at=None,
+                finished_at=None,
+            )
+            session.commit()
+
+            probe = probe_claimable_queued_run(
+                session,
+                queued_status="queued",
+                running_status="running",
+                worker_capabilities={"linux"},
+                ready_runtime_kinds={"openai"},
+            )
+
+            self.assertFalse(probe.claimable)
+            self.assertEqual(probe.reason, QueueClaimabilityReason.RUNTIME_UNAVAILABLE)
+            self.assertEqual(probe.run_id, "run-runtime")
+            self.assertEqual(probe.tenant_id, "tenant-runtime")
+            self.assertEqual(probe.issue_key, "MAB-940")
+
+    def test_probe_claimable_queued_run_reports_blocked_candidate_for_concurrency_limit(self) -> None:
+        now = datetime.now(timezone.utc)
+        with self.session_factory() as session:
+            session.add(
+                Tenant(
+                    tenant_id="tenant-a",
+                    name="Tenant A",
+                    is_enabled=True,
+                    jira_config={},
+                    github_config={},
+                    repos_config={"github_repository": "https://github.com/example/a"},
+                    policy_config={"max_concurrent_runs": 1},
+                    discord_config=None,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            _add_run(
+                session,
+                now=now,
+                run_id="run-a-running",
+                tenant_id="tenant-a",
+                issue_key="MAB-950",
+                issue_summary="Tenant A running",
+                issue_description="running",
+                repo_url="https://github.com/example/a",
+                branch=None,
+                pr_url=None,
+                status="running",
+                plan=_plan_for_capability("linux"),
+                started_at=now,
+                finished_at=None,
+            )
+            _add_run(
+                session,
+                now=now,
+                run_id="run-a-queued",
+                tenant_id="tenant-a",
+                issue_key="MAB-951",
+                issue_summary="Tenant A queued",
+                issue_description="queued",
+                repo_url="https://github.com/example/a",
+                branch=None,
+                pr_url=None,
+                status="queued",
+                plan=_plan_for_capability("linux"),
+                started_at=None,
+                finished_at=None,
+            )
+            session.commit()
+
+            probe = probe_claimable_queued_run(
+                session,
+                queued_status="queued",
+                running_status="running",
+                worker_capabilities={"linux"},
+            )
+
+            self.assertFalse(probe.claimable)
+            self.assertEqual(probe.reason, QueueClaimabilityReason.CONCURRENCY_LIMIT)
+            self.assertEqual(probe.run_id, "run-a-queued")
+            self.assertEqual(probe.tenant_id, "tenant-a")
+            self.assertEqual(probe.issue_key, "MAB-951")

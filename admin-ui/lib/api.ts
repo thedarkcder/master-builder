@@ -497,6 +497,26 @@ export type PlatformServiceStatusRecord = {
   instances?: PlatformServiceInstanceRecord[];
 };
 
+export type PlatformRuntimeDependencyRecord = {
+  state?: string;
+  summary?: string;
+  remediation_text?: string | null;
+  remediation_expires_at?: string | null;
+};
+
+export type WorkerRuntimeAuthRequestRecord = {
+  request_id: string;
+  service_instance_id: string;
+  runtime_kind: string;
+  status: string;
+  remediation_text?: string | null;
+  requested_at: string;
+  started_at?: string | null;
+  completed_at?: string | null;
+  expires_at?: string | null;
+  last_error?: string | null;
+};
+
 export type PlatformServiceInstanceRecord = {
   instance_id: string;
   label: string;
@@ -507,6 +527,7 @@ export type PlatformServiceInstanceRecord = {
   capabilities: string[];
   current_run_id?: string | null;
   active_run_count?: number;
+  runtime_dependencies?: Record<string, PlatformRuntimeDependencyRecord>;
 };
 
 export type PlatformStatusRecord = {
@@ -2191,6 +2212,30 @@ export function getKnowledgeJiraSyncRuntimeStatus(
 
 export function getPlatformStatus(credentials: Credentials): Promise<PlatformStatusRecord> {
   return request<PlatformStatusRecord>(credentials, "/api/admin/status");
+}
+
+export function startWorkerRuntimeLoginSession(
+  credentials: Credentials,
+  serviceInstanceId: string,
+  runtimeKind: string,
+): Promise<WorkerRuntimeAuthRequestRecord> {
+  return request<WorkerRuntimeAuthRequestRecord>(
+    credentials,
+    `/api/admin/workers/${encodeURIComponent(serviceInstanceId)}/runtime-dependencies/${encodeURIComponent(runtimeKind)}/login-session`,
+    {
+      method: "POST",
+    },
+  );
+}
+
+export function getWorkerRuntimeAuthRequest(
+  credentials: Credentials,
+  requestId: string,
+): Promise<WorkerRuntimeAuthRequestRecord> {
+  return request<WorkerRuntimeAuthRequestRecord>(
+    credentials,
+    `/api/admin/workers/runtime-auth-requests/${encodeURIComponent(requestId)}`,
+  );
 }
 
 export function listWebhookQueueJobs(

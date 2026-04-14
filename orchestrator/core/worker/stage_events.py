@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
+from orchestrator.core.decision_types import WorkerStageEvent
 from orchestrator.core.signal_templates import format_stage_discord_update, format_stage_jira_update
 
 
@@ -10,7 +11,7 @@ def _build_stage_update(
     tenant_id: str,
     issue_key: str | None,
     run_id: str,
-    stage: str,
+    stage: WorkerStageEvent,
     jira_url: str | None,
     run_url: str | None = None,
     pr_url: str | None = None,
@@ -18,7 +19,7 @@ def _build_stage_update(
     next_steps: Iterable[str] | None = None,
 ) -> dict[str, str]:
     return {
-        "stage": stage,
+        "stage": stage.value,
         "tenant_id": tenant_id,
         "issue_key": issue_key or "",
         "run_id": run_id,
@@ -26,7 +27,7 @@ def _build_stage_update(
             tenant_id=tenant_id,
             issue_key=issue_key,
             run_id=run_id,
-            stage=stage,
+            stage=stage.value,
             jira_url=jira_url,
             pr_url=pr_url,
             error=error,
@@ -36,7 +37,7 @@ def _build_stage_update(
             tenant_id=tenant_id,
             issue_key=issue_key,
             run_id=run_id,
-            stage=stage,
+            stage=stage.value,
             jira_url=jira_url,
             run_url=run_url,
             pr_url=pr_url,
@@ -60,7 +61,7 @@ def decision_gate_required_update(
         tenant_id=tenant_id,
         issue_key=issue_key,
         run_id=run_id,
-        stage="decision_gate_required",
+        stage=WorkerStageEvent.DECISION_GATE_REQUIRED,
         jira_url=jira_url,
         run_url=run_url,
         error=reason,
@@ -82,7 +83,7 @@ def run_not_ready_update(
         tenant_id=tenant_id,
         issue_key=issue_key,
         run_id=run_id,
-        stage="run_not_ready",
+        stage=WorkerStageEvent.RUN_NOT_READY,
         jira_url=jira_url,
         run_url=run_url,
         error=reason,
@@ -102,7 +103,7 @@ def lock_acquired_update(
         tenant_id=tenant_id,
         issue_key=issue_key,
         run_id=run_id,
-        stage="lock_acquired",
+        stage=WorkerStageEvent.LOCK_ACQUIRED,
         jira_url=jira_url,
         run_url=run_url,
     )
@@ -120,7 +121,7 @@ def plan_posted_update(
         tenant_id=tenant_id,
         issue_key=issue_key,
         run_id=run_id,
-        stage="plan_posted",
+        stage=WorkerStageEvent.PLAN_POSTED,
         jira_url=jira_url,
         run_url=run_url,
     )
@@ -139,7 +140,7 @@ def pr_opened_update(
         tenant_id=tenant_id,
         issue_key=issue_key,
         run_id=run_id,
-        stage="pr_opened",
+        stage=WorkerStageEvent.PR_OPENED,
         jira_url=jira_url,
         run_url=run_url,
         pr_url=pr_url,
@@ -159,7 +160,7 @@ def run_failed_update(
         tenant_id=tenant_id,
         issue_key=issue_key,
         run_id=run_id,
-        stage="run_failed",
+        stage=WorkerStageEvent.RUN_FAILED,
         jira_url=jira_url,
         run_url=run_url,
         error=error,
@@ -184,7 +185,7 @@ def run_requeued_capability_mismatch_update(
         tenant_id=tenant_id,
         issue_key=issue_key,
         run_id=run_id,
-        stage="run_requeued_capability_mismatch",
+        stage=WorkerStageEvent.RUN_REQUEUED_CAPABILITY_MISMATCH,
         jira_url=jira_url,
         run_url=run_url,
         error=error,
@@ -208,7 +209,7 @@ def run_requeued_stale_snapshot_update(
         tenant_id=tenant_id,
         issue_key=issue_key,
         run_id=run_id,
-        stage="run_requeued_stale_snapshot",
+        stage=WorkerStageEvent.RUN_REQUEUED_STALE_SNAPSHOT,
         jira_url=jira_url,
         run_url=run_url,
         error=error,

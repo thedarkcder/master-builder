@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import datetime, timezone
 
+from orchestrator.core.decision_types import JiraConfigKey, tenant_jira_config_text
+
 
 class DiscordAskHistoryService:
     def __init__(
@@ -203,7 +205,7 @@ class DiscordAskHistoryService:
         channel_id: str,
         existing_issue_keys_fn: Callable[..., set[str]],
     ) -> int:
-        connection_id = str((tenant.jira_config or {}).get("connection_id") or "").strip()
+        connection_id = tenant_jira_config_text(tenant=tenant, key=JiraConfigKey.CONNECTION_ID)
         if not connection_id:
             return 0
 
