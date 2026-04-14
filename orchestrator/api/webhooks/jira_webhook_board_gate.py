@@ -14,9 +14,10 @@ from orchestrator.api.webhooks.jira_admission_flow import (
 )
 from orchestrator.api.webhooks.jira_webhook_types import JiraWebhookContext, jira_webhook_response
 from orchestrator.core.communications import DiscordTenantNotificationAction, TransportAction
+from orchestrator.core.communications.execution_admission_format import present_jira_admission
 from orchestrator.core.communications.jira_enqueue_presentation import (
     format_backlog_pre_run_check_message,
-    format_jira_enqueue_skipped_message,
+    format_jira_enqueue_skipped_message_from_admission,
 )
 from orchestrator.core.decision_state_machine import (
     ExecutionAdmissionReason,
@@ -146,14 +147,14 @@ def stage_handle_run_board_gate(
         admission = build_execution_admission_block(
             reason=ExecutionAdmissionReason.BOARD_GATE_UNCONFIGURED,
         )
+        admission_presentation = present_jira_admission(admission=admission)
         return JiraBoardGatePlan(
             response=jira_webhook_response(
                 context,
                 enqueued=False,
-                reason=admission.reason_code,
-                guidance=admission.guidance,
                 board_id=raw_board_id,
                 webhook_event=context.webhook_event,
+                **admission_presentation.response_fields,
             )
         )
     location, detail = _fetch_issue_board_location(
@@ -166,6 +167,8 @@ def stage_handle_run_board_gate(
         return None
     if location == "backlog":
         reason = ExecutionAdmissionReason.ISSUE_IN_BACKLOG
+        admission = build_execution_admission_block(reason=reason)
+        admission_presentation = present_jira_admission(admission=admission)
         decision_result = evaluate_precheck_decision_with_labels(
             context=context,
             session=session,
@@ -196,12 +199,11 @@ def stage_handle_run_board_gate(
             response=jira_webhook_response(
                 context,
                 enqueued=False,
-                reason=reason.value,
-                guidance=build_execution_admission_block(reason=reason).guidance,
                 board_id=board_id,
                 webhook_event=context.webhook_event,
                 detail=detail,
                 pre_run_check=pre_run_check,
+                **admission_presentation.response_fields,
             ),
             actions=actions,
         )
@@ -210,12 +212,14 @@ def stage_handle_run_board_gate(
         if location == "not_on_board"
         else ExecutionAdmissionReason.BOARD_GATE_CHECK_FAILED
     )
+    admission = build_execution_admission_block(reason=reason)
+    admission_presentation = present_jira_admission(admission=admission)
     logger.info(
         "jira_webhook_not_started request_id=%s tenant_id=%s issue_key=%s reason=%s board_id=%s detail=%s",
         context.request_id,
         context.tenant_id,
         context.issue_key,
-        reason.value,
+        admission.reason_code,
         board_id,
         detail,
     )
@@ -223,16 +227,15 @@ def stage_handle_run_board_gate(
         response=jira_webhook_response(
             context,
             enqueued=False,
-            reason=reason.value,
-            guidance=build_execution_admission_block(reason=reason).guidance,
             board_id=board_id,
             webhook_event=context.webhook_event,
             detail=detail,
+            **admission_presentation.response_fields,
         ),
         actions=(
             _build_enqueue_skipped_notification_action(
                 context=context,
-                reason=reason.value,
+                admission=admission,
                 extra_detail=f"board_id={board_id}" if detail is None else f"board_id={board_id}; detail={detail}",
             ),
         ),
@@ -242,13 +245,13 @@ def stage_handle_run_board_gate(
 def _build_enqueue_skipped_notification_action(
     *,
     context: JiraWebhookContext,
-    reason: str,
+    admission,
     extra_detail: str | None,
 ) -> DiscordTenantNotificationAction:
-    message = format_jira_enqueue_skipped_message(
+    message = format_jira_enqueue_skipped_message_from_admission(
         issue_key=context.issue_key,
         issue_status=context.issue_status,
-        reason=reason,
+        admission=admission,
         extra_detail=extra_detail,
     )
     return DiscordTenantNotificationAction(

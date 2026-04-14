@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 
 from sqlalchemy.orm import Session
 
@@ -30,6 +30,12 @@ class DecisionClarificationPresentation:
     @property
     def requires_decision_gate_feedback(self) -> bool:
         return self.mode in {DecisionClassification.DECISION_GATE, DecisionClassification.BOTH}
+
+
+@dataclass(frozen=True)
+class DiscordDecisionClarificationPresentation:
+    message: str
+    response_fields: dict[str, object]
 
 
 def load_cycle_question_feedback(*, session: Session, cycle_id: str | None) -> tuple[dict[str, str], ...]:
@@ -130,6 +136,54 @@ def build_decision_clarification_presentation(
         question_feedback=normalized_feedback,
         missing_slots=missing_slots,
         auto_resolved_slots=auto_resolved_slots,
+    )
+
+
+def build_decision_clarification_response_fields(
+    *,
+    presentation: DecisionClarificationPresentation,
+    questions: Iterable[str] | None = None,
+) -> dict[str, object]:
+    effective_questions = _dedupe(questions or presentation.questions)
+    return {
+        "classification": presentation.mode.value,
+        "decision_gate_reason": presentation.decision_gate_reason,
+        "gtd_missing_criteria": list(presentation.gtd_missing_criteria),
+        "questions": list(effective_questions),
+        "question_feedback": list(presentation.question_feedback),
+        "missing_slots": list(presentation.missing_slots),
+        "auto_resolved_slots": list(presentation.auto_resolved_slots),
+    }
+
+
+def present_discord_decision_clarification(
+    *,
+    issue_key: str,
+    presentation: DecisionClarificationPresentation,
+    precheck_message_builder: Callable[[], tuple[str, list[str]]],
+) -> DiscordDecisionClarificationPresentation:
+    if presentation.requires_decision_gate_feedback and presentation.question_feedback:
+        message = render_decision_gate_feedback_message(
+            issue_key=issue_key,
+            reason=presentation.decision_gate_reason or "clarification required",
+            question_feedback=presentation.question_feedback,
+        )
+        generated_questions = list(presentation.questions)
+    elif presentation.requires_decision_gate_feedback:
+        message = render_decision_gate_remaining_questions_message(
+            issue_key=issue_key,
+            reason=presentation.decision_gate_reason or "clarification required",
+            questions=presentation.decision_gate_questions,
+        )
+        generated_questions = list(presentation.questions)
+    else:
+        message, generated_questions = precheck_message_builder()
+    return DiscordDecisionClarificationPresentation(
+        message=message,
+        response_fields=build_decision_clarification_response_fields(
+            presentation=presentation,
+            questions=generated_questions,
+        ),
     )
 
 

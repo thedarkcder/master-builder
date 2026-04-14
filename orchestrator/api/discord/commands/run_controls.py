@@ -17,9 +17,8 @@ from orchestrator.core.communications.enqueue_reason_contract import (
 )
 from orchestrator.core.communications.decision_clarification_presentation import (
     build_decision_clarification_presentation,
+    present_discord_decision_clarification,
     load_cycle_question_feedback,
-    render_decision_gate_feedback_message,
-    render_decision_gate_remaining_questions_message,
 )
 from orchestrator.core.communications.execution_admission_format import (
     present_discord_admission_conflict,
@@ -463,25 +462,10 @@ def dispatch_run_control_command(
             ),
         )
         if clarification_presentation.recheck_required:
-            if (
-                clarification_presentation.requires_decision_gate_feedback
-                and clarification_presentation.question_feedback
-            ):
-                message = render_decision_gate_feedback_message(
-                    issue_key=issue_key,
-                    reason=clarification_presentation.decision_gate_reason or "clarification required",
-                    question_feedback=clarification_presentation.question_feedback,
-                )
-                generated_questions = list(clarification_presentation.questions)
-            elif clarification_presentation.requires_decision_gate_feedback:
-                message = render_decision_gate_remaining_questions_message(
-                    issue_key=issue_key,
-                    reason=clarification_presentation.decision_gate_reason or "clarification required",
-                    questions=clarification_presentation.decision_gate_questions,
-                )
-                generated_questions = list(clarification_presentation.questions)
-            else:
-                message, generated_questions = build_precheck_message(
+            clarification_response = present_discord_decision_clarification(
+                issue_key=issue_key,
+                presentation=clarification_presentation,
+                precheck_message_builder=lambda: build_precheck_message(
                     runtime=runtime,
                     invocation_context=AgentInvocationContext(
                         channel="discord",
@@ -499,21 +483,16 @@ def dispatch_run_control_command(
                     gtd_missing_criteria=list(clarification_presentation.gtd_missing_criteria),
                     gtd_questions=list(clarification_presentation.gtd_questions),
                     missing_slots=list(clarification_presentation.missing_slots),
-                )
+                ),
+            )
             return DiscordCommandResponse(
                 ok=True,
                 command=command_name,
-                message=message,
+                message=clarification_response.message,
                 data={
                     "issue_key": issue_key,
                     "recheck_required": True,
-                    "classification": clarification_presentation.mode.value,
-                    "decision_gate_reason": clarification_presentation.decision_gate_reason,
-                    "gtd_missing_criteria": list(clarification_presentation.gtd_missing_criteria),
-                    "questions": generated_questions or list(clarification_presentation.questions),
-                    "question_feedback": list(clarification_presentation.question_feedback),
-                    "missing_slots": list(clarification_presentation.missing_slots),
-                    "auto_resolved_slots": list(clarification_presentation.auto_resolved_slots),
+                    **clarification_response.response_fields,
                     "knowledge_mode": None,
                 },
             )

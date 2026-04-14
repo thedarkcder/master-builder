@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from orchestrator.core.communications.enqueue_reason_contract import enqueue_reason_guidance
+from orchestrator.core.decision_state_machine import ExecutionAdmissionDecision
 from orchestrator.core.decision_types import PrecheckOutcome
 
 
@@ -31,6 +32,21 @@ def format_jira_enqueue_skipped_message(
         f"Reason: `{reason}`{detail}\n"
         f"Guidance: {guidance}\n"
         f"Status: `{issue_status or 'unknown'}`"
+    )
+
+
+def format_jira_enqueue_skipped_message_from_admission(
+    *,
+    issue_key: str,
+    issue_status: str | None,
+    admission: ExecutionAdmissionDecision,
+    extra_detail: str | None = None,
+) -> str:
+    return format_jira_enqueue_skipped_message(
+        issue_key=issue_key,
+        issue_status=issue_status,
+        reason=admission.reason_code,
+        extra_detail=extra_detail,
     )
 
 
