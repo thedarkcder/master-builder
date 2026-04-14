@@ -4,12 +4,66 @@ from dataclasses import dataclass
 from enum import Enum
 
 from orchestrator.core.communications.enqueue_reason_contract import enqueue_reason_guidance
+from orchestrator.core.decision_gate import DecisionGateResult
+from orchestrator.core.decision_snapshot_codec import PrecheckSnapshot, apply_frozen_cycle_questions
 from orchestrator.core.decision_types import (
-    DecisionEngineResult,
+    DecisionClassification,
     ExecutionGateReason,
+    ExecutionGateResolution,
     ExecutionGateState,
+    IngressDecision,
     PrecheckOutcome,
+    ReadinessDecision,
+    ReadinessState,
+    WorkerDecision,
 )
+from orchestrator.core.gtd import GoodToDoValidationResult
+from orchestrator.core.pre_run_check import PreRunCheckResult
+
+
+class DecisionEvent(str, Enum):
+    EVALUATE_INGRESS = "evaluate_ingress"
+
+
+class DecisionStateTransition(str, Enum):
+    OPEN_CYCLE_BLOCKED = "open_cycle_blocked"
+    OPEN_CYCLE_CLEAR_AND_CLOSE = "open_cycle_clear_and_close"
+    TERMINAL_GATE_CLOSED_CLEAR = "terminal_gate_closed_clear"
+    REUSE_CLEAR_FINGERPRINT = "reuse_clear_fingerprint"
+    EVALUATE_FRESH = "evaluate_fresh"
+
+
+@dataclass(frozen=True)
+class DecisionState:
+    has_case: bool
+    has_open_cycle: bool
+    unresolved_question_count: int
+    decision_gate_closed_permanently: bool
+    case_classification: DecisionClassification
+    case_issue_fingerprint: str
+    current_issue_fingerprint: str
+
+
+@dataclass(frozen=True)
+class ExecutionAdmissionDecision:
+    can_enqueue: bool
+    precheck_outcome: str | None
+    required_worker_capability: str | None = None
+    reason: ExecutionAdmissionReason | None = None
+    guidance: str | None = None
+    detail: str | None = None
+    ready_label: str | None = None
+
+    @property
+    def blocked(self) -> bool:
+        return not self.can_enqueue
+
+    @property
+    def reason_code(self) -> str | None:
+        return self.reason.value if self.reason is not None else None
+
+
+ExecutionAdmissionOutcome = ExecutionAdmissionDecision
 
 
 class ExecutionAdmissionReason(str, Enum):
@@ -33,30 +87,281 @@ class ExecutionAdmissionReason(str, Enum):
 
 
 @dataclass(frozen=True)
-class ExecutionAdmissionDecision:
-    can_enqueue: bool
-    precheck_outcome: str | None
-    required_worker_capability: str | None = None
-    reason: ExecutionAdmissionReason | None = None
-    guidance: str | None = None
-    detail: str | None = None
-    ready_label: str | None = None
-
-    @property
-    def blocked(self) -> bool:
-        return not self.can_enqueue
-
-    @property
-    def reason_code(self) -> str | None:
-        return self.reason.value if self.reason is not None else None
-
-
-@dataclass(frozen=True)
 class RunGateBlock:
     reason: str
     guidance: str
     detail: str | None
     ready_label: str | None
+
+
+@dataclass(frozen=True)
+class WorkerBlockedOutcome:
+    reason: str
+    next_steps: tuple[str, ...]
+    ready_label: str | None
+    block_reason: str | None
+    pre_check_outcome: str | None
+
+
+def blocking_reason_for_precheck(pre_check: object) -> str | None:
+    return blocking_reason_for_outcome(getattr(pre_check, "outcome", None))
+
+
+def blocking_reason_for_outcome(outcome: object) -> str | None:
+    parsed = PrecheckOutcome.parse(outcome)
+    if parsed is None or (not parsed.is_decision_block and parsed is not PrecheckOutcome.MISSING_READY_LABEL):
+        return None
+    return parsed.value
+
+
+def resolve_decision_state_transition(
+    *,
+    state: DecisionState,
+    event: DecisionEvent = DecisionEvent.EVALUATE_INGRESS,
+) -> DecisionStateTransition:
+    _ = event
+    if state.has_case and state.has_open_cycle:
+        if state.unresolved_question_count > 0:
+            return DecisionStateTransition.OPEN_CYCLE_BLOCKED
+        return DecisionStateTransition.OPEN_CYCLE_CLEAR_AND_CLOSE
+
+    if state.has_case and state.decision_gate_closed_permanently:
+        return DecisionStateTransition.TERMINAL_GATE_CLOSED_CLEAR
+
+    if (
+        state.has_case
+        and not state.has_open_cycle
+        and state.case_classification is DecisionClassification.CLEAR
+        and state.case_issue_fingerprint == state.current_issue_fingerprint
+    ):
+        return DecisionStateTransition.REUSE_CLEAR_FINGERPRINT
+
+    return DecisionStateTransition.EVALUATE_FRESH
+
+
+def execution_gate_reason_for_precheck_outcome(
+    *,
+    outcome: PrecheckOutcome,
+    detail: str | None = None,
+    ready_label: str | None = None,
+) -> ExecutionGateReason:
+    reason_code = outcome.value
+    normalized_detail = str(detail or "").strip() or None
+    normalized_ready_label = str(ready_label or "").strip() or None
+    guidance = enqueue_reason_guidance(reason_code)
+    if outcome is PrecheckOutcome.MISSING_READY_LABEL and normalized_ready_label:
+        guidance = f"{guidance} ({normalized_ready_label})"
+    return ExecutionGateReason(
+        reason_code=reason_code,
+        guidance=guidance,
+        detail=normalized_detail,
+        ready_label=normalized_ready_label,
+    )
+
+
+def guidance_for_precheck_block_reason(
+    *,
+    block_reason: str | None,
+    ready_label: str | None = None,
+) -> str | None:
+    parsed = PrecheckOutcome.parse(block_reason)
+    if parsed is None:
+        return None
+    return execution_gate_reason_for_precheck_outcome(
+        outcome=parsed,
+        ready_label=ready_label,
+    ).guidance
+
+
+def resolve_readiness_decision(
+    *,
+    policy_error: str | None,
+    block_reason: str | None,
+    classification: object,
+) -> ReadinessDecision:
+    if str(policy_error or "").strip():
+        return ReadinessDecision(
+            state=ReadinessState.POLICY_ERROR,
+            reason_code=PrecheckOutcome.POLICY_EVAL_FAILED,
+        )
+
+    parsed_block_reason = PrecheckOutcome.parse(block_reason)
+    if parsed_block_reason is PrecheckOutcome.MISSING_READY_LABEL:
+        return ReadinessDecision(
+            state=ReadinessState.BLOCKED_READY_LABEL,
+            reason_code=PrecheckOutcome.MISSING_READY_LABEL,
+        )
+    if parsed_block_reason is not None and parsed_block_reason.is_decision_block:
+        return ReadinessDecision(
+            state=ReadinessState.BLOCKED_DECISION,
+            reason_code=parsed_block_reason,
+        )
+
+    normalized_classification = DecisionClassification.parse(classification)
+    if normalized_classification.blocks_execution:
+        return ReadinessDecision(
+            state=ReadinessState.BLOCKED_DECISION,
+            reason_code=PrecheckOutcome.DECISION_GATE_REQUIRED,
+        )
+    return ReadinessDecision(state=ReadinessState.READY)
+
+
+def case_state_for_decision(*, decision: IngressDecision) -> str:
+    pre_check = decision.pre_check
+    parsed_block_reason = PrecheckOutcome.parse(decision.block_reason)
+    if parsed_block_reason is PrecheckOutcome.DECISION_GATE_REQUIRED:
+        return "blocked_decision_gate"
+    if parsed_block_reason in {PrecheckOutcome.GTD_REQUIRED, PrecheckOutcome.EXECUTION_BLOCKED}:
+        return "blocked_gtd"
+    if pre_check is not None and PrecheckOutcome.parse(getattr(pre_check, "outcome", None)) is PrecheckOutcome.READY_FOR_AGENT:
+        return "ready_for_execution"
+    return "clear"
+
+
+def decision_reason(*, pre_check: object, classification: str) -> str | None:
+    if pre_check is None:
+        return None
+    parsed_classification = DecisionClassification.parse(classification)
+    if parsed_classification.includes_decision_gate:
+        decision_gate = getattr(pre_check, "decision_gate", None)
+        reason = str(getattr(decision_gate, "reason", "") or "").strip() if decision_gate is not None else ""
+        if reason:
+            return reason
+    if parsed_classification.includes_gtd:
+        missing = [
+            str(item).strip()
+            for item in getattr(pre_check, "gtd_missing_criteria", ())
+            if str(item).strip()
+        ]
+        if missing:
+            return "Missing GTD criteria: " + ", ".join(missing)
+    return None
+
+
+def decision_from_snapshot(
+    *,
+    snapshot: dict[str, object],
+    source: str,
+    classification: str,
+    cycle: object | None,
+    case: object,
+) -> IngressDecision:
+    pre_check_snapshot = PrecheckSnapshot.load(snapshot.get("pre_check"))
+    pre_check = pre_check_snapshot.to_precheck() if pre_check_snapshot is not None else None
+    if pre_check is not None and cycle is not None and getattr(cycle, "status", None) == "open":
+        pre_check = apply_frozen_cycle_questions(
+            pre_check=pre_check,
+            cycle_question_set=list(getattr(cycle, "question_set_json", ())),
+            unresolved_question_ids=list(getattr(cycle, "unresolved_question_ids_json", ())),
+            cycle_reason=getattr(cycle, "reason", None),
+            classification=DecisionClassification.parse(classification),
+        )
+
+    if DecisionClassification.parse(classification) is DecisionClassification.CLEAR:
+        normalized_pre_check = pre_check
+        if normalized_pre_check is None:
+            ready_label = str(getattr(case, "ready_label", "") or "").strip() or None
+            ready_label_present = bool(getattr(case, "ready_label_present", False))
+            outcome = (
+                PrecheckOutcome.MISSING_READY_LABEL.value
+                if ready_label and not ready_label_present
+                else PrecheckOutcome.READY_FOR_AGENT.value
+            )
+            normalized_pre_check = PreRunCheckResult(
+                outcome=outcome,
+                ready_label=ready_label,
+                ready_label_present=ready_label_present,
+                required_worker_capability=str(getattr(case, "required_worker_capability", "") or "").strip(),
+                required_worker_label=str(getattr(case, "required_worker_label", "") or "").strip(),
+                required_worker_label_present=bool(getattr(case, "required_worker_label_present", False)),
+                decision_gate=DecisionGateResult(
+                    triggered=False,
+                    reason="Decision Gate not required",
+                    missing_sections=(),
+                    questions=(),
+                    recommendation="Proceed with execution.",
+                    tags=(),
+                ),
+                gtd=GoodToDoValidationResult(
+                    valid=True,
+                    missing_criteria=(),
+                    clarification_questions=(),
+                ),
+            )
+        if PrecheckOutcome.parse(getattr(normalized_pre_check, "outcome", None)) is PrecheckOutcome.DECISION_GATE_REQUIRED:
+            normalized_pre_check = PreRunCheckResult(
+                outcome=PrecheckOutcome.READY_FOR_AGENT.value,
+                ready_label=normalized_pre_check.ready_label,
+                ready_label_present=normalized_pre_check.ready_label_present,
+                required_worker_capability=normalized_pre_check.required_worker_capability,
+                required_worker_label=normalized_pre_check.required_worker_label,
+                required_worker_label_present=normalized_pre_check.required_worker_label_present,
+                decision_gate=normalized_pre_check.decision_gate,
+                gtd=normalized_pre_check.gtd,
+            )
+        normalized_block_reason = blocking_reason_for_precheck(normalized_pre_check)
+        return IngressDecision(
+            source=source,  # type: ignore[arg-type]
+            pre_check=normalized_pre_check,
+            block_reason=normalized_block_reason,
+            guidance=guidance_for_precheck_block_reason(
+                block_reason=normalized_block_reason,
+                ready_label=str(getattr(normalized_pre_check, "ready_label", "") or "").strip() or None,
+            ),
+            policy_error=None,
+            label_actions=(),
+        )
+
+    return IngressDecision(
+        source=source,  # type: ignore[arg-type]
+        pre_check=pre_check,
+        block_reason=str(snapshot.get("block_reason") or getattr(case, "blocked_reason", None) or "").strip() or None,
+        guidance=str(snapshot.get("guidance") or "").strip() or None,
+        policy_error=str(snapshot.get("policy_error") or "").strip() or None,
+        label_actions=(),
+    )
+
+
+def resolve_execution_gate_state(
+    *,
+    decision: IngressDecision,
+    classification: object,
+) -> ExecutionGateResolution:
+    readiness = resolve_readiness_decision(
+        policy_error=decision.policy_error,
+        block_reason=decision.block_reason,
+        classification=classification,
+    )
+    if decision.pre_check is None or readiness.state == ReadinessState.POLICY_ERROR:
+        return ExecutionGateResolution(
+            state=ExecutionGateState.POLICY_ERROR,
+            reason=execution_gate_reason_for_precheck_outcome(
+                outcome=PrecheckOutcome.POLICY_EVAL_FAILED,
+                detail=str(decision.policy_error or "").strip() or None,
+            ),
+        )
+
+    if readiness.state == ReadinessState.BLOCKED_READY_LABEL:
+        ready_label = str(getattr(decision.pre_check, "ready_label", "") or "").strip() or None
+        return ExecutionGateResolution(
+            state=ExecutionGateState.BLOCK_READY_LABEL,
+            reason=execution_gate_reason_for_precheck_outcome(
+                outcome=PrecheckOutcome.MISSING_READY_LABEL,
+                ready_label=ready_label,
+            ),
+        )
+
+    if readiness.state == ReadinessState.BLOCKED_DECISION:
+        detail = str(getattr(decision.pre_check, "decision_gate_reason", "") or "").strip() or None
+        return ExecutionGateResolution(
+            state=ExecutionGateState.BLOCK_DECISION,
+            reason=execution_gate_reason_for_precheck_outcome(
+                outcome=readiness.reason_code or PrecheckOutcome.DECISION_GATE_REQUIRED,
+                detail=detail,
+            ),
+        )
+
+    return ExecutionGateResolution(state=ExecutionGateState.ALLOW_EXECUTION)
 
 
 def _parse_admission_reason(raw_value: str | None) -> ExecutionAdmissionReason | None:
@@ -71,21 +376,6 @@ def _parse_admission_reason(raw_value: str | None) -> ExecutionAdmissionReason |
 
 def parse_execution_admission_reason(raw_value: object) -> ExecutionAdmissionReason | None:
     return _parse_admission_reason(str(getattr(raw_value, "value", raw_value) or ""))
-
-
-def admission_from_enqueue_reason(
-    *,
-    raw_reason: object,
-    fallback_reason: ExecutionAdmissionReason = ExecutionAdmissionReason.EXECUTION_BLOCKED,
-) -> ExecutionAdmissionDecision:
-    parsed_reason = parse_execution_admission_reason(raw_reason)
-    if parsed_reason is not None:
-        return build_execution_admission_block(reason=parsed_reason)
-    detail = str(getattr(raw_reason, "value", raw_reason) or "").strip() or None
-    return build_execution_admission_block(
-        reason=fallback_reason,
-        detail=detail,
-    )
 
 
 def build_execution_admission_block(
@@ -111,52 +401,55 @@ def build_execution_admission_block(
     )
 
 
-def _resolve_gate_reason(
+def admission_from_enqueue_reason(
     *,
-    gate_state: ExecutionGateState,
-    gate_reason: ExecutionGateReason | None,
-    fallback_reason: PrecheckOutcome | None,
-) -> ExecutionGateReason:
-    if gate_reason is not None:
-        return gate_reason
-    if gate_state == ExecutionGateState.POLICY_ERROR:
-        return ExecutionGateReason(
-            reason_code=PrecheckOutcome.POLICY_EVAL_FAILED.value,
-            guidance=enqueue_reason_guidance(PrecheckOutcome.POLICY_EVAL_FAILED.value),
-        )
-    reason_code = (fallback_reason or PrecheckOutcome.DECISION_GATE_REQUIRED).value
-    if gate_state == ExecutionGateState.BLOCK_READY_LABEL:
-        reason_code = PrecheckOutcome.MISSING_READY_LABEL.value
-    return ExecutionGateReason(
-        reason_code=reason_code,
-        guidance=enqueue_reason_guidance(reason_code),
-    )
+    raw_reason: object,
+    fallback_reason: ExecutionAdmissionReason = ExecutionAdmissionReason.EXECUTION_BLOCKED,
+) -> ExecutionAdmissionDecision:
+    parsed_reason = parse_execution_admission_reason(raw_reason)
+    if parsed_reason is not None:
+        return build_execution_admission_block(reason=parsed_reason)
+    detail = str(getattr(raw_reason, "value", raw_reason) or "").strip() or None
+    return build_execution_admission_block(reason=fallback_reason, detail=detail)
 
 
-def resolve_run_gate_block(*, decision_result: DecisionEngineResult) -> RunGateBlock | None:
-    gate_state = decision_result.execution_gate.state
-    gate_reason = decision_result.execution_gate.reason
+def resolve_run_gate_block(*, decision_result: object) -> RunGateBlock | None:
+    execution_gate = getattr(decision_result, "execution_gate", None)
+    gate_state = getattr(execution_gate, "state", None)
+    gate_reason = getattr(execution_gate, "reason", None)
     if gate_state == ExecutionGateState.ALLOW_EXECUTION:
         return None
-    resolved_reason = _resolve_gate_reason(
-        gate_state=gate_state,
-        gate_reason=gate_reason,
-        fallback_reason=PrecheckOutcome.parse(decision_result.decision.block_reason),
-    )
+    if gate_reason is None:
+        fallback_reason = PrecheckOutcome.parse(
+            getattr(getattr(decision_result, "decision", None), "block_reason", None)
+        )
+        if gate_state == ExecutionGateState.POLICY_ERROR:
+            gate_reason = execution_gate_reason_for_precheck_outcome(
+                outcome=PrecheckOutcome.POLICY_EVAL_FAILED,
+            )
+        elif gate_state == ExecutionGateState.BLOCK_READY_LABEL:
+            gate_reason = execution_gate_reason_for_precheck_outcome(
+                outcome=PrecheckOutcome.MISSING_READY_LABEL,
+            )
+        else:
+            gate_reason = execution_gate_reason_for_precheck_outcome(
+                outcome=fallback_reason or PrecheckOutcome.DECISION_GATE_REQUIRED,
+            )
     return RunGateBlock(
-        reason=resolved_reason.reason_code,
-        guidance=resolved_reason.guidance,
-        detail=resolved_reason.detail,
-        ready_label=resolved_reason.ready_label,
+        reason=str(getattr(gate_reason, "reason_code", "") or "").strip(),
+        guidance=str(getattr(gate_reason, "guidance", "") or "").strip(),
+        detail=str(getattr(gate_reason, "detail", "") or "").strip() or None,
+        ready_label=str(getattr(gate_reason, "ready_label", "") or "").strip() or None,
     )
 
 
-def resolve_execution_admission(*, decision_result: DecisionEngineResult) -> ExecutionAdmissionDecision:
+def resolve_execution_admission(*, decision_result: object) -> ExecutionAdmissionDecision:
     gate_block = resolve_run_gate_block(decision_result=decision_result)
-    parsed_precheck_outcome = PrecheckOutcome.parse(getattr(decision_result.decision.pre_check, "outcome", None))
+    pre_check = getattr(getattr(decision_result, "decision", None), "pre_check", None)
+    parsed_precheck_outcome = PrecheckOutcome.parse(getattr(pre_check, "outcome", None))
     precheck_outcome = parsed_precheck_outcome.value if parsed_precheck_outcome is not None else None
     required_worker_capability = str(
-        getattr(decision_result.decision.pre_check, "required_worker_capability", "") or ""
+        getattr(pre_check, "required_worker_capability", "") or ""
     ).strip() or None
     if gate_block is None:
         return ExecutionAdmissionDecision(
@@ -172,4 +465,120 @@ def resolve_execution_admission(*, decision_result: DecisionEngineResult) -> Exe
         guidance=gate_block.guidance,
         detail=gate_block.detail,
         ready_label=gate_block.ready_label,
+    )
+
+
+def resolve_worker_decision_from_precheck(*, pre_check: object) -> WorkerDecision:
+    parsed_outcome = PrecheckOutcome.parse(getattr(pre_check, "outcome", None))
+    if parsed_outcome is None:
+        return WorkerDecision(
+            allowed=False,
+            decision_gate=None,
+            configuration_error="Execution readiness check failed: persisted policy evaluation failure",
+            block_reason=PrecheckOutcome.POLICY_EVAL_FAILED.value,
+            pre_check=pre_check,
+        )
+    if parsed_outcome is PrecheckOutcome.READY_FOR_AGENT:
+        return WorkerDecision(
+            allowed=True,
+            decision_gate=None,
+            configuration_error=None,
+            classification=DecisionClassification.CLEAR,
+            pre_check=pre_check,
+        )
+    if parsed_outcome is PrecheckOutcome.POLICY_EVAL_FAILED:
+        return WorkerDecision(
+            allowed=False,
+            decision_gate=None,
+            configuration_error="Execution readiness check failed: persisted policy evaluation failure",
+            block_reason=PrecheckOutcome.POLICY_EVAL_FAILED.value,
+            pre_check=pre_check,
+        )
+
+    ready_label = str(getattr(pre_check, "ready_label", "") or "").strip() or None
+    guidance = guidance_for_precheck_block_reason(
+        block_reason=parsed_outcome.value,
+        ready_label=ready_label,
+    )
+    precheck_gate = getattr(pre_check, "decision_gate", None)
+    if parsed_outcome in {
+        PrecheckOutcome.DECISION_GATE_REQUIRED,
+        PrecheckOutcome.GTD_REQUIRED,
+        PrecheckOutcome.EXECUTION_BLOCKED,
+    } and isinstance(precheck_gate, DecisionGateResult) and str(precheck_gate.reason or "").strip():
+        return WorkerDecision(
+            allowed=False,
+            decision_gate=precheck_gate,
+            configuration_error=None,
+            block_reason=parsed_outcome.value,
+            classification=(
+                DecisionClassification.DECISION_GATE
+                if parsed_outcome is PrecheckOutcome.DECISION_GATE_REQUIRED
+                else DecisionClassification.GTD
+            ),
+            pre_check=pre_check,
+        )
+
+    synthetic_gate = DecisionGateResult(
+        triggered=True,
+        reason=guidance,
+        missing_sections=tuple(getattr(getattr(pre_check, "gtd", None), "missing_criteria", ()) or ()),
+        questions=tuple(getattr(getattr(pre_check, "gtd", None), "clarification_questions", ()) or ()),
+        recommendation="Resolve execution-readiness blockers before execution.",
+        tags=(),
+    )
+    return WorkerDecision(
+        allowed=False,
+        decision_gate=synthetic_gate,
+        configuration_error=None,
+        block_reason=parsed_outcome.value,
+        classification=(
+            DecisionClassification.CLEAR
+            if parsed_outcome is PrecheckOutcome.MISSING_READY_LABEL
+            else (
+                DecisionClassification.DECISION_GATE
+                if parsed_outcome is PrecheckOutcome.DECISION_GATE_REQUIRED
+                else DecisionClassification.GTD
+            )
+        ),
+        pre_check=pre_check,
+    )
+
+
+def resolve_worker_blocked_outcome(*, worker_decision: object) -> WorkerBlockedOutcome:
+    pre_check = getattr(worker_decision, "pre_check", None)
+    decision_gate_reason = str(getattr(getattr(worker_decision, "decision_gate", None), "reason", "") or "").strip()
+    parsed_block_reason = PrecheckOutcome.parse(getattr(worker_decision, "block_reason", None))
+    block_reason = parsed_block_reason.value if parsed_block_reason is not None else None
+    ready_label = str(getattr(pre_check, "ready_label", "") or "").strip() or None
+    parsed_pre_check_outcome = PrecheckOutcome.parse(getattr(pre_check, "outcome", None))
+    pre_check_outcome = parsed_pre_check_outcome.value if parsed_pre_check_outcome is not None else block_reason
+
+    if parsed_block_reason is PrecheckOutcome.MISSING_READY_LABEL:
+        reason = decision_gate_reason or (
+            f"Issue is missing the configured ready label. ({ready_label})"
+            if ready_label
+            else "Issue is missing the configured ready label."
+        )
+        next_steps = (
+            (f"Apply ready label `{ready_label}` to the Jira issue, then retry the run.",)
+            if ready_label
+            else ("Apply the configured ready label to the Jira issue, then retry the run.",)
+        )
+        return WorkerBlockedOutcome(
+            reason=reason,
+            next_steps=next_steps,
+            ready_label=ready_label,
+            block_reason=block_reason,
+            pre_check_outcome=pre_check_outcome,
+        )
+
+    if not decision_gate_reason:
+        raise ValueError("missing decision gate reason for blocked worker decision")
+    return WorkerBlockedOutcome(
+        reason=decision_gate_reason,
+        next_steps=("Reply with the required clarification on the issue, then retry the run.",),
+        ready_label=ready_label,
+        block_reason=block_reason,
+        pre_check_outcome=pre_check_outcome,
     )

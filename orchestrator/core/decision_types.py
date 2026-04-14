@@ -21,7 +21,9 @@ DecisionSource = Literal[
 ]
 
 def blocking_reason_for_precheck(pre_check: object) -> str | None:
-    return blocking_reason_for_outcome(getattr(pre_check, "outcome", None))
+    from orchestrator.core.decision_state_machine import blocking_reason_for_precheck as _blocking_reason_for_precheck
+
+    return _blocking_reason_for_precheck(pre_check)
 
 
 @dataclass(frozen=True)
@@ -168,10 +170,9 @@ class ReadinessDecision:
 
 
 def blocking_reason_for_outcome(outcome: object) -> str | None:
-    parsed = PrecheckOutcome.parse(outcome)
-    if parsed is None or not parsed.is_decision_block and parsed is not PrecheckOutcome.MISSING_READY_LABEL:
-        return None
-    return parsed.value
+    from orchestrator.core.decision_state_machine import blocking_reason_for_outcome as _blocking_reason_for_outcome
+
+    return _blocking_reason_for_outcome(outcome)
 
 
 def resolve_readiness_decision(
@@ -180,31 +181,13 @@ def resolve_readiness_decision(
     block_reason: str | None,
     classification: object,
 ) -> ReadinessDecision:
-    if str(policy_error or "").strip():
-        return ReadinessDecision(
-            state=ReadinessState.POLICY_ERROR,
-            reason_code=PrecheckOutcome.POLICY_EVAL_FAILED,
-        )
+    from orchestrator.core.decision_state_machine import resolve_readiness_decision as _resolve_readiness_decision
 
-    parsed_block_reason = PrecheckOutcome.parse(block_reason)
-    if parsed_block_reason is PrecheckOutcome.MISSING_READY_LABEL:
-        return ReadinessDecision(
-            state=ReadinessState.BLOCKED_READY_LABEL,
-            reason_code=PrecheckOutcome.MISSING_READY_LABEL,
-        )
-    if parsed_block_reason is not None and parsed_block_reason.is_decision_block:
-        return ReadinessDecision(
-            state=ReadinessState.BLOCKED_DECISION,
-            reason_code=parsed_block_reason,
-        )
-
-    normalized_classification = DecisionClassification.parse(classification)
-    if normalized_classification.blocks_execution:
-        return ReadinessDecision(
-            state=ReadinessState.BLOCKED_DECISION,
-            reason_code=PrecheckOutcome.DECISION_GATE_REQUIRED,
-        )
-    return ReadinessDecision(state=ReadinessState.READY)
+    return _resolve_readiness_decision(
+        policy_error=policy_error,
+        block_reason=block_reason,
+        classification=classification,
+    )
 
 
 def tenant_ready_label(tenant: object | None) -> str | None:
@@ -328,17 +311,14 @@ def execution_gate_reason_for_precheck_outcome(
     detail: str | None = None,
     ready_label: str | None = None,
 ) -> ExecutionGateReason:
-    reason_code = outcome.value
-    normalized_detail = str(detail or "").strip() or None
-    normalized_ready_label = str(ready_label or "").strip() or None
-    guidance = enqueue_reason_guidance(reason_code)
-    if outcome is PrecheckOutcome.MISSING_READY_LABEL and normalized_ready_label:
-        guidance = f"{guidance} ({normalized_ready_label})"
-    return ExecutionGateReason(
-        reason_code=reason_code,
-        guidance=guidance,
-        detail=normalized_detail,
-        ready_label=normalized_ready_label,
+    from orchestrator.core.decision_state_machine import (
+        execution_gate_reason_for_precheck_outcome as _execution_gate_reason_for_precheck_outcome,
+    )
+
+    return _execution_gate_reason_for_precheck_outcome(
+        outcome=outcome,
+        detail=detail,
+        ready_label=ready_label,
     )
 
 
@@ -347,13 +327,14 @@ def guidance_for_precheck_block_reason(
     block_reason: str | None,
     ready_label: str | None = None,
 ) -> str | None:
-    parsed = PrecheckOutcome.parse(block_reason)
-    if parsed is None:
-        return None
-    return execution_gate_reason_for_precheck_outcome(
-        outcome=parsed,
+    from orchestrator.core.decision_state_machine import (
+        guidance_for_precheck_block_reason as _guidance_for_precheck_block_reason,
+    )
+
+    return _guidance_for_precheck_block_reason(
+        block_reason=block_reason,
         ready_label=ready_label,
-    ).guidance
+    )
 
 
 @dataclass(frozen=True)
@@ -402,38 +383,11 @@ def resolve_execution_gate_state(
     decision: IngressDecision,
     classification: object,
 ) -> ExecutionGateResolution:
-    readiness = resolve_readiness_decision(
-        policy_error=decision.policy_error,
-        block_reason=decision.block_reason,
+    from orchestrator.core.decision_state_machine import (
+        resolve_execution_gate_state as _resolve_execution_gate_state,
+    )
+
+    return _resolve_execution_gate_state(
+        decision=decision,
         classification=classification,
     )
-    if decision.pre_check is None or readiness.state == ReadinessState.POLICY_ERROR:
-        return ExecutionGateResolution(
-            state=ExecutionGateState.POLICY_ERROR,
-            reason=execution_gate_reason_for_precheck_outcome(
-                outcome=PrecheckOutcome.POLICY_EVAL_FAILED,
-                detail=str(decision.policy_error or "").strip() or None,
-            ),
-        )
-
-    if readiness.state == ReadinessState.BLOCKED_READY_LABEL:
-        ready_label = str(getattr(decision.pre_check, "ready_label", "") or "").strip() or None
-        return ExecutionGateResolution(
-            state=ExecutionGateState.BLOCK_READY_LABEL,
-            reason=execution_gate_reason_for_precheck_outcome(
-                outcome=PrecheckOutcome.MISSING_READY_LABEL,
-                ready_label=ready_label,
-            ),
-        )
-
-    if readiness.state == ReadinessState.BLOCKED_DECISION:
-        detail = str(getattr(decision.pre_check, "decision_gate_reason", "") or "").strip() or None
-        return ExecutionGateResolution(
-            state=ExecutionGateState.BLOCK_DECISION,
-            reason=execution_gate_reason_for_precheck_outcome(
-                outcome=readiness.reason_code or PrecheckOutcome.DECISION_GATE_REQUIRED,
-                detail=detail,
-            ),
-        )
-
-    return ExecutionGateResolution(state=ExecutionGateState.ALLOW_EXECUTION)

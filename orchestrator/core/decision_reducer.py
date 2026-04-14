@@ -4,12 +4,12 @@ from dataclasses import dataclass, replace
 
 from orchestrator.core.decision_gate import DecisionGateResult
 from orchestrator.core.decision_planner import DecisionPlannerResult
+from orchestrator.core.decision_state_machine import blocking_reason_for_precheck
+from orchestrator.core.decision_state_machine import guidance_for_precheck_block_reason
 from orchestrator.core.decision_types import (
     DecisionClassification,
     IngressDecision,
     PrecheckOutcome,
-    blocking_reason_for_precheck,
-    guidance_for_precheck_block_reason,
 )
 from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.pre_run_check import PreRunCheckResult
