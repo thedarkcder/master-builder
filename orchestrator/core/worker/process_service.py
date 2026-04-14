@@ -8,6 +8,11 @@ from orchestrator.core.project_policy import resolve_effective_policy
 from orchestrator.core.runs import RUN_STATUS_WAITING_FOR_INPUT
 from orchestrator.core.run_logs import record_run_log_event
 from orchestrator.core.worker.finalization import CompletionTailExecutor, WorkflowFinalizer
+from orchestrator.core.worker.repo_setup_service import (
+    RetryableRepoSetupError,
+    TerminalRepoSetupError,
+    repo_setup_attempt_count_from_plan,
+)
 from orchestrator.core.worker_capabilities import (
     resolve_worker_capability_context,
     worker_label_for_capability,
@@ -74,36 +79,40 @@ def process_next_queued_run(
     resolve_project_for_run_fn,
     fail_missing_project_mapping_fn,
     block_archived_project_fn,
-    ensure_project_repository_checkout_fn,
-    fail_project_repository_checkout_fn,
-    cleanup_run_workspaces_fn,
-    build_run_heartbeat_controller_fn,
+    ensure_project_repository_checkout_fn=None,
+    fail_project_repository_checkout_fn=None,
+    fail_project_repository_setup_fn=None,
+    cleanup_run_workspaces_fn=None,
+    build_run_heartbeat_controller_fn=None,
     promote_run_to_running_fn=None,
-    bind_run_project_fn,
-    workflow_request_for_run_fn,
-    fail_guardrail_violation_fn,
-    tenant_jira_issue_url_fn,
-    lock_acquired_update_fn,
-    plan_posted_update_fn,
-    pr_opened_update_fn,
-    run_failed_update_fn,
-    run_requeued_capability_update_fn,
-    run_requeued_stale_snapshot_update_fn,
-    finalize_cancelled_run_fn,
-    finalize_workflow_result_fn,
-    persist_stage_checkpoint_fn,
-    requeue_workflow_result_for_capability_fn,
-    requeue_workflow_result_for_stale_snapshot_fn,
-    check_run_snapshot_freshness_fn,
-    transition_issue_status_fn,
-    emit_agent_event_fn,
-    resolve_agent_id_fn,
-    resolve_worker_service_instance_id_fn,
-    run_status_queued: str,
-    run_status_running: str,
-    run_status_failed: str,
-    run_status_blocked: str,
-    run_status_cancelled: str,
+    bind_run_project_fn=None,
+    workflow_request_for_run_fn=None,
+    fail_guardrail_violation_fn=None,
+    tenant_jira_issue_url_fn=None,
+    lock_acquired_update_fn=None,
+    repo_setup_ready_update_fn=None,
+    plan_posted_update_fn=None,
+    pr_opened_update_fn=None,
+    run_failed_update_fn=None,
+    run_requeued_repo_setup_update_fn=None,
+    run_requeued_capability_update_fn=None,
+    run_requeued_stale_snapshot_update_fn=None,
+    finalize_cancelled_run_fn=None,
+    finalize_workflow_result_fn=None,
+    persist_stage_checkpoint_fn=None,
+    requeue_run_for_repo_setup_fn=None,
+    requeue_workflow_result_for_capability_fn=None,
+    requeue_workflow_result_for_stale_snapshot_fn=None,
+    check_run_snapshot_freshness_fn=None,
+    transition_issue_status_fn=None,
+    emit_agent_event_fn=None,
+    resolve_agent_id_fn=None,
+    resolve_worker_service_instance_id_fn=None,
+    run_status_queued: str = "queued",
+    run_status_running: str = "running",
+    run_status_failed: str = "failed",
+    run_status_blocked: str = "blocked",
+    run_status_cancelled: str = "cancelled",
     run_status_dispatching: str = "dispatching",
 ):  # noqa: ANN001
     settings = settings_fn()
@@ -123,6 +132,7 @@ def process_next_queued_run(
         failed_status=run_status_failed,
         worker_service_instance_id=worker_service_instance_id,
         worker_capabilities=set(capability_context.available),
+        ready_runtime_kinds=getattr(settings, "worker_runtime_kinds", ""),
         running_stale_timeout_seconds=max(
             60,
             int(getattr(settings, "worker_run_stale_timeout_seconds", 300)),
@@ -141,6 +151,7 @@ def process_next_queued_run(
         block_archived_project_fn=block_archived_project_fn,
         ensure_project_repository_checkout_fn=ensure_project_repository_checkout_fn,
         fail_project_repository_checkout_fn=fail_project_repository_checkout_fn,
+        fail_project_repository_setup_fn=fail_project_repository_setup_fn,
         cleanup_run_workspaces_fn=cleanup_run_workspaces_fn,
         build_run_heartbeat_controller_fn=build_run_heartbeat_controller_fn,
         promote_run_to_running_fn=promote_run_to_running_fn,
@@ -149,14 +160,17 @@ def process_next_queued_run(
         fail_guardrail_violation_fn=fail_guardrail_violation_fn,
         tenant_jira_issue_url_fn=tenant_jira_issue_url_fn,
         lock_acquired_update_fn=lock_acquired_update_fn,
+        repo_setup_ready_update_fn=repo_setup_ready_update_fn,
         plan_posted_update_fn=plan_posted_update_fn,
         pr_opened_update_fn=pr_opened_update_fn,
         run_failed_update_fn=run_failed_update_fn,
+        run_requeued_repo_setup_update_fn=run_requeued_repo_setup_update_fn,
         run_requeued_capability_update_fn=run_requeued_capability_update_fn,
         run_requeued_stale_snapshot_update_fn=run_requeued_stale_snapshot_update_fn,
         finalize_cancelled_run_fn=finalize_cancelled_run_fn,
         finalize_workflow_result_fn=finalize_workflow_result_fn,
         persist_stage_checkpoint_fn=persist_stage_checkpoint_fn,
+        requeue_run_for_repo_setup_fn=requeue_run_for_repo_setup_fn,
         requeue_workflow_result_for_capability_fn=requeue_workflow_result_for_capability_fn,
         requeue_workflow_result_for_stale_snapshot_fn=requeue_workflow_result_for_stale_snapshot_fn,
         check_run_snapshot_freshness_fn=check_run_snapshot_freshness_fn,
@@ -179,40 +193,44 @@ def process_claimed_run(
     logger,
     settings,
     selection,
-    send_discord_message_fn,
-    send_jira_message_fn,
-    resolve_project_for_run_fn,
-    fail_missing_project_mapping_fn,
-    block_archived_project_fn,
-    ensure_project_repository_checkout_fn,
-    fail_project_repository_checkout_fn,
-    cleanup_run_workspaces_fn,
-    build_run_heartbeat_controller_fn,
-    promote_run_to_running_fn,
-    bind_run_project_fn,
-    workflow_request_for_run_fn,
-    fail_guardrail_violation_fn,
-    tenant_jira_issue_url_fn,
-    lock_acquired_update_fn,
-    plan_posted_update_fn,
-    pr_opened_update_fn,
-    run_failed_update_fn,
-    run_requeued_capability_update_fn,
-    run_requeued_stale_snapshot_update_fn,
-    finalize_cancelled_run_fn,
-    finalize_workflow_result_fn,
-    persist_stage_checkpoint_fn,
-    requeue_workflow_result_for_capability_fn,
-    requeue_workflow_result_for_stale_snapshot_fn,
-    check_run_snapshot_freshness_fn,
-    transition_issue_status_fn,
-    emit_agent_event_fn,
-    resolve_agent_id_fn,
-    resolve_worker_service_instance_id_fn,
-    run_status_running: str,
-    run_status_failed: str,
-    run_status_blocked: str,
-    run_status_cancelled: str,
+    send_discord_message_fn=None,
+    send_jira_message_fn=None,
+    resolve_project_for_run_fn=None,
+    fail_missing_project_mapping_fn=None,
+    block_archived_project_fn=None,
+    ensure_project_repository_checkout_fn=None,
+    fail_project_repository_checkout_fn=None,
+    fail_project_repository_setup_fn=None,
+    cleanup_run_workspaces_fn=None,
+    build_run_heartbeat_controller_fn=None,
+    promote_run_to_running_fn=None,
+    bind_run_project_fn=None,
+    workflow_request_for_run_fn=None,
+    fail_guardrail_violation_fn=None,
+    tenant_jira_issue_url_fn=None,
+    lock_acquired_update_fn=None,
+    repo_setup_ready_update_fn=None,
+    plan_posted_update_fn=None,
+    pr_opened_update_fn=None,
+    run_failed_update_fn=None,
+    run_requeued_repo_setup_update_fn=None,
+    run_requeued_capability_update_fn=None,
+    run_requeued_stale_snapshot_update_fn=None,
+    finalize_cancelled_run_fn=None,
+    finalize_workflow_result_fn=None,
+    persist_stage_checkpoint_fn=None,
+    requeue_run_for_repo_setup_fn=None,
+    requeue_workflow_result_for_capability_fn=None,
+    requeue_workflow_result_for_stale_snapshot_fn=None,
+    check_run_snapshot_freshness_fn=None,
+    transition_issue_status_fn=None,
+    emit_agent_event_fn=None,
+    resolve_agent_id_fn=None,
+    resolve_worker_service_instance_id_fn=None,
+    run_status_running: str = "running",
+    run_status_failed: str = "failed",
+    run_status_blocked: str = "blocked",
+    run_status_cancelled: str = "cancelled",
     run_status_dispatching: str = "dispatching",
 ):  # noqa: ANN001
     if selection.terminal_run is not None:
@@ -314,11 +332,6 @@ def process_claimed_run(
         return fail_missing_project_mapping_fn(session, run=run)
     if project.is_archived:
         return block_archived_project_fn(session, run=run, project=project)
-    try:
-        ensure_project_repository_checkout_fn(session=session, tenant=tenant, project=project)
-    except Exception as exc:  # noqa: BLE001
-        return fail_project_repository_checkout_fn(session, run=run, error=str(exc))
-
     notifier = RunStageNotifier(
         session=session,
         tenant=tenant,
@@ -336,8 +349,31 @@ def process_claimed_run(
             project_overrides=project.policy_overrides,
         )
     )
+    if fail_project_repository_setup_fn is None:
+        fail_project_repository_setup_fn = fail_project_repository_checkout_fn or fail_guardrail_violation_fn
+
+    if requeue_run_for_repo_setup_fn is None:
+        def _fallback_requeue_run_for_repo_setup(  # noqa: ANN202
+            session,
+            *,
+            run,
+            stage_updates,
+            error,
+            expected_worker_service_instance_id=None,
+            expected_claim_id=None,
+        ):
+            _ = (stage_updates, expected_worker_service_instance_id, expected_claim_id)
+            return fail_project_repository_setup_fn(
+                session,
+                run=run,
+                error=error,
+            )
+
+        requeue_run_for_repo_setup_fn = _fallback_requeue_run_for_repo_setup
 
     bind_run_project_fn(session, run=run, project=project)
+    jira_issue_url = tenant_jira_issue_url_fn(session=session, tenant=tenant, issue_key=run.issue_key)
+    run_dashboard_url = admin_run_url(admin_ui_base_url=settings.admin_ui_base_url, run_id=run.run_id)
 
     try:
         workflow_request = workflow_request_for_run_fn(
@@ -347,6 +383,73 @@ def process_claimed_run(
             project=project,
             effective_policy=effective_policy,
         )
+    except RetryableRepoSetupError as exc:
+        error_text = str(exc)
+        logger.warning(
+            "worker_repo_setup_retryable_failure run_id=%s tenant_id=%s issue_key=%s error=%s",
+            run.run_id,
+            run.tenant_id,
+            run.issue_key,
+            error_text,
+        )
+        repo_setup_attempts = repo_setup_attempt_count_from_plan(getattr(run, "plan", None)) + 1
+        max_repo_setup_attempts = max(
+            1,
+            int(getattr(settings, "worker_repo_setup_max_attempts", 3)),
+        )
+        _cleanup_run_workspaces_safe(
+            cleanup_run_workspaces_fn=cleanup_run_workspaces_fn,
+            logger=logger,
+            base_dir=settings.project_repo_checkout_base_dir,
+            tenant_id=run.tenant_id,
+            project_id=project.project_id,
+            run_id=run.run_id,
+            workspace_key=worker_workspace_key,
+        )
+        if repo_setup_attempts < max_repo_setup_attempts:
+            if run_requeued_repo_setup_update_fn is not None:
+                notifier.append(
+                    run_requeued_repo_setup_update_fn(
+                        tenant_id=run.tenant_id,
+                        issue_key=run.issue_key,
+                        run_id=run.run_id,
+                        jira_url=jira_issue_url,
+                        run_url=run_dashboard_url,
+                        error=error_text,
+                    )
+                )
+            return requeue_run_for_repo_setup_fn(
+                session,
+                run=run,
+                stage_updates=notifier.stage_updates,
+                error=error_text,
+                expected_worker_service_instance_id=worker_service_instance_id,
+                expected_claim_id=claim_id,
+            )
+        return fail_project_repository_setup_fn(
+            session,
+            run=run,
+            error=f"{error_text} (repo setup retry budget exhausted)",
+        )
+    except TerminalRepoSetupError as exc:
+        error_text = str(exc)
+        logger.warning(
+            "worker_repo_setup_terminal_failure run_id=%s tenant_id=%s issue_key=%s error=%s",
+            run.run_id,
+            run.tenant_id,
+            run.issue_key,
+            error_text,
+        )
+        _cleanup_run_workspaces_safe(
+            cleanup_run_workspaces_fn=cleanup_run_workspaces_fn,
+            logger=logger,
+            base_dir=settings.project_repo_checkout_base_dir,
+            tenant_id=run.tenant_id,
+            project_id=project.project_id,
+            run_id=run.run_id,
+            workspace_key=worker_workspace_key,
+        )
+        return fail_project_repository_setup_fn(session, run=run, error=error_text)
     except (PermissionError, ValueError) as exc:
         logger.warning(
             "worker_workflow_request_build_failed run_id=%s tenant_id=%s issue_key=%s error=%s",
@@ -365,9 +468,16 @@ def process_claimed_run(
             workspace_key=worker_workspace_key,
         )
         return fail_guardrail_violation_fn(session, run=run, error=str(exc))
-
-    jira_issue_url = tenant_jira_issue_url_fn(session=session, tenant=tenant, issue_key=run.issue_key)
-    run_dashboard_url = admin_run_url(admin_ui_base_url=settings.admin_ui_base_url, run_id=run.run_id)
+    if repo_setup_ready_update_fn is not None:
+        notifier.append(
+            repo_setup_ready_update_fn(
+                tenant_id=run.tenant_id,
+                issue_key=run.issue_key,
+                run_id=run.run_id,
+                jira_url=jira_issue_url,
+                run_url=run_dashboard_url,
+            )
+        )
     notifier.append(
         lock_acquired_update_fn(
             tenant_id=run.tenant_id,

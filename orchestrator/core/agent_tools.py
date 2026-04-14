@@ -41,7 +41,11 @@ from orchestrator.storage.models import (
 )
 from orchestrator.tools.git_ops import build_branch_name
 from orchestrator.tools.github_app import GitHubApiError, github_client_from_tenant_config
-from orchestrator.tools.project_repo_checkout import project_repo_dir, project_run_repo_dir
+from orchestrator.tools.project_repo_checkout import (
+    project_checkout_root_dir,
+    project_repo_dir,
+    project_run_repo_dir,
+)
 from orchestrator.tools.repo_allowlist import normalize_repo_identifier
 
 
@@ -112,6 +116,10 @@ TOOL_ALLOWLIST: dict[str, set[str]] = {
         "project.request_install",
         "exec.run_install",
         "run.request_human_input",
+    },
+    "repo_setup": {
+        "repo.read",
+        "repo.exec_bootstrap",
     },
     "orchestrator": {
         "knowledge.exact_read",
@@ -247,6 +255,7 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "project.check_runtime_bindings": "Check whether explicitly named project bindings are configured. Use this only to verify presence of required env or secret-backed bindings; it never returns the underlying values.",
     "project.request_install": "Create a structured install request for the active run and pause the workflow. Use this when execution depends on an integration that is not yet installed for the project.",
     "repo.read": "Run guarded read-only repository commands and return file or git metadata. Use this to inspect code, files, branches, or diffs without making changes.",
+    "repo.exec_bootstrap": "Run a bounded bootstrap shell command inside the project checkout root. Use this only in repo_setup to clone, fetch, repair, prune, or create the execution repo before agent workflow stages begin.",
     "run.request_human_input": "Create a structured human-input request for the active run and pause the workflow until a reply arrives. Use this when one-time operator clarification or data is required to continue.",
     "exec.run_install": "Execute a registered project install with its pre-approved bindings injected server-side. Use this when a configured integration must run and the model must not see the binding values.",
 }
@@ -291,6 +300,7 @@ class AgentToolContext:
     issue_key: str
     run_id: str | None
     repo_dir: Path
+    checkout_root: Path
     run: Run | None = None
 
 
@@ -435,6 +445,8 @@ def execute_agent_tool(
 
     if tool_name == "repo.read":
         return _tool_repo_read(context=context, args=args)
+    if tool_name == "repo.exec_bootstrap":
+        return _tool_repo_exec_bootstrap(context=context, args=args)
     if tool_name.startswith("project."):
         return _execute_project_tool(
             session=session,
@@ -508,7 +520,18 @@ def _resolve_context(
     if project is None:
         raise ValueError(f"No project mapping available for tenant '{tenant.tenant_id}'")
 
-    if run_id:
+    checkout_root = project_checkout_root_dir(
+        base_dir=settings.project_repo_checkout_base_dir,
+        tenant_id=tenant.tenant_id,
+        project_id=project.project_id,
+    )
+    if str(stage or "").strip().lower() == "repo_setup":
+        repo_dir = project_repo_dir(
+            base_dir=settings.project_repo_checkout_base_dir,
+            tenant_id=tenant.tenant_id,
+            project_id=project.project_id,
+        )
+    elif run_id:
         workspace_key = resolve_worker_workspace_key(settings=settings)
         repo_dir = project_run_repo_dir(
             base_dir=settings.project_repo_checkout_base_dir,
@@ -531,6 +554,7 @@ def _resolve_context(
         issue_key=str(issue_key or "").strip(),
         run_id=str(run_id).strip() if run_id else None,
         repo_dir=repo_dir,
+        checkout_root=checkout_root,
         run=run,
     )
 
@@ -551,6 +575,42 @@ def _tool_repo_read(*, context: AgentToolContext, args: dict[str, Any]) -> dict[
     return {
         "ok": process.returncode == 0,
         "exit_code": process.returncode,
+        "stdout": process.stdout,
+        "stderr": process.stderr,
+    }
+
+
+def _tool_repo_exec_bootstrap(*, context: AgentToolContext, args: dict[str, Any]) -> dict[str, Any]:  # noqa: ANN401
+    if context.stage != "repo_setup":
+        raise PermissionError("repo.exec_bootstrap is only allowed during repo_setup")
+    command = str(args.get("command") or "").strip()
+    if not command:
+        raise ValueError("repo.exec_bootstrap requires 'command'")
+    cwd_relative = str(args.get("cwd") or "").strip()
+    checkout_root = context.checkout_root.resolve()
+    checkout_root.mkdir(parents=True, exist_ok=True)
+    cwd = checkout_root
+    if cwd_relative:
+        candidate = (checkout_root / cwd_relative).resolve()
+        try:
+            candidate.relative_to(checkout_root)
+        except ValueError as exc:
+            raise PermissionError("repo.exec_bootstrap cwd must stay within the checkout root") from exc
+        if not candidate.exists():
+            raise ValueError(f"repo.exec_bootstrap cwd does not exist: {candidate}")
+        cwd = candidate
+    process = subprocess.run(  # noqa: S603
+        ["/bin/zsh", "-lc", command],
+        cwd=str(cwd),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return {
+        "ok": process.returncode == 0,
+        "exit_code": process.returncode,
+        "cwd": str(cwd),
+        "checkout_root": str(checkout_root),
         "stdout": process.stdout,
         "stderr": process.stderr,
     }
