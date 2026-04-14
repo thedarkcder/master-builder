@@ -5,7 +5,15 @@ from dataclasses import dataclass, field
 import json
 from typing import Any
 
-from orchestrator.core.runtime_invocation import AgentInvocationContext, invoke_runtime_json
+from sqlalchemy.orm import Session
+
+from orchestrator.core.agent_tools import (
+    execute_agent_tool,
+    governed_allowed_tools_for_stage,
+    governed_tool_catalog_for_stage,
+    native_tool_catalog_for_stage,
+)
+from orchestrator.core.runtime_invocation import AgentInvocationContext, invoke_runtime_json, invoke_runtime_json_with_tools
 from orchestrator.core.codex_runtime import CodexRuntimeError
 from orchestrator.core.prompt_templates import render_prompt
 
@@ -165,7 +173,12 @@ def _json_dump(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True)
 
 
-def _planning_stage_user_context(*, request: SpecialistPlanningRequest, stage: _PlanningStageDefinition) -> dict[str, object]:
+def _planning_stage_user_context(
+    *,
+    request: SpecialistPlanningRequest,
+    stage: _PlanningStageDefinition,
+    runtime_command: str | None,
+) -> dict[str, object]:
     return {
         "parent_issue_key": request.parent_issue_key,
         "parent_summary": request.parent_summary,
@@ -179,11 +192,19 @@ def _planning_stage_user_context(*, request: SpecialistPlanningRequest, stage: _
         "stage_state": stage.planning_state,
         "persona_id": stage.persona_id,
         "role_label": stage.role_label,
+        "governed_tools_json": _json_dump(
+            governed_tool_catalog_for_stage(stage.planning_state, runtime_command=runtime_command)
+        ),
+        "native_tools_json": _json_dump(
+            native_tool_catalog_for_stage(stage.planning_state, runtime_command=runtime_command)
+        ),
     }
 
 
 def _run_stage(
     *,
+    session: Session | None,
+    settings: Any | None,
     runtime: object,
     runtime_for_selector: Callable[[str], object] | None,
     request: SpecialistPlanningRequest,
@@ -194,22 +215,50 @@ def _run_stage(
         resolved = runtime_for_selector(stage.selector)
         if resolved is not None:
             selected_runtime = resolved
+    runtime_command = str(getattr(selected_runtime, "command", "") or "")
 
-    payload = invoke_runtime_json(
-        runtime=selected_runtime,
-        context=AgentInvocationContext(
-            channel="system",
-            tenant_id=request.tenant_id,
-            project_id=request.project_id,
-            command="pm",
-            stage=stage.planning_state,
-            working_dir=request.working_dir,
-            issue_key=request.parent_issue_key,
-            reasoning_effort=stage.reasoning_effort,
-        ),
-        system_prompt=render_prompt(stage.system_prompt_template),
-        user_prompt=render_prompt(stage.user_prompt_template, **_planning_stage_user_context(request=request, stage=stage)),
+    invocation_context = AgentInvocationContext(
+        channel="system",
+        tenant_id=request.tenant_id,
+        project_id=request.project_id,
+        command="pm",
+        stage=stage.planning_state,
+        working_dir=request.working_dir,
+        issue_key=request.parent_issue_key,
+        reasoning_effort=stage.reasoning_effort,
     )
+    system_prompt = render_prompt(stage.system_prompt_template)
+    user_prompt = render_prompt(
+        stage.user_prompt_template,
+        **_planning_stage_user_context(request=request, stage=stage, runtime_command=runtime_command),
+    )
+    governed_tools = governed_allowed_tools_for_stage(stage.planning_state, runtime_command=runtime_command)
+    if session is not None and settings is not None and governed_tools:
+        payload = invoke_runtime_json_with_tools(
+            runtime=selected_runtime,
+            context=invocation_context,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            allowed_tools=governed_tools,
+            execute_tool=lambda tool_name, tool_args: execute_agent_tool(
+                session=session,
+                settings=settings,
+                tenant_id=request.tenant_id,
+                project_id=request.project_id,
+                run_id=None,
+                issue_key=request.parent_issue_key,
+                stage=stage.planning_state,
+                tool_name=tool_name,
+                tool_args=tool_args,
+            ),
+        )
+    else:
+        payload = invoke_runtime_json(
+            runtime=selected_runtime,
+            context=invocation_context,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+        )
     if not isinstance(payload, dict):
         raise CodexRuntimeError(f"Codex did not return a {stage.planning_state} JSON object")
 
@@ -270,6 +319,11 @@ def build_runtime_seed_planning_package(
             "risks": list(result.findings[:3]),
             "how_to_test": [f"Verify the functional behavior '{task}' satisfies the parent feature acceptance criteria."],
             "done_criteria": [f"The functional requirement '{task}' is delivered and validated against the parent feature."],
+            "implementation_decisions": [
+                "Decision owner: Engineering child team.",
+                "Approval path: child PR review and architecture review when boundaries or platform risk change.",
+                "Escalate to the parent PM thread if implementation changes user-visible behavior, permissions, rollout expectations, privacy, security, compliance, or acceptance criteria.",
+            ],
             "labels": ["engineering"],
         }
         for task in result.required_tasks
@@ -288,12 +342,16 @@ def build_runtime_seed_planning_package(
 
 def run_specialist_planning_fanout(
     *,
+    session: Session | None = None,
+    settings: Any | None = None,
     runtime: object,
     request: SpecialistPlanningRequest,
     runtime_for_selector: Callable[[str], object] | None = None,
 ) -> SpecialistPlanningResult:
     stage_results = tuple(
         _run_stage(
+            session=session,
+            settings=settings,
             runtime=runtime,
             runtime_for_selector=runtime_for_selector,
             request=request,

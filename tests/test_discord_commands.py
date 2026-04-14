@@ -3033,7 +3033,7 @@ class DiscordCommandApiTests(DiscordCommandApiTestHarness):
             self.session_factory() as session,
             patch("orchestrator.api.discord.ingress.seed_runtime.build_issue_seed_runtime", return_value=object()),
             patch(
-                "orchestrator.api.discord.ingress.seed_runtime.plan_seed_issues_with_runtime",
+                "orchestrator.api.discord.ingress.seed_runtime.plan_seed_issues_with_codex",
                 return_value={
                     "project_key": "TP",
                     "parent_issue": {
@@ -3139,7 +3139,7 @@ class DiscordCommandApiTests(DiscordCommandApiTestHarness):
             self.session_factory() as session,
             patch("orchestrator.api.discord.ingress.seed_runtime.build_issue_seed_runtime", return_value=object()),
             patch(
-                "orchestrator.api.discord.ingress.seed_runtime.plan_seed_issues_with_runtime",
+                "orchestrator.api.discord.ingress.seed_runtime.plan_seed_issues_with_codex",
                 return_value={
                     "project_key": "TP",
                     "parent_issue": {

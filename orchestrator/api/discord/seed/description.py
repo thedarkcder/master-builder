@@ -133,6 +133,7 @@ def build_engineering_child_description(
     how_to_test: list[str],
     done_criteria: list[str],
     dependencies_and_risks: list[str],
+    implementation_decisions: list[str] | None = None,
     specialist_summary: list[str] | None = None,
     planning_state: str | None = None,
 ) -> dict:
@@ -151,6 +152,16 @@ def build_engineering_child_description(
         _bullet_list(done_criteria if done_criteria else ["Done criteria were not provided"]),
         _heading("Technical Dependencies / Risks"),
         _bullet_list(dependencies_and_risks if dependencies_and_risks else ["No explicit technical dependencies or risks were provided"]),
+        _heading("Implementation Decisions"),
+        _bullet_list(
+            implementation_decisions
+            if implementation_decisions
+            else [
+                "Decision owner: Engineering child team.",
+                "Approval path: child PR review unless product behavior or non-functional requirements change.",
+                "No implementation decisions have been recorded yet.",
+            ]
+        ),
         _heading("Specialist Planning Context"),
         _bullet_list(specialist_summary if specialist_summary else ["No specialist planning context was provided"]),
         _heading("Planning State"),
@@ -183,4 +194,5 @@ def build_seed_issue_description(
         how_to_test=how_to_test,
         done_criteria=acceptance_criteria,
         dependencies_and_risks=dependencies_and_risks,
+        implementation_decisions=None,
     )

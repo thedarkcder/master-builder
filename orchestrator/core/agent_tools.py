@@ -53,6 +53,10 @@ TOOL_ALLOWLIST: dict[str, set[str]] = {
         "decision.read_state",
         "knowledge.exact_read",
         "knowledge.read",
+        "web.search",
+        "web.fetch",
+        "browser.open",
+        "browser.snapshot",
         "project.list_installs",
         "project.check_runtime_bindings",
         "project.request_install",
@@ -61,6 +65,10 @@ TOOL_ALLOWLIST: dict[str, set[str]] = {
     },
     "dev": {
         "knowledge.exact_read",
+        "web.search",
+        "web.fetch",
+        "browser.open",
+        "browser.snapshot",
         "jira.comment",
         "jira.transition",
         "github.create_branch",
@@ -76,6 +84,10 @@ TOOL_ALLOWLIST: dict[str, set[str]] = {
     },
     "test": {
         "knowledge.exact_read",
+        "web.search",
+        "web.fetch",
+        "browser.open",
+        "browser.snapshot",
         "jira.comment",
         "repo.read",
         "project.list_installs",
@@ -86,6 +98,10 @@ TOOL_ALLOWLIST: dict[str, set[str]] = {
     },
     "review": {
         "knowledge.exact_read",
+        "web.search",
+        "web.fetch",
+        "browser.open",
+        "browser.snapshot",
         "jira.comment",
         "jira.transition",
         "github.push_branch",
@@ -158,6 +174,52 @@ TOOL_ALLOWLIST: dict[str, set[str]] = {
         "run.request_human_input",
         "repo.read",
     },
+    "pm_parent_brief_normalization": {
+        "jira.get_issue",
+        "knowledge.exact_read",
+        "knowledge.read",
+        "web.search",
+        "web.fetch",
+        "browser.open",
+        "browser.snapshot",
+        "repo.read",
+    },
+    "engineering_planning": {
+        "jira.get_issue",
+        "knowledge.exact_read",
+        "knowledge.read",
+        "web.search",
+        "web.fetch",
+        "browser.open",
+        "browser.snapshot",
+        "repo.read",
+        "project.list_installs",
+        "project.check_runtime_bindings",
+    },
+    "security_planning": {
+        "jira.get_issue",
+        "knowledge.exact_read",
+        "knowledge.read",
+        "web.search",
+        "web.fetch",
+        "browser.open",
+        "browser.snapshot",
+        "repo.read",
+        "project.list_installs",
+        "project.check_runtime_bindings",
+    },
+    "test_planning": {
+        "jira.get_issue",
+        "knowledge.exact_read",
+        "knowledge.read",
+        "web.search",
+        "web.fetch",
+        "browser.open",
+        "browser.snapshot",
+        "repo.read",
+        "project.list_installs",
+        "project.check_runtime_bindings",
+    },
 }
 
 TOOL_DESCRIPTIONS: dict[str, str] = {
@@ -177,6 +239,10 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "jira.transition": "Move the active Jira issue to another workflow state. Use this only when the stage outcome is clear, for example Testing, Done, or Blocked.",
     "knowledge.exact_read": "Read a specific knowledge asset or exact knowledge match by identifier. Use this when you already know the document you need and want authoritative contents.",
     "knowledge.read": "Search the knowledge base and summarize the most relevant results for the active issue. Use this when you need supporting context but do not know the exact document.",
+    "web.search": "Use native Codex web search when available in this runtime to gather public external evidence. Use this when internal knowledge and repository context are insufficient.",
+    "web.fetch": "Use native Codex page fetch when available in this runtime to read a known public URL. Use this when you already know the page you need.",
+    "browser.open": "Use native Codex browser opening when available in this runtime to inspect a public page. Use this when lightweight browser-style page access is needed.",
+    "browser.snapshot": "Use native Codex browser inspection when available in this runtime to capture a structured UI snapshot. Use this when you need read-only browser/UI inspection.",
     "project.list_installs": "List the integrations installed for the active project. Use this to confirm whether a required Fastlane, Supabase, Railway, Slack, or similar install already exists before planning or execution.",
     "project.check_runtime_bindings": "Check whether explicitly named project bindings are configured. Use this only to verify presence of required env or secret-backed bindings; it never returns the underlying values.",
     "project.request_install": "Create a structured install request for the active run and pause the workflow. Use this when execution depends on an integration that is not yet installed for the project.",
@@ -214,6 +280,7 @@ _READ_ONLY_GIT_SUBCOMMANDS = {
 _DEV_STAGE_BLOCKED_GIT_SUBCOMMANDS = {
     "push",
 }
+_NATIVE_CODEX_TOOL_NAMES = frozenset({"web.search", "web.fetch", "browser.open", "browser.snapshot"})
 
 
 @dataclass(frozen=True)
@@ -238,6 +305,24 @@ def _ensure_repo_checkout_exists(repo_dir: Path) -> None:
 
 def allowed_tools_for_stage(stage: str) -> set[str]:
     return set(TOOL_ALLOWLIST.get(str(stage or "").strip().lower(), set()))
+
+
+def _runtime_supports_native_codex_tools(runtime_command: str | None) -> bool:
+    normalized = str(runtime_command or "").strip().lower()
+    if not normalized or normalized.startswith("http:"):
+        return False
+    return "codex" in normalized
+
+
+def native_model_tools_for_stage(stage: str, *, runtime_command: str | None = None) -> set[str]:
+    if not _runtime_supports_native_codex_tools(runtime_command):
+        return set()
+    return allowed_tools_for_stage(stage) & set(_NATIVE_CODEX_TOOL_NAMES)
+
+
+def governed_allowed_tools_for_stage(stage: str, *, runtime_command: str | None = None) -> set[str]:
+    _ = runtime_command
+    return allowed_tools_for_stage(stage) - set(_NATIVE_CODEX_TOOL_NAMES)
 
 
 def list_implemented_tools() -> list[dict[str, object]]:
@@ -269,6 +354,16 @@ def tool_catalog_for_stage(stage: str) -> list[dict[str, object]]:
         for tool in list_implemented_tools()
         if normalized_stage in tool.get("stages", [])
     ]
+
+
+def governed_tool_catalog_for_stage(stage: str, *, runtime_command: str | None = None) -> list[dict[str, object]]:
+    allowed = governed_allowed_tools_for_stage(stage, runtime_command=runtime_command)
+    return [tool for tool in tool_catalog_for_stage(stage) if str(tool.get("tool_name") or "") in allowed]
+
+
+def native_tool_catalog_for_stage(stage: str, *, runtime_command: str | None = None) -> list[dict[str, object]]:
+    allowed = native_model_tools_for_stage(stage, runtime_command=runtime_command)
+    return [tool for tool in tool_catalog_for_stage(stage) if str(tool.get("tool_name") or "") in allowed]
 
 
 def build_agent_tool_command(
@@ -332,6 +427,10 @@ def execute_agent_tool(
     allowed = allowed_tools_for_stage(context.stage)
     if tool_name not in allowed:
         raise PermissionError(f"Tool '{tool_name}' is not allowed in stage '{context.stage}'")
+    if tool_name in _NATIVE_CODEX_TOOL_NAMES:
+        raise PermissionError(
+            f"Tool '{tool_name}' is a native runtime tool and must not be executed through the governed tool bridge"
+        )
     args = tool_args or {}
 
     if tool_name == "repo.read":
@@ -700,7 +799,6 @@ def _execute_knowledge_tool(
         "text": payload.text,
         "citations": payload.citations,
     }
-
 
 def _execute_project_tool(
     *,

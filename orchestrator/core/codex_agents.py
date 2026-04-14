@@ -6,7 +6,12 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from orchestrator.core.agent_tools import allowed_tools_for_stage, execute_agent_tool, tool_catalog_for_stage
+from orchestrator.core.agent_tools import (
+    execute_agent_tool,
+    governed_allowed_tools_for_stage,
+    governed_tool_catalog_for_stage,
+    native_tool_catalog_for_stage,
+)
 from orchestrator.core.runtime_invocation import (
     AgentInvocationContext,
     invoke_runtime_json,
@@ -27,8 +32,8 @@ from orchestrator.core.workflow.runner import (
 )
 
 
-def _discord_tool_bridge_suffix(*, tool_stage: str) -> str:
-    allowed = allowed_tools_for_stage(tool_stage)
+def _discord_tool_bridge_suffix(*, tool_stage: str, runtime_command: str | None = None) -> str:
+    allowed = governed_allowed_tools_for_stage(tool_stage, runtime_command=runtime_command)
     if not allowed:
         return ""
     return "\n\n" + render_prompt(
@@ -76,7 +81,8 @@ def _invoke_discord_json_maybe_tools(
     settings: Any | None,
     max_tool_hops: int = 8,
 ) -> dict:
-    allowed = allowed_tools_for_stage(tool_stage)
+    runtime_command = str(getattr(runtime, "command", "") or "").strip()
+    allowed = governed_allowed_tools_for_stage(tool_stage, runtime_command=runtime_command)
     if (
         sqlalchemy_session is None
         or settings is None
@@ -89,7 +95,7 @@ def _invoke_discord_json_maybe_tools(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
         )
-    bridged_user = user_prompt + _discord_tool_bridge_suffix(tool_stage=tool_stage)
+    bridged_user = user_prompt + _discord_tool_bridge_suffix(tool_stage=tool_stage, runtime_command=runtime_command)
     return invoke_runtime_json_with_tools(
         runtime=runtime,
         context=context,
@@ -188,7 +194,9 @@ class CodexWorkflowAgents:
         system_prompt: str,
         user_prompt: str,
         reasoning_effort: str = "medium",
+        runtime_override: CodexRuntime | None = None,
     ) -> dict[str, Any]:
+        runtime = runtime_override or self._runtime_for_stage(stage=stage, request=request)
         context = AgentInvocationContext(
             channel="worker",
             tenant_id=request.tenant_id,
@@ -204,13 +212,23 @@ class CodexWorkflowAgents:
             issue_description_chars=len(request.issue_description or ""),
             codex_session_id=self._resume_session_id_for_stage(request=request, stage=stage),
         )
-        allowed_tools = sorted(allowed_tools_for_stage(stage))
+        governed_tools = sorted(
+            governed_allowed_tools_for_stage(stage, runtime_command=str(getattr(runtime, "command", "") or ""))
+        )
+        if not governed_tools:
+            return invoke_runtime_json(
+                runtime=runtime,
+                context=context,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                require_json=False,
+            )
         return invoke_runtime_json_with_tools(
-            runtime=self._runtime_for_stage(stage=stage, request=request),
+            runtime=runtime,
             context=context,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
-            allowed_tools=set(allowed_tools),
+            allowed_tools=set(governed_tools),
             execute_tool=lambda tool_name, tool_args: self._execute_stage_tool(
                 context=context,
                 tool_name=tool_name,
@@ -241,6 +259,8 @@ class CodexWorkflowAgents:
         last_test_result: TestResult | None,
         last_review_result: ReviewResult | None,
     ) -> PmPlan:
+        runtime = self._runtime_for_stage(stage="pm", request=request)
+        runtime_command = str(getattr(runtime, "command", "") or "")
         payload = self._invoke_stage_payload(
             request=request,
             stage="pm",
@@ -291,8 +311,14 @@ class CodexWorkflowAgents:
                     [capability.value for capability in request.available_worker_capabilities]
                 ),
                 human_inputs_json=json.dumps(request.human_inputs),
-                allowed_tools_json=json.dumps(tool_catalog_for_stage("pm")),
+                governed_tools_json=json.dumps(
+                    governed_tool_catalog_for_stage("pm", runtime_command=runtime_command)
+                ),
+                native_tools_json=json.dumps(
+                    native_tool_catalog_for_stage("pm", runtime_command=runtime_command)
+                ),
             ),
+            runtime_override=runtime,
         )
         outcome = _require_stage_outcome(payload=payload, stage="pm")
         next_stage_raw = payload.get("next_stage")
@@ -341,6 +367,8 @@ class CodexWorkflowAgents:
         attempt: int,
         feedback: str | None,
     ) -> DevResult:
+        runtime = self._runtime_for_stage(stage="dev", request=request)
+        runtime_command = str(getattr(runtime, "command", "") or "")
         payload = self._invoke_stage_payload(
             request=request,
             stage="dev",
@@ -369,8 +397,14 @@ class CodexWorkflowAgents:
                 unresolved_prerequisites_json=json.dumps(plan.unresolved_prerequisites),
                 pm_outcome=plan.outcome,
                 human_inputs_json=json.dumps(request.human_inputs),
-                allowed_tools_json=json.dumps(tool_catalog_for_stage("dev")),
+                governed_tools_json=json.dumps(
+                    governed_tool_catalog_for_stage("dev", runtime_command=runtime_command)
+                ),
+                native_tools_json=json.dumps(
+                    native_tool_catalog_for_stage("dev", runtime_command=runtime_command)
+                ),
             ),
+            runtime_override=runtime,
         )
         pr_url_raw = payload.get("pr_url")
         pr_url = str(pr_url_raw).strip() if isinstance(pr_url_raw, str) and str(pr_url_raw).strip() else None
@@ -392,6 +426,8 @@ class CodexWorkflowAgents:
         dev_result: DevResult,
         attempt: int,
     ) -> TestResult:
+        runtime = self._runtime_for_stage(stage="test", request=request)
+        runtime_command = str(getattr(runtime, "command", "") or "")
         payload = self._invoke_stage_payload(
             request=request,
             stage="test",
@@ -420,8 +456,14 @@ class CodexWorkflowAgents:
                 unresolved_prerequisites_json=json.dumps(plan.unresolved_prerequisites),
                 dev_outcome=dev_result.outcome,
                 human_inputs_json=json.dumps(request.human_inputs),
-                allowed_tools_json=json.dumps(tool_catalog_for_stage("test")),
+                governed_tools_json=json.dumps(
+                    governed_tool_catalog_for_stage("test", runtime_command=runtime_command)
+                ),
+                native_tools_json=json.dumps(
+                    native_tool_catalog_for_stage("test", runtime_command=runtime_command)
+                ),
             ),
+            runtime_override=runtime,
         )
         outcome = _require_stage_outcome(payload=payload, stage="test")
         feedback_raw = payload.get("feedback")
@@ -446,6 +488,8 @@ class CodexWorkflowAgents:
         attempt: int,
     ) -> ReviewResult:
         resume_source_state = self._resume_source_state(request=request)
+        runtime = self._runtime_for_stage(stage="review", request=request)
+        runtime_command = str(getattr(runtime, "command", "") or "")
         payload = self._invoke_stage_payload(
             request=request,
             stage="review",
@@ -479,8 +523,14 @@ class CodexWorkflowAgents:
                 human_inputs_json=json.dumps(request.human_inputs),
                 previous_review_summary_json=json.dumps(resume_source_state.get("review_summary") or []),
                 previous_review_feedback=str(resume_source_state.get("review_feedback") or "").strip() or "none",
-                allowed_tools_json=json.dumps(tool_catalog_for_stage("review")),
+                governed_tools_json=json.dumps(
+                    governed_tool_catalog_for_stage("review", runtime_command=runtime_command)
+                ),
+                native_tools_json=json.dumps(
+                    native_tool_catalog_for_stage("review", runtime_command=runtime_command)
+                ),
             ),
+            runtime_override=runtime,
         )
         feedback_raw = payload.get("feedback")
         feedback = str(feedback_raw).strip() if isinstance(feedback_raw, str) and str(feedback_raw).strip() else None
@@ -745,7 +795,10 @@ def answer_voice_room_persona_with_codex(
     persona = get_voice_room_persona_definition(persona_id)
     normalized_history = history if isinstance(history, list) else []
     system_prompt = render_prompt(persona.system_prompt_template)
-    if sqlalchemy_session is not None and settings is not None and allowed_tools_for_stage("discord_voice_room_persona"):
+    if sqlalchemy_session is not None and settings is not None and governed_allowed_tools_for_stage(
+        "discord_voice_room_persona",
+        runtime_command=str(getattr(runtime, "command", "") or ""),
+    ):
         system_prompt += (
             "\n\nWhen the user message includes an Allowed tools section, use tool_request then final_response. "
             "final_response.result must match the same JSON shape required above (same keys as without tools)."
