@@ -17,10 +17,10 @@ from orchestrator.core.config import get_settings
 from orchestrator.core.codex_runtime import CodexRuntime, CodexRuntimeError
 from orchestrator.core.decision_engine import DecisionEngineResult
 from orchestrator.core.decision_gate import DecisionGateResult
+from orchestrator.core.decision_state_machine import resolve_execution_gate_state
 from orchestrator.core.decision_types import (
     DecisionClassification,
     IngressDecision,
-    resolve_execution_gate_state,
 )
 from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.pre_run_check import PreRunCheckResult

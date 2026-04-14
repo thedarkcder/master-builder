@@ -47,14 +47,12 @@ from orchestrator.core.decision_state_machine import (
     DecisionState,
     DecisionStateTransition,
     blocking_reason_for_precheck,
+    decision_from_snapshot as decision_from_snapshot_state,
     guidance_for_precheck_block_reason,
     resolve_execution_gate_state,
     resolve_decision_state_transition,
 )
-from orchestrator.core.decision_state_reducer import (
-    decision_from_snapshot as decision_from_snapshot_state,
-    is_question_driven_state,
-)
+from orchestrator.core.decision_state_reducer import is_question_driven_state
 from orchestrator.core.decision_effect_service import publish_decision_effects as publish_decision_effects_repo
 from orchestrator.core.decision_types import (
     DecisionClassification,
