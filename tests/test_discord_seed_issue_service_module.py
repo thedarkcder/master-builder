@@ -650,6 +650,10 @@ def test_seed_issues_merges_planning_package_context_into_child_ticket_descripti
                     "risks": ["Descriptions may grow too large"],
                     "how_to_test": ["Assert merged planning context appears in the child description"],
                     "done_criteria": ["Child ticket reflects specialist planning context"],
+                    "implementation_decisions": [
+                        "Decision owner: Engineering child team.",
+                        "Approval path: child PR review and architecture review when boundaries or platform risk change.",
+                    ],
                     "labels": ["engineering"],
                 }
             ],
@@ -660,6 +664,8 @@ def test_seed_issues_merges_planning_package_context_into_child_ticket_descripti
     assert data["created_children"] == ["GP-2"]
     assert len(created) == 2
     child_description = _adf_text(created[1].description)
+    assert "Implementation Decisions" in child_description
+    assert "Decision owner: Engineering child team." in child_description
     assert "Specialist Planning Context" in child_description
     assert "Architecture Findings: Architectural boundaries should stay modular." in child_description
     assert "Security Findings: Security review must be explicit." in child_description

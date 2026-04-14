@@ -721,6 +721,11 @@ def _parse_engineering_children(
                     field_name="how_to_test",
                     raw_value=item.get("how_to_test"),
                 ),
+                "implementation_decisions": _string_list_field(
+                    issue_index=issue_index,
+                    field_name="implementation_decisions",
+                    raw_value=item.get("implementation_decisions"),
+                ),
                 "done_criteria": _string_list_field(
                     issue_index=issue_index,
                     field_name="done_criteria",
@@ -804,6 +809,7 @@ def _build_child_issue_input(
             how_to_test=child_issue["how_to_test"],
             done_criteria=child_issue["done_criteria"],
             dependencies_and_risks=[*child_issue["technical_dependencies"], *child_issue["risks"]],
+            implementation_decisions=child_issue["implementation_decisions"],
             specialist_summary=specialist_summary,
             planning_state=planning_state,
         ),

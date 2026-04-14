@@ -699,6 +699,8 @@ def dispatch_ask_command(
                 working_dir=codex_working_dir,
             )
             planning_result = run_specialist_planning_fanout(
+                session=session,
+                settings=settings,
                 runtime=runtime,
                 request=planning_request,
                 runtime_for_selector=lambda selector: build_runtime_for_selector(

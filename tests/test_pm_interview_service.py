@@ -28,6 +28,7 @@ from orchestrator.core.pm_interview_service import (
     select_next_pm_interview_question,
     upsert_pm_interview_case,
 )
+from orchestrator.core.runtime_invocation import AgentInvocationContext
 from orchestrator.storage.models import PMInterviewCase
 
 try:
@@ -363,6 +364,73 @@ class PMInterviewServiceTests(unittest.TestCase):
         user_kwargs = captured["workflow/pm_parent_brief_normalization_user.j2"]
         self.assertEqual(user_kwargs["parent_issue_key"], "MAB-200")
         self.assertIn("Complete Runtime Architecture and Verification Reset", user_kwargs["parent_summary"])
+        self.assertIn("governed_tools_json", user_kwargs)
+        self.assertIn("native_tools_json", user_kwargs)
+
+    def test_normalize_parent_feature_brief_with_runtime_uses_tool_bridge_when_session_available(self) -> None:
+        captured: dict[str, object] = {}
+
+        def _render_prompt(template_name: str, **kwargs):  # noqa: ANN001
+            if template_name == "workflow/pm_parent_brief_normalization_user.j2":
+                captured["governed_tools_json"] = kwargs["governed_tools_json"]
+                captured["native_tools_json"] = kwargs["native_tools_json"]
+            return template_name
+
+        def _invoke_runtime_json_with_tools(*, context, user_prompt, allowed_tools, **kwargs):  # noqa: ANN001
+            _ = kwargs
+            captured["stage"] = context.stage
+            captured["user_prompt"] = user_prompt
+            captured["allowed_tools"] = set(allowed_tools)
+            return {
+                "brief": {
+                    "objective": "Normalized objective",
+                    "user_value": "Clear business outcome",
+                    "target_user": "Operators",
+                    "primary_journey": "Create parent and review subtasks",
+                    "acceptance_criteria": ["Parent planning creates child tickets"],
+                    "scope_in": ["Parent normalization"],
+                    "scope_out": ["Runtime migration"],
+                    "ui_references": ["Current Jira parent workflow"],
+                    "constraints": ["Keep planning reviewable in Jira and Discord"],
+                    "risks": ["Parent planning can drift without clear product answers"],
+                    "success_outcomes": ["Consistent parent structure"],
+                    "recommendation": "Normalize before decomposition",
+                    "open_questions": [],
+                    "next_steps": ["Create engineering subtasks after normalization"],
+                },
+                "open_questions": [],
+            }
+
+        with (
+            patch("orchestrator.core.pm_interview_service.render_prompt", side_effect=_render_prompt),
+            patch("orchestrator.core.pm_interview_service.invoke_runtime_json_with_tools", side_effect=_invoke_runtime_json_with_tools),
+        ):
+            payload = normalize_parent_feature_brief_with_runtime(
+                session=object(),  # type: ignore[arg-type]
+                settings=object(),
+                runtime=SimpleNamespace(command="codex"),
+                parent_issue_key="MAB-200",
+                parent_summary="Complete Runtime Architecture and Verification Reset",
+                parent_description="Stakeholder parent description",
+                invocation_context=AgentInvocationContext(
+                    channel="jira",
+                    tenant_id="example",
+                    project_id="example-default",
+                    command="pm",
+                    stage="pm_parent_brief_normalization",
+                    working_dir=".",
+                    issue_key="MAB-200",
+                ),
+            )
+
+        self.assertTrue(payload["ready_to_write"])
+        self.assertEqual(captured["stage"], "pm_parent_brief_normalization")
+        self.assertIn("knowledge.read", captured["allowed_tools"])
+        self.assertIn("jira.get_issue", captured["allowed_tools"])
+        self.assertNotIn("web.search", captured["allowed_tools"])
+        self.assertIn("tool_name", str(captured["governed_tools_json"]))
+        self.assertIn("knowledge.read", str(captured["governed_tools_json"]))
+        self.assertIn("web.search", str(captured["native_tools_json"]))
 
     def test_plan_pm_interview_with_codex_uses_question_examples_and_json_contract(self) -> None:
         captured: dict[str, object] = {}

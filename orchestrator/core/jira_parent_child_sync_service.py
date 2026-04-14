@@ -285,6 +285,26 @@ def _post_sync_note(
     )
 
 
+def _engineering_decision_note(
+    *,
+    question: str,
+    owner: str,
+    approval_path: str,
+    rationale: str,
+    status_line: str,
+) -> str:
+    lines = [
+        "Implementation decision record",
+        f"- Question: {question.strip()}",
+        f"- Decision owner: {owner.strip()}",
+        f"- Approval path: {approval_path.strip()}",
+        f"- Status: {status_line.strip()}",
+    ]
+    if rationale.strip():
+        lines.append(f"- Rationale: {rationale.strip()}")
+    return "\n".join(lines)
+
+
 def _load_child_details(
     *,
     oauth,
@@ -403,6 +423,8 @@ def _resolve_parent_product_brief(
         selector="workflow.pm_parent_brief_normalization",
     )
     normalization = normalize_parent_feature_brief_with_runtime(
+        session=session,
+        settings=settings,
         runtime=runtime,
         parent_issue_key=parent_detail.key,
         parent_summary=parent_detail.summary,
@@ -760,6 +782,8 @@ def handle_parent_feature_sync(
             selector="workflow.pm_planning_architect",
         )
         planning_result = run_specialist_planning_fanout(
+            session=session,
+            settings=settings,
             runtime=planning_runtime,
             request=SpecialistPlanningRequest(
                 tenant_id=context.tenant_id,
@@ -1262,7 +1286,13 @@ def handle_engineering_clarification_command(
     child_block_note = str(translation.get("child_block_note") or "").strip()
     reason = str(translation.get("reason") or "").strip()
     if classification != "product_behavior" or not stakeholder_question:
-        comment_text = child_block_note or "This question stays with engineering implementation and does not reopen the PM parent brief."
+        comment_text = _engineering_decision_note(
+            question=question,
+            owner="Engineering child team",
+            approval_path="Child PR review and architecture review when boundaries or platform risk change",
+            rationale=reason or child_block_note,
+            status_line="Engineering owns this implementation decision. The parent PM brief does not reopen.",
+        )
         _post_sync_note(
             session=session,
             tenant=context.tenant,
@@ -1339,14 +1369,25 @@ def handle_engineering_clarification_command(
         ),
         post_jira_comment_fn=post_jira_comment_fn,
     )
+    _post_parent_brief_questions_to_discord(
+        session=session,
+        settings=settings,
+        tenant=context.tenant,
+        project_id=context.project_id,
+        parent_issue_key=parent_issue_key,
+        questions=[stakeholder_question],
+    )
     _post_sync_note(
         session=session,
         tenant=context.tenant,
         issue_key=child_detail.key,
         settings=settings,
-        body=(
-            f"Blocked pending PM clarification on parent feature {parent_issue_key}. "
-            f"{child_block_note or stakeholder_question}"
+        body=_engineering_decision_note(
+            question=question,
+            owner="Product via parent PM interview",
+            approval_path=f"Parent feature {parent_issue_key} PM clarification thread",
+            rationale=reason or child_block_note or stakeholder_question,
+            status_line="Escalated to the parent PM thread because the answer changes product behavior or non-functional requirements.",
         ),
         post_jira_comment_fn=post_jira_comment_fn,
     )

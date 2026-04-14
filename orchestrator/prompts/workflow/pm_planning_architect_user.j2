@@ -8,6 +8,16 @@ Related issues JSON: {{ related_issues_json }}
 Status counts JSON: {{ status_counts_json }}
 GitHub context JSON: {{ github_context_json }}
 Recent conversation context JSON: {{ conversation_history_json }}
+Allowed governed tools for this stage: {{ governed_tools_json }}
+Native Codex tools available directly in this runtime: {{ native_tools_json }}
+
+Structured tool bridge:
+- Use native Codex tools directly when they are available in this runtime. Do not emit tool_request for native Codex tools.
+- To call an allowed governed tool, return JSON only:
+  {"type":"tool_request","tool_name":"<allowed tool>","tool_args":{...},"reason":"<optional short reason>"}
+- When the stage is complete, return JSON only:
+  {"type":"final_response","result":{...}}
+- Do not shell out to `python -m orchestrator agent-tool`.
 
 Focus on architecture and decomposition.
 Prefer the smallest set of child tasks that gives a sound design.

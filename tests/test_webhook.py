@@ -2299,8 +2299,26 @@ class JiraWebhookTests(SqliteTemplateApiTestCase):
                     "reason": "The current brief leaves the user-facing behavior open.",
                 },
             ),
+            patch(
+                "orchestrator.core.jira_parent_child_sync_service.resolve_parent_feature_case",
+                return_value=SimpleNamespace(
+                    request_id="pm-parent-950",
+                    source_kind="jira_parent",
+                    owner_user_id="discord-user-1",
+                    channel_id="discord-channel-1",
+                    thread_channel_id="discord-thread-1",
+                    root_message_id="discord-root-1",
+                    source_text="Checkout recovery parent",
+                    brief_json={"objective": "Checkout recovery"},
+                    notes_json={},
+                ),
+            ),
+            patch("orchestrator.core.jira_parent_child_sync_service.resolve_platform_secret_ref", return_value="discord-token"),
+            patch("orchestrator.core.jira_parent_child_sync_service.DiscordApiClient") as discord_client_cls,
             patch("orchestrator.api.webhooks.jira_parent_child_sync.post_jira_comment", return_value=(True, None)) as comment_mock,
         ):
+            discord_client = discord_client_cls.return_value
+            discord_client.post_message.return_value = {"id": "discord-msg-1"}
             response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
             processed = self._process_one_webhook_job()
 
@@ -2311,6 +2329,9 @@ class JiraWebhookTests(SqliteTemplateApiTestCase):
         self.assertEqual(len(client.replaced_labels), 1)
         self.assertIn("sync-blocked", client.replaced_labels[0]["labels"])
         self.assertGreaterEqual(comment_mock.call_count, 2)
+        discord_client.post_message.assert_called_once()
+        self.assertEqual(discord_client.post_message.call_args.kwargs["channel_id"], "discord-thread-1")
+        self.assertIn("customer see", discord_client.post_message.call_args.kwargs["content"])
         with self.session_factory() as session:
             context = session.execute(
                 select(FollowupContext).where(

@@ -112,7 +112,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         runtime = CodexRuntime(
             model="gpt-5-codex",
             max_output_tokens=1200,
-            command="override",
+            command="codex",
             _request=_RuntimeQueue(
                 [
                     '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"next_stage":"dev","execution_worker_capability":"linux"}',
@@ -156,17 +156,20 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         self.assertEqual(captured["execution_branch"], "run/MAB-54/run-1")
         self.assertEqual(captured["integration_branch"], "feature/MAB-54")
         self.assertEqual(captured["allow_pr_creation"], "false")
-        allowed_tools = json.loads(str(captured["allowed_tools_json"]))
-        decision_tool = next(item for item in allowed_tools if item["tool_name"] == "decision.read_state")
+        governed_tools = json.loads(str(captured["governed_tools_json"]))
+        native_tools = json.loads(str(captured["native_tools_json"]))
+        decision_tool = next(item for item in governed_tools if item["tool_name"] == "decision.read_state")
         self.assertEqual(decision_tool["category"], "decision")
         self.assertIn("Decision Gate", decision_tool["description"])
+        self.assertNotIn("web.search", {item["tool_name"] for item in governed_tools})
+        self.assertEqual({item["tool_name"] for item in native_tools}, {"web.search", "web.fetch", "browser.open", "browser.snapshot"})
         self.assertNotIn("agent_tool_command", captured)
 
     def test_test_prompt_receives_structured_tool_catalog_with_descriptions(self) -> None:
         runtime = CodexRuntime(
             model="gpt-5-codex",
             max_output_tokens=1200,
-            command="override",
+            command="codex",
             _request=_RuntimeQueue(
                 [
                     '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"next_stage":"dev","execution_worker_capability":"linux"}',
@@ -189,11 +192,13 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             dev = agents.dev(request, plan, 1, None)
             agents.test(request, plan, dev, 1)
 
-        allowed_tools = json.loads(str(captured["allowed_tools_json"]))
-        runtime_tool = next(item for item in allowed_tools if item["tool_name"] == "project.check_runtime_bindings")
+        governed_tools = json.loads(str(captured["governed_tools_json"]))
+        native_tools = json.loads(str(captured["native_tools_json"]))
+        runtime_tool = next(item for item in governed_tools if item["tool_name"] == "project.check_runtime_bindings")
         self.assertEqual(runtime_tool["category"], "project")
         self.assertIn("explicitly named project bindings", runtime_tool["description"])
         self.assertIn("never returns the underlying values", runtime_tool["description"])
+        self.assertEqual({item["tool_name"] for item in native_tools}, {"web.search", "web.fetch", "browser.open", "browser.snapshot"})
 
     def test_stage_prompts_include_answered_human_inputs(self) -> None:
         runtime = CodexRuntime(
