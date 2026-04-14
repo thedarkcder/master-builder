@@ -148,7 +148,7 @@ class VoiceTranscriptionTests(unittest.TestCase):
         )
         with patch("orchestrator.core.voice.transcription._get_whisper_model", return_value=object()) as model_mock:
             ensure_transcription_provider_ready(settings=settings)
-        model_mock.assert_called_once_with(settings=settings)
+        model_mock.assert_called_once_with(settings=settings, allow_download=False)
 
     def test_ensure_transcription_provider_ready_surfaces_whisper_model_failure(self) -> None:
         settings = Settings(
@@ -162,7 +162,29 @@ class VoiceTranscriptionTests(unittest.TestCase):
             with self.assertRaisesRegex(VoiceTranscriptionError, "model load failed"):
                 ensure_transcription_provider_ready(settings=settings)
 
-    def test_load_whisper_model_tries_local_cache_before_network(self) -> None:
+    def test_load_whisper_model_stays_cache_only_at_runtime(self) -> None:
+        calls: list[dict[str, object]] = []
+
+        class _WhisperModel:
+            def __init__(self, model_name, **kwargs):  # noqa: ANN001
+                calls.append({"model_name": model_name, **kwargs})
+                raise RuntimeError("missing local cache")
+
+        faster_whisper = type("FW", (), {"WhisperModel": _WhisperModel})()
+
+        with self.assertRaisesRegex(RuntimeError, "missing local cache"):
+            _load_whisper_model(
+                faster_whisper=faster_whisper,
+                model_name="base",
+                device="cpu",
+                compute_type="int8",
+                allow_download=False,
+            )
+
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(calls[0]["local_files_only"])
+
+    def test_load_whisper_model_prewarm_tries_local_cache_before_download(self) -> None:
         calls: list[dict[str, object]] = []
 
         class _WhisperModel:
@@ -179,6 +201,7 @@ class VoiceTranscriptionTests(unittest.TestCase):
             model_name="base",
             device="cpu",
             compute_type="int8",
+            allow_download=True,
         )
 
         self.assertEqual(len(calls), 2)

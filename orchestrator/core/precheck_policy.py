@@ -9,19 +9,13 @@ from orchestrator.core.config import get_settings
 from orchestrator.core.decision_gate import DecisionGateResult
 from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.prompt_templates import render_prompt
+from orchestrator.core.runtime_payload_models import PrecheckPolicyPayload
 
 
 @dataclass(frozen=True)
 class PrecheckPolicyResult:
     decision_gate: DecisionGateResult
     gtd: GoodToDoValidationResult
-
-
-def _string_list(value: object) -> tuple[str, ...]:
-    if not isinstance(value, list):
-        return ()
-    return tuple(str(item).strip() for item in value if str(item).strip())
-
 
 def evaluate_precheck_policy(
     *,
@@ -63,31 +57,22 @@ def evaluate_precheck_policy(
     except CodexRuntimeError as exc:
         raise RuntimeError(f"Codex precheck policy evaluation failed: {exc}") from exc
 
-    decision_gate_reason = str(payload.get("reason") or "").strip()
-    decision_gate_recommendation = str(payload.get("recommendation") or "").strip()
-    if not decision_gate_reason:
-        raise RuntimeError("Codex precheck policy evaluation returned empty decision_gate reason")
-    if not decision_gate_recommendation:
-        raise RuntimeError("Codex precheck policy evaluation returned empty decision_gate recommendation")
+    parsed_payload = PrecheckPolicyPayload.from_payload(payload)
 
     decision_gate = DecisionGateResult(
-        triggered=bool(payload.get("triggered")),
-        reason=decision_gate_reason,
-        missing_sections=_string_list(payload.get("missing_sections")),
-        questions=_string_list(payload.get("questions")),
-        recommendation=decision_gate_recommendation,
-        tags=_string_list(payload.get("tags")),
+        triggered=parsed_payload.decision_gate_triggered,
+        reason=parsed_payload.decision_gate_reason,
+        missing_sections=parsed_payload.decision_gate_missing_sections,
+        questions=parsed_payload.decision_gate_questions,
+        recommendation=parsed_payload.decision_gate_recommendation,
+        tags=parsed_payload.decision_gate_tags,
     )
 
     gtd = GoodToDoValidationResult(
-        valid=bool(payload.get("gtd_valid")),
-        missing_criteria=_string_list(payload.get("gtd_missing_criteria")),
-        clarification_questions=_string_list(payload.get("gtd_clarification_questions")),
+        valid=parsed_payload.gtd_valid,
+        missing_criteria=parsed_payload.gtd_missing_criteria,
+        clarification_questions=parsed_payload.gtd_clarification_questions,
     )
-    if not gtd.valid and not gtd.clarification_questions:
-        raise RuntimeError(
-            "Codex precheck policy evaluation returned invalid GTD result without clarification questions"
-        )
 
     return PrecheckPolicyResult(
         decision_gate=decision_gate,

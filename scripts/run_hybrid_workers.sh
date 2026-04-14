@@ -161,6 +161,47 @@ admin_ui_listener_cwd() {
   lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | awk '/^n/ { sub(/^n/, ""); print; exit }'
 }
 
+local_worker_candidate_pids() {
+  ps -axo pid=,command= | awk '/[[:space:]]-m orchestrator worker-runs([[:space:]]|$)/ { print $1 }'
+}
+
+local_worker_pids() {
+  local candidate_pid
+  local pid_cwd
+  for candidate_pid in $(local_worker_candidate_pids); do
+    [[ -z "$candidate_pid" || "$candidate_pid" == "$$" ]] && continue
+    pid_cwd="$(admin_ui_listener_cwd "$candidate_pid")"
+    if [[ "$pid_cwd" == "$ROOT_DIR" ]]; then
+      printf '%s\n' "$candidate_pid"
+    fi
+  done
+}
+
+restart_existing_local_worker_if_owned() {
+  local worker_pids
+  worker_pids="$(local_worker_pids)"
+  if [[ -z "$worker_pids" ]]; then
+    return 0
+  fi
+
+  echo "Stopping existing local run worker..."
+  local pid
+  for pid in $worker_pids; do
+    kill "$pid" >/dev/null 2>&1 || true
+  done
+
+  local deadline
+  deadline="$(( $(date +%s) + 15 ))"
+  while [[ -n "$(local_worker_pids)" ]]; do
+    if (( $(date +%s) >= deadline )); then
+      echo "Timed out waiting for existing local run worker to stop."
+      return 1
+    fi
+    sleep 1
+  done
+  return 0
+}
+
 restart_existing_admin_ui_if_owned() {
   local listener_pids
   listener_pids="$(admin_ui_listener_pids)"
@@ -255,4 +296,5 @@ echo "Local worker capability: ${ORCHESTRATOR_WORKER_CAPABILITIES}"
 echo "Local Codex sandbox: ${ORCHESTRATOR_CODEX_SANDBOX_MODE}"
 echo "Shared repo checkout dir: ${ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR}"
 echo "Starting local run worker..."
+restart_existing_local_worker_if_owned
 "${VENV_DIR}/bin/python" -m orchestrator worker-runs

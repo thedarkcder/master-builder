@@ -25,7 +25,14 @@ import {
 import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/components/auth-provider";
-import { getRun, type TenantRecord, getTenant, listProjects, type ProjectRecord } from "@/lib/api";
+import {
+  getRun,
+  type TenantRecord,
+  getTenant,
+  listDiscordAllowlistRequests,
+  listProjects,
+  type ProjectRecord,
+} from "@/lib/api";
 import {
   canAccessPlatformAdmin,
   canAccessTechnicalSurface,
@@ -33,7 +40,7 @@ import {
   getMembershipForTenant,
   getTenantWorkspaceRoute,
 } from "@/lib/auth-routing";
-import { resolveRunRouteContext } from "@/lib/dashboard-paths";
+import { buildProjectSectionPath, resolveRunRouteContext } from "@/lib/dashboard-paths";
 import { persistLastWorkspaceTenantId } from "@/lib/workspace-preference";
 import {
   Sidebar,
@@ -91,6 +98,7 @@ type DashboardNavPanelProps = {
   tenantBaseRoute: string | null;
   navItems: NavItem[];
   tenantProjects: ProjectRecord[];
+  projectNotificationCounts: Record<string, number>;
   pathname: string;
   runContext: RunRouteCtx;
   projectContextId: string | null;
@@ -106,6 +114,7 @@ function DashboardNavPanel({
   tenantBaseRoute,
   navItems,
   tenantProjects,
+  projectNotificationCounts,
   pathname,
   runContext,
   projectContextId,
@@ -125,17 +134,22 @@ function DashboardNavPanel({
         </SidebarMenuButton>
       </SidebarMenuItem>
       {tenantProjects.map((project) => {
-        const projectHref = `${tenantBaseRoute}/projects/${encodeURIComponent(project.project_id)}`;
+        const projectHref = buildProjectSectionPath(decodedTenantId ?? project.tenant_id, project.project_id, "runs");
         const active =
-          pathname === projectHref ||
-          pathname.startsWith(`${projectHref}/`) ||
+          pathname === buildProjectSectionPath(decodedTenantId ?? project.tenant_id, project.project_id) ||
+          pathname.startsWith(`${buildProjectSectionPath(decodedTenantId ?? project.tenant_id, project.project_id)}/`) ||
           (Boolean(runContext.runId) && project.project_id === projectContextId);
         return (
           <SidebarMenuItem key={project.project_id}>
             <SidebarMenuButton asChild isActive={active}>
               <Link href={projectHref} onClick={close}>
                 <FolderKanban className="h-4 w-4 flex-shrink-0" />
-                {project.name}
+                <span className="truncate">{project.name}</span>
+                {projectNotificationCounts[project.project_id] ? (
+                  <span className="ml-auto inline-flex min-w-5 items-center justify-center rounded-full bg-warning px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white">
+                    {projectNotificationCounts[project.project_id]}
+                  </span>
+                ) : null}
               </Link>
             </SidebarMenuButton>
           </SidebarMenuItem>
@@ -275,16 +289,17 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [tenant, setTenant] = useState<TenantRecord | null>(null);
   const [tenantProjects, setTenantProjects] = useState<ProjectRecord[]>([]);
+  const [projectNotificationCounts, setProjectNotificationCounts] = useState<Record<string, number>>({});
   const tenantMatch = pathname.match(
-    /^\/(?!tenants(?:\/|$)|runs(?:\/|$)|dashboard(?:\/|$)|status(?:\/|$)|secrets(?:\/|$)|agent-runtimes(?:\/|$)|login(?:\/|$)|register(?:\/|$)|invite(?:\/|$)|get-started(?:\/|$)|forgot-password(?:\/|$)|reset-password(?:\/|$)|api(?:\/|$))([^/]+)\//,
+    /^\/(?!tenants(?:\/|$)|runs(?:\/|$)|platform(?:\/|$)|login(?:\/|$)|register(?:\/|$)|invite(?:\/|$)|get-started(?:\/|$)|forgot-password(?:\/|$)|reset-password(?:\/|$)|api(?:\/|$))([^/]+)\//,
   );
   const projectMatch = pathname.match(
-    /^\/(?!tenants(?:\/|$)|runs(?:\/|$)|dashboard(?:\/|$)|status(?:\/|$)|secrets(?:\/|$)|agent-runtimes(?:\/|$)|login(?:\/|$)|register(?:\/|$)|invite(?:\/|$)|get-started(?:\/|$)|forgot-password(?:\/|$)|reset-password(?:\/|$)|api(?:\/|$))([^/]+)\/projects\/([^/]+)(?:\/|$)/,
+    /^\/(?!tenants(?:\/|$)|runs(?:\/|$)|platform(?:\/|$)|login(?:\/|$)|register(?:\/|$)|invite(?:\/|$)|get-started(?:\/|$)|forgot-password(?:\/|$)|reset-password(?:\/|$)|api(?:\/|$))([^/]+)\/projects\/([^/]+)(?:\/|$)/,
   );
   const runContext = resolveRunRouteContext(pathname);
   const isWizardRoute =
     pathname.startsWith("/tenants/new") ||
-    /^\/(?!tenants(?:\/|$)|runs(?:\/|$)|dashboard(?:\/|$)|status(?:\/|$)|secrets(?:\/|$)|agent-runtimes(?:\/|$)|login(?:\/|$)|register(?:\/|$)|invite(?:\/|$)|get-started(?:\/|$)|forgot-password(?:\/|$)|reset-password(?:\/|$)|api(?:\/|$))[^/]+\/projects\/new(\/|$)/.test(pathname);
+    /^\/(?!tenants(?:\/|$)|runs(?:\/|$)|platform(?:\/|$)|login(?:\/|$)|register(?:\/|$)|invite(?:\/|$)|get-started(?:\/|$)|forgot-password(?:\/|$)|reset-password(?:\/|$)|api(?:\/|$))[^/]+\/projects\/new(\/|$)/.test(pathname);
   const [runTenantId, setRunTenantId] = useState<string | null>(null);
   const tenantId = tenantMatch ? tenantMatch[1] : runTenantId;
   const projectContextId = projectMatch?.[2] ? decodeURIComponent(projectMatch[2]) : runContext.projectId || null;
@@ -310,8 +325,8 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
     const onboardingAllowed =
       pathname === "/get-started" ||
       pathname.startsWith("/tenants/new") ||
-      pathname.startsWith("/agent-runtimes") ||
-      /^\/(?!tenants(?:\/|$)|runs(?:\/|$)|dashboard(?:\/|$)|status(?:\/|$)|secrets(?:\/|$)|agent-runtimes(?:\/|$)|login(?:\/|$)|register(?:\/|$)|invite(?:\/|$)|get-started(?:\/|$)|forgot-password(?:\/|$)|reset-password(?:\/|$)|api(?:\/|$))[^/]+\/settings(\/|$)/.test(pathname);
+      pathname.startsWith("/platform/agent-runtimes") ||
+      /^\/(?!tenants(?:\/|$)|runs(?:\/|$)|platform(?:\/|$)|login(?:\/|$)|register(?:\/|$)|invite(?:\/|$)|get-started(?:\/|$)|forgot-password(?:\/|$)|reset-password(?:\/|$)|api(?:\/|$))[^/]+\/settings(\/|$)/.test(pathname);
     if (ready && credentials && needsOnboarding && !onboardingAllowed) {
       router.replace("/get-started");
     }
@@ -384,6 +399,32 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
     };
   }, [credentials, isWizardRoute, tenantId]);
 
+  useEffect(() => {
+    if (!credentials || !decodedTenantIdForPersist || isWizardRoute || tenantProjects.length === 0) {
+      setProjectNotificationCounts({});
+      return;
+    }
+    let cancelled = false;
+    void Promise.all(
+      tenantProjects.map(async (project) => {
+        try {
+          const requests = await listDiscordAllowlistRequests(credentials, decodedTenantIdForPersist, project.project_id);
+          return [project.project_id, requests.length] as const;
+        } catch {
+          return [project.project_id, 0] as const;
+        }
+      }),
+    ).then((entries) => {
+      if (cancelled) {
+        return;
+      }
+      setProjectNotificationCounts(Object.fromEntries(entries));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [credentials, decodedTenantIdForPersist, isWizardRoute, tenantProjects]);
+
   if (!ready) {
     return <main className="p-8 text-sm text-muted-foreground">Loading session...</main>;
   }
@@ -396,8 +437,8 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
     needsOnboarding &&
     pathname !== "/get-started" &&
     !pathname.startsWith("/tenants/new") &&
-    !pathname.startsWith("/agent-runtimes") &&
-    !/^\/(?!tenants(?:\/|$)|runs(?:\/|$)|dashboard(?:\/|$)|status(?:\/|$)|secrets(?:\/|$)|agent-runtimes(?:\/|$)|login(?:\/|$)|register(?:\/|$)|invite(?:\/|$)|get-started(?:\/|$)|forgot-password(?:\/|$)|reset-password(?:\/|$)|api(?:\/|$))[^/]+\/settings(\/|$)/.test(pathname)
+    !pathname.startsWith("/platform/agent-runtimes") &&
+    !/^\/(?!tenants(?:\/|$)|runs(?:\/|$)|platform(?:\/|$)|login(?:\/|$)|register(?:\/|$)|invite(?:\/|$)|get-started(?:\/|$)|forgot-password(?:\/|$)|reset-password(?:\/|$)|api(?:\/|$))[^/]+\/settings(\/|$)/.test(pathname)
   ) {
     return <main className="p-8 text-sm text-muted-foreground">Redirecting to onboarding...</main>;
   }
@@ -418,11 +459,11 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   const tenantBaseRoute = decodedTenantId ? getTenantWorkspaceRoute(decodedTenantId) : null;
   const isPlatformSuperAdmin = canAccessPlatformAdmin(principal);
   const globalNavItems: NavItem[] = [
-    { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-    { href: "/status", label: "Status", icon: Activity },
-    ...(isPlatformSuperAdmin ? [{ href: "/agent-runtimes", label: "Agent runtimes", icon: Cpu }] : []),
+    { href: "/platform/dashboard", label: "Dashboard", icon: LayoutDashboard },
+    { href: "/platform/status", label: "Status", icon: Activity },
+    ...(isPlatformSuperAdmin ? [{ href: "/platform/agent-runtimes", label: "Agent runtimes", icon: Cpu }] : []),
     { href: "/tenants/select", label: "Tenants", icon: Building2 },
-    { href: "/secrets", label: "Secrets", icon: KeyRound }
+    { href: "/platform/secrets", label: "Secrets", icon: KeyRound }
   ];
   const tenantMembership = decodedTenantId ? getMembershipForTenant(principal, decodedTenantId) : null;
   const canManageWorkspaceTeam = decodedTenantId ? canManageTeam(principal, decodedTenantId) : false;
@@ -498,6 +539,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
     tenantBaseRoute,
     navItems,
     tenantProjects,
+    projectNotificationCounts,
     pathname,
     runContext,
     projectContextId,

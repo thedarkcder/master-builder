@@ -343,7 +343,7 @@ test("lets a platform super admin click Team inside a tenant workspace", async (
     await page.getByLabel("Email or username").fill(process.env.ORCHESTRATOR_ADMIN_USERNAME ?? "admin");
     await page.getByLabel("Password").fill(process.env.ORCHESTRATOR_ADMIN_PASSWORD ?? "change-me");
     await page.getByRole("button", { name: "Sign in" }).click();
-    await expect(page).toHaveURL(/\/dashboard$/, { timeout: 20000 });
+    await expect(page).toHaveURL(/\/platform\/dashboard$/, { timeout: 20000 });
 
     await page.goto(`/${tenantId}/dashboard`);
     await expect(page.getByRole("link", { name: "Team" })).toBeVisible();

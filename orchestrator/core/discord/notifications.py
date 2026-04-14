@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 
 from orchestrator.core.config import Settings
+from orchestrator.core.decision_types import WorkerStageEvent
 from orchestrator.core.followup_context_service import (
     FOLLOWUP_CONTEXT_DECISION_GATE,
     upsert_followup_context,
@@ -110,7 +111,7 @@ def send_tenant_discord_message(
                 if thread_channel_id not in thread_ids:
                     thread_ids.append(thread_channel_id)
                 project_discord_config["ask_thread_channel_ids"] = thread_ids[-200:]
-                if event == "decision_gate_required":
+                if event == WorkerStageEvent.DECISION_GATE_REQUIRED.value:
                     matched_issue_key = ISSUE_KEY_PATTERN.search(safe_thread_name)
                     if matched_issue_key is not None:
                         upsert_followup_context(

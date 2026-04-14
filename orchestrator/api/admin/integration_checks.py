@@ -3,6 +3,11 @@ from __future__ import annotations
 from fastapi import HTTPException, status
 
 from orchestrator.api.schemas import IntegrationTestResult
+from orchestrator.core.decision_types import (
+    JiraConfigKey,
+    jira_config_project_keys,
+    tenant_jira_config_text,
+)
 from orchestrator.storage.models import JiraOAuthConnection, Tenant
 from orchestrator.tools.jira_oauth import JiraOAuthError
 
@@ -20,13 +25,14 @@ def test_jira_connection(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
 
     jira = tenant.jira_config
-    required = ["project_keys"]
-    missing = [field for field in required if not jira.get(field)]
+    missing: list[str] = []
+    if not jira_config_project_keys(jira_config=jira):
+        missing.append(JiraConfigKey.PROJECT_KEYS.value)
     if missing:
         return IntegrationTestResult(ok=False, details=f"Missing Jira fields: {', '.join(missing)}")
 
-    connection_id = jira.get("connection_id")
-    if not isinstance(connection_id, str) or not connection_id:
+    connection_id = tenant_jira_config_text(tenant=tenant, key=JiraConfigKey.CONNECTION_ID)
+    if not connection_id:
         return IntegrationTestResult(ok=False, details="Jira OAuth connection is not linked for this tenant")
 
     connection = session.get(JiraOAuthConnection, connection_id)

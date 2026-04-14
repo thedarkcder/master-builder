@@ -14,6 +14,7 @@ class ApiErrorObservabilityTests(unittest.TestCase):
     def test_create_app_registers_discord_executor_once_on_startup(self) -> None:
         with (
             patch("orchestrator.api.main.run_migrations"),
+            patch("orchestrator.api.main.ensure_execution_snapshot_startup_bootstrap"),
             patch("orchestrator.api.main.register_discord_command_executor") as register_mock,
             patch("orchestrator.api.main.sync_discord_guild_commands"),
         ):
@@ -26,6 +27,7 @@ class ApiErrorObservabilityTests(unittest.TestCase):
     def test_create_app_does_not_start_knowledge_jira_sync_runtime(self) -> None:
         with (
             patch("orchestrator.api.main.run_migrations"),
+            patch("orchestrator.api.main.ensure_execution_snapshot_startup_bootstrap"),
             patch("orchestrator.api.main.register_discord_command_executor"),
             patch("orchestrator.api.main.sync_discord_guild_commands"),
             patch("orchestrator.core.knowledge_jira_sync_runtime.run_knowledge_jira_sync") as sync_runtime_mock,
@@ -45,6 +47,7 @@ class ApiErrorObservabilityTests(unittest.TestCase):
 
         with (
             patch("orchestrator.api.main.run_migrations"),
+            patch("orchestrator.api.main.ensure_execution_snapshot_startup_bootstrap"),
             patch("orchestrator.api.main.register_discord_command_executor"),
             patch("orchestrator.api.main.sync_discord_guild_commands"),
             patch("orchestrator.api.main.logger.exception") as exception_log,
@@ -67,6 +70,7 @@ class ApiErrorObservabilityTests(unittest.TestCase):
 
         with (
             patch("orchestrator.api.main.run_migrations"),
+            patch("orchestrator.api.main.ensure_execution_snapshot_startup_bootstrap"),
             patch("orchestrator.api.main.register_discord_command_executor"),
             patch("orchestrator.api.main.sync_discord_guild_commands"),
             patch("orchestrator.api.main.logger.error") as error_log,
@@ -91,6 +95,7 @@ class ApiErrorObservabilityTests(unittest.TestCase):
 
         with (
             patch("orchestrator.api.main.run_migrations"),
+            patch("orchestrator.api.main.ensure_execution_snapshot_startup_bootstrap"),
             patch("orchestrator.api.main.register_discord_command_executor"),
             patch("orchestrator.api.main.sync_discord_guild_commands"),
             TestClient(app, raise_server_exceptions=False) as client,
@@ -105,6 +110,7 @@ class ApiErrorObservabilityTests(unittest.TestCase):
 
         with (
             patch("orchestrator.api.main.run_migrations"),
+            patch("orchestrator.api.main.ensure_execution_snapshot_startup_bootstrap"),
             patch("orchestrator.api.main.register_discord_command_executor"),
             patch("orchestrator.api.main.sync_discord_guild_commands"),
             patch("orchestrator.api.main.logger.info") as info_log,

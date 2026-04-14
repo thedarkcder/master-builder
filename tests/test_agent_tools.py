@@ -1477,7 +1477,7 @@ def test_knowledge_exact_read_returns_stored_asset_payload() -> None:
     exact_read_mock.assert_called_once()
 
 
-def test_knowledge_read_uses_local_only_embeddings_for_background_runs() -> None:
+def test_knowledge_read_uses_best_effort_embeddings_for_background_runs() -> None:
     class _FakeTenant:
         tenant_id = "route25"
         github_config = {}
@@ -1517,4 +1517,4 @@ def test_knowledge_read_uses_local_only_embeddings_for_background_runs() -> None
         )
 
     assert payload == {"query": "bundle id", "text": "facts", "citations": []}
-    assert knowledge_mock.call_args.kwargs["embedding_access_mode"] is KnowledgeEmbeddingAccessMode.LOCAL_ONLY
+    assert knowledge_mock.call_args.kwargs["embedding_access_mode"] is KnowledgeEmbeddingAccessMode.BEST_EFFORT

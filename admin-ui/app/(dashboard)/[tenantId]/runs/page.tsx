@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { listRuns, RUN_STATUSES, type RunRecord, type RunStatus } from "@/lib/api";
+import { formatTimestamp } from "@/lib/datetime";
 import { cn } from "@/lib/utils";
 
 function statusBorderClass(status: string): string {
@@ -239,7 +240,7 @@ export default function TenantRunsPage() {
                   )}
                 </TableCell>
                 <TableCell className="text-sm text-muted-foreground">
-                  {new Date(run.created_at).toLocaleString()}
+                  {formatTimestamp(run.created_at)}
                 </TableCell>
               </TableRow>
             ))}

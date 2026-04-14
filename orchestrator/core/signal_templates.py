@@ -65,7 +65,9 @@ def format_stage_discord_update(
     if pr_url:
         lines.append(f"PR: [Open PR]({pr_url})")
     if error:
-        lines.append(f"Error: {' '.join(error.strip().split())[:200]}")
+        error_text = str(error).strip()
+        if error_text:
+            lines.append(f"Error: {error_text}")
 
     steps = _normalize_lines(next_steps, max_items=3, max_line_chars=140)
     if steps:

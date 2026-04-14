@@ -33,6 +33,7 @@ def stream_run_events_ndjson(
         initial_event_limit=initial_event_limit,
         initial_log_limit=initial_log_limit,
     )
+    snapshot_max_offset = max((int(row.stream_offset) for row in snapshot_rows), default=0)
     for row in snapshot_rows:
         payload = encode_stream_row(row)
         if payload is not None:
@@ -48,6 +49,7 @@ def stream_run_events_ndjson(
         buffer_size=max(1, int(getattr(settings, "log_subscriber_buffer_size", 256))),
         match_fn=build_run_stream_matcher(run_id=run_id),
         render_fn=encode_stream_row,
+        min_stream_offset_exclusive=snapshot_max_offset,
     )
     try:
         yield from stream_from_subscriber(subscriber=subscriber)
