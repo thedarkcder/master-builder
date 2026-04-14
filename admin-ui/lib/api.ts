@@ -373,6 +373,58 @@ export type TenantDeploymentsOverviewRecord = {
   generated_at: string | null;
 };
 
+export type TenantDeploymentPlaneRecord = {
+  provider: "internal_coolify";
+  infrastructure_provider: "aws" | "hetzner" | null;
+  region: string | null;
+  base_domain: string | null;
+  platform_subdomain: string | null;
+  api_base_url: string | null;
+  coolify_project_uuid: string | null;
+  coolify_environment_name: string | null;
+  coolify_server_uuid: string | null;
+  coolify_destination_uuid: string | null;
+  managed_host_id: string | null;
+  secret_refs: Record<string, string>;
+  state: "unconfigured" | "provisioning" | "active" | "degraded" | "paused" | "failed";
+  last_error: string | null;
+};
+
+export type TenantDeploymentPlaneUpdatePayload = TenantDeploymentPlaneRecord;
+
+export const DEPLOYMENT_HOST_STATES = ["provisioning", "active", "degraded", "offline", "retired"] as const;
+
+export type DeploymentHostState = (typeof DEPLOYMENT_HOST_STATES)[number];
+
+export type DeploymentHostRecord = {
+  host_id: string;
+  label: string;
+  provider: string;
+  infrastructure_provider: string | null;
+  region: string | null;
+  capabilities: string[];
+  agent_version: string | null;
+  metadata: Record<string, unknown>;
+  state: DeploymentHostState | string;
+  registered_at: string | null;
+  last_seen_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type DeploymentHostCreatePayload = {
+  label: string;
+  provider?: "internal_coolify";
+  infrastructure_provider?: "aws" | "hetzner" | null;
+  region?: string | null;
+  capabilities: string[];
+};
+
+export type DeploymentHostBootstrapRecord = {
+  host: DeploymentHostRecord;
+  bootstrap_token: string;
+};
+
 export type ProjectDeploymentOperationResultRecord = {
   ok: boolean;
   action: string;
@@ -423,12 +475,53 @@ export type ProjectDeploymentBackupNowPayload = {
 };
 
 export type ProjectDeploymentRestoreRequestPayload = {
-  resource_key?: string | null;
   backup_key: string;
+  resource_key: string;
   backup_uuid?: string | null;
-  execution_uuid?: string | null;
-  restore_mode?: "replace" | "clone" | string | null;
-  note?: string | null;
+  execution_uuid: string;
+  confirmation_value: string;
+};
+
+export type ProjectDeploymentBackupExecutionRecord = {
+  execution_uuid: string;
+  status: string | null;
+  created_at: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  artifact_path: string | null;
+  file_name: string | null;
+  details: Record<string, unknown>;
+};
+
+export type ProjectDeploymentBackupExecutionListRecord = {
+  backup_key: string;
+  resource_key: string;
+  backup_uuid: string | null;
+  database_uuid: string | null;
+  executions: ProjectDeploymentBackupExecutionRecord[];
+};
+
+export type ProjectDeploymentRestoreRunRecord = {
+  restore_run_id: string;
+  tenant_id: string;
+  project_id: string;
+  app_id: string;
+  backup_policy_key: string;
+  resource_key: string;
+  backup_uuid: string | null;
+  execution_uuid: string;
+  database_type: "postgres" | "mysql" | "mariadb";
+  database_uuid: string;
+  restore_mode: "replace";
+  requested_by_user_id: string | null;
+  confirmation_value: string;
+  execution_payload: Record<string, unknown>;
+  status: "queued" | "running" | "succeeded" | "failed" | string;
+  last_error: string | null;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  updated_at: string;
 };
 
 export type ProjectAutomationExecutionRecord = {
@@ -2363,25 +2456,67 @@ export function requestProjectAppDeploymentBackupNow(
   ).then(toDeploymentOperationResult);
 }
 
+export function listProjectAppDeploymentBackupExecutions(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  appId: string,
+  backupKey: string,
+): Promise<ProjectDeploymentBackupExecutionListRecord> {
+  const normalizedBackupKey = normalizeDeploymentItemKey(backupKey);
+  const query = normalizedBackupKey ? `?backup_key=${encodeURIComponent(normalizedBackupKey)}` : "";
+  return request<ProjectDeploymentBackupExecutionListRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/apps/${encodeURIComponent(appId)}/deployment-backups/executions${query}`
+  );
+}
+
 export function requestProjectAppDeploymentRestore(
   credentials: Credentials,
   tenantId: string,
   projectId: string,
   appId: string,
   payload: ProjectDeploymentRestoreRequestPayload,
-): Promise<ProjectDeploymentOperationResultRecord> {
-  return request<ProjectDeploymentOperationApiRecord>(
+): Promise<ProjectDeploymentRestoreRunRecord> {
+  return request<ProjectDeploymentRestoreRunRecord>(
     credentials,
     `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/apps/${encodeURIComponent(appId)}/deployment-backups/restore`,
     {
       method: "POST",
       body: JSON.stringify({
         backup_key: payload.backup_key,
+        resource_key: payload.resource_key,
         backup_uuid: payload.backup_uuid ?? null,
-        execution_uuid: payload.execution_uuid ?? null,
+        execution_uuid: payload.execution_uuid,
+        confirmation_value: payload.confirmation_value,
       }),
     }
-  ).then(toDeploymentOperationResult);
+  );
+}
+
+export function listProjectAppDeploymentRestoreRuns(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  appId: string,
+): Promise<ProjectDeploymentRestoreRunRecord[]> {
+  return request<ProjectDeploymentRestoreRunRecord[]>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/apps/${encodeURIComponent(appId)}/deployment-backups/restore-runs`
+  );
+}
+
+export function getProjectAppDeploymentRestoreRun(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  appId: string,
+  restoreRunId: string,
+): Promise<ProjectDeploymentRestoreRunRecord> {
+  return request<ProjectDeploymentRestoreRunRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/apps/${encodeURIComponent(appId)}/deployment-backups/restore-runs/${encodeURIComponent(restoreRunId)}`
+  );
 }
 
 export function getTenantDeploymentsOverview(
@@ -2391,6 +2526,62 @@ export function getTenantDeploymentsOverview(
   return request<TenantDeploymentsOverviewRecord>(
     credentials,
     `/api/admin/tenants/${encodeURIComponent(tenantId)}/deployments/overview`
+  );
+}
+
+export function getTenantDeploymentPlane(
+  credentials: Credentials,
+  tenantId: string,
+): Promise<TenantDeploymentPlaneRecord> {
+  return request<TenantDeploymentPlaneRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/deployment-plane`
+  );
+}
+
+export function updateTenantDeploymentPlane(
+  credentials: Credentials,
+  tenantId: string,
+  payload: TenantDeploymentPlaneUpdatePayload,
+): Promise<TenantDeploymentPlaneRecord> {
+  return request<TenantDeploymentPlaneRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/deployment-plane`,
+    {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }
+  );
+}
+
+export function listDeploymentHosts(credentials: Credentials): Promise<DeploymentHostRecord[]> {
+  return request<DeploymentHostRecord[]>(
+    credentials,
+    "/api/admin/deployment-hosts"
+  );
+}
+
+export function getDeploymentHost(credentials: Credentials, hostId: string): Promise<DeploymentHostRecord> {
+  return request<DeploymentHostRecord>(credentials, `/api/admin/deployment-hosts/${encodeURIComponent(hostId)}`);
+}
+
+export function createDeploymentHost(
+  credentials: Credentials,
+  payload: DeploymentHostCreatePayload,
+): Promise<DeploymentHostBootstrapRecord> {
+  return request<DeploymentHostBootstrapRecord>(
+    credentials,
+    "/api/admin/deployment-hosts",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        label: payload.label,
+        provider: payload.provider ?? "internal_coolify",
+        infrastructure_provider: payload.infrastructure_provider || null,
+        region: payload.region ?? null,
+        capabilities: payload.capabilities,
+      }),
+    }
   );
 }
 

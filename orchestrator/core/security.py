@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from orchestrator.core.admin_tokens import parse_admin_access_token
 from orchestrator.core.auth_tokens import parse_auth_access_token
 from orchestrator.core.config import get_settings
+from orchestrator.core.deployment_host_tokens import hash_deployment_host_token
 from orchestrator.core.passwords import hash_password, verify_password
 from orchestrator.core.platform_secret_service import (
     PLATFORM_SECRET_ADMIN_PASSWORD_HASH_REF,
@@ -30,6 +31,7 @@ from orchestrator.storage.models import (
     TenantTeam,
     TenantTeamMembership,
     TenantUser,
+    DeploymentHost,
 )
 
 basic_auth = HTTPBasic(auto_error=False)
@@ -70,6 +72,12 @@ class AuthenticatedPrincipal:
             if membership.tenant_id == tenant_id:
                 return membership
         return None
+
+
+@dataclass(frozen=True)
+class DeploymentHostPrincipal:
+    host_id: str
+    label: str
 
 
 def _resolve_admin_password_hash(*, session: Session) -> str | None:
@@ -221,6 +229,21 @@ def require_admin(
     if not principal.is_platform_super_admin or principal.username is None:
         raise _admin_unauthorized("Admin authentication required")
     return principal.username
+
+
+def require_deployment_host_agent(
+    bearer_credentials: HTTPAuthorizationCredentials | None = Depends(bearer_auth),
+    session: Session = Depends(get_session),
+) -> DeploymentHostPrincipal:
+    if bearer_credentials is None or bearer_credentials.scheme.lower() != "bearer":
+        raise _admin_unauthorized("Deployment host authentication required")
+    token_hash = hash_deployment_host_token(bearer_credentials.credentials)
+    host = session.execute(
+        select(DeploymentHost).where(DeploymentHost.access_token_hash == token_hash)
+    ).scalar_one_or_none()
+    if host is None:
+        raise _admin_unauthorized("Invalid deployment host credentials")
+    return DeploymentHostPrincipal(host_id=host.host_id, label=host.label)
 
 
 def require_tenant_permission(

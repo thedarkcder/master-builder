@@ -35,6 +35,7 @@ from orchestrator.core.communications import (
     IngressResult,
     TransportEnvelope,
 )
+from orchestrator.core.deployment_runtime import ingest_coolify_deployment_event
 from orchestrator.core.github.transport_executor import GitHubTransportExecutor
 from orchestrator.core.project_automation_execution_service import (
     mark_project_automation_execution_failure,
@@ -42,6 +43,7 @@ from orchestrator.core.project_automation_execution_service import (
     prepare_project_automation_execution,
 )
 from orchestrator.core.webhook_job_queue import (
+    WEBHOOK_TRANSPORT_COOLIFY_DEPLOYMENT,
     WEBHOOK_TRANSPORT_DISCORD_COMMAND,
     WEBHOOK_TRANSPORT_DISCORD_INTERACTION,
     WEBHOOK_TRANSPORT_GITHUB,
@@ -58,6 +60,46 @@ from orchestrator.core.config import Settings
 from orchestrator.storage.models import Project, Tenant
 
 logger = logging.getLogger(__name__)
+
+
+def _process_coolify_deployment_job(
+    *,
+    session: Session,
+    owner_id: str,
+    claimed_job: WebhookJob,
+) -> tuple[WebhookJob, ...]:
+    if not claimed_job.tenant_id:
+        return mark_webhook_jobs_failed(
+            session,
+            jobs=(claimed_job,),
+            owner_id=owner_id,
+            error="Coolify deployment webhook job is missing tenant_id",
+        )
+    if not claimed_job.project_id:
+        return mark_webhook_jobs_failed(
+            session,
+            jobs=(claimed_job,),
+            owner_id=owner_id,
+            error="Coolify deployment webhook job is missing project_id",
+        )
+
+    tenant = session.get(Tenant, claimed_job.tenant_id)
+    project = session.get(Project, claimed_job.project_id)
+    if tenant is None or not tenant.is_enabled:
+        return mark_webhook_jobs_done(session, jobs=(claimed_job,), owner_id=owner_id)
+    if project is None or project.tenant_id != tenant.tenant_id or bool(getattr(project, "is_archived", False)):
+        return mark_webhook_jobs_done(session, jobs=(claimed_job,), owner_id=owner_id)
+
+    context_json = dict(claimed_job.context_json or {})
+    payload_json = dict(claimed_job.payload_json or {})
+    ingest_coolify_deployment_event(
+        session=session,
+        tenant_id=tenant.tenant_id,
+        project_id=project.project_id,
+        webhook_token=str(context_json.get("webhook_token") or "").strip(),
+        payload=payload_json,
+    )
+    return mark_webhook_jobs_done(session, jobs=(claimed_job,), owner_id=owner_id)
 
 def _rollback_job_session(
     session: Session,
@@ -504,6 +546,12 @@ def process_next_webhook_job(
             processed = _process_project_automation_job(
                 session=session,
                 settings=settings,
+                owner_id=owner_id,
+                claimed_job=job,
+            )
+        elif job.transport == WEBHOOK_TRANSPORT_COOLIFY_DEPLOYMENT:
+            processed = _process_coolify_deployment_job(
+                session=session,
                 owner_id=owner_id,
                 claimed_job=job,
             )

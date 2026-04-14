@@ -145,6 +145,12 @@ class CliEntrypointTests(unittest.TestCase):
         self.assertEqual(child_mock.call_args_list[0].kwargs, {"mode": "runs"})
         self.assertEqual(child_mock.call_args_list[1].kwargs, {"mode": "webhooks"})
 
+    def test_deployment_host_agent_command_invokes_runtime(self) -> None:
+        with patch("orchestrator.cli.run_deployment_host_agent") as runtime_mock:
+            exit_code = cli_main(["deployment-host-agent"])
+        self.assertEqual(exit_code, 0)
+        runtime_mock.assert_called_once_with()
+
     def test_python_m_orchestrator_cli_executes_module_entrypoint(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         result = subprocess.run(

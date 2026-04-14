@@ -108,6 +108,16 @@ class Settings(BaseSettings):
     project_automation_interval_seconds: int = 30
     deployment_reconcile_poll_seconds: int = 30
     deployment_reconcile_batch_size: int = 25
+    deployment_host_stale_timeout_seconds: int = 180
+    deployment_host_agent_api_base_url: str = ""
+    deployment_host_agent_bootstrap_token: str = ""
+    deployment_host_agent_access_token: str = ""
+    deployment_host_agent_access_token_path: str = ""
+    deployment_host_agent_capabilities: str = "restore_database,postgres,mysql,mariadb"
+    deployment_host_agent_poll_seconds: int = 5
+    deployment_host_agent_heartbeat_interval_seconds: int = 30
+    deployment_host_agent_command_timeout_seconds: int = 900
+    deployment_host_agent_container_runtime_command: str = "docker"
     workflow_orchestrated_run_timeout_minutes: int = 90
     run_events_initial_limit: int = 100
     run_logs_initial_limit: int = 200

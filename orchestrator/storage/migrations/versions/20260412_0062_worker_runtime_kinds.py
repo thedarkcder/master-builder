@@ -18,6 +18,11 @@ depends_on = None
 
 
 def upgrade() -> None:
+    inspector = sa.inspect(op.get_bind())
+    worker_columns = {column["name"] for column in inspector.get_columns("worker_runtime_states")}
+    if "runtime_kinds_json" in worker_columns:
+        return
+
     with op.batch_alter_table("worker_runtime_states") as batch_op:
         batch_op.add_column(
             sa.Column(

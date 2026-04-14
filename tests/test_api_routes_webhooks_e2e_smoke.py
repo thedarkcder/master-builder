@@ -437,10 +437,10 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 auth=admin,
             ),
             ("POST", "/api/admin/workflows/{workflow_id}/attempts"): RouteScenario(
-                path="/api/admin/workflows/workflow-e2e/attempts",
+                path="/api/admin/workflows/workflow-missing/attempts",
                 auth=admin,
                 json={"mode": "resume", "checkpoint_kind": "pm"},
-                expected_statuses=(201, 409),
+                expected_statuses=(404,),
             ),
             ("POST", "/api/admin/runs/{run_id}/cancel"): RouteScenario(
                 path="/api/admin/runs/run-e2e/cancel",
@@ -488,9 +488,67 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 },
                 expected_statuses=(200,),
             ),
+            ("GET", "/api/admin/deployment-hosts"): RouteScenario(
+                path="/api/admin/deployment-hosts",
+                auth=admin,
+            ),
+            ("POST", "/api/admin/deployment-hosts"): RouteScenario(
+                path="/api/admin/deployment-hosts",
+                auth=admin,
+                json={
+                    "label": "Smoke Host",
+                    "provider": "internal_coolify",
+                    "infrastructure_provider": "hetzner",
+                    "region": "eu-west",
+                    "capabilities": ["restore_database", "postgres"],
+                },
+                expected_statuses=(201,),
+            ),
+            ("GET", "/api/admin/deployment-hosts/{host_id}"): RouteScenario(
+                path="/api/admin/deployment-hosts/host-missing",
+                auth=admin,
+                expected_statuses=(404,),
+            ),
             ("GET", "/api/admin/tenants/{tenant_id}/deployments/overview"): RouteScenario(
                 path="/api/admin/tenants/route25/deployments/overview",
                 auth=admin,
+            ),
+            ("POST", "/api/internal/deployment-hosts/register"): RouteScenario(
+                path="/api/internal/deployment-hosts/register",
+                json={
+                    "bootstrap_token": "invalid-bootstrap-token",
+                    "agent_version": "1.0.0",
+                    "advertised_capabilities": ["restore_database", "postgres"],
+                },
+                expected_statuses=(401,),
+            ),
+            ("POST", "/api/internal/deployment-hosts/heartbeat"): RouteScenario(
+                path="/api/internal/deployment-hosts/heartbeat",
+                json={
+                    "state": "active",
+                    "agent_version": "1.0.0",
+                    "advertised_capabilities": ["restore_database", "postgres"],
+                },
+                expected_statuses=(401,),
+            ),
+            ("POST", "/api/internal/deployment-hosts/commands/claim"): RouteScenario(
+                path="/api/internal/deployment-hosts/commands/claim",
+                expected_statuses=(401,),
+            ),
+            ("POST", "/api/internal/deployment-hosts/commands/{command_id}/start"): RouteScenario(
+                path="/api/internal/deployment-hosts/commands/command-missing/start",
+                json={"claim_id": "claim-missing"},
+                expected_statuses=(401,),
+            ),
+            ("POST", "/api/internal/deployment-hosts/commands/{command_id}/result"): RouteScenario(
+                path="/api/internal/deployment-hosts/commands/command-missing/result",
+                json={
+                    "claim_id": "claim-missing",
+                    "status": "failed",
+                    "result": {},
+                    "last_error": "missing auth",
+                },
+                expected_statuses=(401,),
             ),
             ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps"): RouteScenario(
                 path="/api/admin/tenants/route25/projects/route25-default/apps",
@@ -624,7 +682,27 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
             ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-backups/restore"): RouteScenario(
                 path="/api/admin/tenants/route25/projects/route25-default/apps/app-missing/deployment-backups/restore",
                 auth=admin,
-                json={"backup_key": "daily"},
+                json={
+                    "backup_key": "daily",
+                    "resource_key": "db",
+                    "execution_uuid": "execution-1",
+                    "confirmation_value": "app-missing",
+                },
+                expected_statuses=(404,),
+            ),
+            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-backups/executions"): RouteScenario(
+                path="/api/admin/tenants/route25/projects/route25-default/apps/app-missing/deployment-backups/executions?backup_key=daily",
+                auth=admin,
+                expected_statuses=(404,),
+            ),
+            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-backups/restore-runs"): RouteScenario(
+                path="/api/admin/tenants/route25/projects/route25-default/apps/app-missing/deployment-backups/restore-runs",
+                auth=admin,
+                expected_statuses=(404,),
+            ),
+            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-backups/restore-runs/{restore_run_id}"): RouteScenario(
+                path="/api/admin/tenants/route25/projects/route25-default/apps/app-missing/deployment-backups/restore-runs/restore-missing",
+                auth=admin,
                 expected_statuses=(404,),
             ),
             ("GET", "/api/admin/tenants/{tenant_id}/delivery-summary"): RouteScenario(
@@ -634,6 +712,16 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
             ("GET", "/api/admin/observability/platform"): RouteScenario(
                 path="/api/admin/observability/platform",
                 auth=admin,
+            ),
+            ("POST", "/api/admin/workers/{service_instance_id}/runtime-dependencies/{runtime_kind}/login-session"): RouteScenario(
+                path="/api/admin/workers/worker-missing/runtime-dependencies/github/login-session",
+                auth=admin,
+                expected_statuses=(400, 404),
+            ),
+            ("GET", "/api/admin/workers/runtime-auth-requests/{request_id}"): RouteScenario(
+                path="/api/admin/workers/runtime-auth-requests/request-missing",
+                auth=admin,
+                expected_statuses=(404,),
             ),
             ("GET", "/api/admin/observability/webhook-jobs"): RouteScenario(
                 path="/api/admin/observability/webhook-jobs?tenant_id=route25&project_id=route25-default&limit=25&offset=0",
