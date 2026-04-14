@@ -1,21 +1,11 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import and_, desc, or_, select
 from fastapi import HTTPException, status
 
-from orchestrator.core.decision_engine import resolve_enqueue_precheck_outcome
-from orchestrator.core.project_policy import resolve_effective_policy
-from orchestrator.core.runs import (
-    RUN_DEDUPE_SCOPE_ISSUE_EXECUTION,
-    RunBootstrap,
-    RunStateTransitionError,
-    cancel_run,
-    enqueue_run,
-)
-from orchestrator.core.communications.enqueue_reason_contract import format_enqueue_conflict_detail
-from orchestrator.storage.models import AgentLifecycleEvent, RunLogEvent
+from orchestrator.storage.models import AgentLifecycleEvent, RunLogEvent, WorkflowExecution
 
 
 def _with_issue_url(payload, issue_url: str | None):  # noqa: ANN001
@@ -28,71 +18,6 @@ def _with_issue_url(payload, issue_url: str | None):  # noqa: ANN001
     if hasattr(payload, "issue_url"):
         payload.issue_url = issue_url
     return payload
-
-
-def _copy_trigger_context(plan: object | None) -> dict[str, object]:
-    if not isinstance(plan, dict):
-        return {}
-    trigger_context = plan.get("trigger_context")
-    return dict(trigger_context) if isinstance(trigger_context, dict) else {}
-
-
-def _build_rerun_bootstrap(
-    *,
-    source_run,
-    normalized_mode: str,
-    normalized_resume_stage: str | None,
-) -> RunBootstrap:  # noqa: ANN001
-    source_plan = source_run.plan if isinstance(source_run.plan, dict) else {}
-    next_trigger_context = _copy_trigger_context(source_plan)
-    next_trigger_context["rerun_mode"] = normalized_mode
-    source_branch = str(getattr(source_run, "branch", "") or "").strip() or None
-    bootstrap_kwargs: dict[str, object] = {"branch": source_branch}
-
-    if normalized_mode == "resume":
-        session_by_stage = {
-            "orchestrated": str(source_run.orchestrated_session_id or "").strip() or None,
-            "pm": str(source_run.pm_session_id or "").strip() or None,
-            "dev": str(source_run.dev_session_id or "").strip() or None,
-            "review": str(source_run.dev_session_id or "").strip() or None,
-        }
-        if normalized_resume_stage not in session_by_stage:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid resume stage")
-        selected_session_id = session_by_stage[normalized_resume_stage]
-        if not selected_session_id:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"No persisted {normalized_resume_stage} session is available for this run",
-            )
-        next_trigger_context["resume_stage"] = normalized_resume_stage
-        next_trigger_context["resume_session_id"] = selected_session_id
-        next_trigger_context["resume_source_run_id"] = source_run.run_id
-        if normalized_resume_stage in {"dev", "review"}:
-            source_plan_payload = source_plan.get("plan")
-            if not isinstance(source_plan_payload, dict):
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail=f"No persisted PM plan is available for a {normalized_resume_stage}-stage resume",
-                )
-            next_trigger_context["resume_source_plan"] = dict(source_plan_payload)
-            bootstrap_kwargs["dev_session_id"] = selected_session_id
-            if normalized_resume_stage == "review":
-                next_trigger_context["resume_source_state"] = dict(source_plan)
-        elif normalized_resume_stage == "pm":
-            bootstrap_kwargs["pm_session_id"] = selected_session_id
-        else:
-            bootstrap_kwargs["orchestrated_session_id"] = selected_session_id
-    else:
-        next_trigger_context.pop("resume_stage", None)
-        next_trigger_context.pop("resume_session_id", None)
-        next_trigger_context.pop("resume_source_run_id", None)
-        next_trigger_context.pop("resume_source_plan", None)
-        next_trigger_context.pop("resume_source_state", None)
-
-    return RunBootstrap(
-        plan={"trigger_context": next_trigger_context},
-        **bootstrap_kwargs,
-    )
 
 
 def list_runs(
@@ -165,86 +90,38 @@ def get_run(*, session, run_id: str, run_model, run_to_schema_fn, tenant_model, 
     return _with_issue_url(payload, issue_url)
 
 
-def rerun_run(
-    *,
-    session,
-    run_id: str,
-    mode: str,
-    resume_stage: str | None,
-    run_model,
-    tenant_model,
-    resolve_project_for_run_fn,
-    run_to_schema_fn,
-):  # noqa: ANN001
-    source_run = session.get(run_model, run_id)
-    if source_run is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
-    tenant = session.get(tenant_model, source_run.tenant_id)
-    if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found for run")
-    project = resolve_project_for_run_fn(session, run=source_run)
-    if project is None:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="No active project mapping found for run")
-    archived = bool(getattr(project, "is_archived", False))
-    if archived:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Project {project.project_id} is archived")
-    effective_policy = resolve_effective_policy(
-        tenant_policy=tenant.policy_config,
-        project_overrides=project.policy_overrides,
-    )
-    normalized_mode = str(mode or "fresh").strip().lower()
-    normalized_resume_stage = str(resume_stage or "").strip().lower() or None
-    enqueue_result = enqueue_run(
-        session,
-        tenant_id=source_run.tenant_id,
-        project_id=project.project_id,
-        issue_key=source_run.issue_key,
-        issue_summary=source_run.issue_summary,
-        issue_description=source_run.issue_description,
-        repo_url=project.github_repository,
-        delivery_id=None,
-        precheck_outcome=resolve_enqueue_precheck_outcome(
-            source="admin_rerun",
-            precheck_source_plan=source_run.plan,
-            issue_summary=source_run.issue_summary,
-            issue_description=source_run.issue_description,
-        ),
-        precheck_source_plan=source_run.plan,
-        max_concurrent_runs=effective_policy.get("max_concurrent_runs"),
-        dedupe_scope=RUN_DEDUPE_SCOPE_ISSUE_EXECUTION,
-        bootstrap=_build_rerun_bootstrap(
-            source_run=source_run,
-            normalized_mode=normalized_mode,
-            normalized_resume_stage=normalized_resume_stage,
-        ),
-    )
-    if not enqueue_result.enqueued:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=format_enqueue_conflict_detail(
-                prefix="Run could not be rerun",
-                enqueue_reason=str(enqueue_result.reason),
-                enqueue_run_obj=enqueue_result.run,
-            ),
-        )
-    session.refresh(enqueue_result.run)
-    return run_to_schema_fn(enqueue_result.run)
-
-
 def cancel_run_admin(
     *,
     session,
     run_id: str,
+    run_model,
     run_to_schema_fn,
     cancelled_by: str = "admin",
 ):  # noqa: ANN001
-    try:
-        cancelled = cancel_run(session, run_id=run_id, cancelled_by=cancelled_by)
-    except RunStateTransitionError as exc:
-        message = str(exc)
-        status_code = status.HTTP_404_NOT_FOUND if "Run not found" in message else status.HTTP_409_CONFLICT
-        raise HTTPException(status_code=status_code, detail=message) from exc
-    return run_to_schema_fn(cancelled)
+    run = session.get(run_model, run_id)
+    if run is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+    if run.status in {"succeeded", "failed", "cancelled"}:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Cannot cancel run {run_id} from terminal status {run.status}",
+        )
+    workflow = session.get(WorkflowExecution, run.workflow_id)
+    if workflow is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow not found for run")
+
+    now = datetime.now(timezone.utc)
+    run.status = "cancelled"
+    run.last_error = f"Cancelled by {cancelled_by}"
+    run.started_at = run.started_at or now
+    run.finished_at = now
+    workflow.status = "cancelled"
+    workflow.last_error = run.last_error
+    workflow.finished_at = now
+    workflow.updated_at = now
+    session.commit()
+    session.refresh(run)
+    return run_to_schema_fn(run)
 
 
 def list_run_events(*, session, run_id: str, run_model, run_event_schema_cls, limit: int = 200):  # noqa: ANN001

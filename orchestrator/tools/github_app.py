@@ -905,28 +905,7 @@ class GitHubAppClient:
         pr_number: int,
         content: str,
     ) -> CommentReactionResult:
-        actor_login = self.get_actor_login()
-        existing = self.list_pull_request_reactions(
-            repo_full_name=repo_full_name,
-            pr_number=pr_number,
-        )
-        matching = [
-            reaction
-            for reaction in existing
-            if reaction.user_login == actor_login
-        ]
-        for reaction in matching:
-            if reaction.content != content:
-                self.delete_issue_reaction(
-                    repo_full_name=repo_full_name,
-                    reaction_id=reaction.reaction_id,
-                )
-        existing_desired = next((reaction for reaction in matching if reaction.content == content), None)
-        if existing_desired is not None:
-            return CommentReactionResult(
-                reaction_id=existing_desired.reaction_id,
-                content=existing_desired.content,
-            )
+        # Installation tokens cannot call GET /user. Use idempotent create-reaction behavior instead.
         return self.add_pull_request_reaction(
             repo_full_name=repo_full_name,
             pr_number=pr_number,

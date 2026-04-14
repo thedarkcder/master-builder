@@ -1,49 +1,98 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from dataclasses import dataclass
 
-DEFAULT_WORKER_CAPABILITY = "linux"
+from orchestrator.core.worker_capability_normalization import DEFAULT_WORKER_CAPABILITY
+from orchestrator.core.worker_capability_normalization import WorkerCapability
+from orchestrator.core.worker_capability_normalization import WorkerCapabilitiesInput
+from orchestrator.core.worker_capability_normalization import parse_worker_capability
+from orchestrator.core.worker_capability_normalization import parse_worker_capabilities_or_raise
+from orchestrator.core.worker_capability_normalization import parse_worker_capabilities_with_diagnostics
 WORKER_CAPABILITY_LABEL_PREFIX = "worker:"
 
-KNOWN_WORKER_CAPABILITIES = {
-    "linux",
-    "macos",
-}
+
+@dataclass(frozen=True)
+class WorkerLabelParseResult:
+    selected_capability: WorkerCapability | None
+    invalid_labels: tuple[str, ...]
+    conflicting_capabilities: tuple[WorkerCapability, ...]
 
 
-def normalize_worker_capability(value: object) -> str | None:
-    normalized = str(value or "").strip().lower()
-    if not normalized:
-        return None
-    if normalized in {"mac", "darwin", "osx", "macos"}:
-        return "macos"
-    if normalized in {"linux", "ubuntu", "debian", "alpine"}:
-        return "linux"
-    if normalized in KNOWN_WORKER_CAPABILITIES:
-        return normalized
-    return None
+@dataclass(frozen=True)
+class WorkerCapabilityContext:
+    current: WorkerCapability
+    available: tuple[WorkerCapability, ...]
+
+    @property
+    def current_value(self) -> str:
+        return self.current.value
+
+    @property
+    def available_values(self) -> tuple[str, ...]:
+        return tuple(capability.value for capability in self.available)
 
 
-def worker_label_for_capability(capability: str) -> str:
-    normalized = normalize_worker_capability(capability) or DEFAULT_WORKER_CAPABILITY
-    return f"{WORKER_CAPABILITY_LABEL_PREFIX}{normalized}"
+def resolve_worker_capability_context(*, raw_value: WorkerCapabilitiesInput, source: str) -> WorkerCapabilityContext:
+    parsed = sorted(
+        parse_worker_capabilities_or_raise(raw_value, source=source),
+        key=lambda capability: capability.value,
+    )
+    if not parsed:
+        parsed = [DEFAULT_WORKER_CAPABILITY]
+    return WorkerCapabilityContext(
+        current=parsed[0],
+        available=tuple(parsed),
+    )
 
 
-def parse_worker_capabilities(raw_value: object) -> set[str]:
-    if isinstance(raw_value, str):
-        values = [item.strip() for item in raw_value.split(",")]
-    elif isinstance(raw_value, Iterable):
-        values = [str(item).strip() for item in raw_value]
-    else:
-        values = []
-    normalized = {
-        cap
-        for cap in (normalize_worker_capability(item) for item in values)
-        if cap is not None
-    }
-    if not normalized:
-        normalized.add(DEFAULT_WORKER_CAPABILITY)
-    return normalized
+def worker_label_for_capability(capability: object) -> str:
+    parsed = parse_worker_capability(capability)
+    if parsed is None:
+        raise ValueError(f"Unsupported worker capability '{capability}'")
+    return f"{WORKER_CAPABILITY_LABEL_PREFIX}{parsed.value}"
+
+
+def parse_worker_capabilities(raw_value: WorkerCapabilitiesInput) -> set[WorkerCapability]:
+    if isinstance(raw_value, Iterable) and not isinstance(raw_value, str):
+        values = [item for item in raw_value if isinstance(item, str)]
+        return set(parse_worker_capabilities_with_diagnostics(values).capabilities)
+    return set(parse_worker_capabilities_with_diagnostics(raw_value).capabilities)
+
+
+def parse_worker_capabilities_strict(raw_value: WorkerCapabilitiesInput, *, source: str) -> set[WorkerCapability]:
+    return parse_worker_capabilities_or_raise(raw_value, source=source)
+
+
+def parse_worker_capabilities_diagnostics(
+    raw_value: WorkerCapabilitiesInput,
+) -> tuple[set[WorkerCapability], tuple[str, ...]]:
+    parsed = parse_worker_capabilities_with_diagnostics(raw_value)
+    return set(parsed.capabilities), parsed.invalid_tokens
+
+
+def parse_worker_capability_labels(
+    issue_labels: list[str] | None,
+) -> WorkerLabelParseResult:
+    invalid_labels: list[str] = []
+    valid_capabilities: set[WorkerCapability] = set()
+    for raw_label in issue_labels or []:
+        label = str(raw_label).strip()
+        if not label.startswith(WORKER_CAPABILITY_LABEL_PREFIX):
+            continue
+        suffix = label.split(":", 1)[1].strip()
+        parsed = parse_worker_capability(suffix)
+        if parsed is None:
+            invalid_labels.append(label)
+            continue
+        valid_capabilities.add(parsed)
+    conflicting = tuple(sorted(valid_capabilities, key=lambda capability: capability.value))
+    selected: WorkerCapability | None = conflicting[0] if len(conflicting) == 1 else None
+    return WorkerLabelParseResult(
+        selected_capability=selected,
+        invalid_labels=tuple(sorted(set(invalid_labels))),
+        conflicting_capabilities=conflicting if len(conflicting) > 1 else (),
+    )
 
 
 def infer_required_worker_capability(
@@ -63,18 +112,11 @@ def infer_required_worker_capability(
     _ = issue_key
     _ = run_id
     normalized_labels = [str(label).strip() for label in (issue_labels or []) if str(label).strip()]
-    for label in normalized_labels:
-        if not label.lower().startswith(f"{WORKER_CAPABILITY_LABEL_PREFIX}"):
-            continue
-        requested = normalize_worker_capability(label.split(":", 1)[1])
-        if requested is not None:
-            return requested
-    return DEFAULT_WORKER_CAPABILITY
+    label_parse = parse_worker_capability_labels(normalized_labels)
+    if label_parse.selected_capability is not None:
+        return label_parse.selected_capability.value
+    return ""
 
 
-def required_worker_capability_for_run(run) -> str | None:  # noqa: ANN001
-    plan = run.plan if isinstance(run.plan, dict) else {}
-    plan_required = normalize_worker_capability(plan.get("required_worker_capability"))
-    if plan_required is not None:
-        return plan_required
-    return None
+def required_worker_capability_for_run(run) -> WorkerCapability | None:  # noqa: ANN001
+    return parse_worker_capability(getattr(run, "required_worker_capability", None))

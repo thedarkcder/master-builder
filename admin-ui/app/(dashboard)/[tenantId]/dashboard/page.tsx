@@ -16,9 +16,9 @@ import {
 import { useAuth } from "@/components/auth-provider";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { formatTimestamp } from "@/lib/datetime";
 import {
   getTenant,
   getTenantDeliverySummary,
@@ -100,12 +100,7 @@ export default function TenantDashboardPage() {
 
   return (
     <div className="space-y-6">
-      {/* Page header */}
-      <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-xl font-semibold">{tenant?.name ?? tenantId}</h1>
-          <p className="text-sm text-muted-foreground">Tenant workspace overview.</p>
-        </div>
+      <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
         <Button variant="outline" size="sm" onClick={() => void loadData()} disabled={loading}>
           <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
           Refresh
@@ -113,135 +108,104 @@ export default function TenantDashboardPage() {
       </div>
 
       {errorMessage ? (
-        <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-5 py-4 text-sm leading-relaxed text-destructive break-words">
+        <div className="rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
           {errorMessage}
         </div>
       ) : null}
 
-      {/* Connection status strip */}
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-sm font-medium text-muted-foreground uppercase tracking-wide">
-            Connection Status
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          {loading ? (
-            <div className="flex gap-8">
-              <Skeleton className="h-8 w-32" />
-              <Skeleton className="h-8 w-32" />
-              <Skeleton className="h-8 w-32" />
-            </div>
-          ) : (
-            <div className="flex flex-wrap gap-8">
-              <ConnectionIndicator
-                label="Tenant"
-                connected={tenant?.is_enabled ?? false}
-                detail={tenant?.is_enabled ? "Enabled" : "Disabled"}
-              />
-              <ConnectionIndicator
-                label="Jira"
-                connected={Boolean(tenant?.jira.connection_id)}
-                detail={tenant?.jira.connection_id ? "Connected" : "Not connected"}
-              />
-              <ConnectionIndicator
-                label="GitHub"
-                connected={Boolean(tenant?.github.installation_id)}
-                detail={tenant?.github.installation_id ? `Install #${tenant.github.installation_id}` : "Not installed"}
-              />
-            </div>
-          )}
-        </CardContent>
-      </Card>
+      <div className="overflow-hidden rounded-2xl border bg-background">
+        <div className="p-5">
+          <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Connection Status</p>
+          <div className="mt-3">
+            {loading ? (
+              <div className="flex gap-8">
+                <Skeleton className="h-8 w-32" />
+                <Skeleton className="h-8 w-32" />
+                <Skeleton className="h-8 w-32" />
+              </div>
+            ) : (
+              <div className="flex flex-wrap gap-8">
+                <ConnectionIndicator
+                  label="Tenant"
+                  connected={tenant?.is_enabled ?? false}
+                  detail={tenant?.is_enabled ? "Enabled" : "Disabled"}
+                />
+                <ConnectionIndicator
+                  label="Jira"
+                  connected={Boolean(tenant?.jira.connection_id)}
+                  detail={tenant?.jira.connection_id ? "Connected" : "Not connected"}
+                />
+                <ConnectionIndicator
+                  label="GitHub"
+                  connected={Boolean(tenant?.github.installation_id)}
+                  detail={tenant?.github.installation_id ? `Install #${tenant.github.installation_id}` : "Not installed"}
+                />
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
 
-      {/* Quick actions */}
       <div className="grid gap-3 sm:grid-cols-3">
         <Link href={isPlatformAdmin ? `/${encodeURIComponent(tenantId)}/runs` : analyticsHref}>
-          <Card className="cursor-pointer transition-shadow hover:shadow-md">
-            <CardContent className="flex items-center gap-3 p-4">
-              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10">
-                <Activity className="h-4 w-4 text-primary" />
-              </div>
-              <div>
-                <p className="text-sm font-medium">{quickActionLabel}</p>
-                <p className="text-xs text-muted-foreground">{quickActionDetail}</p>
-              </div>
-            </CardContent>
-          </Card>
+          <div className="flex items-center gap-3 rounded-2xl border bg-background p-4 transition-colors hover:bg-muted/30">
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10">
+              <Activity className="h-4 w-4 text-primary" />
+            </div>
+            <div>
+              <p className="text-sm font-medium">{quickActionLabel}</p>
+              <p className="text-xs text-muted-foreground">{quickActionDetail}</p>
+            </div>
+          </div>
         </Link>
         <Link href={analyticsHref}>
-          <Card className="cursor-pointer transition-shadow hover:shadow-md">
-            <CardContent className="flex items-center gap-3 p-4">
-              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-info/10">
-                <BarChart3 className="h-4 w-4 text-info" />
-              </div>
-              <div>
-                <p className="text-sm font-medium">Analytics</p>
-                <p className="text-xs text-muted-foreground">
-                  {isPlatformAdmin || membership?.effective_mode === "technical"
-                    ? "Token usage & trends"
-                    : "Delivery progress & trends"}
-                </p>
-              </div>
-            </CardContent>
-          </Card>
+          <div className="flex items-center gap-3 rounded-2xl border bg-background p-4 transition-colors hover:bg-muted/30">
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-info/10">
+              <BarChart3 className="h-4 w-4 text-info" />
+            </div>
+            <div>
+              <p className="text-sm font-medium">Analytics</p>
+              <p className="text-xs text-muted-foreground">
+                {isPlatformAdmin || membership?.effective_mode === "technical"
+                  ? "Token usage & trends"
+                  : "Delivery progress & trends"}
+              </p>
+            </div>
+          </div>
         </Link>
         <Link href={`/${encodeURIComponent(tenantId)}/settings/integrations`}>
-          <Card className="cursor-pointer transition-shadow hover:shadow-md">
-            <CardContent className="flex items-center gap-3 p-4">
-              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-muted">
-                <Settings2 className="h-4 w-4 text-muted-foreground" />
-              </div>
-              <div>
-                <p className="text-sm font-medium">Settings</p>
-                <p className="text-xs text-muted-foreground">Integrations & config</p>
-              </div>
-            </CardContent>
-          </Card>
+          <div className="flex items-center gap-3 rounded-2xl border bg-background p-4 transition-colors hover:bg-muted/30">
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-muted">
+              <Settings2 className="h-4 w-4 text-muted-foreground" />
+            </div>
+            <div>
+              <p className="text-sm font-medium">Settings</p>
+              <p className="text-xs text-muted-foreground">Integrations & config</p>
+            </div>
+          </div>
         </Link>
       </div>
 
       {!isPlatformAdmin && summary ? (
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-          <Card>
-            <CardContent className="p-4">
-              <p className="text-xs uppercase tracking-wide text-muted-foreground">Completed</p>
-              <p className="mt-2 text-2xl font-semibold">{summary.completed_count}</p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="p-4">
-              <p className="text-xs uppercase tracking-wide text-muted-foreground">In Review</p>
-              <p className="mt-2 text-2xl font-semibold">{summary.in_review_count}</p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="p-4">
-              <p className="text-xs uppercase tracking-wide text-muted-foreground">Blocked</p>
-              <p className="mt-2 text-2xl font-semibold">{summary.blocked_count}</p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="p-4">
-              <p className="text-xs uppercase tracking-wide text-muted-foreground">Queued</p>
-              <p className="mt-2 text-2xl font-semibold">{summary.queued_count}</p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="p-4">
-              <p className="text-xs uppercase tracking-wide text-muted-foreground">Cycle Time</p>
-              <p className="mt-2 text-2xl font-semibold">
-                {summary.median_cycle_time_hours == null ? "—" : `${summary.median_cycle_time_hours}h`}
-              </p>
-            </CardContent>
-          </Card>
+          {[
+            { label: "Completed", value: summary.completed_count },
+            { label: "In Review", value: summary.in_review_count },
+            { label: "Blocked", value: summary.blocked_count },
+            { label: "Queued", value: summary.queued_count },
+            { label: "Cycle Time", value: summary.median_cycle_time_hours == null ? "—" : `${summary.median_cycle_time_hours}h` },
+          ].map((item) => (
+            <div key={item.label} className="rounded-xl border bg-background px-4 py-3">
+              <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">{item.label}</p>
+              <p className="mt-2 text-2xl font-semibold">{item.value}</p>
+            </div>
+          ))}
         </div>
       ) : null}
 
-      {/* Recent activity */}
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
-          <CardTitle className="text-base">{isPlatformAdmin ? "Recent Runs" : "Recent Delivery"}</CardTitle>
+      <div className="overflow-hidden rounded-2xl border bg-background">
+        <div className="flex items-center justify-between p-5 pb-0">
+          <h2 className="text-base font-semibold">{isPlatformAdmin ? "Recent Runs" : "Recent Delivery"}</h2>
           <Button asChild variant="ghost" size="sm">
             <Link
               href={isPlatformAdmin ? `/${encodeURIComponent(tenantId)}/runs` : analyticsHref}
@@ -250,15 +214,15 @@ export default function TenantDashboardPage() {
               View all →
             </Link>
           </Button>
-        </CardHeader>
-        <CardContent className="p-0">
+        </div>
+        <div className="mt-4">
           {loading ? (
-            <div className="space-y-2 px-6 pb-6">
+            <div className="space-y-2 px-5 pb-5">
               {[...Array(4)].map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}
             </div>
           ) : isPlatformAdmin ? (
             runs.length === 0 ? (
-              <p className="px-6 pb-6 text-sm text-muted-foreground">No runs found for this tenant.</p>
+              <p className="px-5 pb-5 text-sm text-muted-foreground">No runs found for this tenant.</p>
             ) : (
               <Table>
                 <TableHeader>
@@ -296,7 +260,7 @@ export default function TenantDashboardPage() {
                         )}
                       </TableCell>
                       <TableCell className="text-muted-foreground text-sm">
-                        {new Date(run.created_at).toLocaleString()}
+                        {formatTimestamp(run.created_at)}
                       </TableCell>
                     </TableRow>
                   ))}
@@ -304,7 +268,7 @@ export default function TenantDashboardPage() {
               </Table>
             )
           ) : timeline.length === 0 ? (
-            <p className="px-6 pb-6 text-sm text-muted-foreground">No recent delivery activity yet.</p>
+            <p className="px-5 pb-5 text-sm text-muted-foreground">No recent delivery activity yet.</p>
           ) : (
             <Table>
               <TableHeader>
@@ -325,15 +289,15 @@ export default function TenantDashboardPage() {
                     </TableCell>
                     <TableCell><StatusBadge status={item.status} /></TableCell>
                     <TableCell className="text-sm text-muted-foreground">
-                      {item.completed_at ? new Date(item.completed_at).toLocaleString() : "—"}
+                      {formatTimestamp(item.completed_at, "—")}
                     </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
             </Table>
           )}
-        </CardContent>
-      </Card>
+        </div>
+      </div>
     </div>
   );
 }

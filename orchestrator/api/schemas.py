@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, Field, field_validator, model_serializer
+from pydantic import BaseModel, Field, field_validator, model_serializer, model_validator
 
 from orchestrator.core.agent_execution_profiles import (
     normalize_execution_profile_routing,
@@ -464,6 +464,57 @@ class ProjectRead(BaseModel):
     is_archived: bool
     created_at: datetime
     updated_at: datetime
+
+
+class ProjectInstallWrite(BaseModel):
+    kind: str = Field(min_length=1)
+    label: str = Field(min_length=1)
+    enabled: bool = True
+    config: dict = Field(default_factory=dict)
+    binding_names: list[str] = Field(default_factory=list)
+
+
+class ProjectInstallRead(BaseModel):
+    install_id: str
+    tenant_id: str
+    project_id: str
+    kind: str
+    label: str
+    enabled: bool
+    config: dict = Field(default_factory=dict)
+    binding_names: list[str] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
+
+
+class ProjectInstallsRead(BaseModel):
+    installs: list[ProjectInstallRead] = Field(default_factory=list)
+
+
+class ProjectInstallRequestRead(BaseModel):
+    request_id: str
+    tenant_id: str
+    project_id: str
+    workflow_id: str | None = None
+    run_id: str | None = None
+    issue_key: str
+    kind: str
+    label: str
+    reason: str
+    suggested_config: dict = Field(default_factory=dict)
+    required_bindings: list[str] = Field(default_factory=list)
+    status: str
+    request_kind: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class ProjectInstallRequestsRead(BaseModel):
+    requests: list[ProjectInstallRequestRead] = Field(default_factory=list)
+
+
+class ProjectInstallRequestUpdate(BaseModel):
+    status: str = Field(min_length=1)
 
 
 class ProjectAutomationWrite(BaseModel):
@@ -934,6 +985,12 @@ class AgentRuntimeToolsRead(BaseModel):
 
 class RunRead(BaseModel):
     run_id: str
+    workflow_id: str
+    attempt_number: int
+    parent_run_id: str | None = None
+    entry_mode: str
+    entry_stage: str | None = None
+    entry_checkpoint_id: str | None = None
     tenant_id: str
     project_id: str | None
     issue_key: str
@@ -942,10 +999,9 @@ class RunRead(BaseModel):
     repo_url: str | None
     branch: str | None
     pr_url: str | None
-    dev_session_id: str | None = None
-    pm_session_id: str | None = None
-    orchestrated_session_id: str | None = None
     status: str
+    waiting_for_input: bool = False
+    pending_input_request_id: str | None = None
     last_error: str | None
     plan: dict | None
     created_at: datetime
@@ -953,19 +1009,43 @@ class RunRead(BaseModel):
     finished_at: datetime | None
 
 
-class RunRerunRequest(BaseModel):
-    mode: str = Field(default="fresh", pattern="^(fresh|resume)$")
-    resume_stage: str | None = Field(default=None, pattern="^(orchestrated|pm|dev|review)$")
+class WorkflowRead(BaseModel):
+    workflow_id: str
+    tenant_id: str
+    project_id: str | None
+    issue_key: str
+    issue_summary: str | None = None
+    repo_url: str | None = None
+    branch: str | None = None
+    pr_url: str | None = None
+    dedupe_scope: str
+    status: str
+    active_run_id: str | None = None
+    latest_checkpoint_id: str | None = None
+    source_workflow_id: str | None = None
+    source_run_id: str | None = None
+    blocked_reason: str | None = None
+    pending_input_request_id: str | None = None
+    latest_checkpoint_kind: str | None = None
+    runs: list[RunRead] = Field(default_factory=list)
+    created_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
 
-    @field_validator("resume_stage")
-    @classmethod
-    def validate_resume_stage(cls, value: str | None, info):  # type: ignore[override]
-        mode = info.data.get("mode")
-        if mode == "resume" and not value:
-            raise ValueError("resume_stage is required when mode=resume")
-        if mode != "resume" and value is not None:
-            raise ValueError("resume_stage is only allowed when mode=resume")
-        return value
+
+class WorkflowAttemptCreateRequest(BaseModel):
+    mode: str = Field(pattern="^(fresh|restart|resume)$")
+    checkpoint_kind: str | None = Field(default=None, pattern="^(pm|execution)$")
+
+    @model_validator(mode="after")
+    def validate_checkpoint_contract(self) -> WorkflowAttemptCreateRequest:
+        if self.mode == "fresh":
+            if self.checkpoint_kind is not None:
+                raise ValueError("checkpoint_kind must be omitted for fresh attempts")
+            return self
+        if self.checkpoint_kind is None:
+            raise ValueError("checkpoint_kind is required for restart and resume attempts")
+        return self
 
 
 class RunEventRead(BaseModel):
@@ -1114,6 +1194,20 @@ class PlatformServiceInstanceRead(BaseModel):
     updated_at: datetime | None = None
     capabilities: list[str] = Field(default_factory=list)
     active_run_count: int = 0
+    runtime_dependencies: dict[str, dict[str, object]] = Field(default_factory=dict)
+
+
+class WorkerRuntimeAuthRequestRead(BaseModel):
+    request_id: str
+    service_instance_id: str
+    runtime_kind: str
+    status: str
+    remediation_text: str | None = None
+    requested_at: datetime
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    expires_at: datetime | None = None
+    last_error: str | None = None
 
 
 class PlatformServiceStatusRead(BaseModel):
@@ -1128,6 +1222,42 @@ class PlatformServiceStatusRead(BaseModel):
 
 class PlatformStatusRead(BaseModel):
     services: list[PlatformServiceStatusRead] = Field(default_factory=list)
+
+
+class WebhookQueueJobRead(BaseModel):
+    job_id: str
+    transport: str
+    tenant_id: str | None = None
+    project_id: str | None = None
+    subject_key: str
+    dedupe_key: str | None = None
+    request_id: str
+    event_type: str | None = None
+    status: str
+    owner_id: str | None = None
+    lease_expires_at: datetime | None = None
+    available_at: datetime
+    attempt_count: int
+    last_error: str | None = None
+    created_at: datetime
+    updated_at: datetime
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+
+
+class WebhookQueueSummaryRead(BaseModel):
+    pending_count: int
+    processing_count: int
+    failed_count: int
+    done_count: int
+
+
+class WebhookQueueJobPageRead(BaseModel):
+    items: list[WebhookQueueJobRead] = Field(default_factory=list)
+    total: int
+    limit: int
+    offset: int
+    summary: WebhookQueueSummaryRead
 
 
 class TenantObservabilityRead(BaseModel):

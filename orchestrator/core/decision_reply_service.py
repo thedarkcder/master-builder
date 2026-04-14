@@ -10,6 +10,7 @@ from uuid import uuid4
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from orchestrator.core.decision_types import DecisionClassification, DecisionQuestionKind
 from orchestrator.core.runtime_invocation import AgentInvocationContext, invoke_runtime_json
 from orchestrator.core.codex_runtime import CodexRuntimeError, build_codex_runtime
 from orchestrator.core.prompt_templates import render_prompt
@@ -175,22 +176,26 @@ def unresolved_question_ids_for_cycle(*, session: Session, cycle: DecisionCycle)
     )
 
 
-def classification_for_cycle_questions(*, cycle: DecisionCycle, unresolved_question_ids: tuple[str, ...]) -> str:
+def classification_for_cycle_questions(
+    *,
+    cycle: DecisionCycle,
+    unresolved_question_ids: tuple[str, ...],
+) -> DecisionClassification:
     unresolved = set(unresolved_question_ids)
     kinds = {
         str(item.get("kind") or "").strip()
         for item in cycle.question_set_json
         if str(item.get("id") or "").strip() in unresolved
     }
-    has_dg = "decision_gate" in kinds
-    has_gtd = "gtd" in kinds
+    has_dg = DecisionQuestionKind.DECISION_GATE.value in kinds
+    has_gtd = DecisionQuestionKind.GTD.value in kinds
     if has_dg and has_gtd:
-        return "both"
+        return DecisionClassification.BOTH
     if has_dg:
-        return "decision_gate"
+        return DecisionClassification.DECISION_GATE
     if has_gtd:
-        return "gtd"
-    return "clear"
+        return DecisionClassification.GTD
+    return DecisionClassification.CLEAR
 
 
 def _reply_dedupe_key(
@@ -321,6 +326,19 @@ def _question_lookup(cycle: DecisionCycle) -> dict[str, dict[str, str]]:
     return lookup
 
 
+def _resolved_decision_answer_status(
+    *,
+    requested_status: str,
+    question_id: str,
+    question_kind: str,
+    question_text: str,
+    answer_text: str,
+) -> str:
+    _ = question_id, question_kind, question_text, answer_text
+    normalized_status = str(requested_status or "").strip().lower()
+    return normalized_status if normalized_status in {"answered", "accepted"} else "answered"
+
+
 def _feedback_for_cycle_questions(
     *,
     cycle: DecisionCycle,
@@ -404,9 +422,9 @@ def sync_cycle_answers_from_planner(
         question_id = str(item.get("question_id") or "").strip()
         if not question_id or question_id not in lookup:
             continue
-        status = str(item.get("status") or "").strip().lower()
-        if status not in {"open", "answered", "accepted"}:
-            status = "open"
+        requested_status = str(item.get("status") or "").strip().lower()
+        if requested_status not in {"open", "answered", "accepted"}:
+            requested_status = "open"
         existing = existing_answers.get(question_id)
         if existing is None:
             existing = DecisionAnswer(
@@ -434,10 +452,20 @@ def sync_cycle_answers_from_planner(
             existing_answers[question_id] = existing
 
         current_status = str(existing.status or "").strip().lower()
+        detail = str(item.get("detail") or "").strip()
+        answer_text = str(existing.normalized_answer or "").strip() or detail
+        status = requested_status
+        if status in {"answered", "accepted"} and answer_text:
+            status = _resolved_decision_answer_status(
+                requested_status=status,
+                question_id=question_id,
+                question_kind=lookup[question_id]["kind"],
+                question_text=lookup[question_id]["text"],
+                answer_text=answer_text,
+            )
         if current_status == "accepted" and status != "accepted":
             status = "accepted"
 
-        detail = str(item.get("detail") or "").strip()
         existing.metadata_json = {
             **dict(existing.metadata_json or {}),
             "notes": detail or None,
@@ -450,7 +478,6 @@ def sync_cycle_answers_from_planner(
             existing.source_ref = latest_evidence.source_ref
 
         if status in {"answered", "accepted"}:
-            answer_text = detail
             if answer_text:
                 existing.normalized_answer = answer_text
             existing.answered_at = existing.answered_at or now
@@ -563,14 +590,21 @@ def capture_decision_reply(
         question_id = str(item.get("question_id") or "").strip()
         if not question_id or question_id not in question_lookup:
             continue
-        status = str(item.get("status") or "").strip().lower()
-        if status == "ignored":
+        requested_status = str(item.get("status") or "").strip().lower()
+        if requested_status == "ignored":
             continue
-        if status not in {"answered", "accepted"}:
-            status = "answered"
+        if requested_status not in {"answered", "accepted"}:
+            requested_status = "answered"
         answer_text = str(item.get("answer") or "").strip()
         if not answer_text:
             continue
+        status = _resolved_decision_answer_status(
+            requested_status=requested_status,
+            question_id=question_id,
+            question_kind=question_lookup[question_id]["kind"],
+            question_text=question_lookup[question_id]["text"],
+            answer_text=answer_text,
+        )
         answer = answer_lookup.get(question_id)
         if answer is None:
             answer = DecisionAnswer(

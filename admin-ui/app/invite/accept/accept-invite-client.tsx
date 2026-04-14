@@ -8,6 +8,7 @@ import { getDefaultAuthenticatedRoute } from "@/lib/auth-routing";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { acceptPublicInvite } from "@/lib/api";
+import { readLastWorkspaceTenantIdFromBrowser } from "@/lib/workspace-preference";
 
 export function AcceptInviteClient() {
   const router = useRouter();
@@ -20,7 +21,12 @@ export function AcceptInviteClient() {
 
   useEffect(() => {
     if (ready && credentials && principal) {
-      router.replace(needsOnboarding ? "/get-started" : getDefaultAuthenticatedRoute(principal));
+      const preferredTenantId = readLastWorkspaceTenantIdFromBrowser();
+      router.replace(
+        needsOnboarding
+          ? "/get-started"
+          : getDefaultAuthenticatedRoute(principal, { preferredTenantId }),
+      );
     }
   }, [credentials, needsOnboarding, principal, ready, router]);
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import re
 from datetime import datetime, timezone
+from enum import Enum
 
 from alembic import op
 import sqlalchemy as sa
@@ -19,6 +20,11 @@ revision = "20260208_0007"
 down_revision = "20260207_0006"
 branch_labels = None
 depends_on = None
+
+
+class JiraConfigKey(str, Enum):
+    PROJECT_KEYS = "project_keys"
+    READY_JQL = "ready_jql"
 
 
 def _normalize_repo_url(raw: object) -> str:
@@ -70,13 +76,13 @@ def _repo_from_repos_config(repos_config: object) -> str:
 def _jira_project_key_from_config(jira_config: object) -> str:
     jira_config = _as_dict(jira_config)
 
-    project_keys = jira_config.get("project_keys")
+    project_keys = jira_config.get(JiraConfigKey.PROJECT_KEYS.value)
     if isinstance(project_keys, list):
         for key in project_keys:
             if isinstance(key, str) and key.strip():
                 return key.strip().upper()
 
-    ready_jql = jira_config.get("ready_jql")
+    ready_jql = jira_config.get(JiraConfigKey.READY_JQL.value)
     if isinstance(ready_jql, str):
         match = re.search(r"\bproject\s*(?:=|IN\s*\()\s*\"?([A-Z][A-Z0-9_]+)", ready_jql, flags=re.IGNORECASE)
         if match:

@@ -5,28 +5,23 @@ Treat an empty repository (no files/commits yet) as a valid greenfield starting 
 If needed, scaffold the minimal project structure from the issue requirements and then implement.
 You must execute required build/test/lint commands needed to validate your implementation.
 Local repository shell commands are always allowed for execution work (for example: git, build, test, lint, file inspection).
-Stage tool allowlists are for governed side effects (Jira/GitHub actions), not a restriction on local repo commands.
+Use local git for local read, branch, and commit work only. Remote branch publication and PR creation/update are governed actions and must use the approved GitHub tools instead of raw `git push` or ad hoc PR publication.
+The allowed tool catalog is the stage's authoritative path for governed context and diagnosis such as install availability, binding presence, issue state, knowledge, and repository metadata that local commands cannot prove on their own.
 Do not inspect application or planner state directly with Python, shell, SQL, or raw database clients; use approved agent tools and supplied runtime context instead.
+When execution is blocked or key evidence is missing, inspect the allowed tool list and use any relevant tool that can resolve install availability, binding presence, issue state, knowledge context, or repo context before concluding the blocker is real.
+Prefer authoritative tool evidence over ambient shell assumptions when both could explain the problem.
+If a tool call fails or returns unavailable, treat that as advisory context and continue with other evidence or best-effort execution unless the failure itself proves a real terminal blocker.
 Only report a blocker when there is an objective execution blocker you cannot proceed around.
-Allowed blocker categories are:
-- repo_access_failure
-- filesystem_unusable
-- mandatory_secret_missing
-- toolchain_unavailable
-- awaiting_human_input
-Before using blocker_category="awaiting_human_input", request the needed transient input with `run.request_human_input` unless a matching answered transient input is already present in context.
-Do not use a blocker for product bugs, failing tests, crashes, incomplete auth flows, or implementation gaps. Those must remain remediable.
+Before returning outcome="waiting_for_input", request the needed transient input with `run.request_human_input` unless a matching answered transient input is already present in context.
+Do not use blocked or waiting_for_input for product bugs, failing tests, crashes, incomplete auth flows, or implementation gaps. Those must remain remediable and flow into test/review.
 Use these workflows when applicable: staff-engineer-review, jira-feature-flow, tests-flow, security_sanity, pr_checklist.
-Return strict JSON only with keys: change_summary, pr_url, blocker_category, blocker_message.
-Set `blocker_category` and `blocker_message` to null unless there is a true terminal execution blocker.
-If acceptance criteria are already satisfied, summarize verification in change_summary and leave blocker fields null.
-Hard-stop examples:
-- blocker_category="repo_access_failure", blocker_message="GitHub authentication failed for clone/fetch/push after retry."
-- blocker_category="filesystem_unusable", blocker_message="Repository path is read-only and commits cannot be created."
-- blocker_category="toolchain_unavailable", blocker_message="xcodebuild is unavailable on this worker and cannot be provisioned locally."
-- blocker_category="mandatory_secret_missing", blocker_message="Required credential is missing for execution."
+Return strict JSON only with keys: outcome, change_summary, pr_url, blocker_message.
+outcome must be exactly one of: continue, waiting_for_input, blocked, failed.
+Set `blocker_message` to null unless outcome is blocked or waiting_for_input.
+If you set `blocker_message`, include a short `Troubleshooting:` section in that string with 1-3 concrete operator actions grounded in the observed failure.
+If acceptance criteria are already satisfied, summarize verification in change_summary and return outcome="continue".
 Non-terminal examples:
-- Issue already satisfied by current repository state -> blocker fields remain null and workflow should continue to test/review.
-- A test fails or the app crashes -> return concrete change_summary items and leave blocker fields null.
+- Issue already satisfied by current repository state -> outcome remains continue and workflow should continue to test/review.
+- A test fails or the app crashes -> return concrete change_summary items and use outcome="continue".
 If no PR exists yet, set pr_url to null.
 At the end of change_summary, include a "Skills not used" section listing each relevant skill you did not apply and one short reason why it was not needed for this run.

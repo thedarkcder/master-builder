@@ -16,10 +16,13 @@ from orchestrator.core.webhook_job_queue import (
     enqueue_webhook_job,
 )
 from orchestrator.core.worker.webhook_job_service import process_next_webhook_job
+from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import Project, Run, Tenant, WebhookJob
 from orchestrator.core.communications import DiscordChannelMessageWithAttachmentAction
+from orchestrator.core.communications import IngressResult
+from tests.workflow_test_support import add_run_with_workflow, make_run
 
 
 class WorkerWebhookJobServiceTests(unittest.TestCase):
@@ -33,6 +36,8 @@ class WorkerWebhookJobServiceTests(unittest.TestCase):
         self.session_factory = create_session_factory(database_url=self.database_url)
 
         now = datetime.now(timezone.utc)
+        ready_snapshot = ExecutionSnapshot.empty()
+        ready_snapshot.context.execution_context["pre_check_outcome"] = "ready_for_agent"
         with self.session_factory() as session:
             session.add(
                 Tenant(
@@ -64,8 +69,9 @@ class WorkerWebhookJobServiceTests(unittest.TestCase):
                     updated_at=now,
                 )
             )
-            session.add(
-                Run(
+            add_run_with_workflow(
+                session,
+                make_run(
                     run_id="run-1",
                     tenant_id="tenant-1",
                     project_id=None,
@@ -77,20 +83,23 @@ class WorkerWebhookJobServiceTests(unittest.TestCase):
                     pr_url=None,
                     dedupe_scope="issue_execution",
                     status="queued",
-                    last_error=None,
-                    plan={"pre_check": {"outcome": "ready_for_agent"}},
+                    plan=ready_snapshot.dump(),
                     created_at=now,
                     started_at=None,
                     last_heartbeat_at=None,
                     worker_service_instance_id=None,
                     finished_at=None,
-                )
+                ),
             )
             session.commit()
 
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
         reset_db_engine_cache()
+
+    @staticmethod
+    def _settings() -> SimpleNamespace:
+        return SimpleNamespace(secrets_encryption_key="test-key")
 
     @staticmethod
     def _request() -> WebhookJobEnqueueRequest:
@@ -143,7 +152,31 @@ class WorkerWebhookJobServiceTests(unittest.TestCase):
             context_json={},
         )
 
-    def test_blocking_reconciliation_cancels_stale_queued_run(self) -> None:
+    @staticmethod
+    def _github_request(*, request_id: str, dedupe_key: str, subject_key: str) -> WebhookJobEnqueueRequest:
+        return WebhookJobEnqueueRequest(
+            transport=WEBHOOK_TRANSPORT_GITHUB,
+            request_id=request_id,
+            tenant_id="tenant-1",
+            project_id="project-1",
+            subject_key=subject_key,
+            dedupe_key=dedupe_key,
+            event_type="check_run",
+            payload_json={"action": "completed"},
+            context_json={
+                "tenant_id": "tenant-1",
+                "project_id": "project-1",
+                "pr_number": 26,
+                "review_summary_present": False,
+                "delivery_id": dedupe_key,
+                "github_event": "check_run",
+                "normalized_action": "completed",
+                "installation_id": 12345,
+                "repo_full_name": "example/repo",
+            },
+        )
+
+    def test_blocking_reconciliation_does_not_cancel_existing_run(self) -> None:
         with self.session_factory() as session:
             enqueue_webhook_job(session, request=self._request())
             session.commit()
@@ -168,7 +201,7 @@ class WorkerWebhookJobServiceTests(unittest.TestCase):
             ):
                 processed = process_next_webhook_job(
                     session=session,
-                    settings=SimpleNamespace(),
+                    settings=self._settings(),
                     owner_id="worker-1",
                 )
 
@@ -176,8 +209,8 @@ class WorkerWebhookJobServiceTests(unittest.TestCase):
             job = session.get(WebhookJob, processed.job_id)
             run = session.get(Run, "run-1")
             self.assertEqual(job.status, "done")
-            self.assertEqual(run.status, "cancelled")
-            self.assertEqual(run.last_error, "Cancelled by jira_webhook:gtd_required")
+            self.assertEqual(run.status, "queued")
+            self.assertIsNone(run.last_error)
 
     def test_discord_command_jobs_derive_seed_deferral_in_worker_service(self) -> None:
         request = WebhookJobEnqueueRequest(
@@ -203,11 +236,7 @@ class WorkerWebhookJobServiceTests(unittest.TestCase):
             with patch(
                 "orchestrator.core.worker.webhook_job_service.execute_tenant_discord_ingress_command"
             ) as execute_command:
-                processed = process_next_webhook_job(
-                    session=session,
-                    settings=SimpleNamespace(),
-                    owner_id="worker-1",
-                )
+                processed = process_next_webhook_job(session=session, settings=self._settings(), owner_id="worker-1")
 
             self.assertIsNotNone(processed)
             execute_command.assert_called_once()
@@ -241,7 +270,7 @@ class WorkerWebhookJobServiceTests(unittest.TestCase):
                 ) as execute_side_effect,
                 patch("orchestrator.core.worker.webhook_job_service.mark_project_automation_execution_success") as mark_success,
             ):
-                processed = process_next_webhook_job(session=session, settings=SimpleNamespace(), owner_id="worker-1")
+                processed = process_next_webhook_job(session=session, settings=self._settings(), owner_id="worker-1")
 
             self.assertIsNotNone(processed)
             execute_side_effect.assert_called_once()
@@ -277,11 +306,63 @@ class WorkerWebhookJobServiceTests(unittest.TestCase):
                 ),
                 patch("orchestrator.core.worker.webhook_job_service.mark_project_automation_execution_failure") as mark_failed,
             ):
-                processed = process_next_webhook_job(session=session, settings=SimpleNamespace(), owner_id="worker-1")
+                processed = process_next_webhook_job(session=session, settings=self._settings(), owner_id="worker-1")
 
             self.assertIsNotNone(processed)
             mark_failed.assert_called_once()
             self.assertEqual(session.get(WebhookJob, processed.job_id).status, "failed")
+
+    def test_github_subject_jobs_are_coalesced_and_marked_done_together(self) -> None:
+        with self.session_factory() as session:
+            first = enqueue_webhook_job(
+                session,
+                request=self._github_request(
+                    request_id="request-github-1",
+                    dedupe_key="delivery-github-1",
+                    subject_key="github_pr:tenant-1:example/repo:26",
+                ),
+            ).job
+            second = enqueue_webhook_job(
+                session,
+                request=self._github_request(
+                    request_id="request-github-2",
+                    dedupe_key="delivery-github-2",
+                    subject_key="github_pr:tenant-1:example/repo:26",
+                ),
+            ).job
+            session.commit()
+
+        with self.session_factory() as session:
+            with (
+                patch(
+                    "orchestrator.core.worker.webhook_job_service.build_github_review_runtime",
+                    return_value=(SimpleNamespace(), SimpleNamespace()),
+                ),
+                patch(
+                    "orchestrator.core.worker.webhook_job_service.build_github_webhook_ingress_result",
+                    return_value=IngressResult(actions=()),
+                ) as build_result,
+                patch(
+                    "orchestrator.core.worker.webhook_job_service.build_http_transport_action_executors",
+                    return_value=(),
+                ),
+                patch(
+                    "orchestrator.core.worker.webhook_job_service.execute_side_effect_ingress_result",
+                ),
+            ):
+                processed = process_next_webhook_job(
+                    session=session,
+                    settings=self._settings(),
+                    owner_id="worker-1",
+                )
+
+            self.assertIsNotNone(processed)
+            assert processed is not None
+            self.assertEqual(session.get(WebhookJob, first.job_id).status, "done")
+            self.assertEqual(session.get(WebhookJob, second.job_id).status, "done")
+            self.assertEqual(session.get(WebhookJob, first.job_id).attempt_count, 1)
+            self.assertEqual(session.get(WebhookJob, second.job_id).attempt_count, 1)
+            build_result.assert_called_once()
 
     def test_process_next_webhook_job_snapshots_job_context_before_rollback(self) -> None:
         class _BrokenJob:
@@ -307,7 +388,7 @@ class WorkerWebhookJobServiceTests(unittest.TestCase):
 
         with (
             patch("orchestrator.core.worker.webhook_job_service.claim_next_webhook_job", return_value=claim),
-            patch("orchestrator.core.worker.webhook_job_service._process_github_job", side_effect=_fail_processing),
+            patch("orchestrator.core.worker.webhook_job_service._process_github_subject_jobs", side_effect=_fail_processing),
             patch(
                 "orchestrator.core.worker.webhook_job_service.mark_webhook_job_ids_failed",
                 return_value=("failed-job",),
@@ -315,7 +396,7 @@ class WorkerWebhookJobServiceTests(unittest.TestCase):
         ):
             processed = process_next_webhook_job(
                 session=session,
-                settings=SimpleNamespace(),
+                settings=self._settings(),
                 owner_id="worker-1",
             )
 

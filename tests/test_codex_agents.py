@@ -9,8 +9,16 @@ from orchestrator.core.codex_agents import (
     route_voice_entry_with_runtime,
 )
 from orchestrator.core.runtime_invocation import AgentInvocationContext
-from orchestrator.core.codex_runtime import CodexRuntime
-from orchestrator.core.workflow.runner import DevResult, PmPlan, TestResult, WorkflowRequest
+from orchestrator.core.codex_runtime import CodexRuntime, CodexRuntimeError
+from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
+from orchestrator.core.workflow.runner import (
+    DevResult,
+    PmPlan,
+    ReviewResult,
+    TestResult,
+    WorkflowRequest,
+    WorkflowStageCheckpoint,
+)
 
 
 class _RuntimeQueue:
@@ -53,10 +61,10 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             command="override",
             _request=_RuntimeQueue(
                 [
-                    '{"plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":["risk1"],"next_stage":"dev"}',
-                    '{"change_summary":["implemented"],"pr_url":"https://example/pull/1","blocker_category":null,"blocker_message":null}',
-                    '{"passed":true,"guidance":["run tests"],"feedback":null,"blocker_category":null,"blocker_message":null}',
-                    '{"approved":true,"summary":["looks good"],"feedback":null,"pr_url":"https://example/pull/1","blocker_category":null,"blocker_message":null}',
+                    '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":["risk1"],"next_stage":"dev","execution_worker_capability":"linux"}',
+                    '{"outcome":"continue","change_summary":["implemented"],"pr_url":"https://example/pull/1","blocker_message":null}',
+                    '{"outcome":"continue","guidance":["run tests"],"feedback":null,"blocker_message":null}',
+                    '{"outcome":"continue","summary":["looks good"],"feedback":null,"pr_url":"https://example/pull/1","blocker_message":null}',
                 ]
             ),
         )
@@ -71,9 +79,8 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
 
         self.assertEqual(plan.plan_steps, ["step1"])
         self.assertEqual(dev.pr_url, "https://example/pull/1")
-        self.assertTrue(test_result.passed)
-        self.assertTrue(review.approved)
-        self.assertEqual(review.outcome, "approved")
+        self.assertEqual(test_result.outcome, "continue")
+        self.assertEqual(review.outcome, "continue")
 
     def test_pm_maps_compact_evidence_ledger_fields(self) -> None:
         runtime = CodexRuntime(
@@ -83,9 +90,8 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             _request=_RuntimeQueue(
                 [
                     (
-                        '{"plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":["risk1"],'
-                        '"next_stage":"dev","missing_evidence_sources":["knowledge"],'
-                        '"confirmed_external_blockers":["Apple developer access still pending"],'
+                        '{"outcome":"blocked","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":["risk1"],'
+                        '"next_stage":"dev","execution_worker_capability":"linux","blocker_message":"Apple developer access still pending",'
                         '"resolved_prerequisites":["Supabase redirect URI approved"],'
                         '"unresolved_prerequisites":["Provision staging Service ID"]}'
                     ),
@@ -97,8 +103,8 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         with patch("orchestrator.core.codex_agents.render_prompt", side_effect=lambda template_name, **_: template_name):
             plan = agents.pm(self._request(), 1, None, [], None, None, None)
 
-        self.assertEqual(plan.missing_evidence_sources, ["knowledge"])
-        self.assertEqual(plan.confirmed_external_blockers, ["Apple developer access still pending"])
+        self.assertEqual(plan.outcome, "blocked")
+        self.assertEqual(plan.blocker_message, "Apple developer access still pending")
         self.assertEqual(plan.resolved_prerequisites, ["Supabase redirect URI approved"])
         self.assertEqual(plan.unresolved_prerequisites, ["Provision staging Service ID"])
 
@@ -109,7 +115,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             command="override",
             _request=_RuntimeQueue(
                 [
-                    '{"plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"next_stage":"dev"}',
+                    '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"next_stage":"dev","execution_worker_capability":"linux"}',
                 ]
             ),
         )
@@ -150,8 +156,44 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         self.assertEqual(captured["execution_branch"], "run/MAB-54/run-1")
         self.assertEqual(captured["integration_branch"], "feature/MAB-54")
         self.assertEqual(captured["allow_pr_creation"], "false")
-        self.assertIn("decision.read_state", str(captured["allowed_tools_json"]))
+        allowed_tools = json.loads(str(captured["allowed_tools_json"]))
+        decision_tool = next(item for item in allowed_tools if item["tool_name"] == "decision.read_state")
+        self.assertEqual(decision_tool["category"], "decision")
+        self.assertIn("Decision Gate", decision_tool["description"])
         self.assertNotIn("agent_tool_command", captured)
+
+    def test_test_prompt_receives_structured_tool_catalog_with_descriptions(self) -> None:
+        runtime = CodexRuntime(
+            model="gpt-5-codex",
+            max_output_tokens=1200,
+            command="override",
+            _request=_RuntimeQueue(
+                [
+                    '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"next_stage":"dev","execution_worker_capability":"linux"}',
+                    '{"outcome":"continue","change_summary":["implemented"],"pr_url":null,"blocker_message":null}',
+                    '{"outcome":"continue","guidance":["run tests"],"feedback":null,"blocker_message":null}',
+                ]
+            ),
+        )
+        agents = CodexWorkflowAgents(runtime=runtime)
+        request = self._request()
+        captured: dict[str, object] = {}
+
+        def _render_prompt(template_name: str, **kwargs) -> str:
+            if template_name == "workflow/test_user.j2":
+                captured.update(kwargs)
+            return template_name
+
+        with patch("orchestrator.core.codex_agents.render_prompt", side_effect=_render_prompt):
+            plan = agents.pm(request, 1, None, [], None, None, None)
+            dev = agents.dev(request, plan, 1, None)
+            agents.test(request, plan, dev, 1)
+
+        allowed_tools = json.loads(str(captured["allowed_tools_json"]))
+        runtime_tool = next(item for item in allowed_tools if item["tool_name"] == "project.check_runtime_bindings")
+        self.assertEqual(runtime_tool["category"], "project")
+        self.assertIn("explicitly named project bindings", runtime_tool["description"])
+        self.assertIn("never returns the underlying values", runtime_tool["description"])
 
     def test_stage_prompts_include_answered_human_inputs(self) -> None:
         runtime = CodexRuntime(
@@ -160,8 +202,8 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             command="override",
             _request=_RuntimeQueue(
                 [
-                    '{"plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"next_stage":"dev"}',
-                    '{"change_summary":["implemented"],"pr_url":null,"blocker_category":null,"blocker_message":null}',
+                    '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"next_stage":"dev","execution_worker_capability":"linux"}',
+                    '{"outcome":"continue","change_summary":["implemented"],"pr_url":null,"blocker_message":null}',
                 ]
             ),
         )
@@ -216,10 +258,10 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             command="override",
             _request=_RuntimeQueue(
                 [
-                    '{"plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":["risk1"],"next_stage":"dev"}',
-                    '{"change_summary":["implemented"],"pr_url":"https://example/pull/1","blocker_category":null,"blocker_message":null}',
-                    '{"passed":true,"guidance":["run tests"],"feedback":null,"blocker_category":null,"blocker_message":null}',
-                    '{"approved":true,"summary":["looks good"],"feedback":null,"pr_url":"https://example/pull/1","blocker_category":null,"blocker_message":null}',
+                    '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":["risk1"],"next_stage":"dev","execution_worker_capability":"linux"}',
+                    '{"outcome":"continue","change_summary":["implemented"],"pr_url":"https://example/pull/1","blocker_message":null}',
+                    '{"outcome":"continue","guidance":["run tests"],"feedback":null,"blocker_message":null}',
+                    '{"outcome":"continue","summary":["looks good"],"feedback":null,"pr_url":"https://example/pull/1","blocker_message":null}',
                 ]
             ),
         )
@@ -280,9 +322,10 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             base_branch="main",
             integration_branch="feature/MAB-54",
             pr_target_branch="main",
-            resume_mode="resume",
-            resume_stage="dev",
-            resume_session_id="dev-session-123",
+            entry_mode="resume",
+            entry_stage="dev",
+            checkpoint_kind="execution",
+            checkpoint_session_id="dev-session-123",
         )
         captured_contexts: list[AgentInvocationContext] = []
 
@@ -290,8 +333,15 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             _ = kwargs
             captured_contexts.append(context)
             if context.stage == "pm":
-                return {"plan_steps": ["step1"], "acceptance_criteria": ["ac1"], "risks": []}
-            return {"change_summary": ["implemented"], "pr_url": None}
+                return {
+                    "outcome": "continue",
+                    "plan_steps": ["step1"],
+                    "acceptance_criteria": ["ac1"],
+                    "risks": [],
+                    "next_stage": "dev",
+                    "execution_worker_capability": "linux",
+                }
+            return {"outcome": "continue", "change_summary": ["implemented"], "pr_url": None}
 
         with (
             patch("orchestrator.core.codex_agents.render_prompt", side_effect=lambda template_name, **_: template_name),
@@ -313,6 +363,28 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             _request=_RuntimeQueue([]),
         )
         agents = CodexWorkflowAgents(runtime=runtime)
+        resume_snapshot = ExecutionSnapshot.empty()
+        resume_snapshot.apply_stage_checkpoint(
+            WorkflowStageCheckpoint(
+                stage="pm",
+                attempt=1,
+                status="completed",
+                summary="PM ready",
+                plan=PmPlan(plan_steps=["step"], acceptance_criteria=["ac"], risks=[]),
+            )
+        )
+        resume_snapshot.apply_stage_checkpoint(
+            WorkflowStageCheckpoint(
+                stage="review",
+                attempt=1,
+                status="blocked",
+                summary="Needs nonce verification",
+                review_result=ReviewResult(
+                    summary=["Needs nonce verification"],
+                    feedback="Verify the nonce flow with the QA account",
+                ),
+            )
+        )
         request = WorkflowRequest(
             tenant_id="tenant-1",
             run_id="run-1",
@@ -326,15 +398,11 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             base_branch="main",
             integration_branch="feature/MAB-54",
             pr_target_branch="main",
-            resume_mode="resume",
-            resume_stage="review",
-            resume_session_id="dev-session-123",
-            trigger_context={
-                "resume_source_state": {
-                    "review_summary": ["Needs nonce verification"],
-                    "review_feedback": "Verify the nonce flow with the QA account",
-                }
-            },
+            entry_mode="resume",
+            entry_stage="review",
+            checkpoint_kind="execution",
+            checkpoint_session_id="dev-session-123",
+            checkpoint_payload=resume_snapshot.dump(),
         )
         captured: dict[str, object] = {}
 
@@ -345,13 +413,13 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
 
         with (
             patch("orchestrator.core.codex_agents.render_prompt", side_effect=_render_prompt),
-            patch("orchestrator.core.codex_agents.invoke_runtime_json_with_tools", return_value={"approved": True, "outcome": "approved", "summary": ["ok"], "feedback": None, "pr_url": None}),
+            patch("orchestrator.core.codex_agents.invoke_runtime_json_with_tools", return_value={"outcome": "continue", "summary": ["ok"], "feedback": None, "pr_url": None}),
         ):
             agents.review(
                 request,
                 PmPlan(plan_steps=["step"], acceptance_criteria=["ac"], risks=[]),
                 DevResult(change_summary=["implemented"], pr_url=None),
-                TestResult(passed=True, guidance=["python -m unittest"]),
+                TestResult(guidance=["python -m unittest"]),
                 1,
             )
 
@@ -365,10 +433,10 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             command="override",
             _request=_RuntimeQueue(
                 [
-                    '{"plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":["risk1"],"next_stage":"dev"}',
-                    '{"change_summary":["implemented"],"pr_url":null,"blocker_category":"mandatory_secret_missing","blocker_message":"APPLE_TEST_PASSWORD missing"}',
-                    '{"passed":false,"guidance":["retry targeted UI test"],"feedback":"UI test failed","blocker_category":"toolchain_unavailable","blocker_message":"xcodebuild missing"}',
-                    '{"approved":false,"outcome":"blocked","summary":["Awaiting approval"],"feedback":"Need PM approval","blocker_category":"awaiting_human_input","blocker_message":"Decision owner approval missing"}',
+                    '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":["risk1"],"next_stage":"dev","execution_worker_capability":"linux"}',
+                    '{"outcome":"blocked","change_summary":["implemented"],"pr_url":null,"blocker_message":"APPLE_TEST_PASSWORD missing"}',
+                    '{"outcome":"failed","guidance":["retry targeted UI test"],"feedback":"UI test failed","blocker_message":"xcodebuild missing"}',
+                    '{"outcome":"blocked","summary":["Awaiting approval"],"feedback":"Need PM approval","blocker_message":"Decision owner approval missing"}',
                 ]
             ),
         )
@@ -381,23 +449,23 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             test_result = agents.test(request, plan, dev, 1)
             review = agents.review(request, plan, dev, test_result, 1)
 
-        self.assertEqual(dev.blocker_category, "mandatory_secret_missing")
+        self.assertEqual(dev.outcome, "blocked")
         self.assertEqual(dev.blocker_message, "APPLE_TEST_PASSWORD missing")
-        self.assertEqual(test_result.blocker_category, "toolchain_unavailable")
+        self.assertEqual(test_result.outcome, "failed")
         self.assertEqual(test_result.blocker_message, "xcodebuild missing")
-        self.assertEqual(review.blocker_category, "awaiting_human_input")
+        self.assertEqual(review.outcome, "blocked")
         self.assertEqual(review.blocker_message, "Decision owner approval missing")
 
-    def test_review_fallback_does_not_treat_generic_not_as_rejection(self) -> None:
+    def test_review_requires_explicit_outcome(self) -> None:
         runtime = CodexRuntime(
             model="gpt-5-codex",
             max_output_tokens=1200,
             command="override",
             _request=_RuntimeQueue(
                 [
-                    '{"plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":["risk1"],"next_stage":"dev"}',
-                    '{"change_summary":["implemented"],"pr_url":"https://example/pull/1"}',
-                    '{"passed":true,"guidance":["run tests"],"feedback":null}',
+                    '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":["risk1"],"next_stage":"dev","execution_worker_capability":"linux"}',
+                    '{"outcome":"continue","change_summary":["implemented"],"pr_url":"https://example/pull/1"}',
+                    '{"outcome":"continue","guidance":["run tests"],"feedback":null}',
                     "approved, do not merge automatically",
                 ]
             ),
@@ -409,22 +477,20 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             plan = agents.pm(request, 1, None, [], None, None, None)
             dev = agents.dev(request, plan, 1, None)
             test_result = agents.test(request, plan, dev, 1)
-            review = agents.review(request, plan, dev, test_result, 1)
+            with self.assertRaises(CodexRuntimeError):
+                agents.review(request, plan, dev, test_result, 1)
 
-        self.assertTrue(review.approved)
-        self.assertEqual(review.outcome, "approved")
-
-    def test_review_outcome_falls_back_to_blocked_when_feedback_indicates_hard_stop(self) -> None:
+    def test_review_outcome_uses_explicit_blocked_contract(self) -> None:
         runtime = CodexRuntime(
             model="gpt-5-codex",
             max_output_tokens=1200,
             command="override",
             _request=_RuntimeQueue(
                 [
-                    '{"plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":["risk1"],"next_stage":"dev"}',
-                    '{"change_summary":["implemented"],"pr_url":"https://example/pull/1"}',
-                    '{"passed":true,"guidance":["run tests"],"feedback":null}',
-                    '{"approved":false,"summary":["Governed runtime unavailable"],"feedback":"Governed runtime unavailable"}',
+                    '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":["risk1"],"next_stage":"dev","execution_worker_capability":"linux"}',
+                    '{"outcome":"continue","change_summary":["implemented"],"pr_url":"https://example/pull/1"}',
+                    '{"outcome":"continue","guidance":["run tests"],"feedback":null}',
+                    '{"outcome":"blocked","summary":["Governed runtime unavailable"],"feedback":"Governed runtime unavailable","blocker_message":"Governed runtime unavailable"}',
                 ]
             ),
         )
@@ -437,10 +503,9 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             test_result = agents.test(request, plan, dev, 1)
             review = agents.review(request, plan, dev, test_result, 1)
 
-        self.assertFalse(review.approved)
         self.assertEqual(review.outcome, "blocked")
 
-    def test_pm_fallback_extracts_selected_macos_when_linux_also_present(self) -> None:
+    def test_pm_requires_explicit_outcome(self) -> None:
         runtime = CodexRuntime(
             model="gpt-5-codex",
             max_output_tokens=1200,
@@ -458,9 +523,8 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         request = self._request()
 
         with patch("orchestrator.core.codex_agents.render_prompt", side_effect=lambda template_name, **_: template_name):
-            plan = agents.pm(request, 1, None, [], None, None, None)
-
-        self.assertEqual(plan.execution_worker_capability, "macos")
+            with self.assertRaises(CodexRuntimeError):
+                agents.pm(request, 1, None, [], None, None, None)
 
     def test_answer_board_question(self) -> None:
         runtime = CodexRuntime(
@@ -608,7 +672,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             if _on_log_line is not None:
                 _on_log_line("stdout", "line-1")
                 _on_log_line("stderr", "line-2")
-            return '{"plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"next_stage":"dev"}'
+            return '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"next_stage":"dev","execution_worker_capability":"linux"}'
 
         runtime = CodexRuntime(
             model="gpt-5-codex",
@@ -634,7 +698,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         def _request(_system: str, _user: str, _working_dir: str | None = None, _on_log_line=None) -> str:
             if _on_log_line is not None:
                 _on_log_line("stdout", "line-1")
-            return '{"plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"next_stage":"dev"}'
+            return '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"next_stage":"dev","execution_worker_capability":"linux"}'
 
         runtime = CodexRuntime(
             model="gpt-5-codex",

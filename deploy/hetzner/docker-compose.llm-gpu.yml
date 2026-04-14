@@ -1,0 +1,5 @@
+services:
+  llama-cpp:
+    gpus: all
+    environment:
+      LLAMA_CPP_N_GPU_LAYERS: ${LLAMA_CPP_N_GPU_LAYERS:-999}

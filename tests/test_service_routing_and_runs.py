@@ -253,6 +253,12 @@ class RunsRouteTests(unittest.TestCase):
         now = datetime.now(timezone.utc)
         run = SimpleNamespace(
             run_id="r1",
+            workflow_id="workflow-r1",
+            attempt_number=1,
+            parent_run_id=None,
+            entry_mode="fresh",
+            entry_stage="orchestrated",
+            entry_checkpoint_id=None,
             tenant_id="route25",
             project_id="route25-default",
             issue_key="MAB-1",
@@ -275,6 +281,12 @@ class RunsRouteTests(unittest.TestCase):
         now = datetime.now(timezone.utc)
         run = SimpleNamespace(
             run_id="r2",
+            workflow_id="workflow-r2",
+            attempt_number=1,
+            parent_run_id=None,
+            entry_mode="fresh",
+            entry_stage="orchestrated",
+            entry_checkpoint_id=None,
             tenant_id="route25",
             project_id="route25-default",
             issue_key="MAB-2",

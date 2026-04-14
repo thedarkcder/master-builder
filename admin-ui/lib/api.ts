@@ -223,6 +223,57 @@ export type ProjectAutomationsRecord = {
   automations: ProjectAutomationRecord[];
 };
 
+export type ProjectInstallRecord = {
+  install_id: string;
+  tenant_id: string;
+  project_id: string;
+  kind: string;
+  label: string;
+  enabled: boolean;
+  config: Record<string, unknown>;
+  binding_names: string[];
+  created_at: string;
+  updated_at: string;
+};
+
+export type ProjectInstallsRecord = {
+  installs: ProjectInstallRecord[];
+};
+
+export type ProjectInstallPayload = {
+  kind: string;
+  label: string;
+  enabled: boolean;
+  config: Record<string, unknown>;
+  binding_names: string[];
+};
+
+export type ProjectInstallRequestRecord = {
+  request_id: string;
+  tenant_id: string;
+  project_id: string;
+  workflow_id: string | null;
+  run_id: string | null;
+  issue_key: string;
+  kind: string;
+  label: string;
+  reason: string;
+  suggested_config: Record<string, unknown>;
+  required_bindings: string[];
+  status: string;
+  request_kind: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ProjectInstallRequestsRecord = {
+  requests: ProjectInstallRequestRecord[];
+};
+
+export type ProjectInstallRequestUpdatePayload = {
+  status: string;
+};
+
 export type ProjectCreatePayload = {
   name: string;
   github_repository: string;
@@ -446,6 +497,26 @@ export type PlatformServiceStatusRecord = {
   instances?: PlatformServiceInstanceRecord[];
 };
 
+export type PlatformRuntimeDependencyRecord = {
+  state?: string;
+  summary?: string;
+  remediation_text?: string | null;
+  remediation_expires_at?: string | null;
+};
+
+export type WorkerRuntimeAuthRequestRecord = {
+  request_id: string;
+  service_instance_id: string;
+  runtime_kind: string;
+  status: string;
+  remediation_text?: string | null;
+  requested_at: string;
+  started_at?: string | null;
+  completed_at?: string | null;
+  expires_at?: string | null;
+  last_error?: string | null;
+};
+
 export type PlatformServiceInstanceRecord = {
   instance_id: string;
   label: string;
@@ -456,10 +527,47 @@ export type PlatformServiceInstanceRecord = {
   capabilities: string[];
   current_run_id?: string | null;
   active_run_count?: number;
+  runtime_dependencies?: Record<string, PlatformRuntimeDependencyRecord>;
 };
 
 export type PlatformStatusRecord = {
   services: PlatformServiceStatusRecord[];
+};
+
+export type WebhookQueueJobRecord = {
+  job_id: string;
+  transport: string;
+  tenant_id: string | null;
+  project_id: string | null;
+  subject_key: string;
+  dedupe_key: string | null;
+  request_id: string;
+  event_type: string | null;
+  status: "pending" | "processing" | "failed" | "done" | string;
+  owner_id: string | null;
+  lease_expires_at: string | null;
+  available_at: string;
+  attempt_count: number;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+};
+
+export type WebhookQueueSummaryRecord = {
+  pending_count: number;
+  processing_count: number;
+  failed_count: number;
+  done_count: number;
+};
+
+export type WebhookQueueJobPageRecord = {
+  items: WebhookQueueJobRecord[];
+  total: number;
+  limit: number;
+  offset: number;
+  summary: WebhookQueueSummaryRecord;
 };
 
 export type JiraWebhookActionResult = {
@@ -509,6 +617,12 @@ export type RunStatus = (typeof RUN_STATUSES)[number];
 
 export type RunRecord = {
   run_id: string;
+  workflow_id: string;
+  attempt_number: number;
+  parent_run_id: string | null;
+  entry_mode: string;
+  entry_stage: string | null;
+  entry_checkpoint_id: string | null;
   tenant_id: string;
   project_id: string | null;
   issue_key: string;
@@ -517,10 +631,9 @@ export type RunRecord = {
   repo_url: string | null;
   branch: string | null;
   pr_url: string | null;
-  dev_session_id: string | null;
-  pm_session_id: string | null;
-  orchestrated_session_id: string | null;
   status: RunStatus;
+  waiting_for_input: boolean;
+  pending_input_request_id: string | null;
   last_error: string | null;
   created_at: string;
   started_at: string | null;
@@ -528,9 +641,33 @@ export type RunRecord = {
   plan: Record<string, unknown> | null;
 };
 
-export type RunRerunPayload = {
-  mode: "fresh" | "resume";
-  resume_stage?: "orchestrated" | "pm" | "dev" | "review";
+export type WorkflowRecord = {
+  workflow_id: string;
+  tenant_id: string;
+  project_id: string | null;
+  issue_key: string;
+  issue_summary: string | null;
+  repo_url: string | null;
+  branch: string | null;
+  pr_url: string | null;
+  dedupe_scope: string;
+  status: string;
+  active_run_id: string | null;
+  latest_checkpoint_id: string | null;
+  source_workflow_id: string | null;
+  source_run_id: string | null;
+  blocked_reason: string | null;
+  pending_input_request_id: string | null;
+  latest_checkpoint_kind: string | null;
+  runs: RunRecord[];
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+};
+
+export type WorkflowAttemptCreatePayload = {
+  mode: "fresh" | "restart" | "resume";
+  checkpoint_kind?: "pm" | "execution";
 };
 
 export type RunEventRecord = {
@@ -1746,6 +1883,93 @@ export function runProjectAutomationNow(
   );
 }
 
+export function getProjectInstalls(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string
+): Promise<ProjectInstallsRecord> {
+  return request<ProjectInstallsRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/installs`
+  );
+}
+
+export function createProjectInstall(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  payload: ProjectInstallPayload
+): Promise<ProjectInstallRecord> {
+  return request<ProjectInstallRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/installs`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }
+  );
+}
+
+export function updateProjectInstall(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  installId: string,
+  payload: ProjectInstallPayload
+): Promise<ProjectInstallRecord> {
+  return request<ProjectInstallRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/installs/${encodeURIComponent(installId)}`,
+    {
+      method: "PUT",
+      body: JSON.stringify(payload)
+    }
+  );
+}
+
+export function deleteProjectInstall(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  installId: string
+): Promise<void> {
+  return request<void>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/installs/${encodeURIComponent(installId)}`,
+    {
+      method: "DELETE"
+    }
+  );
+}
+
+export function getProjectInstallRequests(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string
+): Promise<ProjectInstallRequestsRecord> {
+  return request<ProjectInstallRequestsRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/install-requests`
+  );
+}
+
+export function updateProjectInstallRequest(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  requestId: string,
+  payload: ProjectInstallRequestUpdatePayload
+): Promise<ProjectInstallRequestRecord> {
+  return request<ProjectInstallRequestRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/install-requests/${encodeURIComponent(requestId)}`,
+    {
+      method: "PUT",
+      body: JSON.stringify(payload)
+    }
+  );
+}
+
 export function listProjectKnowledgeAssets(
   credentials: Credentials,
   tenantId: string,
@@ -1990,6 +2214,64 @@ export function getPlatformStatus(credentials: Credentials): Promise<PlatformSta
   return request<PlatformStatusRecord>(credentials, "/api/admin/status");
 }
 
+export function startWorkerRuntimeLoginSession(
+  credentials: Credentials,
+  serviceInstanceId: string,
+  runtimeKind: string,
+): Promise<WorkerRuntimeAuthRequestRecord> {
+  return request<WorkerRuntimeAuthRequestRecord>(
+    credentials,
+    `/api/admin/workers/${encodeURIComponent(serviceInstanceId)}/runtime-dependencies/${encodeURIComponent(runtimeKind)}/login-session`,
+    {
+      method: "POST",
+    },
+  );
+}
+
+export function getWorkerRuntimeAuthRequest(
+  credentials: Credentials,
+  requestId: string,
+): Promise<WorkerRuntimeAuthRequestRecord> {
+  return request<WorkerRuntimeAuthRequestRecord>(
+    credentials,
+    `/api/admin/workers/runtime-auth-requests/${encodeURIComponent(requestId)}`,
+  );
+}
+
+export function listWebhookQueueJobs(
+  credentials: Credentials,
+  params: {
+    tenantId: string;
+    projectId: string;
+    status?: string;
+    transport?: string;
+    subjectKey?: string;
+    limit?: number;
+    offset?: number;
+  }
+): Promise<WebhookQueueJobPageRecord> {
+  const query = new URLSearchParams();
+  if (params?.status) {
+    query.set("status", params.status);
+  }
+  if (params?.transport) {
+    query.set("transport", params.transport);
+  }
+  query.set("tenant_id", params.tenantId);
+  query.set("project_id", params.projectId);
+  if (params?.subjectKey) {
+    query.set("subject_key", params.subjectKey);
+  }
+  if (typeof params?.limit === "number") {
+    query.set("limit", String(params.limit));
+  }
+  if (typeof params?.offset === "number") {
+    query.set("offset", String(params.offset));
+  }
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return request<WebhookQueueJobPageRecord>(credentials, `/api/admin/observability/webhook-jobs${suffix}`);
+}
+
 export function listRuns(
   credentials: Credentials,
   params: {
@@ -2040,12 +2322,16 @@ export function getRun(credentials: Credentials, runId: string): Promise<RunReco
   return request<RunRecord>(credentials, `/api/admin/runs/${encodeURIComponent(runId)}`);
 }
 
-export function rerunRun(
+export function getWorkflow(credentials: Credentials, workflowId: string): Promise<WorkflowRecord> {
+  return request<WorkflowRecord>(credentials, `/api/admin/workflows/${encodeURIComponent(workflowId)}`);
+}
+
+export function createWorkflowAttempt(
   credentials: Credentials,
-  runId: string,
-  payload: RunRerunPayload = { mode: "fresh" }
+  workflowId: string,
+  payload: WorkflowAttemptCreatePayload
 ): Promise<RunRecord> {
-  return request<RunRecord>(credentials, `/api/admin/runs/${encodeURIComponent(runId)}/rerun`, {
+  return request<RunRecord>(credentials, `/api/admin/workflows/${encodeURIComponent(workflowId)}/attempts`, {
     method: "POST",
     body: JSON.stringify(payload)
   });

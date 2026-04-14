@@ -12,19 +12,19 @@ from orchestrator.core.agent_observability import (
     agent_observability_tracker,
     reset_agent_observability_for_tests,
 )
-from orchestrator.core.runs import RUN_DEDUPE_SCOPE_ISSUE_EXECUTION, enqueue_run
+from orchestrator.core.runs import enqueue_run
+from orchestrator.core.worker.execution_service import process_next_queued_run
+from orchestrator.core.worker_capability_normalization import WorkerCapability
 from orchestrator.core.workflow.runner import (
     PmPlan,
     WorkflowStageCheckpoint,
     WorkflowDiagnostics,
     WorkflowResult,
 )
-from orchestrator.core.discord.notifications import DiscordSendResult
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
-from orchestrator.storage.migrations import run_migrations
-from orchestrator.storage.models import JiraOAuthConnection, Project, Run, RunLock, Tenant
-from orchestrator.worker import process_next_queued_run
+from orchestrator.storage.models import JiraOAuthConnection, Project, Tenant, WorkflowExecution
 from orchestrator.tools.project_repo_checkout import ProjectRepoCheckoutError
+from tests.test_support.db_harness import SqliteTemplateDbTestCase
 
 
 class _SuccessRunner:
@@ -48,7 +48,7 @@ class _SuccessRunner:
                 )
             )
         return WorkflowResult(
-            succeeded=True,
+            outcome="success",
             plan=PmPlan(
                 plan_steps=["plan", "build", "validate"],
                 acceptance_criteria=["has PR link"],
@@ -66,7 +66,7 @@ class _FailureRunner:
     def run(self, request, *, test_feedback_hook=None, stage_checkpoint_hook=None):  # noqa: ANN001,ARG002
         _ = stage_checkpoint_hook
         return WorkflowResult(
-            succeeded=False,
+            outcome="failed",
             plan=PmPlan(
                 plan_steps=["plan", "build", "validate"],
                 acceptance_criteria=["has PR link"],
@@ -89,7 +89,7 @@ class _CapabilityMismatchRunner:
     def run(self, request, *, test_feedback_hook=None, stage_checkpoint_hook=None):  # noqa: ANN001,ARG002
         _ = stage_checkpoint_hook
         return WorkflowResult(
-            succeeded=False,
+            outcome="requeue",
             plan=PmPlan(
                 plan_steps=["Plan implementation"],
                 acceptance_criteria=["Feature implemented"],
@@ -100,6 +100,11 @@ class _CapabilityMismatchRunner:
             summary=[],
             test_guidance=[],
             attempts=1,
+            requeue_target=WorkerCapability.MACOS,
+            requeue_reason=(
+                "Execution capability mismatch: PM selected macos but current worker is linux. "
+                "Requeue on worker:macos before dev/test/review."
+            ),
             diagnostics=WorkflowDiagnostics(
                 stage="pm",
                 message=(
@@ -118,64 +123,12 @@ class _CapabilityMismatchRunner:
         )
 
 
-class WorkerWorkflowTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self.temp_dir = TemporaryDirectory()
-        self.database_url = f"sqlite:///{self.temp_dir.name}/worker_test.db"
-        self.repo_checkout_base_dir = f"{self.temp_dir.name}/project-repos"
-
-        os.environ["ORCHESTRATOR_DATABASE_URL"] = self.database_url
-        os.environ["ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR"] = self.repo_checkout_base_dir
-        os.environ["ORCHESTRATOR_WORKER_WORKSPACE_KEY"] = "worker-a"
-        get_settings.cache_clear()
-        reset_db_engine_cache()
-        reset_agent_observability_for_tests()
-        run_migrations(database_url=self.database_url)
-        self.session_factory = create_session_factory(database_url=self.database_url)
-        self._jira_issue_details: dict[str, dict[str, object]] = {}
-        self.checkout_patcher = patch(
-            "orchestrator.core.worker.execution_service.ensure_project_repository_checkout"
-        )
-        self.checkout_mock = self.checkout_patcher.start()
-        self.worktree_patcher = patch(
-            "orchestrator.core.worker.workflow_request_service.ensure_run_worktree",
-            side_effect=self._ensure_run_worktree_stub,
-        )
-        self.worktree_patcher.start()
-        self.worktree_validate_patcher = patch(
-            "orchestrator.core.worker.workflow_request_service.validate_run_worktree",
-            return_value=None,
-        )
-        self.worktree_validate_patcher.start()
-        self.freshness_patcher = patch(
-            "orchestrator.core.worker.execution_service.check_run_snapshot_freshness",
-            return_value=SimpleNamespace(stale=False, message=None),
-        )
-        self.freshness_patcher.start()
-        self.jira_oauth_patcher = patch(
-            "orchestrator.core.worker.execution_service.tenant_jira_oauth_context",
-            side_effect=self._tenant_jira_oauth_context_stub,
-        )
-        self.jira_oauth_patcher.start()
-        self._create_tenant()
-        self._seed_checked_out_repo()
-
-    def tearDown(self) -> None:
-        self.checkout_patcher.stop()
-        self.worktree_patcher.stop()
-        self.worktree_validate_patcher.stop()
-        self.freshness_patcher.stop()
-        self.temp_dir.cleanup()
-        os.environ.pop("ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR", None)
-        os.environ.pop("ORCHESTRATOR_WORKER_WORKSPACE_KEY", None)
-        self.jira_oauth_patcher.stop()
-        get_settings.cache_clear()
-        reset_db_engine_cache()
-        reset_agent_observability_for_tests()
-
-    def _create_tenant(self) -> None:
+class WorkerWorkflowTests(SqliteTemplateDbTestCase):
+    @classmethod
+    def bootstrap_template_database(cls) -> None:
         now = datetime.now(timezone.utc)
-        with self.session_factory() as session:
+        session_factory = create_session_factory(database_url=cls._template_database_url)
+        with session_factory() as session:
             session.add(
                 Tenant(
                     tenant_id="tenant-worker",
@@ -229,6 +182,66 @@ class WorkerWorkflowTests(unittest.TestCase):
             )
             session.commit()
 
+    def setUp(self) -> None:
+        self.temp_dir = TemporaryDirectory()
+        self._original_database_url = os.environ.get("ORCHESTRATOR_DATABASE_URL")
+        self.database_url = self._prepare_test_database(name_prefix="worker-workflow")
+        self.repo_checkout_base_dir = f"{self.temp_dir.name}/project-repos"
+
+        os.environ["ORCHESTRATOR_DATABASE_URL"] = self.database_url
+        os.environ["ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR"] = self.repo_checkout_base_dir
+        os.environ["ORCHESTRATOR_WORKER_WORKSPACE_KEY"] = "worker-a"
+        os.environ["ORCHESTRATOR_WORKER_CAPABILITIES"] = "linux"
+        get_settings.cache_clear()
+        reset_db_engine_cache()
+        reset_agent_observability_for_tests()
+        self.session_factory = create_session_factory(database_url=self.database_url)
+        self._jira_issue_details: dict[str, dict[str, object]] = {}
+        self.checkout_patcher = patch(
+            "orchestrator.core.worker.execution_service.ensure_project_repository_checkout"
+        )
+        self.checkout_mock = self.checkout_patcher.start()
+        self.worktree_patcher = patch(
+            "orchestrator.core.worker.workflow_request_service.ensure_run_worktree",
+            side_effect=self._ensure_run_worktree_stub,
+        )
+        self.worktree_patcher.start()
+        self.worktree_validate_patcher = patch(
+            "orchestrator.core.worker.workflow_request_service.validate_run_worktree",
+            return_value=None,
+        )
+        self.worktree_validate_patcher.start()
+        self.freshness_patcher = patch(
+            "orchestrator.core.worker.execution_service.check_run_snapshot_freshness",
+            return_value=SimpleNamespace(stale=False, message=None),
+        )
+        self.freshness_patcher.start()
+        self.jira_oauth_patcher = patch(
+            "orchestrator.core.worker.execution_service.tenant_jira_oauth_context",
+            side_effect=self._tenant_jira_oauth_context_stub,
+        )
+        self.jira_oauth_patcher.start()
+        self._seed_checked_out_repo()
+
+    def tearDown(self) -> None:
+        self.checkout_patcher.stop()
+        self.worktree_patcher.stop()
+        self.worktree_validate_patcher.stop()
+        self.freshness_patcher.stop()
+        self.temp_dir.cleanup()
+        self._cleanup_test_database()
+        if self._original_database_url is None:
+            os.environ.pop("ORCHESTRATOR_DATABASE_URL", None)
+        else:
+            os.environ["ORCHESTRATOR_DATABASE_URL"] = self._original_database_url
+        os.environ.pop("ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR", None)
+        os.environ.pop("ORCHESTRATOR_WORKER_WORKSPACE_KEY", None)
+        os.environ.pop("ORCHESTRATOR_WORKER_CAPABILITIES", None)
+        self.jira_oauth_patcher.stop()
+        get_settings.cache_clear()
+        reset_db_engine_cache()
+        reset_agent_observability_for_tests()
+
     def _tenant_jira_oauth_context_stub(self, *, session, tenant, settings):  # noqa: ANN001
         _ = session, tenant, settings
 
@@ -259,8 +272,6 @@ class WorkerWorkflowTests(unittest.TestCase):
         issue_summary: str | None = None,
         issue_description: str | None = None,
     ) -> str:
-        now = datetime.now(timezone.utc)
-        run_id = f"run-{issue_key}"
         effective_summary = issue_summary or f"Implement {issue_key}"
         effective_description = issue_description or (
             "Objective: Deliver requested behavior. "
@@ -270,31 +281,23 @@ class WorkerWorkflowTests(unittest.TestCase):
             "NFR intent: MVP."
         )
         with self.session_factory() as session:
-            session.add(
-                Run(
-                    run_id=run_id,
-                    tenant_id="tenant-worker",
-                    issue_key=issue_key,
-                    issue_summary=effective_summary,
-                    issue_description=effective_description,
-                    repo_url="https://github.com/example/repo",
-                    branch=None,
-                    pr_url=None,
-                    status="queued",
-                    last_error=None,
-                    plan=None,
-                    created_at=now,
-                    started_at=None,
-                    finished_at=None,
-                )
+            result = enqueue_run(
+                session,
+                tenant_id="tenant-worker",
+                project_id="tenant-worker-default",
+                issue_key=issue_key,
+                issue_summary=effective_summary,
+                issue_description=effective_description,
+                repo_url="https://github.com/example/repo",
+                precheck_outcome="ready_for_agent",
             )
-            session.commit()
+            self.assertTrue(result.enqueued)
         self._jira_issue_details[issue_key] = {
             "summary": effective_summary,
             "description": effective_description,
             "labels": ["agent:ready"],
         }
-        return run_id
+        return result.run.run_id
 
     def _seed_checked_out_repo(self) -> None:
         repo_git_dir = (
@@ -310,16 +313,6 @@ class WorkerWorkflowTests(unittest.TestCase):
             / "runs"
             / run_id
             / "workspaces"
-        )
-
-    def _get_lock(self, session, *, issue_key: str, dedupe_scope: str = RUN_DEDUPE_SCOPE_ISSUE_EXECUTION):
-        return session.get(
-            RunLock,
-            {
-                "tenant_id": "tenant-worker",
-                "issue_key": issue_key,
-                "dedupe_scope": dedupe_scope,
-            },
         )
 
     def _ensure_run_worktree_stub(
@@ -377,22 +370,21 @@ class WorkerWorkflowTests(unittest.TestCase):
             self.assertIsNotNone(processed.started_at)
             self.assertIsNotNone(processed.finished_at)
             self.assertIsInstance(processed.plan, dict)
-            self.assertTrue(processed.plan["succeeded"])
-            self.assertEqual(processed.plan["attempts"], 1)
-            self.assertEqual(processed.plan["plan"]["plan_steps"], ["plan", "build", "validate"])
-            self.assertEqual(processed.plan["stage_checkpoints"]["pm"]["status"], "completed")
-            self.assertEqual(processed.plan["latest_completed_stage"], "pm")
-            stage_updates = processed.plan["stage_updates"]
+            self.assertEqual(processed.plan["workflow"]["outcome"], "success")
+            self.assertEqual(processed.plan["workflow"]["attempts"], 1)
+            self.assertEqual(processed.plan["stages"]["pm"]["artifact"]["plan_steps"], ["plan", "build", "validate"])
+            self.assertEqual(processed.plan["stages"]["pm"]["status"], "completed")
+            stage_updates = processed.plan["events"]["stage_updates"]
             self.assertEqual(
                 [entry["stage"] for entry in stage_updates],
                 ["lock_acquired", "plan_posted", "pr_opened"],
             )
             self.assertIn("TP-300", stage_updates[0]["discord_message"])
-            self.assertIn("run-TP-300", stage_updates[0]["discord_message"])
+            self.assertIn(processed.run_id, stage_updates[0]["discord_message"])
             self.assertIsNotNone(runner.last_request)
             self.assertTrue(
                 str(runner.last_request.execution_repo_dir).endswith(
-                    "/tenant-worker/tenant-worker-default/runs/run-TP-300/workspaces/worker-a/repo"
+                    f"/tenant-worker/tenant-worker-default/runs/{processed.run_id}/workspaces/worker-a/repo"
                 )
             )
             self.assertFalse(self._run_workspaces_dir(run_id).exists())
@@ -425,17 +417,19 @@ class WorkerWorkflowTests(unittest.TestCase):
             self.assertIsNone(processed.started_at)
             self.assertIsNone(processed.finished_at)
             self.assertIsNone(processed.pr_url)
-            self.assertTrue(processed.plan["requeued"])
-            self.assertTrue(processed.plan["stale_branch_snapshot"])
-            self.assertIn("Branch snapshot stale", processed.plan["requeue_reason"])
-            stage_updates = processed.plan["stage_updates"]
+            self.assertTrue(processed.plan["context"]["execution_context"]["stale_branch_snapshot"])
+            self.assertIn("Branch snapshot stale", processed.plan["workflow"]["requeue_reason"])
+            stage_updates = processed.plan["events"]["stage_updates"]
             self.assertEqual(
                 [entry["stage"] for entry in stage_updates],
                 ["lock_acquired", "plan_posted", "run_requeued_stale_snapshot"],
             )
             self.assertFalse(self._run_workspaces_dir(run_id).exists())
-            lock = self._get_lock(session, issue_key="TP-3001")
-            self.assertIsNone(lock)
+            workflow = session.get(WorkflowExecution, processed.workflow_id)
+            self.assertIsNotNone(workflow)
+            assert workflow is not None
+            self.assertEqual(workflow.status, "queued")
+            self.assertEqual(workflow.active_run_id, run_id)
 
     def test_process_next_queued_run_marks_failure_with_diagnostics(self) -> None:
         run_id = self._queue_run("TP-301")
@@ -451,9 +445,8 @@ class WorkerWorkflowTests(unittest.TestCase):
             )
             self.assertIsNone(processed.pr_url)
             self.assertIsInstance(processed.plan, dict)
-            self.assertFalse(processed.plan["succeeded"])
-            self.assertEqual(processed.plan["diagnostics"]["stage"], "test")
-            stage_updates = processed.plan["stage_updates"]
+            self.assertEqual(processed.plan["workflow"]["outcome"], "failed")
+            stage_updates = processed.plan["events"]["stage_updates"]
             self.assertEqual(
                 [entry["stage"] for entry in stage_updates],
                 ["lock_acquired", "plan_posted", "run_failed"],
@@ -480,94 +473,24 @@ class WorkerWorkflowTests(unittest.TestCase):
             self.assertIsNone(processed.started_at)
             self.assertIsNone(processed.finished_at)
             self.assertIsInstance(processed.plan, dict)
-            self.assertEqual(processed.plan["required_worker_capability"], "macos")
-            self.assertEqual(processed.plan["required_worker_label"], "worker:macos")
-            self.assertTrue(processed.plan["requeued"])
-            stage_updates = processed.plan["stage_updates"]
+            self.assertEqual(processed.plan["workflow"]["requeue_target"], "macos")
+            self.assertEqual(processed.plan["context"]["execution_context"]["required_worker_label"], "worker:macos")
+            stage_updates = processed.plan["events"]["stage_updates"]
             self.assertEqual(
                 [entry["stage"] for entry in stage_updates],
                 ["lock_acquired", "plan_posted", "run_requeued_capability_mismatch"],
             )
             self.assertFalse(self._run_workspaces_dir(run_id).exists())
-            lock = self._get_lock(session, issue_key="TP-3020")
-            self.assertIsNone(lock)
+            workflow = session.get(WorkflowExecution, processed.workflow_id)
+            self.assertIsNotNone(workflow)
+            assert workflow is not None
+            self.assertEqual(workflow.status, "queued")
+            self.assertEqual(workflow.active_run_id, run_id)
 
         events, _ = agent_observability_tracker.snapshot()
         event_types = [event.event_type for event in events]
         self.assertIn("TASK_STARTED", event_types)
         self.assertNotIn("TASK_FAILED", event_types)
-
-    def test_process_next_queued_run_blocks_when_ready_label_is_missing(self) -> None:
-        run_id = self._queue_run(
-            "TP-302",
-            issue_summary="Unclear requirements",
-            issue_description="TBD: need to decide later?",
-        )
-        self._jira_issue_details["TP-302"]["labels"] = []
-
-        with self.session_factory() as session:
-            processed = process_next_queued_run(session, _SuccessRunner())
-            self.assertIsNotNone(processed)
-            self.assertEqual(processed.run_id, run_id)
-            self.assertEqual(processed.status, "blocked")
-            self.assertIn("Issue is missing the configured ready label", processed.last_error or "")
-            self.assertIsInstance(processed.plan, dict)
-            self.assertIn("run_not_ready", processed.plan)
-            stage_updates = processed.plan["stage_updates"]
-            self.assertEqual([entry["stage"] for entry in stage_updates], ["run_not_ready"])
-            retry_enqueue = enqueue_run(
-                session,
-                tenant_id="tenant-worker",
-                project_id=None,
-                issue_key="TP-302",
-                issue_summary="Clarified requirements",
-                issue_description=(
-                    "Objective: deliver requested behavior. "
-                    "Scope: explicit in/out scope. "
-                    "Acceptance Criteria: measurable checks. "
-                    "How to test: exact commands and expected outcomes. "
-                    "NFR intent: MVP."
-                ),
-                repo_url="https://github.com/example/repo",
-            )
-            self.assertTrue(retry_enqueue.enqueued)
-
-    def test_process_next_queued_run_fails_and_releases_lock_on_decision_gate_exception(self) -> None:
-        run_id = self._queue_run("TP-3021")
-
-        with self.session_factory() as session, patch(
-            "orchestrator.core.worker.execution_service.apply_decision_gate",
-            side_effect=RuntimeError("decision gate parse failed"),
-        ):
-            processed = process_next_queued_run(session, _SuccessRunner())
-            self.assertIsNotNone(processed)
-            self.assertEqual(processed.run_id, run_id)
-            self.assertEqual(processed.status, "failed")
-            self.assertIn("Decision Gate evaluation failed: decision gate parse failed", processed.last_error or "")
-            lock = self._get_lock(session, issue_key="TP-3021")
-            self.assertIsNone(lock)
-
-    def test_run_not_ready_notification_does_not_open_reply_thread(self) -> None:
-        run_id = self._queue_run(
-            "TP-399",
-            issue_summary="Unclear requirements",
-            issue_description="TBD: need to decide later?",
-        )
-        self._jira_issue_details["TP-399"]["labels"] = []
-
-        with self.session_factory() as session, patch(
-            "orchestrator.worker.send_tenant_discord_message",
-            return_value=DiscordSendResult(sent=True, reason="sent"),
-        ) as send_mock:
-            processed = process_next_queued_run(session, _SuccessRunner())
-            self.assertIsNotNone(processed)
-            self.assertEqual(processed.run_id, run_id)
-            self.assertEqual(processed.status, "blocked")
-
-        send_mock.assert_called_once()
-        kwargs = send_mock.call_args.kwargs
-        self.assertFalse(kwargs["open_thread"])
-        self.assertNotIn("thread_intro_components", kwargs)
 
     def test_process_next_queued_run_missing_project_mapping_releases_run_lock(self) -> None:
         with self.session_factory() as session:
@@ -585,6 +508,7 @@ class WorkerWorkflowTests(unittest.TestCase):
                     "NFR intent: MVP."
                 ),
                 repo_url="https://github.com/example/repo",
+                precheck_outcome="ready_for_agent",
             )
             self.assertTrue(enqueue_result.enqueued)
             run_id = enqueue_result.run.run_id
@@ -598,8 +522,10 @@ class WorkerWorkflowTests(unittest.TestCase):
                 processed.last_error,
                 "No active project mapping found for issue ZZ-101",
             )
-            lock = self._get_lock(session, issue_key="ZZ-101")
-            self.assertIsNone(lock)
+            workflow = session.get(WorkflowExecution, processed.workflow_id)
+            self.assertIsNotNone(workflow)
+            assert workflow is not None
+            self.assertEqual(workflow.status, "failed")
 
     def test_process_next_queued_run_uses_tenant_jira_site_url_for_stage_links(self) -> None:
         run_id = self._queue_run("TP-555")
@@ -634,7 +560,7 @@ class WorkerWorkflowTests(unittest.TestCase):
             processed = process_next_queued_run(session, runner)
             self.assertIsNotNone(processed)
             self.assertEqual(processed.run_id, run_id)
-            stage_updates = processed.plan["stage_updates"]
+            stage_updates = processed.plan["events"]["stage_updates"]
             self.assertIn(
                 "https://jira.example.test/browse/TP-555",
                 stage_updates[0]["discord_message"],

@@ -16,9 +16,11 @@ from orchestrator.core.codex_agents import (
     plan_discord_ask_intent_with_codex,
 )
 from orchestrator.core.runtime_invocation import AgentInvocationContext
-from orchestrator.core.codex_runtime import CodexRuntimeError, build_codex_runtime as _legacy_build_codex_runtime
+from orchestrator.core.codex_runtime import CodexRuntimeError, build_codex_runtime as _build_codex_runtime
 from orchestrator.core.agent_runtime_resolver import build_runtime_for_selector
 from orchestrator.core.config import get_settings
+from orchestrator.core.pm_plugin_catalog import plugin_catalog_payload, tool_catalog_payload
+from orchestrator.core.pm_tool_executor import execute_pm_tool_calls
 from orchestrator.core.pm_interview_service import (
     PM_INTERVIEW_STATUS_PM_COMPLETED,
     PM_INTERVIEW_STATUS_READY_TO_WRITE,
@@ -32,11 +34,14 @@ from orchestrator.core.pm_interview_service import (
 )
 from orchestrator.core.discord.personas import VOICE_ROOM_PERSONA_IDS, resolve_voice_room_persona_profile
 from orchestrator.core.specialist_planning import SpecialistPlanningRequest, run_specialist_planning_fanout
+from orchestrator.core.stage_design_planning import invoke_stage_design_planning_llm
+from orchestrator.core.stage_spi_policy import resolve_stage_spi_enabled
+from orchestrator.core.stage_plugins import evaluate_stage_plugin
 from orchestrator.storage.models import Project, Tenant
 
 
 _room_history_service = DiscordRoomHistoryService()
-build_codex_runtime = _legacy_build_codex_runtime
+build_codex_runtime = _build_codex_runtime
 
 
 def _normalized_project_keys(project_keys: list[str]) -> list[str]:
@@ -531,6 +536,112 @@ def dispatch_ask_command(
                 data=response_data,
             )
 
+        stage_spi_enabled = resolve_stage_spi_enabled(
+            session=session,
+            settings=settings,
+            tenant_id=tenant.tenant_id,
+            project_id=scoped_project_id,
+        )
+        if stage_spi_enabled:
+            existing_notes = dict(getattr(interview_case, "notes_json", None) or {})
+            raw_stage_state = existing_notes.get("stage_spi")
+            stage_state = dict(raw_stage_state) if isinstance(raw_stage_state, dict) else None
+            llm_plan_payload = None
+            stage_tool_outputs_from_executor: list[dict[str, Any]] = []
+            decision_state = None
+            selected_plugin_id = str(getattr(settings, "stage_spi_default_plugin", None) or "design").strip().lower()
+            plugin_catalog = plugin_catalog_payload()
+            allowed_plugin_ids = {str(item.get("plugin_id") or "").strip().lower() for item in plugin_catalog}
+            tool_catalog = tool_catalog_payload()
+            if bool(getattr(settings, "stage_spi_llm_planning_enabled", False)):
+                try:
+                    llm_plan_payload = invoke_stage_design_planning_llm(
+                        session=session,
+                        settings=settings,
+                        tenant_id=tenant.tenant_id,
+                        project_id=scoped_project_id,
+                        working_dir=codex_working_dir,
+                        issue_key=normalized_issue_key,
+                        stage_plugin=selected_plugin_id,
+                        stage_status=str((stage_state or {}).get("stage_status") or "stage_planning").strip().lower() or "stage_planning",
+                        stakeholder_text=question,
+                        assistant_summary=message,
+                        stage_artifacts=dict((stage_state or {}).get("stage_artifacts") or {}),
+                        stage_open_questions=list((stage_state or {}).get("stage_open_questions") or []),
+                        stage_tool_outputs=[dict(x) for x in ((stage_state or {}).get("stage_tool_outputs") or []) if isinstance(x, dict)],
+                    )
+                except CodexRuntimeError:
+                    llm_plan_payload = None
+                if isinstance(llm_plan_payload, dict):
+                    plugin_candidate = str(llm_plan_payload.get("selected_plugin_id") or "").strip().lower()
+                    if plugin_candidate and plugin_candidate in allowed_plugin_ids:
+                        selected_plugin_id = plugin_candidate
+                    decision_raw = str(llm_plan_payload.get("decision_state") or "").strip().lower()
+                    if decision_raw in {"approved", "revisions_required", "pending"}:
+                        decision_state = decision_raw
+                    stage_tool_outputs_from_executor = execute_pm_tool_calls(
+                        tool_calls=llm_plan_payload.get("tool_calls") if isinstance(llm_plan_payload.get("tool_calls"), list) else None,
+                        tenant_id=tenant.tenant_id,
+                        project_id=scoped_project_id,
+                        default_prompt=message,
+                    )
+            stage_result = evaluate_stage_plugin(
+                state=stage_state,
+                stakeholder_text=question,
+                assistant_summary=message,
+                attachments=payload.attachments,
+                plugin_id=selected_plugin_id or None,
+                tenant_id=tenant.tenant_id,
+                project_id=scoped_project_id,
+                request_id=request_id,
+                llm_plan_payload=llm_plan_payload,
+                explicit_tool_outputs=stage_tool_outputs_from_executor,
+                decision_state=decision_state,
+            )
+            existing_notes["stage_spi"] = {
+                "stage_plugin": stage_result.stage_plugin,
+                "stage_status": stage_result.stage_status,
+                "stage_artifacts": dict(stage_result.stage_artifacts),
+                "stage_open_questions": list(stage_result.stage_open_questions),
+                "stage_feedback_log": [dict(item) for item in stage_result.stage_feedback_log],
+                "stage_tool_outputs": [dict(item) for item in stage_result.stage_tool_outputs],
+                "stage_ready_for_implementation": stage_result.stage_ready_for_implementation,
+            }
+            interview_case.notes_json = existing_notes
+            response_data.update(
+                {
+                    "stage_plugin": stage_result.stage_plugin,
+                    "stage_status": stage_result.stage_status,
+                    "stage_artifacts": dict(stage_result.stage_artifacts),
+                    "stage_open_questions": list(stage_result.stage_open_questions),
+                    "stage_tool_outputs": [dict(item) for item in stage_result.stage_tool_outputs],
+                    "stage_ready_for_implementation": stage_result.stage_ready_for_implementation,
+                    "stage_plugin_catalog": plugin_catalog,
+                    "stage_tool_catalog": tool_catalog,
+                }
+            )
+            if stage_result.block_reason:
+                response_data["stage_block_reason"] = stage_result.block_reason
+            if not stage_result.stage_ready_for_implementation:
+                interview_case.status = "question_pending"
+                interview_case.current_question_json = {
+                    "slot_key": "stage_plugin",
+                    "question": stage_result.message,
+                    "examples": [],
+                }
+                interview_case.next_question_json = dict(interview_case.current_question_json)
+                interview_case.missing_slots_json = ["stage_plugin"]
+                interview_case.updated_at = datetime.now(timezone.utc)
+                staged_message = message
+                if stage_result.message and stage_result.message not in staged_message:
+                    staged_message = f"{staged_message}\n\n{stage_result.message}".strip()
+                return DiscordCommandResponse(
+                    ok=True,
+                    command="pm",
+                    message=staged_message,
+                    data=response_data,
+                )
+
         scoped_pm_project_keys = _resolve_pm_project_keys(
             project_keys=normalized_project_keys,
             issue_key=normalized_issue_key,
@@ -550,6 +661,7 @@ def dispatch_ask_command(
             scoped_project_keys=scoped_pm_project_keys,
             codex_working_dir=codex_working_dir,
             pm_status=PM_INTERVIEW_STATUS_READY_TO_WRITE,
+            pm_interview_notes_json=dict(getattr(interview_case, "notes_json", None) or {}),
         )
         parent_issue_key = str(
             (list(parent_seed_data.get("all_parent_issue_keys", [])) or [None])[0] or getattr(interview_case, "parent_issue_key", "") or ""

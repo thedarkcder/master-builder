@@ -11,12 +11,16 @@ from orchestrator.api.admin.config_helpers import (
 from orchestrator.api.admin.route_helpers import (
     admin_project_service,
     allocate_tenant_id,
-    ensure_default_project_for_tenant,
-    sync_tenant_jira_project_keys,
+    provision_jira_webhook,
+    reconcile_tenant_projects,
     with_managed_github_refs,
     with_preserved_jira_system_fields,
 )
-from orchestrator.api.admin.schema_mappers import tenant_to_schema
+from orchestrator.api.admin.schema_mappers import (
+    project_install_request_to_schema,
+    project_install_to_schema,
+    tenant_to_schema,
+)
 from orchestrator.api.admin.project_normalization import (
     with_preserved_discord_system_fields,
 )
@@ -48,6 +52,12 @@ from orchestrator.api.schemas import (
     ProjectAutomationRead,
     ProjectAutomationsRead,
     ProjectAutomationsWrite,
+    ProjectInstallRead,
+    ProjectInstallRequestRead,
+    ProjectInstallRequestUpdate,
+    ProjectInstallRequestsRead,
+    ProjectInstallsRead,
+    ProjectInstallWrite,
     ProjectRead,
     ProjectUpdate,
     TenantDeliverySummaryRead,
@@ -67,6 +77,19 @@ from orchestrator.api.schemas import (
     TenantRead,
     TenantUpdate,
 )
+from orchestrator.core.install_registry_service import (
+    ProjectInstallWrite as ServiceProjectInstallWrite,
+    create_project_install,
+    delete_project_install,
+    get_project_install,
+    list_project_installs,
+    update_project_install,
+)
+from orchestrator.core.install_request_service import (
+    get_project_install_request,
+    list_project_install_requests,
+    update_install_request_status,
+)
 from orchestrator.core.config import get_settings
 from orchestrator.core.discord.oauth import (
     DiscordOAuthError,
@@ -74,6 +97,8 @@ from orchestrator.core.discord.oauth import (
     discord_oauth_is_configured,
     issue_discord_oauth_state,
 )
+from orchestrator.core.discord.oauth_config import resolve_discord_oauth_config
+from orchestrator.core.email_delivery import EmailDeliveryError
 from orchestrator.core.invites import email_delivery
 from orchestrator.core.platform_secret_service import (
     PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF,
@@ -135,6 +160,27 @@ def _build_invite_url(*, request: Request, raw_token: str) -> str:
     settings = get_settings()
     base_url = resolve_public_base_url(request=request, configured_base_url=settings.admin_ui_base_url)
     return f"{base_url}/invite/accept?token={raw_token}"
+
+
+def _send_tenant_invite_email_or_raise(
+    *,
+    email: str,
+    full_name: str | None,
+    invite_url: str,
+    tenant_name: str,
+) -> None:
+    try:
+        email_delivery.send_tenant_invite_email(
+            email=email,
+            full_name=full_name,
+            invite_url=invite_url,
+            tenant_name=tenant_name,
+        )
+    except EmailDeliveryError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Invite email delivery is unavailable",
+        ) from exc
 
 
 def _invite_to_schema_with_url(invite: object, *, invite_url: str | None = None) -> TenantInviteRead:
@@ -254,14 +300,15 @@ def create_tenant(
     return create_tenant_route_impl(
         session=session,
         payload=payload,
+        settings=get_settings(),
         validate_codex_assets_for_tenant_init_fn=_validate_codex_assets_for_tenant_init,
         create_tenant_fn=create_tenant_impl,
         allocate_tenant_id_fn=allocate_tenant_id,
         with_preserved_jira_system_fields_fn=with_preserved_jira_system_fields,
         with_managed_github_refs_fn=with_managed_github_refs,
         with_preserved_discord_system_fields_fn=with_preserved_discord_system_fields,
-        ensure_default_project_for_tenant_fn=ensure_default_project_for_tenant,
-        sync_tenant_jira_project_keys_fn=sync_tenant_jira_project_keys,
+        provision_jira_webhook_fn=provision_jira_webhook,
+        reconcile_tenant_projects_fn=reconcile_tenant_projects,
         tenant_to_schema_fn=tenant_to_schema,
     )
 
@@ -298,8 +345,7 @@ def update_tenant(
         with_preserved_jira_system_fields_fn=with_preserved_jira_system_fields,
         with_managed_github_refs_fn=with_managed_github_refs,
         with_preserved_discord_system_fields_fn=with_preserved_discord_system_fields,
-        ensure_default_project_for_tenant_fn=ensure_default_project_for_tenant,
-        sync_tenant_jira_project_keys_fn=sync_tenant_jira_project_keys,
+        reconcile_tenant_projects_fn=reconcile_tenant_projects,
         tenant_to_schema_fn=tenant_to_schema,
     )
 
@@ -331,14 +377,14 @@ def create_tenant_invite(
         mode_override=payload.mode_override,
         invited_by_user_id=principal.user_id,
     )
-    session.commit()
     invite_url = _build_invite_url(request=request, raw_token=raw_token)
-    email_delivery.send_tenant_invite_email(
+    _send_tenant_invite_email_or_raise(
         email=invite.email,
         full_name=invite.full_name,
         invite_url=invite_url,
         tenant_name=tenant.name,
     )
+    session.commit()
     return _invite_to_schema_with_url(invite, invite_url=invite_url)
 
 
@@ -374,14 +420,14 @@ def resend_tenant_invite(
     if invite is None or tenant is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invite not found")
     next_invite, raw_token = resend_invite(session=session, invite=invite, invited_by_user_id=principal.user_id)
-    session.commit()
     invite_url = _build_invite_url(request=request, raw_token=raw_token)
-    email_delivery.send_tenant_invite_email(
+    _send_tenant_invite_email_or_raise(
         email=next_invite.email,
         full_name=next_invite.full_name,
         invite_url=invite_url,
         tenant_name=tenant.name,
     )
+    session.commit()
     return TenantInviteActionResult(invite=_invite_to_schema_with_url(next_invite, invite_url=invite_url))
 
 
@@ -570,7 +616,9 @@ def get_tenant_discord_identity(
     session: Session = Depends(get_session),
 ) -> TenantDiscordIdentityRead:
     membership = require_tenant_membership(principal=principal, tenant_id=tenant_id)
-    oauth_configured = discord_oauth_is_configured(settings=get_settings())
+    settings = get_settings()
+    oauth_config = resolve_discord_oauth_config(session=session, settings=settings)
+    oauth_configured = discord_oauth_is_configured(config=oauth_config)
     if principal.user_id is None or membership is None:
         return TenantDiscordIdentityRead(linked=False, oauth_configured=oauth_configured)
     identity = get_discord_identity(session=session, user_id=principal.user_id)
@@ -598,6 +646,7 @@ def start_tenant_discord_link(
     if principal.user_id is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tenant user context required")
     settings = get_settings()
+    oauth_config = resolve_discord_oauth_config(session=session, settings=settings)
     state = issue_discord_oauth_state(
         settings=settings,
         tenant_id=tenant_id,
@@ -605,7 +654,7 @@ def start_tenant_discord_link(
         redirect_to=redirect_to,
     )
     try:
-        authorize_url = build_discord_oauth_authorize_url(settings=settings, state=state)
+        authorize_url = build_discord_oauth_authorize_url(config=oauth_config, state=state)
     except DiscordOAuthError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     return TenantDiscordLinkStartRead(authorize_url=authorize_url)
@@ -813,6 +862,162 @@ def update_project(
         payload=payload,
         admin_project_service_factory=admin_project_service,
     )  # type: ignore[return-value]
+
+
+@router.get(
+    "/tenants/{tenant_id}/projects/{project_id}/installs",
+    response_model=ProjectInstallsRead,
+)
+def get_project_installs(
+    tenant_id: str,
+    project_id: str,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> ProjectInstallsRead:
+    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    project = _get_project_for_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
+    installs = list_project_installs(session=session, tenant_id=tenant_id, project_id=project.project_id)
+    return ProjectInstallsRead(installs=[project_install_to_schema(install) for install in installs])
+
+
+@router.post(
+    "/tenants/{tenant_id}/projects/{project_id}/installs",
+    response_model=ProjectInstallRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_project_install_route(
+    tenant_id: str,
+    project_id: str,
+    payload: ProjectInstallWrite,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> ProjectInstallRead:
+    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    project = _get_project_for_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
+    try:
+        install = create_project_install(
+            session=session,
+            tenant_id=tenant_id,
+            project_id=project.project_id,
+            payload=ServiceProjectInstallWrite(
+                kind=payload.kind,
+                label=payload.label,
+                enabled=payload.enabled,
+                config=payload.config,
+                binding_names=tuple(payload.binding_names),
+            ),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return project_install_to_schema(install)
+
+
+@router.put(
+    "/tenants/{tenant_id}/projects/{project_id}/installs/{install_id}",
+    response_model=ProjectInstallRead,
+)
+def update_project_install_route(
+    tenant_id: str,
+    project_id: str,
+    install_id: str,
+    payload: ProjectInstallWrite,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> ProjectInstallRead:
+    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    _get_project_for_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
+    install = get_project_install(session=session, install_id=install_id)
+    if install is None or install.tenant_id != tenant_id or install.project_id != project_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project install not found")
+    try:
+        updated = update_project_install(
+            session=session,
+            install=install,
+            payload=ServiceProjectInstallWrite(
+                kind=payload.kind,
+                label=payload.label,
+                enabled=payload.enabled,
+                config=payload.config,
+                binding_names=tuple(payload.binding_names),
+            ),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return project_install_to_schema(updated)
+
+
+@router.delete(
+    "/tenants/{tenant_id}/projects/{project_id}/installs/{install_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def delete_project_install_route(
+    tenant_id: str,
+    project_id: str,
+    install_id: str,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> Response:
+    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    _get_project_for_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
+    install = get_project_install(session=session, install_id=install_id)
+    if install is None or install.tenant_id != tenant_id or install.project_id != project_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project install not found")
+    delete_project_install(session=session, install=install)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get(
+    "/tenants/{tenant_id}/projects/{project_id}/install-requests",
+    response_model=ProjectInstallRequestsRead,
+)
+def get_project_install_requests_route(
+    tenant_id: str,
+    project_id: str,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> ProjectInstallRequestsRead:
+    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    project = _get_project_for_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
+    requests = list_project_install_requests(session=session, tenant_id=tenant_id, project_id=project.project_id)
+    return ProjectInstallRequestsRead(requests=[project_install_request_to_schema(request) for request in requests])
+
+
+@router.put(
+    "/tenants/{tenant_id}/projects/{project_id}/install-requests/{request_id}",
+    response_model=ProjectInstallRequestRead,
+)
+def update_project_install_request_route(
+    tenant_id: str,
+    project_id: str,
+    request_id: str,
+    payload: ProjectInstallRequestUpdate,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> ProjectInstallRequestRead:
+    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    _get_project_for_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
+    request = get_project_install_request(session=session, request_id=request_id)
+    if request is None or request.tenant_id != tenant_id or request.project_id != project_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project install request not found")
+    if str(payload.status or "").strip().lower() == "fulfilled":
+        matching_install = next(
+            (
+                install
+                for install in list_project_installs(session=session, tenant_id=tenant_id, project_id=project_id)
+                if install.kind == request.kind and install.label == request.label
+            ),
+            None,
+        )
+        if matching_install is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Create a matching project install before marking this request fulfilled",
+            )
+    try:
+        updated = update_install_request_status(session=session, request=request, status=payload.status)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return project_install_request_to_schema(updated)
 
 
 def _get_project_for_tenant_or_404(*, session: Session, tenant_id: str, project_id: str) -> Project:

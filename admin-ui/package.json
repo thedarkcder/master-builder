@@ -3,14 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev -p 4100",
+    "dev": "next dev --webpack -p 4100",
     "dev:turbo": "next dev --turbopack -p 4100",
     "lint": "next typegen && tsc --noEmit -p tsconfig.lint.json",
     "build": "next build",
     "start": "next start -p 4100",
     "test:e2e": "playwright test",
     "test:e2e:headed": "playwright test --headed",
-    "stitch:export": "node scripts/fetch-stitch-export.mjs"
+    "test:e2e:live": "PLAYWRIGHT_RUN_LIVE=1 playwright test --project=chromium-live"
   },
   "engines": {
     "node": ">=20"
@@ -29,8 +29,10 @@
     "recharts": "^2.15.2",
     "tailwind-merge": "^2.5.2"
   },
+  "overrides": {
+    "lodash": "4.18.0"
+  },
   "devDependencies": {
-    "@google/stitch-sdk": "^0.0.3",
     "@playwright/test": "^1.51.1",
     "@types/node": "^22.10.2",
     "@types/react": "^18.3.12",

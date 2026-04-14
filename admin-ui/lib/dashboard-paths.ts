@@ -1,4 +1,4 @@
-export type ProjectSection = "overview" | "settings" | "runs" | "notifications" | "automations" | "secrets";
+export type ProjectSection = "overview" | "settings" | "runs" | "webhooks" | "notifications" | "automations" | "secrets" | "danger";
 export type RunPanel = "overview" | "agents" | "diagnostics" | "cost";
 
 function encodeSegment(value: string): string {
@@ -53,7 +53,7 @@ export function buildRunDetailPath({
 }
 
 export function resolveProjectSection(pathname: string): ProjectSection | null {
-  const match = pathname.match(/^\/(?!tenants(?:\/|$)|runs(?:\/|$)|dashboard(?:\/|$)|status(?:\/|$)|secrets(?:\/|$)|agent-runtimes(?:\/|$)|login(?:\/|$)|register(?:\/|$)|invite(?:\/|$)|get-started(?:\/|$)|forgot-password(?:\/|$)|reset-password(?:\/|$)|api(?:\/|$))[^/]+\/projects\/[^/]+(?:\/([^/]+))?(?:\/|$)/);
+  const match = pathname.match(/^\/(?!tenants(?:\/|$)|runs(?:\/|$)|platform(?:\/|$)|login(?:\/|$)|register(?:\/|$)|invite(?:\/|$)|get-started(?:\/|$)|forgot-password(?:\/|$)|reset-password(?:\/|$)|api(?:\/|$))[^/]+\/projects\/[^/]+(?:\/([^/]+))?(?:\/|$)/);
   const rawSection = match?.[1] ?? "";
   if (!rawSection) {
     return "overview";
@@ -61,9 +61,11 @@ export function resolveProjectSection(pathname: string): ProjectSection | null {
   if (
     rawSection === "settings" ||
     rawSection === "runs" ||
+    rawSection === "webhooks" ||
     rawSection === "notifications" ||
     rawSection === "automations" ||
-    rawSection === "secrets"
+    rawSection === "secrets" ||
+    rawSection === "danger"
   ) {
     return rawSection;
   }
@@ -80,7 +82,7 @@ export function resolveRunRouteContext(pathname: string): {
   panel: RunPanel;
 } {
   const projectMatch = pathname.match(
-    /^\/(?!tenants(?:\/|$)|runs(?:\/|$)|dashboard(?:\/|$)|status(?:\/|$)|secrets(?:\/|$)|agent-runtimes(?:\/|$)|login(?:\/|$)|register(?:\/|$)|invite(?:\/|$)|get-started(?:\/|$)|forgot-password(?:\/|$)|reset-password(?:\/|$)|api(?:\/|$))([^/]+)\/projects\/([^/]+)\/runs\/([^/]+)(?:\/(agents|diagnostics|cost))?(?:\/|$)/,
+    /^\/(?!tenants(?:\/|$)|runs(?:\/|$)|platform(?:\/|$)|login(?:\/|$)|register(?:\/|$)|invite(?:\/|$)|get-started(?:\/|$)|forgot-password(?:\/|$)|reset-password(?:\/|$)|api(?:\/|$))([^/]+)\/projects\/([^/]+)\/runs\/([^/]+)(?:\/(agents|diagnostics|cost))?(?:\/|$)/,
   );
   if (projectMatch) {
     return {
@@ -90,7 +92,7 @@ export function resolveRunRouteContext(pathname: string): {
       panel: (projectMatch[4] as RunPanel | undefined) ?? "overview",
     };
   }
-  const tenantMatch = pathname.match(/^\/(?!tenants(?:\/|$)|runs(?:\/|$)|dashboard(?:\/|$)|status(?:\/|$)|secrets(?:\/|$)|agent-runtimes(?:\/|$)|login(?:\/|$)|register(?:\/|$)|invite(?:\/|$)|get-started(?:\/|$)|forgot-password(?:\/|$)|reset-password(?:\/|$)|api(?:\/|$))([^/]+)\/runs\/([^/]+)(?:\/(agents|diagnostics|cost))?(?:\/|$)/);
+  const tenantMatch = pathname.match(/^\/(?!tenants(?:\/|$)|runs(?:\/|$)|platform(?:\/|$)|login(?:\/|$)|register(?:\/|$)|invite(?:\/|$)|get-started(?:\/|$)|forgot-password(?:\/|$)|reset-password(?:\/|$)|api(?:\/|$))([^/]+)\/runs\/([^/]+)(?:\/(agents|diagnostics|cost))?(?:\/|$)/);
   if (tenantMatch) {
     return {
       tenantId: decodeSegment(tenantMatch[1]),

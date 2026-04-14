@@ -10,7 +10,7 @@ from orchestrator.api.webhooks.jira_trigger_policy import (
 )
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
-from orchestrator.storage.models import Run
+from tests.workflow_test_support import add_run_with_workflow, make_run
 
 
 def test_resolve_jira_trigger_decision_disables_plain_status_recheck_in_transition_only_mode() -> None:
@@ -60,25 +60,20 @@ def test_resolve_decision_gate_cooldown_block_returns_active_cooldown_window() -
     now = datetime.now(timezone.utc)
 
     with session_factory() as session:
-        session.add(
-            Run(
-                run_id="run-1",
-                tenant_id="tenant-1",
-                project_id=None,
-                issue_key="TP-1",
-                issue_summary="Needs clarification",
-                issue_description="Missing decision",
-                repo_url="https://github.com/example/repo",
-                branch=None,
-                pr_url=None,
-                plan=None,
-                status="blocked",
-                last_error="Decision Gate required: Missing GTD sections",
-                created_at=now - timedelta(minutes=2),
-                started_at=None,
-                finished_at=now - timedelta(minutes=2),
-            )
+        run = make_run(
+            run_id="run-1",
+            tenant_id="tenant-1",
+            project_id=None,
+            issue_key="TP-1",
+            issue_summary="Needs clarification",
+            issue_description="Missing decision",
+            repo_url="https://github.com/example/repo",
+            status="blocked",
+            last_error="Decision Gate required: Missing GTD sections",
+            created_at=now - timedelta(minutes=2),
+            finished_at=now - timedelta(minutes=2),
         )
+        add_run_with_workflow(session, run, workflow_status="blocked")
         session.commit()
 
         block = resolve_decision_gate_cooldown_block(
@@ -105,25 +100,20 @@ def test_resolve_retry_source_returns_latest_retryable_run_description() -> None
     now = datetime.now(timezone.utc)
 
     with session_factory() as session:
-        session.add(
-            Run(
-                run_id="run-2",
-                tenant_id="tenant-1",
-                project_id=None,
-                issue_key="TP-2",
-                issue_summary="Retry source",
-                issue_description="Retry this description",
-                repo_url="https://github.com/example/repo",
-                branch=None,
-                pr_url=None,
-                plan=None,
-                status="failed",
-                last_error="boom",
-                created_at=now,
-                started_at=None,
-                finished_at=now,
-            )
+        run = make_run(
+            run_id="run-2",
+            tenant_id="tenant-1",
+            project_id=None,
+            issue_key="TP-2",
+            issue_summary="Retry source",
+            issue_description="Retry this description",
+            repo_url="https://github.com/example/repo",
+            status="failed",
+            last_error="boom",
+            created_at=now,
+            finished_at=now,
         )
+        add_run_with_workflow(session, run, workflow_status="failed")
         session.commit()
 
         resolution = resolve_retry_source(

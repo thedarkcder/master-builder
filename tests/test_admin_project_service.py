@@ -207,6 +207,56 @@ def test_create_project_returns_502_and_deletes_project_when_clone_fails() -> No
     assert isinstance(deleted, Project)
 
 
+def test_create_project_auto_binds_discord_channel_when_tenant_discord_is_installed() -> None:
+    from orchestrator.storage.models import Tenant
+
+    session = _Session()
+    tenant = SimpleNamespace(
+        tenant_id="t1",
+        policy_config={},
+        updated_at=None,
+        discord_config={"guild_id": "guild-123"},
+    )
+    session.set(Tenant, "t1", tenant)
+    resolve_calls: list[tuple[str, str]] = []
+
+    def _resolve_channel(*, session, settings, tenant, project, discord_config: dict) -> dict:  # noqa: ANN001
+        _ = session, settings
+        resolve_calls.append((tenant.tenant_id, project.project_id))
+        return {**discord_config, "channel_id": "discord-channel-123"}
+
+    service = AdminProjectService(
+        normalize_project_repo=lambda value: value.strip(),
+        normalize_project_key=lambda value: value.strip().upper(),
+        normalize_project_policy_overrides=lambda value: value or {},
+        normalize_string_map=lambda value: value or {},
+        normalize_project_discord_config=lambda value: value or {},
+        with_preserved_discord_system_fields=lambda existing, proposed: {**existing, **proposed},
+        resolve_project_discord_channel_binding=_resolve_channel,
+        sync_tenant_jira_project_keys=_sync_tenant_jira_project_keys,
+        ensure_project_repository_checkout=_ensure_project_repository_checkout,
+        resolve_project_run_board_id=_resolve_project_run_board_id,
+        project_to_schema=_project_to_schema,
+        settings_factory=lambda: SimpleNamespace(),
+    )
+    payload = SimpleNamespace(
+        name="Sample",
+        github_repository="https://github.com/example/repo",
+        jira_project_key="tp",
+        policy_overrides=None,
+        environment=None,
+        secret_refs=None,
+        discord=None,
+    )
+
+    service.create_project(session=session, tenant_id="t1", payload=payload)
+
+    created_project = session.added[0]
+    assert isinstance(created_project, Project)
+    assert created_project.discord_config == {"channel_id": "discord-channel-123"}
+    assert resolve_calls == [("t1", created_project.project_id)]
+
+
 def test_create_project_returns_502_when_jira_board_resolution_fails_with_oauth_error() -> None:
     from orchestrator.storage.models import Tenant
 
@@ -348,15 +398,12 @@ def test_update_project_migrates_inline_secret_values_to_project_managed_refs() 
     )
 
     upsert_calls: list[tuple[str, str]] = []
-    with (
-        patch("orchestrator.api.admin.project_service.resolve_scoped_secret_ref", return_value=None),
-        patch(
-            "orchestrator.core.tenant_secret_service._upsert_managed_secret",
-            side_effect=lambda session, *, secret_ref, plaintext_value, encryption_key, scope, tenant_id: upsert_calls.append(
-                (secret_ref, plaintext_value)
-            )
-            or SimpleNamespace(secret_ref=secret_ref, source="managed", updated_at=None),
-        ),
+    with patch(
+        "orchestrator.core.tenant_secret_service._upsert_managed_secret",
+        side_effect=lambda session, *, secret_ref, plaintext_value, encryption_key, scope, tenant_id: upsert_calls.append(
+            (secret_ref, plaintext_value)
+        )
+        or SimpleNamespace(secret_ref=secret_ref, source="managed", updated_at=None),
     ):
         service.update_project(session=session, tenant_id="t1", project_id="p1", payload=payload)
 
@@ -366,6 +413,164 @@ def test_update_project_migrates_inline_secret_values_to_project_managed_refs() 
     }
     assert ("project/t1/p1/SUPABASE_URL", "https://example.supabase.co") in upsert_calls
     assert ("project/t1/p1/APPLE_TEST_PASSWORD", "Ft6ygA&aYkf%hy") in upsert_calls
+
+
+def test_update_project_auto_binds_discord_channel_when_tenant_discord_is_installed() -> None:
+    from orchestrator.storage.models import Tenant
+
+    session = _Session()
+    tenant = SimpleNamespace(
+        tenant_id="t1",
+        policy_config={},
+        updated_at=None,
+        discord_config={"guild_id": "guild-123"},
+    )
+    session.set(Tenant, "t1", tenant)
+    existing_project = Project(
+        project_id="p1",
+        tenant_id="t1",
+        name="Existing",
+        github_repository="https://github.com/example/repo",
+        jira_project_key="TP",
+        policy_overrides={},
+        environment={},
+        secret_refs={},
+        discord_config={},
+        is_archived=False,
+        created_at=None,  # type: ignore[arg-type]
+        updated_at=None,  # type: ignore[arg-type]
+    )
+    session.set(Project, "p1", existing_project)
+    resolve_calls: list[tuple[str, str]] = []
+
+    def _resolve_channel(*, session, settings, tenant, project, discord_config: dict) -> dict:  # noqa: ANN001
+        _ = session, settings
+        resolve_calls.append((tenant.tenant_id, project.project_id))
+        return {**discord_config, "channel_id": "discord-channel-999"}
+
+    service = AdminProjectService(
+        normalize_project_repo=lambda value: value.strip(),
+        normalize_project_key=lambda value: value.strip().upper(),
+        normalize_project_policy_overrides=lambda value: value or {},
+        normalize_string_map=lambda value: value or {},
+        normalize_project_discord_config=lambda value: value or {},
+        with_preserved_discord_system_fields=lambda existing, proposed: {**existing, **proposed},
+        resolve_project_discord_channel_binding=_resolve_channel,
+        sync_tenant_jira_project_keys=_sync_tenant_jira_project_keys,
+        ensure_project_repository_checkout=_ensure_project_repository_checkout,
+        resolve_project_run_board_id=_resolve_project_run_board_id,
+        project_to_schema=_project_to_schema,
+        settings_factory=lambda: SimpleNamespace(),
+    )
+    payload = SimpleNamespace(
+        name="Updated",
+        github_repository="https://github.com/example/repo",
+        jira_project_key="tp",
+        policy_overrides=None,
+        environment=None,
+        secret_refs=None,
+        discord=None,
+        is_archived=False,
+    )
+
+    service.update_project(session=session, tenant_id="t1", project_id="p1", payload=payload)
+
+    assert existing_project.discord_config == {"channel_id": "discord-channel-999"}
+    assert resolve_calls == [("t1", "p1")]
+
+
+def test_update_project_preserves_upstream_secret_refs_without_copying() -> None:
+    from orchestrator.storage.models import Tenant
+
+    session = _Session()
+    tenant = SimpleNamespace(tenant_id="t1", policy_config={}, updated_at=None)
+    session.set(Tenant, "t1", tenant)
+    existing_project = Project(
+        project_id="p1",
+        tenant_id="t1",
+        name="Existing",
+        github_repository="https://github.com/example/repo",
+        jira_project_key="TP",
+        policy_overrides={},
+        environment={},
+        secret_refs={},
+        discord_config={},
+        is_archived=False,
+        created_at=None,  # type: ignore[arg-type]
+        updated_at=None,  # type: ignore[arg-type]
+    )
+    session.set(Project, "p1", existing_project)
+    service = _service()
+    payload = SimpleNamespace(
+        name="Updated",
+        github_repository="https://github.com/example/repo",
+        jira_project_key="tp",
+        policy_overrides=None,
+        environment=None,
+        secret_refs={
+            "RAILWAY_TOKEN": "platform/RAILWAY_TOKEN",
+            "SUPABASE_SERVICE_ROLE_KEY": "tenant/t1/SUPABASE_SERVICE_ROLE_KEY",
+        },
+        discord=None,
+        is_archived=False,
+    )
+
+    with patch("orchestrator.core.tenant_secret_service._upsert_managed_secret") as upsert_mock:
+        service.update_project(session=session, tenant_id="t1", project_id="p1", payload=payload)
+
+    assert existing_project.secret_refs == {
+        "RAILWAY_TOKEN": "platform/RAILWAY_TOKEN",
+        "SUPABASE_SERVICE_ROLE_KEY": "tenant/t1/SUPABASE_SERVICE_ROLE_KEY",
+    }
+    upsert_mock.assert_not_called()
+
+
+def test_get_project_does_not_mutate_existing_secret_refs() -> None:
+    from orchestrator.storage.models import Tenant
+
+    session = _Session()
+    tenant = SimpleNamespace(tenant_id="t1", policy_config={}, updated_at=None)
+    session.set(Tenant, "t1", tenant)
+    existing_project = Project(
+        project_id="p1",
+        tenant_id="t1",
+        name="Existing",
+        github_repository="https://github.com/example/repo",
+        jira_project_key="TP",
+        policy_overrides={},
+        environment={},
+        secret_refs={
+            "SERVICE_ID": "SUPABASE_APPLE_SERVICE_ID",
+            "CALLBACK_URL": "tenant/t1/SUPABASE_APPLE_CALLBACK_URL",
+        },
+        discord_config={},
+        is_archived=False,
+        created_at=None,  # type: ignore[arg-type]
+        updated_at=None,  # type: ignore[arg-type]
+    )
+    session.set(Project, "p1", existing_project)
+    service = AdminProjectService(
+        normalize_project_repo=lambda value: value.strip(),
+        normalize_project_key=lambda value: value.strip().upper(),
+        normalize_project_policy_overrides=lambda value: value or {},
+        normalize_string_map=lambda value: value or {},
+        normalize_project_discord_config=lambda value: value or {},
+        with_preserved_discord_system_fields=lambda existing, proposed: {**existing, **proposed},
+        resolve_project_discord_channel_binding=_resolve_project_discord_channel_binding,
+        sync_tenant_jira_project_keys=_sync_tenant_jira_project_keys,
+        ensure_project_repository_checkout=_ensure_project_repository_checkout,
+        resolve_project_run_board_id=_resolve_project_run_board_id,
+        project_to_schema=_project_to_schema,
+        settings_factory=lambda: SimpleNamespace(secrets_encryption_key="enc-key"),
+    )
+
+    result = service.get_project(session=session, tenant_id="t1", project_id="p1")
+
+    assert result["project_id"] == "p1"
+    assert existing_project.secret_refs == {
+        "SERVICE_ID": "SUPABASE_APPLE_SERVICE_ID",
+        "CALLBACK_URL": "tenant/t1/SUPABASE_APPLE_CALLBACK_URL",
+    }
 
 
 def test_normalize_project_discord_config_preserves_persona_maps() -> None:

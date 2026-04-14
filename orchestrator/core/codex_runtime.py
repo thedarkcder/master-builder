@@ -12,6 +12,7 @@ from urllib import error as urllib_error
 from urllib import request as urllib_request
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -22,7 +23,6 @@ from orchestrator.core.platform_secret_service import platform_secret_service
 _JSON_BLOCK_PATTERN = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL | re.IGNORECASE)
 _ANSI_ESCAPE_PATTERN = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 _STDERR_ERROR_MARKERS = ("error", "failed", "fatal", "exception", "traceback")
-_URL_PATTERN = re.compile(r"https?://[^\s)>\]]+")
 _UUID_PATTERN = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 )
@@ -103,11 +103,51 @@ def _json_balanced_object_candidates(content: str) -> list[str]:
     return candidates
 
 
-def _extract_first_url(content: str) -> str | None:
-    match = _URL_PATTERN.search(content or "")
-    if match is None:
-        return None
-    return match.group(0).strip()
+def _strip_ansi(text: str | bytes | None) -> str:
+    if isinstance(text, bytes):
+        normalized = text.decode("utf-8", errors="replace")
+    else:
+        normalized = str(text or "")
+    return _ANSI_ESCAPE_PATTERN.sub("", normalized)
+
+
+def build_cli_command_env(
+    *,
+    settings: Settings,
+    working_dir: str | None,
+    runtime_kind: str = "codex_cli",
+) -> tuple[str | None, dict[str, str]]:
+    command_cwd = str(working_dir).strip() if working_dir else None
+    return command_cwd, _build_codex_subprocess_env(
+        settings=settings,
+        working_dir=command_cwd,
+        runtime_kind=runtime_kind,
+    )
+
+
+def codex_login_status(
+    *,
+    codex_command: str,
+    settings: Settings,
+    working_dir: str | None,
+) -> tuple[bool | None, str]:
+    command_cwd, env = build_cli_command_env(settings=settings, working_dir=working_dir, runtime_kind="codex_cli")
+    completed = subprocess.run(  # noqa: S603
+        [codex_command, "login", "status"],
+        capture_output=True,
+        text=True,
+        cwd=command_cwd or None,
+        env=env,
+        check=False,
+    )
+    combined_output = "\n".join(
+        part for part in (_strip_ansi(completed.stdout), _strip_ansi(completed.stderr)) if part.strip()
+    ).strip()
+    if completed.returncode == 0:
+        return True, combined_output
+    if completed.returncode == 1 and "not logged in" in combined_output.lower():
+        return False, combined_output
+    return None, combined_output
 
 
 @dataclass
@@ -553,8 +593,54 @@ def _ensure_http_conversation_session(
     return session
 
 
-def _build_codex_subprocess_env(*, settings: Settings) -> dict[str, str]:
-    env = os.environ.copy()
+def _running_inside_container() -> bool:
+    return Path("/.dockerenv").exists()
+
+
+def _runtime_home_root(*, settings: Settings) -> Path:
+    configured_root = str(getattr(settings, "runtime_home", "") or "").strip()
+    if configured_root:
+        return Path(configured_root)
+    normalized_home = str(os.environ.get("HOME") or "").strip()
+    if _running_inside_container() and normalized_home:
+        return Path(normalized_home)
+    return Path(__file__).resolve().parents[2] / ".runtime-home"
+
+def _runtime_home_for_kind(*, settings: Settings, runtime_kind: str) -> Path:
+    return _runtime_home_root(settings=settings) / runtime_kind
+
+
+def _seed_runtime_home_from_repo_config(*, runtime_home: Path) -> None:
+    source_dir = Path(__file__).resolve().parents[2] / ".codex"
+    if not source_dir.is_dir():
+        return
+    target_dir = runtime_home / ".codex"
+    if target_dir.exists():
+        return
+    runtime_home.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(source_dir, target_dir, dirs_exist_ok=True)
+
+
+def _build_codex_subprocess_env(
+    *,
+    settings: Settings,
+    working_dir: str | None = None,
+    runtime_kind: str = "codex_cli",
+) -> dict[str, str]:
+    env: dict[str, str] = {}
+    for key in ("LANG", "LC_ALL", "PATH", "SHELL", "TERM", "TMPDIR", "USER"):
+        value = str(os.environ.get(key) or "").strip()
+        if value:
+            env[key] = value
+    _ = working_dir
+    subprocess_home = _runtime_home_for_kind(
+        settings=settings,
+        runtime_kind=str(runtime_kind or "codex_cli").strip().lower() or "codex_cli",
+    )
+    _seed_runtime_home_from_repo_config(runtime_home=subprocess_home)
+    subprocess_home.mkdir(parents=True, exist_ok=True)
+    env["HOME"] = str(subprocess_home)
+    env["XDG_CONFIG_HOME"] = str(subprocess_home / ".config")
     tool_database_url = _resolve_codex_tool_database_url(
         database_url=str(getattr(settings, "database_url", "") or "").strip(),
         tool_database_url=str(getattr(settings, "codex_tool_database_url", "") or "").strip(),
@@ -575,6 +661,7 @@ def build_codex_runtime(
         settings=settings,
         request_override=request_override,
         cli_command_override=settings.codex_cli_command,
+        runtime_kind_override="codex_cli",
         default_model_override=settings.codex_model,
         default_reasoning_effort_override=settings.codex_reasoning_effort,
     )
@@ -624,6 +711,7 @@ def build_runtime_for_execution_profile(
         settings=settings,
         request_override=request_override,
         cli_command_override=normalized_cli_command,
+        runtime_kind_override=normalized_runtime_kind,
         default_model_override=normalized_model,
         default_reasoning_effort_override=normalized_reasoning_effort,
     )
@@ -884,6 +972,7 @@ def build_cli_runtime(
     settings: Settings,
     request_override: Callable[[str, str, str | None], str] | None = None,
     cli_command_override: str | None = None,
+    runtime_kind_override: str | None = None,
     default_model_override: str | None = None,
     default_reasoning_effort_override: str | None = None,
 ) -> CodexRuntime:
@@ -926,8 +1015,6 @@ def build_cli_runtime(
         raise CodexRuntimeError(
             f"Codex CLI command '{codex_command}' was not found in PATH"
         )
-    subprocess_env = _build_codex_subprocess_env(settings=settings)
-
     def _request(
         system_prompt: str,
         user_prompt: str,
@@ -947,6 +1034,11 @@ def build_cli_runtime(
             f"## User request\n{user_prompt}"
         )
         command_cwd = str(working_dir).strip() if working_dir else None
+        subprocess_env = _build_codex_subprocess_env(
+            settings=settings,
+            working_dir=command_cwd,
+            runtime_kind=str(runtime_kind_override or "codex_cli").strip().lower() or "codex_cli",
+        )
         stderr_log_mode = _normalize_stderr_log_mode(getattr(settings, "codex_stderr_log_mode", "all"))
         normalized_reasoning_effort = str(reasoning_effort or settings.codex_reasoning_effort).strip().lower()
         if normalized_reasoning_effort not in {"low", "medium", "high"}:
@@ -967,6 +1059,10 @@ def build_cli_runtime(
                     "exec",
                     "resume",
                     normalized_resume_session_id,
+                    "--disable",
+                    "apps",
+                    "--disable",
+                    "plugins",
                     "--skip-git-repo-check",
                 ]
                 if normalized_sandbox_mode == "danger-full-access":
@@ -987,6 +1083,10 @@ def build_cli_runtime(
                 command = [
                     codex_command,
                     "exec",
+                    "--disable",
+                    "apps",
+                    "--disable",
+                    "plugins",
                     "--skip-git-repo-check",
                     "--sandbox",
                     settings.codex_sandbox_mode,
@@ -1111,15 +1211,16 @@ def build_cli_runtime(
                 stderr = (process_stderr or "").strip()
                 structured_error = _extract_terminal_error_from_json_stdout(stdout_lines)
                 error_message = structured_error or stderr or "no stderr"
-                if "login" in error_message.lower() or "auth" in error_message.lower():
-                    auth_url = _extract_first_url(error_message)
-                    auth_link = f" Open this link to authenticate: {auth_url}." if auth_url else ""
-                    message = (
-                        "Codex CLI is not authenticated."
-                        f"{auth_link} "
-                        "Run `docker compose run --rm run-worker codex login --device-auth`."
+                login_status, _ = codex_login_status(
+                    codex_command=codex_command,
+                    settings=settings,
+                    working_dir=command_cwd,
+                )
+                if login_status is False:
+                    raise CodexRuntimeError(
+                        "Codex CLI is not authenticated on this worker. "
+                        "Start a worker runtime login session and retry."
                     )
-                    raise CodexRuntimeError(message)
                 raise CodexRuntimeError(
                     f"Codex CLI command failed (exit={returncode}): {error_message}"
                 )

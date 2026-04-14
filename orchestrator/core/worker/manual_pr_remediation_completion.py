@@ -10,6 +10,7 @@ from orchestrator.core.communications import (
 from orchestrator.core.github.transport_executor import GitHubTransportExecutor
 from orchestrator.core.platform_secret_service import resolve_platform_secret_ref
 from orchestrator.core.tenant_secret_service import resolve_scoped_secret_ref
+from orchestrator.core.workflow.execution_snapshot import load_github_pr_remediation_context_from_plan
 from orchestrator.tools.github_app import github_client_from_tenant_config
 from orchestrator.tools.repo_allowlist import normalize_repo_identifier
 
@@ -92,26 +93,26 @@ def build_manual_pr_remediation_completion_actions(
     issue_url: str | None,
     terminal_status: str | None = None,
 ) -> tuple[TransportAction, ...]:  # noqa: ANN001
-    trigger_context = _trigger_context(getattr(run, "plan", None))
-    manual_fix_request = trigger_context.get("manual_fix_request")
-    requested_comment = trigger_context.get("requested_comment")
-    if not isinstance(manual_fix_request, dict) or not isinstance(requested_comment, dict):
+    remediation_context = load_github_pr_remediation_context_from_plan(getattr(run, "plan", None))
+    if remediation_context is None:
+        return ()
+    manual_fix_request = remediation_context.manual_fix_request
+    requested_comment = remediation_context.requested_comment
+    if manual_fix_request is None or requested_comment is None:
         return ()
 
     repo_full_name = _repo_full_name(getattr(project, "github_repository", None))
     if repo_full_name is None:
         return ()
 
-    requested_comment_type = str(requested_comment.get("type") or "").strip().lower()
-    triggering_comment_id = requested_comment.get("id")
-    pr_number = _as_int(trigger_context.get("pr_number"))
-    if not isinstance(triggering_comment_id, int) or pr_number is None:
-        return ()
+    requested_comment_type = requested_comment.comment_type
+    triggering_comment_id = requested_comment.comment_id
+    pr_number = remediation_context.pr_number
 
     status_label = _status_label(terminal_status or getattr(run, "status", None))
-    triggering_comment_url = str(requested_comment.get("url") or "").strip() or None
-    requested_by = str(manual_fix_request.get("requested_by") or "").strip() or None
-    instruction_text = str(manual_fix_request.get("instruction_text") or "").strip() or None
+    triggering_comment_url = requested_comment.url
+    requested_by = manual_fix_request.requested_by
+    instruction_text = manual_fix_request.instruction_text
     reason = _completion_reason(run=run, workflow_result=workflow_result)
     pr_url = str(getattr(run, "pr_url", None) or getattr(workflow_result, "pr_url", None) or "").strip() or None
     change_summary = _change_summary(workflow_result=workflow_result)
@@ -137,7 +138,7 @@ def build_manual_pr_remediation_completion_actions(
     if requested_comment_type == "review_comment":
         return (
             GitHubManualFixReviewThreadReplyAction(
-                triggering_comment_id=triggering_comment_id,
+                triggering_comment_id=int(triggering_comment_id),
                 **common_kwargs,
             ),
         )
@@ -145,19 +146,12 @@ def build_manual_pr_remediation_completion_actions(
     if requested_comment_type == "issue_comment":
         return (
             GitHubManualFixIssueCommentReplyAction(
-                triggering_comment_id=triggering_comment_id,
+                triggering_comment_id=int(triggering_comment_id),
                 **common_kwargs,
             ),
         )
 
     return ()
-
-
-def _trigger_context(plan: object) -> dict[str, object]:
-    if not isinstance(plan, dict):
-        return {}
-    trigger_context = plan.get("trigger_context")
-    return dict(trigger_context) if isinstance(trigger_context, dict) else {}
 
 
 def _repo_full_name(repository_url: object) -> str | None:
@@ -205,17 +199,6 @@ def _change_summary(*, workflow_result) -> tuple[str, ...]:  # noqa: ANN001
         items = tuple(str(item).strip() for item in candidate if str(item).strip())
         if items:
             return items[:3]
-    if bool(getattr(workflow_result, "succeeded", False)):
+    if str(getattr(workflow_result, "outcome", "") or "").strip().lower() == "success":
         return ("Implemented the requested change.",)
     return ()
-
-
-def _as_int(value: object) -> int | None:
-    if isinstance(value, int):
-        return value
-    if isinstance(value, str):
-        try:
-            return int(value)
-        except ValueError:
-            return None
-    return None

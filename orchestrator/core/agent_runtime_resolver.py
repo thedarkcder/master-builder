@@ -73,7 +73,7 @@ def _resolve_agent_execution_profiles(
     platform_selector_routing = normalize_execution_profile_routing(platform_selector_routing)
     merged_routing = dict(routing)
     merged_routing.update(platform_selector_routing or {})
-    # Respect explicit effective-policy overrides as a compatibility path.
+    # Respect explicit effective-policy overrides when no profile explicitly pins those values.
     effective_model = str(effective_policy.get("codex_model") or settings.codex_model).strip() or settings.codex_model
     effective_effort = (
         str(effective_policy.get("codex_reasoning_effort") or settings.codex_reasoning_effort).strip().lower()
@@ -217,3 +217,43 @@ def build_runtime_for_selector(
         primary_runtime=runtime,
         fallback_runtime=fallback_runtime,
     )
+
+
+def resolve_execution_profile_for_selector(
+    *,
+    session,
+    settings: Settings,
+    tenant_id: str | None,
+    project_id: str | None,
+    selector: str,
+    agent_role: str | None = None,
+    agent_name: str | None = None,
+) -> AgentExecutionProfile:  # noqa: ANN001
+    tenant_policy: dict[str, Any] = {}
+    project_overrides: dict[str, Any] = {}
+    normalized_tenant_id = str(tenant_id or "").strip()
+    normalized_project_id = str(project_id or "").strip()
+    if session is not None and normalized_tenant_id:
+        tenant = session.get(Tenant, normalized_tenant_id)
+        if tenant is not None:
+            tenant_policy = dict(tenant.policy_config or {})
+    if session is not None and normalized_project_id:
+        project = session.get(Project, normalized_project_id)
+        if project is not None and (not normalized_tenant_id or project.tenant_id == normalized_tenant_id):
+            project_overrides = dict(project.policy_overrides or {})
+    platform_role_routing, platform_name_routing, platform_selector_routing, platform_profiles = _platform_agent_runtime_settings(
+        session=session
+    )
+    profile, _profiles = _resolve_agent_execution_profiles(
+        settings=settings,
+        tenant_policy=tenant_policy,
+        project_overrides=project_overrides,
+        selector=selector,
+        agent_role=agent_role,
+        agent_name=agent_name,
+        platform_role_routing=platform_role_routing,
+        platform_name_routing=platform_name_routing,
+        platform_selector_routing=platform_selector_routing,
+        platform_profiles=platform_profiles,
+    )
+    return profile

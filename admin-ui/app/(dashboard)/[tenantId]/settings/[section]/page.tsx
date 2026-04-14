@@ -12,6 +12,7 @@ const ALLOWED = [
   "health",
   "config",
   "notifications",
+  "danger",
 ] as const;
 type Section = (typeof ALLOWED)[number];
 

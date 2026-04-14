@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-
 from sqlalchemy import (
     BigInteger,
     Boolean,
@@ -15,6 +14,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -219,6 +219,80 @@ class Project(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class ProjectInstall(Base):
+    __tablename__ = "project_installs"
+    __table_args__ = (
+        Index("ix_project_installs_tenant_project_enabled", "tenant_id", "project_id", "enabled"),
+        Index("ix_project_installs_tenant_project_kind", "tenant_id", "project_id", "kind"),
+    )
+
+    install_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey("tenants.tenant_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    project_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey("projects.project_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    kind: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    label: Mapped[str] = mapped_column(String(255), nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    config_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    binding_names_json: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ProjectInstallRequest(Base):
+    __tablename__ = "project_install_requests"
+    __table_args__ = (
+        Index("ix_project_install_requests_scope_status", "tenant_id", "project_id", "status"),
+        Index("ix_project_install_requests_scope_kind_status", "tenant_id", "project_id", "kind", "status"),
+        Index("ix_project_install_requests_run_status", "run_id", "status"),
+    )
+
+    request_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey("tenants.tenant_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    project_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey("projects.project_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    workflow_id: Mapped[str | None] = mapped_column(
+        String(64),
+        ForeignKey("workflow_executions.workflow_id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    run_id: Mapped[str | None] = mapped_column(
+        String(64),
+        ForeignKey("runs.run_id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    issue_key: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    kind: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    label: Mapped[str] = mapped_column(String(255), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    suggested_config_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    required_bindings_json: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    request_kind: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+
+
 class ProjectAutomation(Base):
     __tablename__ = "project_automations"
     __table_args__ = (
@@ -314,10 +388,105 @@ class PlatformSetting(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class WorkflowExecution(Base):
+    __tablename__ = "workflow_executions"
+    __table_args__ = (
+        Index("ix_workflow_executions_tenant_id", "tenant_id"),
+        Index("ix_workflow_executions_project_id", "project_id"),
+        Index("ix_workflow_executions_issue_key", "issue_key"),
+        Index("ix_workflow_executions_status", "status"),
+        Index(
+            "uq_workflow_executions_active_scope",
+            "tenant_id",
+            "issue_key",
+            "dedupe_scope",
+            unique=True,
+            postgresql_where=text("status IN ('queued', 'running', 'waiting_for_input', 'blocked')"),
+            sqlite_where=text("status IN ('queued', 'running', 'waiting_for_input', 'blocked')"),
+        ),
+    )
+
+    workflow_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey("tenants.tenant_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    project_id: Mapped[str | None] = mapped_column(
+        String(128),
+        ForeignKey("projects.project_id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    issue_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    issue_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    issue_description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    repo_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    branch: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    pr_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    dedupe_scope: Mapped[str] = mapped_column(String(32), nullable=False, default="issue_execution")
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    active_run_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    latest_checkpoint_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    source_workflow_id: Mapped[str | None] = mapped_column(
+        String(64),
+        ForeignKey("workflow_executions.workflow_id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    source_run_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    blocked_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class WorkflowCheckpoint(Base):
+    __tablename__ = "workflow_checkpoints"
+    __table_args__ = (
+        Index("ix_workflow_checkpoints_workflow_id", "workflow_id"),
+        Index("ix_workflow_checkpoints_run_id", "run_id"),
+        Index("ix_workflow_checkpoints_kind", "checkpoint_kind"),
+        Index("ix_workflow_checkpoints_created_at", "created_at"),
+        UniqueConstraint("run_id", "checkpoint_kind", name="uq_workflow_checkpoints_run_kind"),
+    )
+
+    checkpoint_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workflow_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("workflow_executions.workflow_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    run_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("runs.run_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    checkpoint_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    stage: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    payload_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    codex_session_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class Run(Base):
     __tablename__ = "runs"
+    __table_args__ = (
+        Index("ix_runs_workflow_id", "workflow_id"),
+        Index("ix_runs_workflow_attempt", "workflow_id", "attempt_number", unique=True),
+        Index("ix_runs_pre_check_outcome", "pre_check_outcome"),
+        Index("ix_runs_required_worker_capability", "required_worker_capability"),
+        Index("ix_runs_claim_id", "claim_id"),
+        Index("ix_runs_dispatch_claimed_at", "dispatch_claimed_at"),
+    )
 
     run_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workflow_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("workflow_executions.workflow_id", ondelete="CASCADE"),
+        nullable=False,
+    )
     tenant_id: Mapped[str] = mapped_column(
         String(128),
         ForeignKey("tenants.tenant_id", ondelete="CASCADE"),
@@ -336,14 +505,26 @@ class Run(Base):
     repo_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     branch: Mapped[str | None] = mapped_column(String(255), nullable=True)
     pr_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
-    dev_session_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
-    pm_session_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
-    orchestrated_session_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    attempt_number: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    parent_run_id: Mapped[str | None] = mapped_column(
+        String(64),
+        ForeignKey("runs.run_id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    entry_mode: Mapped[str] = mapped_column(String(32), nullable=False, default="fresh")
+    entry_stage: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    entry_checkpoint_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     dedupe_scope: Mapped[str] = mapped_column(String(32), nullable=False, default="issue_execution", index=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    pre_check_outcome: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    required_worker_capability: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    required_runtime_kinds_json: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    claim_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     plan: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    dispatch_claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     worker_service_instance_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
@@ -352,6 +533,15 @@ class Run(Base):
 
 class RunHumanInputRequest(Base):
     __tablename__ = "run_human_input_requests"
+    __table_args__ = (
+        Index(
+            "uq_run_human_input_requests_pending_workflow",
+            "workflow_id",
+            unique=True,
+            postgresql_where=text("status = 'pending'"),
+            sqlite_where=text("status = 'pending'"),
+        ),
+    )
 
     request_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     tenant_id: Mapped[str] = mapped_column(
@@ -366,13 +556,25 @@ class RunHumanInputRequest(Base):
         nullable=True,
         index=True,
     )
+    workflow_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("workflow_executions.workflow_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    checkpoint_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("workflow_checkpoints.checkpoint_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
     source_run_id: Mapped[str] = mapped_column(
         String(64),
         ForeignKey("runs.run_id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
-    resumed_run_id: Mapped[str | None] = mapped_column(
+    consumed_by_run_id: Mapped[str | None] = mapped_column(
         String(64),
         ForeignKey("runs.run_id", ondelete="SET NULL"),
         nullable=True,
@@ -380,8 +582,6 @@ class RunHumanInputRequest(Base):
     )
     issue_key: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     source_stage: Mapped[str] = mapped_column(String(64), nullable=False)
-    resume_stage: Mapped[str] = mapped_column(String(32), nullable=False)
-    resume_session_id: Mapped[str] = mapped_column(String(64), nullable=False)
     request_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     prompt: Mapped[str] = mapped_column(Text, nullable=False)
     instructions: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -486,26 +686,6 @@ class FollowupContext(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
-
-
-class RunLock(Base):
-    __tablename__ = "run_locks"
-
-    tenant_id: Mapped[str] = mapped_column(
-        String(128),
-        ForeignKey("tenants.tenant_id", ondelete="CASCADE"),
-        primary_key=True,
-    )
-    issue_key: Mapped[str] = mapped_column(String(64), primary_key=True)
-    dedupe_scope: Mapped[str] = mapped_column(String(32), primary_key=True, default="issue_execution")
-    run_id: Mapped[str] = mapped_column(
-        String(64),
-        ForeignKey("runs.run_id", ondelete="CASCADE"),
-        nullable=False,
-        unique=True,
-        index=True,
-    )
-    locked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class TenantRunClaim(Base):
@@ -965,10 +1145,36 @@ class WorkerRuntimeState(Base):
     agent_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     worker_mode: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     capabilities_json: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    runtime_kinds_json: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    runtime_dependencies_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     state: Mapped[str] = mapped_column(String(32), nullable=False, default="starting", index=True)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     last_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+
+
+class WorkerRuntimeAuthRequest(Base):
+    __tablename__ = "worker_runtime_auth_requests"
+    __table_args__ = (
+        Index("ix_worker_runtime_auth_requests_scope", "service_instance_id", "runtime_kind", "status"),
+        Index("ix_worker_runtime_auth_requests_requested_at", "requested_at"),
+    )
+
+    request_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    service_instance_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey("worker_runtime_states.service_instance_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    runtime_kind: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, index=True, default="pending")
+    remediation_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class KnowledgeJiraSyncProjectState(Base):

@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 import {
+  makeExecutionSnapshotPlan,
   makeRun,
   makeStageInvocationLogs,
   mockRunDetailApis,
@@ -9,8 +10,8 @@ import {
 
 test("renders checkpoint-backed failed-after-dev runs with separate execution and integration branches", async ({ page }) => {
   const run = makeRun({
-    plan: {
-      stage_checkpoints: {
+    plan: makeExecutionSnapshotPlan({
+      stages: {
         pm: {
           status: "completed",
           completed_at: "2026-03-27T16:55:00Z",
@@ -28,7 +29,7 @@ test("renders checkpoint-backed failed-after-dev runs with separate execution an
         base_branch: "main",
         execution_repo_dir: "/tmp/worktree",
       },
-    },
+    }),
   });
   const logs = makeStageInvocationLogs({
     stage: "dev",
@@ -36,7 +37,7 @@ test("renders checkpoint-backed failed-after-dev runs with separate execution an
     command: "stage.dev",
     startedAt: "2026-03-27T17:00:00Z",
     finishedAt: "2026-03-27T17:02:57Z",
-    codexSessionId: run.dev_session_id ?? undefined,
+    codexSessionId: "019d1c32-5b72-7c53-bad0-8be1f842b1c2",
   });
 
   await seedAdminSession(page);
@@ -64,8 +65,8 @@ test("renders checkpoint-backed failed-after-dev runs with separate execution an
 
 test("marks a finished stage without a checkpoint as interrupted on terminal runs", async ({ page }) => {
   const run = makeRun({
-    plan: {
-      stage_checkpoints: {
+    plan: makeExecutionSnapshotPlan({
+      stages: {
         pm: {
           status: "completed",
           completed_at: "2026-03-27T16:55:00Z",
@@ -76,7 +77,7 @@ test("marks a finished stage without a checkpoint as interrupted on terminal run
         integration_branch: "feature/GP-124",
         execution_branch: "run/gp-124/5de2cedf-b7ae-400c-a53c-3beecf078a51",
       },
-    },
+    }),
   });
   const logs = makeStageInvocationLogs({
     stage: "dev",
@@ -84,7 +85,7 @@ test("marks a finished stage without a checkpoint as interrupted on terminal run
     command: "stage.dev",
     startedAt: "2026-03-27T17:00:00Z",
     finishedAt: "2026-03-27T17:02:57Z",
-    codexSessionId: run.dev_session_id ?? undefined,
+    codexSessionId: "019d1c32-5b72-7c53-bad0-8be1f842b1c2",
   });
 
   await seedAdminSession(page);
@@ -101,39 +102,59 @@ test("marks a finished stage without a checkpoint as interrupted on terminal run
   await expect(page.getByText("agent finished, checkpoint missing")).toBeVisible({ timeout: 15000 });
 });
 
-test("offers review rerun when review state exists and posts the review resume payload", async ({ page }) => {
+test("offers execution resume when review state exists and posts the workflow attempt payload", async ({ page }) => {
   const run = makeRun({
-    plan: {
-      stage_checkpoints: {
+    plan: makeExecutionSnapshotPlan({
+      stages: {
         pm: {
           status: "completed",
           completed_at: "2026-03-27T16:55:00Z",
           summary: "PM plan captured.",
+          artifact: {
+            plan_steps: ["Define implementation scope."],
+            acceptance_criteria: ["AC 1"],
+            risks: [],
+            outcome: "continue",
+            next_stage: "dev",
+            execution_worker_capability: "linux",
+            resolved_prerequisites: [],
+            unresolved_prerequisites: [],
+          },
         },
         dev: {
           status: "completed",
           completed_at: "2026-03-27T17:02:57Z",
           summary: "Code pushed.",
+          artifact: {
+            change_summary: ["Implemented fix."],
+            pr_url: "https://github.com/thedarkcder/girl-power/pull/21",
+            outcome: "continue",
+          },
         },
         review: {
           status: "completed",
           completed_at: "2026-03-27T17:07:00Z",
           summary: "Review found follow-up items.",
+          artifact: {
+            summary: ["Address latest review feedback."],
+            outcome: "continue",
+            feedback: "Address latest review feedback.",
+            pr_url: "https://github.com/thedarkcder/girl-power/pull/21",
+          },
         },
       },
       execution_context: {
         integration_branch: "feature/GP-124",
         execution_branch: "run/gp-124/5de2cedf-b7ae-400c-a53c-3beecf078a51",
       },
-      review_summary: ["Address latest review feedback."],
-    },
+    }),
   });
   let rerunPayload: unknown = null;
 
   await seedAdminSession(page);
   await mockRunDetailApis(page, {
     run,
-    onRerun: (payload) => {
+    onCreateAttempt: (payload) => {
       rerunPayload = payload;
     },
   });
@@ -142,9 +163,81 @@ test("offers review rerun when review state exists and posts the review resume p
 
   await expect(page.getByText("Loading run details...")).toHaveCount(0, { timeout: 15000 });
   await page.getByTestId("run-rerun-trigger").click();
-  await expect(page.getByTestId("rerun-option-review")).toBeVisible();
-  await page.getByTestId("rerun-option-review").click();
+  await expect(page.getByTestId("rerun-option-fresh")).toBeVisible();
+  await expect(page.getByTestId("rerun-option-execution")).toBeVisible();
+  await page.getByTestId("rerun-option-execution").click();
 
-  expect(rerunPayload).toEqual({ mode: "resume", resume_stage: "review" });
+  expect(rerunPayload).toEqual({ mode: "resume", checkpoint_kind: "execution" });
+  await expect(page).toHaveURL(/8e8957f2-79f8-4dc8-8deb-786b2c93828d$/, { timeout: 15000 });
+});
+
+test("offers start from the start as a fresh rerun with no checkpoint payload", async ({ page }) => {
+  const run = makeRun({
+    plan: makeExecutionSnapshotPlan({
+      stages: {
+        pm: {
+          status: "completed",
+          completed_at: "2026-03-27T16:55:00Z",
+          summary: "PM plan captured.",
+        },
+      },
+    }),
+  });
+  let rerunPayload: unknown = null;
+
+  await seedAdminSession(page);
+  await mockRunDetailApis(page, {
+    run,
+    onCreateAttempt: (payload) => {
+      rerunPayload = payload;
+    },
+  });
+
+  await page.goto(`/runs/${run.run_id}`);
+
+  await expect(page.getByText("Loading run details...")).toHaveCount(0, { timeout: 15000 });
+  await page.getByTestId("run-rerun-trigger").click();
+  await expect(page.getByTestId("rerun-option-fresh")).toBeVisible();
+  await page.getByTestId("rerun-option-fresh").click();
+
+  expect(rerunPayload).toEqual({ mode: "fresh" });
+  await expect(page).toHaveURL(/8e8957f2-79f8-4dc8-8deb-786b2c93828d$/, { timeout: 15000 });
+});
+
+test("force rerun cancels the active run and starts fresh with no checkpoint payload", async ({ page }) => {
+  const run = makeRun({
+    status: "running",
+    plan: makeExecutionSnapshotPlan({
+      stages: {
+        pm: {
+          status: "completed",
+          completed_at: "2026-03-27T16:55:00Z",
+          summary: "PM plan captured.",
+        },
+      },
+    }),
+  });
+  let rerunPayload: unknown = null;
+  let cancelCalled = false;
+
+  await seedAdminSession(page);
+  await mockRunDetailApis(page, {
+    run,
+    onCancelRun: () => {
+      cancelCalled = true;
+    },
+    onCreateAttempt: (payload) => {
+      rerunPayload = payload;
+    },
+  });
+
+  await page.goto(`/runs/${run.run_id}`);
+
+  await expect(page.getByText("Loading run details...")).toHaveCount(0, { timeout: 15000 });
+  await expect(page.getByRole("button", { name: "Force Rerun" })).toBeVisible();
+  await page.getByRole("button", { name: "Force Rerun" }).click();
+
+  expect(cancelCalled).toBe(true);
+  expect(rerunPayload).toEqual({ mode: "fresh" });
   await expect(page).toHaveURL(/8e8957f2-79f8-4dc8-8deb-786b2c93828d$/, { timeout: 15000 });
 });

@@ -85,7 +85,11 @@ from orchestrator.core.followup_context_service import (
     resolve_followup_context_match,
     resolve_followup_reaction,
 )
-from orchestrator.core.run_human_input_service import pending_human_input_for_request_id, resume_run_from_human_input_reply
+from orchestrator.core.run_human_input_service import (
+    answer_human_input_request,
+    pending_human_input_for_request_id,
+    resume_workflow_from_human_input_answer,
+)
 from orchestrator.core.platform_secret_service import (
     PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF,
     resolve_platform_secret_ref,
@@ -503,7 +507,8 @@ class DiscordGatewayListener:
                 **kwargs,
             ),
             load_pending_human_input_request=pending_human_input_for_request_id,
-            resume_run_from_human_input_reply=resume_run_from_human_input_reply,
+            answer_human_input_request=answer_human_input_request,
+            resume_workflow_from_human_input_answer=resume_workflow_from_human_input_answer,
             resolve_followup_context_match=resolve_followup_context_match,
             resolve_followup_context=resolve_followup_context,
             resolve_followup_reaction=resolve_followup_reaction,
@@ -739,7 +744,7 @@ class DiscordGatewayListener:
         project_id: str | None = None,
     ) -> tuple[str | None, str | None]:
         if self._transcribe_audio_attachment is None:
-            provider = str(getattr(self._settings, "voice_provider", "disabled") or "").strip().lower()
+            provider = str(getattr(self._settings, "voice_stt_provider", "disabled") or "").strip().lower()
             if provider in {"", "disabled"}:
                 return (
                     None,
@@ -785,7 +790,7 @@ class DiscordGatewayListener:
         return transcript, None
 
     def _room_voice_reply_enabled(self) -> bool:
-        provider = str(getattr(self._settings, "voice_provider", "disabled") or "").strip().lower()
+        provider = str(getattr(self._settings, "voice_tts_provider", "disabled") or "").strip().lower()
         if provider in {"", "disabled"}:
             return False
         return True

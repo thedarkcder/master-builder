@@ -108,6 +108,45 @@ class DockerBuildContractTests(unittest.TestCase):
             msg="Local run workdirs should not be sent into the Docker build context.",
         )
 
+    def test_run_worker_prewarms_models_before_processing_queue_in_dev_and_prod(self) -> None:
+        expected_lines = (
+            "HF_HOME: /root/.cache/huggingface",
+            "HF_HUB_OFFLINE: ${HF_HUB_OFFLINE:-1}",
+            "HF_HUB_OFFLINE=0 python -m orchestrator knowledge-prewarm",
+            "python -m orchestrator worker-runs",
+            "huggingface-cache:/root/.cache/huggingface",
+        )
+
+        for relative_path in ("docker-compose.yml", "deploy/hetzner/docker-compose.prod.yml"):
+            compose = (ROOT / relative_path).read_text(encoding="utf-8")
+            service_block = compose.split("run-worker:", 1)[1]
+            for expected_line in expected_lines:
+                self.assertIn(
+                    expected_line,
+                    service_block,
+                    msg=f"run-worker in {relative_path} should preload cached HF models before starting the queue loop.",
+                )
+
+    def test_webhook_worker_prewarms_voice_models_before_processing_webhooks_in_dev_and_prod(self) -> None:
+        expected_lines = (
+            "HF_HOME: /root/.cache/huggingface",
+            "HF_HUB_OFFLINE: ${HF_HUB_OFFLINE:-1}",
+            "HF_HUB_OFFLINE=0 python -m orchestrator voice-prewarm",
+            "python -m orchestrator worker-webhooks",
+            "huggingface-cache:/root/.cache/huggingface",
+            "pocket-tts-cache:/root/.cache/pocket_tts",
+        )
+
+        for relative_path in ("docker-compose.yml", "deploy/hetzner/docker-compose.prod.yml"):
+            compose = (ROOT / relative_path).read_text(encoding="utf-8")
+            service_block = compose.split("webhook-worker:", 1)[1]
+            for expected_line in expected_lines:
+                self.assertIn(
+                    expected_line,
+                    service_block,
+                    msg=f"webhook-worker in {relative_path} should preload cached voice models before processing webhook events.",
+                )
+
 
 if __name__ == "__main__":
     unittest.main()
