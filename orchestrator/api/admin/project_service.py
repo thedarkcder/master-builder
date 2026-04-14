@@ -15,6 +15,12 @@ from orchestrator.api.admin.deployment_config_service import (
     project_deployment_config_to_schema,
     tenant_deployment_plane_to_schema,
 )
+from orchestrator.api.admin.deployment_restore_service import (
+    create_project_deployment_restore_run,
+    get_project_deployment_restore_run,
+    list_project_deployment_backup_executions,
+    list_project_deployment_restore_runs,
+)
 from orchestrator.api.admin.deployment_release_service import (
     _coolify_api_base_url,
     _resolve_secret_value,
@@ -25,6 +31,7 @@ from orchestrator.api.admin.deployment_release_service import (
 )
 from orchestrator.api.schemas import (
     ProjectDeploymentBackupApplyRequest,
+    ProjectDeploymentBackupExecutionListRead,
     ProjectDeploymentBackupRestoreRequest,
     ProjectDeploymentBackupTriggerRequest,
     ProjectDeploymentConfigRead,
@@ -35,6 +42,7 @@ from orchestrator.api.schemas import (
     ProjectDeploymentBackupPolicyWrite,
     ProjectDeploymentResourceApplyRequest,
     ProjectDeploymentResourceWrite,
+    ProjectDeploymentRestoreRunRead,
     ProjectAppAnalysisRunRead,
     ProjectAppAnalysisRunStart,
     ProjectAppCreate,
@@ -849,13 +857,64 @@ class AdminProjectService:
         project_id: str,
         app_id: str,
         payload: ProjectDeploymentBackupRestoreRequest,
-    ) -> ProjectDeploymentOperationRead:
-        return restore_project_deployment_backup(
+        requested_by_user_id: str | None = None,
+    ) -> ProjectDeploymentRestoreRunRead:
+        return create_project_deployment_restore_run(
             session=session,
             tenant_id=tenant_id,
             project_id=project_id,
-            payload=payload,
             app_id=app_id,
+            payload=payload,
+            requested_by_user_id=requested_by_user_id,
+        )
+
+    def list_project_app_deployment_backup_executions(
+        self,
+        *,
+        session,
+        tenant_id: str,
+        project_id: str,
+        app_id: str,
+        backup_key: str,
+    ) -> ProjectDeploymentBackupExecutionListRead:
+        return list_project_deployment_backup_executions(
+            session=session,
+            tenant_id=tenant_id,
+            project_id=project_id,
+            app_id=app_id,
+            backup_key=backup_key,
+        )
+
+    def list_project_app_deployment_restore_runs(
+        self,
+        *,
+        session,
+        tenant_id: str,
+        project_id: str,
+        app_id: str,
+    ) -> list[ProjectDeploymentRestoreRunRead]:
+        return list_project_deployment_restore_runs(
+            session=session,
+            tenant_id=tenant_id,
+            project_id=project_id,
+            app_id=app_id,
+        )
+
+    def get_project_app_deployment_restore_run(
+        self,
+        *,
+        session,
+        tenant_id: str,
+        project_id: str,
+        app_id: str,
+        restore_run_id: str,
+    ) -> ProjectDeploymentRestoreRunRead:
+        return get_project_deployment_restore_run(
+            session=session,
+            tenant_id=tenant_id,
+            project_id=project_id,
+            app_id=app_id,
+            restore_run_id=restore_run_id,
         )
 
     def update_project(self, *, session, tenant_id: str, project_id: str, payload) -> object:  # noqa: ANN001
@@ -2007,64 +2066,3 @@ def trigger_project_deployment_backups(
         application_uuid=_latest_application_uuid(latest_release),
     )
 
-
-def restore_project_deployment_backup(
-    *,
-    session,
-    tenant_id: str,
-    project_id: str,
-    payload: ProjectDeploymentBackupRestoreRequest,
-    app_id: str | None = None,
-) -> ProjectDeploymentOperationRead:  # noqa: ANN001
-    _tenant, _project, _project_app, _tenant_plane, project_deployment, latest_release = _deployment_context(
-        session=session,
-        tenant_id=tenant_id,
-        project_id=project_id,
-        app_id=app_id,
-    )
-    selected = next(
-        (
-            backup_policy
-            for backup_policy in project_deployment.backup_policies
-            if backup_policy.key == payload.backup_key
-        ),
-        None,
-    )
-    if selected is None:
-        items = [
-            _item_result(
-                key=payload.backup_key,
-                kind="backup",
-                status="failed",
-                message=f"Backup policy '{payload.backup_key}' was not found",
-            )
-        ]
-        return _deployment_operation_from_items(
-            operation="restore_backups",
-            tenant_id=tenant_id,
-            project_id=project_id,
-            provider=_INTERNAL_COOLIFY_PROVIDER,
-            items=items,
-            application_uuid=_latest_application_uuid(latest_release),
-        )
-
-    items = [
-        _item_result(
-            key=selected.key,
-            kind="backup",
-            status="unsupported",
-            message="Coolify restore API is not documented in the public API surface yet",
-            details={
-                "backup_uuid": _normalize_optional_string(payload.backup_uuid),
-                "execution_uuid": _normalize_optional_string(payload.execution_uuid),
-            },
-        )
-    ]
-    return _deployment_operation_from_items(
-        operation="restore_backups",
-        tenant_id=tenant_id,
-        project_id=project_id,
-        provider=_INTERNAL_COOLIFY_PROVIDER,
-        items=items,
-        application_uuid=_latest_application_uuid(latest_release),
-    )

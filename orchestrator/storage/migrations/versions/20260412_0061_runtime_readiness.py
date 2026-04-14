@@ -18,32 +18,39 @@ depends_on = None
 
 
 def upgrade() -> None:
-    with op.batch_alter_table("runs") as batch_op:
-        batch_op.add_column(
-            sa.Column(
-                "required_runtime_kinds_json",
-                sa.JSON(),
-                nullable=False,
-                server_default=sa.text("'[]'"),
+    inspector = sa.inspect(op.get_bind())
+    run_columns = {column["name"] for column in inspector.get_columns("runs")}
+    worker_columns = {column["name"] for column in inspector.get_columns("worker_runtime_states")}
+
+    if "required_runtime_kinds_json" not in run_columns:
+        with op.batch_alter_table("runs") as batch_op:
+            batch_op.add_column(
+                sa.Column(
+                    "required_runtime_kinds_json",
+                    sa.JSON(),
+                    nullable=False,
+                    server_default=sa.text("'[]'"),
+                )
             )
-        )
-    with op.batch_alter_table("worker_runtime_states") as batch_op:
-        batch_op.add_column(
-            sa.Column(
-                "runtime_dependencies_json",
-                sa.JSON(),
-                nullable=False,
-                server_default=sa.text("'{}'"),
+        op.execute("UPDATE runs SET required_runtime_kinds_json = '[]' WHERE required_runtime_kinds_json IS NULL")
+        with op.batch_alter_table("runs") as batch_op:
+            batch_op.alter_column("required_runtime_kinds_json", server_default=None)
+
+    if "runtime_dependencies_json" not in worker_columns:
+        with op.batch_alter_table("worker_runtime_states") as batch_op:
+            batch_op.add_column(
+                sa.Column(
+                    "runtime_dependencies_json",
+                    sa.JSON(),
+                    nullable=False,
+                    server_default=sa.text("'{}'"),
+                )
             )
+        op.execute(
+            "UPDATE worker_runtime_states SET runtime_dependencies_json = '{}' WHERE runtime_dependencies_json IS NULL"
         )
-    op.execute("UPDATE runs SET required_runtime_kinds_json = '[]' WHERE required_runtime_kinds_json IS NULL")
-    op.execute(
-        "UPDATE worker_runtime_states SET runtime_dependencies_json = '{}' WHERE runtime_dependencies_json IS NULL"
-    )
-    with op.batch_alter_table("runs") as batch_op:
-        batch_op.alter_column("required_runtime_kinds_json", server_default=None)
-    with op.batch_alter_table("worker_runtime_states") as batch_op:
-        batch_op.alter_column("runtime_dependencies_json", server_default=None)
+        with op.batch_alter_table("worker_runtime_states") as batch_op:
+            batch_op.alter_column("runtime_dependencies_json", server_default=None)
 
 
 def downgrade() -> None:

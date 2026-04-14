@@ -8,6 +8,7 @@ from tempfile import TemporaryDirectory
 from sqlalchemy.exc import PendingRollbackError
 
 from orchestrator.core.webhook_job_queue import (
+    WEBHOOK_TRANSPORT_COOLIFY_DEPLOYMENT,
     WEBHOOK_TRANSPORT_DISCORD_COMMAND,
     WEBHOOK_TRANSPORT_GITHUB,
     WEBHOOK_TRANSPORT_JIRA,
@@ -174,6 +175,25 @@ class WorkerWebhookJobServiceTests(unittest.TestCase):
                 "installation_id": 12345,
                 "repo_full_name": "example/repo",
             },
+        )
+
+    @staticmethod
+    def _coolify_request(*, request_id: str, project_id: str = "project-1") -> WebhookJobEnqueueRequest:
+        return WebhookJobEnqueueRequest(
+            transport=WEBHOOK_TRANSPORT_COOLIFY_DEPLOYMENT,
+            request_id=request_id,
+            tenant_id="tenant-1",
+            project_id=project_id,
+            subject_key=f"coolify_deployment:tenant-1:{project_id}",
+            dedupe_key=request_id,
+            event_type="deployment.updated",
+            payload_json={
+                "event_type": "deployment.updated",
+                "deployment_uuid": "deployment-uuid-1",
+                "application_uuid": "application-uuid-1",
+                "status": "running",
+            },
+            context_json={"webhook_token": "coolify-webhook-token"},
         )
 
     def test_blocking_reconciliation_does_not_cancel_existing_run(self) -> None:
@@ -403,3 +423,49 @@ class WorkerWebhookJobServiceTests(unittest.TestCase):
         self.assertEqual(processed, "failed-job")
         session.rollback.assert_called_once()
         mark_failed.assert_called_once()
+
+    def test_coolify_webhook_jobs_call_runtime_ingest_and_mark_done(self) -> None:
+        with self.session_factory() as session:
+            enqueue_webhook_job(session, request=self._coolify_request(request_id="coolify-request-1"))
+            session.commit()
+
+        with self.session_factory() as session:
+            with patch(
+                "orchestrator.core.worker.webhook_job_service.ingest_coolify_deployment_event",
+                return_value={"ok": True, "updated": True, "release_id": "release-1", "status": "deploying"},
+            ) as ingest_mock:
+                processed = process_next_webhook_job(session=session, settings=self._settings(), owner_id="worker-1")
+
+            self.assertIsNotNone(processed)
+            assert processed is not None
+            ingest_mock.assert_called_once_with(
+                session=session,
+                tenant_id="tenant-1",
+                project_id="project-1",
+                webhook_token="coolify-webhook-token",
+                payload={
+                    "event_type": "deployment.updated",
+                    "deployment_uuid": "deployment-uuid-1",
+                    "application_uuid": "application-uuid-1",
+                    "status": "running",
+                },
+            )
+            self.assertEqual(session.get(WebhookJob, processed.job_id).status, "done")
+
+    def test_coolify_webhook_jobs_mark_failed_when_runtime_ingest_raises(self) -> None:
+        with self.session_factory() as session:
+            enqueue_webhook_job(session, request=self._coolify_request(request_id="coolify-request-2"))
+            session.commit()
+
+        with self.session_factory() as session:
+            with patch(
+                "orchestrator.core.worker.webhook_job_service.ingest_coolify_deployment_event",
+                side_effect=RuntimeError("coolify ingest failed"),
+            ):
+                processed = process_next_webhook_job(session=session, settings=self._settings(), owner_id="worker-1")
+
+            self.assertIsNotNone(processed)
+            assert processed is not None
+            job = session.get(WebhookJob, processed.job_id)
+            self.assertEqual(job.status, "failed")
+            self.assertIn("coolify ingest failed", str(job.last_error))

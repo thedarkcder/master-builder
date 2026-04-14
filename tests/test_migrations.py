@@ -50,7 +50,7 @@ class MigrationTests(unittest.TestCase):
 
         duplicates = {revision_id: count for revision_id, count in Counter(revision_ids).items() if count > 1}
         self.assertEqual(duplicates, {})
-        self.assertEqual(script.get_heads(), ["20260410_0058"])
+        self.assertEqual(script.get_heads(), ["20260414_0066"])
 
     def test_jira_feature_migrations_chain_after_staging_worker_head(self) -> None:
         """Branch-specific migrations chained after staging merge head (20260328_0045)."""
@@ -98,9 +98,21 @@ class MigrationTests(unittest.TestCase):
                 'revision = "20260407_0054"',
                 'down_revision = "20260407_0053"',
             ),
-            "20260409_0055_project_installs.py": (
+            "20260409_0055_internal_coolify_deployment_config.py": (
                 'revision = "20260409_0055"',
                 'down_revision = "20260407_0054"',
+            ),
+            "20260409_0056_internal_coolify_deployment_releases.py": (
+                'revision = "20260409_0056"',
+                'down_revision = "20260409_0055"',
+            ),
+            "20260409_0057_project_apps_and_app_scoped_releases.py": (
+                'revision = "20260409_0057"',
+                'down_revision = "20260409_0056"',
+            ),
+            "20260409_0058_project_installs.py": (
+                'revision = "20260409_0058"',
+                'down_revision = "20260409_0057"',
             ),
             "20260410_0056_execution_snapshot_legacy_payload_backfill.py": (
                 'revision = "20260410_0056"',
@@ -113,6 +125,18 @@ class MigrationTests(unittest.TestCase):
             "20260410_0058_execution_snapshot_checkpoint_backfill.py": (
                 'revision = "20260410_0058"',
                 'down_revision = "20260410_0057"',
+            ),
+            "20260414_0064_merge_worker_runtime_and_internal_coolify_heads.py": (
+                'revision = "20260414_0064"',
+                'down_revision = ("20260409_0058", "20260413_0063")',
+            ),
+            "20260414_0065_project_deployment_restore_runs.py": (
+                'revision = "20260414_0065"',
+                'down_revision = "20260414_0064"',
+            ),
+            "20260414_0066_deployment_host_agents.py": (
+                'revision = "20260414_0066"',
+                'down_revision = "20260414_0065"',
             ),
         }
 
@@ -179,7 +203,7 @@ class MigrationTests(unittest.TestCase):
             self.assertIn("tenant_user_discord_identities", inspector.get_table_names())
             with engine.begin() as connection:
                 versions = connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
-            self.assertEqual(versions, ["20260410_0058"])
+            self.assertEqual(versions, ["20260414_0066"])
 
     def test_run_migrations_repairs_legacy_stream_only_0039_head(self) -> None:
         with TemporaryDirectory() as tmp_dir:
@@ -223,7 +247,7 @@ class MigrationTests(unittest.TestCase):
             self.assertIn("tenant_user_discord_identities", inspector.get_table_names())
             with engine.begin() as connection:
                 versions = connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
-            self.assertEqual(versions, ["20260410_0058"])
+            self.assertEqual(versions, ["20260414_0066"])
 
     def test_run_migrations_repairs_stamp_when_schema_0045_but_version_0044(self) -> None:
         with TemporaryDirectory() as tmp_dir:
@@ -237,7 +261,7 @@ class MigrationTests(unittest.TestCase):
 
             with engine.begin() as connection:
                 versions = connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
-            self.assertEqual(versions, ["20260410_0058"])
+            self.assertEqual(versions, ["20260414_0066"])
 
     def test_run_migrations_disables_alembic_logger_reconfiguration(self) -> None:
         fake_config = MagicMock()
@@ -278,6 +302,9 @@ class MigrationTests(unittest.TestCase):
             self.assertIn("discord_command_sync_runtime_states", inspector.get_table_names())
             self.assertIn("project_automations", inspector.get_table_names())
             self.assertIn("project_automation_executions", inspector.get_table_names())
+            self.assertIn("project_deployment_restore_runs", inspector.get_table_names())
+            self.assertIn("deployment_hosts", inspector.get_table_names())
+            self.assertIn("deployment_host_commands", inspector.get_table_names())
             self.assertNotIn("run_locks", inspector.get_table_names())
 
             run_columns = {column["name"] for column in inspector.get_columns("runs")}
@@ -317,10 +344,33 @@ class MigrationTests(unittest.TestCase):
 
             automation_indexes = {index["name"] for index in inspector.get_indexes("project_automations")}
             execution_indexes = {index["name"] for index in inspector.get_indexes("project_automation_executions")}
+            restore_run_columns = {column["name"] for column in inspector.get_columns("project_deployment_restore_runs")}
+            restore_run_indexes = {index["name"] for index in inspector.get_indexes("project_deployment_restore_runs")}
 
             self.assertIn("ix_project_automations_due_scan", automation_indexes)
             self.assertIn("ix_project_automation_executions_due_scan", execution_indexes)
             self.assertIn("ix_project_automation_executions_automation_history", execution_indexes)
+            self.assertIn("execution_uuid", restore_run_columns)
+            self.assertIn("database_uuid", restore_run_columns)
+            self.assertIn("host_id", restore_run_columns)
+            self.assertIn("command_id", restore_run_columns)
+            self.assertIn("status", restore_run_columns)
+            self.assertIn("ix_project_deployment_restore_runs_app_id", restore_run_indexes)
+            self.assertIn("ix_project_deployment_restore_runs_app_status", restore_run_indexes)
+            self.assertIn("ix_project_deployment_restore_runs_tenant_status", restore_run_indexes)
+            self.assertIn("ix_project_deployment_restore_runs_host_id", restore_run_indexes)
+            self.assertIn("ix_project_deployment_restore_runs_command_id", restore_run_indexes)
+            host_columns = {column["name"] for column in inspector.get_columns("deployment_hosts")}
+            host_indexes = {index["name"] for index in inspector.get_indexes("deployment_hosts")}
+            host_command_columns = {column["name"] for column in inspector.get_columns("deployment_host_commands")}
+            host_command_indexes = {index["name"] for index in inspector.get_indexes("deployment_host_commands")}
+            self.assertIn("access_token_hash", host_columns)
+            self.assertIn("capability_keys_json", host_columns)
+            self.assertIn("ix_deployment_hosts_state", host_indexes)
+            self.assertIn("claim_id", host_command_columns)
+            self.assertIn("payload_json", host_command_columns)
+            self.assertIn("ix_deployment_host_commands_host_status_available_at", host_command_indexes)
+            self.assertIn("ix_deployment_host_commands_restore_run_id", host_command_indexes)
             automation_columns = {column["name"]: column for column in inspector.get_columns("project_automations")}
             self.assertNotIn("delivery_text_channel_id", automation_columns)
             self.assertIn("worker_runtime_states", inspector.get_table_names())
@@ -536,7 +586,7 @@ class MigrationTests(unittest.TestCase):
             with engine.begin() as connection:
                 current_revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
 
-            self.assertEqual(current_revision, "20260410_0058")
+            self.assertEqual(current_revision, "20260414_0066")
 
     def test_run_migrations_rejects_sqlite_without_test_opt_in(self) -> None:
         previous = os.environ.get("ORCHESTRATOR_ALLOW_SQLITE_FOR_TESTS")

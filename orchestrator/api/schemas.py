@@ -5,7 +5,7 @@ from pathlib import PurePosixPath
 import re
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_serializer, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_serializer, model_validator
 
 from orchestrator.core.agent_execution_profiles import (
     normalize_execution_profile_routing,
@@ -777,6 +777,7 @@ class TenantDeploymentPlaneWrite(BaseModel):
     coolify_environment_name: str | None = None
     coolify_server_uuid: str | None = None
     coolify_destination_uuid: str | None = None
+    managed_host_id: str | None = None
     secret_refs: dict[str, str] = Field(default_factory=dict)
     state: Literal["unconfigured", "provisioning", "active", "degraded", "paused", "failed"] = "unconfigured"
     last_error: str | None = None
@@ -790,6 +791,7 @@ class TenantDeploymentPlaneWrite(BaseModel):
         "coolify_environment_name",
         "coolify_server_uuid",
         "coolify_destination_uuid",
+        "managed_host_id",
         "last_error",
     )
     @classmethod
@@ -804,6 +806,160 @@ class TenantDeploymentPlaneWrite(BaseModel):
 
 class TenantDeploymentPlaneRead(TenantDeploymentPlaneWrite):
     pass
+
+
+class DeploymentHostCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    label: str
+    provider: Literal["internal_coolify"] = "internal_coolify"
+    infrastructure_provider: Literal["aws", "hetzner"] | None = None
+    region: str | None = None
+    capabilities: list[str] = Field(default_factory=list)
+
+    @field_validator("label")
+    @classmethod
+    def normalize_label(cls, value: object) -> str:
+        return _normalize_required_string(value)
+
+    @field_validator("infrastructure_provider", "region")
+    @classmethod
+    def normalize_optional_host_strings(cls, value: object) -> str | None:
+        return _normalize_optional_string(value)
+
+    @field_validator("capabilities")
+    @classmethod
+    def normalize_capabilities(cls, value: object) -> list[str]:
+        normalized: list[str] = []
+        if not isinstance(value, list):
+            return normalized
+        for item in value:
+            capability = _normalize_lower_string(item)
+            if capability and capability not in normalized:
+                normalized.append(capability)
+        return normalized
+
+
+class DeploymentHostRead(BaseModel):
+    host_id: str
+    label: str
+    provider: str
+    infrastructure_provider: str | None = None
+    region: str | None = None
+    capabilities: list[str] = Field(default_factory=list)
+    agent_version: str | None = None
+    metadata: dict[str, object] = Field(default_factory=dict)
+    state: Literal["provisioning", "active", "degraded", "offline", "retired"]
+    registered_at: datetime | None = None
+    last_seen_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class DeploymentHostBootstrapRead(BaseModel):
+    host: DeploymentHostRead
+    bootstrap_token: str
+
+
+class DeploymentHostRegistrationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    bootstrap_token: str
+    agent_version: str | None = None
+    advertised_capabilities: list[str] = Field(default_factory=list)
+
+    @field_validator("bootstrap_token", "agent_version")
+    @classmethod
+    def normalize_required_registration_strings(cls, value: object, info: ValidationInfo) -> str | None:
+        normalized = _normalize_optional_string(value)
+        if info.field_name == "bootstrap_token":
+            if normalized is None:
+                raise ValueError("bootstrap_token is required")
+            return normalized
+        return normalized
+
+    @field_validator("advertised_capabilities")
+    @classmethod
+    def normalize_advertised_capabilities(cls, value: object) -> list[str]:
+        return DeploymentHostCreate.normalize_capabilities(value)
+
+
+class DeploymentHostRegistrationRead(BaseModel):
+    host: DeploymentHostRead
+    access_token: str
+
+
+class DeploymentHostHeartbeatWrite(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    agent_version: str | None = None
+    advertised_capabilities: list[str] = Field(default_factory=list)
+    state: Literal["active", "degraded"] = "active"
+
+    @field_validator("agent_version")
+    @classmethod
+    def normalize_agent_version(cls, value: object) -> str | None:
+        return _normalize_optional_string(value)
+
+    @field_validator("advertised_capabilities")
+    @classmethod
+    def normalize_advertised_capabilities(cls, value: object) -> list[str]:
+        return DeploymentHostCreate.normalize_capabilities(value)
+
+
+class DeploymentHostCommandRead(BaseModel):
+    command_id: str
+    host_id: str
+    tenant_id: str | None = None
+    project_id: str | None = None
+    app_id: str | None = None
+    restore_run_id: str | None = None
+    kind: str
+    status: Literal["queued", "claimed", "running", "succeeded", "failed", "expired", "canceled"]
+    claim_id: str | None = None
+    payload: dict[str, object] = Field(default_factory=dict)
+    result: dict[str, object] = Field(default_factory=dict)
+    last_error: str | None = None
+    available_at: datetime
+    claimed_at: datetime | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class DeploymentHostCommandClaimRead(BaseModel):
+    command: DeploymentHostCommandRead | None = None
+
+
+class DeploymentHostCommandStartWrite(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    claim_id: str
+
+    @field_validator("claim_id")
+    @classmethod
+    def normalize_claim_id(cls, value: object) -> str:
+        return _normalize_required_string(value)
+
+
+class DeploymentHostCommandResultWrite(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    claim_id: str
+    status: Literal["succeeded", "failed"]
+    result: dict[str, object] = Field(default_factory=dict)
+    last_error: str | None = None
+
+    @field_validator("claim_id", "last_error")
+    @classmethod
+    def normalize_command_result_strings(cls, value: object, info: ValidationInfo) -> str | None:
+        normalized = _normalize_optional_string(value)
+        if info.field_name == "claim_id":
+            if normalized is None:
+                raise ValueError("claim_id is required")
+            return normalized
+        return normalized
 
 
 class ProjectDeploymentDomainWrite(BaseModel):
@@ -1085,13 +1241,59 @@ class ProjectDeploymentBackupRestoreRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     backup_key: str
+    resource_key: str
+    execution_uuid: str
+    confirmation_value: str
     backup_uuid: str | None = None
-    execution_uuid: str | None = None
 
-    @field_validator("backup_key", "backup_uuid", "execution_uuid")
+    @field_validator("backup_key", "resource_key", "execution_uuid", "confirmation_value", "backup_uuid")
     @classmethod
     def normalize_optional_strings(cls, value: object) -> str | None:
         return _normalize_optional_string(value)
+
+
+class ProjectDeploymentBackupExecutionRead(BaseModel):
+    execution_uuid: str
+    status: str | None = None
+    created_at: datetime | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    artifact_path: str | None = None
+    file_name: str | None = None
+    details: dict[str, object] = Field(default_factory=dict)
+
+
+class ProjectDeploymentBackupExecutionListRead(BaseModel):
+    backup_key: str
+    resource_key: str
+    backup_uuid: str | None = None
+    database_uuid: str | None = None
+    executions: list[ProjectDeploymentBackupExecutionRead] = Field(default_factory=list)
+
+
+class ProjectDeploymentRestoreRunRead(BaseModel):
+    restore_run_id: str
+    tenant_id: str
+    project_id: str
+    app_id: str
+    host_id: str | None = None
+    command_id: str | None = None
+    backup_policy_key: str
+    resource_key: str
+    backup_uuid: str | None = None
+    execution_uuid: str
+    database_type: Literal["postgres", "mysql", "mariadb"]
+    database_uuid: str
+    restore_mode: Literal["replace"]
+    requested_by_user_id: str | None = None
+    confirmation_value: str
+    execution_payload: dict[str, object] = Field(default_factory=dict)
+    status: Literal["queued", "running", "succeeded", "failed"]
+    last_error: str | None = None
+    created_at: datetime
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    updated_at: datetime
 
 
 class ProjectDeploymentOperationItemRead(BaseModel):

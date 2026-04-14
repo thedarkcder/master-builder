@@ -188,3 +188,4 @@
 - When a runtime login modal starts a worker-owned auth request, do not stop after showing the initial instructions. Keep polling the auth request lifecycle and tell the user when it reaches `completed`, `failed`, or `expired`.
 - Do not duplicate nested remediation data into flattened top-level API fields “for convenience.” Keep one authoritative payload shape and make consumers read that directly.
 - When Next.js local auth routes hang while the dev server warns about an SWC mismatch, treat it as a local dev-runtime problem first. Reset the local install/runtime and prefer a stable webpack dev server default over changing auth route code to compensate.
+- When the user rejects human-managed infrastructure credentials, do not keep refining static key or vault-secret variants. Reframe immediately to machine identity or host-agent execution so the control plane never depends on operator-generated remote access secrets.

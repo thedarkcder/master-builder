@@ -17,6 +17,8 @@ import {
   createProjectAppRelease,
   getProjectAppDeploymentConfig,
   listProjectAppAnalysisRuns,
+  listProjectAppDeploymentBackupExecutions,
+  listProjectAppDeploymentRestoreRuns,
   listProjectAppReleases,
   listProjectApps,
   requestProjectAppDeploymentBackupNow,
@@ -27,12 +29,15 @@ import {
   type ProjectAppDeploymentConfigRecord,
   type ProjectAppDeploymentReleaseRecord,
   type ProjectAppRecord,
+  type ProjectDeploymentBackupExecutionListRecord,
+  type ProjectDeploymentBackupExecutionRecord,
   type ProjectDeploymentApplyBackupsPayload,
   type ProjectDeploymentApplyDomainsPayload,
   type ProjectDeploymentApplyResourcesPayload,
   type ProjectDeploymentBackupNowPayload,
   type ProjectDeploymentReleaseCreatePayload,
   type ProjectDeploymentRestoreRequestPayload,
+  type ProjectDeploymentRestoreRunRecord,
   type ProjectDeploymentOperationResultRecord,
   type ProjectDeploymentBackupPolicyRecord,
   type ProjectDeploymentDomainRecord,
@@ -95,12 +100,17 @@ type ReleaseDraft = {
   reason: string;
 };
 
-type OperationKey = "resources" | "domains" | "backups" | "backupNow" | "restore";
+type OperationKey = "resources" | "domains" | "backups" | "backupNow";
 
 type OperationFeedback = {
   busy: boolean;
   statusLine: string;
   result: ProjectDeploymentOperationResultRecord | null;
+};
+
+type RestoreOperationState = {
+  busy: boolean;
+  statusLine: string;
 };
 
 const RESOURCE_KIND_OPTIONS = [
@@ -567,10 +577,32 @@ function statusLineVariant(status: string): string {
   if (normalized === "running" || normalized === "deploying") {
     return "border-warning/30 bg-warning/10 text-warning";
   }
-  if (normalized === "completed" || normalized === "live") {
+  if (normalized === "queued") {
+    return "border-info/30 bg-info/10 text-info";
+  }
+  if (normalized === "completed" || normalized === "live" || normalized === "succeeded") {
     return "border-success/30 bg-success/10 text-success";
   }
   return "border-border bg-muted/30 text-muted-foreground";
+}
+
+function restoreStatusVariant(status: string): "default" | "secondary" | "outline" | "success" | "warning" | "destructive" | "info" {
+  const normalized = status.trim().toLowerCase();
+  if (normalized === "succeeded" || normalized === "completed") return "success";
+  if (normalized === "running" || normalized === "deploying") return "warning";
+  if (normalized === "queued") return "info";
+  if (normalized === "failed") return "destructive";
+  return "outline";
+}
+
+function restoreExecutionLabel(execution: ProjectDeploymentBackupExecutionRecord): string {
+  const name = execution.file_name?.trim() || execution.execution_uuid;
+  const status = execution.status?.trim() ? ` · ${execution.status}` : "";
+  return `${name}${status}`;
+}
+
+function restoreRunLabel(run: ProjectDeploymentRestoreRunRecord): string {
+  return `${run.backup_policy_key} / ${run.execution_uuid}`;
 }
 
 function DeploymentOperationCard({
@@ -634,8 +666,12 @@ export function TenantProjectAppsPage({
   const [backupNowPolicyKey, setBackupNowPolicyKey] = useState("");
   const [restoreResourceKey, setRestoreResourceKey] = useState("");
   const [restoreBackupKey, setRestoreBackupKey] = useState("");
-  const [restoreMode, setRestoreMode] = useState<"replace" | "clone">("replace");
-  const [restoreNote, setRestoreNote] = useState("");
+  const [restoreExecutionUuid, setRestoreExecutionUuid] = useState("");
+  const [restoreConfirmationValue, setRestoreConfirmationValue] = useState("");
+  const [restoreExecutions, setRestoreExecutions] = useState<ProjectDeploymentBackupExecutionListRecord | null>(null);
+  const [restoreRuns, setRestoreRuns] = useState<ProjectDeploymentRestoreRunRecord[]>([]);
+  const [restoreBusy, setRestoreBusy] = useState(false);
+  const [restoreStatusLine, setRestoreStatusLine] = useState("");
   const [busy, setBusy] = useState(false);
   const [loadingSurface, setLoadingSurface] = useState(false);
   const [statusLine, setStatusLine] = useState("");
@@ -649,7 +685,6 @@ export function TenantProjectAppsPage({
     domains: emptyOperationFeedback(),
     backups: emptyOperationFeedback(),
     backupNow: emptyOperationFeedback(),
-    restore: emptyOperationFeedback(),
   });
 
   const selectedApp = useMemo(
@@ -687,6 +722,33 @@ export function TenantProjectAppsPage({
     () => [...selectedAppReleases].sort((left, right) => right.created_at.localeCompare(left.created_at)),
     [selectedAppReleases],
   );
+  const restoreRunList = useMemo(
+    () => [...restoreRuns].sort((left, right) => right.created_at.localeCompare(left.created_at)),
+    [restoreRuns],
+  );
+  const latestRestoreRun = restoreRunList[0] ?? null;
+  const restoreExecutionList = restoreExecutions;
+  const restoreExecutionRows = restoreExecutionList?.executions ?? [];
+  const selectedRestorePolicy = useMemo(
+    () => deploymentForm.backup_policies.find((policy) => normalizeKey(policy.key) === normalizeKey(restoreBackupKey)) ?? null,
+    [deploymentForm.backup_policies, restoreBackupKey],
+  );
+  const selectedRestoreResource = useMemo(
+    () => deploymentForm.resources.find((resource) => normalizeKey(resource.key) === normalizeKey(restoreResourceKey)) ?? null,
+    [deploymentForm.resources, restoreResourceKey],
+  );
+  const selectedRestoreExecution = useMemo(
+    () => restoreExecutionRows.find((execution) => normalizeKey(execution.execution_uuid) === normalizeKey(restoreExecutionUuid)) ?? null,
+    [restoreExecutionRows, restoreExecutionUuid],
+  );
+  const restoreConfirmationMatches = Boolean(selectedApp && trimToNull(restoreConfirmationValue) === selectedApp.slug.trim());
+  const restoreSelectionIsValid =
+    Boolean(selectedApp && selectedRestorePolicy && selectedRestoreResource && selectedRestoreExecution) &&
+    Boolean(trimToNull(restoreBackupKey)) &&
+    Boolean(trimToNull(restoreResourceKey)) &&
+    Boolean(trimToNull(restoreExecutionUuid)) &&
+    Boolean(restoreConfirmationMatches) &&
+    selectedRestorePolicy?.resource_key.trim() === selectedRestoreResource?.key.trim();
 
   async function loadApps({ silent = false }: { silent?: boolean } = {}) {
     if (!credentials) {
@@ -719,18 +781,29 @@ export function TenantProjectAppsPage({
     }
     setLoadingSurface(true);
     setSurfaceStatusLine("");
+    setRestoreStatusLine("");
     try {
-      const [config, releases] = await Promise.all([
+      const [config, releases, restoreRunRows] = await Promise.all([
         getProjectAppDeploymentConfig(credentials, tenantId, projectId, appId),
         listProjectAppReleases(credentials, tenantId, projectId, appId),
+        listProjectAppDeploymentRestoreRuns(credentials, tenantId, projectId, appId),
       ]);
       setSelectedAppReleases(releases);
+      setRestoreRuns(restoreRunRows);
+      setRestoreExecutions(null);
+      setRestoreBackupKey("");
+      setRestoreResourceKey("");
+      setRestoreExecutionUuid("");
+      setRestoreConfirmationValue("");
       setDeploymentForm(toDeploymentForm(config));
       setReleaseDraft(emptyReleaseDraft());
     } catch (error) {
       setSurfaceStatusLine(`Unable to load managed deployment settings: ${(error as Error).message}`);
       setSelectedAppReleases([]);
+      setRestoreRuns([]);
+      setRestoreExecutions(null);
       setDeploymentForm(emptyDeploymentForm());
+      setRestoreStatusLine(`Unable to load restore history: ${(error as Error).message}`);
     } finally {
       setLoadingSurface(false);
     }
@@ -760,13 +833,15 @@ export function TenantProjectAppsPage({
       if (document.visibilityState !== "visible") {
         return;
       }
-      if (latestAnalysisRun?.status === "queued" || latestAnalysisRun?.status === "running") {
+      if (latestAnalysisRun?.status === "queued" || latestAnalysisRun?.status === "running" || latestRestoreRun?.status === "queued" || latestRestoreRun?.status === "running") {
         void refreshAll({ silent: true });
+        void refreshRestoreRuns();
       }
     };
     const refreshOnFocus = () => {
-      if (latestAnalysisRun?.status === "queued" || latestAnalysisRun?.status === "running") {
+      if (latestAnalysisRun?.status === "queued" || latestAnalysisRun?.status === "running" || latestRestoreRun?.status === "queued" || latestRestoreRun?.status === "running") {
         void refreshAll({ silent: true });
+        void refreshRestoreRuns();
       }
     };
     window.addEventListener("focus", refreshOnFocus);
@@ -775,7 +850,7 @@ export function TenantProjectAppsPage({
       window.removeEventListener("focus", refreshOnFocus);
       document.removeEventListener("visibilitychange", refreshOnVisibility);
     };
-  }, [latestAnalysisRun?.status, selectedAppId, credentials, tenantId, projectId]);
+  }, [latestAnalysisRun?.status, latestRestoreRun?.status, selectedAppId, credentials, tenantId, projectId]);
 
   useEffect(() => {
     const firstResourceKey = deploymentForm.resources.find((resource) => !isBlankResourceDraft(resource))?.key?.trim() ?? "";
@@ -790,6 +865,51 @@ export function TenantProjectAppsPage({
       setRestoreResourceKey(firstResourceKey);
     }
   }, [deploymentForm.resources, deploymentForm.backup_policies, backupNowPolicyKey, restoreBackupKey, restoreResourceKey]);
+
+  useEffect(() => {
+    if (!selectedApp) {
+      return;
+    }
+    const selectedPolicy = deploymentForm.backup_policies.find(
+      (policy) => normalizeKey(policy.key) === normalizeKey(restoreBackupKey),
+    );
+    const policyResourceKey = selectedPolicy?.resource_key.trim() ?? "";
+    if (policyResourceKey && normalizeKey(policyResourceKey) !== normalizeKey(restoreResourceKey)) {
+      setRestoreResourceKey(policyResourceKey);
+    }
+  }, [deploymentForm.backup_policies, restoreBackupKey, restoreResourceKey, selectedApp]);
+
+  useEffect(() => {
+    if (!credentials || !selectedAppId) {
+      return;
+    }
+    const backupKey = trimToNull(restoreBackupKey);
+    if (!backupKey) {
+      setRestoreExecutions(null);
+      setRestoreExecutionUuid("");
+      return;
+    }
+    let cancelled = false;
+    setRestoreExecutions(null);
+    setRestoreExecutionUuid("");
+    void listProjectAppDeploymentBackupExecutions(credentials, tenantId, projectId, selectedAppId, backupKey)
+      .then((loaded) => {
+        if (cancelled) {
+          return;
+        }
+        setRestoreExecutions(loaded);
+      })
+      .catch((error) => {
+        if (cancelled) {
+          return;
+        }
+        setRestoreExecutions(null);
+        setRestoreStatusLine(`Unable to load restore executions: ${(error as Error).message}`);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [credentials, selectedAppId, projectId, tenantId, restoreBackupKey]);
 
   function updateOperationFeedback(key: OperationKey, updates: Partial<OperationFeedback>) {
     setOperationFeedback((current) => ({
@@ -821,6 +941,23 @@ export function TenantProjectAppsPage({
         statusLine: `Operation failed: ${(error as Error).message}`,
         result: null,
       });
+    }
+  }
+
+  async function refreshRestoreRuns({ silent = false }: { silent?: boolean } = {}) {
+    if (!credentials || !selectedApp) {
+      return;
+    }
+    try {
+      const loaded = await listProjectAppDeploymentRestoreRuns(credentials, tenantId, projectId, selectedApp.app_id);
+      setRestoreRuns(loaded);
+      if (!silent) {
+        setRestoreStatusLine(`Loaded ${loaded.length} restore run${loaded.length === 1 ? "" : "s"}.`);
+      }
+    } catch (error) {
+      if (!silent) {
+        setRestoreStatusLine(`Unable to refresh restore runs: ${(error as Error).message}`);
+      }
     }
   }
 
@@ -994,22 +1131,42 @@ export function TenantProjectAppsPage({
       return;
     }
     const backupKey = trimToNull(restoreBackupKey);
-    if (!backupKey) {
-      updateOperationFeedback("restore", {
-        busy: false,
-        statusLine: "Enter a backup key before requesting a restore.",
-        result: null,
-      });
+    const resourceKey = trimToNull(restoreResourceKey);
+    const executionUuid = trimToNull(restoreExecutionUuid);
+    const confirmationValue = trimToNull(restoreConfirmationValue);
+    if (!backupKey || !resourceKey || !executionUuid) {
+      setRestoreStatusLine("Select a backup policy, resource, and execution before requesting a restore.");
       return;
     }
-    await runOperation("restore", () =>
-      requestProjectAppDeploymentRestore(credentials, tenantId, projectId, selectedApp.app_id, {
+    if (!confirmationValue || confirmationValue !== selectedApp.slug.trim()) {
+      setRestoreStatusLine(`Type the app slug exactly to confirm restore: ${selectedApp.slug}`);
+      return;
+    }
+    if (selectedRestorePolicy && selectedRestorePolicy.resource_key.trim() !== resourceKey) {
+      setRestoreStatusLine(`Backup policy ${selectedRestorePolicy.key} targets resource ${selectedRestorePolicy.resource_key}.`);
+      return;
+    }
+    setRestoreBusy(true);
+    setRestoreStatusLine("");
+    try {
+      const payload: ProjectDeploymentRestoreRequestPayload = {
         backup_key: backupKey,
-        restore_mode: restoreMode,
-        resource_key: trimToNull(restoreResourceKey),
-        note: trimToNull(restoreNote),
-      } as ProjectDeploymentRestoreRequestPayload),
-    );
+        resource_key: resourceKey,
+        execution_uuid: executionUuid,
+        confirmation_value: confirmationValue,
+        ...(restoreExecutions?.backup_uuid ? { backup_uuid: restoreExecutions.backup_uuid } : {}),
+      };
+      const created = await requestProjectAppDeploymentRestore(credentials, tenantId, projectId, selectedApp.app_id, payload);
+      setRestoreRuns((current) => [created, ...current.filter((run) => run.restore_run_id !== created.restore_run_id)]);
+      setRestoreExecutionUuid("");
+      setRestoreConfirmationValue("");
+      setRestoreStatusLine(`Queued restore run ${created.restore_run_id}.`);
+      await refreshRestoreRuns({ silent: true });
+    } catch (error) {
+      setRestoreStatusLine(`Restore failed: ${(error as Error).message}`);
+    } finally {
+      setRestoreBusy(false);
+    }
   }
 
   async function createRelease() {
@@ -1663,57 +1820,147 @@ export function TenantProjectAppsPage({
                         </div>
                       ))
                     )}
-                    <div className="space-y-1.5">
-                      <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Backup now policy key</label>
-                      <Input
-                        value={backupNowPolicyKey}
-                        onChange={(event) => setBackupNowPolicyKey(event.target.value)}
-                        placeholder={deploymentForm.backup_policies[0]?.key ?? "backup-policy"}
-                      />
-                    </div>
                     <div className="grid gap-3 md:grid-cols-2">
                       <div className="space-y-1.5">
-                        <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Restore backup key</label>
-                        <Input
-                          value={restoreBackupKey}
-                          onChange={(event) => setRestoreBackupKey(event.target.value)}
-                          placeholder="backup-2024-01-01"
-                        />
-                      </div>
-                      <div className="space-y-1.5">
-                        <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Restore resource key</label>
-                        <Input
-                          value={restoreResourceKey}
-                          onChange={(event) => setRestoreResourceKey(event.target.value)}
-                          placeholder={deploymentForm.resources[0]?.key ?? "resource"}
-                        />
-                      </div>
-                      <div className="space-y-1.5">
-                        <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Restore mode</label>
+                        <label htmlFor="backup-now-policy-select" className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Backup now policy</label>
                         <select
+                          id="backup-now-policy-select"
                           className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-                          value={restoreMode}
-                          onChange={(event) => setRestoreMode(event.target.value as "replace" | "clone")}
+                          value={backupNowPolicyKey}
+                          onChange={(event) => setBackupNowPolicyKey(event.target.value)}
                         >
-                          <option value="replace">Replace</option>
-                          <option value="clone">Clone</option>
+                          <option value="">Select a backup policy</option>
+                          {deploymentForm.backup_policies
+                            .filter((backup) => !isBlankBackupDraft(backup))
+                            .map((backup) => (
+                              <option key={backup.key} value={backup.key}>
+                                {backup.key} · {backup.resource_key}
+                              </option>
+                            ))}
                         </select>
                       </div>
                       <div className="space-y-1.5">
-                        <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Restore note</label>
+                        <label htmlFor="restore-backup-policy-select" className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Restore backup policy</label>
+                        <select
+                          id="restore-backup-policy-select"
+                          className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                          value={restoreBackupKey}
+                          onChange={(event) => setRestoreBackupKey(event.target.value)}
+                        >
+                          <option value="">Select a backup policy</option>
+                          {deploymentForm.backup_policies
+                            .filter((backup) => !isBlankBackupDraft(backup))
+                            .map((backup) => (
+                              <option key={backup.key} value={backup.key}>
+                                {backup.key} · {backup.resource_key}
+                              </option>
+                            ))}
+                        </select>
+                      </div>
+                      <div className="space-y-1.5">
+                        <label htmlFor="restore-resource-select" className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Restore resource</label>
+                        <select
+                          id="restore-resource-select"
+                          className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                          value={restoreResourceKey}
+                          onChange={(event) => setRestoreResourceKey(event.target.value)}
+                        >
+                          <option value="">Select a resource</option>
+                          {deploymentForm.resources
+                            .filter((resource) => !isBlankResourceDraft(resource))
+                            .map((resource) => (
+                              <option key={resource.key} value={resource.key}>
+                                {resource.key} · {resource.kind}
+                              </option>
+                            ))}
+                        </select>
+                      </div>
+                      <div className="space-y-1.5">
+                        <label htmlFor="restore-execution-select" className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Restore execution</label>
+                        <select
+                          id="restore-execution-select"
+                          className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                          value={restoreExecutionUuid}
+                          onChange={(event) => setRestoreExecutionUuid(event.target.value)}
+                          disabled={!trimToNull(restoreBackupKey) || restoreExecutionRows.length === 0}
+                        >
+                          <option value="">
+                            {!trimToNull(restoreBackupKey)
+                              ? "Select a backup policy first"
+                              : restoreExecutionRows.length === 0
+                                ? "No executions available"
+                                : "Select an execution"}
+                          </option>
+                          {restoreExecutionRows.map((execution) => (
+                            <option key={execution.execution_uuid} value={execution.execution_uuid}>
+                              {restoreExecutionLabel(execution)}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="space-y-1.5 md:col-span-2">
+                        <label htmlFor="restore-confirmation-input" className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                          Confirm restore by typing the app slug
+                        </label>
                         <Input
-                          value={restoreNote}
-                          onChange={(event) => setRestoreNote(event.target.value)}
-                          placeholder="Rollback from failed release"
+                          id="restore-confirmation-input"
+                          value={restoreConfirmationValue}
+                          onChange={(event) => setRestoreConfirmationValue(event.target.value)}
+                          placeholder={selectedApp?.slug ?? "app-slug"}
                         />
                       </div>
+                    </div>
+                    <div className="space-y-2 rounded-xl border bg-muted/20 p-4">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Restore execution list</p>
+                          <p className="text-sm text-muted-foreground">
+                            {restoreExecutions
+                              ? `Backup ${restoreExecutions.backup_uuid ?? "—"} for database ${restoreExecutions.database_uuid ?? "—"}`
+                              : trimToNull(restoreBackupKey)
+                                ? "Loading restore executions..."
+                                : "Select a backup policy to load available executions."}
+                          </p>
+                        </div>
+                        <Badge variant="outline">{restoreExecutionRows.length} execution{restoreExecutionRows.length === 1 ? "" : "s"}</Badge>
+                      </div>
+                      {restoreExecutionRows.length === 0 ? (
+                        <div className="rounded-lg border border-dashed px-4 py-6 text-sm text-muted-foreground">
+                          {trimToNull(restoreBackupKey) ? "No executions returned for the selected backup policy." : "No backup policy selected yet."}
+                        </div>
+                      ) : (
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead>Execution</TableHead>
+                              <TableHead>Status</TableHead>
+                              <TableHead>Created</TableHead>
+                              <TableHead>Artifact</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {restoreExecutionRows.map((execution) => (
+                              <TableRow key={execution.execution_uuid}>
+                                <TableCell className="font-mono text-xs">{execution.execution_uuid}</TableCell>
+                                <TableCell>
+                                  <Badge variant={restoreStatusVariant(execution.status ?? "")}>{execution.status ?? "unknown"}</Badge>
+                                </TableCell>
+                                <TableCell className="text-sm text-muted-foreground">{formatTimestamp(execution.created_at)}</TableCell>
+                                <TableCell className="max-w-[280px] truncate text-sm text-muted-foreground" title={execution.artifact_path ?? execution.file_name ?? ""}>
+                                  {execution.file_name ?? execution.artifact_path ?? "—"}
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      )}
                     </div>
                     {operationFeedback.backups.statusLine ? <p className="text-xs text-muted-foreground">{operationFeedback.backups.statusLine}</p> : null}
                   </CardContent>
                 </Card>
 
                 <div className="space-y-4">
-                  <DeploymentOperationCard
+                <DeploymentOperationCard
                     title="Trigger backup"
                     description="Request a managed backup using the configured backup policy."
                     feedback={operationFeedback.backupNow}
@@ -1721,14 +1968,69 @@ export function TenantProjectAppsPage({
                     buttonLabel="Run backup"
                     disabled={savingConfig || deploying}
                   />
-                  <DeploymentOperationCard
-                    title="Restore"
-                    description="Request a restore flow using the latest known release entry."
-                    feedback={operationFeedback.restore}
-                    onRun={() => void requestRestore()}
-                    buttonLabel="Run restore"
-                    disabled={savingConfig || deploying}
-                  />
+                  <Card>
+                    <CardHeader className="pb-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <CardTitle className="text-sm">Restore</CardTitle>
+                          <CardDescription>Creates an async managed restore run for the selected backup execution.</CardDescription>
+                        </div>
+                        <Button size="sm" variant="outline" onClick={() => void requestRestore()} disabled={savingConfig || deploying || restoreBusy || !restoreSelectionIsValid}>
+                          {restoreBusy ? <RefreshCw className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <ArrowRight className="mr-1.5 h-3.5 w-3.5" />}
+                          {restoreBusy ? "Queuing…" : "Run restore"}
+                        </Button>
+                      </div>
+                    </CardHeader>
+                    <CardContent className="space-y-3">
+                      <div className={`rounded-xl border px-3 py-2 text-xs ${statusLineVariant(restoreBusy ? "running" : latestRestoreRun?.status ?? "queued")}`}>
+                        {restoreStatusLine || (latestRestoreRun ? `Latest restore run ${latestRestoreRun.restore_run_id} is ${latestRestoreRun.status}.` : "Choose a backup execution and confirm the app slug to start a restore.")}
+                      </div>
+                      {latestRestoreRun ? (
+                        <div className="grid gap-2 rounded-xl border bg-muted/10 p-3 text-sm">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-muted-foreground">Latest run</span>
+                            <Badge variant={restoreStatusVariant(latestRestoreRun.status)}>{latestRestoreRun.status}</Badge>
+                          </div>
+                          <div className="font-mono text-xs text-muted-foreground">{latestRestoreRun.restore_run_id}</div>
+                          <div className="text-xs text-muted-foreground">{restoreRunLabel(latestRestoreRun)}</div>
+                          {latestRestoreRun.last_error ? <p className="text-xs text-destructive">{latestRestoreRun.last_error}</p> : null}
+                        </div>
+                      ) : null}
+                      {restoreRunList.length === 0 ? (
+                        <div className="rounded-lg border border-dashed px-4 py-6 text-sm text-muted-foreground">No restore runs recorded for this app yet.</div>
+                      ) : (
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead>Run</TableHead>
+                              <TableHead>Status</TableHead>
+                              <TableHead>Execution</TableHead>
+                              <TableHead>Created</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {restoreRunList.map((run) => (
+                              <TableRow key={run.restore_run_id}>
+                                <TableCell>
+                                  <div className="space-y-1">
+                                    <p className="font-mono text-xs">{run.restore_run_id}</p>
+                                    <p className="text-xs text-muted-foreground">{run.backup_policy_key}</p>
+                                  </div>
+                                </TableCell>
+                                <TableCell>
+                                  <Badge variant={restoreStatusVariant(run.status)}>{run.status}</Badge>
+                                </TableCell>
+                                <TableCell className="max-w-[260px] truncate text-sm text-muted-foreground" title={run.execution_uuid}>
+                                  {run.execution_uuid}
+                                </TableCell>
+                                <TableCell className="text-sm text-muted-foreground">{formatTimestamp(run.created_at)}</TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      )}
+                    </CardContent>
+                  </Card>
                 </div>
               </div>
             ) : null}
@@ -1820,9 +2122,6 @@ export function TenantProjectAppsPage({
                 ) : null}
                 {operationFeedback.backupNow.statusLine ? (
                   <div className="rounded-xl border bg-muted/30 px-4 py-3 text-sm text-muted-foreground">{operationFeedback.backupNow.statusLine}</div>
-                ) : null}
-                {operationFeedback.restore.statusLine ? (
-                  <div className="rounded-xl border bg-muted/30 px-4 py-3 text-sm text-muted-foreground">{operationFeedback.restore.statusLine}</div>
                 ) : null}
               </div>
             ) : null}

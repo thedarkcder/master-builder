@@ -70,6 +70,7 @@ from orchestrator.api.schemas import (
     ProjectDeploymentConfigRead,
     ProjectDeploymentConfigWrite,
     ProjectDeploymentBackupApplyRequest,
+    ProjectDeploymentBackupExecutionListRead,
     ProjectDeploymentBackupRestoreRequest,
     ProjectDeploymentBackupTriggerRequest,
     ProjectDeploymentDomainApplyRequest,
@@ -77,6 +78,7 @@ from orchestrator.api.schemas import (
     ProjectDeploymentReleaseRead,
     ProjectDeploymentReleaseStatusUpdate,
     ProjectDeploymentOperationRead,
+    ProjectDeploymentRestoreRunRead,
     ProjectDeploymentResourceApplyRequest,
     TenantDeliverySummaryRead,
     TenantDeploymentsOverviewRead,
@@ -1259,16 +1261,17 @@ def trigger_project_app_deployment_backups(
 
 @router.post(
     "/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-backups/restore",
-    response_model=ProjectDeploymentOperationRead,
+    response_model=ProjectDeploymentRestoreRunRead,
+    status_code=status.HTTP_201_CREATED,
 )
-def restore_project_app_deployment_backup(
+def create_project_app_deployment_restore_run(
     tenant_id: str,
     project_id: str,
     app_id: str,
     payload: ProjectDeploymentBackupRestoreRequest,
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
-) -> ProjectDeploymentOperationRead:
+) -> ProjectDeploymentRestoreRunRead:
     require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
     return admin_project_service().restore_project_app_deployment_backup(
         session=session,
@@ -1276,6 +1279,71 @@ def restore_project_app_deployment_backup(
         project_id=project_id,
         app_id=app_id,
         payload=payload,
+        requested_by_user_id=principal.user_id,
+    )
+
+
+@router.get(
+    "/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-backups/executions",
+    response_model=ProjectDeploymentBackupExecutionListRead,
+)
+def list_project_app_deployment_backup_executions(
+    tenant_id: str,
+    project_id: str,
+    app_id: str,
+    backup_key: str = Query(...),
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> ProjectDeploymentBackupExecutionListRead:
+    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    return admin_project_service().list_project_app_deployment_backup_executions(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        app_id=app_id,
+        backup_key=backup_key,
+    )
+
+
+@router.get(
+    "/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-backups/restore-runs",
+    response_model=list[ProjectDeploymentRestoreRunRead],
+)
+def list_project_app_deployment_restore_runs(
+    tenant_id: str,
+    project_id: str,
+    app_id: str,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> list[ProjectDeploymentRestoreRunRead]:
+    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    return admin_project_service().list_project_app_deployment_restore_runs(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        app_id=app_id,
+    )
+
+
+@router.get(
+    "/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-backups/restore-runs/{restore_run_id}",
+    response_model=ProjectDeploymentRestoreRunRead,
+)
+def get_project_app_deployment_restore_run(
+    tenant_id: str,
+    project_id: str,
+    app_id: str,
+    restore_run_id: str,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> ProjectDeploymentRestoreRunRead:
+    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    return admin_project_service().get_project_app_deployment_restore_run(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        app_id=app_id,
+        restore_run_id=restore_run_id,
     )
 
 

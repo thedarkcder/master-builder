@@ -10,6 +10,7 @@ from sqlalchemy import func, select
 
 from orchestrator.core.agent_tools import execute_agent_tool, print_tool_event
 from orchestrator.core.config import get_settings
+from orchestrator.core.deployment_host_agent_runtime import run_deployment_host_agent
 from orchestrator.core.discord.gateway_runtime import run_discord_gateway
 from orchestrator.core.discord.live_voice_gateway_runtime import run_discord_live_voice
 from orchestrator.core.knowledge_prewarm import prewarm_knowledge_dependencies
@@ -49,6 +50,7 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("worker-child-runs", help="Run one child issue-execution job")
     subparsers.add_parser("worker-child-webhooks", help="Run one child webhook job")
     subparsers.add_parser("worker-child-deployments", help="Run one child deployment reconciliation job")
+    subparsers.add_parser("deployment-host-agent", help="Run the managed deployment host agent")
     subparsers.add_parser("discord-gateway", help="Run Discord gateway leader loop")
     subparsers.add_parser("discord-live-voice", help="Run Discord live voice leader loop")
     subparsers.add_parser("knowledge-jira-sync", help="Run Jira knowledge sync leader loop")
@@ -343,6 +345,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "worker-child-deployments":
         return int(run_worker_child_once(mode="deployments"))
+
+    if args.command == "deployment-host-agent":
+        run_deployment_host_agent()
+        return 0
 
     if args.command == "discord-gateway":
         run_discord_gateway()
