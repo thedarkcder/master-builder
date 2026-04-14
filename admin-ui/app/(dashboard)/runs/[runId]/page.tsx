@@ -1414,7 +1414,7 @@ export default function RunDetailPage() {
     const maxEndMs = Math.max(
       ...segments.map((segment) => segment.endMs),
       Number.isFinite(finishedMs) ? finishedMs : 0,
-      nowMs
+      isActiveRun ? nowMs : 0
     );
     const totalMs = Math.max(1, maxEndMs - minStartMs);
     const resumedCount = invocationSessionRows.filter((row) => row.resumedSession === true).length;
