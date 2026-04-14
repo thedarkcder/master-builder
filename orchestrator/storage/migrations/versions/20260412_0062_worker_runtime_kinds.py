@@ -17,30 +17,21 @@ branch_labels = None
 depends_on = None
 
 
-def _has_column(table_name: str, column_name: str) -> bool:
-    inspector = sa.inspect(op.get_bind())
-    return any(column.get("name") == column_name for column in inspector.get_columns(table_name))
-
-
 def upgrade() -> None:
     with op.batch_alter_table("worker_runtime_states") as batch_op:
-        if not _has_column("worker_runtime_states", "runtime_kinds_json"):
-            batch_op.add_column(
-                sa.Column(
-                    "runtime_kinds_json",
-                    sa.JSON(),
-                    nullable=False,
-                    server_default=sa.text("'[]'"),
-                )
+        batch_op.add_column(
+            sa.Column(
+                "runtime_kinds_json",
+                sa.JSON(),
+                nullable=False,
+                server_default=sa.text("'[]'"),
             )
-    if _has_column("worker_runtime_states", "runtime_kinds_json"):
-        op.execute("UPDATE worker_runtime_states SET runtime_kinds_json = '[]' WHERE runtime_kinds_json IS NULL")
+        )
+    op.execute("UPDATE worker_runtime_states SET runtime_kinds_json = '[]' WHERE runtime_kinds_json IS NULL")
     with op.batch_alter_table("worker_runtime_states") as batch_op:
-        if _has_column("worker_runtime_states", "runtime_kinds_json"):
-            batch_op.alter_column("runtime_kinds_json", server_default=None)
+        batch_op.alter_column("runtime_kinds_json", server_default=None)
 
 
 def downgrade() -> None:
     with op.batch_alter_table("worker_runtime_states") as batch_op:
-        if _has_column("worker_runtime_states", "runtime_kinds_json"):
-            batch_op.drop_column("runtime_kinds_json")
+        batch_op.drop_column("runtime_kinds_json")

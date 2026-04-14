@@ -12,7 +12,7 @@ from orchestrator.core.agent_observability import (
     agent_observability_tracker,
     reset_agent_observability_for_tests,
 )
-from orchestrator.core.runs import RunBootstrap, enqueue_run
+from orchestrator.core.runs import enqueue_run
 from orchestrator.core.worker.execution_service import process_next_queued_run
 from orchestrator.core.worker_capability_normalization import WorkerCapability
 from orchestrator.core.workflow.runner import (
@@ -290,7 +290,6 @@ class WorkerWorkflowTests(SqliteTemplateDbTestCase):
                 issue_description=effective_description,
                 repo_url="https://github.com/example/repo",
                 precheck_outcome="ready_for_agent",
-                bootstrap=RunBootstrap(required_runtime_kinds_json=[]),
             )
             self.assertTrue(result.enqueued)
         self._jira_issue_details[issue_key] = {
@@ -510,7 +509,6 @@ class WorkerWorkflowTests(SqliteTemplateDbTestCase):
                 ),
                 repo_url="https://github.com/example/repo",
                 precheck_outcome="ready_for_agent",
-                bootstrap=RunBootstrap(required_runtime_kinds_json=[]),
             )
             self.assertTrue(enqueue_result.enqueued)
             run_id = enqueue_result.run.run_id

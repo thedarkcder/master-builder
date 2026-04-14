@@ -90,21 +90,10 @@ class RunLifecycleTests(unittest.TestCase):
             dedupe_scope=dedupe_scope,
         ).one_or_none()
 
-    def _enqueue_issue_run(self, session, *, issue_key: str, **kwargs):
-        return enqueue_run(
-            session,
-            tenant_id="tenant-runs",
-            project_id=None,
-            issue_key=issue_key,
-            dedupe_scope=RUN_DEDUPE_SCOPE_ISSUE_EXECUTION,
-            precheck_outcome="ready_for_agent",
-            **kwargs,
-        )
-
     def test_enqueue_is_idempotent_for_active_issue(self) -> None:
         with self.session_factory() as session:
-            first = self._enqueue_issue_run(session, issue_key="TP-901")
-            second = self._enqueue_issue_run(session, issue_key="TP-901")
+            first = enqueue_run(session, tenant_id="tenant-runs", project_id=None, issue_key="TP-901")
+            second = enqueue_run(session, tenant_id="tenant-runs", project_id=None, issue_key="TP-901")
 
             self.assertTrue(first.enqueued)
             self.assertFalse(second.enqueued)
@@ -119,22 +108,19 @@ class RunLifecycleTests(unittest.TestCase):
 
     def test_enqueue_allows_parallel_pr_remediation_and_issue_execution(self) -> None:
         with self.session_factory() as session:
-            issue_run = self._enqueue_issue_run(session, issue_key="TP-907")
-            remediation_plan = ExecutionSnapshot.empty(
-                trigger_context={
-                    "source": "github_pr_review_feedback",
-                    "pr_number": 7,
-                    "head_sha": "abc123def456",
-                }
-            ).dump()
+            issue_run = enqueue_run(
+                session,
+                tenant_id="tenant-runs",
+                project_id=None,
+                issue_key="TP-907",
+                dedupe_scope=RUN_DEDUPE_SCOPE_ISSUE_EXECUTION,
+            )
             remediation_run = enqueue_run(
                 session,
                 tenant_id="tenant-runs",
                 project_id=None,
                 issue_key="TP-907",
                 dedupe_scope=RUN_DEDUPE_SCOPE_PR_REMEDIATION,
-                precheck_source_plan=remediation_plan,
-                bootstrap=RunBootstrap(plan=remediation_plan),
             )
 
             self.assertTrue(issue_run.enqueued)
@@ -153,8 +139,20 @@ class RunLifecycleTests(unittest.TestCase):
 
     def test_enqueue_deduplicates_delivery_identifier(self) -> None:
         with self.session_factory() as session:
-            first = self._enqueue_issue_run(session, issue_key="TP-902", delivery_id="delivery-xyz")
-            second = self._enqueue_issue_run(session, issue_key="TP-902", delivery_id="delivery-xyz")
+            first = enqueue_run(
+                session,
+                tenant_id="tenant-runs",
+                project_id=None,
+                issue_key="TP-902",
+                delivery_id="delivery-xyz",
+            )
+            second = enqueue_run(
+                session,
+                tenant_id="tenant-runs",
+                project_id=None,
+                issue_key="TP-902",
+                delivery_id="delivery-xyz",
+            )
 
             self.assertTrue(first.enqueued)
             self.assertFalse(second.enqueued)
@@ -163,8 +161,20 @@ class RunLifecycleTests(unittest.TestCase):
 
     def test_enqueue_respects_tenant_concurrency_limit(self) -> None:
         with self.session_factory() as session:
-            first = self._enqueue_issue_run(session, issue_key="TP-910", max_concurrent_runs=1)
-            second = self._enqueue_issue_run(session, issue_key="TP-911", max_concurrent_runs=1)
+            first = enqueue_run(
+                session,
+                tenant_id="tenant-runs",
+                project_id=None,
+                issue_key="TP-910",
+                max_concurrent_runs=1,
+            )
+            second = enqueue_run(
+                session,
+                tenant_id="tenant-runs",
+                project_id=None,
+                issue_key="TP-911",
+                max_concurrent_runs=1,
+            )
 
             self.assertTrue(first.enqueued)
             self.assertFalse(second.enqueued)
@@ -173,7 +183,7 @@ class RunLifecycleTests(unittest.TestCase):
 
     def test_running_to_success_updates_workflow_and_persists_timestamps(self) -> None:
         with self.session_factory() as session:
-            enqueue = self._enqueue_issue_run(session, issue_key="TP-903")
+            enqueue = enqueue_run(session, tenant_id="tenant-runs", project_id=None, issue_key="TP-903")
             running = mark_run_running(session, run_id=enqueue.run.run_id)
             self.assertEqual(running.status, "running")
             self.assertIsNotNone(running.started_at)
@@ -196,7 +206,7 @@ class RunLifecycleTests(unittest.TestCase):
 
     def test_failure_path_marks_blocked_without_finishing_workflow(self) -> None:
         with self.session_factory() as session:
-            enqueue = self._enqueue_issue_run(session, issue_key="TP-904")
+            enqueue = enqueue_run(session, tenant_id="tenant-runs", project_id=None, issue_key="TP-904")
             mark_run_running(session, run_id=enqueue.run.run_id)
             blocked = mark_run_terminal(
                 session,
@@ -217,7 +227,7 @@ class RunLifecycleTests(unittest.TestCase):
 
     def test_invalid_state_transition_is_rejected(self) -> None:
         with self.session_factory() as session:
-            enqueue = self._enqueue_issue_run(session, issue_key="TP-905")
+            enqueue = enqueue_run(session, tenant_id="tenant-runs", project_id=None, issue_key="TP-905")
             mark_run_terminal(
                 session,
                 run_id=enqueue.run.run_id,
@@ -229,14 +239,14 @@ class RunLifecycleTests(unittest.TestCase):
 
     def test_enqueue_creates_new_workflow_after_terminal_run(self) -> None:
         with self.session_factory() as session:
-            first = self._enqueue_issue_run(session, issue_key="TP-906")
+            first = enqueue_run(session, tenant_id="tenant-runs", project_id=None, issue_key="TP-906")
             mark_run_terminal(
                 session,
                 run_id=first.run.run_id,
                 terminal_status=RUN_STATUS_SUCCEEDED,
             )
 
-            second = self._enqueue_issue_run(session, issue_key="TP-906")
+            second = enqueue_run(session, tenant_id="tenant-runs", project_id=None, issue_key="TP-906")
             self.assertTrue(second.enqueued)
             self.assertNotEqual(second.run.run_id, first.run.run_id)
             self.assertNotEqual(second.run.workflow_id, first.run.workflow_id)

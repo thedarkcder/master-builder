@@ -17,7 +17,6 @@ from fastapi.testclient import TestClient
 from orchestrator.api.main import create_app
 from orchestrator.core.config import get_settings
 from orchestrator.core.secrets import encrypt_value
-from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import JiraOAuthConnection, Run, Tenant, WorkflowCheckpoint, WorkflowExecution
@@ -347,7 +346,7 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                     dedupe_scope="issue_execution",
                     status="queued",
                     last_error=None,
-                    plan=ExecutionSnapshot.empty(trigger_context={"source": "smoke"}).dump(),
+                    plan=None,
                     created_at=now,
                     started_at=None,
                     last_heartbeat_at=None,
@@ -362,7 +361,7 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                     run_id="run-e2e",
                     checkpoint_kind="pm",
                     stage="pm",
-                    payload_json=ExecutionSnapshot.empty(trigger_context={"source": "smoke"}).dump(),
+                    payload_json={"source": "smoke"},
                     codex_session_id=None,
                     created_at=now,
                     updated_at=now,
@@ -1207,16 +1206,6 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
             ("GET", "/api/app/auth/me"): RouteScenario(
                 path="/api/app/auth/me",
                 expected_statuses=(401,),
-            ),
-            ("POST", "/api/admin/workers/{service_instance_id}/runtime-dependencies/{runtime_kind}/login-session"): RouteScenario(
-                path="/api/admin/workers/worker-macos-local%3Aruns/runtime-dependencies/codex_cli/login-session",
-                auth=admin,
-                expected_statuses=(202, 404),
-            ),
-            ("GET", "/api/admin/workers/runtime-auth-requests/{request_id}"): RouteScenario(
-                path="/api/admin/workers/runtime-auth-requests/request-e2e",
-                auth=admin,
-                expected_statuses=(200, 404),
             ),
             ("GET", "/api/app/discord/callback"): RouteScenario(
                 path="/api/app/discord/callback?state=bad",
