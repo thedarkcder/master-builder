@@ -9,6 +9,11 @@ from orchestrator.core.platform_secret_service import resolve_platform_secret_re
 from orchestrator.core.run_human_input_service import answered_human_inputs_for_attempt
 from orchestrator.core.tenant_secret_service import resolve_scoped_secret_ref
 from orchestrator.core.workflow.checkpoints import checkpoint_kind_for_stage
+from orchestrator.core.worker.repo_setup_service import (
+    RetryableRepoSetupError,
+    TerminalRepoSetupError,
+    prepare_execution_repo_for_run,
+)
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot, load_parsed_trigger_context_from_plan
 from orchestrator.core.workflow.trigger_context import GithubPrRemediationTriggerContext
 from orchestrator.core.worker_workspace import resolve_worker_workspace_key
@@ -17,12 +22,6 @@ from orchestrator.core.worker_capabilities import resolve_worker_capability_cont
 from orchestrator.core.workflow.runner import WorkflowRequest
 from orchestrator.storage.models import Project, Run, Tenant, WorkflowCheckpoint
 from orchestrator.tools.github_app import github_client_from_tenant_config
-from orchestrator.tools.project_repo_checkout import (
-    ProjectRepoCheckoutError,
-    ensure_run_worktree,
-    read_run_worktree_metadata,
-    validate_run_worktree,
-)
 from orchestrator.tools.repo_allowlist import normalize_repo_identifier
 
 
@@ -92,6 +91,7 @@ def build_workflow_request_for_run(
         remediation_head_branch=remediation_head_branch,
     )
     execution_repo_dir, execution_branch, start_point_ref, start_point_sha, workspace_key = _resolve_execution_repo_dir(
+        session=session,
         settings=settings,
         tenant=tenant,
         run=run,
@@ -157,6 +157,7 @@ def build_workflow_request_for_run(
 
 def _resolve_execution_repo_dir(
     *,
+    session,
     settings,
     tenant: Tenant,
     run: Run,
@@ -168,39 +169,31 @@ def _resolve_execution_repo_dir(
         raise ValueError("Run project routing is required before workflow execution")
     workspace_key = resolve_worker_workspace_key(settings=settings)
     try:
-        repo_dir, execution_branch = ensure_run_worktree(
-            base_dir=settings.project_repo_checkout_base_dir,
-            tenant_id=tenant.tenant_id,
+        preparation = prepare_execution_repo_for_run(
+            session=session,
+            settings=settings,
+            tenant=tenant,
+            run=run,
             project=project,
-            run_id=run.run_id,
-            issue_key=run.issue_key,
             base_branch=base_branch,
             integration_branch=integration_branch,
             workspace_key=workspace_key,
         )
-    except ProjectRepoCheckoutError as exc:
-        raise ValueError(str(exc)) from exc
+    except (RetryableRepoSetupError, TerminalRepoSetupError):
+        raise
     except Exception as exc:  # noqa: BLE001
         raise ValueError(
-            "Run worktree bootstrap failed "
+            "Run repo setup failed "
             f"(tenant_id={tenant.tenant_id}, project_id={project.project_id}, run_id={run.run_id}): {exc}"
         ) from exc
-    validation_error = validate_run_worktree(
-        repo_dir=repo_dir,
-        run_id=run.run_id,
-        execution_branch=execution_branch,
-        workspace_key=workspace_key,
+    prepared_repo = preparation.prepared_repo
+    return (
+        str(prepared_repo.repo_dir),
+        prepared_repo.execution_branch,
+        prepared_repo.start_point_ref,
+        prepared_repo.start_point_sha,
+        prepared_repo.workspace_key,
     )
-    if validation_error is not None:
-        raise ValueError(
-            "Run worktree is invalid for workflow execution "
-            f"(tenant_id={tenant.tenant_id}, project_id={project.project_id}, run_id={run.run_id}, "
-            f"repo_dir={repo_dir}, reason={validation_error})"
-        )
-    metadata = read_run_worktree_metadata(repo_dir=repo_dir) or {}
-    start_point_ref = str(metadata.get("start_point_ref") or "").strip() or None
-    start_point_sha = str(metadata.get("start_point_sha") or "").strip() or None
-    return str(repo_dir), execution_branch, start_point_ref, start_point_sha, workspace_key
 
 
 def _normalize_branch(value: object) -> str | None:

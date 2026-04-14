@@ -271,6 +271,15 @@ def fail_project_repository_checkout(session: Session, *, run: Run, error: str) 
     )
 
 
+def fail_project_repository_setup(session: Session, *, run: Run, error: str) -> Run:
+    return mark_run_terminal(
+        session,
+        run_id=run.run_id,
+        terminal_status=RUN_STATUS_FAILED,
+        last_error=f"Project repository setup failed: {error}",
+    )
+
+
 def finalize_cancelled_run(
     session: Session,
     *,
@@ -474,6 +483,70 @@ def requeue_workflow_result_for_stale_snapshot(
     snapshot.workflow.outcome = "requeue"
     snapshot.workflow.requeue_target = None
     snapshot.workflow.requeue_reason = error
+    run.plan = snapshot.dump()
+    run.pr_url = None
+    run.status = "queued"
+    run.last_error = None
+    run.claim_id = None
+    run.dispatch_claimed_at = None
+    run.started_at = None
+    run.last_heartbeat_at = None
+    run.finished_at = None
+    run.worker_service_instance_id = None
+    workflow = _workflow_for_run(session, run=run)
+    if workflow is not None:
+        workflow.status = "queued"
+        workflow.last_error = None
+        workflow.finished_at = None
+        workflow.active_run_id = run.run_id
+        workflow.updated_at = datetime.now(timezone.utc)
+    notify_run_enqueued(
+        session,
+        tenant_id=run.tenant_id,
+        project_id=run.project_id,
+        run_id=run.run_id,
+        issue_key=run.issue_key,
+    )
+    session.commit()
+    session.refresh(run)
+    return run
+
+
+def requeue_run_for_repo_setup(
+    session: Session,
+    *,
+    run: Run,
+    stage_updates: list[dict[str, str]],
+    error: str,
+    expected_worker_service_instance_id: str | None = None,
+    expected_claim_id: str | None = None,
+) -> Run:
+    run = _refresh_owned_run(
+        session,
+        run=run,
+        expected_worker_service_instance_id=expected_worker_service_instance_id,
+        expected_claim_id=expected_claim_id,
+        allow_statuses={RUN_STATUS_RUNNING},
+    )
+    if not _run_is_owned_by(
+        run=run,
+        expected_worker_service_instance_id=expected_worker_service_instance_id,
+        expected_claim_id=expected_claim_id,
+        allow_statuses={RUN_STATUS_RUNNING},
+    ):
+        return run
+    snapshot = _load_or_init_snapshot(run.plan)
+    attempts = snapshot.context.execution_context.get("repo_setup_attempts")
+    try:
+        repo_setup_attempts = max(0, int(attempts)) + 1
+    except (TypeError, ValueError):
+        repo_setup_attempts = 1
+    snapshot.context.execution_context["repo_setup_attempts"] = repo_setup_attempts
+    snapshot.context.execution_context["repo_setup_last_error"] = error
+    snapshot.workflow.outcome = "requeue"
+    snapshot.workflow.requeue_target = None
+    snapshot.workflow.requeue_reason = error
+    snapshot.events.stage_updates = [dict(item) for item in stage_updates if isinstance(item, dict)]
     run.plan = snapshot.dump()
     run.pr_url = None
     run.status = "queued"

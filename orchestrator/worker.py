@@ -21,6 +21,7 @@ from orchestrator.core.logging import configure_logging
 from orchestrator.core.knowledge_prewarm import prewarm_knowledge_dependencies
 from orchestrator.core.platform_metrics import platform_metrics
 from orchestrator.core.project_policy import resolve_effective_policy
+from orchestrator.core.runtime_requirements import normalize_runtime_kinds
 from orchestrator.core.runs import (
     RUN_STATUS_BLOCKED,
     RUN_STATUS_CANCELLED,
@@ -392,7 +393,7 @@ def _claim_next_run_once(
     session_factory: sessionmaker[Session],
     settings: Settings,
     service_instance_id: str,
-    ready_runtime_kinds: set[str],
+    ready_runtime_kinds: set[str] | None = None,
 ) -> ClaimedRunDispatch | None:
     capability_context = resolve_worker_capability_context(
         raw_value=getattr(settings, "worker_capabilities", None),
@@ -406,7 +407,9 @@ def _claim_next_run_once(
             failed_status="failed",
             worker_service_instance_id=service_instance_id,
             worker_capabilities=set(capability_context.available),
-            ready_runtime_kinds=ready_runtime_kinds,
+            ready_runtime_kinds=ready_runtime_kinds or set(
+                normalize_runtime_kinds(getattr(settings, "worker_runtime_kinds", None))
+            ),
             running_stale_timeout_seconds=max(
                 60,
                 int(getattr(settings, "worker_run_stale_timeout_seconds", 300)),
@@ -458,7 +461,7 @@ def _probe_claimable_run_once(
     *,
     session_factory: sessionmaker[Session],
     settings: Settings,
-    ready_runtime_kinds: set[str],
+    ready_runtime_kinds: set[str] | None = None,
 ) -> QueueClaimabilityProbe:
     capability_context = resolve_worker_capability_context(
         raw_value=getattr(settings, "worker_capabilities", None),
@@ -470,7 +473,9 @@ def _probe_claimable_run_once(
             queued_status="queued",
             running_status="running",
             worker_capabilities=set(capability_context.available),
-            ready_runtime_kinds=ready_runtime_kinds,
+            ready_runtime_kinds=ready_runtime_kinds or set(
+                normalize_runtime_kinds(getattr(settings, "worker_runtime_kinds", None))
+            ),
             running_stale_timeout_seconds=max(
                 60,
                 int(getattr(settings, "worker_run_stale_timeout_seconds", 300)),

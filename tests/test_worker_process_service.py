@@ -169,9 +169,6 @@ class WorkerProcessServiceTests(unittest.TestCase):
             order.append("resolve_project")
             return project
 
-        def _ensure_checkout(**_kwargs):  # noqa: ANN001
-            order.append("checkout")
-
         result = process_next_queued_run(
             session=session,
             runner=SimpleNamespace(
@@ -206,7 +203,7 @@ class WorkerProcessServiceTests(unittest.TestCase):
             resolve_project_for_run_fn=_resolve_project,
             fail_missing_project_mapping_fn=MagicMock(),
             block_archived_project_fn=MagicMock(),
-            ensure_project_repository_checkout_fn=_ensure_checkout,
+            ensure_project_repository_checkout_fn=MagicMock(),
             fail_project_repository_checkout_fn=MagicMock(),
             cleanup_run_workspaces_fn=MagicMock(),
             build_run_heartbeat_controller_fn=lambda **_: _FakeHeartbeatController(),
@@ -263,7 +260,7 @@ class WorkerProcessServiceTests(unittest.TestCase):
         )
 
         self.assertEqual(result.status, "succeeded")
-        self.assertEqual(order[:4], ["promote", "resolve_project", "checkout", "build_request"])
+        self.assertEqual(order[:3], ["promote", "resolve_project", "build_request"])
 
     def test_process_next_queued_run_fails_when_promotion_returns_non_running_owned_run(self) -> None:
         now = datetime.now(timezone.utc)
