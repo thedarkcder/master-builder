@@ -484,7 +484,7 @@ class DiscordCommandProductionPathTests(SqliteTemplateDbTestCase):
         }
 
         with (
-            patch("orchestrator.api.discord.ingress.seed_runtime.build_codex_runtime", return_value=runtime),
+            patch("orchestrator.api.discord.ingress.seed_runtime.build_issue_seed_runtime", return_value=runtime),
             patch("orchestrator.api.discord.ingress.jira_runtime.tenant_jira_oauth_context", return_value=fake_oauth),
         ):
             response = self._post_command("!issues seed draft a backlog item for relink policy")
@@ -524,7 +524,7 @@ class DiscordCommandProductionPathTests(SqliteTemplateDbTestCase):
             session.commit()
 
         with (
-            patch("orchestrator.api.discord.ingress.seed_runtime.build_codex_runtime", return_value=runtime),
+            patch("orchestrator.api.discord.ingress.seed_runtime.build_issue_seed_runtime", return_value=runtime),
             patch("orchestrator.api.discord.ingress.jira_runtime.tenant_jira_oauth_context", return_value=fake_oauth),
         ):
             response = self._post_command("!issues seed draft a backlog item for relink policy")
@@ -623,7 +623,7 @@ class DiscordCommandProductionPathTests(SqliteTemplateDbTestCase):
         }
 
         with (
-            patch("orchestrator.api.discord.ingress.seed_runtime.build_codex_runtime", return_value=runtime),
+            patch("orchestrator.api.discord.ingress.seed_runtime.build_issue_seed_runtime", return_value=runtime),
             patch("orchestrator.api.discord.ingress.jira_runtime.tenant_jira_oauth_context", return_value=fake_oauth),
         ):
             response = self._post_command("!issues seed draft a backlog item for relink policy")
@@ -647,11 +647,11 @@ class DiscordCommandProductionPathTests(SqliteTemplateDbTestCase):
             ]
         )
 
-        with patch("orchestrator.api.discord.ingress.seed_runtime.build_codex_runtime", return_value=runtime):
+        with patch("orchestrator.api.discord.ingress.seed_runtime.build_issue_seed_runtime", return_value=runtime):
             response = self._post_command("!issues seed draft a backlog item for relink policy")
 
         self.assertEqual(response.status_code, 503)
-        self.assertIn("Codex PM batch seeding is unavailable", response.json()["detail"])
+        self.assertIn("PM parent seeding runtime is unavailable", response.json()["detail"])
         self.assertIn("no last agent message", response.json()["detail"].lower())
         self.assertEqual(queue.calls, 2)
 
@@ -664,7 +664,7 @@ class DiscordCommandProductionPathTests(SqliteTemplateDbTestCase):
             ]
         )
 
-        with patch("orchestrator.api.discord.ingress.seed_runtime.build_codex_runtime", return_value=runtime):
+        with patch("orchestrator.api.discord.ingress.seed_runtime.build_issue_seed_runtime", return_value=runtime):
             response = self._post_command("!issues seed draft a backlog item for relink policy")
 
         self.assertEqual(response.status_code, 503)
@@ -676,7 +676,7 @@ class DiscordCommandProductionPathTests(SqliteTemplateDbTestCase):
         runtime, queue = self._seed_runtime([self._planned_seed_output()])
 
         with (
-            patch("orchestrator.api.discord.ingress.seed_runtime.build_codex_runtime", return_value=runtime),
+            patch("orchestrator.api.discord.ingress.seed_runtime.build_issue_seed_runtime", return_value=runtime),
             patch("orchestrator.api.discord.ingress.jira_runtime.tenant_jira_oauth_context", return_value={"client": None}),
         ):
             response = self._post_command("!issues seed draft a backlog item for relink policy")

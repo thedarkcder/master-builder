@@ -1,0 +1,14 @@
+Parent issue key: {{ parent_issue_key }}
+Parent summary: {{ parent_summary }}
+Parent description:
+{{ parent_description }}
+
+Normalize this parent issue into the typed product brief contract.
+Preserve the requested behavior, business intent, and constraints from the ticket text.
+Assume the parent may have been written by a non-technical stakeholder.
+Do not ask implementation or architecture questions.
+If the ticket text is too ambiguous, ask only the smallest set of stakeholder-safe product or non-functional questions needed before child-ticket planning can proceed.
+
+Return strict JSON only with keys:
+- brief
+- open_questions

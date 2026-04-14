@@ -16,7 +16,7 @@ from orchestrator.core.codex_agents import (
     plan_discord_ask_intent_with_codex,
 )
 from orchestrator.core.runtime_invocation import AgentInvocationContext
-from orchestrator.core.codex_runtime import CodexRuntimeError, build_codex_runtime as _build_codex_runtime
+from orchestrator.core.codex_runtime import CodexRuntimeError
 from orchestrator.core.agent_runtime_resolver import build_runtime_for_selector
 from orchestrator.core.config import get_settings
 from orchestrator.core.pm_plugin_catalog import plugin_catalog_payload, tool_catalog_payload
@@ -33,7 +33,11 @@ from orchestrator.core.pm_interview_service import (
     upsert_pm_interview_case,
 )
 from orchestrator.core.discord.personas import VOICE_ROOM_PERSONA_IDS, resolve_voice_room_persona_profile
-from orchestrator.core.specialist_planning import SpecialistPlanningRequest, run_specialist_planning_fanout
+from orchestrator.core.specialist_planning import (
+    SpecialistPlanningRequest,
+    build_runtime_seed_planning_package,
+    run_specialist_planning_fanout,
+)
 from orchestrator.core.stage_design_planning import invoke_stage_design_planning_llm
 from orchestrator.core.stage_spi_policy import resolve_stage_spi_enabled
 from orchestrator.core.stage_plugins import evaluate_stage_plugin
@@ -41,7 +45,6 @@ from orchestrator.storage.models import Project, Tenant
 
 
 _room_history_service = DiscordRoomHistoryService()
-build_codex_runtime = _build_codex_runtime
 
 
 def _normalized_project_keys(project_keys: list[str]) -> list[str]:
@@ -276,8 +279,8 @@ def dispatch_ask_command(
     store_pending_ask_action: Callable[..., Any],
     store_ask_history_entry: Callable[..., Any],
     ask_board_message: Callable[..., Any],
-    seed_parent_issues_with_codex: Callable[..., Any] | None,
-    seed_issues_with_codex: Callable[..., Any] | None,
+    seed_parent_issues_with_runtime: Callable[..., Any] | None,
+    seed_issues_with_runtime: Callable[..., Any] | None,
     scoped_project_keys: list[str],
     scoped_project_id: str | None,
     codex_working_dir: str,
@@ -646,14 +649,14 @@ def dispatch_ask_command(
             project_keys=normalized_project_keys,
             issue_key=normalized_issue_key,
         )
-        if seed_parent_issues_with_codex is None:
+        if seed_parent_issues_with_runtime is None:
             return DiscordCommandResponse(
                 ok=True,
                 command="pm",
                 message=message,
                 data=response_data,
             )
-        parent_seed_message, parent_seed_data = seed_parent_issues_with_codex(
+        parent_seed_message, parent_seed_data = seed_parent_issues_with_runtime(
             session=session,
             tenant=tenant,
             prompt_markdown=product_brief_markdown,
@@ -680,7 +683,7 @@ def dispatch_ask_command(
         planning_message = ""
         planning_state = None
         planning_package: dict[str, Any] | None = None
-        if parent_issue_key and seed_issues_with_codex is not None:
+        if parent_issue_key and seed_issues_with_runtime is not None:
             planning_request = SpecialistPlanningRequest(
                 tenant_id=tenant.tenant_id,
                 project_id=scoped_project_id,
@@ -707,34 +710,11 @@ def dispatch_ask_command(
                 ),
             )
             planning_state = planning_result.planning_state
-            stage_payloads = {}
-            stage_name_map = {
-                "engineering_planning": "engineering",
-                "security_planning": "security",
-                "test_planning": "testing",
-            }
-            for stage in planning_result.stages:
-                stage_payloads[stage_name_map.get(stage.planning_state, stage.planning_state)] = stage.to_payload()
-            child_issues = [
-                {
-                    "summary": task,
-                    "behavior_slice": final_assessment.brief.objective or question,
-                    "technical_objective": task,
-                    "implementation_plan": [task],
-                    "technical_dependencies": list(planning_result.acceptance_impacts[:3]),
-                    "risks": list(planning_result.findings[:3]),
-                    "how_to_test": [f"Verify '{task}' satisfies the parent feature acceptance criteria."],
-                    "done_criteria": [f"'{task}' is implemented and validated against the parent feature."],
-                    "labels": ["engineering"],
-                }
-                for task in planning_result.required_tasks
-            ]
-            planning_package = {
-                "planning_state": planning_result.planning_state,
-                "specialist_outputs": stage_payloads,
-                "child_issues": child_issues,
-            }
-            issue_seed_message, issue_seed_data = seed_issues_with_codex(
+            planning_package = build_runtime_seed_planning_package(
+                result=planning_result,
+                behavior_slice=str(final_assessment.brief.objective or question).strip() or question,
+            )
+            issue_seed_message, issue_seed_data = seed_issues_with_runtime(
                 session=session,
                 tenant=tenant,
                 prompt_markdown=product_brief_markdown,

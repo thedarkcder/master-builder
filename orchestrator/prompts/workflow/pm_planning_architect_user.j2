@@ -11,10 +11,15 @@ Recent conversation context JSON: {{ conversation_history_json }}
 
 Focus on architecture and decomposition.
 Prefer the smallest set of child tasks that gives a sound design.
-If the feature is underspecified, ask the narrowest missing behavior question and include a short example in the question text.
+Write child task titles as functional behavior slices a delivery team could own in parallel.
+Do not emit internal implementation chores like "add service", "wire endpoint", or "refactor module" unless the parent feature is explicitly about internal platform behavior.
+Assume the parent brief came from a non-technical stakeholder and keep any clarification requests answerable in product language.
+Include a Mermaid flowchart that a reviewer can paste into a Mermaid renderer to understand the target architecture.
+If the feature is underspecified, ask the narrowest missing behavior or non-functional question and include a short example in the question text.
 Return strict JSON only with keys:
 - findings
 - recommendations
 - required_tasks
 - open_behavior_questions
 - acceptance_impacts
+- mermaid_diagram

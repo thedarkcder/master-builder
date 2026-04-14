@@ -23,6 +23,21 @@ def _bullet_list(items: list[str]) -> dict:
     }
 
 
+def _paragraph(text: str) -> dict:
+    return {
+        "type": "paragraph",
+        "content": [{"type": "text", "text": text}],
+    }
+
+
+def _code_block(text: str, *, language: str) -> dict:
+    return {
+        "type": "codeBlock",
+        "attrs": {"language": language},
+        "content": [{"type": "text", "text": text}],
+    }
+
+
 def build_parent_feature_description(
     *,
     objective: str,
@@ -39,6 +54,8 @@ def build_parent_feature_description(
     sync_status: str,
     pm_status: str | None = None,
     planning_state: str | None = None,
+    architecture_summary: list[str] | None = None,
+    architecture_diagram: str | None = None,
 ) -> dict:
     content = [
         _heading("Objective"),
@@ -47,6 +64,23 @@ def build_parent_feature_description(
         _bullet_list([user_value.strip() or "User value was not provided"]),
         _heading("Recommendation"),
         _bullet_list([recommendation.strip() or "Recommendation was not provided"]),
+        _heading("Architecture Context"),
+        _bullet_list(
+            architecture_summary
+            if architecture_summary
+            else ["Architecture context was not provided"]
+        ),
+    ]
+    if isinstance(architecture_diagram, str) and architecture_diagram.strip():
+        content.extend(
+            [
+                _heading("Architecture Diagram"),
+                _paragraph("Mermaid diagram generated during backlog planning."),
+                _code_block(architecture_diagram.strip(), language="mermaid"),
+            ]
+        )
+    content.extend(
+        [
         _heading("Scope In"),
         _bullet_list(scope_in),
         _heading("Scope Out"),
@@ -83,7 +117,8 @@ def build_parent_feature_description(
         _bullet_list([f"Parent revision: {parent_revision}", f"Children sync status: {sync_status}"]),
         _heading("Notes / Links"),
         _bullet_list(["Owned by Product Management", "Reported via Discord PM flow"]),
-    ]
+        ]
+    )
     return {"type": "doc", "version": 1, "content": content}
 
 

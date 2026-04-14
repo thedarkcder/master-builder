@@ -22,7 +22,7 @@ def dispatch_issues_command(
     codex_working_dir: str,
     normalized_user_id: str,
     defer_seed_issues: bool,
-    seed_parent_issues_with_codex: Callable[..., Any],
+    seed_parent_issues_with_runtime: Callable[..., Any],
     find_seed_followup_context: Callable[..., Any],
     store_seed_followup_context: Callable[..., Any],
     clear_seed_followup_context: Callable[..., Any],
@@ -51,7 +51,7 @@ def dispatch_issues_command(
                 message="PM batch seeding started. I will reply in this thread with parent issue links when done.",
                 data={"deferred": True, "prompt_markdown": prompt_markdown},
             )
-        message, data = seed_parent_issues_with_codex(
+        message, data = seed_parent_issues_with_runtime(
             session=session,
             tenant=tenant,
             prompt_markdown=prompt_markdown,
@@ -154,7 +154,7 @@ def dispatch_issues_command(
         forced_issue_keys = [
             str(value).strip().upper() for value in context.get("issue_keys", []) if str(value).strip()
         ]
-        message, data = seed_parent_issues_with_codex(
+        message, data = seed_parent_issues_with_runtime(
             session=session,
             tenant=tenant,
             prompt_markdown=followup_prompt,

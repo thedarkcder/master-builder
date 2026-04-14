@@ -233,19 +233,54 @@ def _normalize_planning_package(raw_planning_package: object) -> dict[str, Any]:
         child_issues = raw_planning_package.get("engineering_children")
     planning_state = _normalized_status(raw_planning_package.get("planning_state") or raw_planning_package.get("state"))
     summary_lines: list[str] = []
+    architecture_summary_raw = raw_planning_package.get("architecture_summary")
+    if architecture_summary_raw is not None and not isinstance(architecture_summary_raw, list):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Planning package architecture_summary must be a list of strings",
+        )
+    architecture_diagram_raw = raw_planning_package.get("architecture_diagram")
+    if architecture_diagram_raw is not None and not isinstance(architecture_diagram_raw, str):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Planning package architecture_diagram must be a string",
+        )
+    architecture_summary: list[str] = [
+        str(value).strip() for value in (architecture_summary_raw or []) if str(value).strip()
+    ]
+    architecture_diagram = (
+        architecture_diagram_raw.strip()
+        if isinstance(architecture_diagram_raw, str) and architecture_diagram_raw.strip()
+        else None
+    )
     if isinstance(specialist_outputs, dict):
-        for stage_name in ("engineering", "security", "testing"):
+        for stage_name in ("architecture", "engineering", "security", "testing"):
             summary_lines.extend(
                 _planning_stage_summary_lines(
                     stage_name=stage_name,
                     raw_stage=specialist_outputs.get(stage_name),
                 )
             )
+        if not architecture_summary:
+            architecture_stage = specialist_outputs.get("architecture")
+            if isinstance(architecture_stage, dict):
+                for field_name in ("findings", "recommendations", "acceptance_impacts"):
+                    architecture_summary.extend(
+                        _string_list_from_stage(
+                            stage_name="architecture",
+                            field_name=field_name,
+                            raw_value=architecture_stage.get(field_name),
+                        )
+                    )
+                if architecture_diagram is None and isinstance(architecture_stage.get("mermaid_diagram"), str):
+                    architecture_diagram = architecture_stage.get("mermaid_diagram", "").strip() or None
     if not isinstance(child_issues, list):
         child_issues = []
     return {
         "planning_state": planning_state,
         "specialist_summary": summary_lines,
+        "architecture_summary": architecture_summary,
+        "architecture_diagram": architecture_diagram,
         "child_issues": child_issues,
     }
 
@@ -700,7 +735,7 @@ def _parse_engineering_children(
             }
         )
     if not children and not allow_empty_children:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Codex returned no valid engineering_children")
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Issue seeding returned no valid engineering_children")
     return children
 
 
@@ -711,6 +746,8 @@ def _build_parent_issue_input(
     sync_status: str,
     pm_status: str | None = None,
     planning_state: str | None = None,
+    architecture_summary: list[str] | None = None,
+    architecture_diagram: str | None = None,
 ) -> JiraIssueCreateInput:
     return JiraIssueCreateInput(
         summary=parent_issue["summary"],
@@ -729,6 +766,8 @@ def _build_parent_issue_input(
             sync_status=sync_status,
             pm_status=pm_status,
             planning_state=planning_state,
+            architecture_summary=architecture_summary,
+            architecture_diagram=architecture_diagram,
         ),
         labels=_dedupe_labels(
             parent_issue["labels"],
@@ -819,7 +858,7 @@ def _upsert_issue(
     return created.key, True, False
 
 
-def seed_issues_with_codex(
+def seed_issues_with_runtime(
     *,
     session,
     tenant: Tenant,
@@ -831,8 +870,8 @@ def seed_issues_with_codex(
     codex_working_dir: str,
     tenant_project_keys_fn,
     get_settings_fn,
-    build_codex_runtime_fn,
-    plan_seed_issues_with_codex_fn,
+    build_runtime_fn,
+    plan_seed_issues_with_runtime_fn,
     codex_runtime_error_type,
     build_seed_issue_description_fn,
     issue_key_pattern,
@@ -856,9 +895,9 @@ def seed_issues_with_codex(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tenant has no Jira project keys")
 
     settings = get_settings_fn()
-    runtime = build_codex_runtime_fn(session=session, settings=settings)
+    runtime = build_runtime_fn(session=session, settings=settings)
     try:
-        plan_payload = plan_seed_issues_with_codex_fn(
+        plan_payload = plan_seed_issues_with_runtime_fn(
             runtime=runtime,
             prompt_markdown=prompt_markdown,
             allowed_project_keys=project_keys,
@@ -874,17 +913,17 @@ def seed_issues_with_codex(
     except codex_runtime_error_type as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Codex issue seeding is unavailable: {exc}",
+            detail=f"Issue seeding runtime is unavailable: {exc}",
         ) from exc
 
     project_key_raw = plan_payload.get("project_key")
     project_key = str(project_key_raw).strip().upper() if isinstance(project_key_raw, str) else ""
     if not project_key:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Codex did not return project_key")
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Issue seeding runtime did not return project_key")
     if project_key not in project_keys:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"Codex selected unsupported Jira project key '{project_key}'",
+            detail=f"Issue seeding runtime selected unsupported Jira project key '{project_key}'",
         )
 
     normalized_force_issue_keys = [str(value).strip().upper() for value in (force_issue_keys or []) if str(value).strip()]
@@ -903,6 +942,8 @@ def seed_issues_with_codex(
     planning_package_supplied = planning_package is not None or "planning_package" in plan_payload or "specialist_planning" in plan_payload
     planning_state = effective_planning_package.get("planning_state") or ""
     specialist_summary = list(effective_planning_package.get("specialist_summary") or [])
+    architecture_summary = list(effective_planning_package.get("architecture_summary") or [])
+    architecture_diagram = effective_planning_package.get("architecture_diagram")
     child_issue_drafts = effective_planning_package.get("child_issues")
     if child_issue_drafts is None:
         child_issue_drafts = plan_payload.get("engineering_children")
@@ -945,6 +986,8 @@ def seed_issues_with_codex(
             sync_status=parent_sync_status,
             pm_status=effective_pm_status or None,
             planning_state=planning_state_for_description,
+            architecture_summary=architecture_summary,
+            architecture_diagram=architecture_diagram if isinstance(architecture_diagram, str) else None,
         )
         parent_issue_key, parent_created, parent_updated = _upsert_issue(
             oauth=oauth,
@@ -969,6 +1012,8 @@ def seed_issues_with_codex(
                 sync_status=parent_sync_status,
                 pm_status=effective_pm_status or None,
                 planning_state=planning_state_for_description,
+                architecture_summary=architecture_summary,
+                architecture_diagram=architecture_diagram if isinstance(architecture_diagram, str) else None,
             )
             oauth["client"].update_issue_fields(
                 access_token=oauth["access_token"],
@@ -1195,7 +1240,7 @@ def seed_issues_with_codex(
     )
 
 
-def seed_parent_issues_with_codex(
+def seed_parent_issues_with_runtime(
     *,
     session,
     tenant: Tenant,
@@ -1207,8 +1252,8 @@ def seed_parent_issues_with_codex(
     codex_working_dir: str,
     tenant_project_keys_fn,
     get_settings_fn,
-    build_codex_runtime_fn,
-    plan_pm_parent_issues_with_codex_fn,
+    build_runtime_fn,
+    plan_pm_parent_issues_with_runtime_fn,
     codex_runtime_error_type,
     issue_key_pattern,
     tenant_jira_oauth_context_fn,
@@ -1236,9 +1281,9 @@ def seed_parent_issues_with_codex(
         settings=settings,
         pm_interview_notes_json=pm_interview_notes_json,
     )
-    runtime = build_codex_runtime_fn(session=session, settings=settings)
+    runtime = build_runtime_fn(session=session, settings=settings)
     try:
-        plan_payload = plan_pm_parent_issues_with_codex_fn(
+        plan_payload = plan_pm_parent_issues_with_runtime_fn(
             runtime=runtime,
             prompt_markdown=prompt_markdown,
             allowed_project_keys=project_keys,
@@ -1254,17 +1299,17 @@ def seed_parent_issues_with_codex(
     except codex_runtime_error_type as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Codex PM batch seeding is unavailable: {exc}",
+            detail=f"PM parent seeding runtime is unavailable: {exc}",
         ) from exc
 
     project_key_raw = plan_payload.get("project_key")
     project_key = str(project_key_raw).strip().upper() if isinstance(project_key_raw, str) else ""
     if not project_key:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Codex did not return project_key")
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="PM parent seeding runtime did not return project_key")
     if project_key not in project_keys:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"Codex selected unsupported Jira project key '{project_key}'",
+            detail=f"PM parent seeding runtime selected unsupported Jira project key '{project_key}'",
         )
 
     normalized_force_issue_keys = [str(value).strip().upper() for value in (force_issue_keys or []) if str(value).strip()]
@@ -1388,19 +1433,3 @@ def seed_parent_issues_with_codex(
             "errors": [],
         },
     )
-
-
-def seed_issues_with_codex(**kwargs):  # type: ignore[no-untyped-def]
-    if "build_codex_runtime_fn" in kwargs:
-        kwargs["build_runtime_fn"] = kwargs.pop("build_codex_runtime_fn")
-    if "plan_seed_issues_with_codex_fn" in kwargs:
-        kwargs["plan_seed_issues_with_runtime_fn"] = kwargs.pop("plan_seed_issues_with_codex_fn")
-    return seed_issues_with_runtime(**kwargs)
-
-
-def seed_parent_issues_with_codex(**kwargs):  # type: ignore[no-untyped-def]
-    if "build_codex_runtime_fn" in kwargs:
-        kwargs["build_runtime_fn"] = kwargs.pop("build_codex_runtime_fn")
-    if "plan_pm_parent_issues_with_codex_fn" in kwargs:
-        kwargs["plan_pm_parent_issues_with_runtime_fn"] = kwargs.pop("plan_pm_parent_issues_with_codex_fn")
-    return seed_parent_issues_with_runtime(**kwargs)
