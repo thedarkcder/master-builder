@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
-from orchestrator.api.discord.ingress.seed_runtime import seed_issues_with_codex
+from orchestrator.api.discord.ingress.seed_runtime import seed_issues_with_runtime
 from orchestrator.api.discord.seed.issue_service import list_child_issue_previews_for_parent
 from orchestrator.api.jira_oauth.connection_service import tenant_jira_oauth_context
 from orchestrator.api.webhooks.contracts import (
     extract_changed_fields,
     extract_jira_comment_text,
+    extract_status_transition,
     post_jira_comment,
 )
 from orchestrator.api.webhooks.jira_webhook_types import JiraWebhookContext, jira_webhook_response
@@ -21,7 +22,6 @@ from orchestrator.core.jira_parent_child_sync_service import (
     handle_parent_feature_sync as handle_parent_feature_sync_service,
     is_system_generated_comment as is_system_generated_comment_service,
 )
-
 
 def _build_service_context(*, context: JiraWebhookContext) -> JiraParentChildSyncContext:
     return JiraParentChildSyncContext(
@@ -69,8 +69,10 @@ def handle_parent_feature_sync(
         settings=settings,
         tenant_jira_oauth_context_fn=tenant_jira_oauth_context,
         extract_changed_fields_fn=extract_changed_fields,
+        extract_status_transition_fn=extract_status_transition,
         list_child_issue_previews_for_parent_fn=list_child_issue_previews_for_parent,
-        seed_issues_with_codex_fn=seed_issues_with_codex,
+        build_runtime_for_selector_fn=build_runtime_for_selector,
+        seed_issues_with_runtime_fn=seed_issues_with_runtime,
         post_jira_comment_fn=post_jira_comment,
     )
     return _webhook_response_from_result(context=context, result=result)
@@ -105,7 +107,7 @@ def handle_engineering_clarification_reply(
         session=session,
         settings=settings,
         tenant_jira_oauth_context_fn=tenant_jira_oauth_context,
-        seed_issues_with_codex_fn=seed_issues_with_codex,
+        seed_issues_with_runtime_fn=seed_issues_with_runtime,
         post_jira_comment_fn=post_jira_comment,
         extract_jira_comment_text_fn=extract_jira_comment_text,
     )

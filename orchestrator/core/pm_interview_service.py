@@ -10,7 +10,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from orchestrator.core.codex_agents import _invoke_discord_json_maybe_tools
-from orchestrator.core.runtime_invocation import AgentInvocationContext
+from orchestrator.core.runtime_invocation import AgentInvocationContext, invoke_runtime_json
 from orchestrator.core.codex_runtime import CodexRuntime, CodexRuntimeError
 from orchestrator.core.prompt_templates import render_prompt
 from orchestrator.storage.models import PMInterviewCase
@@ -21,6 +21,8 @@ PM_INTERVIEW_STATUS_RESEARCHING = "researching"
 PM_INTERVIEW_STATUS_READY_TO_WRITE = "ready_to_write"
 PM_INTERVIEW_STATUS_PM_COMPLETED = "pm_completed"
 PM_INTERVIEW_STATUS_ABANDONED = "abandoned"
+PM_INTERVIEW_SOURCE_KIND_PARENT_BRIEF_SNAPSHOT = "parent_brief_snapshot"
+PM_INTERVIEW_PARENT_BRIEF_CHANNEL_ID = "jira-parent-sync"
 
 PM_INTERVIEW_ACTIVE_STATUSES = (
     PM_INTERVIEW_STATUS_DRAFTING,
@@ -614,6 +616,91 @@ def resolve_pm_interview_case(
     return resolution.interview_case if resolution.status == "matched" else None
 
 
+def resolve_parent_feature_brief(
+    *,
+    session: Session,
+    tenant_id: str,
+    parent_issue_key: str,
+) -> PMInterviewBrief | None:
+    normalized_tenant_id = _normalized_text(tenant_id)
+    normalized_parent_issue_key = _normalized_text(parent_issue_key).upper()
+    if not normalized_tenant_id or not normalized_parent_issue_key:
+        return None
+    row = session.execute(
+        select(PMInterviewCase)
+        .where(
+            PMInterviewCase.tenant_id == normalized_tenant_id,
+            PMInterviewCase.parent_issue_key == normalized_parent_issue_key,
+        )
+        .order_by(PMInterviewCase.updated_at.desc(), PMInterviewCase.created_at.desc())
+    ).scalars().first()
+    if row is None:
+        return None
+    return normalize_pm_interview_brief(getattr(row, "brief_json", None) or None)
+
+
+def resolve_parent_feature_case(
+    *,
+    session: Session,
+    tenant_id: str,
+    parent_issue_key: str,
+) -> PMInterviewCase | None:
+    normalized_tenant_id = _normalized_text(tenant_id)
+    normalized_parent_issue_key = _normalized_text(parent_issue_key).upper()
+    if not normalized_tenant_id or not normalized_parent_issue_key:
+        return None
+    primary_row = session.execute(
+        select(PMInterviewCase)
+        .where(
+            PMInterviewCase.tenant_id == normalized_tenant_id,
+            PMInterviewCase.parent_issue_key == normalized_parent_issue_key,
+            PMInterviewCase.source_kind != PM_INTERVIEW_SOURCE_KIND_PARENT_BRIEF_SNAPSHOT,
+        )
+        .order_by(PMInterviewCase.updated_at.desc(), PMInterviewCase.created_at.desc())
+    ).scalars().first()
+    if primary_row is not None:
+        return primary_row
+    return session.execute(
+        select(PMInterviewCase)
+        .where(
+            PMInterviewCase.tenant_id == normalized_tenant_id,
+            PMInterviewCase.parent_issue_key == normalized_parent_issue_key,
+        )
+        .order_by(PMInterviewCase.updated_at.desc(), PMInterviewCase.created_at.desc())
+    ).scalars().first()
+
+
+def persist_parent_feature_brief_snapshot(
+    *,
+    session: Session,
+    tenant_id: str,
+    project_id: str | None,
+    parent_issue_key: str,
+    source_text: str,
+    brief: Mapping[str, Any] | PMInterviewBrief,
+    notes: Mapping[str, Any] | None = None,
+) -> PMInterviewCase:
+    normalized_parent_issue_key = _normalized_text(parent_issue_key).upper()
+    if not normalized_parent_issue_key:
+        raise ValueError("parent_issue_key is required")
+    return upsert_pm_interview_case(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        request_id=f"parent-brief:{normalized_parent_issue_key}",
+        source_kind=PM_INTERVIEW_SOURCE_KIND_PARENT_BRIEF_SNAPSHOT,
+        channel_id=PM_INTERVIEW_PARENT_BRIEF_CHANNEL_ID,
+        source_text=source_text,
+        status=PM_INTERVIEW_STATUS_PM_COMPLETED,
+        parent_issue_key=normalized_parent_issue_key,
+        brief=brief,
+        notes={
+            "parent_brief_snapshot": True,
+            **dict(notes or {}),
+        },
+    )
+
+
 def _get_existing_pm_interview_case(
     *,
     session: Session,
@@ -822,6 +909,42 @@ def normalize_pm_interview_evidence(
     payload: Sequence[Mapping[str, Any] | PMInterviewEvidence] | None,
 ) -> tuple[PMInterviewEvidence, ...]:
     return _evidence_update_payloads(payload)
+
+
+def normalize_parent_feature_brief_with_runtime(
+    *,
+    runtime: CodexRuntime,
+    parent_issue_key: str,
+    parent_summary: str,
+    parent_description: str,
+    invocation_context: AgentInvocationContext,
+) -> dict[str, Any]:
+    payload = invoke_runtime_json(
+        runtime=runtime,
+        context=invocation_context,
+        system_prompt=render_prompt("workflow/pm_parent_brief_normalization_system.j2"),
+        user_prompt=render_prompt(
+            "workflow/pm_parent_brief_normalization_user.j2",
+            parent_issue_key=parent_issue_key,
+            parent_summary=parent_summary,
+            parent_description=parent_description,
+        ),
+    )
+    if not isinstance(payload, dict):
+        raise CodexRuntimeError("Codex did not return a parent brief normalization JSON object")
+    brief_payload = payload.get("brief")
+    if not isinstance(brief_payload, Mapping):
+        raise CodexRuntimeError("Codex did not return a normalized parent brief object")
+    normalized_brief = normalize_pm_interview_brief(brief_payload)
+    assessment = assess_pm_interview_brief(brief=normalized_brief.to_payload(), evidence=())
+    questions = _normalized_text_list(payload.get("open_questions"))
+    if not assessment.ready_to_write and not questions and assessment.next_question is not None:
+        questions = (format_pm_interview_question(assessment.next_question),)
+    return {
+        "brief": assessment.brief.to_payload(),
+        "open_questions": list(questions),
+        "ready_to_write": assessment.ready_to_write and not questions,
+    }
 
 
 def _question_payload(value: Mapping[str, Any] | PMInterviewQuestion | None) -> dict[str, Any]:

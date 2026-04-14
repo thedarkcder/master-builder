@@ -43,9 +43,10 @@ class SpecialistPlanningStageResult:
     required_tasks: tuple[str, ...]
     open_behavior_questions: tuple[str, ...]
     acceptance_impacts: tuple[str, ...]
+    mermaid_diagram: str | None = None
 
     def to_payload(self) -> dict[str, object]:
-        return {
+        payload = {
             "planning_state": self.planning_state,
             "persona_id": self.persona_id,
             "role_label": self.role_label,
@@ -56,6 +57,9 @@ class SpecialistPlanningStageResult:
             "open_behavior_questions": list(self.open_behavior_questions),
             "acceptance_impacts": list(self.acceptance_impacts),
         }
+        if isinstance(self.mermaid_diagram, str) and self.mermaid_diagram.strip():
+            payload["mermaid_diagram"] = self.mermaid_diagram.strip()
+        return payload
 
 
 @dataclass(frozen=True)
@@ -69,9 +73,11 @@ class SpecialistPlanningResult:
     acceptance_impacts: tuple[str, ...]
     blocked_stage_states: tuple[str, ...]
     block_reason: str | None
+    architecture_summary: tuple[str, ...] = ()
+    architecture_diagram: str | None = None
 
     def to_payload(self) -> dict[str, object]:
-        return {
+        payload = {
             "planning_state": self.planning_state,
             "stages": [stage.to_payload() for stage in self.stages],
             "findings": list(self.findings),
@@ -82,6 +88,11 @@ class SpecialistPlanningResult:
             "blocked_stage_states": list(self.blocked_stage_states),
             "block_reason": self.block_reason,
         }
+        if self.architecture_summary:
+            payload["architecture_summary"] = list(self.architecture_summary)
+        if isinstance(self.architecture_diagram, str) and self.architecture_diagram.strip():
+            payload["architecture_diagram"] = self.architecture_diagram.strip()
+        return payload
 
 
 @dataclass(frozen=True)
@@ -207,6 +218,10 @@ def _run_stage(
     required_tasks = _string_list(payload.get("required_tasks"))
     open_behavior_questions = _string_list(payload.get("open_behavior_questions"))
     acceptance_impacts = _string_list(payload.get("acceptance_impacts"))
+    mermaid_diagram = None
+    if isinstance(payload.get("mermaid_diagram"), str):
+        normalized_diagram = payload.get("mermaid_diagram", "").strip()
+        mermaid_diagram = normalized_diagram or None
     blocked = bool(open_behavior_questions)
 
     return SpecialistPlanningStageResult(
@@ -219,7 +234,56 @@ def _run_stage(
         required_tasks=required_tasks,
         open_behavior_questions=open_behavior_questions,
         acceptance_impacts=acceptance_impacts,
+        mermaid_diagram=mermaid_diagram,
     )
+
+
+def planning_output_key(*, stage: SpecialistPlanningStageResult) -> str:
+    if stage.persona_id == "architect":
+        return "architecture"
+    if stage.persona_id == "security":
+        return "security"
+    if stage.persona_id == "qa":
+        return "testing"
+    return stage.planning_state
+
+
+def build_runtime_seed_planning_package(
+    *,
+    result: SpecialistPlanningResult,
+    behavior_slice: str,
+) -> dict[str, object]:
+    stage_payloads = {
+        planning_output_key(stage=stage): stage.to_payload()
+        for stage in result.stages
+    }
+    child_issues = [
+        {
+            "summary": task,
+            "behavior_slice": behavior_slice,
+            "technical_objective": f"Deliver the behavior slice '{task}' without expanding parent scope.",
+            "implementation_plan": [
+                f"Implement the functional requirement: {task}",
+                "Keep the solution aligned to the parent acceptance criteria and architecture guidance.",
+            ],
+            "technical_dependencies": list(result.acceptance_impacts[:3]),
+            "risks": list(result.findings[:3]),
+            "how_to_test": [f"Verify the functional behavior '{task}' satisfies the parent feature acceptance criteria."],
+            "done_criteria": [f"The functional requirement '{task}' is delivered and validated against the parent feature."],
+            "labels": ["engineering"],
+        }
+        for task in result.required_tasks
+    ]
+    payload: dict[str, object] = {
+        "planning_state": result.planning_state,
+        "specialist_outputs": stage_payloads,
+        "child_issues": child_issues,
+    }
+    if result.architecture_summary:
+        payload["architecture_summary"] = list(result.architecture_summary)
+    if isinstance(result.architecture_diagram, str) and result.architecture_diagram.strip():
+        payload["architecture_diagram"] = result.architecture_diagram.strip()
+    return payload
 
 
 def run_specialist_planning_fanout(
@@ -254,6 +318,16 @@ def run_specialist_planning_fanout(
             for stage_result in stage_results
             if stage_result.blocked and stage_result.open_behavior_questions
         )
+    architect_stage = next((stage for stage in stage_results if stage.persona_id == "architect"), None)
+    architecture_summary = ()
+    architecture_diagram = None
+    if architect_stage is not None:
+        architecture_summary = _merge_unique(
+            architect_stage.findings,
+            architect_stage.recommendations,
+            architect_stage.acceptance_impacts,
+        )
+        architecture_diagram = architect_stage.mermaid_diagram
 
     return SpecialistPlanningResult(
         planning_state=planning_state,
@@ -265,4 +339,6 @@ def run_specialist_planning_fanout(
         acceptance_impacts=_merge_unique(*(stage_result.acceptance_impacts for stage_result in stage_results)),
         blocked_stage_states=blocked_stage_states,
         block_reason=block_reason,
+        architecture_summary=architecture_summary,
+        architecture_diagram=architecture_diagram,
     )

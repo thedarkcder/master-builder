@@ -11,6 +11,7 @@ import pytest
 from orchestrator.core.pm_interview_service import (
     PM_INTERVIEW_STATUS_ABANDONED,
     PM_INTERVIEW_STATUS_PM_COMPLETED,
+    PM_INTERVIEW_SOURCE_KIND_PARENT_BRIEF_SNAPSHOT,
     PM_INTERVIEW_STATUS_READY_TO_WRITE,
     PM_INTERVIEW_STATUS_QUESTION_PENDING,
     assess_pm_interview_brief,
@@ -18,7 +19,10 @@ from orchestrator.core.pm_interview_service import (
     mark_pm_interview_case_abandoned,
     mark_pm_interview_case_completed,
     normalize_pm_interview_evidence,
+    normalize_parent_feature_brief_with_runtime,
     plan_pm_interview_with_codex,
+    persist_parent_feature_brief_snapshot,
+    resolve_parent_feature_brief,
     resolve_pm_interview_case,
     resolve_pm_interview_case_match,
     select_next_pm_interview_question,
@@ -242,6 +246,123 @@ class PMInterviewServiceTests(unittest.TestCase):
             )
             session.commit()
             self.assertEqual(abandoned.status, PM_INTERVIEW_STATUS_ABANDONED)
+
+    def test_resolve_parent_feature_brief_uses_latest_case_for_parent_issue(self) -> None:
+        with self.session_factory() as session:
+            persist_parent_feature_brief_snapshot(
+                session=session,
+                tenant_id="example",
+                project_id="example-default",
+                parent_issue_key="TP-500",
+                source_text="Legacy parent description",
+                brief={
+                    "objective": "Legacy objective",
+                    "user_value": "Legacy value",
+                },
+                notes={"source": "compat"},
+            )
+            upsert_pm_interview_case(
+                session=session,
+                tenant_id="example",
+                project_id="example-default",
+                request_id="pm-req-parent-1",
+                source_kind="command",
+                channel_id="discord-channel-1",
+                source_text="create runtime reset",
+                parent_issue_key="TP-500",
+                status=PM_INTERVIEW_STATUS_PM_COMPLETED,
+                brief={
+                    "objective": "Canonical objective",
+                    "user_value": "Canonical value",
+                    "acceptance_criteria": ["Canonical acceptance"],
+                },
+            )
+            session.commit()
+
+        with self.session_factory() as session:
+            brief = resolve_parent_feature_brief(
+                session=session,
+                tenant_id="example",
+                parent_issue_key="TP-500",
+            )
+
+        self.assertIsNotNone(brief)
+        assert brief is not None
+        self.assertEqual(brief.objective, "Canonical objective")
+        self.assertEqual(brief.user_value, "Canonical value")
+        self.assertEqual(brief.acceptance_criteria, ("Canonical acceptance",))
+
+    def test_persist_parent_feature_brief_snapshot_stores_parent_brief_record(self) -> None:
+        with self.session_factory() as session:
+            row = persist_parent_feature_brief_snapshot(
+                session=session,
+                tenant_id="example",
+                project_id="example-default",
+                parent_issue_key="TP-501",
+                source_text="Objective\nFallback parent brief",
+                brief={
+                    "objective": "Fallback parent brief",
+                    "user_value": "Fallback value",
+                },
+                notes={"source": "jira_parent_brief_normalization"},
+            )
+            session.commit()
+
+            stored = session.query(PMInterviewCase).filter_by(request_id="parent-brief:TP-501").one()
+
+        self.assertEqual(row.source_kind, PM_INTERVIEW_SOURCE_KIND_PARENT_BRIEF_SNAPSHOT)
+        self.assertEqual(stored.parent_issue_key, "TP-501")
+        self.assertEqual(stored.status, PM_INTERVIEW_STATUS_PM_COMPLETED)
+        self.assertEqual(stored.channel_id, "jira-parent-sync")
+        self.assertEqual(stored.brief_json["objective"], "Fallback parent brief")
+        self.assertEqual(stored.notes_json["source"], "jira_parent_brief_normalization")
+        self.assertTrue(stored.notes_json["parent_brief_snapshot"])
+
+    def test_normalize_parent_feature_brief_with_runtime_returns_typed_brief(self) -> None:
+        captured: dict[str, object] = {}
+
+        def _render_prompt(template_name: str, **kwargs):  # noqa: ANN001
+            captured[template_name] = kwargs
+            return template_name
+
+        with (
+            patch(
+                "orchestrator.core.pm_interview_service.invoke_runtime_json",
+                return_value={
+                    "brief": {
+                        "objective": "Refactor the orchestration stack",
+                        "user_value": "Runtime behavior is easier to reason about and verify",
+                        "target_user": "Platform engineers",
+                        "primary_journey": "Plan and execute orchestration changes from Jira parents",
+                        "acceptance_criteria": ["One canonical decision state machine exists"],
+                        "scope_in": ["Decision state machine refactor"],
+                        "scope_out": ["Unrelated UI redesign"],
+                        "ui_references": ["Current runtime architecture doc"],
+                        "constraints": ["Keep the runtime-agnostic contract stable"],
+                        "risks": ["Planning drift across runtimes"],
+                        "success_outcomes": ["Parent planning produces stable child tickets"],
+                        "recommendation": "Normalize the brief before planning child tickets",
+                    },
+                    "open_questions": [],
+                },
+            ),
+            patch("orchestrator.core.pm_interview_service.render_prompt", side_effect=_render_prompt),
+        ):
+            payload = normalize_parent_feature_brief_with_runtime(
+                runtime=SimpleNamespace(),
+                parent_issue_key="MAB-200",
+                parent_summary="Complete Runtime Architecture and Verification Reset",
+                parent_description="Long Jira parent description",
+                invocation_context=SimpleNamespace(),
+            )
+
+        self.assertTrue(payload["ready_to_write"])
+        self.assertEqual(payload["open_questions"], [])
+        self.assertEqual(payload["brief"]["objective"], "Refactor the orchestration stack")
+        self.assertIn("workflow/pm_parent_brief_normalization_system.j2", captured)
+        user_kwargs = captured["workflow/pm_parent_brief_normalization_user.j2"]
+        self.assertEqual(user_kwargs["parent_issue_key"], "MAB-200")
+        self.assertIn("Complete Runtime Architecture and Verification Reset", user_kwargs["parent_summary"])
 
     def test_plan_pm_interview_with_codex_uses_question_examples_and_json_contract(self) -> None:
         captured: dict[str, object] = {}
