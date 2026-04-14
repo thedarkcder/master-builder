@@ -694,6 +694,28 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             ),
         )
 
+    def test_legacy_decision_snapshot_codec_module_is_removed(self) -> None:
+        legacy_module = ROOT / "orchestrator" / "core" / "decision_snapshot_codec.py"
+        self.assertFalse(
+            legacy_module.exists(),
+            msg="Legacy decision_snapshot_codec module should be removed after state-machine cutover.",
+        )
+
+    def test_runtime_modules_do_not_import_decision_snapshot_codec_directly(self) -> None:
+        violations: list[str] = []
+        for module_path in sorted(ORCHESTRATOR_ROOT.rglob("*.py")):
+            for module_name in _imported_modules(module_path):
+                if module_name == "orchestrator.core.decision_snapshot_codec":
+                    violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{module_name}")
+        self.assertEqual(
+            violations,
+            [],
+            msg=(
+                "Decision snapshot helpers must flow through the canonical decision_state_machine boundary: "
+                f"{violations}"
+            ),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
