@@ -23,23 +23,27 @@ import { CodexModelSelect } from "@/components/codex-model-select";
 import { OverrideSegmentedControl } from "@/components/override-segmented-control";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
+import { formatTimestamp } from "@/lib/datetime";
 import {
   getProject,
   getTenant,
+  listDiscordAllowlistRequests,
   listCodexModels,
   listGitHubRepositories,
   listJiraProjects,
   listRuns,
+  listWebhookQueueJobs,
   RUN_STATUSES,
   updateProject,
   type ProjectRecord,
   type RunRecord,
   type RunStatus,
+  type WebhookQueueJobRecord,
+  type WebhookQueueSummaryRecord,
 } from "@/lib/api";
 import {
   canAccessPlatformAdmin,
@@ -49,7 +53,7 @@ import {
 } from "@/lib/auth-routing";
 import { buildProjectSectionPath, buildRunDetailPath, resolveProjectSection } from "@/lib/dashboard-paths";
 
-type Tab = "overview" | "settings" | "runs" | "notifications" | "automations" | "secrets";
+type Tab = "overview" | "settings" | "runs" | "webhooks" | "notifications" | "automations" | "secrets" | "danger";
 type SettingsSection = "general" | "ai" | "automation" | "knowledge" | "governance";
 type OverrideToggleValue = "inherit" | "enabled" | "disabled";
 type RequireAgentsValue = "inherit" | "required";
@@ -83,9 +87,11 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "overview", label: "Overview" },
   { id: "settings", label: "Settings" },
   { id: "runs", label: "Runs" },
+  { id: "webhooks", label: "Webhooks" },
   { id: "notifications", label: "Notifications" },
   { id: "automations", label: "Automations" },
   { id: "secrets", label: "Secrets" },
+  { id: "danger", label: "Danger" },
 ];
 
 const SETTINGS_SECTIONS: { id: SettingsSection; label: string; description: string }[] = [
@@ -211,6 +217,7 @@ export function TenantProjectDetailsPage() {
   const [form, setForm] = useState<ProjectFormState>(() => buildProjectFormState(null));
   const [busy, setBusy] = useState(false);
   const [archiveConfirmationName, setArchiveConfirmationName] = useState("");
+  const [showArchiveConfirm, setShowArchiveConfirm] = useState(false);
   const [statusLine, setStatusLine] = useState("");
   const [repoOptions, setRepoOptions] = useState<string[]>([]);
   const [jiraOptions, setJiraOptions] = useState<string[]>([]);
@@ -223,6 +230,10 @@ export function TenantProjectDetailsPage() {
   const [runs, setRuns] = useState<RunRecord[]>([]);
   const [runsStatusLine, setRunsStatusLine] = useState("");
   const [runsBusy, setRunsBusy] = useState(false);
+  const [webhookJobs, setWebhookJobs] = useState<WebhookQueueJobRecord[]>([]);
+  const [webhookSummary, setWebhookSummary] = useState<WebhookQueueSummaryRecord | null>(null);
+  const [webhookBusy, setWebhookBusy] = useState(false);
+  const [webhookStatusLine, setWebhookStatusLine] = useState("");
   const [activeSettingsSection, setActiveSettingsSection] = useState<SettingsSection>("general");
   const [runIssueFilter, setRunIssueFilter] = useState("");
   const [runStatusFilter, setRunStatusFilter] = useState<RunStatus | "all">("all");
@@ -231,6 +242,7 @@ export function TenantProjectDetailsPage() {
   const [runToDate, setRunToDate] = useState("");
   const [runPage, setRunPage] = useState(1);
   const [runPageSize, setRunPageSize] = useState<25 | 50 | 100>(25);
+  const [notificationCount, setNotificationCount] = useState(0);
 
   // Secrets state
   const [secretRefs, setSecretRefs] = useState<Record<string, string>>({});
@@ -251,7 +263,7 @@ export function TenantProjectDetailsPage() {
     if (allowProjectManagement) {
       return resolved;
     }
-    return resolved === "settings" || resolved === "notifications" || resolved === "automations" || resolved === "secrets"
+    return resolved === "settings" || resolved === "notifications" || resolved === "automations" || resolved === "secrets" || resolved === "danger"
       ? "overview"
       : resolved;
   }, [allowProjectManagement, pathname]);
@@ -333,6 +345,28 @@ export function TenantProjectDetailsPage() {
     }
   }
 
+  async function loadWebhookJobs() {
+    if (!credentials) return;
+    setWebhookBusy(true);
+    try {
+      const payload = await listWebhookQueueJobs(credentials, {
+        tenantId: params.tenantId,
+        projectId: params.projectId,
+        limit: 50,
+        offset: 0,
+      });
+      setWebhookJobs(payload.items);
+      setWebhookSummary(payload.summary);
+      setWebhookStatusLine("");
+    } catch (error) {
+      setWebhookJobs([]);
+      setWebhookSummary(null);
+      setWebhookStatusLine(`Webhook queue is unavailable: ${(error as Error).message}`);
+    } finally {
+      setWebhookBusy(false);
+    }
+  }
+
   async function loadProject() {
     if (!credentials) return;
     setBusy(true);
@@ -360,15 +394,40 @@ export function TenantProjectDetailsPage() {
   }, [activeTab, ready, credentials, project, runFromDate, runIssueFilter, runPage, runPageSize, runPrFilter, runStatusFilter, runToDate]);
 
   useEffect(() => {
+    if (ready && credentials && project && activeTab === "webhooks") void loadWebhookJobs();
+  }, [activeTab, ready, credentials, project, params.tenantId, params.projectId]);
+
+  useEffect(() => {
     if (activeTab !== "settings") {
       setActiveSettingsSection("general");
     }
   }, [activeTab]);
 
+  useEffect(() => {
+    if (!credentials || !allowProjectManagement) {
+      setNotificationCount(0);
+      return;
+    }
+    let cancelled = false;
+    void listDiscordAllowlistRequests(credentials, params.tenantId, params.projectId)
+      .then((requests) => {
+        if (!cancelled) {
+          setNotificationCount(requests.length);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setNotificationCount(0);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [allowProjectManagement, credentials, params.projectId, params.tenantId]);
+
   async function toggleArchive() {
     if (!credentials || !project) return;
     if (!project.is_archived && archiveConfirmationName.trim() !== project.name.trim()) {
-      setStatusLine(`Enter "${project.name}" to archive this project.`);
       return;
     }
     setBusy(true);
@@ -514,7 +573,7 @@ export function TenantProjectDetailsPage() {
       });
       setProject(updated);
       setForm(buildProjectFormState(updated));
-      setStatusLine("Project details saved.");
+      setStatusLine("");
     } catch (error) {
       setStatusLine(`Unable to update project: ${(error as Error).message}`);
     } finally {
@@ -542,7 +601,7 @@ export function TenantProjectDetailsPage() {
       const payload = await getProject(credentials, params.tenantId, params.projectId);
       setProject(payload);
       setSecretRefs(payload.secret_refs ?? {});
-      setSecretsStatusLine(`Loaded ${Object.keys(payload.secret_refs ?? {}).length} project secret(s).`);
+      setSecretsStatusLine("");
     } catch (error) {
       setSecretsStatusLine(`Failed to load secrets: ${(error as Error).message}`);
     } finally {
@@ -567,7 +626,7 @@ export function TenantProjectDetailsPage() {
       });
       setProject(updated);
       setSecretRefs(updated.secret_refs ?? {});
-      setSecretsStatusLine("Project secrets saved.");
+      setSecretsStatusLine("");
       return true;
     } catch (error) {
       setSecretsStatusLine(`Save failed: ${(error as Error).message}`);
@@ -644,19 +703,32 @@ export function TenantProjectDetailsPage() {
       {/* Underline tab bar */}
       <div className="border-b overflow-x-auto">
         <nav className="-mb-px flex min-w-max gap-1" aria-label="Project sections">
-          {visibleTabs.map((tab) => (
-            <Link
-              key={tab.id}
-              href={buildProjectSectionPath(params.tenantId, params.projectId, tab.id)}
-              className={`px-4 py-2.5 text-sm font-medium transition-colors whitespace-nowrap border-b-2 ${
-                activeTab === tab.id
-                  ? "border-primary text-foreground"
-                  : "border-transparent text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              {tab.label}
-            </Link>
-          ))}
+          {visibleTabs.map((tab) => {
+            const isDanger = tab.id === "danger";
+            return (
+              <Link
+                key={tab.id}
+                href={buildProjectSectionPath(params.tenantId, params.projectId, tab.id)}
+                className={[
+                  "px-4 py-2.5 text-sm font-medium transition-colors whitespace-nowrap border-b-2",
+                  isDanger && activeTab === tab.id
+                    ? "border-red-500 text-red-600"
+                    : isDanger
+                      ? "border-transparent text-red-400 hover:border-red-300 hover:text-red-500"
+                      : activeTab === tab.id
+                        ? "border-primary text-foreground"
+                        : "border-transparent text-muted-foreground hover:text-foreground",
+                ].join(" ")}
+              >
+                <span>{tab.label}</span>
+                {tab.id === "notifications" && notificationCount > 0 ? (
+                  <span className="ml-2 inline-flex min-w-5 items-center justify-center rounded-full bg-warning px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white">
+                    {notificationCount}
+                  </span>
+                ) : null}
+              </Link>
+            );
+          })}
         </nav>
       </div>
 
@@ -725,7 +797,7 @@ export function TenantProjectDetailsPage() {
                     </div>
                   </aside>
                   <div className="space-y-5">
-                    <div className="rounded-xl border px-4 py-3">
+                    <div className="rounded-xl border bg-background px-4 py-3">
                       <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Repository</p>
                       <Link
                         className="mt-2 inline-flex items-center gap-1 text-sm text-primary hover:underline"
@@ -740,11 +812,11 @@ export function TenantProjectDetailsPage() {
                     <div className="grid gap-4 xl:grid-cols-3">
                 {canAccessTechnicalPolicy ? (
                   <>
-                    <Card className="xl:col-span-1">
-                      <CardHeader className="pb-3">
-                        <CardTitle className="text-base">Effective AI policy</CardTitle>
-                      </CardHeader>
-                      <CardContent className="space-y-3">
+                    <div className="overflow-hidden rounded-2xl border bg-background xl:col-span-1">
+                      <div className="px-6 pt-6 pb-3">
+                        <h2 className="text-base font-semibold">Effective AI policy</h2>
+                      </div>
+                      <div className="px-6 pb-6 space-y-3">
                         <div className="space-y-1">
                           <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Model</p>
                           <p className="text-sm font-medium text-foreground">
@@ -769,14 +841,14 @@ export function TenantProjectDetailsPage() {
                           </p>
                           <p className="text-sm font-medium text-foreground">{project.effective_policy.knowledge_auto_answer_mode}</p>
                         </div>
-                      </CardContent>
-                    </Card>
+                      </div>
+                    </div>
 
-                    <Card className="xl:col-span-1">
-                      <CardHeader className="pb-3">
-                        <CardTitle className="text-base">Effective automation policy</CardTitle>
-                      </CardHeader>
-                      <CardContent className="space-y-3">
+                    <div className="overflow-hidden rounded-2xl border bg-background xl:col-span-1">
+                      <div className="px-6 pt-6 pb-3">
+                        <h2 className="text-base font-semibold">Effective automation policy</h2>
+                      </div>
+                      <div className="px-6 pb-6 space-y-3">
                         <div className="grid gap-3 sm:grid-cols-2">
                           <div className="space-y-1">
                             <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">PR creation</p>
@@ -831,19 +903,19 @@ export function TenantProjectDetailsPage() {
                               : "None"}
                           </p>
                         </div>
-                      </CardContent>
-                    </Card>
+                      </div>
+                    </div>
                   </>
                 ) : null}
 
-                <Card className={canAccessTechnicalPolicy ? "xl:col-span-1" : "xl:col-span-3"}>
-                  <CardHeader className="pb-3">
+                <div className={`overflow-hidden rounded-2xl border bg-background ${canAccessTechnicalPolicy ? "xl:col-span-1" : "xl:col-span-3"}`}>
+                  <div className="px-6 pt-6 pb-3">
                     <div className="flex items-center gap-2">
                       <Library className="h-4 w-4 text-primary" />
-                      <CardTitle className="text-base">Knowledge</CardTitle>
+                      <h2 className="text-base font-semibold">Knowledge</h2>
                     </div>
-                  </CardHeader>
-                  <CardContent className="space-y-3">
+                  </div>
+                  <div className="px-6 pb-6 space-y-3">
                     <div className="grid gap-3 sm:grid-cols-2">
                       <div className="space-y-1">
                         <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Knowledge browser</p>
@@ -899,8 +971,8 @@ export function TenantProjectDetailsPage() {
                         Runtime secret references are configured separately to keep settings focused.
                       </p>
                     </div>
-                  </CardContent>
-                </Card>
+                  </div>
+                </div>
                     </div>
                   </div>
                 </div>
@@ -920,14 +992,10 @@ export function TenantProjectDetailsPage() {
           ) : null}
           {project ? (
             <>
-              <Card>
-                <CardHeader className="pb-3">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="overflow-hidden rounded-2xl border bg-background">
+                <div className="flex flex-wrap items-center justify-between gap-3 p-6 pb-3">
                     <div>
-                      <CardTitle className="text-base">Settings</CardTitle>
-                      <p className="text-sm text-muted-foreground">
-                        Project-level overrides for execution, automation, and AI behavior.
-                      </p>
+                      <h2 className="text-base font-semibold">Settings</h2>
                     </div>
                     <div className="flex items-center gap-2">
                       <Button variant="ghost" size="sm" onClick={() => void loadOptions()} disabled={busy}>
@@ -938,9 +1006,8 @@ export function TenantProjectDetailsPage() {
                         Save settings
                       </Button>
                     </div>
-                  </div>
-                </CardHeader>
-                <CardContent className="space-y-4">
+                </div>
+                <div className="px-6 pb-6 space-y-4">
                   <div className="grid gap-2 md:grid-cols-5">
                     {SETTINGS_SECTIONS.map((section) => (
                       <button
@@ -958,15 +1025,15 @@ export function TenantProjectDetailsPage() {
                       </button>
                     ))}
                   </div>
-                </CardContent>
-              </Card>
+                </div>
+              </div>
 
               {activeSettingsSection === "general" ? (
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="text-base">General</CardTitle>
-                  </CardHeader>
-                  <CardContent className="grid gap-4 md:grid-cols-3">
+                <div className="overflow-hidden rounded-2xl border bg-background">
+                  <div className="p-6 pb-3">
+                    <h2 className="text-base font-semibold">General</h2>
+                  </div>
+                  <div className="p-6 pt-0 grid gap-4 md:grid-cols-3">
                     <div className="space-y-1.5">
                       <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                         Project name
@@ -1015,16 +1082,16 @@ export function TenantProjectDetailsPage() {
                           : null}
                       </datalist>
                     </div>
-                  </CardContent>
-                </Card>
+                  </div>
+                </div>
               ) : null}
 
               {activeSettingsSection === "ai" ? (
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="text-base">AI</CardTitle>
-                  </CardHeader>
-                  <CardContent className="grid gap-4 md:grid-cols-2">
+                <div className="overflow-hidden rounded-2xl border bg-background">
+                  <div className="p-6 pb-3">
+                    <h2 className="text-base font-semibold">AI</h2>
+                  </div>
+                  <div className="p-6 pt-0 grid gap-4 md:grid-cols-2">
                     <div className="space-y-1.5 md:col-span-2">
                       <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                         Execution model override
@@ -1069,16 +1136,16 @@ export function TenantProjectDetailsPage() {
                         Effective: {project.effective_policy.codex_reasoning_effort ?? (globalCodexReasoningEffort || "medium")}
                       </p>
                     </div>
-                  </CardContent>
-                </Card>
+                  </div>
+                </div>
               ) : null}
 
               {activeSettingsSection === "automation" ? (
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="text-base">Automation</CardTitle>
-                  </CardHeader>
-                  <CardContent className="grid gap-4 md:grid-cols-2">
+                <div className="overflow-hidden rounded-2xl border bg-background">
+                  <div className="p-6 pb-3">
+                    <h2 className="text-base font-semibold">Automation</h2>
+                  </div>
+                  <div className="p-6 pt-0 grid gap-4 md:grid-cols-2">
                     <div className="space-y-1.5">
                       <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                         Jira transitions
@@ -1227,16 +1294,16 @@ export function TenantProjectDetailsPage() {
                         Effective commands: {(project.effective_policy.allowed_commands ?? []).length > 0 ? (project.effective_policy.allowed_commands ?? []).join(", ") : "none"}
                       </p>
                     </div>
-                  </CardContent>
-                </Card>
+                  </div>
+                </div>
               ) : null}
 
               {activeSettingsSection === "knowledge" ? (
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="text-base">Knowledge</CardTitle>
-                  </CardHeader>
-                  <CardContent className="grid gap-4 md:grid-cols-2">
+                <div className="overflow-hidden rounded-2xl border bg-background">
+                  <div className="p-6 pb-3">
+                    <h2 className="text-base font-semibold">Knowledge</h2>
+                  </div>
+                  <div className="p-6 pt-0 grid gap-4 md:grid-cols-2">
                     <div className="space-y-1.5">
                       <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                         Knowledge base
@@ -1266,75 +1333,32 @@ export function TenantProjectDetailsPage() {
                       </select>
                       <p className="text-xs text-muted-foreground">Effective: {project.effective_policy.knowledge_auto_answer_mode}</p>
                     </div>
-                  </CardContent>
-                </Card>
+                  </div>
+                </div>
               ) : null}
 
               {activeSettingsSection === "governance" ? (
-                <div className="space-y-4">
-                  <Card>
-                    <CardHeader>
-                      <CardTitle className="text-base">Governance</CardTitle>
-                    </CardHeader>
-                    <CardContent className="grid gap-4 md:grid-cols-2">
-                      <div className="space-y-1.5">
-                        <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                          Require AGENTS.md
-                        </label>
-                        <select
-                          className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-                          value={form.require_agents_md}
-                          onChange={(e) => setForm((prev) => ({ ...prev, require_agents_md: e.target.value as RequireAgentsValue }))}
-                          disabled={busy}
-                        >
-                          <option value="inherit">Inherit tenant setting</option>
-                          <option value="required">Require AGENTS.md</option>
-                        </select>
-                        <p className="text-xs text-muted-foreground">Effective: {project.effective_policy.require_agents_md ? "Required" : "Not required"}</p>
-                      </div>
-                    </CardContent>
-                  </Card>
-
-                  <Card className="border-red-200 bg-red-50/40">
-                    <CardHeader>
-                      <CardTitle className="text-base">Danger zone</CardTitle>
-                    </CardHeader>
-                    <CardContent className="space-y-4">
-                      <p className="text-sm text-muted-foreground">
-                        Archive this project to remove it from the active workspace while keeping it recoverable.
-                      </p>
-                      {project.is_archived ? null : (
-                        <div className="space-y-2">
-                          <p className="text-sm text-muted-foreground">
-                            Type <span className="font-medium text-foreground">{project.name}</span> to confirm.
-                          </p>
-                          <Input
-                            value={archiveConfirmationName}
-                            onChange={(event) => setArchiveConfirmationName(event.target.value)}
-                            placeholder={project.name}
-                            disabled={busy}
-                          />
-                        </div>
-                      )}
-                      <div className="flex flex-wrap items-center justify-between gap-3">
-                        <p className="text-xs text-muted-foreground">
-                          {project.is_archived
-                            ? "Unarchive to return the project to the active workspace."
-                            : "Archiving removes access from the active list immediately."}
-                        </p>
-                        <Button
-                          variant="outline"
-                          className={project.is_archived ? undefined : "border-red-300 bg-red-600 text-white hover:bg-red-700 hover:text-white"}
-                          size="sm"
-                          onClick={() => void toggleArchive()}
-                          disabled={busy || (!project.is_archived && archiveConfirmationName.trim() !== project.name.trim())}
-                        >
-                          <Archive className="mr-1.5 h-3.5 w-3.5" />
-                          {project.is_archived ? "Unarchive project" : "Archive project"}
-                        </Button>
-                      </div>
-                    </CardContent>
-                  </Card>
+                <div className="overflow-hidden rounded-2xl border bg-background">
+                  <div className="p-6 pb-3">
+                    <h2 className="text-base font-semibold">Governance</h2>
+                  </div>
+                  <div className="p-6 pt-0 grid gap-4 md:grid-cols-2">
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                        Require AGENTS.md
+                      </label>
+                      <select
+                        className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                        value={form.require_agents_md}
+                        onChange={(e) => setForm((prev) => ({ ...prev, require_agents_md: e.target.value as RequireAgentsValue }))}
+                        disabled={busy}
+                      >
+                        <option value="inherit">Inherit tenant setting</option>
+                        <option value="required">Require AGENTS.md</option>
+                      </select>
+                      <p className="text-xs text-muted-foreground">Effective: {project.effective_policy.require_agents_md ? "Required" : "Not required"}</p>
+                    </div>
+                  </div>
                 </div>
               ) : null}
             </>
@@ -1346,24 +1370,21 @@ export function TenantProjectDetailsPage() {
 
       {/* ── Runs tab ─────────────────────────────────────────────────────── */}
       {activeTab === "runs" ? (
-        <Card>
-          <CardHeader className="pb-3">
-            <div className="flex items-center justify-between gap-2">
-              <CardTitle className="text-base">Project Runs</CardTitle>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => void loadRuns()}
-                disabled={runsBusy}
-              >
-                <RefreshCw className={`h-3.5 w-3.5 ${runsBusy ? "animate-spin" : ""}`} />
-              </Button>
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {/* Filter toolbar */}
-            <div className="overflow-x-auto rounded-lg border bg-muted/30">
-              <div className="flex min-w-max flex-nowrap items-center gap-2 px-3 py-2.5 md:min-w-0 md:flex-wrap">
+        <div className="overflow-hidden rounded-2xl border bg-background">
+          <div className="flex items-center justify-between gap-2 border-b px-5 py-3">
+            <h2 className="text-sm font-semibold">Project Runs</h2>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => void loadRuns()}
+              disabled={runsBusy}
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${runsBusy ? "animate-spin" : ""}`} />
+            </Button>
+          </div>
+
+          <div className="overflow-x-auto border-b px-5 py-3">
+            <div className="flex min-w-max flex-nowrap items-center gap-2 md:min-w-0 md:flex-wrap">
               <SlidersHorizontal className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
               <Input
                 className="h-8 w-40 text-sm"
@@ -1462,112 +1483,186 @@ export function TenantProjectDetailsPage() {
               >
                 Clear
               </Button>
-              </div>
             </div>
+          </div>
 
-            {runsStatusLine ? (
-              <p className="rounded-lg border bg-muted/30 px-4 py-3 text-sm text-muted-foreground">
-                {runsStatusLine}
-              </p>
-            ) : null}
+          {runsStatusLine ? (
+            <div className="border-b px-5 py-3 text-sm text-muted-foreground">
+              {runsStatusLine}
+            </div>
+          ) : null}
 
-            {runs.length === 0 ? (
-              <p className="rounded-lg border bg-muted/30 px-4 py-8 text-center text-sm text-muted-foreground">
-                No runs found for this project.
-              </p>
-            ) : (
-              <div className="overflow-hidden rounded-lg border">
-                <Table>
-                  <TableHeader>
-                    <TableRow className="bg-muted/40">
-                      <TableHead className="pl-4">Run</TableHead>
-                      <TableHead>Issue</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead>Created</TableHead>
-                      <TableHead>PR</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {runs.map((run) => (
-                      <TableRow
-                        key={run.run_id}
-                        className={`border-l-2 ${STATUS_BORDER[run.status] ?? "border-l-transparent"}`}
+          {runs.length === 0 ? (
+            <div className="px-5 py-12 text-center text-sm text-muted-foreground">
+              No runs found for this project.
+            </div>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="pl-5">Run</TableHead>
+                  <TableHead>Issue</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Created</TableHead>
+                  <TableHead>PR</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {runs.map((run) => (
+                  <TableRow
+                    key={run.run_id}
+                    className={`border-l-2 ${STATUS_BORDER[run.status] ?? "border-l-transparent"}`}
+                  >
+                    <TableCell className="pl-5 font-medium">
+                      <Link
+                        className="text-primary hover:underline"
+                        href={buildRunDetailPath({
+                          tenantId: params.tenantId,
+                          projectId: params.projectId,
+                          runId: run.run_id,
+                        })}
                       >
-                        <TableCell className="pl-4 font-medium">
-                          <Link
-                            className="text-primary hover:underline"
-                            href={buildRunDetailPath({
-                              tenantId: params.tenantId,
-                              projectId: params.projectId,
-                              runId: run.run_id,
-                            })}
-                          >
-                            {run.issue_summary?.trim() || run.issue_key || run.run_id}
-                          </Link>
-                          <p className="text-xs text-muted-foreground font-mono">{run.run_id}</p>
-                        </TableCell>
-                        <TableCell>
-                          {run.issue_url ? (
-                            <Link
-                              className="text-primary hover:underline text-sm"
-                              href={run.issue_url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                            >
-                              {run.issue_key}
-                            </Link>
-                          ) : (
-                            <span className="text-muted-foreground">{run.issue_key ?? "—"}</span>
-                          )}
-                        </TableCell>
-                        <TableCell>
-                          <StatusBadge status={run.status} />
-                        </TableCell>
-                        <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
-                          {new Date(run.created_at).toLocaleString()}
-                        </TableCell>
-                        <TableCell>
-                          {run.pr_url ? (
-                            <Link
-                              className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
-                              href={run.pr_url}
-                              target="_blank"
-                            >
-                              PR <ExternalLink className="h-3 w-3" />
-                            </Link>
-                          ) : (
-                            <span className="text-xs text-muted-foreground">—</span>
-                          )}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
-            )}
+                        {run.issue_summary?.trim() || run.issue_key || run.run_id}
+                      </Link>
+                      <p className="text-xs text-muted-foreground font-mono">{run.run_id}</p>
+                    </TableCell>
+                    <TableCell>
+                      {run.issue_url ? (
+                        <Link
+                          className="text-primary hover:underline text-sm"
+                          href={run.issue_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          {run.issue_key}
+                        </Link>
+                      ) : (
+                        <span className="text-muted-foreground">{run.issue_key ?? "—"}</span>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      <StatusBadge status={run.status} />
+                    </TableCell>
+                    <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
+                      {formatTimestamp(run.created_at)}
+                    </TableCell>
+                    <TableCell>
+                      {run.pr_url ? (
+                        <Link
+                          className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
+                          href={run.pr_url}
+                          target="_blank"
+                        >
+                          PR <ExternalLink className="h-3 w-3" />
+                        </Link>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">—</span>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
 
-            {/* Pagination */}
-            <div className="flex items-center justify-end gap-2">
+          <div className="flex items-center justify-between border-t px-5 py-3">
+            <span className="text-xs text-muted-foreground">
+              {runs.length} run{runs.length !== 1 ? "s" : ""}
+            </span>
+            <div className="flex items-center gap-1">
               <Button
                 variant="outline"
                 size="sm"
+                className="h-7 text-xs"
                 onClick={() => setRunPage((prev) => Math.max(1, prev - 1))}
                 disabled={runsBusy || runPage <= 1}
               >
-                ← Prev
+                Prev
               </Button>
-              <span className="text-sm text-muted-foreground">Page {runPage}</span>
+              <span className="px-2 text-xs text-muted-foreground">Page {runPage}</span>
               <Button
                 variant="outline"
                 size="sm"
+                className="h-7 text-xs"
                 onClick={() => setRunPage((prev) => prev + 1)}
                 disabled={runsBusy || runs.length < runPageSize}
               >
-                Next →
+                Next
               </Button>
             </div>
-          </CardContent>
-        </Card>
+          </div>
+        </div>
+      ) : null}
+
+      {/* ── Webhooks tab ───────────────────────────────────────────────────── */}
+      {activeTab === "webhooks" ? (
+        <div className="space-y-4">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            {[
+              { label: "Pending", value: webhookSummary?.pending_count ?? 0 },
+              { label: "Processing", value: webhookSummary?.processing_count ?? 0 },
+              { label: "Failed", value: webhookSummary?.failed_count ?? 0 },
+              { label: "Done", value: webhookSummary?.done_count ?? 0 },
+            ].map((kpi) => (
+              <div key={kpi.label} className="rounded-xl border bg-background px-4 py-3">
+                <p className="text-xs text-muted-foreground">{kpi.label}</p>
+                <p className="mt-0.5 text-xl font-semibold">{kpi.value}</p>
+              </div>
+            ))}
+          </div>
+
+          {webhookStatusLine ? (
+            <div className="rounded-xl border px-4 py-3 text-sm text-muted-foreground">{webhookStatusLine}</div>
+          ) : null}
+
+          <div className="overflow-hidden rounded-2xl border bg-background">
+            <div className="flex items-center justify-between border-b px-5 py-3">
+              <h2 className="text-sm font-semibold">Webhook Queue</h2>
+              <Button variant="ghost" size="sm" onClick={() => void loadWebhookJobs()} disabled={webhookBusy}>
+                <RefreshCw className={`h-3.5 w-3.5 ${webhookBusy ? "animate-spin" : ""}`} />
+              </Button>
+            </div>
+
+            {webhookJobs.length === 0 ? (
+              <div className="px-5 py-12 text-center text-sm text-muted-foreground">
+                No webhook jobs found for this project.
+              </div>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="pl-5">Status</TableHead>
+                    <TableHead>Transport</TableHead>
+                    <TableHead>Subject</TableHead>
+                    <TableHead>Owner</TableHead>
+                    <TableHead>Attempts</TableHead>
+                    <TableHead>Last Error</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {webhookJobs.map((job) => (
+                    <TableRow key={job.job_id}>
+                      <TableCell className="pl-5">
+                        <StatusBadge status={job.status} />
+                      </TableCell>
+                      <TableCell className="font-mono text-xs">{job.transport}</TableCell>
+                      <TableCell className="max-w-[280px] truncate font-mono text-xs" title={job.subject_key}>
+                        {job.subject_key}
+                      </TableCell>
+                      <TableCell className="max-w-[220px] truncate font-mono text-xs" title={job.owner_id ?? ""}>
+                        {job.owner_id ?? "—"}
+                      </TableCell>
+                      <TableCell className="text-xs">{job.attempt_count}</TableCell>
+                      <TableCell className="max-w-[300px] truncate text-xs text-muted-foreground" title={job.last_error ?? ""}>
+                        {job.last_error ?? "—"}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </div>
+        </div>
       ) : null}
 
       {/* ── Notifications tab ────────────────────────────────────────────── */}
@@ -1576,6 +1671,7 @@ export function TenantProjectDetailsPage() {
           tenantId={params.tenantId}
           projectId={params.projectId}
           credentials={credentials}
+          onAllowlistRequestsChange={(requests) => setNotificationCount(requests.length)}
         />
       ) : null}
 
@@ -1587,22 +1683,107 @@ export function TenantProjectDetailsPage() {
         />
       ) : null}
 
+      {/* ── Danger tab ───────────────────────────────────────────────────── */}
+      {activeTab === "danger" && project ? (
+        <div className="space-y-6">
+          <div className="overflow-hidden rounded-2xl border bg-background">
+            <div className="px-6 pt-6">
+              <h2 className="text-base font-semibold">Danger zone</h2>
+            </div>
+            <div className="divide-y">
+              <div className="flex flex-wrap items-center justify-between gap-4 px-6 py-5">
+                <div className="space-y-0.5">
+                  <p className="text-sm font-medium">
+                    {project.is_archived ? "Unarchive this project" : "Archive this project"}
+                  </p>
+                  <p className="text-sm text-muted-foreground">
+                    {project.is_archived
+                      ? "Restore this project to the active workspace."
+                      : "Archiving removes the project from the active list immediately. It can be restored later."}
+                  </p>
+                </div>
+                <Button
+                  variant="outline"
+                  className={
+                    project.is_archived
+                      ? undefined
+                      : "border-red-300 text-red-600 hover:bg-red-50 hover:text-red-700"
+                  }
+                  onClick={() => {
+                    if (!project.is_archived) {
+                      setShowArchiveConfirm(true);
+                      setArchiveConfirmationName("");
+                    } else {
+                      void toggleArchive();
+                    }
+                  }}
+                  disabled={busy}
+                >
+                  <Archive className="mr-1.5 h-3.5 w-3.5" />
+                  {project.is_archived ? "Unarchive project" : "Archive project…"}
+                </Button>
+              </div>
+            </div>
+          </div>
+
+          {showArchiveConfirm ? (
+            <div className="fixed inset-0 z-50 flex items-center justify-center">
+              <div
+                className="fixed inset-0 bg-black/50"
+                onClick={() => setShowArchiveConfirm(false)}
+              />
+              <div className="relative mx-4 w-full max-w-md rounded-2xl border bg-background p-6 shadow-lg">
+                <h3 className="text-lg font-semibold">Archive project</h3>
+                <p className="mt-2 text-sm text-muted-foreground">
+                  This will remove <span className="font-medium text-foreground">{project.name}</span> from the
+                  active workspace immediately.
+                </p>
+                <div className="mt-4 space-y-2">
+                  <p className="text-sm">
+                    To confirm, type <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-sm">{project.name}</span> below.
+                  </p>
+                  <Input
+                    value={archiveConfirmationName}
+                    onChange={(event) => setArchiveConfirmationName(event.target.value)}
+                    placeholder={project.name}
+                    autoFocus
+                    disabled={busy}
+                  />
+                </div>
+                <div className="mt-6 flex justify-end gap-3">
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setShowArchiveConfirm(false);
+                      setArchiveConfirmationName("");
+                    }}
+                    disabled={busy}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    className="border-red-300 bg-red-600 text-white hover:bg-red-700 hover:text-white"
+                    onClick={() => {
+                      void toggleArchive().then(() => setShowArchiveConfirm(false));
+                    }}
+                    disabled={
+                      busy ||
+                      archiveConfirmationName.trim() !== project.name.trim()
+                    }
+                  >
+                    {busy ? "Archiving…" : "Archive project"}
+                  </Button>
+                </div>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
       {/* ── Secrets tab ──────────────────────────────────────────────────── */}
       {activeTab === "secrets" ? (
         <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10">
-                <KeyRound className="h-5 w-5 text-primary" />
-              </div>
-              <div>
-                <h2 className="text-base font-semibold">Project Secrets</h2>
-                <p className="text-sm text-muted-foreground">
-                  Stored as project-scoped managed secrets under{" "}
-                  <code className="rounded bg-muted px-1 font-mono text-xs">{projectSecretPrefix}{"{KEY}"}</code>.
-                </p>
-              </div>
-            </div>
+          <div className="flex items-center justify-end">
             <Button variant="outline" size="sm" onClick={() => void refreshSecrets()} disabled={secretsBusy}>
               <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${secretsBusy ? "animate-spin" : ""}`} />
               Refresh
@@ -1613,21 +1794,16 @@ export function TenantProjectDetailsPage() {
             <p className="rounded-lg border bg-muted/40 px-4 py-2.5 text-sm text-muted-foreground">{secretsStatusLine}</p>
           ) : null}
 
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base">{editingSecretKey ? "Edit Secret" : "Add Secret"}</CardTitle>
+          <div className="overflow-hidden rounded-2xl border bg-background">
+            <div className="p-6 pb-3">
+              <h2 className="text-base font-semibold">{editingSecretKey ? "Edit Secret" : "Add Secret"}</h2>
               {editingSecretKey ? (
-                <p className="text-sm text-warning">
-                  Editing <code className="rounded bg-muted px-1 font-mono text-xs">{editingSecretKey}</code>. The
-                  existing value is never shown.
+                <p className="mt-1 text-sm text-warning">
+                  Editing <code className="rounded bg-muted px-1 font-mono text-xs">{editingSecretKey}</code>.
                 </p>
-              ) : (
-                <p className="text-sm text-muted-foreground">
-                  Enter a key and value. Values are encrypted and stored as managed project refs.
-                </p>
-              )}
-            </CardHeader>
-            <CardContent className="space-y-4">
+              ) : null}
+            </div>
+            <div className="px-6 pb-6 space-y-4">
               <div className="grid gap-4 md:grid-cols-2">
                 <div className="space-y-1.5">
                   <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
@@ -1666,21 +1842,19 @@ export function TenantProjectDetailsPage() {
                   </Button>
                 ) : null}
               </div>
-            </CardContent>
-          </Card>
+            </div>
+          </div>
 
-          <Card>
-            <CardHeader className="pb-3">
-              <div className="flex items-center justify-between gap-2">
-                <CardTitle className="text-base">Stored Secrets</CardTitle>
+          <div className="overflow-hidden rounded-2xl border bg-background">
+            <div className="flex items-center justify-between gap-2 p-6 pb-3">
+                <h2 className="text-base font-semibold">Stored Secrets</h2>
                 {Object.keys(secretRefs).length > 0 ? (
                   <Badge variant="outline" className="text-xs">
                     {Object.keys(secretRefs).length} secret{Object.keys(secretRefs).length !== 1 ? "s" : ""}
                   </Badge>
                 ) : null}
-              </div>
-            </CardHeader>
-            <CardContent className="p-0">
+            </div>
+            <div>
             {Object.keys(secretRefs).length === 0 ? (
               <div className="flex flex-col items-center justify-center gap-2 py-10 text-center">
                 <KeyRound className="h-6 w-6 text-muted-foreground" />
@@ -1738,8 +1912,8 @@ export function TenantProjectDetailsPage() {
                 </TableBody>
               </Table>
             )}
-            </CardContent>
-          </Card>
+            </div>
+          </div>
         </div>
       ) : null}
     </div>

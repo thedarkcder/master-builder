@@ -16,10 +16,6 @@ export default function TenantProfileLayout({ children }: { children: React.Reac
 
   return (
     <div className="space-y-0">
-      <div className="mb-1">
-        <h1 className="text-xl font-semibold">Profile</h1>
-        <p className="text-sm text-muted-foreground">Manage your identity, workspace preferences, and account security.</p>
-      </div>
       <div className="overflow-x-auto border-b">
         <nav className="-mb-px flex min-w-max gap-0" aria-label="Profile tabs">
           {tabs.map((tab) => {

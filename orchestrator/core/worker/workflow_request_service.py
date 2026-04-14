@@ -2,15 +2,20 @@ from __future__ import annotations
 
 import logging
 
+from sqlalchemy import select
+
 from orchestrator.core.guardrails import enforce_safe_command
 from orchestrator.core.platform_secret_service import resolve_platform_secret_ref
-from orchestrator.core.run_human_input_service import answered_human_inputs_for_request
+from orchestrator.core.run_human_input_service import answered_human_inputs_for_attempt
 from orchestrator.core.tenant_secret_service import resolve_scoped_secret_ref
+from orchestrator.core.workflow.checkpoints import checkpoint_kind_for_stage
+from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot, load_parsed_trigger_context_from_plan
+from orchestrator.core.workflow.trigger_context import GithubPrRemediationTriggerContext
 from orchestrator.core.worker_workspace import resolve_worker_workspace_key
 from orchestrator.core.worker.queue_selector import coerce_positive_int
-from orchestrator.core.worker_capabilities import parse_worker_capabilities
+from orchestrator.core.worker_capabilities import resolve_worker_capability_context
 from orchestrator.core.workflow.runner import WorkflowRequest
-from orchestrator.storage.models import Project, Run, Tenant
+from orchestrator.storage.models import Project, Run, Tenant, WorkflowCheckpoint
 from orchestrator.tools.github_app import github_client_from_tenant_config
 from orchestrator.tools.project_repo_checkout import (
     ProjectRepoCheckoutError,
@@ -57,11 +62,26 @@ def build_workflow_request_for_run(
     else:
         issue_description = issue_description.strip()
     trigger_context = _extract_trigger_context(getattr(run, "plan", None))
+    parsed_trigger_context = load_parsed_trigger_context_from_plan(getattr(run, "plan", None))
+    entry_mode = str(getattr(run, "entry_mode", "fresh") or "fresh").strip().lower() or "fresh"
+    entry_stage = str(getattr(run, "entry_stage", "") or "").strip().lower() or None
+    checkpoint = _entry_checkpoint(session=session, run=run)
+    checkpoint_payload = dict(checkpoint.payload_json) if checkpoint is not None else None
+    if checkpoint_payload is not None and ExecutionSnapshot.load(checkpoint_payload) is None:
+        logger.warning(
+            "Resume checkpoint payload is not a supported execution snapshot shape; "
+            "executor will handle resume failure safely "
+            "(workflow_id=%s, run_id=%s, checkpoint_id=%s)",
+            run.workflow_id,
+            run.run_id,
+            checkpoint.checkpoint_id if checkpoint is not None else None,
+        )
+        checkpoint_payload = None
     project_environment = getattr(project, "environment", {}) if project is not None else {}
     default_branch = project_environment.get("default_branch") if isinstance(project_environment, dict) else None
-    remediation_base_branch = _extract_remediation_base_ref(trigger_context)
+    remediation_base_branch = _extract_remediation_base_ref(parsed_trigger_context)
     base_branch = remediation_base_branch or _normalize_branch(default_branch) or "main"
-    remediation_head_branch = _extract_remediation_head_ref(trigger_context)
+    remediation_head_branch = _extract_remediation_head_ref(parsed_trigger_context)
     integration_branch = _resolve_integration_branch(
         session=session,
         settings=settings,
@@ -79,29 +99,30 @@ def build_workflow_request_for_run(
         base_branch=base_branch,
         integration_branch=integration_branch,
     )
-    available_worker_capabilities = sorted(
-        parse_worker_capabilities(getattr(settings, "worker_capabilities", ""))
+    capability_context = resolve_worker_capability_context(
+        raw_value=getattr(settings, "worker_capabilities", ""),
+        source="ORCHESTRATOR_WORKER_CAPABILITIES",
     )
-    current_worker_capability = available_worker_capabilities[0] if available_worker_capabilities else "linux"
-    pr_number = _extract_pr_number(trigger_context)
-    resume_mode = _extract_resume_mode(trigger_context)
-    resume_stage = _extract_resume_stage(trigger_context)
-    resume_session_id = _extract_resume_session_id(trigger_context)
-    resume_source_plan = _extract_resume_source_plan(trigger_context)
-    human_input_request_ids = _extract_human_input_request_ids(trigger_context)
-    human_inputs = answered_human_inputs_for_request(
+    pr_number = _extract_pr_number(
+        parsed_trigger_context=parsed_trigger_context,
+        trigger_context=trigger_context,
+    )
+    human_inputs = answered_human_inputs_for_attempt(
         session=session,
         settings=settings,
-        request_ids=human_input_request_ids,
-    ) if human_input_request_ids else []
+        workflow_id=run.workflow_id,
+        consumed_by_run_id=run.run_id,
+    )
 
     return WorkflowRequest(
         tenant_id=tenant.tenant_id,
+        workflow_id=run.workflow_id,
         project_id=project.project_id if project is not None else run.project_id,
         project_name=project.name if project is not None else None,
         github_repository=project.github_repository if project is not None else None,
         jira_project_key=project.jira_project_key if project is not None else None,
         run_id=run.run_id,
+        attempt_number=int(getattr(run, "attempt_number", 1) or 1),
         issue_key=run.issue_key,
         issue_summary=run.issue_summary or f"Execute {run.issue_key}",
         issue_description=issue_description,
@@ -110,8 +131,8 @@ def build_workflow_request_for_run(
         suggested_test_commands=suggested_test_commands,
         execution_repo_dir=execution_repo_dir,
         workspace_key=workspace_key,
-        current_worker_capability=current_worker_capability,
-        available_worker_capabilities=available_worker_capabilities,
+        current_worker_capability=capability_context.current,
+        available_worker_capabilities=capability_context.available,
         base_branch=base_branch,
         integration_branch=integration_branch,
         pr_target_branch=base_branch,
@@ -120,10 +141,16 @@ def build_workflow_request_for_run(
         start_point_sha=start_point_sha,
         pr_number=pr_number,
         trigger_context=trigger_context,
-        resume_mode=resume_mode,
-        resume_stage=resume_stage,
-        resume_session_id=resume_session_id,
-        resume_source_plan=resume_source_plan,
+        entry_mode=entry_mode,
+        entry_stage=entry_stage,
+        checkpoint_kind=(
+            checkpoint.checkpoint_kind
+            if checkpoint is not None
+            else (checkpoint_kind_for_stage(entry_stage) if entry_mode == "resume" and entry_stage else None)
+        ),
+        checkpoint_id=checkpoint.checkpoint_id if checkpoint is not None else None,
+        checkpoint_payload=checkpoint_payload,
+        checkpoint_session_id=checkpoint.codex_session_id if checkpoint is not None else None,
         human_inputs=human_inputs,
     )
 
@@ -295,15 +322,22 @@ def _repo_full_name(repository_url: str) -> str | None:
 
 
 def _extract_trigger_context(plan: object) -> dict | None:
-    if not isinstance(plan, dict):
+    if plan is None or (isinstance(plan, dict) and not plan):
         return None
-    trigger_context = plan.get("trigger_context")
-    if isinstance(trigger_context, dict):
-        return trigger_context
-    return None
+    snapshot = ExecutionSnapshot.load(plan)
+    if snapshot is None:
+        raise ValueError("Unsupported execution snapshot version/shape")
+    trigger_context = snapshot.trigger_context()
+    return trigger_context or None
 
 
-def _extract_pr_number(trigger_context: dict | None) -> int | None:
+def _extract_pr_number(
+    *,
+    parsed_trigger_context: object,
+    trigger_context: dict | None,
+) -> int | None:
+    if isinstance(parsed_trigger_context, GithubPrRemediationTriggerContext):
+        return parsed_trigger_context.pr_number
     if not isinstance(trigger_context, dict):
         return None
     value = trigger_context.get("pr_number")
@@ -312,58 +346,36 @@ def _extract_pr_number(trigger_context: dict | None) -> int | None:
     return None
 
 
-def _extract_remediation_head_ref(trigger_context: dict | None) -> str | None:
-    if not isinstance(trigger_context, dict):
+def _extract_remediation_head_ref(parsed_trigger_context: object) -> str | None:
+    if not isinstance(parsed_trigger_context, GithubPrRemediationTriggerContext):
         return None
-    source = str(trigger_context.get("source") or "").strip().lower()
-    if source != "github_pr_review_feedback":
+    return _normalize_branch(parsed_trigger_context.head_ref)
+
+
+def _extract_remediation_base_ref(parsed_trigger_context: object) -> str | None:
+    if not isinstance(parsed_trigger_context, GithubPrRemediationTriggerContext):
         return None
-    return _normalize_branch(trigger_context.get("head_ref"))
+    return _normalize_branch(parsed_trigger_context.base_ref)
 
 
-def _extract_remediation_base_ref(trigger_context: dict | None) -> str | None:
-    if not isinstance(trigger_context, dict):
+def _entry_checkpoint(*, session, run: Run) -> WorkflowCheckpoint | None:  # noqa: ANN001
+    checkpoint_id = str(getattr(run, "entry_checkpoint_id", "") or "").strip()
+    if checkpoint_id:
+        checkpoint = session.get(WorkflowCheckpoint, checkpoint_id)
+        if checkpoint is not None:
+            return checkpoint
+    if str(getattr(run, "entry_mode", "fresh") or "fresh").strip().lower() != "resume":
         return None
-    source = str(trigger_context.get("source") or "").strip().lower()
-    if source != "github_pr_review_feedback":
+    entry_stage = str(getattr(run, "entry_stage", "") or "").strip().lower() or None
+    if not entry_stage:
         return None
-    return _normalize_branch(trigger_context.get("base_ref"))
-
-
-def _extract_resume_mode(trigger_context: dict | None) -> str | None:
-    if not isinstance(trigger_context, dict):
-        return None
-    value = str(trigger_context.get("rerun_mode") or "").strip().lower()
-    return value if value in {"fresh", "resume"} else None
-
-
-def _extract_resume_stage(trigger_context: dict | None) -> str | None:
-    if not isinstance(trigger_context, dict):
-        return None
-    value = str(trigger_context.get("resume_stage") or "").strip().lower()
-    return value if value in {"orchestrated", "pm", "dev", "review"} else None
-
-
-def _extract_resume_session_id(trigger_context: dict | None) -> str | None:
-    if not isinstance(trigger_context, dict):
-        return None
-    value = str(trigger_context.get("resume_session_id") or "").strip()
-    return value or None
-
-
-def _extract_resume_source_plan(trigger_context: dict | None) -> dict | None:
-    if not isinstance(trigger_context, dict):
-        return None
-    value = trigger_context.get("resume_source_plan")
-    if not isinstance(value, dict):
-        return None
-    return value
-
-
-def _extract_human_input_request_ids(trigger_context: dict | None) -> list[str]:
-    if not isinstance(trigger_context, dict):
-        return []
-    value = trigger_context.get("human_input_request_ids")
-    if not isinstance(value, list):
-        return []
-    return [str(item or "").strip() for item in value if str(item or "").strip()]
+    checkpoint_kind = checkpoint_kind_for_stage(entry_stage)
+    return session.execute(
+        select(WorkflowCheckpoint)
+        .where(
+            WorkflowCheckpoint.workflow_id == run.workflow_id,
+            WorkflowCheckpoint.checkpoint_kind == checkpoint_kind,
+        )
+        .order_by(WorkflowCheckpoint.created_at.desc())
+        .limit(1)
+    ).scalar_one_or_none()

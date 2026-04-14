@@ -489,6 +489,40 @@ def test_seed_parent_issues_rejects_incomplete_pm_status_before_jira_write() -> 
     assert create_issue_mock.call_count == 0
 
 
+def test_seed_parent_issues_blocks_when_stage_spi_not_ready() -> None:
+    tenant = SimpleNamespace(tenant_id="tenant-a")
+
+    with __import__("pytest").raises(HTTPException) as exc_ctx:
+        seed_parent_issues_with_codex(
+            session=MagicMock(),
+            tenant=tenant,
+            prompt_markdown="pm batch",
+            scoped_project_id="project-a",
+            force_issue_keys=None,
+            allow_create=True,
+            scoped_project_keys=["GP"],
+            codex_working_dir="/tmp",
+            tenant_project_keys_fn=lambda **_kwargs: ["GP"],
+            get_settings_fn=lambda: SimpleNamespace(stage_spi_enabled=True),
+            build_codex_runtime_fn=lambda **_kwargs: (_ for _ in ()).throw(AssertionError("should not build runtime")),
+            plan_pm_parent_issues_with_codex_fn=lambda **_kwargs: (_ for _ in ()).throw(AssertionError("should not plan")),
+            codex_runtime_error_type=RuntimeError,
+            issue_key_pattern=__import__("re").compile(r"^[A-Z]+-\d+$"),
+            tenant_jira_oauth_context_fn=lambda **_kwargs: {},
+            select_seed_match_fn=lambda **_kwargs: None,
+            pm_status="ready_to_write",
+            pm_interview_notes_json={
+                "stage_spi": {
+                    "stage_ready_for_implementation": False,
+                    "stage_status": "stage_review_pending",
+                }
+            },
+        )
+
+    assert exc_ctx.value.status_code == 409
+    assert "Stage plugin has not approved" in str(exc_ctx.value.detail)
+
+
 def test_seed_issues_blocks_children_until_planning_completes_and_keeps_parent_pm_complete() -> None:
     tenant = SimpleNamespace(tenant_id="tenant-a")
     created: list = []

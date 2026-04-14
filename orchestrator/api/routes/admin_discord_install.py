@@ -9,7 +9,10 @@ from sqlalchemy.orm import Session
 
 from orchestrator.api.dependencies import get_session
 from orchestrator.api.schemas import DiscordInstallStart
+from orchestrator.api.admin.route_helpers import reconcile_tenant_projects
 from orchestrator.core.config import get_settings
+from orchestrator.core.discord.commands_sync import sync_discord_guild_commands
+from orchestrator.core.discord.oauth_config import resolve_discord_oauth_config
 from orchestrator.core.discord_install_state import (
     create_discord_install_state_token,
     parse_discord_install_state_token,
@@ -42,7 +45,8 @@ def start_discord_install(
     else:
         require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_WORKSPACE_MANAGE)
 
-    client_id = settings.discord_oauth_client_id.strip()
+    oauth_config = resolve_discord_oauth_config(session=session, settings=settings)
+    client_id = oauth_config.client_id
     if not client_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Discord application client id is not configured")
 
@@ -74,9 +78,11 @@ def start_discord_install(
 @router.get("/discord/install/callback", include_in_schema=False)
 def discord_install_callback(
     state_token: str = Query(..., alias="state"),
-    guild_id: str = Query(..., min_length=1),
+    guild_id: str | None = Query(default=None),
     code: str | None = Query(default=None),
     permissions: str | None = Query(default=None),
+    error: str | None = Query(default=None),
+    error_description: str | None = Query(default=None),
     session: Session = Depends(get_session),
 ) -> RedirectResponse:
     settings = get_settings()
@@ -89,8 +95,28 @@ def discord_install_callback(
     if tenant is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
 
+    normalized_guild_id = str(guild_id or "").strip()
+    normalized_error = str(error or "").strip()
+    if normalized_error or not normalized_guild_id:
+        install_status = "cancelled" if normalized_error == "access_denied" else "failed"
+        query_params: dict[str, str] = {"discord_install": install_status}
+        if normalized_error:
+            query_params["discord_error"] = normalized_error
+        normalized_error_description = str(error_description or "").strip()
+        if normalized_error_description:
+            query_params["discord_error_description"] = normalized_error_description
+        if state.return_to == "wizard":
+            query_params["tenant_id"] = tenant.tenant_id
+            redirect_url = f"{settings.admin_ui_base_url.rstrip('/')}/tenants/new/discord?{urlencode(query_params)}"
+        else:
+            redirect_url = (
+                f"{settings.admin_ui_base_url.rstrip('/')}/{quote(tenant.tenant_id, safe='')}/settings/discord"
+                f"?{urlencode(query_params)}"
+            )
+        return RedirectResponse(url=redirect_url, status_code=status.HTTP_302_FOUND)
+
     discord_config = dict(tenant.discord_config or {})
-    discord_config["guild_id"] = guild_id.strip()
+    discord_config["guild_id"] = normalized_guild_id
     discord_config["installed_at"] = datetime.now(timezone.utc).isoformat()
     discord_config["installation_code_received"] = bool(code)
     if permissions:
@@ -99,7 +125,11 @@ def discord_install_callback(
         discord_config["installer_user_id"] = state.installer_user_id
     tenant.discord_config = discord_config
     tenant.updated_at = datetime.now(timezone.utc)
+    reconcile_tenant_projects(session, tenant=tenant)
     session.commit()
+    # Successful installs should refresh guild commands immediately instead of waiting
+    # for an API restart or a manual sync action.
+    sync_discord_guild_commands(settings=settings, session=session)
 
     if state.return_to == "wizard":
         redirect_url = (
@@ -108,7 +138,7 @@ def discord_install_callback(
         )
     else:
         redirect_url = (
-            f"{settings.admin_ui_base_url.rstrip('/')}/tenants/{quote(tenant.tenant_id, safe='')}/settings/discord"
+            f"{settings.admin_ui_base_url.rstrip('/')}/{quote(tenant.tenant_id, safe='')}/settings/discord"
             "?discord_install=success"
         )
     return RedirectResponse(url=redirect_url, status_code=status.HTTP_302_FOUND)

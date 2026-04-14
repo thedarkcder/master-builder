@@ -11,6 +11,7 @@ const tabs = [
   { label: "Configuration", section: "config" },
   { label: "Health", section: "health" },
   { label: "Notifications", section: "notifications" },
+  { label: "Danger", section: "danger" },
 ];
 
 export default function SettingsLayout({ children }: { children: React.ReactNode }) {
@@ -20,24 +21,25 @@ export default function SettingsLayout({ children }: { children: React.ReactNode
 
   return (
     <div className="space-y-0">
-      <div className="mb-1">
-        <h1 className="text-xl font-semibold">Settings</h1>
-        <p className="text-sm text-muted-foreground">Configure integrations, policies, and workspace options.</p>
-      </div>
       <div className="overflow-x-auto border-b">
         <nav className="-mb-px flex min-w-max gap-0" aria-label="Settings tabs">
           {tabs.map((tab) => {
             const href = `/${encodeURIComponent(tenantId)}/settings/${tab.section}`;
             const active = pathname === href || pathname.startsWith(`${href}/`);
+            const isDanger = tab.section === "danger";
             return (
               <Link
                 key={tab.section}
                 href={href}
                 className={[
                   "inline-flex items-center border-b-2 px-4 py-2.5 text-sm font-medium whitespace-nowrap transition-colors",
-                  active
-                    ? "border-primary text-foreground"
-                    : "border-transparent text-muted-foreground hover:border-border hover:text-foreground",
+                  isDanger && active
+                    ? "border-red-500 text-red-600"
+                    : isDanger
+                      ? "border-transparent text-red-400 hover:border-red-300 hover:text-red-500"
+                      : active
+                        ? "border-primary text-foreground"
+                        : "border-transparent text-muted-foreground hover:border-border hover:text-foreground",
                 ].join(" ")}
               >
                 {tab.label}

@@ -20,11 +20,15 @@ from orchestrator.api.admin.runs_service import (
     list_run_events as list_run_events_impl,
     list_run_log_events as list_run_log_events_impl,
     list_runs as list_runs_impl,
-    rerun_run as rerun_run_impl,
 )
-from orchestrator.api.admin.schema_mappers import run_to_schema
+from orchestrator.api.admin.schema_mappers import run_to_schema, workflow_to_schema
+from orchestrator.api.admin.workflows_service import (
+    create_workflow_attempt as create_workflow_attempt_impl,
+    get_workflow as get_workflow_impl,
+    list_workflows as list_workflows_impl,
+)
 from orchestrator.api.dependencies import get_session
-from orchestrator.api.schemas import RunEventRead, RunLogEventRead, RunRead, RunRerunRequest
+from orchestrator.api.schemas import RunEventRead, RunLogEventRead, RunRead, WorkflowAttemptCreateRequest, WorkflowRead
 from orchestrator.core.config import get_settings
 from orchestrator.core.jira_links import tenant_jira_issue_url
 from orchestrator.core.security import (
@@ -33,8 +37,7 @@ from orchestrator.core.security import (
     require_authenticated_principal,
     require_tenant_workspace_access,
 )
-from orchestrator.core.worker.run_lifecycle import resolve_project_for_run
-from orchestrator.storage.models import Run, Tenant
+from orchestrator.storage.models import Run, Tenant, WorkflowExecution
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -104,22 +107,69 @@ def get_run(
     )
 
 
-@router.post("/runs/{run_id}/rerun", response_model=RunRead, status_code=status.HTTP_201_CREATED)
-def rerun_failed_run(
-    run_id: str,
-    payload: RunRerunRequest | None = None,
+@router.get("/workflows", response_model=list[WorkflowRead])
+def list_workflows(
+    tenant_id: str | None = Query(default=None),
+    project_id: str | None = Query(default=None),
+    status_filter: str | None = Query(default=None, alias="status"),
+    issue_query: str | None = Query(default=None, alias="issue"),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> list[WorkflowRead]:
+    if not principal.is_platform_super_admin:
+        if not tenant_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="tenant_id is required for tenant-scoped workflow listing",
+            )
+        require_tenant_workspace_access(principal=principal, tenant_id=tenant_id)
+    return list_workflows_impl(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        status_filter=status_filter,
+        issue_query=issue_query,
+        limit=limit,
+        offset=offset,
+        workflow_to_schema_fn=workflow_to_schema,
+        run_to_schema_fn=run_to_schema,
+    )
+
+
+@router.get("/workflows/{workflow_id}", response_model=WorkflowRead)
+def get_workflow(
+    workflow_id: str,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> WorkflowRead:
+    if not principal.is_platform_super_admin:
+        workflow = session.get(WorkflowExecution, workflow_id)
+        if workflow is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow not found")
+        require_tenant_workspace_access(principal=principal, tenant_id=workflow.tenant_id)
+    return get_workflow_impl(
+        session=session,
+        workflow_id=workflow_id,
+        workflow_to_schema_fn=workflow_to_schema,
+        run_to_schema_fn=run_to_schema,
+    )
+
+
+@router.post("/workflows/{workflow_id}/attempts", response_model=RunRead, status_code=status.HTTP_201_CREATED)
+def create_workflow_attempt(
+    workflow_id: str,
+    payload: WorkflowAttemptCreateRequest,
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> RunRead:
-    rerun_request = payload or RunRerunRequest()
-    return rerun_run_impl(
+    return create_workflow_attempt_impl(
         session=session,
-        run_id=run_id,
-        mode=rerun_request.mode,
-        resume_stage=rerun_request.resume_stage,
-        run_model=Run,
+        workflow_id=workflow_id,
+        mode=payload.mode,
+        checkpoint_kind=payload.checkpoint_kind,
         tenant_model=Tenant,
-        resolve_project_for_run_fn=resolve_project_for_run,
         run_to_schema_fn=run_to_schema,
     )
 
@@ -133,6 +183,7 @@ def cancel_run(
     return cancel_run_admin_impl(
         session=session,
         run_id=run_id,
+        run_model=Run,
         run_to_schema_fn=run_to_schema,
         cancelled_by="admin",
     )

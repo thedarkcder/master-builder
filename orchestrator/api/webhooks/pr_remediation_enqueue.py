@@ -1,7 +1,12 @@
 from __future__ import annotations
 
-from orchestrator.core.decision_engine import resolve_enqueue_precheck_outcome
-from orchestrator.core.runs import RUN_DEDUPE_SCOPE_PR_REMEDIATION, RunBootstrap, enqueue_run
+from orchestrator.core.runs import (
+    RUN_DEDUPE_SCOPE_PR_REMEDIATION,
+    RunBootstrap,
+    enqueue_run,
+    resolve_enqueue_precheck_outcome,
+)
+from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 
 
 def _build_manual_fix_trigger_context(
@@ -35,6 +40,12 @@ def _build_manual_fix_trigger_context(
         "requested_comment": requested_comment,
         "code_context": code_context,
     }
+
+
+def _bootstrap_plan_for_pr_remediation(*, trigger_context: dict[str, object]) -> dict[str, object]:
+    snapshot = ExecutionSnapshot.empty(trigger_context=trigger_context)
+    snapshot.context.execution_context["orchestration_mode"] = "orchestrated_subagents"
+    return snapshot.dump()
 
 
 def enqueue_pr_remediation_run(
@@ -157,10 +168,7 @@ def enqueue_pr_remediation_run(
         bootstrap=RunBootstrap(
             branch=str(details.head_ref or "").strip() or None,
             pr_url=str(details.html_url or "").strip() or None,
-            plan={
-                "trigger_context": trigger_context,
-                "orchestration_mode": "orchestrated_subagents",
-            },
+            plan=_bootstrap_plan_for_pr_remediation(trigger_context=trigger_context),
         ),
     )
     return enqueue_result

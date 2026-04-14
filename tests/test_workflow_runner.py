@@ -14,7 +14,7 @@ class _ExecuteOnlyAgents:
         if self.fail:
             raise RuntimeError("boom")
         return WorkflowResult(
-            succeeded=True,
+            outcome="success",
             plan=PmPlan(
                 plan_steps=["one-shot run"],
                 acceptance_criteria=["open validated PR"],
@@ -43,7 +43,7 @@ class WorkflowRunnerTests(unittest.TestCase):
         agents = _ExecuteOnlyAgents()
         result = WorkflowRunner(agents).run(self._request())
 
-        self.assertTrue(result.succeeded)
+        self.assertEqual(result.outcome, "success")
         self.assertEqual(agents.calls, 1)
         self.assertEqual(result.attempts, 1)
         self.assertIn("workflow completed", result.summary)
@@ -54,7 +54,7 @@ class WorkflowRunnerTests(unittest.TestCase):
         agents = _ExecuteOnlyAgents(fail=True)
         result = WorkflowRunner(agents).run(self._request())
 
-        self.assertFalse(result.succeeded)
+        self.assertEqual(result.outcome, "blocked")
         self.assertEqual(agents.calls, 1)
         self.assertIsNotNone(result.diagnostics)
         self.assertEqual(result.diagnostics.stage, "workflow")

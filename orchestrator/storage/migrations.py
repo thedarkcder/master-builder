@@ -6,6 +6,7 @@ from sqlalchemy import create_engine, inspect, text
 import sqlalchemy as sa
 
 from orchestrator.core.config import get_settings
+from orchestrator.storage.database_support import ensure_postgres_database_url
 
 
 _TOP_REVISION_IDS = {
@@ -124,6 +125,11 @@ def run_migrations(database_url: str | None = None) -> None:
     settings = get_settings()
     root = Path(__file__).resolve().parents[2]
     target_database_url = database_url or settings.database_url
+    ensure_postgres_database_url(
+        database_url=target_database_url,
+        context="Migrations",
+        allow_sqlite_for_tests=bool(getattr(settings, "allow_sqlite_for_tests", False)),
+    )
 
     _normalize_repaired_top_revisions(target_database_url)
     _repair_stamp_if_schema_ahead_of_version(target_database_url)

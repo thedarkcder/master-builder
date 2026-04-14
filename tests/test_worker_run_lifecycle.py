@@ -1,10 +1,11 @@
 import os
 import unittest
 from datetime import datetime, timezone
-from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from orchestrator.core.runs import RUN_DEDUPE_SCOPE_ISSUE_EXECUTION, enqueue_run
+from orchestrator.core.worker_capability_normalization import WorkerCapability
+from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.core.worker.run_lifecycle import (
     bind_run_project,
     block_archived_project,
@@ -24,27 +25,17 @@ from orchestrator.core.workflow.runner import (
     WorkflowStageCheckpoint,
 )
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
-from orchestrator.storage.migrations import run_migrations
-from orchestrator.storage.models import Project, Run, RunLock, Tenant
+from orchestrator.storage.models import Project, Run, Tenant, WorkflowExecution
+from tests.test_support.db_harness import SqliteTemplateDbTestCase
+from tests.workflow_test_support import add_workflow_attempt
 
 
-class WorkerRunLifecycleTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self.temp_dir = TemporaryDirectory()
-        self.database_url = f"sqlite:///{self.temp_dir.name}/worker_lifecycle.db"
-        os.environ["ORCHESTRATOR_DATABASE_URL"] = self.database_url
-        reset_db_engine_cache()
-        run_migrations(database_url=self.database_url)
-        self.session_factory = create_session_factory(database_url=self.database_url)
-        self._seed_tenants_projects()
-
-    def tearDown(self) -> None:
-        self.temp_dir.cleanup()
-        reset_db_engine_cache()
-
-    def _seed_tenants_projects(self) -> None:
+class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
+    @classmethod
+    def bootstrap_template_database(cls) -> None:
+        session_factory = create_session_factory(database_url=cls._template_database_url)
         now = datetime.now(timezone.utc)
-        with self.session_factory() as session:
+        with session_factory() as session:
             session.add(
                 Tenant(
                     tenant_id="tenant-a",
@@ -99,37 +90,56 @@ class WorkerRunLifecycleTests(unittest.TestCase):
             )
             session.commit()
 
-    def _get_lock(self, session, *, issue_key: str, dedupe_scope: str = RUN_DEDUPE_SCOPE_ISSUE_EXECUTION):
-        return session.get(
-            RunLock,
-            {
-                "tenant_id": "tenant-a",
-                "issue_key": issue_key,
-                "dedupe_scope": dedupe_scope,
-            },
-        )
+    def setUp(self) -> None:
+        self._original_database_url = os.environ.get("ORCHESTRATOR_DATABASE_URL")
+        self.database_url = self._prepare_test_database(name_prefix="worker-lifecycle")
+        os.environ["ORCHESTRATOR_DATABASE_URL"] = self.database_url
+        reset_db_engine_cache()
+        self.session_factory = create_session_factory(database_url=self.database_url)
+
+    def tearDown(self) -> None:
+        self._cleanup_test_database()
+        if self._original_database_url is None:
+            os.environ.pop("ORCHESTRATOR_DATABASE_URL", None)
+        else:
+            os.environ["ORCHESTRATOR_DATABASE_URL"] = self._original_database_url
+        reset_db_engine_cache()
+
+    def _get_workflow(self, session, *, issue_key: str, dedupe_scope: str = RUN_DEDUPE_SCOPE_ISSUE_EXECUTION):
+        return session.query(WorkflowExecution).filter_by(
+            tenant_id="tenant-a",
+            issue_key=issue_key,
+            dedupe_scope=dedupe_scope,
+        ).one_or_none()
+
+    @staticmethod
+    def _canonical_plan(
+        *,
+        trigger_context: dict | None = None,
+        execution_context: dict | None = None,
+        live_stage_updates: list[dict] | None = None,
+    ) -> dict:
+        snapshot = ExecutionSnapshot.empty(trigger_context=trigger_context)
+        if execution_context:
+            snapshot.context.execution_context = dict(execution_context)
+        if live_stage_updates:
+            snapshot.events.live_stage_updates = [dict(item) for item in live_stage_updates]
+        return snapshot.dump()
 
     def test_resolve_project_for_run_and_bind_run_project(self) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
-            run = Run(
+            _, run, _ = add_workflow_attempt(
+                session,
                 run_id="run-1",
                 tenant_id="tenant-a",
+                project_id="tenant-b-default",
                 issue_key="TA-100",
                 issue_summary="resolve project",
                 issue_description="desc",
                 repo_url=None,
-                branch=None,
-                pr_url=None,
-                status="queued",
-                last_error=None,
-                plan=None,
                 created_at=now,
-                started_at=None,
-                finished_at=None,
-                project_id="tenant-b-default",
             )
-            session.add(run)
             session.commit()
             session.refresh(run)
 
@@ -141,7 +151,7 @@ class WorkerRunLifecycleTests(unittest.TestCase):
             self.assertEqual(run.project_id, "tenant-a-default")
             self.assertEqual(run.repo_url, "https://github.com/example/a")
 
-    def test_fail_missing_project_mapping_releases_lock(self) -> None:
+    def test_fail_missing_project_mapping_updates_workflow(self) -> None:
         with self.session_factory() as session:
             queued = enqueue_run(
                 session,
@@ -155,6 +165,7 @@ class WorkerRunLifecycleTests(unittest.TestCase):
                     "How to test: fail missing project mapping."
                 ),
                 repo_url="https://github.com/example/a",
+                precheck_outcome="ready_for_agent",
             )
             self.assertTrue(queued.enqueued)
             run = queued.run
@@ -165,10 +176,11 @@ class WorkerRunLifecycleTests(unittest.TestCase):
                 failed_run.last_error,
                 "No active project mapping found for issue ZZ-404",
             )
-            lock = self._get_lock(session, issue_key="ZZ-404")
-            self.assertIsNone(lock)
+            workflow = self._get_workflow(session, issue_key="ZZ-404")
+            assert workflow is not None
+            self.assertEqual(workflow.status, "failed")
 
-    def test_fail_project_repository_checkout_releases_lock(self) -> None:
+    def test_fail_project_repository_checkout_updates_workflow(self) -> None:
         with self.session_factory() as session:
             queued = enqueue_run(
                 session,
@@ -182,6 +194,7 @@ class WorkerRunLifecycleTests(unittest.TestCase):
                     "How to test: fail repository checkout."
                 ),
                 repo_url="https://github.com/example/a",
+                precheck_outcome="ready_for_agent",
             )
             self.assertTrue(queued.enqueued)
             run = queued.run
@@ -196,8 +209,9 @@ class WorkerRunLifecycleTests(unittest.TestCase):
                 failed_run.last_error,
                 "Project repository checkout failed: clone failed",
             )
-            lock = self._get_lock(session, issue_key="TA-401")
-            self.assertIsNone(lock)
+            workflow = self._get_workflow(session, issue_key="TA-401")
+            assert workflow is not None
+            self.assertEqual(workflow.status, "failed")
 
     def test_start_block_and_finalize_workflow_result(self) -> None:
         now = datetime.now(timezone.utc)
@@ -205,32 +219,16 @@ class WorkerRunLifecycleTests(unittest.TestCase):
             project = session.get(Project, "tenant-a-default")
             assert project is not None
             project.is_archived = True
-            run = Run(
+            _, run, _ = add_workflow_attempt(
+                session,
                 run_id="run-2",
                 tenant_id="tenant-a",
+                project_id="tenant-a-default",
                 issue_key="TA-200",
                 issue_summary="lifecycle states",
                 issue_description="desc",
                 repo_url="https://github.com/example/a",
-                branch=None,
-                pr_url=None,
-                status="queued",
-                last_error=None,
-                plan=None,
                 created_at=now,
-                started_at=None,
-                finished_at=None,
-                project_id="tenant-a-default",
-            )
-            session.add(run)
-            session.add(
-                RunLock(
-                    tenant_id="tenant-a",
-                    issue_key="TA-200",
-                    dedupe_scope=RUN_DEDUPE_SCOPE_ISSUE_EXECUTION,
-                    run_id="run-2",
-                    locked_at=now,
-                )
             )
             session.commit()
             session.refresh(run)
@@ -250,12 +248,14 @@ class WorkerRunLifecycleTests(unittest.TestCase):
             run.status = "running"
             run.last_error = None
             run.finished_at = None
-            run.plan = {"trigger_context": {"source": "github_pr_review_feedback", "pr_number": 6}}
+            run.plan = self._canonical_plan(
+                trigger_context={"source": "github_pr_review_feedback", "pr_number": 6}
+            )
             session.commit()
             session.refresh(run)
 
             result = WorkflowResult(
-                succeeded=False,
+                outcome="failed",
                 plan=PmPlan(
                     plan_steps=["a"],
                     acceptance_criteria=["b"],
@@ -280,47 +280,37 @@ class WorkerRunLifecycleTests(unittest.TestCase):
             )
             self.assertEqual(finalized.status, "failed")
             self.assertEqual(finalized.last_error, "failure details")
-            self.assertEqual(finalized.plan["stage_updates"], [{"stage": "run_failed"}])
+            self.assertEqual(finalized.plan["events"]["stage_updates"], [{"stage": "run_failed"}])
             self.assertEqual(
-                finalized.plan.get("trigger_context"),
+                finalized.plan["context"]["trigger_context"],
                 {"source": "github_pr_review_feedback", "pr_number": 6},
             )
-            lock = self._get_lock(session, issue_key="TA-200")
-            self.assertIsNone(lock)
+            workflow = self._get_workflow(session, issue_key="TA-200")
+            assert workflow is not None
+            self.assertEqual(workflow.status, "failed")
 
     def test_persist_stage_checkpoint_merges_artifacts_and_survives_finalization(self) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
-            run = Run(
+            _, run, _ = add_workflow_attempt(
+                session,
                 run_id="run-checkpoint",
                 tenant_id="tenant-a",
+                project_id="tenant-a-default",
                 issue_key="TA-205",
                 issue_summary="persist checkpoints",
                 issue_description="desc",
                 repo_url="https://github.com/example/a",
-                branch=None,
-                pr_url=None,
-                status="running",
-                last_error=None,
-                plan={
-                    "trigger_context": {"resume_stage": "dev"},
-                    "live_stage_updates": [{"stage": "lock_acquired", "recorded_at": now.isoformat()}],
-                },
+                plan=self._canonical_plan(
+                    trigger_context={"source": "manual"},
+                    live_stage_updates=[{"stage": "lock_acquired", "recorded_at": now.isoformat()}],
+                ),
+                workflow_status="running",
+                run_status="running",
                 created_at=now,
                 started_at=now,
-                finished_at=None,
-                project_id="tenant-a-default",
+                last_heartbeat_at=now,
                 worker_service_instance_id="node-a:1234",
-            )
-            session.add(run)
-            session.add(
-                RunLock(
-                    tenant_id="tenant-a",
-                    issue_key="TA-205",
-                    dedupe_scope=RUN_DEDUPE_SCOPE_ISSUE_EXECUTION,
-                    run_id="run-checkpoint",
-                    locked_at=now,
-                )
             )
             session.commit()
             session.refresh(run)
@@ -342,18 +332,24 @@ class WorkerRunLifecycleTests(unittest.TestCase):
                 expected_worker_service_instance_id="node-a:1234",
             )
 
-            self.assertEqual(run.plan["trigger_context"], {"resume_stage": "dev"})
-            self.assertEqual(run.plan["plan"]["plan_steps"], ["plan"])
-            self.assertEqual(run.plan["stage_checkpoints"]["pm"]["status"], "completed")
-            self.assertEqual(run.plan["execution_context"]["execution_branch"], "run/ta-205/run-checkpoint")
-            self.assertEqual(run.plan["execution_context"]["integration_branch"], "feature/TA-205")
-            self.assertEqual(run.plan["live_stage_updates"][0]["stage"], "lock_acquired")
+            self.assertEqual(run.plan["context"]["trigger_context"], {"source": "manual"})
+            self.assertEqual(run.plan["stages"]["pm"]["artifact"]["plan_steps"], ["plan"])
+            self.assertEqual(run.plan["stages"]["pm"]["status"], "completed")
+            self.assertEqual(
+                run.plan["context"]["execution_context"]["execution_branch"],
+                "run/ta-205/run-checkpoint",
+            )
+            self.assertEqual(
+                run.plan["context"]["execution_context"]["integration_branch"],
+                "feature/TA-205",
+            )
+            self.assertEqual(run.plan["events"]["live_stage_updates"][0]["stage"], "lock_acquired")
 
             finalized = finalize_workflow_result(
                 session,
                 run=run,
                 workflow_result=WorkflowResult(
-                    succeeded=True,
+                    outcome="success",
                     plan=PmPlan(plan_steps=["plan"], acceptance_criteria=["ac"], risks=[]),
                     pr_url=None,
                     summary=["done"],
@@ -365,30 +361,26 @@ class WorkerRunLifecycleTests(unittest.TestCase):
             )
 
             self.assertEqual(finalized.status, "succeeded")
-            self.assertEqual(finalized.plan["stage_checkpoints"]["pm"]["status"], "completed")
-            self.assertEqual(finalized.plan["trigger_context"], {"resume_stage": "dev"})
+            self.assertEqual(finalized.plan["stages"]["pm"]["status"], "completed")
+            self.assertEqual(finalized.plan["context"]["trigger_context"], {"source": "manual"})
 
     def test_start_run_returns_none_when_status_does_not_match_expected(self) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
-            run = Run(
+            _, run, _ = add_workflow_attempt(
+                session,
                 run_id="run-expected-status",
                 tenant_id="tenant-a",
+                project_id="tenant-a-default",
                 issue_key="TA-201",
                 issue_summary="claim guarded by expected status",
                 issue_description="desc",
                 repo_url="https://github.com/example/a",
-                branch=None,
-                pr_url=None,
-                status="running",
-                last_error=None,
-                plan=None,
+                workflow_status="running",
+                run_status="running",
                 created_at=now,
                 started_at=now,
-                finished_at=None,
-                project_id="tenant-a-default",
             )
-            session.add(run)
             session.commit()
             session.refresh(run)
 
@@ -401,41 +393,31 @@ class WorkerRunLifecycleTests(unittest.TestCase):
     def test_start_run_only_guards_expected_status(self) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
-            running = Run(
+            add_workflow_attempt(
+                session,
                 run_id="run-already-running",
                 tenant_id="tenant-a",
+                project_id="tenant-a-default",
                 issue_key="TA-301",
                 issue_summary="already running",
                 issue_description="desc",
                 repo_url="https://github.com/example/a",
-                branch=None,
-                pr_url=None,
-                status="running",
-                last_error=None,
-                plan=None,
+                workflow_status="running",
+                run_status="running",
                 created_at=now,
                 started_at=now,
-                finished_at=None,
-                project_id="tenant-a-default",
             )
-            queued = Run(
+            _, queued, _ = add_workflow_attempt(
+                session,
                 run_id="run-queued-under-limit",
                 tenant_id="tenant-a",
+                project_id="tenant-a-default",
                 issue_key="TA-302",
                 issue_summary="queued candidate",
                 issue_description="desc",
                 repo_url="https://github.com/example/a",
-                branch=None,
-                pr_url=None,
-                status="queued",
-                last_error=None,
-                plan=None,
                 created_at=now,
-                started_at=None,
-                finished_at=None,
-                project_id="tenant-a-default",
             )
-            session.add_all([running, queued])
             session.commit()
             session.refresh(queued)
 
@@ -454,34 +436,76 @@ class WorkerRunLifecycleTests(unittest.TestCase):
             assert refreshed_running is not None
             self.assertEqual(refreshed_running.status, "running")
 
+    def test_finalize_workflow_result_fails_on_unsupported_outcome(self) -> None:
+        now = datetime.now(timezone.utc)
+        with self.session_factory() as session:
+            _, run, _ = add_workflow_attempt(
+                session,
+                run_id="run-unsupported-outcome",
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                issue_key="TA-998",
+                issue_summary="unsupported outcome",
+                issue_description="desc",
+                repo_url="https://github.com/example/a",
+                workflow_status="running",
+                run_status="running",
+                created_at=now,
+                started_at=now,
+                last_heartbeat_at=now,
+                worker_service_instance_id="node-a:1234",
+            )
+            session.commit()
+            session.refresh(run)
+
+            unsupported_result = WorkflowResult(
+                outcome="success",  # typed baseline; overridden below for unsupported-path coverage
+                plan=PmPlan(
+                    plan_steps=["done"],
+                    acceptance_criteria=["done"],
+                    risks=[],
+                ),
+                pr_url=None,
+                summary=[],
+                test_guidance=[],
+                attempts=1,
+            )
+            object.__setattr__(unsupported_result, "outcome", "nonsense")
+
+            finalized = finalize_workflow_result(
+                session,
+                run=run,
+                workflow_result=unsupported_result,
+                stage_updates=[{"stage": "task_completed"}],
+                expected_worker_service_instance_id="node-a:1234",
+            )
+            self.assertEqual(finalized.status, "failed")
+            self.assertIn("Unsupported workflow outcome", finalized.last_error or "")
+
     def test_finalize_workflow_result_returns_run_when_ownership_is_lost(self) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
-            run = Run(
+            _, run, _ = add_workflow_attempt(
+                session,
                 run_id="run-ownership-lost",
                 tenant_id="tenant-a",
+                project_id="tenant-a-default",
                 issue_key="TA-999",
                 issue_summary="ownership lost",
                 issue_description="desc",
                 repo_url="https://github.com/example/a",
-                branch=None,
-                pr_url=None,
-                status="running",
-                last_error=None,
-                plan=None,
+                workflow_status="running",
+                run_status="running",
                 created_at=now,
                 started_at=now,
                 last_heartbeat_at=now,
-                finished_at=None,
-                project_id="tenant-a-default",
                 worker_service_instance_id="node-b:9999",
             )
-            session.add(run)
             session.commit()
             session.refresh(run)
 
             workflow_result = WorkflowResult(
-                succeeded=True,
+                outcome="success",
                 plan=PmPlan(
                     plan_steps=["done"],
                     acceptance_criteria=["done"],
@@ -506,40 +530,31 @@ class WorkerRunLifecycleTests(unittest.TestCase):
     def test_requeue_workflow_result_for_capability_notifies_queue_listener(self) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
-            run = Run(
+            _, run, _ = add_workflow_attempt(
+                session,
                 run_id="run-capability-requeue",
                 tenant_id="tenant-a",
+                project_id="tenant-a-default",
                 issue_key="TA-202",
                 issue_summary="capability requeue",
                 issue_description="desc",
                 repo_url="https://github.com/example/a",
-                branch=None,
-                pr_url=None,
-                status="running",
+                workflow_status="running",
+                run_status="running",
                 last_error="old error",
-                plan={"trigger_context": {"source": "github_pr_review_feedback", "pr_number": 6}},
+                plan=self._canonical_plan(
+                    trigger_context={"source": "github_pr_review_feedback", "pr_number": 6}
+                ),
                 created_at=now,
                 started_at=now,
                 last_heartbeat_at=now,
-                finished_at=None,
-                project_id="tenant-a-default",
                 worker_service_instance_id="node-a:1234",
-            )
-            session.add(run)
-            session.add(
-                RunLock(
-                    tenant_id="tenant-a",
-                    issue_key="TA-202",
-                    dedupe_scope=RUN_DEDUPE_SCOPE_ISSUE_EXECUTION,
-                    run_id="run-capability-requeue",
-                    locked_at=now,
-                )
             )
             session.commit()
             session.refresh(run)
 
             workflow_result = WorkflowResult(
-                succeeded=False,
+                outcome="requeue",
                 plan=PmPlan(
                     plan_steps=["retry on required capability"],
                     acceptance_criteria=["run is queued for a compatible worker"],
@@ -549,6 +564,8 @@ class WorkerRunLifecycleTests(unittest.TestCase):
                 summary=[],
                 test_guidance=[],
                 attempts=1,
+                requeue_target=WorkerCapability.MACOS,
+                requeue_reason="Execution capability mismatch: PM selected macos but current worker is linux.",
                 diagnostics=WorkflowDiagnostics(
                     stage="dev",
                     message="Execution capability mismatch: PM selected macos but current worker is linux.",
@@ -573,11 +590,11 @@ class WorkerRunLifecycleTests(unittest.TestCase):
             self.assertIsNone(requeued.last_heartbeat_at)
             self.assertIsNone(requeued.finished_at)
             self.assertIsNone(requeued.worker_service_instance_id)
-            self.assertEqual(requeued.plan["required_worker_capability"], "macos")
-            self.assertEqual(requeued.plan["required_worker_label"], "macos")
-            self.assertTrue(requeued.plan["requeued"])
+            self.assertEqual(requeued.required_worker_capability, "macos")
+            self.assertEqual(requeued.plan["workflow"]["requeue_target"], "macos")
+            self.assertEqual(requeued.plan["context"]["execution_context"]["required_worker_label"], "macos")
             self.assertEqual(
-                requeued.plan.get("trigger_context"),
+                requeued.plan["context"]["trigger_context"],
                 {"source": "github_pr_review_feedback", "pr_number": 6},
             )
             notify_mock.assert_called_once_with(
@@ -587,46 +604,40 @@ class WorkerRunLifecycleTests(unittest.TestCase):
                 run_id="run-capability-requeue",
                 issue_key="TA-202",
             )
-            lock = self._get_lock(session, issue_key="TA-202")
-            self.assertIsNone(lock)
+            workflow = self._get_workflow(session, issue_key="TA-202")
+            assert workflow is not None
+            self.assertEqual(workflow.status, "queued")
 
     def test_requeue_workflow_result_for_stale_snapshot_notifies_queue_listener(self) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
-            run = Run(
+            _, run, _ = add_workflow_attempt(
+                session,
                 run_id="run-stale-requeue",
                 tenant_id="tenant-a",
+                project_id="tenant-a-default",
                 issue_key="TA-203",
                 issue_summary="stale snapshot requeue",
                 issue_description="desc",
                 repo_url="https://github.com/example/a",
                 branch="feature/TA-203",
                 pr_url="https://github.com/example/a/pull/88",
-                status="running",
+                workflow_status="running",
+                run_status="running",
                 last_error="old error",
-                plan={"trigger_context": {"source": "github_pr_review_feedback", "pr_number": 6}},
+                plan=self._canonical_plan(
+                    trigger_context={"source": "github_pr_review_feedback", "pr_number": 6}
+                ),
                 created_at=now,
                 started_at=now,
                 last_heartbeat_at=now,
-                finished_at=None,
-                project_id="tenant-a-default",
                 worker_service_instance_id="node-a:1234",
-            )
-            session.add(run)
-            session.add(
-                RunLock(
-                    tenant_id="tenant-a",
-                    issue_key="TA-203",
-                    dedupe_scope=RUN_DEDUPE_SCOPE_ISSUE_EXECUTION,
-                    run_id="run-stale-requeue",
-                    locked_at=now,
-                )
             )
             session.commit()
             session.refresh(run)
 
             workflow_result = WorkflowResult(
-                succeeded=True,
+                outcome="success",
                 plan=PmPlan(
                     plan_steps=["finalize"],
                     acceptance_criteria=["PR exists"],
@@ -655,11 +666,13 @@ class WorkerRunLifecycleTests(unittest.TestCase):
             self.assertIsNone(requeued.finished_at)
             self.assertIsNone(requeued.pr_url)
             self.assertIsNone(requeued.worker_service_instance_id)
-            self.assertTrue(requeued.plan["requeued"])
-            self.assertTrue(requeued.plan["stale_branch_snapshot"])
-            self.assertIn("Branch snapshot stale", requeued.plan["requeue_reason"])
+            self.assertTrue(requeued.plan["context"]["execution_context"]["stale_branch_snapshot"])
+            self.assertEqual(requeued.plan["workflow"]["outcome"], "requeue")
+            self.assertIsNone(requeued.plan["workflow"]["requeue_target"])
+            self.assertIn("Branch snapshot stale", requeued.plan["workflow"]["requeue_reason"])
+            self.assertIsNotNone(ExecutionSnapshot.load(requeued.plan))
             self.assertEqual(
-                requeued.plan.get("trigger_context"),
+                requeued.plan["context"]["trigger_context"],
                 {"source": "github_pr_review_feedback", "pr_number": 6},
             )
             notify_mock.assert_called_once_with(
@@ -669,5 +682,6 @@ class WorkerRunLifecycleTests(unittest.TestCase):
                 run_id="run-stale-requeue",
                 issue_key="TA-203",
             )
-            lock = self._get_lock(session, issue_key="TA-203")
-            self.assertIsNone(lock)
+            workflow = self._get_workflow(session, issue_key="TA-203")
+            assert workflow is not None
+            self.assertEqual(workflow.status, "queued")

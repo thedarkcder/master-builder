@@ -16,7 +16,7 @@ Attempt: {{ attempt }}
 Plan steps: {{ plan_steps_json }}
 Acceptance criteria: {{ acceptance_criteria_json }}
 Dev summary: {{ dev_summary_json }}
-Test passed: {{ test_passed }}
+Test outcome: {{ test_outcome }}
 Test guidance: {{ test_guidance_json }}
 Test feedback: {{ test_feedback }}
 Previous review summary: {{ previous_review_summary_json }}
@@ -24,8 +24,6 @@ Previous review feedback: {{ previous_review_feedback }}
 PR URL: {{ pr_url }}
 Resolved prerequisites: {{ resolved_prerequisites_json }}
 Unresolved prerequisites: {{ unresolved_prerequisites_json }}
-Confirmed external blockers: {{ confirmed_external_blockers_json }}
-Missing evidence sources: {{ missing_evidence_sources_json }}
 Answered transient human inputs for this run: {{ human_inputs_json }}
 Allowed tools for this stage: {{ allowed_tools_json }}
 
@@ -40,17 +38,19 @@ Required actions:
 1. Decide if this run can be accepted now.
 2. Provide concise findings and unresolved blockers.
 3. Treat the PM evidence ledger as the current ticket prerequisite summary; do not invent new external blockers from missing repo evidence alone.
-4. Preserve fail-closed behavior when verification is incomplete.
-5. If a one-time transient human input can unblock the remaining verification, request it with `run.request_human_input` before using outcome="blocked" with blocker_category="awaiting_human_input".
+3a. When acceptance depends on missing install availability, binding presence, issue state, or external context, inspect the allowed tool list and use any relevant tool that can resolve that uncertainty before concluding the run is blocked.
+4. If evidence shows remediable defects or incomplete work, return outcome="failed".
+5. If a one-time transient human input can unblock the remaining verification, request it with `run.request_human_input` before returning outcome="waiting_for_input".
 6. If PR creation required by policy is `true`, you must not approve the run unless a PR exists and `pr_url` is set.
 6a. Treat the Integration branch as the canonical PR head branch. A PR opened from the Execution branch (`run/...`) does not satisfy the contract unless the Integration branch itself is the remediation head branch.
+6b. Use `github.push_branch` for remote branch publication and `github.open_pr` for PR creation or update. Do not use raw `git push` or other ad hoc remote publication commands.
+6c. If PR creation required by policy is `true` and `pr_url` is missing, you must attempt `github.push_branch` then `github.open_pr` in this review attempt before returning blocked or failed.
 7. When previous review feedback is present, treat it as the active review context for this resumed review pass.
+8. If you return outcome="blocked" or outcome="waiting_for_input", make `feedback` and any non-null `blocker_message` operator-friendly: keep the failure concise, then add a short `Troubleshooting:` section with 1-3 concrete fix actions supported by the observed evidence.
 
 Output contract:
-- approved: boolean decision.
-- outcome: "approved" | "needs_changes" | "blocked".
+- outcome: "continue" | "waiting_for_input" | "blocked" | "failed".
 - summary: array of review findings/outcome notes.
-- feedback: blocking feedback string or null.
+- feedback: blocking feedback string or null. For blocked or failed outcomes, include a short `Troubleshooting:` section with concrete operator actions.
 - pr_url: PR URL string or null.
-- blocker_category: terminal blocker category or null.
-- blocker_message: terminal blocker detail or null.
+- blocker_message: null unless outcome is blocked or waiting_for_input. When non-null, include a short `Troubleshooting:` section with concrete operator actions.

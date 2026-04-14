@@ -15,7 +15,8 @@ from orchestrator.api.schemas import TokenCompareRequest
 from orchestrator.core.config import get_settings
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
-from orchestrator.storage.models import Project, Run, RunLogEvent, RunTokenUsage, Tenant
+from orchestrator.storage.models import Project, RunLogEvent, RunTokenUsage, Tenant
+from tests.workflow_test_support import add_run_with_workflow, make_run
 
 
 class TokenAnalyticsBackfillTests(unittest.TestCase):
@@ -73,25 +74,25 @@ class TokenAnalyticsBackfillTests(unittest.TestCase):
                 )
             )
         session.flush()
-        session.add(
-            Run(
-                run_id=run_id,
-                tenant_id=tenant_id,
-                project_id=project_id,
-                issue_key=issue_key,
-                issue_summary="summary",
-                issue_description="description",
-                repo_url="https://github.com/example/repo",
-                branch="jira/TP-1",
-                pr_url=None,
-                status="completed",
-                last_error=None,
-                plan=None,
-                created_at=self.now,
-                started_at=self.now,
-                finished_at=self.now,
-            )
+        run = make_run(
+            run_id=run_id,
+            workflow_id=f"workflow-{run_id}",
+            tenant_id=tenant_id,
+            project_id=project_id,
+            issue_key=issue_key,
+            issue_summary="summary",
+            issue_description="description",
+            repo_url="https://github.com/example/repo",
+            branch=f"jira/{issue_key}",
+            attempt_number=1,
+            entry_mode="fresh",
+            entry_stage="orchestrated",
+            status="completed",
+            created_at=self.now,
+            started_at=self.now,
+            finished_at=self.now,
         )
+        add_run_with_workflow(session, run)
 
     def _insert_turn_completed_log(
         self,

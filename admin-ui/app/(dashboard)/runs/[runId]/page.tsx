@@ -3,28 +3,30 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, usePathname, useRouter } from "next/navigation";
-import { ArrowLeft } from "lucide-react";
+import { AlertCircle, ArrowLeft, Brain, ChevronRight, FileCode, MessageSquare, Terminal, Wrench } from "lucide-react";
 
 import { useAuth } from "@/components/auth-provider";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { TokenStackedBarChart } from "@/components/charts";
 import {
   cancelRun,
+  createWorkflowAttempt,
   getRun,
+  getWorkflow,
   getTokenTimeline,
   listRunEvents,
   listRunLogs,
-  rerunRun,
   streamRunEvents,
   type RunEventRecord,
   type RunLogEventRecord,
   type RunRecord,
-  type RunRerunPayload,
+  type WorkflowRecord,
+  type WorkflowAttemptCreatePayload,
   type TokenTimelineRecord
 } from "@/lib/api";
+import { formatTimestamp } from "@/lib/datetime";
 import { buildRunDetailPath, resolveRunRouteContext } from "@/lib/dashboard-paths";
 
 type InvocationTelemetry = {
@@ -111,18 +113,24 @@ type ChatTimelineEntry = {
   attempt: number | null;
   speaker: string;
   text: string;
-  kind: "message" | "reasoning" | "status" | "error";
+  kind: "message" | "reasoning" | "status" | "error" | "command" | "file_edit" | "tool_call";
+  meta?: {
+    command?: string;
+    exitCode?: number;
+    output?: string;
+    filePath?: string;
+    language?: string;
+  };
 };
 type RunPanelTab = "overview" | "agents" | "diagnostics" | "cost";
 type AgentStage = "pm" | "dev" | "test" | "review";
 const CHAT_PAGE_SIZE = 40;
 
-type RerunSessionOption = {
+type RerunAttemptOption = {
   key: string;
   label: string;
-  payload: RunRerunPayload;
-  sessionId: string | null;
-  isLastSession: boolean;
+  payload: WorkflowAttemptCreatePayload;
+  detail: string;
 };
 
 const PANEL_TABS: { id: RunPanelTab; label: string }[] = [
@@ -158,10 +166,6 @@ function statusFromLifecycleEvent(eventType: string): RunRecord["status"] | null
   return null;
 }
 
-// statusBadge is superseded by StatusBadge component; kept to avoid cascade changes in unchanged code paths.
-function statusBadge(_status: string) {
-  return null;
-}
 
 function parseTelemetryPayload(message: string): InvocationTelemetry | null {
   try {
@@ -183,13 +187,13 @@ function parseStageCheckpoints(plan: Record<string, unknown> | null | undefined)
   if (!isRecord(plan)) {
     return {};
   }
-  const raw = plan["stage_checkpoints"];
-  if (!isRecord(raw)) {
+  const stagesRaw = isRecord(plan["stages"]) ? plan["stages"] : null;
+  if (!stagesRaw) {
     return {};
   }
   const parsed: Partial<Record<AgentStage, StageCheckpointEntry>> = {};
   for (const stage of ["pm", "dev", "test", "review"] as AgentStage[]) {
-    const item = raw[stage];
+    const item = stagesRaw[stage];
     if (!isRecord(item)) {
       continue;
     }
@@ -206,7 +210,10 @@ function parseExecutionContext(plan: Record<string, unknown> | null | undefined)
   if (!isRecord(plan)) {
     return {};
   }
-  const raw = plan["execution_context"];
+  const raw =
+    (isRecord(plan["context"]) && isRecord(plan["context"]["execution_context"]))
+      ? plan["context"]["execution_context"]
+      : null;
   if (!isRecord(raw)) {
     return {};
   }
@@ -226,6 +233,24 @@ function parseExecutionContext(plan: Record<string, unknown> | null | undefined)
     }
   }
   return parsed;
+}
+
+function parseStageArtifact(
+  plan: Record<string, unknown> | null | undefined,
+  stage: AgentStage,
+): Record<string, unknown> | null {
+  if (!isRecord(plan)) {
+    return null;
+  }
+  const stagesRaw = isRecord(plan["stages"]) ? plan["stages"] : null;
+  if (!stagesRaw) {
+    return null;
+  }
+  const stageRaw = stagesRaw[stage];
+  if (!isRecord(stageRaw)) {
+    return null;
+  }
+  return isRecord(stageRaw["artifact"]) ? stageRaw["artifact"] : null;
 }
 
 function stageFromCommand(command: string | null | undefined): string {
@@ -324,7 +349,28 @@ function dedupeRunLogs(entries: RunLogEventRecord[]): RunLogEventRecord[] {
   return ordered;
 }
 
-function parseRunLogChatText(entry: RunLogEventRecord): Pick<ChatTimelineEntry, "speaker" | "text" | "kind"> | null {
+type ParsedChatEntry = Pick<ChatTimelineEntry, "speaker" | "text" | "kind"> & { meta?: ChatTimelineEntry["meta"] };
+
+function tryParseToolRequest(text: string): ParsedChatEntry | null {
+  if (!text.startsWith("{")) return null;
+  let inner: unknown = null;
+  try { inner = JSON.parse(text); } catch { return null; }
+  if (!isRecord(inner)) return null;
+  const t = String(inner.type ?? "").trim().toLowerCase();
+  if (t === "tool_request" || t === "tool_call" || t === "function_call") {
+    const toolName = String(inner.tool_name ?? inner.name ?? inner.function_name ?? "tool").trim();
+    const reason = String(inner.reason ?? "").trim();
+    return {
+      speaker: "codex",
+      text: toolName,
+      kind: "tool_call",
+      meta: { output: reason || undefined }
+    };
+  }
+  return null;
+}
+
+function parseRunLogChatText(entry: RunLogEventRecord): ParsedChatEntry | null {
   const raw = String(entry.message ?? "");
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -364,31 +410,208 @@ function parseRunLogChatText(entry: RunLogEventRecord): Pick<ChatTimelineEntry, 
     return { speaker: "codex", text: `Turn completed${usageSuffix}`, kind: "status" };
   }
 
+  if (eventType === "tool_request" || eventType === "tool_call" || eventType === "function_call") {
+    const toolName = String(parsed.tool_name ?? parsed.name ?? parsed.function_name ?? "tool").trim();
+    const reason = String(parsed.reason ?? "").trim();
+    return {
+      speaker: "codex",
+      text: toolName,
+      kind: "tool_call",
+      meta: { output: reason || undefined }
+    };
+  }
+
   const item = isRecord(parsed.item) ? parsed.item : null;
   if (eventType === "item.completed" && item) {
     const itemType = String(item.type ?? "").trim().toLowerCase();
+
     if (itemType === "agent_message") {
-      return { speaker: "codex", text: String(item.text ?? "").trim(), kind: "message" };
+      const msgText = String(item.text ?? "").trim();
+      const innerObj = tryParseToolRequest(msgText);
+      if (innerObj) return innerObj;
+      return { speaker: "codex", text: msgText, kind: "message" };
     }
+
     if (itemType === "reasoning") {
       return { speaker: "codex", text: String(item.text ?? "").trim(), kind: "reasoning" };
     }
+
     if (itemType === "command_execution") {
       const status = String(item.status ?? "").trim().toLowerCase();
-      const exitCode = item.exit_code;
-      if (status === "failed" || (typeof exitCode === "number" && exitCode !== 0)) {
-        const command = normalizeInlineText(String(item.command ?? ""));
-        const output = normalizeInlineText(String(item.aggregated_output ?? ""));
+      const exitCode = typeof item.exit_code === "number" ? item.exit_code : null;
+      const command = normalizeInlineText(String(item.command ?? ""));
+      const output = String(item.aggregated_output ?? "").trim();
+      const isFailed = status === "failed" || (exitCode !== null && exitCode !== 0);
+
+      if (isFailed) {
         return {
-          speaker: "command",
-          text: `Command failed${typeof exitCode === "number" ? ` (exit ${exitCode})` : ""}: ${command}${output ? ` | ${output}` : ""}`,
-          kind: "error"
+          speaker: "terminal",
+          text: `Command failed${exitCode !== null ? ` (exit ${exitCode})` : ""}: ${command}`,
+          kind: "error",
+          meta: { command, exitCode: exitCode ?? undefined, output: output || undefined }
         };
       }
+      return {
+        speaker: "terminal",
+        text: command,
+        kind: "command",
+        meta: { command, exitCode: exitCode ?? 0, output: output || undefined }
+      };
+    }
+
+    if (itemType === "file_edit" || itemType === "file_create" || itemType === "file_write") {
+      const filePath = String(item.file_path ?? item.path ?? "").trim();
+      const language = filePath.split(".").pop() ?? "";
+      const content = String(item.content ?? item.diff ?? item.text ?? "").trim();
+      return {
+        speaker: "codex",
+        text: `${itemType === "file_create" || itemType === "file_write" ? "Created" : "Edited"} ${filePath || "file"}`,
+        kind: "file_edit",
+        meta: { filePath, language, output: content || undefined }
+      };
+    }
+
+    if (itemType === "tool_call" || itemType === "function_call" || itemType === "mcp_call") {
+      const toolName = String(item.name ?? item.tool_name ?? item.function_name ?? "tool").trim();
+      const result = String(item.output ?? item.result ?? "").trim();
+      return {
+        speaker: "codex",
+        text: toolName,
+        kind: "tool_call",
+        meta: { output: result || undefined }
+      };
+    }
+
+    if (itemType) {
+      const fallbackText = String(item.text ?? "").trim();
+      const innerObj = tryParseToolRequest(fallbackText);
+      if (innerObj) return innerObj;
+      return {
+        speaker: "codex",
+        text: `${itemType}${fallbackText ? `: ${normalizeInlineText(fallbackText).slice(0, 200)}` : ""}`,
+        kind: "status"
+      };
     }
   }
 
   return null;
+}
+
+function relativeTime(iso: string): string {
+  const ms = Date.now() - new Date(iso).getTime();
+  if (ms < 0) return "just now";
+  const sec = Math.floor(ms / 1000);
+  if (sec < 60) return `${sec}s ago`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const d = Math.floor(hr / 24);
+  return `${d}d ago`;
+}
+
+const MAX_OUTPUT_PREVIEW = 600;
+
+const TIMELINE_ICON: Record<ChatTimelineEntry["kind"], { icon: React.ReactNode; color: string }> = {
+  message:   { icon: <MessageSquare className="h-3.5 w-3.5" />, color: "text-blue-500" },
+  reasoning: { icon: <Brain className="h-3.5 w-3.5" />,          color: "text-violet-500" },
+  status:    { icon: <ChevronRight className="h-3.5 w-3.5" />,   color: "text-muted-foreground" },
+  error:     { icon: <AlertCircle className="h-3.5 w-3.5" />,    color: "text-red-500" },
+  command:   { icon: <Terminal className="h-3.5 w-3.5" />,       color: "text-amber-500" },
+  file_edit: { icon: <FileCode className="h-3.5 w-3.5" />,      color: "text-emerald-500" },
+  tool_call: { icon: <Wrench className="h-3.5 w-3.5" />,        color: "text-orange-500" },
+};
+
+function TimelineRow({
+  entry,
+  stageDisplayLabelFn,
+  isLast,
+}: {
+  entry: ChatTimelineEntry;
+  stageDisplayLabelFn: (stage: string) => string;
+  isLast: boolean;
+}) {
+  const { icon, color } = TIMELINE_ICON[entry.kind] ?? TIMELINE_ICON.message;
+  const stageLbl = stageDisplayLabelFn(entry.stage);
+  const ts = relativeTime(entry.recordedAt);
+  const fullTs = formatTimestamp(entry.recordedAt);
+  const attempt = entry.attempt !== null ? ` #${entry.attempt}` : "";
+
+  return (
+    <li className="group relative flex gap-3 pb-4 last:pb-0">
+      {/* vertical connector line */}
+      {!isLast && (
+        <div className="absolute left-[13px] top-6 bottom-0 w-px bg-border" />
+      )}
+
+      {/* dot / icon */}
+      <div className={`relative z-10 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border bg-background ${color}`}>
+        {icon}
+      </div>
+
+      {/* content */}
+      <div className="min-w-0 flex-1 pt-0.5">
+        {/* header */}
+        <div className="flex items-baseline gap-1.5 text-xs">
+          <span className="font-medium text-foreground">
+            {entry.kind === "status" ? entry.text : entry.kind === "command" ? "Ran command" : entry.kind === "file_edit" ? "Edited file" : entry.kind === "tool_call" ? `Called ${entry.text}` : entry.kind === "reasoning" ? "Thinking" : entry.kind === "error" ? "Error" : stageLbl}
+          </span>
+          <span className="text-[10px] text-muted-foreground">{stageLbl}{attempt}</span>
+          <span className="ml-auto shrink-0 text-[10px] text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" title={fullTs}>{ts}</span>
+        </div>
+
+        {/* body per kind */}
+        {entry.kind === "status" ? null : entry.kind === "reasoning" ? (
+          <details className="mt-1 text-xs text-muted-foreground">
+            <summary className="cursor-pointer select-none hover:text-foreground">Show reasoning</summary>
+            <p className="mt-1.5 whitespace-pre-wrap italic leading-relaxed">{entry.text}</p>
+          </details>
+        ) : entry.kind === "command" ? (
+          <div className="mt-1">
+            <div className="inline-flex items-center gap-1.5 rounded-md bg-zinc-950 px-2.5 py-1 text-[11px] text-zinc-200">
+              <code>{entry.meta?.command ?? entry.text}</code>
+              {entry.meta?.exitCode != null && (
+                <span className={`ml-1 rounded px-1 py-px text-[9px] font-medium ${entry.meta.exitCode === 0 ? "bg-emerald-900/50 text-emerald-300" : "bg-red-900/50 text-red-300"}`}>
+                  {entry.meta.exitCode}
+                </span>
+              )}
+            </div>
+            {entry.meta?.output ? (
+              <details className="mt-1.5 text-xs text-muted-foreground">
+                <summary className="cursor-pointer select-none hover:text-foreground">Output</summary>
+                <pre className="mt-1 max-h-40 overflow-auto rounded-md bg-muted/50 px-2.5 py-2 text-[10px] leading-relaxed">
+                  {entry.meta.output.slice(0, MAX_OUTPUT_PREVIEW)}{entry.meta.output.length > MAX_OUTPUT_PREVIEW ? "\n…" : ""}
+                </pre>
+              </details>
+            ) : null}
+          </div>
+        ) : entry.kind === "file_edit" ? (
+          <div className="mt-1">
+            <code className="text-xs font-medium">{entry.meta?.filePath || "file"}</code>
+            {entry.text && <span className="ml-1.5 text-xs text-muted-foreground">{entry.text}</span>}
+            {entry.meta?.output ? (
+              <details className="mt-1.5 text-xs text-muted-foreground">
+                <summary className="cursor-pointer select-none hover:text-foreground">Diff</summary>
+                <pre className="mt-1 max-h-40 overflow-auto rounded-md bg-muted/50 px-2.5 py-2 text-[10px] leading-relaxed">
+                  {entry.meta.output.slice(0, MAX_OUTPUT_PREVIEW)}{entry.meta.output.length > MAX_OUTPUT_PREVIEW ? "\n…" : ""}
+                </pre>
+              </details>
+            ) : null}
+          </div>
+        ) : entry.kind === "tool_call" ? (
+          <div className="mt-1 text-xs">
+            {entry.meta?.output ? (
+              <span className="text-muted-foreground">{entry.meta.output.slice(0, 160)}{entry.meta.output.length > 160 ? "…" : ""}</span>
+            ) : null}
+          </div>
+        ) : entry.kind === "error" ? (
+          <p className="mt-1 whitespace-pre-wrap text-xs leading-relaxed text-destructive">{entry.text}</p>
+        ) : (
+          <p className="mt-1 whitespace-pre-wrap text-xs leading-relaxed">{entry.text}</p>
+        )}
+      </div>
+    </li>
+  );
 }
 
 export default function RunDetailPage() {
@@ -398,6 +621,7 @@ export default function RunDetailPage() {
   const { credentials, ready } = useAuth();
   const routeContext = useMemo(() => resolveRunRouteContext(pathname), [pathname]);
   const [run, setRun] = useState<RunRecord | null>(null);
+  const [workflow, setWorkflow] = useState<WorkflowRecord | null>(null);
   const [events, setEvents] = useState<RunEventRecord[]>([]);
   const [logs, setLogs] = useState<RunLogEventRecord[]>([]);
   const [busy, setBusy] = useState(false);
@@ -442,15 +666,24 @@ export default function RunDetailPage() {
         listRunLogs(credentials, params.runId, { limit: 200 })
       ]);
       let timeline: TokenTimelineRecord | null = null;
-      try {
-        timeline = await getTokenTimeline(credentials, params.runId, {
+      let workflowPayload: WorkflowRecord | null = null;
+      const [timelineResult, workflowResult] = await Promise.allSettled([
+        getTokenTimeline(credentials, params.runId, {
           tenantId: runPayload.tenant_id,
           include_retries: true
-        });
-      } catch (error) {
-        setTokenTimelineError(`Failed to load token timeline: ${(error as Error).message}`);
+        }),
+        getWorkflow(credentials, runPayload.workflow_id),
+      ]);
+      if (timelineResult.status === "fulfilled") {
+        timeline = timelineResult.value;
+      } else {
+        setTokenTimelineError(`Failed to load token timeline: ${(timelineResult.reason as Error).message}`);
+      }
+      if (workflowResult.status === "fulfilled") {
+        workflowPayload = workflowResult.value;
       }
       setRun(runPayload);
+      setWorkflow(workflowPayload);
       setEvents(runEvents);
       setLogs(dedupeRunLogs(runLogs));
       setTokenTimeline(timeline);
@@ -459,6 +692,7 @@ export default function RunDetailPage() {
     } catch (error) {
       setStatusLine(`Failed to load run: ${(error as Error).message}`);
       setTokenTimelineError(`Failed to load token timeline: ${(error as Error).message}`);
+      setWorkflow(null);
     } finally {
       setBusy(false);
       setTokenTimelineBusy(false);
@@ -534,8 +768,10 @@ export default function RunDetailPage() {
     setForceRerunBusy(true);
     try {
       const cancelled = await cancelRun(credentials, run.run_id);
-      const nextRun = await rerunRun(credentials, cancelled.run_id, { mode: "fresh" });
-      setStatusLine(`Force-cancelled ${cancelled.run_id} and queued rerun ${nextRun.run_id}.`);
+      const nextRun = await createWorkflowAttempt(credentials, cancelled.workflow_id, {
+        mode: "fresh"
+      });
+      setStatusLine(`Force-cancelled ${cancelled.run_id} and queued fresh run ${nextRun.run_id}.`);
       router.push(
         buildRunDetailPath({
           tenantId: run.tenant_id,
@@ -574,9 +810,15 @@ export default function RunDetailPage() {
 
   const isRerunnable = Boolean(run);
   const isActiveRun = run?.status === "queued" || run?.status === "running";
-  const liveStageUpdates = Array.isArray(run?.plan?.["live_stage_updates"])
-    ? (run?.plan?.["live_stage_updates"] as Array<Record<string, unknown>>)
-    : [];
+  const liveStageUpdates = useMemo(() => {
+    if (!isRecord(run?.plan)) {
+      return [] as Array<Record<string, unknown>>;
+    }
+    const eventsRoot = isRecord(run.plan["events"]) ? run.plan["events"] : null;
+    return Array.isArray(eventsRoot?.["live_stage_updates"])
+      ? (eventsRoot["live_stage_updates"] as Array<Record<string, unknown>>)
+      : [];
+  }, [run?.plan]);
   function selectedAgentStage(filter: string): string {
     if (filter === "tester") {
       return "test";
@@ -644,20 +886,13 @@ export default function RunDetailPage() {
         workstreamEvents: [] as OrchestrationWorkstreamTraceEntry[],
       };
     }
-    const planRoot = run.plan;
-    const orchestrationRoot = isRecord(planRoot["orchestration_trace"])
-      ? (planRoot["orchestration_trace"] as Record<string, unknown>)
-      : null;
-    const stageRaw = Array.isArray(planRoot["orchestration_stage_trace"])
-      ? planRoot["orchestration_stage_trace"]
-      : Array.isArray(orchestrationRoot?.["stage_events"])
-        ? (orchestrationRoot?.["stage_events"] as unknown[])
-        : [];
-    const workstreamRaw = Array.isArray(planRoot["orchestration_workstream_trace"])
-      ? planRoot["orchestration_workstream_trace"]
-      : Array.isArray(orchestrationRoot?.["workstream_events"])
-        ? (orchestrationRoot?.["workstream_events"] as unknown[])
-        : [];
+    const eventsRoot = isRecord(run.plan["events"]) ? run.plan["events"] : null;
+    const stageRaw = Array.isArray(eventsRoot?.["stage_trace"])
+      ? (eventsRoot["stage_trace"] as unknown[])
+      : [];
+    const workstreamRaw = Array.isArray(eventsRoot?.["workstream_trace"])
+      ? (eventsRoot["workstream_trace"] as unknown[])
+      : [];
     const stageEvents: OrchestrationStageTraceEntry[] = stageRaw
       .map((item, index) => {
         if (!isRecord(item)) {
@@ -705,6 +940,32 @@ export default function RunDetailPage() {
   }, [run?.plan]);
   const stageCheckpoints = useMemo(() => parseStageCheckpoints(run?.plan ?? null), [run?.plan]);
   const executionContext = useMemo(() => parseExecutionContext(run?.plan ?? null), [run?.plan]);
+  const workflowCheckpointAvailability = useMemo(() => {
+    const availability = { pm: false, execution: false };
+    if (!workflow) {
+      return availability;
+    }
+    for (const workflowRun of workflow.runs ?? []) {
+      const checkpoints = parseStageCheckpoints(workflowRun.plan ?? null);
+      if (checkpoints.pm) {
+        availability.pm = true;
+      }
+      if (checkpoints.dev || checkpoints.test || checkpoints.review) {
+        availability.execution = true;
+      }
+      if (availability.pm && availability.execution) {
+        break;
+      }
+    }
+    return availability;
+  }, [workflow]);
+  const hasExecutionCheckpoint = Boolean(
+    stageCheckpoints.dev ||
+    stageCheckpoints.test ||
+    stageCheckpoints.review ||
+    workflowCheckpointAvailability.execution,
+  );
+  const hasPmCheckpoint = Boolean(stageCheckpoints.pm || workflowCheckpointAvailability.pm);
   const invocationSessionRows = useMemo(() => {
     const telemetryRows = logs
       .filter((entry) => entry.stage === "telemetry" && entry.stream === "system")
@@ -786,85 +1047,58 @@ export default function RunDetailPage() {
   }, [logs, orchestrationTrace.stageEvents, run?.created_at, run?.started_at]);
   const latestCodexSessionId = useMemo(() => {
     const fromTimeline = invocationSessionRows.find((row) => row.codexSessionId)?.codexSessionId;
-    if (fromTimeline) {
-      return fromTimeline;
-    }
-    return run?.dev_session_id ?? null;
-  }, [invocationSessionRows, run?.dev_session_id]);
-  const hasReviewResumeState = useMemo(() => {
-    if (!run?.dev_session_id || !isRecord(run.plan)) {
-      return false;
-    }
-    if (stageCheckpoints.review) {
-      return true;
-    }
-    const reviewSummary = toStringList(run.plan["review_summary"]);
-    const reviewFeedback = String(run.plan["review_feedback"] ?? "").trim();
-    return reviewSummary.length > 0 || reviewFeedback.length > 0;
-  }, [run?.dev_session_id, run?.plan, stageCheckpoints.review]);
-  const rerunSessionOptions = useMemo(() => {
+    return fromTimeline ?? null;
+  }, [invocationSessionRows]);
+  const rerunOptions = useMemo(() => {
     if (!run) {
-      return [] as RerunSessionOption[];
+      return [] as RerunAttemptOption[];
     }
-    const recencyBySession = new Map<string, number>();
-    for (const row of invocationSessionRows) {
-      const sessionId = String(row.codexSessionId ?? "").trim();
-      if (!sessionId) {
-        continue;
-      }
-      const rowTime = new Date(row.startedAt ?? row.finishedAt ?? 0).getTime();
-      const current = recencyBySession.get(sessionId) ?? Number.NEGATIVE_INFINITY;
-      if (rowTime > current) {
-        recencyBySession.set(sessionId, rowTime);
-      }
-    }
-    const candidates: Array<Omit<RerunSessionOption, "isLastSession">> = [
-      {
-        key: "orchestrated",
-        label: "Orchestrated",
-        payload: { mode: "resume" as const, resume_stage: "orchestrated" as const },
-        sessionId: run.orchestrated_session_id,
-      },
-      {
-        key: "pm",
-        label: "PM",
-        payload: { mode: "resume" as const, resume_stage: "pm" as const },
-        sessionId: run.pm_session_id,
-      },
-      {
-        key: "dev",
-        label: "Dev",
-        payload: { mode: "resume" as const, resume_stage: "dev" as const },
-        sessionId: run.dev_session_id,
-      },
-      {
-        key: "review",
-        label: "Review",
-        payload: { mode: "resume" as const, resume_stage: "review" as const },
-        sessionId: hasReviewResumeState ? run.dev_session_id : null,
-      },
-    ].filter((option) => Boolean(option.sessionId));
-    const sorted = candidates.sort((a, b) => {
-      const aRank = recencyBySession.get(String(a.sessionId)) ?? Number.NEGATIVE_INFINITY;
-      const bRank = recencyBySession.get(String(b.sessionId)) ?? Number.NEGATIVE_INFINITY;
-      if (aRank !== bRank) {
-        return bRank - aRank;
-      }
-      return a.label.localeCompare(b.label);
+    const options: RerunAttemptOption[] = [];
+    options.push({
+      key: "fresh",
+      label: "Start from the start",
+      payload: { mode: "fresh" },
+      detail: "Create a brand-new run with no checkpoint or prior thread reuse."
     });
-    return sorted.map((option) => ({
-      ...option,
-      isLastSession: Boolean(latestCodexSessionId) && option.sessionId === latestCodexSessionId,
-    }));
-  }, [hasReviewResumeState, invocationSessionRows, latestCodexSessionId, run]);
+    if (hasExecutionCheckpoint) {
+      options.push({
+        key: "execution",
+        label: "Resume execution",
+        payload: { mode: "resume", checkpoint_kind: "execution" },
+        detail: "Continue from the latest dev/test/review checkpoint."
+      });
+    }
+    if (hasPmCheckpoint) {
+      options.push({
+        key: "pm",
+        label: "Resume PM",
+        payload: { mode: "resume", checkpoint_kind: "pm" },
+        detail: "Continue from the latest PM checkpoint."
+      });
+      options.push({
+        key: "restart-pm",
+        label: "Restart from PM",
+        payload: { mode: "restart", checkpoint_kind: "pm" },
+        detail: "Create a new attempt from the PM checkpoint."
+      });
+    } else if (hasExecutionCheckpoint) {
+      options.push({
+        key: "restart-execution",
+        label: "Restart from execution",
+        payload: { mode: "restart", checkpoint_kind: "execution" },
+        detail: "Create a new attempt from the latest execution checkpoint."
+      });
+    }
+    return options;
+  }, [run, hasExecutionCheckpoint, hasPmCheckpoint]);
 
-  async function handleRerunSelection(payload: RunRerunPayload, label: string) {
+  async function handleRerunSelection(payload: WorkflowAttemptCreatePayload, label: string) {
     if (!credentials || !run) {
       return;
     }
     setRerunBusy(true);
     try {
-      const nextRun = await rerunRun(credentials, run.run_id, payload);
+      const nextRun = await createWorkflowAttempt(credentials, run.workflow_id, payload);
       setStatusLine(`Queued ${label.toLowerCase()} as run ${nextRun.run_id} for ${nextRun.issue_key}.`);
       router.push(
         buildRunDetailPath({
@@ -937,24 +1171,25 @@ export default function RunDetailPage() {
     return items.slice(0, 6);
   }, [workflowDiagnostics?.history]);
   const agentOutcomes = useMemo(() => {
-    const planRoot = isRecord(run?.plan) ? run.plan : {};
-    const workflowPlan = isRecord(planRoot["plan"]) ? planRoot["plan"] : null;
-    const stageCheckpoints = isRecord(planRoot["stage_checkpoints"]) ? planRoot["stage_checkpoints"] : null;
+    const pmArtifact = parseStageArtifact(run?.plan ?? null, "pm");
+    const devArtifact = parseStageArtifact(run?.plan ?? null, "dev");
+    const testArtifact = parseStageArtifact(run?.plan ?? null, "test");
+    const reviewArtifact = parseStageArtifact(run?.plan ?? null, "review");
     const checkpointSummaryForStage = (stage: AgentStage): string[] => {
-      if (!stageCheckpoints || !isRecord(stageCheckpoints[stage])) {
+      const checkpoint = stageCheckpoints[stage];
+      if (!checkpoint || !checkpoint.summary) {
         return [];
       }
-      const summary = String(stageCheckpoints[stage]["summary"] ?? "").trim();
-      return summary ? [summary] : [];
+      return [checkpoint.summary];
     };
     const pmItems = [
       ...checkpointSummaryForStage("pm"),
-      ...toStringList(workflowPlan?.["plan_steps"]),
-      ...toStringList(workflowPlan?.["acceptance_criteria"]).map((item) => `AC: ${item}`),
-      ...toStringList(workflowPlan?.["risks"]).map((item) => `Risk: ${item}`)
+      ...toStringList(pmArtifact?.["plan_steps"]),
+      ...toStringList(pmArtifact?.["acceptance_criteria"]).map((item) => `AC: ${item}`),
+      ...toStringList(pmArtifact?.["risks"]).map((item) => `Risk: ${item}`)
     ];
-    const nextStage = workflowPlan ? String(workflowPlan["next_stage"] ?? "").trim() : "";
-    const executionWorker = workflowPlan ? String(workflowPlan["execution_worker_capability"] ?? "").trim() : "";
+    const nextStage = pmArtifact ? String(pmArtifact["next_stage"] ?? "").trim() : "";
+    const executionWorker = pmArtifact ? String(pmArtifact["execution_worker_capability"] ?? "").trim() : "";
     if (nextStage) {
       pmItems.push(`Next stage: ${nextStage}`);
     }
@@ -982,26 +1217,26 @@ export default function RunDetailPage() {
       {
         stage: "dev",
         label: "Dev",
-        items: [...checkpointSummaryForStage("dev"), ...toStringList(planRoot["dev_rationale"]), ...workstreamSummaries],
+        items: [...checkpointSummaryForStage("dev"), ...toStringList(devArtifact?.["change_summary"]), ...workstreamSummaries],
         feedback: null as string | null,
         emptyText: "No Dev rationale captured."
       },
       {
         stage: "test",
         label: "Test",
-        items: [...checkpointSummaryForStage("test"), ...toStringList(planRoot["test_guidance"])],
+        items: [...checkpointSummaryForStage("test"), ...toStringList(testArtifact?.["guidance"])],
         feedback: null as string | null,
         emptyText: "No test guidance captured."
       },
       {
         stage: "review",
         label: "Review",
-        items: [...checkpointSummaryForStage("review"), ...toStringList(planRoot["review_summary"]), ...reviewHistory],
-        feedback: String(planRoot["review_feedback"] ?? "").trim() || null,
+        items: [...checkpointSummaryForStage("review"), ...toStringList(reviewArtifact?.["summary"]), ...reviewHistory],
+        feedback: String(reviewArtifact?.["feedback"] ?? "").trim() || null,
         emptyText: "No review summary captured."
       }
     ];
-  }, [orchestrationTrace.workstreamEvents, run?.plan, workflowDiagnostics?.history]);
+  }, [orchestrationTrace.workstreamEvents, run?.plan, stageCheckpoints, workflowDiagnostics?.history]);
   const stageLiveSnapshots = useMemo(() => {
     const snapshots = new Map<AgentStage, { recordedAt: string; text: string }>();
     const validStages = new Set<AgentStage>(["pm", "dev", "test", "review"]);
@@ -1236,7 +1471,8 @@ export default function RunDetailPage() {
           attempt: entry.attempt,
           speaker: parsed.speaker,
           text: parsed.text,
-          kind: parsed.kind
+          kind: parsed.kind,
+          ...(parsed.meta ? { meta: parsed.meta } : {})
         } satisfies ChatTimelineEntry;
       })
       .filter((entry): entry is ChatTimelineEntry => entry !== null);
@@ -1313,9 +1549,9 @@ export default function RunDetailPage() {
   }, [activePanel, chatAutoScroll, visibleChatTimelineEntries.length]);
 
   return (
-    <div className="space-y-0">
+    <div className="space-y-6">
       {/* Page header — metadata strip */}
-      <div className="mb-6 space-y-3">
+      <div className="space-y-3">
         {/* Row 1: status + id + chips; actions wrap on narrow screens */}
         <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
           <div className="flex min-w-0 flex-wrap items-center gap-2">
@@ -1356,37 +1592,19 @@ export default function RunDetailPage() {
                   {rerunBusy ? "Requeueing..." : "Rerun"}
                 </summary>
                 <div className="absolute right-0 z-20 mt-2 min-w-64 rounded-md border border-border bg-background p-1 shadow-lg">
-                  {rerunSessionOptions.map((option) => (
+                  {rerunOptions.map((option) => (
                     <button
                       key={option.key}
                       data-testid={`rerun-option-${option.key}`}
                       type="button"
                       className="flex w-full items-center justify-between rounded px-3 py-2 text-left text-xs hover:bg-muted"
-                      onClick={() => void handleRerunSelection(option.payload, `resume from ${option.label}`)}
+                      onClick={() => void handleRerunSelection(option.payload, option.label)}
                       disabled={rerunBusy}
                     >
                       <span>{option.label}</span>
-                      <span className="flex items-center gap-2">
-                        {option.isLastSession ? (
-                          <span className="rounded bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide">
-                            Last session
-                          </span>
-                        ) : null}
-                        {option.sessionId ? (
-                          <code className="max-w-28 truncate rounded bg-muted px-1">{option.sessionId}</code>
-                        ) : null}
-                      </span>
+                      <span className="max-w-40 text-right text-[10px] text-muted-foreground">{option.detail}</span>
                     </button>
                   ))}
-                  <button
-                    data-testid="rerun-option-fresh"
-                    type="button"
-                    className="flex w-full items-center justify-between rounded px-3 py-2 text-left text-xs hover:bg-muted"
-                    onClick={() => void handleRerunSelection({ mode: "fresh" }, "fresh rerun")}
-                    disabled={rerunBusy}
-                  >
-                    <span>Rerun from start</span>
-                  </button>
                 </div>
               </details>
             ) : null}
@@ -1404,7 +1622,7 @@ export default function RunDetailPage() {
                           ? `/${encodeURIComponent(run.tenant_id)}/projects/${encodeURIComponent(projectContextId)}/runs`
                           : `/${encodeURIComponent(run.tenant_id)}/runs`
                       )
-                    : "/dashboard"
+                    : "/platform/dashboard"
                 }
               >
                 <ArrowLeft className="mr-1.5 h-3.5 w-3.5" />
@@ -1436,9 +1654,9 @@ export default function RunDetailPage() {
                 <code className="rounded bg-muted px-1">{executionContext.execution_branch}</code>
               </span>
             ) : null}
-            <span><span className="font-medium text-foreground">Created</span> {new Date(run.created_at).toLocaleString()}</span>
-            {run.started_at ? <span><span className="font-medium text-foreground">Started</span> {new Date(run.started_at).toLocaleString()}</span> : null}
-            {run.finished_at ? <span><span className="font-medium text-foreground">Finished</span> {new Date(run.finished_at).toLocaleString()}</span> : null}
+            <span><span className="font-medium text-foreground">Created</span> {formatTimestamp(run.created_at)}</span>
+            {run.started_at ? <span><span className="font-medium text-foreground">Started</span> {formatTimestamp(run.started_at)}</span> : null}
+            {run.finished_at ? <span><span className="font-medium text-foreground">Finished</span> {formatTimestamp(run.finished_at)}</span> : null}
             {run.status !== "queued" && run.status !== "running" ? (
               <span data-testid="run-not-active" className="rounded border border-border bg-muted px-1.5 py-0.5 text-[11px]">
                 Not active
@@ -1452,18 +1670,18 @@ export default function RunDetailPage() {
       </div>
 
       {statusLine || (run && (run.status === "failed" || run.status === "blocked") && terminalFailureMessage) ? (
-        <div className="mb-8 space-y-4">
+        <div className="space-y-4">
           {statusLine ? (
             <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-5 py-4 text-sm leading-relaxed text-destructive">
               {statusLine}
             </div>
           ) : null}
           {run && (run.status === "failed" || run.status === "blocked") && terminalFailureMessage ? (
-            <Card className="border-destructive/40 bg-destructive/5 shadow-sm">
-              <CardHeader className="space-y-1 px-5 pb-3 pt-5 sm:px-6 sm:pt-6">
-                <CardTitle className="text-base font-semibold text-destructive">Failure Reason</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3 px-5 pb-5 text-xs sm:px-6 sm:pb-6">
+            <div className="overflow-hidden rounded-2xl border border-destructive/30 bg-destructive/5">
+              <div className="px-5 pt-5 sm:px-6 sm:pt-6">
+                <h2 className="text-base font-semibold text-destructive">Failure Reason</h2>
+              </div>
+              <div className="space-y-3 px-5 pb-5 text-xs sm:px-6 sm:pb-6">
                 <p className="break-words whitespace-pre-wrap text-destructive">{terminalFailureMessage}</p>
                 {secondaryFailureDetail ? (
                   <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-destructive sm:p-4">
@@ -1480,8 +1698,8 @@ export default function RunDetailPage() {
                     ))}
                   </ul>
                 ) : null}
-              </CardContent>
-            </Card>
+              </div>
+            </div>
           ) : null}
         </div>
       ) : null}
@@ -1489,7 +1707,7 @@ export default function RunDetailPage() {
       {run ? (
         <>
           {/* Pipeline stage bar */}
-          <div className="mb-6 mt-1 flex items-center gap-2 overflow-x-auto">
+          <div className="flex items-center gap-2 overflow-x-auto">
             {(["pm", "dev", "test", "review"] as AgentStage[]).map((stage, idx) => {
               const progress = stageProgress[stage];
               const isRunning = progress.status === "running";
@@ -1531,7 +1749,7 @@ export default function RunDetailPage() {
           </div>
 
           {/* Tab bar — underline style */}
-          <div className="mb-6 border-b overflow-x-auto">
+          <div className="border-b overflow-x-auto">
             <nav className="-mb-px flex min-w-max gap-0" aria-label="Run detail panels">
               {PANEL_TABS.map((tab) => (
                 <button
@@ -1553,24 +1771,22 @@ export default function RunDetailPage() {
 
           {/* Agents panel */}
           {activePanel === "agents" ? (
-            <div className="space-y-3">
+            <div className="overflow-hidden rounded-2xl border bg-background divide-y">
               {agentOutcomes.map((outcome) => (
-                <Card key={outcome.stage}>
-                  <CardHeader className="pb-2 pt-4">
-                    <div className="flex items-center gap-2">
-                      <div
-                        className="h-2.5 w-2.5 rounded-full"
-                        style={{ backgroundColor: stageColor(outcome.stage) }}
-                      />
-                      <CardTitle className="text-sm font-semibold uppercase tracking-wide">
-                        {outcome.label}
-                      </CardTitle>
-                      <span className="ml-auto text-xs text-muted-foreground">
-                        {stageProgress[outcome.stage as AgentStage]?.detail ?? "not started"}
-                      </span>
-                    </div>
-                  </CardHeader>
-                  <CardContent className="text-xs">
+                <div key={outcome.stage} className="px-5 py-4">
+                  <div className="flex items-center gap-2">
+                    <div
+                      className="h-2.5 w-2.5 rounded-full"
+                      style={{ backgroundColor: stageColor(outcome.stage) }}
+                    />
+                    <h2 className="text-sm font-semibold uppercase tracking-wide">
+                      {outcome.label}
+                    </h2>
+                    <span className="ml-auto text-xs text-muted-foreground">
+                      {stageProgress[outcome.stage as AgentStage]?.detail ?? "not started"}
+                    </span>
+                  </div>
+                  <div className="mt-2 text-xs">
                     {outcome.items.length === 0 && !stageLiveSnapshots.get(outcome.stage as AgentStage) ? (
                       <p className="text-muted-foreground">{outcome.emptyText}</p>
                     ) : (
@@ -1592,8 +1808,8 @@ export default function RunDetailPage() {
                         Feedback: {outcome.feedback}
                       </p>
                     ) : null}
-                  </CardContent>
-                </Card>
+                  </div>
+                </div>
               ))}
             </div>
           ) : null}
@@ -1621,15 +1837,13 @@ export default function RunDetailPage() {
                         { label: "P95 Runtime", value: formatDuration(tokenTimeline.totals.p95_runtime_ms) },
                         { label: "Turns", value: String(tokenTimeline.turns.length) }
                       ].map((kpi) => (
-                        <Card key={kpi.label}>
-                          <CardContent className="p-4">
-                            <p className="text-xs text-muted-foreground uppercase tracking-wide">{kpi.label}</p>
-                            <p className="mt-1 text-2xl font-bold">{kpi.value}</p>
-                          </CardContent>
-                        </Card>
+                        <div key={kpi.label} className="rounded-xl border bg-background p-4">
+                          <p className="text-xs text-muted-foreground uppercase tracking-wide">{kpi.label}</p>
+                          <p className="mt-1 text-2xl font-bold">{kpi.value}</p>
+                        </div>
                       ))}
                     </div>
-                    <div className="min-w-0 overflow-x-auto rounded-md border bg-muted/20 p-3">
+                    <div className="min-w-0 overflow-x-auto rounded-2xl border bg-background p-5">
                       <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Token lane by turn</p>
                       <TokenStackedBarChart
                         data={tokenTimelineChartData}
@@ -1656,7 +1870,7 @@ export default function RunDetailPage() {
                         ]}
                       />
                     </div>
-                    <div className="rounded-md border bg-muted/20 p-3">
+                    <div className="rounded-2xl border bg-background p-5">
                       <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
                         Per-turn token breakdown
                       </p>
@@ -1745,11 +1959,11 @@ export default function RunDetailPage() {
             <div className="space-y-4">
               {/* Gantt timeline */}
               {runTimeline ? (
-                <Card>
-                  <CardHeader className="pb-3">
-                    <CardTitle className="text-sm">Run Timeline</CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-3">
+                <div className="overflow-hidden rounded-2xl border bg-background">
+                  <div className="px-5 pt-5">
+                    <h2 className="text-sm font-semibold">Run Timeline</h2>
+                  </div>
+                  <div className="space-y-3 p-5">
                     <div className="grid gap-3 sm:grid-cols-4">
                       {[
                         { label: "Total", value: formatDuration(runTimeline.totalMs) },
@@ -1757,7 +1971,7 @@ export default function RunDetailPage() {
                         { label: "Stage runtime", value: formatDuration(runTimeline.stageMs) },
                         { label: "Resumed", value: String(runTimeline.resumedCount) }
                       ].map((item) => (
-                        <div key={item.label} className="rounded-lg border p-3 text-xs">
+                        <div key={item.label} className="rounded-xl border bg-background p-3 text-xs">
                           <p className="text-muted-foreground">{item.label}</p>
                           <p className="mt-0.5 font-semibold">{item.value}</p>
                         </div>
@@ -1779,88 +1993,45 @@ export default function RunDetailPage() {
                         );
                       })}
                     </div>
-                  </CardContent>
-                </Card>
+                  </div>
+                </div>
               ) : null}
 
               {/* Chat timeline */}
-              <Card>
-                <CardHeader className="pb-3">
-                  <div className="flex items-center justify-between">
-                    <CardTitle className="text-sm">Activity Timeline</CardTitle>
-                    <div className="flex gap-1.5">
-                      {hasOlderChatMessages ? (
-                        <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => { setChatVisibleCount((c) => Math.min(c + CHAT_PAGE_SIZE, chatTimelineEntries.length)); setChatAutoScroll(false); }}>
-                          Load older
-                        </Button>
-                      ) : null}
-                      {!chatAutoScroll ? (
-                        <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => { setChatVisibleCount(CHAT_PAGE_SIZE); setChatAutoScroll(true); }}>
-                          Latest
-                        </Button>
-                      ) : null}
-                    </div>
+              <div className="flex flex-col overflow-hidden rounded-2xl border bg-background">
+                <div className="sticky top-0 z-10 flex items-center justify-between border-b bg-background px-5 py-3">
+                  <h2 className="text-sm font-semibold">Activity Timeline</h2>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] text-muted-foreground">{chatTimelineEntries.length} messages</span>
+                    {hasOlderChatMessages ? (
+                      <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => { setChatVisibleCount((c) => Math.min(c + CHAT_PAGE_SIZE, chatTimelineEntries.length)); setChatAutoScroll(false); }}>
+                        Load older
+                      </Button>
+                    ) : null}
+                    {!chatAutoScroll ? (
+                      <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => { setChatVisibleCount(CHAT_PAGE_SIZE); setChatAutoScroll(true); }}>
+                        Latest
+                      </Button>
+                    ) : null}
                   </div>
-                </CardHeader>
-                <CardContent>
+                </div>
+                <div className="flex-1 px-5 py-4">
                   {chatTimelineEntries.length === 0 ? (
-                    <p className="text-sm text-muted-foreground">No messages captured yet.</p>
+                    <p className="py-8 text-center text-sm text-muted-foreground">No messages captured yet.</p>
                   ) : (
-                    <ul ref={chatListRef} className="max-h-[480px] space-y-1.5 overflow-y-auto pr-1 text-xs">
-                      {visibleChatTimelineEntries.map((entry) => {
-                        if (entry.kind === "status") {
-                          return (
-                            <li key={entry.key} className="flex items-center gap-2 py-1">
-                              <div className="h-px flex-1 bg-border" />
-                              <span className="max-w-[min(100%,56rem)] whitespace-normal break-words rounded-xl border px-2 py-1 text-center text-[10px] text-muted-foreground">
-                                {stageDisplayLabel(entry.stage)}{entry.attempt !== null ? ` #${entry.attempt}` : ""} — {entry.text}
-                              </span>
-                              <div className="h-px flex-1 bg-border" />
-                            </li>
-                          );
-                        }
-                        if (entry.kind === "error") {
-                          return (
-                            <li
-                              key={entry.key}
-                              className="rounded-lg border-l-2 border-destructive bg-destructive/5 p-3 sm:p-4"
-                            >
-                              <p className="mb-2 text-[10px] text-muted-foreground">
-                                {new Date(entry.recordedAt).toLocaleString()} · {stageDisplayLabel(entry.stage)} · {entry.speaker}
-                              </p>
-                              <p className="break-words whitespace-pre-wrap text-destructive">{entry.text}</p>
-                            </li>
-                          );
-                        }
-                        if (entry.kind === "reasoning") {
-                          return (
-                            <li key={entry.key}>
-                              <details className="rounded-lg border bg-muted/30 p-2 text-[10px] text-muted-foreground">
-                                <summary className="cursor-pointer font-medium">
-                                  {stageDisplayLabel(entry.stage)} reasoning · {new Date(entry.recordedAt).toLocaleTimeString()}
-                                </summary>
-                                <p className="mt-1.5 whitespace-pre-wrap italic">{entry.text}</p>
-                              </details>
-                            </li>
-                          );
-                        }
-                        return (
-                          <li
-                            key={entry.key}
-                            className="rounded-lg bg-primary/5 p-2.5"
-                            style={{ borderLeft: `2px solid ${stageColor(entry.stage)}` }}
-                          >
-                            <p className="mb-1 text-[10px] text-muted-foreground">
-                              {new Date(entry.recordedAt).toLocaleString()} · {stageDisplayLabel(entry.stage)}{entry.attempt !== null ? ` #${entry.attempt}` : ""} · {entry.speaker}
-                            </p>
-                            <p className="whitespace-pre-wrap">{entry.text}</p>
-                          </li>
-                        );
-                      })}
+                    <ul ref={chatListRef} className="max-h-[560px] overflow-y-auto pr-1 text-xs">
+                      {visibleChatTimelineEntries.map((entry, idx) => (
+                        <TimelineRow
+                          key={entry.key}
+                          entry={entry}
+                          stageDisplayLabelFn={stageDisplayLabel}
+                          isLast={idx === visibleChatTimelineEntries.length - 1}
+                        />
+                      ))}
                     </ul>
                   )}
-                </CardContent>
-              </Card>
+                </div>
+              </div>
             </div>
           ) : null}
 
@@ -1869,71 +2040,67 @@ export default function RunDetailPage() {
             <div className="space-y-4">
               {/* Terminal diagnostics */}
               {workflowDiagnostics || terminalFailureMessage ? (
-                <Card>
-                  <CardHeader className="pb-2">
-                    <CardTitle className="text-sm">Terminal Diagnostics</CardTitle>
-                  </CardHeader>
-                  <CardContent className="text-xs space-y-1">
+                <div className="overflow-hidden rounded-2xl border border-destructive/30 bg-destructive/5">
+                  <div className="px-5 pt-5">
+                    <h2 className="text-sm font-semibold text-destructive">Terminal Diagnostics</h2>
+                  </div>
+                  <div className="space-y-1 px-5 pb-5 text-xs">
                     <p><span className="font-medium">Stage:</span> {workflowDiagnostics?.stage || "unknown"}</p>
                     <p><span className="font-medium">Message:</span> {terminalFailureMessage || "No diagnostics message."}</p>
-                  </CardContent>
-                </Card>
+                  </div>
+                </div>
               ) : null}
 
-              {/* Session timeline */}
-              <Card>
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-sm">Codex Session Timeline</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  {invocationSessionRows.length === 0 ? (
-                    <p className="text-xs text-muted-foreground">No stage invocation telemetry captured yet.</p>
-                  ) : (
-                    <ul className="max-h-[280px] space-y-2 overflow-y-auto pr-1 text-xs">
-                      {invocationSessionRows.map((row) => (
-                        <li key={row.key} className="rounded-lg border p-2.5">
-                          <div className="flex items-center gap-2 mb-1">
-                            <span className="font-semibold uppercase" style={{ color: stageColor(row.stage) }}>{row.stage}</span>
-                            {row.attempt !== null ? <span className="text-muted-foreground">#{row.attempt}</span> : null}
-                            <span className="rounded-full border px-1.5 py-0.5 text-[10px]">{row.resumedSession === null ? "unknown" : row.resumedSession ? "resumed" : "new"}</span>
-                            {row.status ? <span className="text-muted-foreground">{row.status}</span> : null}
-                            {row.durationMs !== null ? <span className="ml-auto text-muted-foreground">{formatDuration(row.durationMs)}</span> : null}
-                          </div>
-                          <p className="text-muted-foreground">start: {row.startedAt ? new Date(row.startedAt).toLocaleString() : "n/a"} · finish: {row.finishedAt ? new Date(row.finishedAt).toLocaleString() : "n/a"}</p>
-                          {row.codexSessionId ? <p className="break-all text-muted-foreground">session: {row.codexSessionId}</p> : null}
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </CardContent>
-              </Card>
+              <div className="overflow-hidden rounded-2xl border bg-background divide-y">
+                {/* Session timeline */}
+                <div className="px-5 py-5">
+                  <h2 className="text-sm font-semibold">Codex Session Timeline</h2>
+                  <div className="mt-3">
+                    {invocationSessionRows.length === 0 ? (
+                      <p className="text-xs text-muted-foreground">No stage invocation telemetry captured yet.</p>
+                    ) : (
+                      <ul className="max-h-[280px] space-y-2 overflow-y-auto pr-1 text-xs">
+                        {invocationSessionRows.map((row) => (
+                          <li key={row.key} className="rounded-lg border bg-background p-2.5">
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className="font-semibold uppercase" style={{ color: stageColor(row.stage) }}>{row.stage}</span>
+                              {row.attempt !== null ? <span className="text-muted-foreground">#{row.attempt}</span> : null}
+                              <span className="rounded-full border px-1.5 py-0.5 text-[10px]">{row.resumedSession === null ? "unknown" : row.resumedSession ? "resumed" : "new"}</span>
+                              {row.status ? <span className="text-muted-foreground">{row.status}</span> : null}
+                              {row.durationMs !== null ? <span className="ml-auto text-muted-foreground">{formatDuration(row.durationMs)}</span> : null}
+                            </div>
+                            <p className="text-muted-foreground">start: {formatTimestamp(row.startedAt, "n/a")} · finish: {formatTimestamp(row.finishedAt, "n/a")}</p>
+                            {row.codexSessionId ? <p className="break-all text-muted-foreground">session: {row.codexSessionId}</p> : null}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                </div>
 
-              {/* Agent events */}
-              <Card>
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-sm">Agent Events</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  {events.length === 0 ? (
-                    <p className="text-xs text-muted-foreground">No agent events captured yet.</p>
-                  ) : (
-                    <ul className="max-h-[260px] space-y-2 overflow-y-auto pr-1 text-xs">
-                      {events.map((event, idx) => (
-                        <li key={`${event.agent_id}-${event.recorded_at}-${idx}`} className="rounded-lg border p-2.5">
-                          <p><span className="font-medium">{event.event_type}</span> by {event.agent_id}</p>
-                          <p className="text-muted-foreground">{new Date(event.recorded_at).toLocaleString()}</p>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </CardContent>
-              </Card>
+                {/* Agent events */}
+                <div className="px-5 py-5">
+                  <h2 className="text-sm font-semibold">Agent Events</h2>
+                  <div className="mt-3">
+                    {events.length === 0 ? (
+                      <p className="text-xs text-muted-foreground">No agent events captured yet.</p>
+                    ) : (
+                      <ul className="max-h-[260px] space-y-2 overflow-y-auto pr-1 text-xs">
+                        {events.map((event, idx) => (
+                          <li key={`${event.agent_id}-${event.recorded_at}-${idx}`} className="rounded-lg border bg-background p-2.5">
+                            <p><span className="font-medium">{event.event_type}</span> by {event.agent_id}</p>
+                            <p className="text-muted-foreground">{formatTimestamp(event.recorded_at)}</p>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                </div>
 
-              {/* Raw logs */}
-              <Card>
-                <CardHeader className="pb-2">
+                {/* Raw logs */}
+                <div className="px-5 py-5">
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <CardTitle className="text-sm">Raw Agent Logs</CardTitle>
+                    <h2 className="text-sm font-semibold">Raw Agent Logs</h2>
                     <div className="flex items-center gap-1.5 text-xs">
                       <Button variant="outline" size="sm" className="h-7" onClick={() => void handleLoadOlderLogs()} disabled={loadingOlderLogs || !hasMoreLogs || logs.length === 0}>
                         {loadingOlderLogs ? "Loading..." : hasMoreLogs ? "Load older" : "All loaded"}
@@ -1949,38 +2116,36 @@ export default function RunDetailPage() {
                       ))}
                     </div>
                   </div>
-                </CardHeader>
-                <CardContent>
-                  {logs.length === 0 ? (
-                    <p className="text-xs text-muted-foreground">No logs captured yet.</p>
-                  ) : filteredLogs.length === 0 ? (
-                    <p className="text-xs text-muted-foreground">No log lines match current filters.</p>
-                  ) : (
-                    <ul className="max-h-[320px] space-y-2 overflow-y-auto pr-1 text-xs">
-                      {filteredLogs.map((entry, idx) => (
-                        <li key={`${entry.recorded_at}-${idx}`} className="rounded-lg border p-2.5" style={{ borderLeft: `2px solid ${stageColor(entry.stage)}` }}>
-                          <p className="mb-0.5 text-muted-foreground">
-                            <span className="font-medium text-foreground">{entry.agent_id}</span> · {entry.stage}{entry.attempt !== null ? ` #${entry.attempt}` : ""} [{entry.stream}] · {new Date(entry.recorded_at).toLocaleString()}
-                          </p>
-                          <p className="whitespace-pre-wrap">{entry.message}</p>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </CardContent>
-              </Card>
+                  <div className="mt-3">
+                    {logs.length === 0 ? (
+                      <p className="text-xs text-muted-foreground">No logs captured yet.</p>
+                    ) : filteredLogs.length === 0 ? (
+                      <p className="text-xs text-muted-foreground">No log lines match current filters.</p>
+                    ) : (
+                      <ul className="max-h-[320px] space-y-2 overflow-y-auto pr-1 text-xs">
+                        {filteredLogs.map((entry, idx) => (
+                          <li key={`${entry.recorded_at}-${idx}`} className="rounded-lg border bg-background p-2.5" style={{ borderLeft: `2px solid ${stageColor(entry.stage)}` }}>
+                            <p className="mb-0.5 text-muted-foreground">
+                              <span className="font-medium text-foreground">{entry.agent_id}</span> · {entry.stage}{entry.attempt !== null ? ` #${entry.attempt}` : ""} [{entry.stream}] · {formatTimestamp(entry.recorded_at)}
+                            </p>
+                            <p className="whitespace-pre-wrap">{entry.message}</p>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                </div>
 
-              {/* Plan JSON */}
-              <Card>
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-sm">Plan JSON</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <pre className="max-h-[360px] overflow-auto rounded-lg bg-muted/50 p-3 text-xs whitespace-pre-wrap">
-                    {run.plan ? JSON.stringify(run.plan, null, 2) : "No plan captured for this run."}
-                  </pre>
-                </CardContent>
-              </Card>
+                {/* Plan JSON */}
+                <div className="px-5 py-5">
+                  <h2 className="text-sm font-semibold">Plan JSON</h2>
+                  <div className="mt-3">
+                    <pre className="max-h-[360px] overflow-auto rounded-lg bg-muted/50 p-3 text-xs whitespace-pre-wrap">
+                      {run.plan ? JSON.stringify(run.plan, null, 2) : "No plan captured for this run."}
+                    </pre>
+                  </div>
+                </div>
+              </div>
             </div>
           ) : null}
         </>

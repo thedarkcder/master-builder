@@ -31,6 +31,14 @@ def _has_index(table_name: str, index_name: str) -> bool:
     return any(index.get("name") == index_name for index in inspector.get_indexes(table_name))
 
 
+def _has_column(table_name: str, column_name: str) -> bool:
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    if table_name not in inspector.get_table_names():
+        return False
+    return any(column.get("name") == column_name for column in inspector.get_columns(table_name))
+
+
 def upgrade() -> None:
     bind = op.get_bind()
     if bind.dialect.name == "postgresql":
@@ -83,7 +91,9 @@ def upgrade() -> None:
         ("ix_run_human_input_requests_expires_at", ["expires_at"]),
         ("ix_run_human_input_requests_created_at", ["created_at"]),
     ):
-        if not _has_index("run_human_input_requests", index_name):
+        if all(_has_column("run_human_input_requests", column_name) for column_name in columns) and not _has_index(
+            "run_human_input_requests", index_name
+        ):
             op.create_index(index_name, "run_human_input_requests", columns, unique=False)
 
 

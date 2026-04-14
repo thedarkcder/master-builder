@@ -1,20 +1,12 @@
 import { CheckCircle2, Disc3, Link2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-
 type DiscordStepProps = {
   createdTenantId: string;
   tenantIdPreview: string;
   guildId: string | null | undefined;
   installedAt: string | null | undefined;
-  onboardingChannelId: string | null | undefined;
-  inviteExpirySeconds: number | null | undefined;
-  inviteMaxUses: number | null | undefined;
   onStartInstall: () => void;
-  onOnboardingChannelChange: (value: string) => void;
-  onInviteExpiryChange: (value: string) => void;
-  onInviteMaxUsesChange: (value: string) => void;
 };
 
 export function DiscordStep({
@@ -22,16 +14,10 @@ export function DiscordStep({
   tenantIdPreview,
   guildId,
   installedAt,
-  onboardingChannelId,
-  inviteExpirySeconds,
-  inviteMaxUses,
-  onStartInstall,
-  onOnboardingChannelChange,
-  onInviteExpiryChange,
-  onInviteMaxUsesChange
+  onStartInstall
 }: DiscordStepProps) {
   return (
-    <div className="grid gap-6 xl:grid-cols-[320px_minmax(0,1fr)]">
+    <div className="max-w-xl">
       <div className="min-w-0 rounded-2xl border border-slate-200 bg-slate-50/70 px-5 py-5">
         <div className="space-y-4">
           <div className="flex items-center gap-2 text-sm font-medium text-slate-900">
@@ -56,47 +42,8 @@ export function DiscordStep({
               Guild ID: <strong>{guildId ?? "Not connected yet"}</strong>
             </div>
             <div className="text-xs text-slate-500">Installed at: <strong>{installedAt ?? "Not installed yet"}</strong></div>
+            <div className="text-xs text-slate-500">Optional step. You can continue setup without Discord.</div>
           </div>
-        </div>
-      </div>
-
-      <div className="min-w-0 grid gap-5 md:grid-cols-2">
-        <div className="space-y-1.5 md:col-span-2">
-          <label className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500" htmlFor="discord-onboarding-channel">
-            Invite channel
-          </label>
-          <Input
-            id="discord-onboarding-channel"
-            value={onboardingChannelId ?? ""}
-            onChange={(event) => onOnboardingChannelChange(event.target.value)}
-            placeholder="Discord text channel ID"
-            className="h-12 rounded-2xl border-slate-200 bg-white"
-          />
-          <p className="text-sm text-slate-500">Use the channel where new members should receive the workspace invite.</p>
-        </div>
-        <div className="space-y-1.5">
-          <label className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500" htmlFor="discord-invite-expiry">
-            Invite expiry
-          </label>
-          <Input
-            id="discord-invite-expiry"
-            value={String(inviteExpirySeconds ?? 86400)}
-            onChange={(event) => onInviteExpiryChange(event.target.value)}
-            placeholder="86400"
-            className="h-12 rounded-2xl border-slate-200 bg-white"
-          />
-        </div>
-        <div className="space-y-1.5">
-          <label className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500" htmlFor="discord-invite-max-uses">
-            Invite max uses
-          </label>
-          <Input
-            id="discord-invite-max-uses"
-            value={String(inviteMaxUses ?? 1)}
-            onChange={(event) => onInviteMaxUsesChange(event.target.value)}
-            placeholder="1"
-            className="h-12 rounded-2xl border-slate-200 bg-white"
-          />
         </div>
       </div>
     </div>

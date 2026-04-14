@@ -20,6 +20,14 @@ class PasswordResetTokenPayload:
     expires_at: datetime
 
 
+def normalize_password_reset_timestamp(value: datetime | None) -> str:
+    if value is None:
+        return ""
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC).isoformat()
+    return value.astimezone(UTC).isoformat()
+
+
 def issue_password_reset_token(
     *,
     user_id: str,
@@ -32,7 +40,7 @@ def issue_password_reset_token(
     payload = {
         "user_id": user_id.strip(),
         "email": email.strip().lower(),
-        "password_updated_at": password_updated_at.astimezone(UTC).isoformat(),
+        "password_updated_at": normalize_password_reset_timestamp(password_updated_at),
         "expires_at": expires_at.isoformat(),
     }
     payload_token = _urlsafe_b64encode(json.dumps(payload, separators=(",", ":")).encode("utf-8"))

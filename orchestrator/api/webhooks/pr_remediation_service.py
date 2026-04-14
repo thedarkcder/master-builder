@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 import re
 
 from sqlalchemy import select
@@ -9,6 +10,7 @@ from sqlalchemy.orm import Session
 from orchestrator.api.webhooks.pr_remediation_issue_service import (
     latest_issue_run as _latest_issue_run,
     repository_full_name as _repository_full_name,
+    run_matches_pr_remediation_head as _run_matches_pr_remediation_head,
 )
 from orchestrator.api.webhooks.pr_remediation_enqueue import enqueue_pr_remediation_run
 from orchestrator.api.webhooks.pr_remediation_policy import (
@@ -22,6 +24,7 @@ from orchestrator.tools.github_app import GitHubApiError, GitHubAppClient
 
 _ISSUE_KEY_PATTERN = re.compile(r"\b([A-Z][A-Z0-9]+-\d+)\b")
 _MANUAL_FIX_SNIPPET_RADIUS = 5
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -450,19 +453,22 @@ def count_pr_remediation_attempts(
     normalized_sha = str(head_sha or "").strip()
     total = 0
     for run in runs:
-        plan = run.plan if isinstance(run.plan, dict) else {}
-        trigger = plan.get("trigger_context") if isinstance(plan, dict) else None
-        if not isinstance(trigger, dict):
-            continue
-        if str(trigger.get("source") or "").strip() != "github_pr_review_feedback":
-            continue
         try:
-            trigger_pr_number = int(trigger.get("pr_number") or 0)
-        except (TypeError, ValueError):
-            continue
-        if trigger_pr_number != pr_number:
-            continue
-        if str(trigger.get("head_sha") or "").strip() != normalized_sha:
+            if not _run_matches_pr_remediation_head(
+                run=run,
+                pr_number=pr_number,
+                head_sha=normalized_sha,
+            ):
+                continue
+        except ValueError as exc:
+            logger.warning(
+                "pr_remediation_attempt_count_invalid_snapshot_skipped tenant_id=%s project_id=%s run_id=%s issue_key=%s error=%s",
+                tenant_id,
+                project_id,
+                getattr(run, "run_id", None),
+                issue_key,
+                exc,
+            )
             continue
         total += 1
     return total

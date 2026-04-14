@@ -94,6 +94,9 @@ _DEFAULT_ROUTING = {
     "workflow.review": PROFILE_ENGINEERING_EXECUTION,
     "workflow.standup_voice_brief": PROFILE_GENERAL_PLANNING,
     "workflow.retro_voice_brief": PROFILE_GENERAL_PLANNING,
+    "workflow.design_planning": PROFILE_GENERAL_PLANNING,
+    "workflow.design_review": PROFILE_GENERAL_PLANNING,
+    "workflow.design_feedback": PROFILE_GENERAL_PLANNING,
 }
 _KNOWN_AGENT_ROLES = (
     AGENT_ROLE_PM,
@@ -257,7 +260,9 @@ def default_execution_profiles(
     default_claude_cli_command: str | None = None,
 ) -> dict[str, dict[str, Any]]:
     normalized_codex_command = str(default_codex_cli_command or "").strip() or "codex"
-    normalized_chat_command = str(default_chat_cli_command or "").strip() or normalized_codex_command
+    normalized_chat_command = (
+        str(default_chat_cli_command or default_claude_cli_command or "").strip() or normalized_codex_command
+    )
     normalized_codex_model = normalize_codex_model(default_codex_model) or "gpt-5.4"
     normalized_chat_model = normalize_codex_model(default_chat_model) or normalized_codex_model
     normalized_codex_effort = normalize_codex_reasoning_effort(default_codex_reasoning_effort) or "medium"

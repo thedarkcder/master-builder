@@ -1,0 +1,17 @@
+Stage plugin: {{ stage_plugin }}
+Current stage status: {{ stage_status }}
+Stakeholder input: {{ stakeholder_text }}
+Assistant summary: {{ assistant_summary }}
+Current artifacts: {{ stage_artifacts_json }}
+Open questions: {{ stage_open_questions_json }}
+Tool outputs: {{ stage_tool_outputs_json }}
+Plugin catalog: {{ plugin_catalog_json }}
+Tool catalog: {{ tool_catalog_json }}
+
+Contract:
+- update stage_artifacts with concise design direction
+- keep unresolved questions in stage_open_questions
+- set decision_state to approved, revisions_required, or pending
+- choose selected_plugin_id from plugin catalog
+- if tools are needed, return tool_calls as:
+  [{"tool":"<tool_name>","arguments":{...}}]

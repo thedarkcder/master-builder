@@ -27,7 +27,7 @@ Worker pick/start decisions:
 - `orchestrator/core/worker/decision_gate.py`
 
 Board-ingress qualification and Decision Gate:
-- `orchestrator/api/webhooks/jira_webhook_precheck.py`
+- `orchestrator/api/webhooks/jira_admission_flow.py`
 - `orchestrator/core/decision_clarification_service.py`
 - `orchestrator/core/worker/process_service.py`
 

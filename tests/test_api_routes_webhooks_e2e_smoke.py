@@ -19,7 +19,7 @@ from orchestrator.core.config import get_settings
 from orchestrator.core.secrets import encrypt_value
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
-from orchestrator.storage.models import JiraOAuthConnection, Run, Tenant
+from orchestrator.storage.models import JiraOAuthConnection, Run, Tenant, WorkflowCheckpoint, WorkflowExecution
 
 pytestmark = pytest.mark.smoke
 
@@ -172,6 +172,12 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 return_value=None,
             )
         )
+        self.patch_stack.enter_context(
+            patch(
+                "orchestrator.api.routes.admin_tenants.email_delivery.send_tenant_invite_email",
+                return_value=None,
+            )
+        )
 
         self.app = create_app()
         self.client = TestClient(self.app, raise_server_exceptions=False)
@@ -281,8 +287,8 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 )
             )
             session.add(
-                Run(
-                    run_id="run-e2e",
+                WorkflowExecution(
+                    workflow_id="workflow-e2e",
                     tenant_id="example",
                     project_id="example-default",
                     issue_key="TP-1",
@@ -291,12 +297,59 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                     repo_url="https://github.com/example/repo",
                     branch="feature/e2e",
                     pr_url=None,
+                    dedupe_scope="issue_execution",
+                    status="queued",
+                    last_error=None,
+                    active_run_id="run-e2e",
+                    latest_checkpoint_id="checkpoint-e2e",
+                    source_workflow_id=None,
+                    source_run_id=None,
+                    blocked_reason=None,
+                    created_at=now,
+                    started_at=None,
+                    finished_at=None,
+                    updated_at=now,
+                )
+            )
+            session.add(
+                Run(
+                    run_id="run-e2e",
+                    workflow_id="workflow-e2e",
+                    tenant_id="example",
+                    project_id="example-default",
+                    issue_key="TP-1",
+                    issue_summary="smoke",
+                    issue_description=None,
+                    repo_url="https://github.com/example/repo",
+                    branch="feature/e2e",
+                    pr_url=None,
+                    attempt_number=1,
+                    parent_run_id=None,
+                    entry_mode="fresh",
+                    entry_stage="orchestrated",
+                    entry_checkpoint_id="checkpoint-e2e",
+                    dedupe_scope="issue_execution",
                     status="queued",
                     last_error=None,
                     plan=None,
                     created_at=now,
                     started_at=None,
+                    last_heartbeat_at=None,
+                    worker_service_instance_id=None,
                     finished_at=None,
+                )
+            )
+            session.add(
+                WorkflowCheckpoint(
+                    checkpoint_id="checkpoint-e2e",
+                    workflow_id="workflow-e2e",
+                    run_id="run-e2e",
+                    checkpoint_kind="pm",
+                    stage="pm",
+                    payload_json={"source": "smoke"},
+                    codex_session_id=None,
+                    created_at=now,
+                    updated_at=now,
                 )
             )
             session.commit()
@@ -319,6 +372,11 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 expected_statuses=(200,),
             ),
             ("GET", "/api/admin/auth/me"): RouteScenario(path="/api/admin/auth/me", auth=admin),
+            ("GET", "/api/admin/status"): RouteScenario(path="/api/admin/status", auth=admin),
+            ("GET", "/api/admin/agent-runtime-models"): RouteScenario(
+                path="/api/admin/agent-runtime-models",
+                auth=admin,
+            ),
             ("GET", "/api/admin/github/install/callback"): RouteScenario(
                 path="/api/admin/github/install/callback?state=bad&installation_id=1",
                 expected_statuses=(400,),
@@ -337,6 +395,11 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
             ),
             ("GET", "/api/admin/runs"): RouteScenario(path="/api/admin/runs", auth=admin),
             ("GET", "/api/admin/runs/{run_id}"): RouteScenario(path="/api/admin/runs/run-e2e", auth=admin),
+            ("GET", "/api/admin/workflows"): RouteScenario(path="/api/admin/workflows", auth=admin),
+            ("GET", "/api/admin/workflows/{workflow_id}"): RouteScenario(
+                path="/api/admin/workflows/workflow-e2e",
+                auth=admin,
+            ),
             ("GET", "/api/admin/runs/{run_id}/events"): RouteScenario(
                 path="/api/admin/runs/run-e2e/events",
                 auth=admin,
@@ -358,9 +421,10 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 path="/api/admin/codex/events/stream?tenant_id=example&project_id=example-default",
                 auth=admin,
             ),
-            ("POST", "/api/admin/runs/{run_id}/rerun"): RouteScenario(
-                path="/api/admin/runs/run-e2e/rerun",
+            ("POST", "/api/admin/workflows/{workflow_id}/attempts"): RouteScenario(
+                path="/api/admin/workflows/workflow-e2e/attempts",
                 auth=admin,
+                json={"mode": "resume", "checkpoint_kind": "pm"},
                 expected_statuses=(201, 409),
             ),
             ("POST", "/api/admin/runs/{run_id}/cancel"): RouteScenario(
@@ -392,8 +456,16 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 path="/api/admin/tenants/example/health",
                 auth=admin,
             ),
+            ("GET", "/api/admin/tenants/{tenant_id}/delivery-summary"): RouteScenario(
+                path="/api/admin/tenants/example/delivery-summary",
+                auth=admin,
+            ),
             ("GET", "/api/admin/observability/platform"): RouteScenario(
                 path="/api/admin/observability/platform",
+                auth=admin,
+            ),
+            ("GET", "/api/admin/observability/webhook-jobs"): RouteScenario(
+                path="/api/admin/observability/webhook-jobs?tenant_id=example&project_id=example-default&limit=25&offset=0",
                 auth=admin,
             ),
             ("GET", "/api/admin/observability/knowledge-jira-sync"): RouteScenario(
@@ -413,9 +485,46 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 path="/api/admin/agent-runtimes",
                 auth=admin,
             ),
+            ("GET", "/api/admin/agent-runtime-profiles"): RouteScenario(
+                path="/api/admin/agent-runtime-profiles",
+                auth=admin,
+            ),
             ("GET", "/api/admin/agent-runtime-tools"): RouteScenario(
                 path="/api/admin/agent-runtime-tools",
                 auth=admin,
+            ),
+            ("POST", "/api/admin/agent-runtime-profiles"): RouteScenario(
+                path="/api/admin/agent-runtime-profiles",
+                auth=admin,
+                json={
+                    "profile_name": "smoke_profile",
+                    "runtime_kind": "codex_cli",
+                    "model": "gpt-5.4",
+                    "reasoning_effort": "medium",
+                    "tool_bridge_allowed": True,
+                },
+                expected_statuses=(200, 201, 400, 409, 422),
+            ),
+            ("PUT", "/api/admin/agent-runtime-profiles/{profile_name}"): RouteScenario(
+                path="/api/admin/agent-runtime-profiles/smoke_profile",
+                auth=admin,
+                json={
+                    "runtime_kind": "codex_cli",
+                    "model": "gpt-5.4",
+                    "reasoning_effort": "medium",
+                    "tool_bridge_allowed": True,
+                },
+                expected_statuses=(200, 400, 404, 422),
+            ),
+            ("POST", "/api/admin/agent-runtime-profiles/{profile_name}/reset"): RouteScenario(
+                path="/api/admin/agent-runtime-profiles/smoke_profile/reset",
+                auth=admin,
+                expected_statuses=(200, 400, 404, 422),
+            ),
+            ("DELETE", "/api/admin/agent-runtime-profiles/{profile_name}"): RouteScenario(
+                path="/api/admin/agent-runtime-profiles/smoke_profile",
+                auth=admin,
+                expected_statuses=(204, 404),
             ),
             ("PUT", "/api/admin/agent-runtimes"): RouteScenario(
                 path="/api/admin/agent-runtimes",
@@ -527,9 +636,75 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 path="/api/admin/tenants/example/github/install/start?return_to=edit",
                 auth=admin,
             ),
+            ("POST", "/api/admin/tenants/{tenant_id}/discord/install/start"): RouteScenario(
+                path="/api/admin/tenants/example/discord/install/start?return_to=edit",
+                auth=admin,
+                expected_statuses=(200, 400, 404, 422),
+            ),
+            ("POST", "/api/admin/tenants/{tenant_id}/discord/link/start"): RouteScenario(
+                path="/api/admin/tenants/example/discord/link/start",
+                auth=admin,
+                expected_statuses=(200, 400, 404, 422),
+            ),
+            ("POST", "/api/admin/tenants/{tenant_id}/discord/onboarding-invite"): RouteScenario(
+                path="/api/admin/tenants/example/discord/onboarding-invite",
+                auth=admin,
+                expected_statuses=(200, 400, 404, 422),
+            ),
+            ("GET", "/api/admin/tenants/{tenant_id}/discord/identity"): RouteScenario(
+                path="/api/admin/tenants/example/discord/identity",
+                auth=admin,
+                expected_statuses=(200, 404),
+            ),
             ("GET", "/api/admin/tenants/{tenant_id}/github/repositories"): RouteScenario(
                 path="/api/admin/tenants/example/github/repositories",
                 auth=admin,
+            ),
+            ("GET", "/api/admin/tenants/{tenant_id}/members"): RouteScenario(
+                path="/api/admin/tenants/example/members",
+                auth=admin,
+            ),
+            ("PUT", "/api/admin/tenants/{tenant_id}/members/{membership_id}"): RouteScenario(
+                path="/api/admin/tenants/example/members/membership-missing",
+                auth=admin,
+                json={},
+                expected_statuses=(404, 422),
+            ),
+            ("GET", "/api/admin/tenants/{tenant_id}/teams"): RouteScenario(
+                path="/api/admin/tenants/example/teams",
+                auth=admin,
+            ),
+            ("POST", "/api/admin/tenants/{tenant_id}/teams"): RouteScenario(
+                path="/api/admin/tenants/example/teams",
+                auth=admin,
+                json={},
+                expected_statuses=(201, 409, 422),
+            ),
+            ("PUT", "/api/admin/tenants/{tenant_id}/teams/{team_id}"): RouteScenario(
+                path="/api/admin/tenants/example/teams/team-missing",
+                auth=admin,
+                json={},
+                expected_statuses=(404, 422),
+            ),
+            ("GET", "/api/admin/tenants/{tenant_id}/invites"): RouteScenario(
+                path="/api/admin/tenants/example/invites",
+                auth=admin,
+            ),
+            ("POST", "/api/admin/tenants/{tenant_id}/invites"): RouteScenario(
+                path="/api/admin/tenants/example/invites",
+                auth=admin,
+                json={},
+                expected_statuses=(201, 409, 422),
+            ),
+            ("POST", "/api/admin/tenants/{tenant_id}/invites/{invite_id}/resend"): RouteScenario(
+                path="/api/admin/tenants/example/invites/invite-missing/resend",
+                auth=admin,
+                expected_statuses=(200, 404),
+            ),
+            ("POST", "/api/admin/tenants/{tenant_id}/invites/{invite_id}/revoke"): RouteScenario(
+                path="/api/admin/tenants/example/invites/invite-missing/revoke",
+                auth=admin,
+                expected_statuses=(200, 404),
             ),
             ("POST", "/api/admin/tenants/{tenant_id}/jira/disconnect"): RouteScenario(
                 path="/api/admin/tenants/example/jira/disconnect",
@@ -585,6 +760,59 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                     "is_archived": False,
                 },
             ),
+            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/installs"): RouteScenario(
+                path="/api/admin/tenants/example/projects/example-default/installs",
+                auth=admin,
+            ),
+            ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/installs"): RouteScenario(
+                path="/api/admin/tenants/example/projects/example-default/installs",
+                auth=admin,
+                json={
+                    "kind": "fastlane_lane",
+                    "label": "Smoke Fastlane",
+                    "enabled": True,
+                    "config": {
+                        "working_dir": ".",
+                        "platform": "ios",
+                        "lane": "beta",
+                        "use_bundle_exec": True,
+                    },
+                    "binding_names": ["FASTLANE_SESSION"],
+                },
+                expected_statuses=(201,),
+            ),
+            ("PUT", "/api/admin/tenants/{tenant_id}/projects/{project_id}/installs/{install_id}"): RouteScenario(
+                path="/api/admin/tenants/example/projects/example-default/installs/install-missing",
+                auth=admin,
+                json={
+                    "kind": "fastlane_lane",
+                    "label": "Missing Install",
+                    "enabled": True,
+                    "config": {
+                        "working_dir": ".",
+                        "platform": "ios",
+                        "lane": "beta",
+                        "use_bundle_exec": True,
+                    },
+                    "binding_names": ["FASTLANE_SESSION"],
+                },
+                expected_statuses=(404,),
+            ),
+            ("DELETE", "/api/admin/tenants/{tenant_id}/projects/{project_id}/installs/{install_id}"): RouteScenario(
+                path="/api/admin/tenants/example/projects/example-default/installs/install-missing",
+                auth=admin,
+                expected_statuses=(404, 204),
+            ),
+            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/install-requests"): RouteScenario(
+                path="/api/admin/tenants/example/projects/example-default/install-requests",
+                auth=admin,
+            ),
+            ("PUT", "/api/admin/tenants/{tenant_id}/projects/{project_id}/install-requests/{request_id}"): RouteScenario(
+                path="/api/admin/tenants/example/projects/example-default/install-requests/request-missing",
+                auth=admin,
+                json={"status": "rejected"},
+                expected_statuses=(404,),
+            ),
             ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/automations"): RouteScenario(
                 path="/api/admin/tenants/example/projects/example-default/automations",
                 auth=admin,
@@ -593,6 +821,11 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 path="/api/admin/tenants/example/projects/example-default/automations",
                 auth=admin,
                 json={"automations": []},
+            ),
+            ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/automations/{kind}/run-now"): RouteScenario(
+                path="/api/admin/tenants/example/projects/example-default/automations/daily-summary/run-now",
+                auth=admin,
+                expected_statuses=(200, 400, 404, 409),
             ),
             ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/knowledge/assets"): RouteScenario(
                 path="/api/admin/tenants/example/projects/example-default/knowledge/assets",
@@ -752,6 +985,10 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 path="/api/admin/tenants/example/unarchive",
                 auth=admin,
             ),
+            ("GET", "/api/admin/discord/install/callback"): RouteScenario(
+                path="/api/admin/discord/install/callback?state=bad&code=x",
+                expected_statuses=(400, 422),
+            ),
             ("POST", "/discord/command/{tenant_id}"): RouteScenario(
                 path="/discord/command/example",
                 json={"user_id": "u1", "command": "!help", "channel_id": "discord-channel-1"},
@@ -765,6 +1002,59 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 json={"user_id": "u1", "command": "!help", "channel_id": "discord-channel-1"},
             ),
             ("POST", "/github/webhook"): RouteScenario(path="/github/webhook", json={"action": "opened"}),
+            ("POST", "/api/public/register"): RouteScenario(
+                path="/api/public/register",
+                json={},
+                expected_statuses=(201, 400, 409, 422),
+            ),
+            ("POST", "/api/public/invites/accept"): RouteScenario(
+                path="/api/public/invites/accept",
+                json={},
+                expected_statuses=(200, 400, 404, 422),
+            ),
+            ("POST", "/api/public/password-reset/request"): RouteScenario(
+                path="/api/public/password-reset/request",
+                json={},
+                expected_statuses=(200, 400, 422),
+            ),
+            ("POST", "/api/public/password-reset/confirm"): RouteScenario(
+                path="/api/public/password-reset/confirm",
+                json={},
+                expected_statuses=(200, 400, 404, 422),
+            ),
+            ("POST", "/api/app/auth/login"): RouteScenario(
+                path="/api/app/auth/login",
+                json={},
+                expected_statuses=(200, 400, 401, 422),
+            ),
+            ("GET", "/api/app/auth/me"): RouteScenario(
+                path="/api/app/auth/me",
+                expected_statuses=(401,),
+            ),
+            ("GET", "/api/app/discord/callback"): RouteScenario(
+                path="/api/app/discord/callback?state=bad",
+                expected_statuses=(400, 422),
+            ),
+            ("PUT", "/api/app/me/profile"): RouteScenario(
+                path="/api/app/me/profile",
+                json={},
+                expected_statuses=(401, 422),
+            ),
+            ("POST", "/api/app/me/password"): RouteScenario(
+                path="/api/app/me/password",
+                json={},
+                expected_statuses=(401, 422),
+            ),
+            ("PUT", "/api/app/tenants/{tenant_id}/me/settings"): RouteScenario(
+                path="/api/app/tenants/example/me/settings",
+                json={},
+                expected_statuses=(401, 422),
+            ),
+            ("POST", "/api/app/onboarding/{tenant_id}/complete"): RouteScenario(
+                path="/api/app/onboarding/example/complete",
+                json={},
+                expected_statuses=(401, 404, 422),
+            ),
             ("GET", "/health"): RouteScenario(path="/health"),
             ("GET", "/metrics"): RouteScenario(path="/metrics"),
             ("POST", "/jira/webhook/{tenant_id}"): RouteScenario(path="/jira/webhook/example", json={"webhookEvent": "jira:issue_updated"}),

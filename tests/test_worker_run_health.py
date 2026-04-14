@@ -9,14 +9,13 @@ from types import SimpleNamespace
 from sqlalchemy import select
 
 from orchestrator.core.worker.run_health import (
-    cleanup_orphan_run_locks,
     recover_stale_running_runs,
     touch_run_heartbeat,
 )
-from orchestrator.core.runs import RUN_DEDUPE_SCOPE_ISSUE_EXECUTION
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
-from orchestrator.storage.models import AgentLifecycleEvent, Run, RunLock, RunLogEvent, Tenant
+from orchestrator.storage.models import AgentLifecycleEvent, Run, RunLogEvent, Tenant, WorkflowExecution
+from tests.workflow_test_support import add_run_with_workflow, make_run
 
 
 class WorkerRunHealthTests(unittest.TestCase):
@@ -52,38 +51,35 @@ class WorkerRunHealthTests(unittest.TestCase):
             )
             session.commit()
 
-    def _get_lock(self, session, *, issue_key: str, dedupe_scope: str = RUN_DEDUPE_SCOPE_ISSUE_EXECUTION):
-        return session.get(
-            RunLock,
-            {
-                "tenant_id": "tenant-a",
-                "issue_key": issue_key,
-                "dedupe_scope": dedupe_scope,
-            },
-        )
+    def _get_workflow(self, session, *, issue_key: str):
+        return session.execute(
+            select(WorkflowExecution).where(
+                WorkflowExecution.tenant_id == "tenant-a",
+                WorkflowExecution.issue_key == issue_key,
+                WorkflowExecution.dedupe_scope == "issue_execution",
+            )
+        ).scalar_one_or_none()
 
     def test_touch_run_heartbeat_updates_only_current_owner(self) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
-            session.add(
-                Run(
+            add_run_with_workflow(
+                session,
+                make_run(
                     run_id="run-heartbeat",
                     tenant_id="tenant-a",
                     issue_key="TA-1",
                     issue_summary="heartbeat",
                     issue_description="desc",
                     repo_url="https://github.com/example/a",
-                    branch=None,
-                    pr_url=None,
-                    status="running",
-                    last_error=None,
-                    plan=None,
                     created_at=now - timedelta(minutes=5),
+                    status="running",
                     started_at=now - timedelta(minutes=4),
                     last_heartbeat_at=now - timedelta(minutes=3),
-                    finished_at=None,
                     worker_service_instance_id="node-a:1234",
-                )
+                    claim_id="claim-1",
+                ),
+                workflow_status="running",
             )
             session.commit()
 
@@ -91,6 +87,7 @@ class WorkerRunHealthTests(unittest.TestCase):
                 session,
                 run_id="run-heartbeat",
                 worker_service_instance_id="node-a:1234",
+                claim_id="claim-1",
                 heartbeat_at=now,
             )
             self.assertTrue(updated)
@@ -103,6 +100,7 @@ class WorkerRunHealthTests(unittest.TestCase):
                 session,
                 run_id="run-heartbeat",
                 worker_service_instance_id="node-b:9999",
+                claim_id="claim-1",
                 heartbeat_at=now + timedelta(seconds=10),
             )
             self.assertFalse(rejected)
@@ -111,158 +109,52 @@ class WorkerRunHealthTests(unittest.TestCase):
             assert refreshed.last_heartbeat_at is not None
             self.assertEqual(refreshed.last_heartbeat_at.replace(tzinfo=timezone.utc), now)
 
-    def test_cleanup_orphan_run_locks_removes_terminal_locks(self) -> None:
-        now = datetime.now(timezone.utc)
-        with self.session_factory() as session:
-            running = Run(
-                run_id="run-active",
-                tenant_id="tenant-a",
-                issue_key="TA-2",
-                issue_summary="active",
-                issue_description="desc",
-                repo_url="https://github.com/example/a",
-                branch=None,
-                pr_url=None,
-                status="running",
-                last_error=None,
-                plan=None,
-                created_at=now,
-                started_at=now,
-                last_heartbeat_at=now,
-                finished_at=None,
-            )
-            terminal = Run(
-                run_id="run-terminal",
-                tenant_id="tenant-a",
-                issue_key="TA-3",
-                issue_summary="terminal",
-                issue_description="desc",
-                repo_url="https://github.com/example/a",
-                branch=None,
-                pr_url=None,
-                status="failed",
-                last_error="boom",
-                plan=None,
-                created_at=now,
-                started_at=now,
-                last_heartbeat_at=now,
-                finished_at=now,
-            )
-            session.add_all([running, terminal])
-            session.add_all(
-                [
-                    RunLock(
-                        tenant_id="tenant-a",
-                        issue_key="TA-2",
-                        dedupe_scope=RUN_DEDUPE_SCOPE_ISSUE_EXECUTION,
-                        run_id="run-active",
-                        locked_at=now,
-                    ),
-                    RunLock(
-                        tenant_id="tenant-a",
-                        issue_key="TA-3",
-                        dedupe_scope=RUN_DEDUPE_SCOPE_ISSUE_EXECUTION,
-                        run_id="run-terminal",
-                        locked_at=now,
-                    ),
-                ]
-            )
-            session.commit()
-
-            removed = cleanup_orphan_run_locks(session=session)
-            self.assertEqual(removed, 1)
-            self.assertIsNotNone(self._get_lock(session, issue_key="TA-2"))
-            self.assertIsNone(self._get_lock(session, issue_key="TA-3"))
-
     def test_recover_stale_running_runs_marks_failed_and_preserves_fresh_runs(self) -> None:
         now = datetime.now(timezone.utc)
         stale_heartbeat = now - timedelta(minutes=20)
         stale_started = now - timedelta(minutes=18)
         fresh_started = now - timedelta(seconds=30)
         with self.session_factory() as session:
-            session.add_all(
-                [
-                    Run(
-                        run_id="run-stale-heartbeat",
-                        tenant_id="tenant-a",
-                        issue_key="TA-10",
-                        issue_summary="stale heartbeat",
-                        issue_description="desc",
-                        repo_url="https://github.com/example/a",
-                        branch=None,
-                        pr_url=None,
-                        status="running",
-                        last_error=None,
-                        plan=None,
-                        created_at=stale_started,
-                        started_at=stale_started,
-                        last_heartbeat_at=stale_heartbeat,
-                        finished_at=None,
-                        worker_service_instance_id="node-a:1234",
-                    ),
-                    Run(
-                        run_id="run-stale-no-heartbeat",
-                        tenant_id="tenant-a",
-                        issue_key="TA-11",
-                        issue_summary="stale no heartbeat",
-                        issue_description="desc",
-                        repo_url="https://github.com/example/a",
-                        branch=None,
-                        pr_url=None,
-                        status="running",
-                        last_error=None,
-                        plan=None,
-                        created_at=stale_started,
-                        started_at=stale_started,
-                        last_heartbeat_at=None,
-                        finished_at=None,
-                        worker_service_instance_id="node-b:9999",
-                    ),
-                    Run(
-                        run_id="run-fresh-no-heartbeat",
-                        tenant_id="tenant-a",
-                        issue_key="TA-12",
-                        issue_summary="fresh no heartbeat",
-                        issue_description="desc",
-                        repo_url="https://github.com/example/a",
-                        branch=None,
-                        pr_url=None,
-                        status="running",
-                        last_error=None,
-                        plan=None,
-                        created_at=fresh_started,
-                        started_at=fresh_started,
-                        last_heartbeat_at=None,
-                        finished_at=None,
-                        worker_service_instance_id="node-c:1111",
-                    ),
-                ]
-            )
-            session.add_all(
-                [
-                    RunLock(
-                        tenant_id="tenant-a",
-                        issue_key="TA-10",
-                        dedupe_scope=RUN_DEDUPE_SCOPE_ISSUE_EXECUTION,
-                        run_id="run-stale-heartbeat",
-                        locked_at=stale_started,
-                    ),
-                    RunLock(
-                        tenant_id="tenant-a",
-                        issue_key="TA-11",
-                        dedupe_scope=RUN_DEDUPE_SCOPE_ISSUE_EXECUTION,
-                        run_id="run-stale-no-heartbeat",
-                        locked_at=stale_started,
-                    ),
-                    RunLock(
-                        tenant_id="tenant-a",
-                        issue_key="TA-12",
-                        dedupe_scope=RUN_DEDUPE_SCOPE_ISSUE_EXECUTION,
-                        run_id="run-fresh-no-heartbeat",
-                        locked_at=fresh_started,
-                    ),
-                ]
-            )
+            for run in (
+                make_run(
+                    run_id="run-stale-heartbeat",
+                    tenant_id="tenant-a",
+                    issue_key="TA-10",
+                    issue_summary="stale heartbeat",
+                    issue_description="desc",
+                    repo_url="https://github.com/example/a",
+                    created_at=stale_started,
+                    status="running",
+                    started_at=stale_started,
+                    last_heartbeat_at=stale_heartbeat,
+                    worker_service_instance_id="node-a:1234",
+                ),
+                make_run(
+                    run_id="run-stale-no-heartbeat",
+                    tenant_id="tenant-a",
+                    issue_key="TA-11",
+                    issue_summary="stale no heartbeat",
+                    issue_description="desc",
+                    repo_url="https://github.com/example/a",
+                    created_at=stale_started,
+                    status="running",
+                    started_at=stale_started,
+                    worker_service_instance_id="node-b:9999",
+                ),
+                make_run(
+                    run_id="run-fresh-no-heartbeat",
+                    tenant_id="tenant-a",
+                    issue_key="TA-12",
+                    issue_summary="fresh no heartbeat",
+                    issue_description="desc",
+                    repo_url="https://github.com/example/a",
+                    created_at=fresh_started,
+                    status="running",
+                    started_at=fresh_started,
+                    worker_service_instance_id="node-c:1111",
+                ),
+            ):
+                add_run_with_workflow(session, run, workflow_status="running")
             session.commit()
 
             recovered = recover_stale_running_runs(
@@ -291,9 +183,15 @@ class WorkerRunHealthTests(unittest.TestCase):
             assert fresh_run is not None
             self.assertEqual(fresh_run.status, "running")
 
-            self.assertIsNone(self._get_lock(session, issue_key="TA-10"))
-            self.assertIsNone(self._get_lock(session, issue_key="TA-11"))
-            self.assertIsNotNone(self._get_lock(session, issue_key="TA-12"))
+            stale_workflow = self._get_workflow(session, issue_key="TA-10")
+            legacy_workflow = self._get_workflow(session, issue_key="TA-11")
+            fresh_workflow = self._get_workflow(session, issue_key="TA-12")
+            assert stale_workflow is not None
+            assert legacy_workflow is not None
+            assert fresh_workflow is not None
+            self.assertEqual(stale_workflow.status, "failed")
+            self.assertEqual(legacy_workflow.status, "failed")
+            self.assertEqual(fresh_workflow.status, "running")
 
             stale_logs = session.execute(
                 select(RunLogEvent).where(RunLogEvent.run_id == "run-stale-heartbeat")

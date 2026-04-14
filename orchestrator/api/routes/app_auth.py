@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import UTC
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -11,8 +10,7 @@ from sqlalchemy.orm import Session
 
 from orchestrator.api.admin.route_helpers import (
     allocate_tenant_id,
-    ensure_default_project_for_tenant,
-    sync_tenant_jira_project_keys,
+    reconcile_tenant_projects,
     validate_codex_assets_for_tenant_init,
 )
 from orchestrator.api.admin.schema_mappers import tenant_to_schema
@@ -32,8 +30,14 @@ from orchestrator.api.schemas import (
 from orchestrator.core.auth_tokens import create_auth_access_token
 from orchestrator.core.config import get_settings
 from orchestrator.core.discord.oauth import DiscordOAuthError, exchange_code_for_user, parse_discord_oauth_state
+from orchestrator.core.discord.oauth_config import resolve_discord_oauth_config
 from orchestrator.core.password_reset_email import send_password_reset_email
-from orchestrator.core.password_reset_tokens import PasswordResetTokenError, issue_password_reset_token, parse_password_reset_token
+from orchestrator.core.password_reset_tokens import (
+    PasswordResetTokenError,
+    issue_password_reset_token,
+    normalize_password_reset_timestamp,
+    parse_password_reset_token,
+)
 from orchestrator.core.platform_secret_service import (
     PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF,
     resolve_platform_secret_ref,
@@ -132,16 +136,6 @@ class PasswordResetRequest(BaseModel):
 class PasswordResetConfirmRequest(BaseModel):
     token: str = Field(min_length=1)
     new_password: str = Field(min_length=8)
-
-
-def _normalize_password_updated_at(value) -> str:  # noqa: ANN001
-    if value is None:
-        return ""
-    if value.tzinfo is None:
-        return value.replace(tzinfo=UTC).isoformat()
-    return value.astimezone(UTC).isoformat()
-
-
 @router.post("/api/public/register", response_model=PublicRegistrationResponse, status_code=status.HTTP_201_CREATED)
 def public_register(
     payload: PublicRegistrationRequest,
@@ -171,8 +165,7 @@ def public_register(
         onboarding_kind="tenant_admin_setup",
     )
     session.add(tenant)
-    ensure_default_project_for_tenant(session, tenant=tenant)
-    sync_tenant_jira_project_keys(session, tenant=tenant)
+    reconcile_tenant_projects(session, tenant=tenant)
     try:
         session.commit()
     except IntegrityError as exc:
@@ -242,7 +235,7 @@ def confirm_password_reset(
     credential = session.get(TenantUserCredential, tenant_user.user_id)
     if credential is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid password reset token")
-    if _normalize_password_updated_at(credential.password_updated_at) != token_payload.password_updated_at:
+    if normalize_password_reset_timestamp(credential.password_updated_at) != token_payload.password_updated_at:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid password reset token")
     reset_user_password(session=session, user_id=tenant_user.user_id, new_password=payload.new_password)
     session.commit()
@@ -449,9 +442,10 @@ def discord_oauth_callback(
     session: Session = Depends(get_session),
 ) -> RedirectResponse:
     settings = get_settings()
+    oauth_config = resolve_discord_oauth_config(session=session, settings=settings)
     try:
         parsed_state = parse_discord_oauth_state(settings=settings, state=state)
-        discord_user = exchange_code_for_user(settings=settings, code=code)
+        discord_user = exchange_code_for_user(config=oauth_config, code=code)
     except DiscordOAuthError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 

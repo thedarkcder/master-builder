@@ -9,6 +9,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from orchestrator.core.guardrails import redact_sensitive_text
 from orchestrator.storage.models import Project
 from orchestrator.tools.repo_allowlist import normalize_repo_identifier
 
@@ -57,10 +58,8 @@ out/
 *.class
 """
 
-_MCP_SERVER_DISABLED_LINES = (
-    ("jira_master_builder", 'enabled = false'),
-    ("jira_bsktpay", 'enabled = false'),
-)
+_MCP_SERVER_SECTION_PATTERN = re.compile(r"(?ms)^(\[mcp_servers\.(?P<name>[^\]]+)\]\s*\n)(.*?)(?=^\[|\Z)")
+_FEATURES_SECTION_PATTERN = re.compile(r"(?ms)^(\[features\]\s*\n)(.*?)(?=^\[|\Z)")
 
 
 def _repo_full_name(repository_url: str) -> str:
@@ -76,7 +75,9 @@ def _repo_full_name(repository_url: str) -> str:
 
 def _safe_git_error(stderr: str, stdout: str) -> str:
     message = (stderr or stdout or "git command failed").strip()
-    return re.sub(r"https://x-access-token:[^@]+@", "https://x-access-token:[REDACTED]@", message)
+    return redact_sensitive_text(
+        re.sub(r"https://x-access-token:[^@]+@", "https://x-access-token:[REDACTED]@", message)
+    )
 
 
 def _github_git_extraheader(github_installation_token: str) -> str:
@@ -163,15 +164,6 @@ def project_run_repo_dir(
     ) / "repo"
 
 
-def project_legacy_run_repo_dir(*, base_dir: str, tenant_id: str, project_id: str, run_id: str) -> Path:
-    return project_run_root_dir(
-        base_dir=base_dir,
-        tenant_id=tenant_id,
-        project_id=project_id,
-        run_id=run_id,
-    ) / "repo"
-
-
 def execution_branch_name(*, issue_key: str, run_id: str) -> str:
     normalized_issue = re.sub(r"[^a-z0-9._/-]+", "-", str(issue_key).strip().lower()).strip("-")
     normalized_run = re.sub(r"[^a-z0-9._/-]+", "-", str(run_id).strip().lower()).strip("-")
@@ -228,7 +220,7 @@ def _sync_agent_workspace_files(*, repo_dir: Path) -> None:
 
     if codex_src.exists() and codex_src.is_dir():
         shutil.copytree(codex_src, repo_dir / ".codex", dirs_exist_ok=True)
-        _disable_jira_mcp_servers_in_project_codex(repo_dir=repo_dir)
+        _restrict_external_tool_surfaces_in_project_codex(repo_dir=repo_dir)
 
     gitignore_path = repo_dir / ".gitignore"
     seeded_gitignore = False
@@ -395,14 +387,6 @@ def cleanup_run_workspaces(
     else:
         if workspaces_root.exists():
             shutil.rmtree(workspaces_root, ignore_errors=True)
-        legacy_repo = project_legacy_run_repo_dir(
-            base_dir=base_dir,
-            tenant_id=tenant_id,
-            project_id=project_id,
-            run_id=run_id,
-        )
-        if legacy_repo.exists():
-            _remove_run_worktree(repo_dir=repo_dir, run_repo_dir=legacy_repo)
 
     if run_root.exists():
         try:
@@ -491,17 +475,8 @@ def ensure_run_worktree(
         run_id=run_id,
         workspace_key=normalized_workspace_key,
     )
-    legacy_run_repo = project_legacy_run_repo_dir(
-        base_dir=base_dir,
-        tenant_id=tenant_id,
-        project_id=project.project_id,
-        run_id=run_id,
-    )
     execution_branch = execution_branch_name(issue_key=issue_key, run_id=run_id)
     _run_git(["fetch", "origin", "--prune"], cwd=repo_dir)
-    if legacy_run_repo.exists():
-        _remove_run_worktree(repo_dir=repo_dir, run_repo_dir=legacy_run_repo)
-        _run_git(["worktree", "prune"], cwd=repo_dir)
     start_point_ref = _resolve_worktree_start_point(
         repo_dir=repo_dir,
         base_branch=base_branch,
@@ -581,30 +556,30 @@ def validate_run_worktree(
     return None
 
 
-def _disable_jira_mcp_servers_in_project_codex(*, repo_dir: Path) -> None:
+def _restrict_external_tool_surfaces_in_project_codex(*, repo_dir: Path) -> None:
     config_path = repo_dir / ".codex" / "config.toml"
     if not config_path.exists():
         return
     raw = config_path.read_text(encoding="utf-8")
     updated = raw
-    for server_name, enabled_line in _MCP_SERVER_DISABLED_LINES:
-        section_pattern = rf"(?ms)^(\[mcp_servers\.{re.escape(server_name)}\]\s*\n)(.*?)(?=^\[|\Z)"
-        section_match = re.search(section_pattern, updated)
+    cursor = 0
+    while True:
+        section_match = _MCP_SERVER_SECTION_PATTERN.search(updated, cursor)
         if section_match is None:
-            continue
+            break
         section_header = section_match.group(1)
-        section_body = section_match.group(2)
+        section_body = section_match.group(3)
         if re.search(r"(?m)^\s*enabled\s*=\s*(true|false)\s*$", section_body):
             section_body = re.sub(
                 r"(?m)^\s*enabled\s*=\s*(true|false)\s*$",
-                enabled_line,
+                "enabled = false",
                 section_body,
                 count=1,
             )
         else:
             if not section_body.endswith("\n"):
                 section_body += "\n"
-            section_body += f"{enabled_line}\n"
+            section_body += "enabled = false\n"
         # Keep TOML sections separated even when source file omits trailing newline.
         if not section_body.endswith("\n"):
             section_body += "\n"
@@ -612,6 +587,39 @@ def _disable_jira_mcp_servers_in_project_codex(*, repo_dir: Path) -> None:
             f"{updated[:section_match.start()]}"
             f"{section_header}{section_body}"
             f"{updated[section_match.end():]}"
+        )
+        cursor = section_match.start() + len(section_header) + len(section_body)
+
+    features_match = _FEATURES_SECTION_PATTERN.search(updated)
+    if features_match is None:
+        suffix = "" if updated.endswith("\n") else "\n"
+        updated = (
+            f"{updated}{suffix}\n[features]\n"
+            "apps = false\n"
+            "plugins = false\n"
+        )
+    else:
+        section_header = features_match.group(1)
+        section_body = features_match.group(2)
+        for feature_name in ("apps", "plugins"):
+            feature_pattern = rf"(?m)^\s*{re.escape(feature_name)}\s*=\s*(true|false)\s*$"
+            if re.search(feature_pattern, section_body):
+                section_body = re.sub(
+                    feature_pattern,
+                    f"{feature_name} = false",
+                    section_body,
+                    count=1,
+                )
+            else:
+                if not section_body.endswith("\n"):
+                    section_body += "\n"
+                section_body += f"{feature_name} = false\n"
+        if not section_body.endswith("\n"):
+            section_body += "\n"
+        updated = (
+            f"{updated[:features_match.start()]}"
+            f"{section_header}{section_body}"
+            f"{updated[features_match.end():]}"
         )
     if updated != raw:
         config_path.write_text(updated, encoding="utf-8")

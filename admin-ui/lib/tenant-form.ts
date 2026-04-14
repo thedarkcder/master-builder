@@ -88,7 +88,18 @@ export function defaultTenantFormValues(): TenantFormValues {
   };
 }
 
+function normalizeDiscordConfig(discord: DiscordConfig | null): DiscordConfig {
+  if (!discord) {
+    return { notify_events: [] };
+  }
+  return {
+    ...discord,
+    notify_events: Array.isArray(discord.notify_events) ? discord.notify_events : []
+  };
+}
+
 export function recordToFormValues(record: TenantRecord): TenantFormValues {
+  const normalizedDiscord = normalizeDiscordConfig(record.discord);
   return {
     tenantId: record.tenant_id,
     name: record.name,
@@ -98,10 +109,7 @@ export function recordToFormValues(record: TenantRecord): TenantFormValues {
     repos: record.repos,
     policy: record.policy,
     discordEnabled: Boolean(record.discord),
-    discord:
-      record.discord ?? {
-        notify_events: []
-      }
+    discord: normalizedDiscord
   };
 }
 
@@ -165,7 +173,7 @@ export function toCreatePayload(
     discord: values.discordEnabled
       ? {
           ...values.discord,
-          notify_events: values.discord.notify_events
+          notify_events: (Array.isArray(values.discord.notify_events) ? values.discord.notify_events : [])
             .map((value) => value.trim())
             .filter((value, index, array) => value.length > 0 && array.indexOf(value) === index)
         }

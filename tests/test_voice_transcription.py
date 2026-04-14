@@ -30,7 +30,7 @@ class _FakeResponse:
 
 class VoiceTranscriptionTests(unittest.TestCase):
     def test_transcribe_rejects_disabled_provider(self) -> None:
-        settings = Settings(voice_provider="disabled")
+        settings = Settings(voice_stt_provider="disabled")
         with self.assertRaisesRegex(VoiceTranscriptionError, "disabled"):
             transcribe_audio_bytes(
                 settings=settings,
@@ -40,7 +40,7 @@ class VoiceTranscriptionTests(unittest.TestCase):
 
     def test_transcribe_openai_requires_api_key(self) -> None:
         settings = Settings(
-            voice_provider="openai",
+            voice_stt_provider="openai",
             voice_transcription_openai_api_key="",
         )
         with self.assertRaisesRegex(VoiceTranscriptionError, "API key"):
@@ -61,7 +61,7 @@ class VoiceTranscriptionTests(unittest.TestCase):
             return _FakeResponse(b'{"text":"Build a lighter onboarding flow"}')
 
         settings = Settings(
-            voice_provider="openai",
+            voice_stt_provider="openai",
             voice_transcription_openai_api_key="test-key",
             voice_transcription_model="gpt-4o-mini-transcribe",
         )
@@ -80,7 +80,7 @@ class VoiceTranscriptionTests(unittest.TestCase):
 
     def test_transcribe_openai_invalid_json_is_error(self) -> None:
         settings = Settings(
-            voice_provider="openai",
+            voice_stt_provider="openai",
             voice_transcription_openai_api_key="test-key",
         )
         with patch("orchestrator.core.voice.transcription.urlopen", return_value=_FakeResponse(b"not-json")):
@@ -93,7 +93,7 @@ class VoiceTranscriptionTests(unittest.TestCase):
 
     def test_transcribe_openai_http_error_surfaces(self) -> None:
         settings = Settings(
-            voice_provider="openai",
+            voice_stt_provider="openai",
             voice_transcription_openai_api_key="test-key",
         )
         error = HTTPError(
@@ -123,7 +123,7 @@ class VoiceTranscriptionTests(unittest.TestCase):
                 return iter([_Segment("Build"), _Segment("the PM room")]), object()
 
         settings = Settings(
-            voice_provider="whisper",
+            voice_stt_provider="whisper",
             voice_transcription_model="base",
             voice_transcription_language="en",
         )
@@ -143,16 +143,16 @@ class VoiceTranscriptionTests(unittest.TestCase):
 
     def test_ensure_transcription_provider_ready_loads_whisper_model(self) -> None:
         settings = Settings(
-            voice_provider="whisper",
+            voice_stt_provider="whisper",
             voice_transcription_model="small",
         )
         with patch("orchestrator.core.voice.transcription._get_whisper_model", return_value=object()) as model_mock:
             ensure_transcription_provider_ready(settings=settings)
-        model_mock.assert_called_once_with(settings=settings)
+        model_mock.assert_called_once_with(settings=settings, allow_download=False)
 
     def test_ensure_transcription_provider_ready_surfaces_whisper_model_failure(self) -> None:
         settings = Settings(
-            voice_provider="whisper",
+            voice_stt_provider="whisper",
             voice_transcription_model="base",
         )
         with patch(
@@ -162,7 +162,29 @@ class VoiceTranscriptionTests(unittest.TestCase):
             with self.assertRaisesRegex(VoiceTranscriptionError, "model load failed"):
                 ensure_transcription_provider_ready(settings=settings)
 
-    def test_load_whisper_model_tries_local_cache_before_network(self) -> None:
+    def test_load_whisper_model_stays_cache_only_at_runtime(self) -> None:
+        calls: list[dict[str, object]] = []
+
+        class _WhisperModel:
+            def __init__(self, model_name, **kwargs):  # noqa: ANN001
+                calls.append({"model_name": model_name, **kwargs})
+                raise RuntimeError("missing local cache")
+
+        faster_whisper = type("FW", (), {"WhisperModel": _WhisperModel})()
+
+        with self.assertRaisesRegex(RuntimeError, "missing local cache"):
+            _load_whisper_model(
+                faster_whisper=faster_whisper,
+                model_name="base",
+                device="cpu",
+                compute_type="int8",
+                allow_download=False,
+            )
+
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(calls[0]["local_files_only"])
+
+    def test_load_whisper_model_prewarm_tries_local_cache_before_download(self) -> None:
         calls: list[dict[str, object]] = []
 
         class _WhisperModel:
@@ -179,6 +201,7 @@ class VoiceTranscriptionTests(unittest.TestCase):
             model_name="base",
             device="cpu",
             compute_type="int8",
+            allow_download=True,
         )
 
         self.assertEqual(len(calls), 2)

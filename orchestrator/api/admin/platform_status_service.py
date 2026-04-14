@@ -8,10 +8,11 @@ from orchestrator.api.schemas import PlatformServiceInstanceRead, PlatformServic
 from orchestrator.core.config import Settings
 from orchestrator.core.discord.command_sync_status import get_discord_command_sync_status
 from orchestrator.core.knowledge_jira_sync_status import get_runtime_status as get_knowledge_jira_sync_runtime_status
-from orchestrator.core.worker_capabilities import parse_worker_capabilities
+from orchestrator.core.worker_capability_normalization import WorkerCapability
+from orchestrator.core.worker_capabilities import parse_worker_capabilities_diagnostics
 from orchestrator.storage.models import Run, WorkerRuntimeState
 
-ACTIVE_RUN_STATUSES = {"queued", "running"}
+ACTIVE_RUN_STATUSES = {"queued", "dispatching", "running"}
 WORKER_RUNTIME_HEARTBEAT_STALE_SECONDS = 120
 
 
@@ -35,12 +36,25 @@ def _capability_label(value: str) -> str:
 
 
 def _worker_row_capabilities(row: WorkerRuntimeState) -> list[str]:
-    capabilities = parse_worker_capabilities(row.capabilities_json)
-    return [_capability_label(item) for item in sorted(capabilities)]
+    capabilities, _invalid = parse_worker_capabilities_diagnostics(row.capabilities_json)
+    return [_capability_label(item.value) for item in sorted(capabilities, key=lambda item: item.value)]
 
 
 def _worker_row_last_seen(row: WorkerRuntimeState) -> datetime | None:
     return _coerce_aware(row.last_heartbeat_at) or _coerce_aware(row.updated_at)
+
+
+def _runtime_dependencies_payload(row: WorkerRuntimeState) -> dict[str, dict[str, object]]:
+    raw_value = getattr(row, "runtime_dependencies_json", None)
+    if not isinstance(raw_value, dict):
+        return {}
+    payload: dict[str, dict[str, object]] = {}
+    for raw_kind, raw_entry in raw_value.items():
+        runtime_kind = str(raw_kind or "").strip().lower()
+        if not runtime_kind or not isinstance(raw_entry, dict):
+            continue
+        payload[runtime_kind] = dict(raw_entry)
+    return payload
 
 
 def _is_worker_row_fresh(*, row: WorkerRuntimeState, now: datetime) -> bool:
@@ -61,6 +75,8 @@ def _worker_instance_status(
         return "stopped", "Worker stopped cleanly."
     if not _is_worker_row_fresh(row=row, now=now):
         return "stale", "Last heartbeat is outside the worker freshness window."
+    if state == "degraded":
+        return "degraded", "Worker is online but blocked by a startup/runtime dependency."
     if active_run_count > 0 or state == "busy":
         run_label = "run" if active_run_count == 1 else "runs"
         return "busy", f"Processing {active_run_count} active {run_label}."
@@ -143,12 +159,17 @@ def _worker_instances(*, session, now: datetime) -> list[PlatformServiceInstance
                 updated_at=last_seen,
                 capabilities=_worker_row_capabilities(row),
                 active_run_count=active_run_count,
+                runtime_dependencies=_runtime_dependencies_payload(row),
             )
         )
     return instances
 
 
-def _worker_capabilities(*, instances: list[PlatformServiceInstanceRead], settings: Settings) -> list[str]:
+def _worker_capabilities(
+    *,
+    instances: list[PlatformServiceInstanceRead],
+    configured_capabilities: set[WorkerCapability],
+) -> list[str]:
     capability_ids: set[str] = set()
     for instance in instances:
         capability_ids.update(
@@ -159,7 +180,7 @@ def _worker_capabilities(*, instances: list[PlatformServiceInstanceRead], settin
             }
         )
     if not capability_ids:
-        capability_ids.update(parse_worker_capabilities(getattr(settings, "worker_capabilities", None)))
+        capability_ids.update({capability.value for capability in configured_capabilities})
     return [_capability_label(item) for item in sorted(capability_ids)]
 
 
@@ -177,15 +198,31 @@ def _api_status() -> PlatformServiceStatusRead:
 def _worker_status(*, session, settings: Settings) -> PlatformServiceStatusRead:  # noqa: ANN001
     now = _utcnow()
     instances = _worker_instances(session=session, now=now)
-    capabilities = _worker_capabilities(instances=instances, settings=settings)
+    configured_capabilities, invalid_configured_tokens = parse_worker_capabilities_diagnostics(
+        getattr(settings, "worker_capabilities", None)
+    )
+    capabilities = _worker_capabilities(
+        instances=instances,
+        configured_capabilities=configured_capabilities,
+    )
     fresh_instances = [instance for instance in instances if instance.status not in {"stale", "stopped"}]
     stale_instances = [instance for instance in instances if instance.status == "stale"]
+    degraded_instances = [instance for instance in fresh_instances if instance.status == "degraded"]
     busy_instances = [instance for instance in fresh_instances if instance.status == "busy"]
     latest_heartbeat = max((instance.updated_at for instance in instances if instance.updated_at is not None), default=None)
     if fresh_instances:
-        if stale_instances:
+        if stale_instances or degraded_instances:
             status = "degraded"
-            summary = f"{len(stale_instances)} worker instance{'' if len(stale_instances) == 1 else 's'} have stale heartbeats."
+            parts: list[str] = []
+            if stale_instances:
+                parts.append(
+                    f"{len(stale_instances)} worker instance{'' if len(stale_instances) == 1 else 's'} have stale heartbeats."
+                )
+            if degraded_instances:
+                parts.append(
+                    f"{len(degraded_instances)} worker instance{'' if len(degraded_instances) == 1 else 's'} are blocked by startup/runtime dependencies."
+                )
+            summary = " ".join(parts)
         elif busy_instances:
             busy_count = sum(instance.active_run_count for instance in busy_instances)
             summary = (
@@ -205,6 +242,14 @@ def _worker_status(*, session, settings: Settings) -> PlatformServiceStatusRead:
     else:
         status = "unavailable"
         summary = "No worker runtime registrations are present."
+    if invalid_configured_tokens:
+        invalid = ", ".join(invalid_configured_tokens)
+        allowed = "linux, macos"
+        summary = (
+            f"{summary} Invalid ORCHESTRATOR_WORKER_CAPABILITIES token(s): {invalid}. "
+            f"Allowed values: {allowed}."
+        )
+        status = "degraded"
 
     return PlatformServiceStatusRead(
         service_id="workers",

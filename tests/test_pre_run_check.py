@@ -224,27 +224,125 @@ def test_pre_run_check_passes_recorded_answers_to_policy() -> None:
     ]
 
 
-def test_pre_run_check_blocks_pm_parent_issue_execution() -> None:
-    with patch("orchestrator.core.pre_run_check.infer_required_worker_capability", return_value="linux"):
+def test_pre_run_check_does_not_hardcode_pm_parent_execution_block() -> None:
+    with (
+        patch("orchestrator.core.pre_run_check.infer_required_worker_capability", return_value="linux"),
+        patch(
+            "orchestrator.core.pre_run_check.evaluate_precheck_policy",
+            return_value=_policy_result(
+                decision_gate=DecisionGateResult(
+                    triggered=False,
+                    reason="Decision Gate not required",
+                    missing_sections=(),
+                    questions=(),
+                    recommendation="Proceed",
+                    tags=(),
+                ),
+                gtd=GoodToDoValidationResult(
+                    valid=True,
+                    missing_criteria=(),
+                    clarification_questions=(),
+                ),
+            ),
+        ),
+    ):
         result = evaluate_pre_run_check(
             issue_summary="PM parent",
             issue_description="Product brief only",
             issue_labels=["pm-parent", "agent:ready"],
             ready_label="agent:ready",
         )
-    assert result.outcome == "gtd_required"
-    assert result.gtd_missing_criteria == ("Engineering child ticket required",)
+    assert result.outcome == "ready_for_agent"
 
 
-def test_pre_run_check_blocks_stale_engineering_child_execution() -> None:
-    with patch("orchestrator.core.pre_run_check.infer_required_worker_capability", return_value="linux"):
+def test_pre_run_check_does_not_hardcode_sync_stale_execution_block() -> None:
+    with (
+        patch("orchestrator.core.pre_run_check.infer_required_worker_capability", return_value="linux"),
+        patch(
+            "orchestrator.core.pre_run_check.evaluate_precheck_policy",
+            return_value=_policy_result(
+                decision_gate=DecisionGateResult(
+                    triggered=False,
+                    reason="Decision Gate not required",
+                    missing_sections=(),
+                    questions=(),
+                    recommendation="Proceed",
+                    tags=(),
+                ),
+                gtd=GoodToDoValidationResult(
+                    valid=True,
+                    missing_criteria=(),
+                    clarification_questions=(),
+                ),
+            ),
+        ),
+    ):
         result = evaluate_pre_run_check(
             issue_summary="Engineering child",
             issue_description="Technical task",
             issue_labels=["engineering-child", "sync-stale", "agent:ready"],
             ready_label="agent:ready",
         )
+    assert result.outcome == "ready_for_agent"
+
+
+def test_pre_run_check_requires_fix_for_invalid_worker_label() -> None:
+    with patch("orchestrator.core.pre_run_check.evaluate_precheck_policy") as policy_mock:
+        policy_mock.return_value = _policy_result(
+            decision_gate=DecisionGateResult(
+                triggered=False,
+                reason="Decision Gate not required",
+                missing_sections=(),
+                questions=(),
+                recommendation="Proceed",
+                tags=(),
+            ),
+            gtd=GoodToDoValidationResult(
+                valid=True,
+                missing_criteria=(),
+                clarification_questions=(),
+            ),
+        )
+        result = evaluate_pre_run_check(
+            issue_summary="Build iOS flow",
+            issue_description="desc",
+            issue_labels=["agent:ready", "worker:darwin"],
+            ready_label="agent:ready",
+        )
     assert result.outcome == "gtd_required"
+    assert result.gtd_valid is False
+    assert result.gtd_missing_criteria == ("Worker capability labels must use canonical values.",)
     assert result.gtd_clarification_questions == (
-        "Refresh this engineering child from the latest parent feature before execution.",
+        "Replace invalid worker label(s): worker:darwin. Use worker:linux or worker:macos.",
+    )
+
+
+def test_pre_run_check_requires_fix_for_conflicting_worker_labels() -> None:
+    with patch("orchestrator.core.pre_run_check.evaluate_precheck_policy") as policy_mock:
+        policy_mock.return_value = _policy_result(
+            decision_gate=DecisionGateResult(
+                triggered=False,
+                reason="Decision Gate not required",
+                missing_sections=(),
+                questions=(),
+                recommendation="Proceed",
+                tags=(),
+            ),
+            gtd=GoodToDoValidationResult(
+                valid=True,
+                missing_criteria=(),
+                clarification_questions=(),
+            ),
+        )
+        result = evaluate_pre_run_check(
+            issue_summary="Build iOS flow",
+            issue_description="desc",
+            issue_labels=["agent:ready", "worker:linux", "worker:macos"],
+            ready_label="agent:ready",
+        )
+    assert result.outcome == "gtd_required"
+    assert result.gtd_valid is False
+    assert result.gtd_missing_criteria == ("Worker capability labels must not conflict.",)
+    assert result.gtd_clarification_questions == (
+        "Conflicting worker capability labels detected: linux, macos. Keep exactly one of worker:linux or worker:macos.",
     )

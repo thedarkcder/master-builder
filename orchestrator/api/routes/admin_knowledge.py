@@ -26,6 +26,7 @@ from orchestrator.api.schemas import (
     KnowledgeSyncResultRead,
 )
 from orchestrator.core.config import get_settings
+from orchestrator.core.decision_types import JiraConfigKey, tenant_jira_config_text
 from orchestrator.core.knowledge_base import (
     create_knowledge_asset,
     decode_base64_content,
@@ -631,7 +632,7 @@ def sync_project_knowledge_from_jira_route(
             session=session,
         )
 
-    connection_id = str((tenant.jira_config or {}).get("connection_id") or "").strip()
+    connection_id = tenant_jira_config_text(tenant=tenant, key=JiraConfigKey.CONNECTION_ID)
     if not connection_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tenant Jira connection is not configured")
     connection = session.get(JiraOAuthConnection, connection_id)

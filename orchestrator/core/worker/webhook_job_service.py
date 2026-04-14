@@ -54,21 +54,10 @@ from orchestrator.core.webhook_job_queue import (
     mark_webhook_jobs_done,
     mark_webhook_jobs_failed,
 )
-from orchestrator.core.runs import cancel_queued_issue_runs
 from orchestrator.core.config import Settings
 from orchestrator.storage.models import Project, Tenant
 
 logger = logging.getLogger(__name__)
-
-_STALE_QUEUE_BLOCKING_REASONS = {
-    "decision_gate_required",
-    "gtd_required",
-    "missing_ready_label",
-    "issue_done",
-    "issue_in_backlog",
-    "ready_for_agent_backlog",
-}
-
 
 def _rollback_job_session(
     session: Session,
@@ -118,20 +107,6 @@ def _refresh_jira_context_from_live_issue(*, context, session, settings) -> None
         session=session,
         tenant_id=context.tenant_id,
         issue_key=context.issue_key,
-    )
-
-
-def _cancel_stale_queued_runs_if_blocked(*, session, context, response_content: dict[str, object]) -> None:  # noqa: ANN001
-    if bool(response_content.get("enqueued")):
-        return
-    reason = str(response_content.get("reason") or "").strip()
-    if reason not in _STALE_QUEUE_BLOCKING_REASONS:
-        return
-    cancel_queued_issue_runs(
-        session,
-        tenant_id=context.tenant_id,
-        issue_key=context.issue_key,
-        cancelled_by=f"jira_webhook:{reason}",
     )
 
 
@@ -227,11 +202,6 @@ def _process_jira_subject_jobs(
             session=session,
             settings=settings,
         )
-        _cancel_stale_queued_runs_if_blocked(
-            session=session,
-            context=pending_issue_context,
-            response_content=plan.content,
-        )
         execute_side_effect_ingress_result(
             result=IngressResult(actions=plan.actions),
             envelope=TransportEnvelope(
@@ -253,25 +223,28 @@ def _process_jira_subject_jobs(
     )
 
 
-def _process_github_job(
+def _process_github_subject_jobs(
     *,
     session: Session,
     settings: Settings,
     owner_id: str,
     claimed_job: WebhookJob,
+    related_jobs: tuple[WebhookJob, ...],
 ) -> tuple[WebhookJob, ...]:
-    context_json = dict(claimed_job.context_json or {})
+    jobs = tuple(sorted((claimed_job, *related_jobs), key=lambda item: item.created_at))
+    source_job = jobs[-1]
+    context_json = dict(source_job.context_json or {})
     tenant = session.get(Tenant, context_json.get("tenant_id"))
     project = session.get(Project, context_json.get("project_id"))
     if tenant is None or project is None or not tenant.is_enabled or bool(getattr(project, "is_archived", False)):
-        return mark_webhook_jobs_done(session, jobs=(claimed_job,), owner_id=owner_id)
+        return mark_webhook_jobs_done(session, jobs=jobs, owner_id=owner_id)
     pr_number = int(context_json.get("pr_number"))
     review_summary_present = bool(context_json.get("review_summary_present"))
     context = GitHubWebhookContext(
-        request_id=claimed_job.request_id,
-        delivery_id=str(context_json.get("delivery_id") or claimed_job.dedupe_key or ""),
-        github_event=str(context_json.get("github_event") or claimed_job.event_type or ""),
-        payload=dict(claimed_job.payload_json or {}),
+        request_id=source_job.request_id,
+        delivery_id=str(context_json.get("delivery_id") or source_job.dedupe_key or ""),
+        github_event=str(context_json.get("github_event") or source_job.event_type or ""),
+        payload=dict(source_job.payload_json or {}),
         normalized_action=str(context_json.get("normalized_action") or "").strip() or None,
         installation_id=int(context_json.get("installation_id") or 0),
         tenant=tenant,
@@ -308,7 +281,7 @@ def _process_github_job(
     result = asyncio.run(
         build_github_webhook_ingress_result(
             prepared_runtime=prepared_runtime,
-            request_id=claimed_job.request_id,
+            request_id=source_job.request_id,
             session=session,
             settings=settings,
         )
@@ -317,10 +290,10 @@ def _process_github_job(
         result=_non_http_ingress_result(result),
         envelope=TransportEnvelope(
             transport=WEBHOOK_TRANSPORT_GITHUB,
-            event_type=str(claimed_job.event_type or "github_webhook"),
-            request_id=claimed_job.request_id,
-            tenant_id_hint=claimed_job.tenant_id,
-            delivery_id=claimed_job.dedupe_key,
+            event_type=str(source_job.event_type or "github_webhook"),
+            request_id=source_job.request_id,
+            tenant_id_hint=source_job.tenant_id,
+            delivery_id=source_job.dedupe_key,
         ),
         transport_action_executors=build_http_transport_action_executors(
             session=session,
@@ -328,7 +301,7 @@ def _process_github_job(
             extra_transport_action_executors=tuple(getattr(prepared_runtime, "transport_action_executors", ()) or ()),
         ),
     )
-    return mark_webhook_jobs_done(session, jobs=(claimed_job,), owner_id=owner_id)
+    return mark_webhook_jobs_done(session, jobs=jobs, owner_id=owner_id)
 
 
 def _process_project_automation_job(
@@ -512,11 +485,20 @@ def process_next_webhook_job(
                 related_jobs=additional_jobs,
             )
         elif job.transport == WEBHOOK_TRANSPORT_GITHUB:
-            processed = _process_github_job(
+            additional_jobs = claim_pending_jobs_for_subject(
+                session,
+                transport=WEBHOOK_TRANSPORT_GITHUB,
+                subject_key=job.subject_key,
+                owner_id=owner_id,
+                exclude_job_id=job.job_id,
+            )
+            failed_job_ids = (job_id, *(str(item.job_id) for item in additional_jobs))
+            processed = _process_github_subject_jobs(
                 session=session,
                 settings=settings,
                 owner_id=owner_id,
                 claimed_job=job,
+                related_jobs=additional_jobs,
             )
         elif job.transport == WEBHOOK_TRANSPORT_PROJECT_AUTOMATION:
             processed = _process_project_automation_job(

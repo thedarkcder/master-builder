@@ -46,8 +46,10 @@ class ProjectAutomationRuntime:
 
     def run_forever(self) -> None:
         if not is_postgres_database_url(self._settings.database_url):
-            logger.info("project_automation_runtime_skipped_non_postgres")
-            return
+            raise RuntimeError(
+                "Project automation runtime requires PostgreSQL advisory locks; "
+                "set ORCHESTRATOR_DATABASE_URL to a postgresql URL."
+            )
         if psycopg is None:
             raise RuntimeError("project_automation runtime requires psycopg")
 

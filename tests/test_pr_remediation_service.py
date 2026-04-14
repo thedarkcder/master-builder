@@ -4,12 +4,25 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import MagicMock, patch
 
-from orchestrator.api.webhooks.pr_remediation_issue_service import build_pr_remediation_bug_description
-from orchestrator.api.webhooks.pr_remediation_service import enqueue_pr_remediation_if_needed
+from orchestrator.api.webhooks.pr_remediation_issue_service import (
+    build_pr_remediation_bug_description,
+    find_existing_issue_key_for_pr_head,
+)
+from orchestrator.api.webhooks.pr_remediation_service import (
+    count_pr_remediation_attempts,
+    enqueue_pr_remediation_if_needed,
+)
 from orchestrator.core.runs import EnqueueRunResult
+from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 
 
 class PrRemediationServiceTests(unittest.TestCase):
+    @staticmethod
+    def _trigger_context_from_bootstrap_plan(bootstrap_plan: object) -> dict[str, object]:
+        snapshot = ExecutionSnapshot.load(bootstrap_plan)
+        assert snapshot is not None
+        return dict(snapshot.trigger_context())
+
     def _base_context(self) -> tuple[MagicMock, SimpleNamespace, SimpleNamespace, MagicMock, dict, SimpleNamespace]:
         session = MagicMock()
         session.commit = MagicMock()
@@ -56,6 +69,121 @@ class PrRemediationServiceTests(unittest.TestCase):
         }
         settings = SimpleNamespace(secrets_encryption_key="k")
         return session, tenant, project, github_client, payload, settings
+
+    def test_find_existing_issue_key_uses_canonical_trigger_context(self) -> None:
+        session = MagicMock()
+        matching_plan = ExecutionSnapshot.empty(
+            trigger_context={
+                "source": "github_pr_review_feedback",
+                "pr_number": 11,
+                "head_sha": "abc123def456",
+            }
+        ).dump()
+        runs = [
+            SimpleNamespace(issue_key="GP-201", plan={"trigger_context": {"source": "legacy"}}, created_at=1),
+            SimpleNamespace(issue_key="GP-202", plan=matching_plan, created_at=2),
+        ]
+        session.execute.return_value.scalars.return_value = runs
+
+        issue_key = find_existing_issue_key_for_pr_head(
+            session=session,
+            tenant_id="example",
+            project_id="example-default",
+            pr_number=11,
+            head_sha="abc123def456",
+        )
+
+        self.assertEqual(issue_key, "GP-202")
+
+    def test_find_existing_issue_key_skips_malformed_snapshot_with_warning(self) -> None:
+        session = MagicMock()
+        matching_plan = ExecutionSnapshot.empty(
+            trigger_context={
+                "source": "github_pr_review_feedback",
+                "pr_number": 11,
+                "head_sha": "abc123def456",
+            }
+        ).dump()
+        runs = [
+            SimpleNamespace(run_id="run-malformed", issue_key="GP-201", plan={"trigger_context": {"source": "legacy"}}, created_at=1),
+            SimpleNamespace(run_id="run-good", issue_key="GP-202", plan=matching_plan, created_at=2),
+        ]
+        session.execute.return_value.scalars.return_value = runs
+
+        with patch("orchestrator.api.webhooks.pr_remediation_issue_service.logger.warning") as warning_mock:
+            issue_key = find_existing_issue_key_for_pr_head(
+                session=session,
+                tenant_id="example",
+                project_id="example-default",
+                pr_number=11,
+                head_sha="abc123def456",
+            )
+
+        self.assertEqual(issue_key, "GP-202")
+        warning_mock.assert_called_once()
+
+    def test_count_pr_remediation_attempts_uses_canonical_trigger_context(self) -> None:
+        session = MagicMock()
+        matching_plan = ExecutionSnapshot.empty(
+            trigger_context={
+                "source": "github_pr_review_feedback",
+                "pr_number": 11,
+                "head_sha": "abc123def456",
+            }
+        ).dump()
+        runs = [
+            SimpleNamespace(plan={"trigger_context": {"source": "legacy"}}),
+            SimpleNamespace(plan=matching_plan),
+            SimpleNamespace(
+                plan=ExecutionSnapshot.empty(
+                    trigger_context={
+                        "source": "github_pr_review_feedback",
+                        "pr_number": 11,
+                        "head_sha": "different",
+                    }
+                ).dump()
+            ),
+        ]
+        session.execute.return_value.scalars.return_value = runs
+
+        total = count_pr_remediation_attempts(
+            session=session,
+            tenant_id="example",
+            project_id="example-default",
+            issue_key="GP-202",
+            pr_number=11,
+            head_sha="abc123def456",
+        )
+
+        self.assertEqual(total, 1)
+
+    def test_count_pr_remediation_attempts_skips_malformed_snapshot_with_warning(self) -> None:
+        session = MagicMock()
+        matching_plan = ExecutionSnapshot.empty(
+            trigger_context={
+                "source": "github_pr_review_feedback",
+                "pr_number": 11,
+                "head_sha": "abc123def456",
+            }
+        ).dump()
+        runs = [
+            SimpleNamespace(run_id="run-malformed", plan={"trigger_context": {"source": "legacy"}}),
+            SimpleNamespace(run_id="run-good", plan=matching_plan),
+        ]
+        session.execute.return_value.scalars.return_value = runs
+
+        with patch("orchestrator.api.webhooks.pr_remediation_service.logger.warning") as warning_mock:
+            total = count_pr_remediation_attempts(
+                session=session,
+                tenant_id="example",
+                project_id="example-default",
+                issue_key="GP-202",
+                pr_number=11,
+                head_sha="abc123def456",
+            )
+
+        self.assertEqual(total, 1)
+        warning_mock.assert_called_once()
 
     def test_non_trigger_event_returns_not_triggered(self) -> None:
         session, tenant, project, github_client, payload, settings = self._base_context()
@@ -291,7 +419,10 @@ class PrRemediationServiceTests(unittest.TestCase):
         self.assertTrue(result.triggered)
         self.assertTrue(result.enqueued)
         self.assertIsNone(result.reason)
-        manual_fix = enqueue_run_mock.call_args.kwargs["bootstrap"].plan.get("trigger_context", {}).get("manual_fix_request")
+        trigger_context = self._trigger_context_from_bootstrap_plan(
+            enqueue_run_mock.call_args.kwargs["bootstrap"].plan
+        )
+        manual_fix = trigger_context.get("manual_fix_request")
         self.assertIsInstance(manual_fix, dict)
         self.assertEqual(manual_fix.get("instruction_text"), "fix the flaky test")
         requested_comment = manual_fix.get("requested_comment")
@@ -343,7 +474,10 @@ class PrRemediationServiceTests(unittest.TestCase):
         self.assertTrue(result.triggered)
         self.assertTrue(result.enqueued)
         self.assertEqual(result.issue_key, "GP-122")
-        manual_fix = enqueue_run_mock.call_args.kwargs["bootstrap"].plan.get("trigger_context", {}).get("manual_fix_request")
+        trigger_context = self._trigger_context_from_bootstrap_plan(
+            enqueue_run_mock.call_args.kwargs["bootstrap"].plan
+        )
+        manual_fix = trigger_context.get("manual_fix_request")
         self.assertIsInstance(manual_fix, dict)
         self.assertEqual(manual_fix.get("requested_by"), "owner-a")
         self.assertEqual(manual_fix.get("instruction_text"), "rename this variable")
@@ -425,7 +559,9 @@ class PrRemediationServiceTests(unittest.TestCase):
 
         self.assertTrue(result.triggered)
         self.assertTrue(result.enqueued)
-        trigger_context = enqueue_run_mock.call_args.kwargs["bootstrap"].plan.get("trigger_context", {})
+        trigger_context = self._trigger_context_from_bootstrap_plan(
+            enqueue_run_mock.call_args.kwargs["bootstrap"].plan
+        )
         self.assertNotIn("review_comments", trigger_context)
         self.assertNotIn("issue_comments", trigger_context)
         requested_comment = trigger_context.get("requested_comment")
@@ -512,7 +648,9 @@ class PrRemediationServiceTests(unittest.TestCase):
 
         self.assertTrue(result.triggered)
         self.assertTrue(result.enqueued)
-        trigger_context = enqueue_run_mock.call_args.kwargs["bootstrap"].plan.get("trigger_context", {})
+        trigger_context = self._trigger_context_from_bootstrap_plan(
+            enqueue_run_mock.call_args.kwargs["bootstrap"].plan
+        )
         self.assertNotIn("review_comments", trigger_context)
         self.assertNotIn("issue_comments", trigger_context)
         self.assertIsNone(trigger_context.get("code_context"))

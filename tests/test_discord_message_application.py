@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 from orchestrator.api.discord.messages.application import DiscordMessageIngressDeps, build_discord_message_ingress_result
 from orchestrator.core.communications import (
     DiscordAskWithThreadAction,
+    DiscordChannelMessageAction,
     DiscordChannelMessageWithAttachmentAction,
     DiscordThreadReplyAction,
 )
@@ -35,7 +36,8 @@ class DiscordMessageApplicationTests(unittest.TestCase):
             is_audio_attachment=MagicMock(side_effect=lambda attachment: str(attachment.get("content_type") or "").startswith("audio/")),
             transcribe_audio_attachment=transcribe_audio_attachment or MagicMock(return_value=("Create a share feature", None)),
             load_pending_human_input_request=MagicMock(return_value=None),
-            resume_run_from_human_input_reply=MagicMock(),
+            answer_human_input_request=MagicMock(),
+            resume_workflow_from_human_input_answer=MagicMock(),
             resolve_followup_context_match=resolve_followup_context_match,
             resolve_followup_context=MagicMock(return_value=None),
             resolve_followup_reaction=resolve_followup_reaction or MagicMock(return_value=None),
@@ -141,6 +143,47 @@ class DiscordMessageApplicationTests(unittest.TestCase):
 
         self.assertEqual(result.actions, ())
         execute.assert_not_called()
+
+    def test_human_input_reply_answers_then_resumes_workflow(self) -> None:
+        execute = MagicMock()
+        pending_request = SimpleNamespace(
+            request_id="request-1",
+            issue_key="TP-1",
+        )
+        answered_request = SimpleNamespace(request_id="request-1")
+        resumed_run = SimpleNamespace(run_id="run-2")
+        deps = self._deps(
+            execute_tenant_discord_command=execute,
+            resolve_followup_context_match=MagicMock(
+                return_value=SimpleNamespace(status="matched", context=SimpleNamespace(context_type="human_input"), matches=())
+            ),
+            resolve_followup_reaction=MagicMock(
+                return_value=SimpleNamespace(kind="human_input", request_id="request-1")
+            ),
+        )
+        deps.load_pending_human_input_request.return_value = pending_request
+        deps.answer_human_input_request.return_value = answered_request
+        deps.resume_workflow_from_human_input_answer.return_value = resumed_run
+
+        result = build_discord_message_ingress_result(
+            payload={
+                "id": "msg-4a",
+                "channel_id": "thread-1",
+                "author": {"id": "user-1", "bot": False},
+                "content": "use qa-account@example.com",
+            },
+            session=MagicMock(),
+            deps=deps,
+        )
+
+        self.assertEqual(len(result.actions), 1)
+        self.assertIsInstance(result.actions[0], DiscordChannelMessageAction)
+        deps.answer_human_input_request.assert_called_once()
+        deps.resume_workflow_from_human_input_answer.assert_called_once_with(
+            session=unittest.mock.ANY,
+            settings=deps.settings,
+            request=answered_request,
+        )
 
     def test_pm_voice_note_entry_opens_interview_thread(self) -> None:
         execute = MagicMock(
@@ -339,4 +382,3 @@ class DiscordMessageApplicationTests(unittest.TestCase):
         self.assertIsInstance(result.actions[0], DiscordChannelMessageWithAttachmentAction)
         build_voice.assert_called_once()
         self.assertEqual(build_voice.call_args.kwargs.get("content_override"), "PM guidance")
-

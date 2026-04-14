@@ -593,15 +593,15 @@ test("lets standard tenant users open Projects without showing project-managemen
   await page.goto("/example/projects");
 
   await expect(page.getByRole("heading", { name: "Projects" })).toBeVisible();
-  await expect(page.locator('a[href="/example/projects/route-web"]').last()).toBeVisible();
+  await expect(page.locator('a[href="/example/projects/route-web/runs"]').last()).toBeVisible();
   await expect(page.getByRole("link", { name: "All projects" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Add project" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Add project" })).toHaveCount(0);
 
-  await page.locator('a[href="/example/projects/route-web"]').last().click();
-  await expect(page).toHaveURL(/\/example\/projects\/route-web$/);
-  await expect(page.getByText("Project", { exact: true })).toBeVisible();
+  await page.locator('a[href="/example/projects/route-web/runs"]').last().click();
+  await expect(page).toHaveURL(/\/example\/projects\/route-web\/runs$/);
   await expect(page.getByRole("heading", { name: "Route Web" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Project Runs" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Open settings" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Add knowledge" })).toHaveCount(0);
   await expect(page.getByText("Failed to load project")).toHaveCount(0);

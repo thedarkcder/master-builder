@@ -5,7 +5,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    database_url: str = "sqlite:///./orchestrator.db"
+    database_url: str = "postgresql+psycopg://orchestrator:orchestrator@127.0.0.1:4402/orchestrator"
+    allow_sqlite_for_tests: bool = False
     db_pool_size: int = 10
     db_pool_max_overflow: int = 20
     db_pool_timeout_seconds: int = 60
@@ -22,7 +23,7 @@ class Settings(BaseSettings):
     discord_oauth_client_secret: str = ""
     discord_oauth_redirect_url: str = "http://localhost:4000/api/public/discord/oauth/callback"
     discord_install_state_secret: str = "local-dev-discord-install-secret"
-    discord_bot_permissions: int = 277025574912
+    discord_bot_permissions: int = 3224728621023057
     email_delivery_provider: Literal["smtp", "resend"] = "smtp"
     email_from_name: str = "Master Builder"
     email_from_address: str = "no-reply@masterbuilder.local"
@@ -45,7 +46,8 @@ class Settings(BaseSettings):
     discord_guild_id: str = ""
     discord_channel_name_template: str = "{project_name}"
     discord_channel_category_id: str = ""
-    voice_provider: Literal["disabled", "openai", "whisper", "pocket_tts"] = "disabled"
+    voice_stt_provider: Literal["disabled", "openai", "whisper"] = "disabled"
+    voice_tts_provider: Literal["disabled", "pocket_tts"] = "disabled"
     voice_transcription_model: str = "gpt-4o-mini-transcribe"
     voice_transcription_language: str = ""
     voice_transcription_openai_api_key: str = ""
@@ -98,6 +100,9 @@ class Settings(BaseSettings):
     knowledge_jira_sync_lock_key: int = 947102033128
     knowledge_jira_sync_max_issues: int = 500
     knowledge_jira_sync_invalid_token_backoff_seconds: int = 21600
+    stage_spi_enabled: bool = False
+    stage_spi_default_plugin: str = "design"
+    stage_spi_llm_planning_enabled: bool = False
     project_automation_lock_key: int = 947102033131
     project_automation_poll_seconds: int = 30
     project_automation_interval_seconds: int = 30
@@ -105,10 +110,14 @@ class Settings(BaseSettings):
     run_events_initial_limit: int = 100
     run_logs_initial_limit: int = 200
     project_repo_checkout_base_dir: str = "/tmp/master-builder-project-repos"
+    runtime_home: str = ""
     worker_poll_interval_seconds: int = 5
     worker_run_heartbeat_interval_seconds: int = 30
     worker_run_stale_timeout_seconds: int = 300
     worker_stale_sweep_interval_seconds: int = 60
+    worker_max_child_processes: int = 5
+    worker_runtime_readiness_refresh_seconds: int = 30
+    worker_runtime_auth_remediation_ttl_seconds: int = 900
     tenant_archive_retention_days: int = 60
     tenant_archive_sweep_interval_seconds: int = 3600
     discord_gateway_lock_key: int = 947102033127
@@ -122,6 +131,7 @@ class Settings(BaseSettings):
     sentry_traces_sample_rate: float = 0.0
     agent_id: str = "worker-linux-local"
     worker_capabilities: str = "linux"
+    worker_runtime_kinds: str = "codex_cli"
     worker_workspace_key: str = ""
     discord_command_sync_lock_key: int = 947102033130
 
