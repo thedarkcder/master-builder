@@ -15,7 +15,10 @@ from orchestrator.api.admin.deployment_release_service import (
     _coolify_api_base_url,
     _resolve_secret_value,
 )
-from orchestrator.api.admin.deployment_host_service import resolve_active_deployment_host
+from orchestrator.api.admin.deployment_host_service import (
+    resolve_active_deployment_host,
+    resolve_default_active_deployment_host,
+)
 from orchestrator.api.schemas import (
     ProjectDeploymentBackupExecutionListRead,
     ProjectDeploymentBackupExecutionRead,
@@ -306,11 +309,13 @@ def get_project_deployment_restore_run(
 def _resolve_restore_host_id(*, session, tenant_plane: TenantDeploymentPlaneRead) -> str:  # noqa: ANN001
     managed_host_id = _normalize_optional_string(tenant_plane.managed_host_id)
     if managed_host_id is None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Tenant deployment plane is missing a managed host for database restore",
+        host = resolve_default_active_deployment_host(
+            session=session,
+            infrastructure_provider=tenant_plane.infrastructure_provider,
+            region=tenant_plane.region,
         )
-    host = resolve_active_deployment_host(session=session, host_id=managed_host_id)
+    else:
+        host = resolve_active_deployment_host(session=session, host_id=managed_host_id)
     capabilities = {str(value or "").strip().lower() for value in list(host.capability_keys_json or [])}
     if "restore_database" not in capabilities:
         raise HTTPException(

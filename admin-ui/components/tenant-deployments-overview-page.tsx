@@ -213,7 +213,7 @@ export function TenantDeploymentsOverviewPage() {
       const created = await createDeploymentHost(credentials, payload);
       setHosts((current) => [created.host, ...current.filter((host) => host.host_id !== created.host.host_id)]);
       setHostBootstrap(created);
-      setHostStatusLine(`Created managed host ${created.host.label}. Copy the bootstrap token now.`);
+      setHostStatusLine(`Created managed host ${created.host.label}. Bootstrap token is ready for manual agent bootstrap.`);
       setHostDraft(emptyManagedHostDraft());
     } catch (error) {
       setHostStatusLine(`Failed to create managed host: ${(error as Error).message}`);
@@ -279,7 +279,7 @@ export function TenantDeploymentsOverviewPage() {
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Managed hosts</CardTitle>
-            <CardDescription>Create hosts, register agents, and attach one host to this tenant’s managed deployment plane.</CardDescription>
+            <CardDescription>Compose-managed stacks self-bootstrap these hosts. Manual host creation remains available for advanced environments.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-6">
             <div className="rounded-xl border bg-muted/10 p-4">
@@ -408,7 +408,7 @@ export function TenantDeploymentsOverviewPage() {
                   <Button type="submit" disabled={hostBusy}>
                     {hostBusy ? "Creating..." : "Create managed host"}
                   </Button>
-                  <p className="text-xs text-muted-foreground">The bootstrap token is shown once after creation.</p>
+                  <p className="text-xs text-muted-foreground">Use this only when you need to bootstrap a host outside the managed stack.</p>
                 </div>
               </form>
 
@@ -418,7 +418,7 @@ export function TenantDeploymentsOverviewPage() {
                   <ul className="mt-3 space-y-2 text-sm text-muted-foreground">
                     <li>Label, region, capabilities, and lifecycle state.</li>
                     <li>Last seen time and agent version after registration.</li>
-                    <li>Bootstrap token for the host agent bootstrap flow.</li>
+                    <li>One-time bootstrap token only for manual agent registration flows.</li>
                   </ul>
                 </div>
 
@@ -448,7 +448,7 @@ export function TenantDeploymentsOverviewPage() {
                   </div>
                 ) : (
                   <div className="rounded-xl border bg-muted/10 p-4 text-sm text-muted-foreground">
-                    Create a host to receive a one-time bootstrap token and register the host agent.
+                    Managed stacks bootstrap hosts automatically. Create one here only for manual or external host registration.
                   </div>
                 )}
               </div>

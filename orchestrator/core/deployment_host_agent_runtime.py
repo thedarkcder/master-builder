@@ -38,6 +38,7 @@ class DeploymentHostControlPlaneError(DeploymentHostAgentError):
 class DeploymentHostAgentConfig:
     api_base_url: str
     bootstrap_token: str | None
+    bootstrap_token_path: Path | None
     access_token: str | None
     access_token_path: Path
     capabilities: tuple[str, ...]
@@ -95,6 +96,13 @@ def resolve_deployment_host_agent_config(*, settings: Settings | None = None) ->
     return DeploymentHostAgentConfig(
         api_base_url=api_base_url.rstrip("/"),
         bootstrap_token=_normalize_optional_string(getattr(resolved_settings, "deployment_host_agent_bootstrap_token", "")),
+        bootstrap_token_path=(
+            Path(raw_bootstrap_path).expanduser()
+            if (raw_bootstrap_path := _normalize_optional_string(
+                getattr(resolved_settings, "deployment_host_agent_bootstrap_token_path", ""),
+            )) is not None
+            else None
+        ),
         access_token=_normalize_optional_string(getattr(resolved_settings, "deployment_host_agent_access_token", "")),
         access_token_path=_resolve_access_token_path(resolved_settings),
         capabilities=_normalize_capabilities(getattr(resolved_settings, "deployment_host_agent_capabilities", "")),
@@ -116,6 +124,13 @@ def resolve_deployment_host_agent_config(*, settings: Settings | None = None) ->
 
 
 def load_deployment_host_agent_access_token(path: Path) -> str | None:
+    try:
+        return _normalize_optional_string(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+
+
+def load_deployment_host_agent_bootstrap_token(path: Path) -> str | None:
     try:
         return _normalize_optional_string(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
@@ -387,12 +402,19 @@ class DeploymentHostAgent:
     def _load_access_token(self) -> str | None:
         return self._config.access_token or load_deployment_host_agent_access_token(self._config.access_token_path)
 
+    def _load_bootstrap_token(self) -> str | None:
+        if self._config.bootstrap_token is not None:
+            return self._config.bootstrap_token
+        if self._config.bootstrap_token_path is None:
+            return None
+        return load_deployment_host_agent_bootstrap_token(self._config.bootstrap_token_path)
+
     def _ensure_client(self) -> DeploymentHostControlPlaneClient:
         if self._client is not None:
             return self._client
         access_token = self._load_access_token()
         if access_token is None:
-            bootstrap_token = self._config.bootstrap_token
+            bootstrap_token = self._load_bootstrap_token()
             if bootstrap_token is None:
                 raise DeploymentHostAgentError(
                     "Deployment host agent requires either an access token or a bootstrap token",
@@ -407,6 +429,8 @@ class DeploymentHostAgent:
             if registered_access_token is None:
                 raise DeploymentHostAgentError("Deployment host registration did not return an access token")
             persist_deployment_host_agent_access_token(self._config.access_token_path, registered_access_token)
+            if self._config.bootstrap_token_path is not None:
+                self._config.bootstrap_token_path.unlink(missing_ok=True)
             access_token = registered_access_token
             logger.info("deployment_host_agent_registered")
         self._client = self._client_factory(
@@ -503,4 +527,3 @@ def run_deployment_host_agent(*, settings: Settings | None = None) -> None:
     agent = DeploymentHostAgent(config=resolve_deployment_host_agent_config(settings=resolved_settings))
     logger.info("deployment_host_agent_started")
     agent.run()
-

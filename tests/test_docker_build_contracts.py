@@ -147,6 +147,42 @@ class DockerBuildContractTests(unittest.TestCase):
                     msg=f"webhook-worker in {relative_path} should preload cached voice models before processing webhook events.",
                 )
 
+    def test_deployment_host_services_are_bootstrapped_in_dev_and_prod(self) -> None:
+        for relative_path in ("docker-compose.yml", "deploy/hetzner/docker-compose.prod.yml"):
+            compose = (ROOT / relative_path).read_text(encoding="utf-8")
+            bootstrap_block = compose.split("deployment-host-bootstrap:", 1)[1]
+            agent_block = compose.split("deployment-host-agent:", 1)[1]
+
+            for expected_line in (
+                "python",
+                "scripts/bootstrap_deployment_host_agent.py",
+                "--bootstrap-token-path",
+                "/var/lib/master-builder/deployment-host/bootstrap-token",
+                "--access-token-path",
+                "/var/lib/master-builder/deployment-host/access-token",
+                "deployment-host-state:/var/lib/master-builder/deployment-host",
+            ):
+                self.assertIn(
+                    expected_line,
+                    bootstrap_block,
+                    msg=f"deployment-host-bootstrap in {relative_path} should provision the host bootstrap token into the private state volume.",
+                )
+
+            for expected_line in (
+                "service_completed_successfully",
+                "ORCHESTRATOR_DEPLOYMENT_HOST_AGENT_BOOTSTRAP_TOKEN_PATH: /var/lib/master-builder/deployment-host/bootstrap-token",
+                "ORCHESTRATOR_DEPLOYMENT_HOST_AGENT_ACCESS_TOKEN_PATH: /var/lib/master-builder/deployment-host/access-token",
+                "deployment-host-agent",
+                "- orchestrator",
+                "/var/run/docker.sock:/var/run/docker.sock",
+                "deployment-host-state:/var/lib/master-builder/deployment-host",
+            ):
+                self.assertIn(
+                    expected_line,
+                    agent_block,
+                    msg=f"deployment-host-agent in {relative_path} should run automatically after bootstrap and have host Docker access.",
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

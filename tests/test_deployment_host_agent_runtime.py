@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -15,6 +16,7 @@ def _agent_config(*, access_token_path: Path, bootstrap_token: str | None = None
     return DeploymentHostAgentConfig(
         api_base_url="http://localhost:4000",
         bootstrap_token=bootstrap_token,
+        bootstrap_token_path=None,
         access_token=None,
         access_token_path=access_token_path,
         capabilities=("restore_database", "postgres"),
@@ -81,6 +83,41 @@ def test_agent_bootstraps_and_persists_access_token() -> None:
         assert events[0][0] == "register"
         assert events[1][0] == "heartbeat"
         assert events[2] == ("claim", "access-token-1")
+
+
+def test_agent_bootstraps_from_token_file_and_removes_it_after_registration() -> None:
+    with TemporaryDirectory() as tmp_dir:
+        bootstrap_path = Path(tmp_dir) / "bootstrap-token"
+        access_token_path = Path(tmp_dir) / "agent-token"
+        bootstrap_path.write_text("bootstrap-token-1", encoding="utf-8")
+        events: list[tuple[str, object]] = []
+
+        class _FakeClient:
+            def __init__(self, *, api_base_url: str, access_token: str | None = None) -> None:
+                self.api_base_url = api_base_url
+                self.access_token = access_token
+
+            def register(self, *, bootstrap_token: str, agent_version: str, advertised_capabilities: tuple[str, ...]) -> dict[str, object]:
+                events.append(("register", (bootstrap_token, agent_version, advertised_capabilities)))
+                return {"access_token": "access-token-1", "host": {"host_id": "host-1"}}
+
+            def heartbeat(self, *, agent_version: str, advertised_capabilities: tuple[str, ...], state: str) -> dict[str, object]:
+                events.append(("heartbeat", (self.access_token, agent_version, tuple(advertised_capabilities), state)))
+                return {"host_id": "host-1"}
+
+            def claim_command(self) -> dict[str, object] | None:
+                events.append(("claim", self.access_token))
+                return None
+
+        config = replace(_agent_config(access_token_path=access_token_path), bootstrap_token_path=bootstrap_path)
+        agent = DeploymentHostAgent(config=config, client_factory=_FakeClient)
+
+        result = agent.process_once()
+
+        assert result.processed is False
+        assert access_token_path.read_text(encoding="utf-8") == "access-token-1"
+        assert not bootstrap_path.exists()
+        assert events[0][0] == "register"
 
 
 def test_agent_process_once_executes_restore_and_reports_success() -> None:
