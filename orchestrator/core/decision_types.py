@@ -169,27 +169,6 @@ class ReadinessDecision:
     reason_code: PrecheckOutcome | None = None
 
 
-def blocking_reason_for_outcome(outcome: object) -> str | None:
-    from orchestrator.core.decision_state_machine import blocking_reason_for_outcome as _blocking_reason_for_outcome
-
-    return _blocking_reason_for_outcome(outcome)
-
-
-def resolve_readiness_decision(
-    *,
-    policy_error: str | None,
-    block_reason: str | None,
-    classification: object,
-) -> ReadinessDecision:
-    from orchestrator.core.decision_state_machine import resolve_readiness_decision as _resolve_readiness_decision
-
-    return _resolve_readiness_decision(
-        policy_error=policy_error,
-        block_reason=block_reason,
-        classification=classification,
-    )
-
-
 def tenant_ready_label(tenant: object | None) -> str | None:
     return tenant_jira_config_text(tenant=tenant, key=JiraConfigKey.READY_LABEL)
 
@@ -305,38 +284,6 @@ class ExecutionGateResolution:
     reason: ExecutionGateReason | None = None
 
 
-def execution_gate_reason_for_precheck_outcome(
-    *,
-    outcome: PrecheckOutcome,
-    detail: str | None = None,
-    ready_label: str | None = None,
-) -> ExecutionGateReason:
-    from orchestrator.core.decision_state_machine import (
-        execution_gate_reason_for_precheck_outcome as _execution_gate_reason_for_precheck_outcome,
-    )
-
-    return _execution_gate_reason_for_precheck_outcome(
-        outcome=outcome,
-        detail=detail,
-        ready_label=ready_label,
-    )
-
-
-def guidance_for_precheck_block_reason(
-    *,
-    block_reason: str | None,
-    ready_label: str | None = None,
-) -> str | None:
-    from orchestrator.core.decision_state_machine import (
-        guidance_for_precheck_block_reason as _guidance_for_precheck_block_reason,
-    )
-
-    return _guidance_for_precheck_block_reason(
-        block_reason=block_reason,
-        ready_label=ready_label,
-    )
-
-
 @dataclass(frozen=True)
 class DecisionEventInput:
     source: DecisionSource
@@ -376,18 +323,3 @@ class DecisionEngineResult:
     @property
     def classification_code(self) -> str:
         return self.classification.value
-
-
-def resolve_execution_gate_state(
-    *,
-    decision: IngressDecision,
-    classification: object,
-) -> ExecutionGateResolution:
-    from orchestrator.core.decision_state_machine import (
-        resolve_execution_gate_state as _resolve_execution_gate_state,
-    )
-
-    return _resolve_execution_gate_state(
-        decision=decision,
-        classification=classification,
-    )

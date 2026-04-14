@@ -22,7 +22,7 @@ from orchestrator.core.communications.decision_clarification_presentation import
     render_decision_gate_remaining_questions_message,
 )
 from orchestrator.core.communications.execution_admission_format import (
-    format_discord_admission_conflict_detail,
+    present_discord_admission_conflict,
 )
 from orchestrator.core.decision_engine import DecisionEventInput, DecisionSource
 from orchestrator.core.decision_clarification_port import DecisionClarificationPort
@@ -102,9 +102,10 @@ def _queue_run_from_issue_context(
     )
     admission = resolve_execution_admission(decision_result=decision_result)
     if admission.blocked:
+        conflict = present_discord_admission_conflict(admission=admission)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=format_discord_admission_conflict_detail(admission=admission),
+            detail=conflict.detail,
         )
     enqueue_result = enqueue_issue_run_with_precheck(
         session,
@@ -492,7 +493,7 @@ def dispatch_run_control_command(
                         issue_key=issue_key,
                     ),
                     issue_key=issue_key,
-                    classification=clarification_presentation.mode.value,
+                    classification=clarification_presentation.mode,
                     decision_gate_reason=clarification_presentation.decision_gate_reason or "",
                     decision_gate_questions=list(clarification_presentation.decision_gate_questions),
                     gtd_missing_criteria=list(clarification_presentation.gtd_missing_criteria),
