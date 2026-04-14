@@ -16,6 +16,21 @@ from orchestrator.core.worker.stage_notifier import RunStageNotifier
 from orchestrator.core.worker_workspace import resolve_worker_workspace_key
 
 
+def _run_matches_execution_ownership(
+    run,  # noqa: ANN001
+    *,
+    expected_worker_service_instance_id: str | None,
+    expected_claim_id: str | None,
+    expected_status: str,
+) -> bool:
+    return (
+        str(getattr(run, "status", "") or "").strip().lower() == str(expected_status or "").strip().lower()
+        and str(getattr(run, "worker_service_instance_id", "") or "").strip()
+        == str(expected_worker_service_instance_id or "").strip()
+        and str(getattr(run, "claim_id", "") or "").strip() == str(expected_claim_id or "").strip()
+    )
+
+
 def _emit_queue_wait_metric(*, session, run, project_id: str | None, agent_id: str) -> None:  # noqa: ANN001
     if run.started_at is None or run.created_at is None:
         return
@@ -100,8 +115,6 @@ def process_next_queued_run(
     except ValueError as exc:
         logger.error("worker_capability_configuration_invalid error=%s", exc)
         raise
-    worker_workspace_key = resolve_worker_workspace_key(settings=settings)
-    agent_id = resolve_agent_id_fn()
     worker_service_instance_id = resolve_worker_service_instance_id_fn()
     selection = claim_next_queued_run_fn(
         session,
@@ -242,6 +255,42 @@ def process_claimed_run(
                 error="Claimed run could not transition from dispatching to running",
             )
         run = promoted_run
+        if not _run_matches_execution_ownership(
+            run,
+            expected_worker_service_instance_id=worker_service_instance_id,
+            expected_claim_id=claim_id,
+            expected_status=run_status_running,
+        ):
+            current_owner = str(getattr(run, "worker_service_instance_id", "") or "").strip()
+            current_claim_id = str(getattr(run, "claim_id", "") or "").strip()
+            current_status = str(getattr(run, "status", "") or "").strip().lower()
+            if current_owner != str(worker_service_instance_id or "").strip() or current_claim_id != claim_id:
+                logger.warning(
+                    "worker_run_ownership_lost_before_execution run_id=%s tenant_id=%s issue_key=%s status=%s current_owner=%s expected_owner=%s current_claim_id=%s expected_claim_id=%s",
+                    run.run_id,
+                    run.tenant_id,
+                    run.issue_key,
+                    current_status,
+                    current_owner,
+                    worker_service_instance_id,
+                    current_claim_id,
+                    claim_id,
+                )
+                return run
+            logger.error(
+                "worker_run_promotion_invalid_state run_id=%s tenant_id=%s issue_key=%s status=%s worker_service_instance_id=%s claim_id=%s",
+                run.run_id,
+                run.tenant_id,
+                run.issue_key,
+                current_status,
+                current_owner,
+                current_claim_id,
+            )
+            return fail_guardrail_violation_fn(
+                session,
+                run=run,
+                error="Claimed run could not transition from dispatching to running",
+            )
     elif getattr(run, "status", None) == run_status_dispatching:
         return fail_guardrail_violation_fn(
             session,

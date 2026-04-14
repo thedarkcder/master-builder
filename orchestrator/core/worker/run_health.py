@@ -65,7 +65,7 @@ def touch_run_heartbeat(
         update(Run)
         .where(
             Run.run_id == run_id,
-            Run.status.in_((RUN_STATUS_DISPATCHING, RUN_STATUS_RUNNING)),
+            Run.status == RUN_STATUS_RUNNING,
             Run.worker_service_instance_id == normalized_owner,
             Run.claim_id == normalized_claim_id,
         )
