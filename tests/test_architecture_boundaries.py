@@ -670,6 +670,30 @@ class ArchitectureBoundaryTests(unittest.TestCase):
                 msg=f"{module_path.relative_to(ROOT).as_posix()} must invoke shared execution snapshot startup bootstrap.",
             )
 
+    def test_runtime_modules_do_not_import_execution_snapshot_migration_directly(self) -> None:
+        allowed_importers = {
+            "orchestrator/cli.py",
+            "orchestrator/core/workflow/execution_snapshot_startup.py",
+        }
+        violations: list[str] = []
+        for module_path in sorted(ORCHESTRATOR_ROOT.rglob("*.py")):
+            relative = module_path.relative_to(ROOT).as_posix()
+            if relative in allowed_importers:
+                continue
+            if relative.startswith("orchestrator/storage/migrations/versions/"):
+                continue
+            for module_name in _imported_modules(module_path):
+                if module_name == "orchestrator.core.workflow.execution_snapshot_migration":
+                    violations.append(f"{relative}:{module_name}")
+        self.assertEqual(
+            violations,
+            [],
+            msg=(
+                "Execution snapshot legacy conversion must stay in explicit migration/bootstrap paths only: "
+                f"{violations}"
+            ),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
