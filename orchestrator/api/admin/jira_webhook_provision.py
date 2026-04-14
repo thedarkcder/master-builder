@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from orchestrator.api.schemas import JiraWebhookActionResult
+from orchestrator.core.decision_types import JiraConfigKey, jira_config_text
 from orchestrator.storage.models import JiraOAuthConnection, Tenant
 from orchestrator.tools.jira_oauth import JiraOAuthError
 
@@ -12,6 +13,7 @@ def provision_jira_webhook(
     session,
     tenant: Tenant,
     settings,
+    commit: bool = True,
     replace_existing: bool,
     jira_webhook_events: list[str],
     delete_jira_webhooks_fn,
@@ -29,9 +31,16 @@ def provision_jira_webhook(
     cleanup_conflicting_jira_webhook_url_fn,
 ) -> JiraWebhookActionResult:  # noqa: ANN001
     action_name = "reset" if replace_existing else "provision"
+
+    def _persist_tenant_jira_config(updated_jira_config: dict) -> None:
+        tenant.jira_config = updated_jira_config
+        tenant.updated_at = datetime.now(timezone.utc)
+        if commit:
+            session.commit()
+
     jira_config = dict(tenant.jira_config)
-    connection_id = jira_config.get("connection_id")
-    if not isinstance(connection_id, str) or not connection_id:
+    connection_id = jira_config_text(jira_config=jira_config, key=JiraConfigKey.CONNECTION_ID)
+    if not connection_id:
         return JiraWebhookActionResult(
             ok=False,
             action=action_name,
@@ -132,9 +141,7 @@ def provision_jira_webhook(
                     "Failed to provision Jira webhook: "
                     f"{exc}. Cleanup attempt failed: {cleanup_exc}"
                 )
-                tenant.jira_config = jira_config
-                tenant.updated_at = datetime.now(timezone.utc)
-                session.commit()
+                _persist_tenant_jira_config(jira_config)
                 return JiraWebhookActionResult(
                     ok=False,
                     action=action_name,
@@ -167,9 +174,7 @@ def provision_jira_webhook(
                         "Failed to provision Jira webhook: "
                         f"{exc}. URL-conflict cleanup failed: {cleanup_exc}"
                     )
-                    tenant.jira_config = jira_config
-                    tenant.updated_at = datetime.now(timezone.utc)
-                    session.commit()
+                    _persist_tenant_jira_config(jira_config)
                     return JiraWebhookActionResult(
                         ok=False,
                         action=action_name,
@@ -178,9 +183,7 @@ def provision_jira_webhook(
                     )
         if webhook_ids is None:
             jira_config["webhook_last_error"] = f"Failed to provision Jira webhook: {exc}"
-            tenant.jira_config = jira_config
-            tenant.updated_at = datetime.now(timezone.utc)
-            session.commit()
+            _persist_tenant_jira_config(jira_config)
             return JiraWebhookActionResult(
                 ok=False,
                 action=action_name,
@@ -209,9 +212,7 @@ def provision_jira_webhook(
                     f"webhook(s): {exc}"
                 )
                 cleanup_note = f"{cleanup_note} {stale_cleanup_note}".strip() if cleanup_note else stale_cleanup_note
-    tenant.jira_config = jira_config
-    tenant.updated_at = datetime.now(timezone.utc)
-    session.commit()
+    _persist_tenant_jira_config(jira_config)
     details = f"Provisioned {len(webhook_ids)} Jira webhook(s)."
     if cleanup_note:
         details = f"{details} {cleanup_note}"

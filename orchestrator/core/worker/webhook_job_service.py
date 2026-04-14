@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
 import logging
 
 from fastapi import HTTPException
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestrator.api.commands.entrypoint import execute_tenant_discord_ingress_command
@@ -31,7 +29,6 @@ from orchestrator.api.webhooks.jira_webhook_types import (
     hydrate_jira_webhook_context,
 )
 from orchestrator.api.webhooks.contracts import JIRA_COMMENT_EVENTS, resolve_active_project_for_issue
-from orchestrator.core.deployment_runtime import ingest_coolify_deployment_event
 from orchestrator.core.communications import (
     HttpJsonResponseAction,
     HttpJsonResponseBytesAction,
@@ -44,22 +41,12 @@ from orchestrator.core.project_automation_execution_service import (
     mark_project_automation_execution_success,
     prepare_project_automation_execution,
 )
-from orchestrator.core.project_app_artifact_pr_runtime import create_project_app_artifact_pr
-from orchestrator.core.project_app_analysis_runtime import run_project_app_analysis
-from orchestrator.core.project_app_planner import (
-    mark_project_app_analysis_run_completed,
-    mark_project_app_analysis_run_failed,
-    mark_project_app_analysis_run_running,
-    persist_project_app_analysis_result,
-)
 from orchestrator.core.webhook_job_queue import (
     WEBHOOK_TRANSPORT_DISCORD_COMMAND,
     WEBHOOK_TRANSPORT_DISCORD_INTERACTION,
-    WEBHOOK_TRANSPORT_COOLIFY_DEPLOYMENT,
     WEBHOOK_TRANSPORT_GITHUB,
     WEBHOOK_TRANSPORT_JIRA,
     WEBHOOK_TRANSPORT_PROJECT_AUTOMATION,
-    WEBHOOK_TRANSPORT_PROJECT_APP_ANALYSIS,
     WebhookJob,
     claim_next_webhook_job,
     claim_pending_jobs_for_subject,
@@ -68,180 +55,9 @@ from orchestrator.core.webhook_job_queue import (
     mark_webhook_jobs_failed,
 )
 from orchestrator.core.config import Settings
-from orchestrator.storage.models import Project, ProjectAppAnalysisRun, Tenant
-from orchestrator.storage.models import ProjectApp
+from orchestrator.storage.models import Project, Tenant
 
 logger = logging.getLogger(__name__)
-
-
-def _normalize_optional_string(value: object) -> str | None:
-    normalized = str(value or "").strip()
-    return normalized or None
-
-
-def _coerce_result_payload(run: ProjectAppAnalysisRun) -> dict[str, object]:
-    payload = getattr(run, "result_payload", None)
-    return payload if isinstance(payload, dict) else {}
-
-
-def _artifact_pr_context_for_run(run: ProjectAppAnalysisRun) -> tuple[int | None, str | None]:
-    payload = _coerce_result_payload(run)
-    artifact_pr = payload.get("artifact_pr")
-    if not isinstance(artifact_pr, dict):
-        return None, None
-    pr_number_raw = artifact_pr.get("pr_number")
-    pr_number = pr_number_raw if isinstance(pr_number_raw, int) and pr_number_raw > 0 else None
-    head_branch = _normalize_optional_string(artifact_pr.get("head_branch"))
-    return pr_number, head_branch
-
-
-def _normalized_app_source_paths_for_run(run: ProjectAppAnalysisRun) -> set[str]:
-    payload = _coerce_result_payload(run)
-    normalized_apps = payload.get("normalized_apps")
-    if not isinstance(normalized_apps, list):
-        return set()
-    source_paths: set[str] = set()
-    for item in normalized_apps:
-        if not isinstance(item, dict):
-            continue
-        source_path = _normalize_optional_string(item.get("source_path"))
-        if source_path is None:
-            continue
-        source_paths.add(source_path)
-    return source_paths
-
-
-def _needs_generated_source_paths_for_run(run: ProjectAppAnalysisRun) -> set[str]:
-    payload = _coerce_result_payload(run)
-    normalized_apps = payload.get("normalized_apps")
-    if not isinstance(normalized_apps, list):
-        return set()
-    source_paths: set[str] = set()
-    for item in normalized_apps:
-        if not isinstance(item, dict):
-            continue
-        source_path = _normalize_optional_string(item.get("source_path"))
-        if source_path is None:
-            continue
-        if bool(item.get("needs_generated_files")):
-            source_paths.add(source_path)
-    return source_paths
-
-
-def _latest_completed_analysis_runs_for_project(
-    *,
-    session: Session,
-    tenant_id: str,
-    project_id: str,
-) -> list[ProjectAppAnalysisRun]:
-    return session.execute(
-        select(ProjectAppAnalysisRun)
-        .where(
-            ProjectAppAnalysisRun.tenant_id == tenant_id,
-            ProjectAppAnalysisRun.project_id == project_id,
-            ProjectAppAnalysisRun.status == "completed",
-        )
-        .order_by(ProjectAppAnalysisRun.completed_at.desc(), ProjectAppAnalysisRun.created_at.desc())
-    ).scalars().all()
-
-
-def _reconcile_project_app_status_after_artifact_pr_merge(
-    *,
-    session: Session,
-    tenant_id: str,
-    project_id: str,
-    pr_number: int,
-    head_branch: str | None,
-) -> int:
-    analysis_runs = _latest_completed_analysis_runs_for_project(
-        session=session,
-        tenant_id=tenant_id,
-        project_id=project_id,
-    )
-    if not analysis_runs:
-        return 0
-
-    matching_run: ProjectAppAnalysisRun | None = None
-    for run in analysis_runs:
-        run_pr_number, run_head_branch = _artifact_pr_context_for_run(run)
-        if run_pr_number == pr_number:
-            matching_run = run
-            break
-        if head_branch and run_head_branch == head_branch:
-            matching_run = run
-            break
-    if matching_run is None:
-        return 0
-
-    candidate_source_paths = _needs_generated_source_paths_for_run(matching_run)
-    if not candidate_source_paths:
-        return 0
-
-    # Guard against stale merge events: only update paths for which this matching run is
-    # still the latest completed analysis run mentioning that source path.
-    latest_run_by_source_path: dict[str, str] = {}
-    for run in analysis_runs:
-        run_id = str(run.run_id or "").strip()
-        if not run_id:
-            continue
-        for source_path in _normalized_app_source_paths_for_run(run):
-            if source_path not in latest_run_by_source_path:
-                latest_run_by_source_path[source_path] = run_id
-
-    eligible_source_paths = {
-        source_path
-        for source_path in candidate_source_paths
-        if latest_run_by_source_path.get(source_path) == matching_run.run_id
-    }
-    if not eligible_source_paths:
-        return 0
-
-    apps = session.execute(
-        select(ProjectApp).where(
-            ProjectApp.tenant_id == tenant_id,
-            ProjectApp.project_id == project_id,
-            ProjectApp.source_path.in_(sorted(eligible_source_paths)),
-        )
-    ).scalars().all()
-    now = datetime.now(timezone.utc)
-    updated = 0
-    for app in apps:
-        if str(app.status or "").strip().lower() != "needs_pr_merge":
-            continue
-        app.status = "ready"
-        app.updated_at = now
-        updated += 1
-    return updated
-
-
-def _merged_pull_request_context(
-    *,
-    github_event: str | None,
-    normalized_action: str | None,
-    payload: dict[str, object],
-    fallback_pr_number: int | None,
-) -> tuple[int, str | None] | None:
-    if str(github_event or "").strip().lower() != "pull_request":
-        return None
-    if str(normalized_action or "").strip().lower() != "closed":
-        return None
-    pull_request = payload.get("pull_request")
-    if not isinstance(pull_request, dict):
-        return None
-    if not bool(pull_request.get("merged")):
-        return None
-    pr_number_raw = pull_request.get("number")
-    if isinstance(pr_number_raw, int) and pr_number_raw > 0:
-        pr_number = pr_number_raw
-    elif isinstance(fallback_pr_number, int) and fallback_pr_number > 0:
-        pr_number = fallback_pr_number
-    else:
-        return None
-    head_branch = None
-    head = pull_request.get("head")
-    if isinstance(head, dict):
-        head_branch = _normalize_optional_string(head.get("ref"))
-    return pr_number, head_branch
 
 def _rollback_job_session(
     session: Session,
@@ -423,41 +239,13 @@ def _process_github_subject_jobs(
     if tenant is None or project is None or not tenant.is_enabled or bool(getattr(project, "is_archived", False)):
         return mark_webhook_jobs_done(session, jobs=jobs, owner_id=owner_id)
     pr_number = int(context_json.get("pr_number"))
-    github_event = str(context_json.get("github_event") or source_job.event_type or "").strip() or None
-    normalized_action = str(context_json.get("normalized_action") or "").strip() or None
-    payload_json = dict(source_job.payload_json or {})
-    merged_context = _merged_pull_request_context(
-        github_event=github_event,
-        normalized_action=normalized_action,
-        payload=payload_json,
-        fallback_pr_number=pr_number,
-    )
-    if merged_context is not None:
-        merged_pr_number, merged_head_branch = merged_context
-        updated_count = _reconcile_project_app_status_after_artifact_pr_merge(
-            session=session,
-            tenant_id=tenant.tenant_id,
-            project_id=project.project_id,
-            pr_number=merged_pr_number,
-            head_branch=merged_head_branch,
-        )
-        logger.info(
-            "project_app_artifact_pr_merge_reconciled tenant_id=%s project_id=%s pr_number=%s head_branch=%s updated_app_count=%s",
-            tenant.tenant_id,
-            project.project_id,
-            merged_pr_number,
-            merged_head_branch or "none",
-            updated_count,
-        )
-        return mark_webhook_jobs_done(session, jobs=jobs, owner_id=owner_id)
-
     review_summary_present = bool(context_json.get("review_summary_present"))
     context = GitHubWebhookContext(
         request_id=source_job.request_id,
         delivery_id=str(context_json.get("delivery_id") or source_job.dedupe_key or ""),
-        github_event=str(github_event or ""),
-        payload=payload_json,
-        normalized_action=normalized_action,
+        github_event=str(context_json.get("github_event") or source_job.event_type or ""),
+        payload=dict(source_job.payload_json or {}),
+        normalized_action=str(context_json.get("normalized_action") or "").strip() or None,
         installation_id=int(context_json.get("installation_id") or 0),
         tenant=tenant,
         project=project,
@@ -659,173 +447,6 @@ def _process_discord_interaction_job(
     return mark_webhook_jobs_done(session, jobs=(claimed_job,), owner_id=owner_id)
 
 
-def _process_coolify_deployment_job(
-    *,
-    session: Session,
-    owner_id: str,
-    claimed_job: WebhookJob,
-) -> tuple[WebhookJob, ...]:
-    if not claimed_job.tenant_id or not claimed_job.project_id:
-        return mark_webhook_jobs_failed(
-            session,
-            jobs=(claimed_job,),
-            owner_id=owner_id,
-            error="Coolify deployment webhook job is missing tenant_id or project_id",
-        )
-    payload = dict(claimed_job.payload_json or {})
-    context = dict(claimed_job.context_json or {})
-    webhook_token = str(context.get("webhook_token") or context.get("token") or "").strip()
-    result = ingest_coolify_deployment_event(
-        session=session,
-        tenant_id=claimed_job.tenant_id,
-        project_id=claimed_job.project_id,
-        webhook_token=webhook_token,
-        payload=payload,
-    )
-    if not bool(result.get("ok", False)):
-        return mark_webhook_jobs_failed(
-            session,
-            jobs=(claimed_job,),
-            owner_id=owner_id,
-            error="Coolify deployment webhook was not accepted",
-        )
-    return mark_webhook_jobs_done(session, jobs=(claimed_job,), owner_id=owner_id)
-
-
-def _process_project_app_analysis_job(
-    *,
-    session: Session,
-    settings: Settings,
-    owner_id: str,
-    claimed_job: WebhookJob,
-) -> tuple[WebhookJob, ...]:
-    if not claimed_job.tenant_id or not claimed_job.project_id:
-        return mark_webhook_jobs_failed(
-            session,
-            jobs=(claimed_job,),
-            owner_id=owner_id,
-            error="Project app analysis webhook job is missing tenant_id or project_id",
-        )
-
-    payload = dict(claimed_job.payload_json or {})
-    analysis_run_id = str(payload.get("analysis_run_id") or "").strip()
-    if not analysis_run_id:
-        return mark_webhook_jobs_failed(
-            session,
-            jobs=(claimed_job,),
-            owner_id=owner_id,
-            error="Project app analysis webhook job is missing analysis_run_id",
-        )
-
-    run = session.get(ProjectAppAnalysisRun, analysis_run_id)
-    if run is None or run.tenant_id != claimed_job.tenant_id or run.project_id != claimed_job.project_id:
-        return mark_webhook_jobs_failed(
-            session,
-            jobs=(claimed_job,),
-            owner_id=owner_id,
-            error="Project app analysis run was not found",
-        )
-    if run.status == "completed":
-        return mark_webhook_jobs_done(session, jobs=(claimed_job,), owner_id=owner_id)
-
-    tenant = session.get(Tenant, claimed_job.tenant_id)
-    project = session.get(Project, claimed_job.project_id)
-    if tenant is None or project is None or not tenant.is_enabled or bool(getattr(project, "is_archived", False)):
-        return mark_webhook_jobs_failed(
-            session,
-            jobs=(claimed_job,),
-            owner_id=owner_id,
-            error="Project app analysis context is unavailable",
-        )
-
-    request_payload = dict(run.request_payload or {})
-    checkout_path = str(payload.get("checkout_path") or request_payload.get("checkout_path") or "").strip()
-    if not checkout_path:
-        return mark_webhook_jobs_failed(
-            session,
-            jobs=(claimed_job,),
-            owner_id=owner_id,
-            error="Project app analysis run is missing checkout_path",
-        )
-    analysis_source = str(payload.get("analysis_source") or request_payload.get("analysis_source") or "").strip() or None
-    planner_version = (
-        str(payload.get("planner_version") or request_payload.get("planner_version") or run.planner_version or "").strip()
-        or None
-    )
-
-    try:
-        mark_project_app_analysis_run_running(
-            session=session,
-            analysis_run_id=analysis_run_id,
-        )
-        session.commit()
-
-        analysis_result = run_project_app_analysis(
-            tenant=tenant,
-            project=project,
-            checkout_path=checkout_path,
-            analysis_source=analysis_source,
-            planner_version=planner_version,
-            session=session,
-            settings=settings,
-        )
-        persist_project_app_analysis_result(
-            session=session,
-            tenant_id=claimed_job.tenant_id,
-            project_id=claimed_job.project_id,
-            analysis_run_id=analysis_run_id,
-            apps=analysis_result.apps,
-            raw_planner_result_json=analysis_result.metadata.raw_planner_result_json,
-            analysis_source=analysis_source,
-            planner_version=planner_version,
-        )
-        artifact_pr_result = create_project_app_artifact_pr(
-            session=session,
-            settings=settings,
-            tenant=tenant,
-            project=project,
-            checkout_path=checkout_path,
-            analysis_run_id=analysis_run_id,
-            analysis_result=analysis_result,
-        )
-        result_payload = {
-            "raw_planner_result_json": analysis_result.metadata.raw_planner_result_json,
-            "normalized_apps": [app.to_result_json() for app in analysis_result.apps],
-            "analysis_source": analysis_source,
-            "planner_version": planner_version,
-            "pre_scan_count": analysis_result.metadata.pre_scan_count,
-            "runtime_count": analysis_result.metadata.runtime_count,
-            "normalized_count": analysis_result.metadata.normalized_count,
-        }
-        if artifact_pr_result is not None:
-            result_payload["artifact_pr"] = artifact_pr_result.to_result_json()
-        mark_project_app_analysis_run_completed(
-            session=session,
-            analysis_run_id=analysis_run_id,
-            result_payload=result_payload,
-        )
-        session.commit()
-    except Exception as exc:  # noqa: BLE001
-        session.rollback()
-        try:
-            mark_project_app_analysis_run_failed(
-                session=session,
-                analysis_run_id=analysis_run_id,
-                error=str(exc),
-            )
-            session.commit()
-        except Exception:  # noqa: BLE001
-            logger.exception(
-                "project_app_analysis_run_failure_mark_failed request_id=%s tenant_id=%s job_id=%s",
-                claimed_job.request_id,
-                claimed_job.tenant_id,
-                claimed_job.job_id,
-            )
-        raise
-
-    return mark_webhook_jobs_done(session, jobs=(claimed_job,), owner_id=owner_id)
-
-
 def process_next_webhook_job(
     *,
     session: Session,
@@ -895,19 +516,6 @@ def process_next_webhook_job(
         elif job.transport == WEBHOOK_TRANSPORT_DISCORD_INTERACTION:
             processed = _process_discord_interaction_job(
                 session=session,
-                owner_id=owner_id,
-                claimed_job=job,
-            )
-        elif job.transport == WEBHOOK_TRANSPORT_COOLIFY_DEPLOYMENT:
-            processed = _process_coolify_deployment_job(
-                session=session,
-                owner_id=owner_id,
-                claimed_job=job,
-            )
-        elif job.transport == WEBHOOK_TRANSPORT_PROJECT_APP_ANALYSIS:
-            processed = _process_project_app_analysis_job(
-                session=session,
-                settings=settings,
                 owner_id=owner_id,
                 claimed_job=job,
             )

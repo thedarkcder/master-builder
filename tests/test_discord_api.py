@@ -7,7 +7,13 @@ from urllib.error import HTTPError
 from urllib.error import URLError
 from unittest.mock import patch
 
-from orchestrator.tools.discord_api import DiscordApiClient, DiscordApiError, DiscordTextChannel
+from orchestrator.tools.discord_api import (
+    DiscordApiClient,
+    DiscordApiError,
+    DiscordCategoryChannel,
+    DiscordTextChannel,
+    DiscordVoiceChannel,
+)
 
 
 class _FakeResponse:
@@ -102,6 +108,48 @@ class DiscordApiClientTests(unittest.TestCase):
             ],
         )
 
+    def test_list_voice_channels_filters_and_normalizes(self) -> None:
+        client = DiscordApiClient(bot_token="token")
+        with patch.object(
+            client,
+            "_request_json",
+            return_value=[
+                {"id": "v1", "type": 2, "name": "alpha-voice", "parent_id": "p1"},
+                {"id": "v2", "type": 2, "name": "beta-voice", "parent_id": ""},
+                {"id": "text", "type": 0, "name": "text"},
+                {"type": 2, "name": "missing-id"},
+            ],
+        ):
+            channels = client.list_voice_channels(guild_id="g1")
+        self.assertEqual(
+            channels,
+            [
+                DiscordVoiceChannel(channel_id="v1", name="alpha-voice", parent_id="p1"),
+                DiscordVoiceChannel(channel_id="v2", name="beta-voice", parent_id=None),
+            ],
+        )
+
+    def test_list_channel_categories_filters_and_normalizes(self) -> None:
+        client = DiscordApiClient(bot_token="token")
+        with patch.object(
+            client,
+            "_request_json",
+            return_value=[
+                {"id": "cat-1", "type": 4, "name": "Projects"},
+                {"id": "cat-2", "type": 4, "name": "Voice Rooms"},
+                {"id": "text", "type": 0, "name": "alpha"},
+                {"type": 4, "name": "missing-id"},
+            ],
+        ):
+            categories = client.list_channel_categories(guild_id="g1")
+        self.assertEqual(
+            categories,
+            [
+                DiscordCategoryChannel(channel_id="cat-1", name="Projects"),
+                DiscordCategoryChannel(channel_id="cat-2", name="Voice Rooms"),
+            ],
+        )
+
     def test_create_text_channel_validates_response(self) -> None:
         client = DiscordApiClient(bot_token="token")
         with patch.object(client, "_request_json", return_value={"id": "c1", "name": "alpha", "parent_id": None}):
@@ -111,6 +159,16 @@ class DiscordApiClientTests(unittest.TestCase):
         with patch.object(client, "_request_json", return_value={"name": "alpha"}):
             with self.assertRaisesRegex(DiscordApiError, "missing id"):
                 client.create_text_channel(guild_id="g1", name="alpha")
+
+    def test_create_voice_channel_validates_response(self) -> None:
+        client = DiscordApiClient(bot_token="token")
+        with patch.object(client, "_request_json", return_value={"id": "v1", "name": "alpha-voice", "parent_id": None}):
+            channel = client.create_voice_channel(guild_id="g1", name="alpha-voice")
+        self.assertEqual(channel.channel_id, "v1")
+
+        with patch.object(client, "_request_json", return_value={"name": "alpha-voice"}):
+            with self.assertRaisesRegex(DiscordApiError, "missing id"):
+                client.create_voice_channel(guild_id="g1", name="alpha-voice")
 
     def test_post_message_validates_and_trims(self) -> None:
         client = DiscordApiClient(bot_token="token")
@@ -258,6 +316,22 @@ class DiscordApiClientTests(unittest.TestCase):
         ):
             created = client.ensure_text_channel(guild_id="g1", name="new")
         self.assertEqual(created.channel_id, "c2")
+        create_mock.assert_called_once()
+
+        with patch.object(
+            client,
+            "list_voice_channels",
+            return_value=[DiscordVoiceChannel(channel_id="v1", name="proj-voice", parent_id="p1")],
+        ):
+            existing_voice = client.ensure_voice_channel(guild_id="g1", name="proj-voice", parent_id="p1")
+        self.assertEqual(existing_voice.channel_id, "v1")
+
+        with (
+            patch.object(client, "list_voice_channels", return_value=[]),
+            patch.object(client, "create_voice_channel", return_value=DiscordVoiceChannel("v2", "new-voice", None)) as create_mock,
+        ):
+            created_voice = client.ensure_voice_channel(guild_id="g1", name="new-voice")
+        self.assertEqual(created_voice.channel_id, "v2")
         create_mock.assert_called_once()
 
         with patch.object(client, "_request_json", return_value={"id": "app1"}):

@@ -33,6 +33,7 @@ from orchestrator.core.project_routing import (
 )
 from orchestrator.core.platform_secret_service import resolve_platform_secret_ref
 from orchestrator.core.tenant_secret_service import resolve_scoped_secret_ref
+from orchestrator.core.decision_types import tenant_jira_webhook_secret_ref
 from orchestrator.storage.models import Project, Tenant
 from orchestrator.tools.jira_oauth import JiraOAuthError
 
@@ -127,13 +128,13 @@ def validate_webhook_auth(
     session: Session,
     settings,
 ) -> None:  # noqa: ANN001
-    webhook_secret_ref = tenant.jira_config.get("webhook_secret_ref")
+    webhook_secret_ref = tenant_jira_webhook_secret_ref(tenant)
     if not webhook_secret_ref:
         return
 
     expected_token = resolve_scoped_secret_ref(
         session,
-        secret_ref=str(webhook_secret_ref),
+        secret_ref=webhook_secret_ref,
         encryption_key=settings.secrets_encryption_key,
         tenant_id=tenant.tenant_id,
     )

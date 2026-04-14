@@ -3,6 +3,7 @@ from __future__ import annotations
 from base64 import b64decode
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from enum import Enum
 from functools import lru_cache
 import hashlib
 import importlib
@@ -62,12 +63,19 @@ _INLINE_CONFIGURATION_ALIASES: dict[str, tuple[str, ...]] = {
 _KNOWLEDGE_EMBEDDING_MODEL_DEFAULT = "BAAI/bge-small-en-v1.5"
 _REFERENCE_FACT_SLOT_NAME = "reference_fact"
 _SLOT_NAME_MAX_LENGTH = 128
+_EMBEDDING_MODEL_RETRY_COOLDOWN_SECONDS = 300
+_embedding_model_unavailable_until_epoch: float = 0.0
 
 
 @dataclass(frozen=True)
 class KnowledgePromptContext:
     text: str
     citations: list[dict[str, Any]]
+
+
+class KnowledgeEmbeddingAccessMode(str, Enum):
+    BEST_EFFORT = "best_effort"
+    LOCAL_ONLY = "local_only"
 
 
 @dataclass(frozen=True)
@@ -444,16 +452,26 @@ def _cosine_similarity(vec_a: list[float], vec_b: list[float]) -> float:
     return dot / (norm_a * norm_b)
 
 
-def _embed_texts(texts: list[str]) -> list[list[float] | None]:
+def _embed_texts(
+    texts: list[str],
+    *,
+    embedding_access_mode: KnowledgeEmbeddingAccessMode = KnowledgeEmbeddingAccessMode.BEST_EFFORT,
+) -> list[list[float] | None]:
     if not texts:
         return []
+    if _embedding_model_retry_suppressed():
+        return [None for _ in texts]
     try:
-        model = _knowledge_text_embedding_model()
+        model = _knowledge_text_embedding_model(
+            _local_files_only_for_embedding_access_mode(embedding_access_mode)
+        )
     except Exception:  # noqa: BLE001
+        _mark_embedding_model_unavailable()
         return [None for _ in texts]
     try:
         vectors = list(model.embed(texts))
     except Exception:  # noqa: BLE001
+        _mark_embedding_model_unavailable()
         return [None for _ in texts]
     normalized: list[list[float] | None] = []
     for vector in vectors:
@@ -464,6 +482,20 @@ def _embed_texts(texts: list[str]) -> list[list[float] | None]:
     while len(normalized) < len(texts):
         normalized.append(None)
     return normalized[: len(texts)]
+
+
+def _embedding_model_retry_suppressed(*, now_epoch: float | None = None) -> bool:
+    now_value = float(now_epoch) if now_epoch is not None else datetime.now(timezone.utc).timestamp()
+    return now_value < _embedding_model_unavailable_until_epoch
+
+
+def _mark_embedding_model_unavailable(*, now_epoch: float | None = None) -> None:
+    global _embedding_model_unavailable_until_epoch
+    now_value = float(now_epoch) if now_epoch is not None else datetime.now(timezone.utc).timestamp()
+    _embedding_model_unavailable_until_epoch = max(
+        _embedding_model_unavailable_until_epoch,
+        now_value + float(_EMBEDDING_MODEL_RETRY_COOLDOWN_SECONDS),
+    )
 
 
 def ensure_knowledge_embedding_model_ready(*, local_files_only: bool | None = None) -> str:
@@ -529,6 +561,13 @@ def _resolve_knowledge_embedding_local_files_only(local_files_only: bool | None)
     if local_files_only is not None:
         return local_files_only
     return _knowledge_embedding_offline_enabled()
+
+
+def _local_files_only_for_embedding_access_mode(
+    embedding_access_mode: KnowledgeEmbeddingAccessMode,
+) -> bool | None:
+    _ = embedding_access_mode
+    return True
 
 
 def _asset_checksum(*, text_content: str, binary_content: bytes | None) -> str | None:
@@ -1543,9 +1582,13 @@ def _sqlite_fallback_context(
     normalized_query: str,
     max_items: int,
     max_chars: int,
+    embedding_access_mode: KnowledgeEmbeddingAccessMode,
 ) -> KnowledgePromptContext:
     query_tokens = _candidate_tokens(normalized_query)
-    query_embedding = _embed_texts([normalized_query])[0]
+    query_embedding = _embed_texts(
+        [normalized_query],
+        embedding_access_mode=embedding_access_mode,
+    )[0]
     rows = session.execute(
         select(KnowledgeChunk, KnowledgeAsset)
         .join(KnowledgeAsset, KnowledgeAsset.asset_id == KnowledgeChunk.asset_id)
@@ -1643,9 +1686,13 @@ def _postgres_hybrid_context(
     normalized_query: str,
     max_items: int,
     max_chars: int,
+    embedding_access_mode: KnowledgeEmbeddingAccessMode,
 ) -> KnowledgePromptContext:
     query_tokens = _candidate_tokens(normalized_query)
-    query_embedding = _embed_texts([normalized_query])[0]
+    query_embedding = _embed_texts(
+        [normalized_query],
+        embedding_access_mode=embedding_access_mode,
+    )[0]
     candidate_scores: dict[str, dict[str, float]] = {}
     if query_embedding:
         embedding_literal = vector_literal(query_embedding)
@@ -1750,6 +1797,7 @@ def build_knowledge_prompt_context(
     query: str,
     max_items: int = 5,
     max_chars: int = 3200,
+    embedding_access_mode: KnowledgeEmbeddingAccessMode = KnowledgeEmbeddingAccessMode.BEST_EFFORT,
 ) -> KnowledgePromptContext:
     if not tenant_id:
         return KnowledgePromptContext(text="", citations=[])
@@ -1777,6 +1825,7 @@ def build_knowledge_prompt_context(
                 normalized_query=normalized_query,
                 max_items=max_items,
                 max_chars=max_chars,
+                embedding_access_mode=embedding_access_mode,
             )
         except Exception:  # noqa: BLE001
             chunk_context = _sqlite_fallback_context(
@@ -1786,6 +1835,7 @@ def build_knowledge_prompt_context(
                 normalized_query=normalized_query,
                 max_items=max_items,
                 max_chars=max_chars,
+                embedding_access_mode=embedding_access_mode,
             )
     else:
         chunk_context = _sqlite_fallback_context(
@@ -1795,6 +1845,7 @@ def build_knowledge_prompt_context(
             normalized_query=normalized_query,
             max_items=max_items,
             max_chars=max_chars,
+            embedding_access_mode=embedding_access_mode,
         )
 
     sections = []

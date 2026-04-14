@@ -947,6 +947,10 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
             patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_ids", return_value=set()),
             patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_project_keys", return_value={}),
             patch("orchestrator.core.discord.gateway_listener.resolve_followup_context_match", return_value=_no_followup_resolution()),
+            patch(
+                "orchestrator.core.discord.gateway_listener.route_discord_voice_entry",
+                return_value={"lane": "ask", "persona": "engineer", "confidence": 0.91, "reason": "router"},
+            ),
             patch("orchestrator.core.discord.gateway_listener.execute_tenant_discord_command", return_value=command_response) as command_mock,
             patch("orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url", return_value="https://jira.example.com"),
             patch("orchestrator.core.discord.gateway_listener.build_command_followup_message", return_value="ok"),

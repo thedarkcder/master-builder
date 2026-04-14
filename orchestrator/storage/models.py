@@ -594,6 +594,10 @@ class Run(Base):
     __table_args__ = (
         Index("ix_runs_workflow_id", "workflow_id"),
         Index("ix_runs_workflow_attempt", "workflow_id", "attempt_number", unique=True),
+        Index("ix_runs_pre_check_outcome", "pre_check_outcome"),
+        Index("ix_runs_required_worker_capability", "required_worker_capability"),
+        Index("ix_runs_claim_id", "claim_id"),
+        Index("ix_runs_dispatch_claimed_at", "dispatch_claimed_at"),
     )
 
     run_id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -633,8 +637,13 @@ class Run(Base):
     dedupe_scope: Mapped[str] = mapped_column(String(32), nullable=False, default="issue_execution", index=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    pre_check_outcome: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    required_worker_capability: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    required_runtime_kinds_json: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    claim_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     plan: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    dispatch_claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     worker_service_instance_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
@@ -1255,10 +1264,36 @@ class WorkerRuntimeState(Base):
     agent_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     worker_mode: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     capabilities_json: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    runtime_kinds_json: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    runtime_dependencies_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     state: Mapped[str] = mapped_column(String(32), nullable=False, default="starting", index=True)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     last_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+
+
+class WorkerRuntimeAuthRequest(Base):
+    __tablename__ = "worker_runtime_auth_requests"
+    __table_args__ = (
+        Index("ix_worker_runtime_auth_requests_scope", "service_instance_id", "runtime_kind", "status"),
+        Index("ix_worker_runtime_auth_requests_requested_at", "requested_at"),
+    )
+
+    request_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    service_instance_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey("worker_runtime_states.service_instance_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    runtime_kind: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, index=True, default="pending")
+    remediation_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class KnowledgeJiraSyncProjectState(Base):

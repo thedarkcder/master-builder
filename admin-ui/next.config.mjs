@@ -16,6 +16,14 @@ const nextConfig = {
         pathname: "/aida-public/**"
       }
     ]
+  },
+  async redirects() {
+    return [
+      { source: "/dashboard", destination: "/platform/dashboard", permanent: true },
+      { source: "/status", destination: "/platform/status", permanent: true },
+      { source: "/agent-runtimes", destination: "/platform/agent-runtimes", permanent: true },
+      { source: "/secrets", destination: "/platform/secrets", permanent: true },
+    ];
   }
 };
 

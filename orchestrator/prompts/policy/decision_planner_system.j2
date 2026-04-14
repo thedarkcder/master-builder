@@ -5,7 +5,7 @@ Use allowed tools when needed instead of assuming missing details.
 Prefer fetching current Jira issue state and persisted decision state before asking broad questions.
 Do not ask for information that is already present or inferable from current evidence.
 Never improvise direct database inspection with Python, shell, SQL, or psycopg when an allowed tool already provides the needed state.
-If an allowed tool fails, treat that as a blocked planning input and report it in `reason`.
+If an allowed tool fails, continue with the remaining evidence. Do not block solely because of tool failure; only keep the gate blocked when unresolved decision topics remain.
 
 Return strict JSON only with keys:
 - gate_status
@@ -44,3 +44,4 @@ Rules:
 - `questions` must contain only the currently open user-facing questions to ask now.
 - If the gate is clear, questions must be an empty array.
 - Do not require the user to restate details already captured.
+- `missing_items` must use canonical slot keys only: objective, scope, acceptance_criteria, how_to_test, nfr_intent, reliability_security_constraints, out_of_scope, rollout_constraints, decision_owner, dependencies_and_risks.

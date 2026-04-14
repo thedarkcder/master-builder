@@ -159,7 +159,7 @@ test("hydrates a stored valid admin session and opens platform admin home", asyn
     },
   ]);
 
-  await page.goto("/dashboard");
+  await page.goto("/platform/dashboard");
 
   await expect(page.getByRole("heading", { name: "Operations Overview" })).toBeVisible();
 });
@@ -229,10 +229,10 @@ test("shows a dedicated Status page for platform services", async ({ page }) => 
     },
   ]);
 
-  await page.goto("/dashboard");
+  await page.goto("/platform/dashboard");
   await page.getByRole("link", { name: "Status" }).click();
 
-  await expect(page).toHaveURL(/\/status$/);
+  await expect(page).toHaveURL(/\/platform\/status$/);
   await expect(page.getByRole("heading", { name: "Platform status" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Workers" })).toBeVisible();
   await expect(page.getByText("Worker instances")).toBeVisible();
@@ -420,10 +420,10 @@ test("shows a dedicated Agent runtimes page without duplicating platform status 
     },
   ]);
 
-  await page.goto("/dashboard");
+  await page.goto("/platform/dashboard");
   await page.getByRole("link", { name: "Agent runtimes" }).click();
 
-  await expect(page).toHaveURL(/\/agent-runtimes$/);
+  await expect(page).toHaveURL(/\/platform\/agent-runtimes$/);
   await expect(page.getByRole("heading", { name: "Agent runtimes" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Routing" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Profiles" })).toBeVisible();
@@ -584,7 +584,7 @@ test("covers runtime profile form permutations across every provider on create a
     },
   ]);
 
-  await page.goto("/agent-runtimes");
+  await page.goto("/platform/agent-runtimes");
   await page.getByRole("button", { name: "Profiles" }).click();
   await expect(page.getByRole("heading", { name: "Profiles" })).toBeVisible();
 
@@ -731,7 +731,7 @@ test("submits the login form and lands on platform admin home", async ({ page })
   await page.getByLabel("Password").fill(process.env.ORCHESTRATOR_ADMIN_PASSWORD ?? "change-me");
   await page.getByRole("button", { name: "Sign in" }).click();
 
-  await expect(page).toHaveURL(/\/dashboard$/, { timeout: 15000 });
+  await expect(page).toHaveURL(/\/platform\/dashboard$/, { timeout: 15000 });
   await expect(page.getByRole("heading", { name: "Operations Overview" })).toBeVisible();
 });
 
@@ -759,7 +759,7 @@ test("logging out fully ends the session before another user signs in", async ({
     await page.getByLabel("Password").fill(process.env.ORCHESTRATOR_ADMIN_PASSWORD ?? "change-me");
     await page.getByRole("button", { name: "Sign in" }).click();
 
-    await expect(page).toHaveURL(/\/dashboard$/, { timeout: 15000 });
+    await expect(page).toHaveURL(/\/platform\/dashboard$/, { timeout: 15000 });
     await expect(page.getByRole("heading", { name: "Operations Overview" })).toBeVisible();
 
     await page.getByRole("button", { name: "Logout" }).click();

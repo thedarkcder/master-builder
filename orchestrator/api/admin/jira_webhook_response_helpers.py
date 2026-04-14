@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import status
 
 from orchestrator.api.schemas import JiraWebhookActionResult, JiraWebhookDiagnosticsRead
+from orchestrator.core.decision_types import JiraConfigKey, jira_config_text
 
 
 def jira_webhook_action_status_code(result: JiraWebhookActionResult) -> int:
@@ -26,8 +27,8 @@ def build_jira_webhook_diagnostics(
     jira_webhook_callback_url_fn,
     parse_managed_webhook_ids_fn,
 ) -> JiraWebhookDiagnosticsRead:  # noqa: ANN001
-    connection_id = jira_config.get("connection_id")
-    connected = isinstance(connection_id, str) and bool(connection_id.strip())
+    connection_id = jira_config_text(jira_config=jira_config, key=JiraConfigKey.CONNECTION_ID)
+    connected = bool(connection_id)
     last_received_at_raw = jira_config.get("webhook_last_received_at")
     last_received_at = (
         last_received_at_raw.strip()

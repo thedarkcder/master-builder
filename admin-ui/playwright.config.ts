@@ -2,6 +2,7 @@ import { defineConfig, devices } from "@playwright/test";
 
 const PLAYWRIGHT_APP_PORT = process.env.PLAYWRIGHT_APP_PORT ?? "4101";
 const PLAYWRIGHT_BASE_URL = process.env.PLAYWRIGHT_BASE_URL ?? `http://localhost:${PLAYWRIGHT_APP_PORT}`;
+const PLAYWRIGHT_RUN_LIVE = process.env.PLAYWRIGHT_RUN_LIVE === "1";
 
 export default defineConfig({
   testDir: "./tests/e2e",
@@ -30,6 +31,16 @@ export default defineConfig({
     {
       name: "chromium",
       use: { ...devices["Desktop Chrome"] },
+      testIgnore: ["**/*-live.spec.ts"],
     },
+    ...(PLAYWRIGHT_RUN_LIVE
+      ? [
+          {
+            name: "chromium-live",
+            use: { ...devices["Desktop Chrome"] },
+            testMatch: ["**/*-live.spec.ts"],
+          },
+        ]
+      : []),
   ],
 });

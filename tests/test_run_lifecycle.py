@@ -12,6 +12,7 @@ from orchestrator.core.runs import (
     RUN_STATUS_SUCCEEDED,
     RunBootstrap,
     RunStateTransitionError,
+    enqueue_attempt_for_workflow_uncommitted,
     enqueue_run,
     mark_run_running,
     mark_run_terminal,
@@ -327,3 +328,49 @@ class RunLifecycleTests(unittest.TestCase):
                 "stages": {},
             },
         )
+
+    def test_enqueue_attempt_rejects_non_ready_persisted_precheck(self) -> None:
+        now = datetime.now(timezone.utc)
+        with self.session_factory() as session:
+            workflow = WorkflowExecution(
+                workflow_id="workflow-non-ready",
+                tenant_id="tenant-runs",
+                project_id=None,
+                issue_key="TP-913",
+                issue_summary="resume test",
+                issue_description="desc",
+                repo_url=None,
+                branch=None,
+                pr_url=None,
+                dedupe_scope=RUN_DEDUPE_SCOPE_ISSUE_EXECUTION,
+                status="waiting_for_input",
+                last_error=None,
+                active_run_id=None,
+                latest_checkpoint_id=None,
+                source_workflow_id=None,
+                source_run_id=None,
+                blocked_reason=None,
+                created_at=now,
+                started_at=now,
+                finished_at=None,
+                updated_at=now,
+            )
+            session.add(workflow)
+            session.commit()
+
+            with self.assertRaisesRegex(
+                RunStateTransitionError,
+                "pre_check_outcome must be 'ready_for_agent'",
+            ):
+                enqueue_attempt_for_workflow_uncommitted(
+                    session,
+                    workflow_id="workflow-non-ready",
+                    bootstrap=RunBootstrap(
+                        workflow_id="workflow-non-ready",
+                        entry_mode="resume",
+                        entry_stage="pm",
+                        plan=ExecutionSnapshot.empty(
+                            trigger_context={"source": "manual"},
+                        ).dump(),
+                    ),
+                )

@@ -294,6 +294,30 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             msg=f"Webhook planner/classifier modules importing provider clients directly: {violations}",
         )
 
+    def test_transport_and_worker_adapters_do_not_call_enqueue_reason_guidance_directly(self) -> None:
+        roots = [
+            ROOT / "orchestrator" / "api" / "webhooks",
+            ROOT / "orchestrator" / "api" / "discord" / "commands",
+            ROOT / "orchestrator" / "core" / "worker",
+        ]
+        violations: list[str] = []
+        for root in roots:
+            for module_path in sorted(root.rglob("*.py")):
+                tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
+                for node in ast.walk(tree):
+                    if not isinstance(node, ast.Call):
+                        continue
+                    func = node.func
+                    if isinstance(func, ast.Name) and func.id == "enqueue_reason_guidance":
+                        violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{node.lineno}")
+                    if isinstance(func, ast.Attribute) and func.attr == "enqueue_reason_guidance":
+                        violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{node.lineno}")
+        self.assertEqual(
+            violations,
+            [],
+            msg=f"Direct enqueue_reason_guidance calls found in transport/worker adapters: {violations}",
+        )
+
     def test_github_and_jira_application_roots_do_not_import_provider_helpers_directly(self) -> None:
         banned_imports = {
             "orchestrator.api.webhooks.pr_review_comment_service",
@@ -472,6 +496,177 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             [],
             msg=f"Reply transport compatibility shims should not have production references: {violations}",
         )
+
+    def test_workflow_core_modules_do_not_import_api_layer(self) -> None:
+        violations: list[str] = []
+        for module_path in sorted((ORCHESTRATOR_ROOT / "core" / "workflow").rglob("*.py")):
+            for module_name in _imported_modules(module_path):
+                if module_name.startswith("orchestrator.api"):
+                    violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{module_name}")
+        self.assertEqual(
+            violations,
+            [],
+            msg=f"Workflow core modules must not import API-layer modules: {violations}",
+        )
+
+    def test_transport_modules_do_not_branch_on_decision_classification_or_reason_strings(self) -> None:
+        modules = [
+            ROOT / "orchestrator" / "api" / "discord" / "commands" / "run_controls.py",
+            ROOT / "orchestrator" / "api" / "webhooks" / "jira_admission_flow.py",
+            ROOT / "orchestrator" / "api" / "webhooks" / "jira_webhook_comment_flow.py",
+        ]
+        banned_values = {
+            "decision_gate",
+            "gtd",
+            "both",
+            "clear",
+            "decision_gate_required",
+            "gtd_required",
+            "missing_ready_label",
+            "policy_eval_failed",
+        }
+        banned_names = {"classification", "reason_code", "block_reason"}
+        violations: list[str] = []
+        for module_path in modules:
+            tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Compare):
+                    compare_targets = [node.left, *node.comparators]
+                    compare_names = {
+                        subnode.id
+                        for target in compare_targets
+                        for subnode in ast.walk(target)
+                        if isinstance(subnode, ast.Name)
+                    }
+                    compare_attrs = {
+                        subnode.attr
+                        for target in compare_targets
+                        for subnode in ast.walk(target)
+                        if isinstance(subnode, ast.Attribute)
+                    }
+                    if not (banned_names & (compare_names | compare_attrs)):
+                        continue
+                    constants = {
+                        value_node.value
+                        for target in compare_targets
+                        for value_node in ast.walk(target)
+                        if isinstance(value_node, ast.Constant) and isinstance(value_node.value, str)
+                    }
+                    if constants & banned_values:
+                        violations.append(
+                            f"{module_path.relative_to(ROOT).as_posix()}:{node.lineno}:{sorted(constants & banned_values)!r}"
+                        )
+        self.assertEqual(
+            violations,
+            [],
+            msg=f"Transport modules must consume typed domain outcomes instead of branching on decision strings: {violations}",
+        )
+
+    def test_transport_modules_do_not_import_split_decision_runtime_modules(self) -> None:
+        modules = [
+            ROOT / "orchestrator" / "api" / "webhooks" / "jira_admission_flow.py",
+            ROOT / "orchestrator" / "api" / "webhooks" / "jira_webhook_comment_flow.py",
+            ROOT / "orchestrator" / "api" / "discord" / "commands" / "run_controls.py",
+            ROOT / "orchestrator" / "core" / "worker" / "run_not_ready.py",
+        ]
+        forbidden_imports = {
+            "orchestrator.core.execution_admission",
+            "orchestrator.core.decision_state_reducer",
+        }
+        violations: list[str] = []
+        for module_path in modules:
+            for module_name in _imported_modules(module_path):
+                if module_name in forbidden_imports:
+                    violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{module_name}")
+        self.assertEqual(
+            violations,
+            [],
+            msg=f"Transport modules must import unified decision_state_machine boundary only: {violations}",
+        )
+
+    def test_decision_transition_logic_lives_in_decision_state_reducer_only(self) -> None:
+        reducer_module = ROOT / "orchestrator" / "core" / "decision_state_reducer.py"
+        self.assertTrue(reducer_module.exists(), msg="decision_state_reducer.py must exist as the transition boundary")
+
+        forbidden_modules = [
+            ROOT / "orchestrator" / "core" / "decision_state_machine.py",
+            ROOT / "orchestrator" / "core" / "decision_precheck_mapping.py",
+            ROOT / "orchestrator" / "core" / "decision_state_repository.py",
+        ]
+        forbidden_symbols = {
+            "DecisionStateTransition",
+            "DecisionStateReducerInput",
+            "reduce_decision_state_transition",
+            "case_state_for_decision",
+            "decision_reason",
+            "decision_from_snapshot",
+            "worker_blocking_gate",
+        }
+        violations: list[str] = []
+        for module_path in forbidden_modules:
+            tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.FunctionDef, ast.ClassDef)) and node.name in forbidden_symbols:
+                    violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{node.lineno}:{node.name}")
+        self.assertEqual(
+            violations,
+            [],
+            msg=f"Decision transition/classification semantics must only live in decision_state_reducer: {violations}",
+        )
+
+    def test_decision_engine_uses_reducer_boundary_for_transition_semantics(self) -> None:
+        module_path = ROOT / "orchestrator" / "core" / "decision_engine.py"
+        imports = _imported_modules(module_path)
+        self.assertIn(
+            "orchestrator.core.decision_state_reducer",
+            imports,
+            msg="decision_engine must import transition semantics from decision_state_reducer",
+        )
+
+        tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
+        violations: list[str] = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ImportFrom):
+                continue
+            if node.module != "orchestrator.core.decision_state_machine":
+                if node.module == "orchestrator.core.decision_precheck_mapping":
+                    for alias in node.names:
+                        if alias.name == "decision_from_snapshot":
+                            violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{node.lineno}:{alias.name}")
+                continue
+            for alias in node.names:
+                if alias.name in {"DecisionStateTransition", "DecisionStateReducerInput", "reduce_decision_state_transition"}:
+                    violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{node.lineno}:{alias.name}")
+        self.assertEqual(
+            violations,
+            [],
+            msg=f"decision_engine must consume reducer boundary semantics directly: {violations}",
+        )
+
+    def test_api_and_worker_bootstrap_execution_snapshot_startup_migration(self) -> None:
+        api_path = ROOT / "orchestrator" / "api" / "main.py"
+        worker_path = ROOT / "orchestrator" / "worker.py"
+        expected_module = "orchestrator.core.workflow.execution_snapshot_startup"
+        expected_symbol = "ensure_execution_snapshot_startup_bootstrap"
+
+        for module_path in (api_path, worker_path):
+            tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
+            imports_ok = False
+            call_ok = False
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom) and node.module == expected_module:
+                    imports_ok = any(alias.name == expected_symbol for alias in node.names)
+                if isinstance(node, ast.Call):
+                    if isinstance(node.func, ast.Name) and node.func.id == expected_symbol:
+                        call_ok = True
+            self.assertTrue(
+                imports_ok,
+                msg=f"{module_path.relative_to(ROOT).as_posix()} must import shared execution snapshot startup bootstrap.",
+            )
+            self.assertTrue(
+                call_ok,
+                msg=f"{module_path.relative_to(ROOT).as_posix()} must invoke shared execution snapshot startup bootstrap.",
+            )
 
 
 if __name__ == "__main__":

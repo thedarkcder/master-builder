@@ -10,13 +10,16 @@ from sqlalchemy import func, select
 
 from orchestrator.core.agent_tools import execute_agent_tool, print_tool_event
 from orchestrator.core.config import get_settings
-from orchestrator.core.decision_engine import resolve_enqueue_precheck_outcome
 from orchestrator.core.discord.gateway_runtime import run_discord_gateway
 from orchestrator.core.discord.live_voice_gateway_runtime import run_discord_live_voice
 from orchestrator.core.knowledge_prewarm import prewarm_knowledge_dependencies
 from orchestrator.core.knowledge_jira_sync_runtime import run_knowledge_jira_sync
 from orchestrator.core.project_automation_runtime import run_project_automation_runtime
-from orchestrator.core.runs import enqueue_run, resolve_precheck_outcome_for_enqueue
+from orchestrator.core.runs import (
+    enqueue_run,
+    resolve_enqueue_precheck_outcome,
+    resolve_precheck_outcome_for_enqueue,
+)
 from orchestrator.core.voice.prewarm import prewarm_voice_dependencies
 from orchestrator.core.workflow.execution_snapshot_migration import migrate_execution_snapshots
 from orchestrator.storage.database_support import ensure_postgres_database_url
@@ -54,7 +57,7 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("migrate", help="Apply DB migrations")
     snapshot_migrate_parser = subparsers.add_parser(
         "migrate-execution-snapshots",
-        help="Canonicalize legacy run/checkpoint execution snapshot payloads",
+        help="Normalize run/checkpoint execution snapshots to canonical payload shape",
     )
     snapshot_migrate_parser.add_argument(
         "--apply",
@@ -392,3 +395,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     parser.error(f"Unknown command: {args.command}")
     return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -152,12 +152,7 @@ def extract_turn_completed_usage(message: str) -> ParsedTurnUsage | None:
         if normalized_cached is None:
             normalized_cached = _coerce_non_negative_int(usage_payload.get("cache_read_tokens"))
     if normalized_input is None and normalized_output is None:
-        fallback_total = _coerce_non_negative_int(usage_payload.get("total_tokens"))
-        if fallback_total is None:
-            return None
-        normalized_input = 0
-        # Provider omitted token split; preserve aggregate usage in one bucket.
-        normalized_output = fallback_total
+        return None
     if normalized_cached is None:
         normalized_cached = 0
 
@@ -455,9 +450,9 @@ def record_run_log_event(
     )
     if normalized_event is None:
         return
-    legacy_row = _build_run_log_model(normalized_event)
+    log_row = _build_run_log_model(normalized_event)
     stream_row = _build_run_stream_model(normalized_event)
-    session.add(legacy_row)
+    session.add(log_row)
     session.add(stream_row)
     materialize_token_usage_from_log_message(session=session, run_log_row=normalized_event)
     session.flush()

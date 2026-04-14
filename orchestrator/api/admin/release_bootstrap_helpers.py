@@ -3,6 +3,11 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from orchestrator.api.schemas import ReleaseBootstrapReportRead
+from orchestrator.core.decision_types import (
+    JiraConfigKey,
+    jira_config_project_keys,
+    jira_config_text,
+)
 from orchestrator.storage.models import JiraOAuthConnection, Tenant
 from orchestrator.tools.jira_oauth import JiraOAuthError
 
@@ -51,17 +56,13 @@ def compute_release_bootstrap_result(
     details: list[str] = []
 
     jira_config = dict(tenant.jira_config or {})
-    project_keys = jira_config.get("project_keys")
-    if isinstance(project_keys, list):
-        normalized_project_keys = [str(item).strip() for item in project_keys if str(item).strip()]
-    else:
-        normalized_project_keys = []
+    normalized_project_keys = list(jira_config_project_keys(jira_config=jira_config))
     checks["jira_project_keys"] = bool(normalized_project_keys)
     if not normalized_project_keys:
         details.append("Missing Jira project keys.")
 
-    connection_id = jira_config.get("connection_id")
-    if not isinstance(connection_id, str) or not connection_id:
+    connection_id = jira_config_text(jira_config=jira_config, key=JiraConfigKey.CONNECTION_ID)
+    if not connection_id:
         details.append("Jira OAuth connection is not linked.")
         connection = None
     else:

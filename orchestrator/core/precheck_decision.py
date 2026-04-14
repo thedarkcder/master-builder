@@ -3,12 +3,15 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from orchestrator.core.decision_types import DecisionClassification
+from orchestrator.core.precheck_slot_registry import canonical_slot_id
+from orchestrator.core.runtime_payload_models import PrecheckMessagePayload
 from orchestrator.core.runtime_invocation import AgentInvocationContext, invoke_runtime_json
 from orchestrator.core.codex_runtime import CodexRuntime, CodexRuntimeError
 from orchestrator.core.prompt_templates import render_prompt
 
 
-def precheck_classification(pre_check: object) -> str:
+def precheck_classification(pre_check: object) -> DecisionClassification:
     decision_gate = bool(getattr(pre_check, "decision_gate_triggered", False))
     gtd_valid_raw = getattr(pre_check, "gtd_valid", None)
     if isinstance(gtd_valid_raw, bool):
@@ -16,44 +19,16 @@ def precheck_classification(pre_check: object) -> str:
     else:
         gtd_missing = bool(getattr(pre_check, "gtd_missing_criteria", ()) or getattr(pre_check, "gtd_clarification_questions", ()))
     if decision_gate and gtd_missing:
-        return "both"
+        return DecisionClassification.BOTH
     if decision_gate:
-        return "decision_gate"
+        return DecisionClassification.DECISION_GATE
     if gtd_missing:
-        return "gtd"
-    return "clear"
+        return DecisionClassification.GTD
+    return DecisionClassification.CLEAR
 
 
-def _normalize_slot_name(raw_value: str) -> str:
-    normalized = str(raw_value or "").strip().lower()
-    normalized = normalized.replace("-", " ").replace("_", " ")
-    canonical = {
-        "objective": "objective",
-        "scope": "scope",
-        "acceptance criteria": "acceptance_criteria",
-        "acceptance": "acceptance_criteria",
-        "how to test": "how_to_test",
-        "test plan": "how_to_test",
-        "nfr intent": "nfr_intent",
-        "nfr": "nfr_intent",
-        "mvp vs scale-ready": "nfr_intent",
-        "reliability/security constraints": "reliability_security_constraints",
-        "reliability constraints": "reliability_security_constraints",
-        "security constraints": "reliability_security_constraints",
-        "out of scope": "out_of_scope",
-        "rollout constraints": "rollout_constraints",
-        "migration constraints": "rollout_constraints",
-        "decision owner": "decision_owner",
-        "dependencies / risks": "dependencies_and_risks",
-        "dependencies and risks": "dependencies_and_risks",
-        "risks": "dependencies_and_risks",
-    }
-    if normalized in canonical:
-        return canonical[normalized]
-    for key, value in canonical.items():
-        if key in normalized:
-            return value
-    return normalized.replace(" ", "_")
+def _canonical_slot_name(raw_value: object) -> str:
+    return canonical_slot_id(raw_value)
 
 
 def precheck_missing_slots(pre_check: object) -> list[str]:
@@ -63,15 +38,15 @@ def precheck_missing_slots(pre_check: object) -> list[str]:
         missing_sections = getattr(decision_gate, "missing_sections", ())
         if isinstance(missing_sections, (list, tuple)):
             for item in missing_sections:
-                normalized = _normalize_slot_name(str(item))
-                if normalized and normalized not in slots:
-                    slots.append(normalized)
+                canonical = _canonical_slot_name(item)
+                if canonical and canonical not in slots:
+                    slots.append(canonical)
     gtd_missing = getattr(pre_check, "gtd_missing_criteria", ())
     if isinstance(gtd_missing, (list, tuple)):
         for item in gtd_missing:
-            normalized = _normalize_slot_name(str(item))
-            if normalized and normalized not in slots:
-                slots.append(normalized)
+            canonical = _canonical_slot_name(item)
+            if canonical and canonical not in slots:
+                slots.append(canonical)
     return slots
 
 
@@ -80,7 +55,7 @@ def build_precheck_message(
     runtime: CodexRuntime,
     invocation_context: AgentInvocationContext,
     issue_key: str,
-    classification: str,
+    classification: DecisionClassification,
     decision_gate_reason: str,
     decision_gate_questions: list[str],
     gtd_missing_criteria: list[str],
@@ -96,7 +71,7 @@ def build_precheck_message(
             user_prompt=render_prompt(
                 "policy/precheck_message_user.j2",
                 issue_key=issue_key,
-                classification=classification,
+                classification=classification.value,
                 decision_gate_reason=decision_gate_reason,
                 decision_gate_questions_json=json.dumps(decision_gate_questions),
                 gtd_missing_criteria_json=json.dumps(gtd_missing_criteria),
@@ -114,15 +89,9 @@ def build_precheck_message(
             gtd_questions=gtd_questions,
         )
 
-    message = str(payload.get("message") or "").strip()
-    questions_raw = payload.get("questions")
-    questions = (
-        [str(item).strip() for item in questions_raw if str(item).strip()]
-        if isinstance(questions_raw, list)
-        else []
-    )
-    response_classification = str(payload.get("classification") or "").strip().lower()
-    if not message or response_classification not in {"decision_gate", "gtd", "both", "clear"}:
+    try:
+        parsed_payload = PrecheckMessagePayload.from_payload(payload)
+    except RuntimeError:
         return _fallback_precheck_message(
             issue_key=issue_key,
             classification=classification,
@@ -131,22 +100,22 @@ def build_precheck_message(
             gtd_missing_criteria=gtd_missing_criteria,
             gtd_questions=gtd_questions,
         )
-    return message, questions
+    return parsed_payload.message, list(parsed_payload.questions)
 
 
 def _fallback_precheck_message(
     *,
     issue_key: str,
-    classification: str,
+    classification: DecisionClassification,
     decision_gate_reason: str,
     decision_gate_questions: list[str],
     gtd_missing_criteria: list[str],
     gtd_questions: list[str],
 ) -> tuple[str, list[str]]:
     lines = [f"Clarification is still needed for `{issue_key}`."]
-    if classification in {"decision_gate", "both"}:
+    if classification.includes_decision_gate:
         lines.append(f"Decision Gate reason: {decision_gate_reason or 'clarification required'}")
-    if classification in {"gtd", "both"} and gtd_missing_criteria:
+    if classification.includes_gtd and gtd_missing_criteria:
         lines.append("Missing GTD criteria: " + ", ".join(gtd_missing_criteria))
     questions = [*decision_gate_questions, *gtd_questions]
     questions = [item for item in questions if item.strip()]
