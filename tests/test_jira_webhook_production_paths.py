@@ -10,7 +10,8 @@ from sqlalchemy import select
 
 from orchestrator.core.config import get_settings
 from orchestrator.core.decision_gate import DecisionGateResult
-from orchestrator.core.decision_types import DecisionEngineResult, IngressDecision, resolve_execution_gate_state
+from orchestrator.core.decision_state_machine import resolve_execution_gate_state
+from orchestrator.core.decision_types import DecisionEngineResult, IngressDecision
 from orchestrator.core.followup_context_service import upsert_followup_context
 from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.pre_run_check import PreRunCheckResult

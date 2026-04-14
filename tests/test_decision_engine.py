@@ -10,7 +10,8 @@ from orchestrator.core.decision_engine import (
 )
 from orchestrator.core.decision_precheck_mapping import derive_label_actions
 from orchestrator.core.decision_gate import DecisionGateResult
-from orchestrator.core.decision_types import ExecutionGateResolution, ExecutionGateState, resolve_execution_gate_state
+from orchestrator.core.decision_state_machine import resolve_execution_gate_state
+from orchestrator.core.decision_types import ExecutionGateResolution, ExecutionGateState
 from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.label_action_service import apply_issue_label_actions
 from orchestrator.core.pre_run_check import PreRunCheckResult

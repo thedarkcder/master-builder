@@ -18,8 +18,8 @@ from orchestrator.core.decision_snapshot_codec import (
 from orchestrator.core.knowledge_base import SlotResolution
 from orchestrator.core.pre_run_check import PreRunCheckResult, evaluate_pre_run_check
 from orchestrator.core.precheck_decision import precheck_missing_slots
+from orchestrator.core.decision_state_machine import decision_from_snapshot
 from orchestrator.core.decision_state_machine import resolve_execution_gate_state
-from orchestrator.core.decision_state_reducer import decision_from_snapshot
 from orchestrator.core.decision_types import (
     DecisionClassification,
     DecisionSource,

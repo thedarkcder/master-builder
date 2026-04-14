@@ -19,10 +19,10 @@ from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.core.config import get_settings
 from orchestrator.core.decision_planner import DecisionPlannerQuestion, DecisionPlannerResult
 from orchestrator.core.decision_gate import DecisionGateResult
+from orchestrator.core.decision_state_machine import resolve_execution_gate_state
 from orchestrator.core.decision_types import (
     DecisionClassification,
     IngressDecision,
-    resolve_execution_gate_state,
 )
 from orchestrator.core.decision_engine import DecisionEngineResult
 from orchestrator.core.gtd import GoodToDoValidationResult

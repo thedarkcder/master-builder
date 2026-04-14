@@ -31,12 +31,12 @@ from orchestrator.core.discord.channel_tenant_index import invalidate_discord_ch
 from orchestrator.core.config import get_settings
 from orchestrator.core.codex_runtime import CodexRuntimeError
 from orchestrator.core.decision_gate import DecisionGateResult
+from orchestrator.core.decision_state_machine import resolve_execution_gate_state
 from orchestrator.core.decision_types import (
     DecisionClassification,
     DecisionEngineResult,
     IngressDecision,
     PrecheckOutcome,
-    resolve_execution_gate_state,
 )
 from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.pm_interview_service import (
