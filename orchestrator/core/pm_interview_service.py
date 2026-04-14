@@ -9,16 +9,11 @@ from uuid import uuid4
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from orchestrator.core.agent_tools import (
-    execute_agent_tool,
-    governed_allowed_tools_for_stage,
-    governed_tool_catalog_for_stage,
-    native_tool_catalog_for_stage,
-)
 from orchestrator.core.codex_agents import _invoke_discord_json_maybe_tools
-from orchestrator.core.runtime_invocation import AgentInvocationContext, invoke_runtime_json, invoke_runtime_json_with_tools
+from orchestrator.core.runtime_invocation import AgentInvocationContext
 from orchestrator.core.codex_runtime import CodexRuntime, CodexRuntimeError
 from orchestrator.core.prompt_templates import render_prompt
+from orchestrator.core.runtime_stage_session import RuntimeStageSession
 from orchestrator.storage.models import PMInterviewCase
 
 PM_INTERVIEW_STATUS_DRAFTING = "drafting"
@@ -622,91 +617,6 @@ def resolve_pm_interview_case(
     return resolution.interview_case if resolution.status == "matched" else None
 
 
-def resolve_parent_feature_brief(
-    *,
-    session: Session,
-    tenant_id: str,
-    parent_issue_key: str,
-) -> PMInterviewBrief | None:
-    normalized_tenant_id = _normalized_text(tenant_id)
-    normalized_parent_issue_key = _normalized_text(parent_issue_key).upper()
-    if not normalized_tenant_id or not normalized_parent_issue_key:
-        return None
-    row = session.execute(
-        select(PMInterviewCase)
-        .where(
-            PMInterviewCase.tenant_id == normalized_tenant_id,
-            PMInterviewCase.parent_issue_key == normalized_parent_issue_key,
-        )
-        .order_by(PMInterviewCase.updated_at.desc(), PMInterviewCase.created_at.desc())
-    ).scalars().first()
-    if row is None:
-        return None
-    return normalize_pm_interview_brief(getattr(row, "brief_json", None) or None)
-
-
-def resolve_parent_feature_case(
-    *,
-    session: Session,
-    tenant_id: str,
-    parent_issue_key: str,
-) -> PMInterviewCase | None:
-    normalized_tenant_id = _normalized_text(tenant_id)
-    normalized_parent_issue_key = _normalized_text(parent_issue_key).upper()
-    if not normalized_tenant_id or not normalized_parent_issue_key:
-        return None
-    primary_row = session.execute(
-        select(PMInterviewCase)
-        .where(
-            PMInterviewCase.tenant_id == normalized_tenant_id,
-            PMInterviewCase.parent_issue_key == normalized_parent_issue_key,
-            PMInterviewCase.source_kind != PM_INTERVIEW_SOURCE_KIND_PARENT_BRIEF_SNAPSHOT,
-        )
-        .order_by(PMInterviewCase.updated_at.desc(), PMInterviewCase.created_at.desc())
-    ).scalars().first()
-    if primary_row is not None:
-        return primary_row
-    return session.execute(
-        select(PMInterviewCase)
-        .where(
-            PMInterviewCase.tenant_id == normalized_tenant_id,
-            PMInterviewCase.parent_issue_key == normalized_parent_issue_key,
-        )
-        .order_by(PMInterviewCase.updated_at.desc(), PMInterviewCase.created_at.desc())
-    ).scalars().first()
-
-
-def persist_parent_feature_brief_snapshot(
-    *,
-    session: Session,
-    tenant_id: str,
-    project_id: str | None,
-    parent_issue_key: str,
-    source_text: str,
-    brief: Mapping[str, Any] | PMInterviewBrief,
-    notes: Mapping[str, Any] | None = None,
-) -> PMInterviewCase:
-    normalized_parent_issue_key = _normalized_text(parent_issue_key).upper()
-    if not normalized_parent_issue_key:
-        raise ValueError("parent_issue_key is required")
-    return upsert_pm_interview_case(
-        session=session,
-        tenant_id=tenant_id,
-        project_id=project_id,
-        request_id=f"parent-brief:{normalized_parent_issue_key}",
-        source_kind=PM_INTERVIEW_SOURCE_KIND_PARENT_BRIEF_SNAPSHOT,
-        channel_id=PM_INTERVIEW_PARENT_BRIEF_CHANNEL_ID,
-        source_text=source_text,
-        status=PM_INTERVIEW_STATUS_PM_COMPLETED,
-        parent_issue_key=normalized_parent_issue_key,
-        brief=brief,
-        notes={
-            "parent_brief_snapshot": True,
-            **dict(notes or {}),
-        },
-    )
-
-
 def _get_existing_pm_interview_case(
     *,
     session: Session,
@@ -927,55 +837,26 @@ def normalize_parent_feature_brief_with_runtime(
     parent_description: str,
     invocation_context: AgentInvocationContext,
 ) -> dict[str, Any]:
+    stage_session = RuntimeStageSession.create(
+        runtime=runtime,
+        context=invocation_context,
+        policy_stage="pm_parent_brief_normalization",
+        session=session,
+        settings=settings,
+        issue_key=parent_issue_key,
+    )
     system_prompt = render_prompt("workflow/pm_parent_brief_normalization_system.j2")
     user_prompt = render_prompt(
         "workflow/pm_parent_brief_normalization_user.j2",
         parent_issue_key=parent_issue_key,
         parent_summary=parent_summary,
         parent_description=parent_description,
-        governed_tools_json=json.dumps(
-            governed_tool_catalog_for_stage(
-                "pm_parent_brief_normalization",
-                runtime_command=str(getattr(runtime, "command", "") or ""),
-            )
-        ),
-        native_tools_json=json.dumps(
-            native_tool_catalog_for_stage(
-                "pm_parent_brief_normalization",
-                runtime_command=str(getattr(runtime, "command", "") or ""),
-            )
-        ),
+        **stage_session.tooling.governed_native_prompt_context(),
     )
-    governed_tools = governed_allowed_tools_for_stage(
-        "pm_parent_brief_normalization",
-        runtime_command=str(getattr(runtime, "command", "") or ""),
+    payload = stage_session.invoke_json(
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
     )
-    if session is not None and settings is not None and governed_tools:
-        payload = invoke_runtime_json_with_tools(
-            runtime=runtime,
-            context=invocation_context,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            allowed_tools=governed_tools,
-            execute_tool=lambda tool_name, tool_args: execute_agent_tool(
-                session=session,
-                settings=settings,
-                tenant_id=str(invocation_context.tenant_id or "").strip(),
-                project_id=str(invocation_context.project_id or "").strip() or None,
-                run_id=str(invocation_context.run_id or "").strip() or None,
-                issue_key=parent_issue_key,
-                stage="pm_parent_brief_normalization",
-                tool_name=tool_name,
-                tool_args=tool_args,
-            ),
-        )
-    else:
-        payload = invoke_runtime_json(
-            runtime=runtime,
-            context=invocation_context,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-        )
     if not isinstance(payload, dict):
         raise CodexRuntimeError("Codex did not return a parent brief normalization JSON object")
     brief_payload = payload.get("brief")

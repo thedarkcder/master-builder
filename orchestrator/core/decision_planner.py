@@ -3,11 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 
-from orchestrator.core.agent_tools import allowed_tools_for_stage, execute_agent_tool
-from orchestrator.core.runtime_invocation import AgentInvocationContext, invoke_runtime_json_with_tools
+from orchestrator.core.runtime_invocation import AgentInvocationContext
 from orchestrator.core.codex_runtime import CodexRuntimeError, build_codex_runtime
 from orchestrator.core.prompt_templates import render_prompt
 from orchestrator.core.runtime_payload_models import DecisionPlannerPayload, PlannerGateStatus
+from orchestrator.core.runtime_stage_session import RuntimeStageSession
 from orchestrator.storage.models import DecisionCase, DecisionCycle, Project, Tenant
 
 
@@ -50,20 +50,26 @@ def plan_decision_questions(
     if classification not in {"decision_gate", "gtd", "both"}:
         return None
     runtime = build_codex_runtime(session=session, settings=settings)
-    allowed_tools = sorted(allowed_tools_for_stage("decision_planner"))
+    context = AgentInvocationContext(
+        channel="system",
+        tenant_id=tenant.tenant_id,
+        project_id=project.project_id,
+        command="policy",
+        stage="decision_planner",
+        working_dir=".",
+        issue_key=issue_key,
+        reasoning_effort="medium",
+    )
+    stage_session = RuntimeStageSession.create(
+        runtime=runtime,
+        context=context,
+        policy_stage="decision_planner",
+        session=session,
+        settings=settings,
+        issue_key=issue_key,
+    )
     try:
-        payload = invoke_runtime_json_with_tools(
-            runtime=runtime,
-            context=AgentInvocationContext(
-                channel="system",
-                tenant_id=tenant.tenant_id,
-                project_id=project.project_id,
-                command="policy",
-                stage="decision_planner",
-                working_dir=".",
-                issue_key=issue_key,
-                reasoning_effort="medium",
-            ),
+        payload = stage_session.invoke_json(
             system_prompt=render_prompt("policy/decision_planner_system.j2"),
             user_prompt=render_prompt(
                 "policy/decision_planner_user.j2",
@@ -77,19 +83,10 @@ def plan_decision_questions(
                 case_state=case.state if case is not None else "",
                 current_questions_json=json.dumps(cycle.question_set_json if cycle is not None else []),
                 current_cycle_metadata_json=json.dumps(cycle.metadata_json if cycle is not None else {}),
-                allowed_tools_json=json.dumps(allowed_tools),
-            ),
-            allowed_tools=set(allowed_tools),
-            execute_tool=lambda tool_name, tool_args: execute_agent_tool(
-                session=session,
-                settings=settings,
-                tenant_id=tenant.tenant_id,
-                project_id=project.project_id,
-                run_id=None,
-                issue_key=issue_key,
-                stage="decision_planner",
-                tool_name=tool_name,
-                tool_args=tool_args,
+                allowed_tools_json=json.dumps(
+                    sorted(stage_session.tooling.governed_tools),
+                    ensure_ascii=False,
+                ),
             ),
         )
     except CodexRuntimeError as exc:

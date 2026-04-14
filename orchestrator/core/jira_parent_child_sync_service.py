@@ -25,18 +25,25 @@ from orchestrator.core.followup_context_service import (
     resolve_issue_followup_context,
     upsert_followup_context,
 )
-from orchestrator.core.pm_interview_service import (
-    PM_INTERVIEW_SOURCE_KIND_PARENT_BRIEF_SNAPSHOT,
-    PM_INTERVIEW_STATUS_QUESTION_PENDING,
-    normalize_parent_feature_brief_with_runtime,
+from orchestrator.core.parent_feature_brief_store import (
     persist_parent_feature_brief_snapshot,
     resolve_parent_feature_brief,
     resolve_parent_feature_case,
+)
+from orchestrator.core.pm_interview_service import (
+    PM_INTERVIEW_SOURCE_KIND_PARENT_BRIEF_SNAPSHOT,
+    PM_INTERVIEW_STATUS_PM_COMPLETED,
+    PM_INTERVIEW_STATUS_QUESTION_PENDING,
+    normalize_parent_feature_brief_with_runtime,
     upsert_pm_interview_case,
 )
 from orchestrator.core.platform_secret_service import (
     PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF,
     resolve_platform_secret_ref,
+)
+from orchestrator.core.parent_feature_planning_workflow import (
+    ParentFeaturePlanningWorkflow,
+    ParentFeaturePlanningWorkflowDeps,
 )
 from orchestrator.storage.models import Project
 from orchestrator.tools.discord_api import DiscordApiClient, DiscordApiError
@@ -86,6 +93,270 @@ class JiraParentChildSyncResult:
     handled: bool
     reason: str | None = None
     extra: dict[str, object] = field(default_factory=dict)
+
+
+class _JiraParentIssueGateway:
+    def __init__(
+        self,
+        *,
+        session: Session,
+        settings,  # noqa: ANN001
+        context: JiraParentChildSyncContext,
+        tenant_jira_oauth_context_fn,
+        list_child_issue_previews_for_parent_fn,
+        post_jira_comment_fn,
+    ) -> None:
+        self._session = session
+        self._settings = settings
+        self._context = context
+        self._tenant_jira_oauth_context_fn = tenant_jira_oauth_context_fn
+        self._list_child_issue_previews_for_parent_fn = list_child_issue_previews_for_parent_fn
+        self._post_jira_comment_fn = post_jira_comment_fn
+        self._oauth = None
+
+    def _oauth_context(self):
+        if self._oauth is None:
+            self._oauth = self._tenant_jira_oauth_context_fn(
+                session=self._session,
+                tenant=self._context.tenant,
+                settings=self._settings,
+            )
+        return self._oauth
+
+    def load_parent_detail(self, issue_key: str) -> JiraIssueDetail:
+        oauth = self._oauth_context()
+        return oauth.client.get_issue_detail(
+            access_token=oauth.access_token,
+            cloud_id=oauth.connection.cloud_id,
+            issue_id_or_key=issue_key,
+        )
+
+    def load_child_details(self, *, project_key: str, parent_issue_key: str) -> list[JiraIssueDetail]:
+        return _load_child_details(
+            oauth=self._oauth_context(),
+            project_key=project_key,
+            parent_issue_key=parent_issue_key,
+            list_child_issue_previews_for_parent_fn=self._list_child_issue_previews_for_parent_fn,
+        )
+
+    def rewrite_parent_issue_from_brief(
+        self,
+        *,
+        parent_detail: JiraIssueDetail,
+        brief_payload: dict[str, object],
+        sync_status: str,
+        planning_state: str | None,
+        open_questions: list[str] | None,
+    ) -> None:
+        _rewrite_parent_issue_from_brief(
+            oauth=self._oauth_context(),
+            parent_detail=parent_detail,
+            brief_payload=brief_payload,
+            sync_status=sync_status,
+            planning_state=planning_state,
+            open_questions=open_questions,
+        )
+
+    def update_issue_sync_label(self, *, issue_detail: JiraIssueDetail, target_label: str) -> None:
+        _update_issue_sync_label(
+            oauth=self._oauth_context(),
+            issue_detail=issue_detail,
+            target_label=target_label,
+        )
+
+    def post_parent_brief_questions(self, *, parent_issue_key: str, questions: list[str]) -> bool:
+        return _post_parent_brief_questions_to_discord(
+            session=self._session,
+            settings=self._settings,
+            tenant=self._context.tenant,
+            project_id=self._context.project_id,
+            parent_issue_key=parent_issue_key,
+            questions=questions,
+        )
+
+    def post_sync_note(self, *, issue_key: str, body: str) -> None:
+        _post_sync_note(
+            session=self._session,
+            tenant=self._context.tenant,
+            issue_key=issue_key,
+            settings=self._settings,
+            body=body,
+            post_jira_comment_fn=self._post_jira_comment_fn,
+        )
+
+    def mark_issues_sync_blocked(self, *, issue_keys: list[str]) -> None:
+        _mark_issues_sync_blocked(oauth=self._oauth_context(), issue_keys=issue_keys)
+
+    def transition_issue(self, *, issue_key: str, target_status: str) -> None:
+        oauth = self._oauth_context()
+        oauth.client.transition_issue(
+            access_token=oauth.access_token,
+            cloud_id=oauth.connection.cloud_id,
+            issue_id_or_key=issue_key,
+            target_status=target_status,
+        )
+
+
+class _ParentBriefPlanner:
+    def __init__(
+        self,
+        *,
+        session: Session,
+        settings,  # noqa: ANN001
+        context: JiraParentChildSyncContext,
+        build_runtime_for_selector_fn,
+    ) -> None:
+        self._session = session
+        self._settings = settings
+        self._context = context
+        self._build_runtime_for_selector_fn = build_runtime_for_selector_fn
+
+    def resolve_product_brief(
+        self,
+        *,
+        parent_detail: JiraIssueDetail,
+        refresh: bool,
+    ) -> tuple[dict[str, object], list[str]]:
+        return _resolve_parent_product_brief(
+            session=self._session,
+            settings=self._settings,
+            tenant_id=self._context.tenant_id,
+            project_id=self._context.project_id,
+            parent_detail=parent_detail,
+            build_runtime_for_selector_fn=self._build_runtime_for_selector_fn,
+            refresh=refresh,
+        )
+
+    def plan_backlog_parent(
+        self,
+        *,
+        parent_detail: JiraIssueDetail,
+        product_brief: dict[str, object],
+        project_key: str,
+    ) -> tuple[object, dict[str, Any]]:
+        planning_runtime = self._build_runtime_for_selector_fn(
+            session=self._session,
+            settings=self._settings,
+            tenant_id=self._context.tenant_id,
+            project_id=self._context.project_id,
+            selector="workflow.pm_planning_architect",
+        )
+        planning_result = run_specialist_planning_fanout(
+            session=self._session,
+            settings=self._settings,
+            runtime=planning_runtime,
+            request=SpecialistPlanningRequest(
+                tenant_id=self._context.tenant_id,
+                project_id=self._context.project_id,
+                parent_issue_key=parent_detail.key,
+                parent_summary=parent_detail.summary,
+                parent_description=parent_detail.description,
+                product_brief=product_brief,
+                project_keys=(project_key,),
+                related_issues=(),
+                status_counts={parent_detail.status: 1},
+                github_context={},
+                conversation_history=(),
+                working_dir=".",
+            ),
+            runtime_for_selector=lambda selector: self._build_runtime_for_selector_fn(
+                session=self._session,
+                settings=self._settings,
+                tenant_id=self._context.tenant_id,
+                project_id=self._context.project_id,
+                selector=selector,
+            ),
+        )
+        planning_package = build_runtime_seed_planning_package(
+            result=planning_result,
+            behavior_slice=str(product_brief.get("objective") or parent_detail.summary).strip() or parent_detail.summary,
+        )
+        return planning_result, planning_package
+
+
+class _ParentChildSyncGateway:
+    def __init__(
+        self,
+        *,
+        session: Session,
+        context: JiraParentChildSyncContext,
+        seed_issues_with_runtime_fn,
+    ) -> None:
+        self._session = session
+        self._context = context
+        self._seed_issues_with_runtime_fn = seed_issues_with_runtime_fn
+
+    def seed_parent_backlog_children(
+        self,
+        *,
+        parent_detail: JiraIssueDetail,
+        project_key: str,
+        planning_package: dict[str, Any],
+        planning_state: str,
+    ) -> dict[str, Any]:
+        _, seed_data = self._seed_issues_with_runtime_fn(
+            session=self._session,
+            tenant=self._context.tenant,
+            prompt_markdown=_build_parent_seed_prompt(parent_detail=parent_detail),
+            scoped_project_id=self._context.project_id,
+            force_issue_keys=[self._context.issue_key],
+            allow_create=True,
+            allow_empty_children=planning_state != PLANNING_STATE_COMPLETED,
+            scoped_project_keys=[project_key],
+            codex_working_dir=".",
+            planning_package=planning_package,
+        )
+        return seed_data
+
+    def refresh_parent_children(
+        self,
+        *,
+        parent_detail: JiraIssueDetail,
+        child_details: list[JiraIssueDetail],
+        changed_fields: list[str],
+        project_key: str,
+    ) -> dict[str, Any]:
+        _, seed_data = self._seed_issues_with_runtime_fn(
+            session=self._session,
+            tenant=self._context.tenant,
+            prompt_markdown=_build_parent_resync_prompt(
+                parent_detail=parent_detail,
+                child_details=child_details,
+                changed_fields=changed_fields,
+            ),
+            scoped_project_id=self._context.project_id,
+            force_issue_keys=[self._context.issue_key, *[detail.key for detail in child_details]],
+            allow_create=True,
+            allow_empty_children=True,
+            scoped_project_keys=[project_key],
+            codex_working_dir=".",
+        )
+        return seed_data
+
+    @staticmethod
+    def combined_child_updates(*, seed_data: dict[str, Any]) -> tuple[list[str], list[str], list[str]]:
+        return _combined_child_updates(seed_data=seed_data)
+
+    @staticmethod
+    def sync_completion_note(*, updated_children: list[str], created_children: list[str]) -> str:
+        return _sync_completion_note(updated_children=updated_children, created_children=created_children)
+
+    @staticmethod
+    def fanout_completion_note(
+        *,
+        target_status: str,
+        promoted_children: list[str],
+        unchanged_children: list[str],
+        skipped_children: list[str],
+        failed_children: list[str],
+    ) -> str:
+        return _fanout_completion_note(
+            target_status=target_status,
+            promoted_children=promoted_children,
+            unchanged_children=unchanged_children,
+            skipped_children=skipped_children,
+            failed_children=failed_children,
+        )
 
 
 def is_system_generated_comment(*, text: str | None) -> bool:
@@ -448,6 +719,7 @@ def _resolve_parent_product_brief(
         parent_issue_key=parent_detail.key,
         source_text=parent_detail.description,
         brief=brief_payload,
+        status=PM_INTERVIEW_STATUS_QUESTION_PENDING if open_questions else PM_INTERVIEW_STATUS_PM_COMPLETED,
         notes={
             "source": "jira_parent_brief_normalization",
             "parent_summary": parent_detail.summary,
@@ -651,6 +923,7 @@ def _post_parent_brief_questions_to_discord(
             session=session,
             tenant_id=str(getattr(tenant, "tenant_id", "") or ""),
             parent_issue_key=parent_issue_key,
+            include_incomplete=True,
         ),
         notes={
             "source": "jira_parent_brief_normalization",
@@ -712,497 +985,46 @@ def handle_parent_feature_sync(
     seed_issues_with_runtime_fn,
     post_jira_comment_fn,
 ) -> JiraParentChildSyncResult:  # noqa: ANN001
-    normalized_labels = {str(label).strip().casefold() for label in context.issue_labels or []}
-    if context.webhook_event not in {"issue_created", "issue_updated"} or "pm-parent" not in normalized_labels:
-        return JiraParentChildSyncResult(handled=False)
-    if context.webhook_event == "issue_created":
-        oauth = tenant_jira_oauth_context_fn(session=session, tenant=context.tenant, settings=settings)
-        parent_detail = oauth.client.get_issue_detail(
-            access_token=oauth.access_token,
-            cloud_id=oauth.connection.cloud_id,
-            issue_id_or_key=context.issue_key,
-        )
-        project_key = _project_key_for_issue(context.issue_key)
-        product_brief, normalization_questions = _resolve_parent_product_brief(
-            session=session,
-            settings=settings,
-            tenant_id=context.tenant_id,
-            project_id=context.project_id,
-            parent_detail=parent_detail,
-            build_runtime_for_selector_fn=build_runtime_for_selector_fn,
-        )
-        _rewrite_parent_issue_from_brief(
-            oauth=oauth,
-            parent_detail=parent_detail,
-            brief_payload=product_brief,
-            sync_status="sync-blocked" if normalization_questions else "children_syncing",
-            planning_state="brief_normalized",
-            open_questions=normalization_questions or None,
-        )
-        if normalization_questions:
-            _update_issue_sync_label(
-                oauth=oauth,
-                issue_detail=parent_detail,
-                target_label="sync-blocked",
-            )
-            _post_parent_brief_questions_to_discord(
-                session=session,
-                settings=settings,
-                tenant=context.tenant,
-                project_id=context.project_id,
-                parent_issue_key=parent_detail.key,
-                questions=normalization_questions,
-            )
-            question_block = " ".join(normalization_questions)
-            _post_sync_note(
-                session=session,
-                tenant=context.tenant,
-                issue_key=context.issue_key,
-                settings=settings,
-                body=(
-                    "Parent feature was created in backlog, but brief normalization is blocked pending clarification. "
-                    f"{question_block}"
-                ),
-                post_jira_comment_fn=post_jira_comment_fn,
-            )
-            return JiraParentChildSyncResult(
-                handled=True,
-                reason="pm_parent_issue_created_brief_blocked",
-                extra={
-                    "questions": normalization_questions,
-                    "webhook_event": context.webhook_event,
-                },
-            )
-        prompt_markdown = _build_parent_seed_prompt(parent_detail=parent_detail)
-        planning_runtime = build_runtime_for_selector_fn(
-            session=session,
-            settings=settings,
-            tenant_id=context.tenant_id,
-            project_id=context.project_id,
-            selector="workflow.pm_planning_architect",
-        )
-        planning_result = run_specialist_planning_fanout(
-            session=session,
-            settings=settings,
-            runtime=planning_runtime,
-            request=SpecialistPlanningRequest(
-                tenant_id=context.tenant_id,
-                project_id=context.project_id,
-                parent_issue_key=parent_detail.key,
-                parent_summary=parent_detail.summary,
-                parent_description=parent_detail.description,
-                product_brief=product_brief,
-                project_keys=(project_key,),
-                related_issues=(),
-                status_counts={parent_detail.status: 1},
-                github_context={},
-                conversation_history=(),
-                working_dir=".",
-            ),
-            runtime_for_selector=lambda selector: build_runtime_for_selector_fn(
-                session=session,
-                settings=settings,
-                tenant_id=context.tenant_id,
-                project_id=context.project_id,
-                selector=selector,
-            ),
-        )
-        planning_package = build_runtime_seed_planning_package(
-            result=planning_result,
-            behavior_slice=str(product_brief.get("objective") or parent_detail.summary).strip() or parent_detail.summary,
-        )
-        try:
-            _, seed_data = seed_issues_with_runtime_fn(
-                session=session,
-                tenant=context.tenant,
-                prompt_markdown=prompt_markdown,
-                scoped_project_id=context.project_id,
-                force_issue_keys=[context.issue_key],
-                allow_create=True,
-                allow_empty_children=planning_result.planning_state != PLANNING_STATE_COMPLETED,
-                scoped_project_keys=[project_key],
-                codex_working_dir=".",
-                planning_package=planning_package,
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.exception(
-                "jira_parent_issue_created_seed_failed request_id=%s tenant_id=%s issue_key=%s error=%s",
-                context.request_id,
-                context.tenant_id,
-                context.issue_key,
-                exc,
-            )
-            _update_issue_sync_label(
-                oauth=oauth,
-                issue_detail=parent_detail,
-                target_label="sync-blocked",
-            )
-            _post_sync_note(
-                session=session,
-                tenant=context.tenant,
-                issue_key=context.issue_key,
-                settings=settings,
-                body=f"Parent feature was created in backlog, but engineering child planning failed. Error: {exc}",
-                post_jira_comment_fn=post_jira_comment_fn,
-            )
-            return JiraParentChildSyncResult(
-                handled=True,
-                reason="pm_parent_issue_created_seed_failed",
-                extra={"webhook_event": context.webhook_event},
-            )
-
-        updated_children, created_children, changed_children = _combined_child_updates(seed_data=seed_data)
-        if planning_result.planning_state != PLANNING_STATE_COMPLETED or bool(seed_data.get("requires_input")):
-            _update_issue_sync_label(
-                oauth=oauth,
-                issue_detail=parent_detail,
-                target_label="sync-blocked",
-            )
-            questions = list(planning_result.open_behavior_questions) or [
-                str(value).strip() for value in seed_data.get("questions", []) if str(value).strip()
-            ]
-            question_block = " ".join(questions) if questions else "More product detail is required."
-            _post_sync_note(
-                session=session,
-                tenant=context.tenant,
-                issue_key=context.issue_key,
-                settings=settings,
-                body=(
-                    "Parent feature was created in backlog, but engineering child planning is blocked pending clarification. "
-                    f"{question_block}"
-                ),
-                post_jira_comment_fn=post_jira_comment_fn,
-            )
-            return JiraParentChildSyncResult(
-                handled=True,
-                reason="pm_parent_issue_created_seed_blocked",
-                extra={
-                    "questions": questions,
-                    "parent_revision": seed_data.get("parent_revision"),
-                    "children_sync_status": seed_data.get("children_sync_status"),
-                    "webhook_event": context.webhook_event,
-                },
-            )
-
-        _post_sync_note(
-            session=session,
-            tenant=context.tenant,
-            issue_key=context.issue_key,
-            settings=settings,
-            body=(
-                "Backlog parent feature planning complete. "
-                f"{_sync_completion_note(updated_children=updated_children, created_children=created_children)}"
-            ),
-            post_jira_comment_fn=post_jira_comment_fn,
-        )
-        for child_key in changed_children:
-            _post_sync_note(
-                session=session,
-                tenant=context.tenant,
-                issue_key=child_key,
-                settings=settings,
-                body=f"Created or refreshed from parent feature {context.issue_key} during backlog planning.",
-                post_jira_comment_fn=post_jira_comment_fn,
-            )
-        return JiraParentChildSyncResult(
-            handled=True,
-            reason="pm_parent_issue_created_seed_completed",
-            extra={
-                "updated_children": changed_children,
-                "parent_revision": seed_data.get("parent_revision"),
-                "children_sync_status": seed_data.get("children_sync_status"),
-                "webhook_event": context.webhook_event,
-            },
-        )
-    material_changed_fields = _material_parent_changed_fields(
-        payload=context.payload,
-        extract_changed_fields_fn=extract_changed_fields_fn,
-    )
-    if not material_changed_fields:
-        board_entry_target_status = _parent_board_entry_target_status(
-            payload=context.payload,
-            extract_status_transition_fn=extract_status_transition_fn,
-        )
-        if board_entry_target_status:
-            oauth = tenant_jira_oauth_context_fn(session=session, tenant=context.tenant, settings=settings)
-            project_key = _project_key_for_issue(context.issue_key)
-            child_details = _load_child_details(
-                oauth=oauth,
-                project_key=project_key,
-                parent_issue_key=context.issue_key,
-                list_child_issue_previews_for_parent_fn=list_child_issue_previews_for_parent_fn,
-            )
-            if not child_details:
-                _post_sync_note(
-                    session=session,
-                    tenant=context.tenant,
-                    issue_key=context.issue_key,
-                    settings=settings,
-                    body="Parent feature moved onto the board, but there are no engineering child tickets to promote.",
-                    post_jira_comment_fn=post_jira_comment_fn,
-                )
-                return JiraParentChildSyncResult(
-                    handled=True,
-                    reason="pm_parent_board_entry_no_children",
-                    extra={"target_status": board_entry_target_status, "webhook_event": context.webhook_event},
-                )
-
-            promoted_children: list[str] = []
-            unchanged_children: list[str] = []
-            skipped_children: list[str] = []
-            failed_children: list[str] = []
-            for child_detail in child_details:
-                child_labels = {str(label).strip().casefold() for label in child_detail.labels}
-                if "engineering-child" not in child_labels:
-                    skipped_children.append(child_detail.key)
-                    continue
-                if _normalize_status_name(child_detail.status) in _CHILD_STATUSES_TO_LEAVE:
-                    unchanged_children.append(child_detail.key)
-                    continue
-                try:
-                    oauth.client.transition_issue(
-                        access_token=oauth.access_token,
-                        cloud_id=oauth.connection.cloud_id,
-                        issue_id_or_key=child_detail.key,
-                        target_status=board_entry_target_status,
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    logger.exception(
-                        "jira_parent_board_entry_child_transition_failed request_id=%s tenant_id=%s parent_issue_key=%s child_issue_key=%s target_status=%s error=%s",
-                        context.request_id,
-                        context.tenant_id,
-                        context.issue_key,
-                        child_detail.key,
-                        board_entry_target_status,
-                        exc,
-                    )
-                    failed_children.append(child_detail.key)
-                    continue
-                promoted_children.append(child_detail.key)
-
-            _post_sync_note(
-                session=session,
-                tenant=context.tenant,
-                issue_key=context.issue_key,
-                settings=settings,
-                body=_fanout_completion_note(
-                    target_status=board_entry_target_status,
-                    promoted_children=promoted_children,
-                    unchanged_children=unchanged_children,
-                    skipped_children=skipped_children,
-                    failed_children=failed_children,
-                ),
-                post_jira_comment_fn=post_jira_comment_fn,
-            )
-            return JiraParentChildSyncResult(
-                handled=True,
-                reason="pm_parent_board_entry_fanout_completed" if not failed_children else "pm_parent_board_entry_fanout_partial",
-                extra={
-                    "target_status": board_entry_target_status,
-                    "promoted_children": promoted_children,
-                    "unchanged_children": unchanged_children,
-                    "skipped_children": skipped_children,
-                    "failed_children": failed_children,
-                    "webhook_event": context.webhook_event,
-                },
-            )
-        return JiraParentChildSyncResult(
-            handled=True,
-            reason="pm_parent_non_material_change",
-            extra={"changed_fields": [], "webhook_event": context.webhook_event},
-        )
-    oauth = tenant_jira_oauth_context_fn(session=session, tenant=context.tenant, settings=settings)
-    parent_detail = oauth.client.get_issue_detail(
-        access_token=oauth.access_token,
-        cloud_id=oauth.connection.cloud_id,
-        issue_id_or_key=context.issue_key,
-    )
-    project_key = _project_key_for_issue(context.issue_key)
-    child_details = _load_child_details(
-        oauth=oauth,
-        project_key=project_key,
-        parent_issue_key=context.issue_key,
+    issue_gateway = _JiraParentIssueGateway(
+        session=session,
+        settings=settings,
+        context=context,
+        tenant_jira_oauth_context_fn=tenant_jira_oauth_context_fn,
         list_child_issue_previews_for_parent_fn=list_child_issue_previews_for_parent_fn,
-    )
-    product_brief, normalization_questions = _resolve_parent_product_brief(
-        session=session,
-        settings=settings,
-        tenant_id=context.tenant_id,
-        project_id=context.project_id,
-        parent_detail=parent_detail,
-        build_runtime_for_selector_fn=build_runtime_for_selector_fn,
-        refresh=True,
-    )
-    _rewrite_parent_issue_from_brief(
-        oauth=oauth,
-        parent_detail=parent_detail,
-        brief_payload=product_brief,
-        sync_status="sync-blocked" if normalization_questions else "children_syncing",
-        planning_state="brief_normalized",
-        open_questions=normalization_questions or None,
-    )
-    if normalization_questions:
-        blocked_issue_keys = [context.issue_key, *[detail.key for detail in child_details]]
-        _mark_issues_sync_blocked(oauth=oauth, issue_keys=blocked_issue_keys)
-        _post_parent_brief_questions_to_discord(
-            session=session,
-            settings=settings,
-            tenant=context.tenant,
-            project_id=context.project_id,
-            parent_issue_key=parent_detail.key,
-            questions=normalization_questions,
-        )
-        question_block = " ".join(normalization_questions)
-        _post_sync_note(
-            session=session,
-            tenant=context.tenant,
-            issue_key=context.issue_key,
-            settings=settings,
-            body=f"Parent feature changed but brief normalization is blocked pending clarification. {question_block}",
-            post_jira_comment_fn=post_jira_comment_fn,
-        )
-        return JiraParentChildSyncResult(
-            handled=True,
-            reason="pm_parent_sync_brief_blocked",
-            extra={
-                "changed_fields": material_changed_fields,
-                "questions": normalization_questions,
-                "webhook_event": context.webhook_event,
-            },
-        )
-    if not child_details:
-        _post_sync_note(
-            session=session,
-            tenant=context.tenant,
-            issue_key=context.issue_key,
-            settings=settings,
-            body="Parent feature changed, but there are no engineering child tickets to refresh.",
-            post_jira_comment_fn=post_jira_comment_fn,
-        )
-        return JiraParentChildSyncResult(
-            handled=True,
-            reason="pm_parent_no_children",
-            extra={"changed_fields": material_changed_fields, "webhook_event": context.webhook_event},
-        )
-    prompt_markdown = _build_parent_resync_prompt(
-        parent_detail=parent_detail,
-        child_details=child_details,
-        changed_fields=material_changed_fields,
-    )
-    force_issue_keys = [context.issue_key, *[detail.key for detail in child_details]]
-    try:
-        _, seed_data = seed_issues_with_runtime_fn(
-            session=session,
-            tenant=context.tenant,
-            prompt_markdown=prompt_markdown,
-            scoped_project_id=context.project_id,
-            force_issue_keys=force_issue_keys,
-            allow_create=True,
-            allow_empty_children=True,
-            scoped_project_keys=[project_key],
-            codex_working_dir=".",
-        )
-    except Exception as exc:  # noqa: BLE001
-        logger.exception(
-            "jira_parent_sync_failed request_id=%s tenant_id=%s issue_key=%s error=%s",
-            context.request_id,
-            context.tenant_id,
-            context.issue_key,
-            exc,
-        )
-        blocked_issue_keys = [context.issue_key, *[detail.key for detail in child_details]]
-        _mark_issues_sync_blocked(oauth=oauth, issue_keys=blocked_issue_keys)
-        _post_sync_note(
-            session=session,
-            tenant=context.tenant,
-            issue_key=context.issue_key,
-            settings=settings,
-            body=(
-                "Parent feature changed and child refresh failed. "
-                f"Blocked {len(child_details)} engineering child ticket(s). Error: {exc}"
-            ),
-            post_jira_comment_fn=post_jira_comment_fn,
-        )
-        for detail in child_details:
-            _post_sync_note(
-                session=session,
-                tenant=context.tenant,
-                issue_key=detail.key,
-                settings=settings,
-                body=f"Blocked because parent feature {context.issue_key} changed and refresh failed.",
-                post_jira_comment_fn=post_jira_comment_fn,
-            )
-        return JiraParentChildSyncResult(
-            handled=True,
-            reason="pm_parent_sync_failed",
-            extra={
-                "changed_fields": material_changed_fields,
-                "stale_child_keys": [detail.key for detail in child_details],
-                "webhook_event": context.webhook_event,
-            },
-        )
-
-    updated_children, created_children, changed_children = _combined_child_updates(seed_data=seed_data)
-    if bool(seed_data.get("requires_input")):
-        blocked_issue_keys = [context.issue_key, *[detail.key for detail in child_details]]
-        _mark_issues_sync_blocked(oauth=oauth, issue_keys=blocked_issue_keys)
-        questions = [str(value).strip() for value in seed_data.get("questions", []) if str(value).strip()]
-        question_block = " ".join(questions) if questions else "More product detail is required."
-        _post_sync_note(
-            session=session,
-            tenant=context.tenant,
-            issue_key=context.issue_key,
-            settings=settings,
-            body=f"Parent feature changed but child sync is blocked pending clarification. {question_block}",
-            post_jira_comment_fn=post_jira_comment_fn,
-        )
-        for detail in child_details:
-            _post_sync_note(
-                session=session,
-                tenant=context.tenant,
-                issue_key=detail.key,
-                settings=settings,
-                body=f"Still blocked because parent feature {context.issue_key} needs clarification before refresh can complete.",
-                post_jira_comment_fn=post_jira_comment_fn,
-            )
-        return JiraParentChildSyncResult(
-            handled=True,
-            reason="pm_parent_sync_blocked",
-            extra={
-                "changed_fields": material_changed_fields,
-                "stale_child_keys": [detail.key for detail in child_details],
-                "questions": questions,
-                "webhook_event": context.webhook_event,
-            },
-        )
-
-    _post_sync_note(
-        session=session,
-        tenant=context.tenant,
-        issue_key=context.issue_key,
-        settings=settings,
-        body=f"{_sync_completion_note(updated_children=updated_children, created_children=created_children)} Changed fields: {', '.join(material_changed_fields)}.",
         post_jira_comment_fn=post_jira_comment_fn,
     )
-    for child_key in changed_children:
-        _post_sync_note(
-            session=session,
-            tenant=context.tenant,
-            issue_key=child_key,
-            settings=settings,
-            body=f"Refreshed from parent feature {context.issue_key} after Jira product update.",
-            post_jira_comment_fn=post_jira_comment_fn,
+    brief_planner = _ParentBriefPlanner(
+        session=session,
+        settings=settings,
+        context=context,
+        build_runtime_for_selector_fn=build_runtime_for_selector_fn,
+    )
+    child_sync_gateway = _ParentChildSyncGateway(
+        session=session,
+        context=context,
+        seed_issues_with_runtime_fn=seed_issues_with_runtime_fn,
+    )
+    workflow = ParentFeaturePlanningWorkflow(
+        deps=ParentFeaturePlanningWorkflowDeps(
+            issue_gateway=issue_gateway,
+            brief_planner=brief_planner,
+            child_sync_gateway=child_sync_gateway,
+            project_key_for_issue_fn=_project_key_for_issue,
+            material_parent_changed_fields_fn=_material_parent_changed_fields,
+            parent_board_entry_target_status_fn=_parent_board_entry_target_status,
+            extract_changed_fields_fn=extract_changed_fields_fn,
+            extract_status_transition_fn=extract_status_transition_fn,
         )
+    )
+    result = workflow.handle(
+        context=context,
+        session=session,
+        settings=settings,
+    )
     return JiraParentChildSyncResult(
-        handled=True,
-        reason="pm_parent_sync_completed",
-        extra={
-            "changed_fields": material_changed_fields,
-            "updated_children": changed_children,
-            "parent_revision": seed_data.get("parent_revision"),
-            "children_sync_status": seed_data.get("children_sync_status"),
-            "webhook_event": context.webhook_event,
-        },
+        handled=result.handled,
+        reason=result.reason,
+        extra=dict(result.extra or {}),
     )
 
 
@@ -1369,7 +1191,7 @@ def handle_engineering_clarification_command(
         ),
         post_jira_comment_fn=post_jira_comment_fn,
     )
-    _post_parent_brief_questions_to_discord(
+    posted_to_discord = _post_parent_brief_questions_to_discord(
         session=session,
         settings=settings,
         tenant=context.tenant,
@@ -1377,6 +1199,18 @@ def handle_engineering_clarification_command(
         parent_issue_key=parent_issue_key,
         questions=[stakeholder_question],
     )
+    if not posted_to_discord:
+        _post_sync_note(
+            session=session,
+            tenant=context.tenant,
+            issue_key=parent_issue_key,
+            settings=settings,
+            body=(
+                "Discord PM follow-up could not be created for this clarification. "
+                "Continue the decision on the parent Jira issue for now."
+            ),
+            post_jira_comment_fn=post_jira_comment_fn,
+        )
     _post_sync_note(
         session=session,
         tenant=context.tenant,
