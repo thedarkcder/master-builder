@@ -177,6 +177,17 @@ class ExecutionSnapshotMigrationTests(unittest.TestCase):
         self.assertEqual(snapshot.context.execution_context["pre_check_outcome"], "ready_for_agent")
         self.assertEqual(len(snapshot.events.live_stage_updates), 1)
 
+    def test_execution_snapshot_runtime_loader_rejects_partial_legacy_dict(self) -> None:
+        self.assertIsNone(
+            ExecutionSnapshot.load(
+                {
+                    "trigger_context": {"source": "manual_fix_request", "pr_number": 42},
+                    "pre_check": {"outcome": "ready_for_agent"},
+                    "live_stage_updates": [{"stage": "lock_acquired"}],
+                }
+            )
+        )
+
     def test_migrate_execution_snapshots_dry_run_reports_conversions_without_persisting(self) -> None:
         with self.session_factory() as session:
             report = migrate_execution_snapshots(session=session, apply=False)
