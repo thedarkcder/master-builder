@@ -224,7 +224,6 @@ class WorkerClaimedRunIntegrationTests(SqliteTemplateDbTestCase):
             session_factory=self.session_factory,
             settings=settings,
             service_instance_id=worker_service_instance_id_for_mode(settings=settings, mode="runs"),
-            ready_runtime_kinds=set(),
         )
         self.assertIsNotNone(claimed)
         assert claimed is not None
