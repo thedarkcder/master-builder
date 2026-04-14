@@ -3,9 +3,12 @@ from __future__ import annotations
 import io
 import json
 import os
+import subprocess
+import sys
 import unittest
 from contextlib import redirect_stdout
 from datetime import datetime, timezone
+from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 from types import SimpleNamespace
@@ -141,6 +144,19 @@ class CliEntrypointTests(unittest.TestCase):
         self.assertEqual(child_mock.call_count, 2)
         self.assertEqual(child_mock.call_args_list[0].kwargs, {"mode": "runs"})
         self.assertEqual(child_mock.call_args_list[1].kwargs, {"mode": "webhooks"})
+
+    def test_python_m_orchestrator_cli_executes_module_entrypoint(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        result = subprocess.run(
+            [sys.executable, "-m", "orchestrator.cli", "--help"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("master-builder orchestrator", result.stdout)
 
     def test_discord_live_voice_command_invokes_runtime(self) -> None:
         with patch("orchestrator.cli.run_discord_live_voice") as voice_mock:

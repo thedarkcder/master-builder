@@ -13,6 +13,7 @@ import {
 
 import { useAuth } from "@/components/auth-provider";
 import { getDefaultAuthenticatedRoute } from "@/lib/auth-routing";
+import { formatTimestamp } from "@/lib/datetime";
 import { readLastWorkspaceTenantIdFromBrowser } from "@/lib/workspace-preference";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { Button } from "@/components/ui/button";
@@ -221,7 +222,7 @@ export default function DashboardPage() {
                     <TableCell className="text-muted-foreground text-sm">{run.tenant_id}</TableCell>
                     <TableCell><StatusBadge status={run.status} /></TableCell>
                     <TableCell className="text-muted-foreground text-sm">
-                      {new Date(run.created_at).toLocaleString()}
+                      {formatTimestamp(run.created_at)}
                     </TableCell>
                   </TableRow>
                 ))}

@@ -176,7 +176,7 @@ def prune_agent_lifecycle_events(
     session: Session,
     max_events_per_tenant: int = MAX_PERSISTED_EVENTS_PER_TENANT,
 ) -> int:
-    ranked_legacy = (
+    ranked_events = (
         select(
             AgentLifecycleEvent.event_id,
             func.row_number()
@@ -187,12 +187,12 @@ def prune_agent_lifecycle_events(
             .label("row_number"),
         ).subquery()
     )
-    cutoff_legacy_ids = session.execute(
-        select(ranked_legacy.c.event_id).where(ranked_legacy.c.row_number > max(0, int(max_events_per_tenant)))
+    cutoff_event_ids = session.execute(
+        select(ranked_events.c.event_id).where(ranked_events.c.row_number > max(0, int(max_events_per_tenant)))
     ).scalars().all()
     deleted = 0
-    if cutoff_legacy_ids:
-        result = session.execute(delete(AgentLifecycleEvent).where(AgentLifecycleEvent.event_id.in_(cutoff_legacy_ids)))
+    if cutoff_event_ids:
+        result = session.execute(delete(AgentLifecycleEvent).where(AgentLifecycleEvent.event_id.in_(cutoff_event_ids)))
         deleted += int(result.rowcount or 0)
 
     ranked_stream = (

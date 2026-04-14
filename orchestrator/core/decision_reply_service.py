@@ -10,6 +10,7 @@ from uuid import uuid4
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from orchestrator.core.decision_types import DecisionClassification, DecisionQuestionKind
 from orchestrator.core.runtime_invocation import AgentInvocationContext, invoke_runtime_json
 from orchestrator.core.codex_runtime import CodexRuntimeError, build_codex_runtime
 from orchestrator.core.prompt_templates import render_prompt
@@ -175,22 +176,26 @@ def unresolved_question_ids_for_cycle(*, session: Session, cycle: DecisionCycle)
     )
 
 
-def classification_for_cycle_questions(*, cycle: DecisionCycle, unresolved_question_ids: tuple[str, ...]) -> str:
+def classification_for_cycle_questions(
+    *,
+    cycle: DecisionCycle,
+    unresolved_question_ids: tuple[str, ...],
+) -> DecisionClassification:
     unresolved = set(unresolved_question_ids)
     kinds = {
         str(item.get("kind") or "").strip()
         for item in cycle.question_set_json
         if str(item.get("id") or "").strip() in unresolved
     }
-    has_dg = "decision_gate" in kinds
-    has_gtd = "gtd" in kinds
+    has_dg = DecisionQuestionKind.DECISION_GATE.value in kinds
+    has_gtd = DecisionQuestionKind.GTD.value in kinds
     if has_dg and has_gtd:
-        return "both"
+        return DecisionClassification.BOTH
     if has_dg:
-        return "decision_gate"
+        return DecisionClassification.DECISION_GATE
     if has_gtd:
-        return "gtd"
-    return "clear"
+        return DecisionClassification.GTD
+    return DecisionClassification.CLEAR
 
 
 def _reply_dedupe_key(

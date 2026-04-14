@@ -25,3 +25,5 @@ admin-ui/tsconfig.tsbuildinfo
 mcp.json
 admin-ui/.next-playwright
 .DS_Store
+.runtime-home/
+.codex/tmp/

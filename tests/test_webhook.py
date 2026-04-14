@@ -3,19 +3,15 @@ import os
 import json
 import hmac
 import hashlib
-import unittest
 from datetime import datetime, timedelta, timezone
-from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 from cryptography.fernet import Fernet
 from fastapi import HTTPException
-from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from orchestrator.api.main import create_app
 from orchestrator.api.discord.interactions.followup import (
     _build_command_followup_message,
     _run_discord_command_followup,
@@ -35,23 +31,53 @@ from orchestrator.core.discord.channel_tenant_index import invalidate_discord_ch
 from orchestrator.core.config import get_settings
 from orchestrator.core.codex_runtime import CodexRuntimeError
 from orchestrator.core.decision_gate import DecisionGateResult
-from orchestrator.core.decision_types import DecisionEngineResult, IngressDecision, resolve_execution_gate_state
+from orchestrator.core.decision_types import (
+    DecisionClassification,
+    DecisionEngineResult,
+    IngressDecision,
+    PrecheckOutcome,
+    resolve_execution_gate_state,
+)
 from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.pre_run_check import PreRunCheckResult
 from orchestrator.core.precheck_question_lock import build_precheck_questions_block
 from orchestrator.core.worker.webhook_job_service import process_next_webhook_job
 from orchestrator.core.webhook_health import reset_webhook_health_tracker_for_tests, webhook_health_tracker
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
-from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import FollowupContext, Project, Run, Tenant, WebhookJob
 from orchestrator.tools.discord_api import DiscordApiError
 from orchestrator.tools.jira_oauth import JiraIssueDetail, JiraIssuePreview, JiraOAuthError
+from tests.test_support.db_harness import SqliteTemplateApiTestCase
 from tests.workflow_test_support import add_run_with_workflow, make_run
 
 pytestmark = pytest.mark.contract
 
 
-class JiraWebhookTests(unittest.TestCase):
+class JiraWebhookTests(SqliteTemplateApiTestCase):
+    _secrets_encryption_key: str
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls._secrets_encryption_key = Fernet.generate_key().decode("utf-8")
+        super().setUpClass()
+
+    @classmethod
+    def class_environment_overrides(cls) -> dict[str, str]:
+        return {
+            "ORCHESTRATOR_ADMIN_USERNAME": "admin",
+            "ORCHESTRATOR_ADMIN_PASSWORD": "secret",
+            "ORCHESTRATOR_SECRETS_ENCRYPTION_KEY": cls._secrets_encryption_key,
+            "ORCHESTRATOR_TEST_WEBHOOK_SECRET": "super-secret-token",
+            "ORCHESTRATOR_TEST_GITHUB_WEBHOOK_SECRET": "github-super-secret-token",
+        }
+
+    @classmethod
+    def bootstrap_template_state(cls) -> None:
+        cls._create_tenant_with_client(
+            client=cls._class_client,
+            tenant_id="tenant-webhook",
+        )
+
     @staticmethod
     def _pre_run_check(*, outcome: str = "ready_for_agent", capability: str = "linux") -> PreRunCheckResult:
         return PreRunCheckResult(
@@ -88,8 +114,21 @@ class JiraWebhookTests(unittest.TestCase):
         cycle_id: str | None = None,
         auto_resolved_slots: list[str] | None = None,
     ) -> DecisionEngineResult:
-        block_reason = pre_check.outcome if pre_check.outcome in {"decision_gate_required", "gtd_required", "missing_ready_label"} else None
-        classification = "decision_gate" if pre_check.outcome in {"decision_gate_required", "gtd_required", "execution_blocked"} else "clear"
+        parsed_outcome = PrecheckOutcome.parse(pre_check.outcome)
+        block_reason = parsed_outcome.value if parsed_outcome in {
+            PrecheckOutcome.DECISION_GATE_REQUIRED,
+            PrecheckOutcome.GTD_REQUIRED,
+            PrecheckOutcome.MISSING_READY_LABEL,
+        } else None
+        classification = (
+            DecisionClassification.DECISION_GATE
+            if parsed_outcome in {
+                PrecheckOutcome.DECISION_GATE_REQUIRED,
+                PrecheckOutcome.GTD_REQUIRED,
+                PrecheckOutcome.EXECUTION_BLOCKED,
+            }
+            else DecisionClassification.CLEAR
+        )
         decision = IngressDecision(
             source="jira_webhook",
             pre_check=pre_check,
@@ -113,48 +152,35 @@ class JiraWebhookTests(unittest.TestCase):
         )
 
     def setUp(self) -> None:
-        self.temp_dir = TemporaryDirectory()
-        self.database_url = f"sqlite:///{self.temp_dir.name}/webhook_test.db"
+        self.database_url = self._start_test_database(name_prefix="webhook")
         self.webhook_secret_env = "ORCHESTRATOR_TEST_WEBHOOK_SECRET"
         self.webhook_secret_value = "super-secret-token"
         self.github_webhook_secret_env = "ORCHESTRATOR_TEST_GITHUB_WEBHOOK_SECRET"
         self.github_webhook_secret_value = "github-super-secret-token"
 
-        os.environ["ORCHESTRATOR_DATABASE_URL"] = self.database_url
-        os.environ["ORCHESTRATOR_ADMIN_USERNAME"] = "admin"
-        os.environ["ORCHESTRATOR_ADMIN_PASSWORD"] = "secret"
-        os.environ["ORCHESTRATOR_SECRETS_ENCRYPTION_KEY"] = Fernet.generate_key().decode("utf-8")
-        os.environ[self.webhook_secret_env] = self.webhook_secret_value
-        os.environ[self.github_webhook_secret_env] = self.github_webhook_secret_value
-
         get_settings.cache_clear()
         reset_db_engine_cache()
         invalidate_discord_channel_tenant_index()
         reset_webhook_health_tracker_for_tests()
-        run_migrations(database_url=self.database_url)
         self.session_factory = create_session_factory(database_url=self.database_url)
 
-        self.client = TestClient(create_app())
-        self._create_tenant("tenant-webhook")
-
         self._default_pre_run_check_patch = patch(
-            "orchestrator.api.webhooks.jira_webhook_precheck.evaluate_pre_run_check",
+            "orchestrator.api.webhooks.jira_admission_flow.evaluate_pre_run_check",
             return_value=self._pre_run_check(),
         )
         self._default_pre_run_check_patch.start()
         self._default_precheck_decision_patch = patch(
-            "orchestrator.api.webhooks.jira_webhook_precheck.evaluate_precheck_decision_with_labels",
+            "orchestrator.api.webhooks.jira_admission_flow.evaluate_precheck_decision_with_labels",
             side_effect=self._evaluate_precheck_decision_with_labels,
         )
         self._default_precheck_decision_patch.start()
 
     def tearDown(self) -> None:
-        self.temp_dir.cleanup()
+        self._cleanup_test_database()
         os.environ.pop(self.webhook_secret_env, None)
         os.environ.pop(self.github_webhook_secret_env, None)
         os.environ.pop("ORCHESTRATOR_GITHUB_WEBHOOK_SECRET_REF", None)
         os.environ.pop("ORCHESTRATOR_WEBHOOK_MAX_BODY_BYTES", None)
-        os.environ.pop("ORCHESTRATOR_SECRETS_ENCRYPTION_KEY", None)
         get_settings.cache_clear()
         reset_db_engine_cache()
         invalidate_discord_channel_tenant_index()
@@ -171,18 +197,18 @@ class JiraWebhookTests(unittest.TestCase):
         issue_description: str | None = None,
         idempotency_key: str | None = None,
     ):
-        from orchestrator.api.webhooks import jira_webhook_precheck
+        from orchestrator.api.webhooks import jira_admission_flow
 
         _ = idempotency_key
         effective_issue_description = context.issue_description if issue_description is None else issue_description
-        pre_check = jira_webhook_precheck.evaluate_pre_run_check(
+        pre_check = jira_admission_flow.evaluate_pre_run_check(
             tenant_id=context.tenant_id,
             project_id=context.project.project_id if context.project is not None else None,
             issue_key=context.issue_key,
             issue_summary=context.issue_summary,
             issue_description=effective_issue_description,
             issue_labels=context.issue_labels,
-            ready_label=jira_webhook_precheck.resolve_ready_label_for_tenant(context.tenant),
+            ready_label=jira_admission_flow.resolve_ready_label_for_tenant(context.tenant),
         )
         labels_to_add = []
         if pre_check.ready_label and not pre_check.ready_label_present:
@@ -191,7 +217,7 @@ class JiraWebhookTests(unittest.TestCase):
             labels_to_add.append(pre_check.required_worker_label)
         if labels_to_add:
             try:
-                oauth = jira_webhook_precheck.tenant_jira_oauth_context(
+                oauth = jira_admission_flow.tenant_jira_oauth_context(
                     session=session,
                     tenant=context.tenant,
                     settings=settings,
@@ -217,6 +243,29 @@ class JiraWebhookTests(unittest.TestCase):
 
     def _create_tenant(
         self,
+        tenant_id: str,
+        webhook_secret_ref: str | None = None,
+        github_webhook_secret_ref: str | None = None,
+        github_installation_id: str = "12345",
+        is_enabled: bool = True,
+        max_concurrent_runs: int = 2,
+        ready_trigger_mode: str = "status_recheck",
+    ) -> None:
+        self._create_tenant_with_client(
+            client=self.client,
+            tenant_id=tenant_id,
+            webhook_secret_ref=webhook_secret_ref,
+            github_webhook_secret_ref=github_webhook_secret_ref,
+            github_installation_id=github_installation_id,
+            is_enabled=is_enabled,
+            max_concurrent_runs=max_concurrent_runs,
+            ready_trigger_mode=ready_trigger_mode,
+        )
+
+    @staticmethod
+    def _create_tenant_with_client(
+        *,
+        client,
         tenant_id: str,
         webhook_secret_ref: str | None = None,
         github_webhook_secret_ref: str | None = None,
@@ -263,9 +312,11 @@ class JiraWebhookTests(unittest.TestCase):
             },
             "discord": None,
         }
-        response = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
-        self.assertEqual(response.status_code, 201)
-        self.assertEqual(response.json()["tenant_id"], tenant_id)
+        response = client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        if response.status_code != 201:
+            raise AssertionError(f"Failed to create tenant `{tenant_id}`: {response.status_code} {response.text}")
+        if response.json()["tenant_id"] != tenant_id:
+            raise AssertionError(f"Unexpected tenant id for `{tenant_id}`: {response.json()['tenant_id']}")
 
     def _sign_github_payload(self, payload_bytes: bytes, secret: str) -> str:
         digest = hmac.new(secret.encode("utf-8"), payload_bytes, hashlib.sha256).hexdigest()
@@ -331,7 +382,7 @@ class JiraWebhookTests(unittest.TestCase):
     def test_webhook_queues_todo_status_for_worker_reconciliation(self) -> None:
         payload = self._jira_issue_payload(issue_key="TP-123", status_name="To Do", labels=["agent:ready"])
 
-        with patch("orchestrator.api.webhooks.jira_webhook_precheck.evaluate_pre_run_check", return_value=self._pre_run_check()):
+        with patch("orchestrator.api.webhooks.jira_admission_flow.evaluate_pre_run_check", return_value=self._pre_run_check()):
             response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
 
         self.assertEqual(response.status_code, 202)
@@ -385,7 +436,7 @@ class JiraWebhookTests(unittest.TestCase):
         with (
             patch("orchestrator.api.webhooks.jira_webhook_board_gate._fetch_issue_board_location", return_value=("backlog", None)),
             patch(
-                "orchestrator.api.webhooks.jira_webhook_precheck.evaluate_pre_run_check",
+                "orchestrator.api.webhooks.jira_admission_flow.evaluate_pre_run_check",
                 return_value=self._pre_run_check(outcome="decision_gate_required"),
             ),
             patch("orchestrator.core.discord.transport_executor.send_tenant_discord_message") as notify_mock,
@@ -410,7 +461,7 @@ class JiraWebhookTests(unittest.TestCase):
         payload["webhookEvent"] = "jira:issue_updated"
         with (
             patch("orchestrator.api.webhooks.jira_webhook_board_gate._fetch_issue_board_location", return_value=("backlog", None)),
-            patch("orchestrator.api.webhooks.jira_webhook_precheck.evaluate_pre_run_check", return_value=self._pre_run_check()),
+            patch("orchestrator.api.webhooks.jira_admission_flow.evaluate_pre_run_check", return_value=self._pre_run_check()),
             patch("orchestrator.core.discord.transport_executor.send_tenant_discord_message") as notify_mock,
         ):
             response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
@@ -453,7 +504,7 @@ class JiraWebhookTests(unittest.TestCase):
         with (
             patch("orchestrator.api.webhooks.jira_webhook_board_gate._fetch_issue_board_location", return_value=("backlog", None)),
             patch(
-                "orchestrator.api.webhooks.jira_webhook_precheck.evaluate_pre_run_check",
+                "orchestrator.api.webhooks.jira_admission_flow.evaluate_pre_run_check",
                 return_value=self._pre_run_check(),
             ),
             patch("orchestrator.core.discord.transport_executor.send_tenant_discord_message") as notify_mock,
@@ -467,7 +518,7 @@ class JiraWebhookTests(unittest.TestCase):
     def test_evaluate_precheck_decision_with_labels_writes_open_questions_to_jira(self) -> None:
         self._default_precheck_decision_patch.stop()
         try:
-            from orchestrator.api.webhooks import jira_webhook_precheck
+            from orchestrator.api.webhooks import jira_admission_flow
 
             unresolved_pre_check = PreRunCheckResult(
                 outcome="decision_gate_required",
@@ -530,15 +581,15 @@ class JiraWebhookTests(unittest.TestCase):
                 )
 
                 with patch.object(
-                    jira_webhook_precheck,
+                    jira_admission_flow,
                     "evaluate_issue_clarification_state",
                     return_value=decision_result,
                 ), patch.object(
-                    jira_webhook_precheck,
+                    jira_admission_flow,
                     "tenant_jira_oauth_context",
                     return_value=oauth_context,
                 ):
-                    result = jira_webhook_precheck.evaluate_precheck_decision_with_labels(
+                    result = jira_admission_flow.evaluate_precheck_decision_with_labels(
                         context=context,
                         session=session,
                         settings=get_settings(),
@@ -556,7 +607,7 @@ class JiraWebhookTests(unittest.TestCase):
     def test_evaluate_precheck_decision_with_labels_removes_resolved_question_block_from_jira(self) -> None:
         self._default_precheck_decision_patch.stop()
         try:
-            from orchestrator.api.webhooks import jira_webhook_precheck
+            from orchestrator.api.webhooks import jira_admission_flow
 
             existing_block = build_precheck_questions_block(
                 decision_gate_reason="Cross-account relink policy is missing.",
@@ -605,15 +656,15 @@ class JiraWebhookTests(unittest.TestCase):
                 )
 
                 with patch.object(
-                    jira_webhook_precheck,
+                    jira_admission_flow,
                     "evaluate_issue_clarification_state",
                     return_value=decision_result,
                 ), patch.object(
-                    jira_webhook_precheck,
+                    jira_admission_flow,
                     "tenant_jira_oauth_context",
                     return_value=oauth_context,
                 ):
-                    result = jira_webhook_precheck.evaluate_precheck_decision_with_labels(
+                    result = jira_admission_flow.evaluate_precheck_decision_with_labels(
                         context=context,
                         session=session,
                         settings=get_settings(),
@@ -648,10 +699,10 @@ class JiraWebhookTests(unittest.TestCase):
             client=oauth_client,
         )
         with patch(
-            "orchestrator.api.webhooks.jira_webhook_precheck.tenant_jira_oauth_context",
+            "orchestrator.api.webhooks.jira_admission_flow.tenant_jira_oauth_context",
             return_value=oauth_context,
         ), patch(
-            "orchestrator.api.webhooks.jira_webhook_precheck.evaluate_pre_run_check",
+            "orchestrator.api.webhooks.jira_admission_flow.evaluate_pre_run_check",
             return_value=self._pre_run_check(capability="macos"),
         ):
             response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
@@ -691,11 +742,11 @@ class JiraWebhookTests(unittest.TestCase):
 
         with (
             patch(
-                "orchestrator.api.webhooks.jira_webhook_precheck.tenant_jira_oauth_context",
+                "orchestrator.api.webhooks.jira_admission_flow.tenant_jira_oauth_context",
                 return_value=oauth_context,
             ),
             patch(
-                "orchestrator.api.webhooks.jira_webhook_precheck.evaluate_pre_run_check",
+                "orchestrator.api.webhooks.jira_admission_flow.evaluate_pre_run_check",
                 return_value=missing_ready_decision_gate,
             ),
         ):
@@ -787,7 +838,7 @@ class JiraWebhookTests(unittest.TestCase):
         payload = self._jira_issue_payload(issue_key="TP-130", status_name="To Do", labels=["agent:ready"])
         payload["webhookEvent"] = "jira:issue_created"
 
-        with patch("orchestrator.api.webhooks.jira_webhook_precheck.evaluate_pre_run_check", return_value=self._pre_run_check()):
+        with patch("orchestrator.api.webhooks.jira_admission_flow.evaluate_pre_run_check", return_value=self._pre_run_check()):
             response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
 
         body = self._assert_jira_issue_event_queued(response, issue_key="TP-130")
@@ -797,7 +848,7 @@ class JiraWebhookTests(unittest.TestCase):
         payload = self._jira_issue_payload(issue_key="TP-130", status_name="Ready for Agent", labels=["agent:ready"])
         payload["webhookEvent"] = "jira:issue_created"
 
-        with patch("orchestrator.api.webhooks.jira_webhook_precheck.evaluate_pre_run_check", return_value=self._pre_run_check()):
+        with patch("orchestrator.api.webhooks.jira_admission_flow.evaluate_pre_run_check", return_value=self._pre_run_check()):
             response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
 
         body = self._assert_jira_issue_event_queued(response, issue_key="TP-130")
@@ -1149,8 +1200,8 @@ class JiraWebhookTests(unittest.TestCase):
 
         payload = self._jira_issue_payload(issue_key="TP-804", status_name="To Do")
         with (
-            patch("orchestrator.api.webhooks.jira_webhook_precheck.send_tenant_discord_message") as notify_mock,
-            patch("orchestrator.api.webhooks.jira_webhook_precheck.evaluate_pre_run_check", return_value=self._pre_run_check()),
+            patch("orchestrator.core.discord.transport_executor.send_tenant_discord_message") as notify_mock,
+            patch("orchestrator.api.webhooks.jira_admission_flow.evaluate_pre_run_check", return_value=self._pre_run_check()),
         ):
             response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
 
@@ -1179,7 +1230,7 @@ class JiraWebhookTests(unittest.TestCase):
             session.commit()
 
         payload = self._jira_issue_payload(issue_key="TP-805", status_name="To Do")
-        with patch("orchestrator.api.webhooks.jira_webhook_precheck.evaluate_pre_run_check", return_value=self._pre_run_check()):
+        with patch("orchestrator.api.webhooks.jira_admission_flow.evaluate_pre_run_check", return_value=self._pre_run_check()):
             response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
 
         self._assert_jira_issue_event_queued(response, issue_key="TP-805")
@@ -1243,7 +1294,7 @@ class JiraWebhookTests(unittest.TestCase):
             },
         }
 
-        with patch("orchestrator.api.webhooks.jira_webhook_precheck.evaluate_pre_run_check", return_value=self._pre_run_check()):
+        with patch("orchestrator.api.webhooks.jira_admission_flow.evaluate_pre_run_check", return_value=self._pre_run_check()):
             response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
 
         self._assert_jira_issue_event_queued(response, issue_key="TP-131")
@@ -1411,7 +1462,7 @@ class JiraWebhookTests(unittest.TestCase):
             },
         }
         decision_result = SimpleNamespace(
-            classification="decision_gate",
+            classification=DecisionClassification.DECISION_GATE,
             cycle_id="cycle-1",
             decision=SimpleNamespace(
                 pre_check=SimpleNamespace(
@@ -1434,8 +1485,8 @@ class JiraWebhookTests(unittest.TestCase):
                 ),
             ) as capture_mock,
             patch(
-                "orchestrator.api.webhooks.jira_webhook_comment_flow.unresolved_question_feedback_for_cycle",
-                return_value=[{"question_id": "dg_1", "question_text": "Need entitlement confirmation"}],
+                "orchestrator.api.webhooks.jira_webhook_comment_flow.load_cycle_question_feedback",
+                return_value=({"question_id": "dg_1", "question_text": "Need entitlement confirmation"},),
             ),
         ):
             response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
@@ -2072,7 +2123,7 @@ class JiraWebhookTests(unittest.TestCase):
         with patch(
             "orchestrator.api.webhooks.jira_webhook_comment_flow.stage_handle_comment_decision_reply",
         ) as reply_stage_mock, patch(
-            "orchestrator.api.webhooks.jira_webhook_precheck.evaluate_precheck_decision_with_labels",
+            "orchestrator.api.webhooks.jira_admission_flow.evaluate_precheck_decision_with_labels",
         ) as evaluate_mock:
             response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
             processed = self._process_one_webhook_job()

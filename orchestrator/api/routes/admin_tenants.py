@@ -11,6 +11,7 @@ from orchestrator.api.admin.config_helpers import (
 from orchestrator.api.admin.route_helpers import (
     admin_project_service,
     allocate_tenant_id,
+    provision_jira_webhook,
     reconcile_tenant_projects,
     with_managed_github_refs,
     with_preserved_jira_system_fields,
@@ -299,12 +300,14 @@ def create_tenant(
     return create_tenant_route_impl(
         session=session,
         payload=payload,
+        settings=get_settings(),
         validate_codex_assets_for_tenant_init_fn=_validate_codex_assets_for_tenant_init,
         create_tenant_fn=create_tenant_impl,
         allocate_tenant_id_fn=allocate_tenant_id,
         with_preserved_jira_system_fields_fn=with_preserved_jira_system_fields,
         with_managed_github_refs_fn=with_managed_github_refs,
         with_preserved_discord_system_fields_fn=with_preserved_discord_system_fields,
+        provision_jira_webhook_fn=provision_jira_webhook,
         reconcile_tenant_projects_fn=reconcile_tenant_projects,
         tenant_to_schema_fn=tenant_to_schema,
     )

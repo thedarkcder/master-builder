@@ -5,6 +5,7 @@ from typing import Pattern
 
 from sqlalchemy.orm import Session
 
+from orchestrator.core.decision_types import JiraConfigKey, tenant_jira_config_text
 from orchestrator.core.discord.personas import format_voice_room_persona_label
 from orchestrator.storage.models import JiraOAuthConnection, Tenant
 
@@ -175,7 +176,7 @@ def build_command_followup_message(
 
 
 def resolve_tenant_jira_browse_base_url(*, session: Session, tenant: Tenant) -> str | None:
-    connection_id = str(tenant.jira_config.get("connection_id") or "").strip()
+    connection_id = tenant_jira_config_text(tenant=tenant, key=JiraConfigKey.CONNECTION_ID)
     if not connection_id:
         return None
     connection = session.get(JiraOAuthConnection, connection_id)

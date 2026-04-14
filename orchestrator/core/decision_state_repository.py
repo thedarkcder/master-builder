@@ -5,16 +5,14 @@ from uuid import uuid4
 
 from sqlalchemy import select
 
+from orchestrator.core.decision_types import PrecheckOutcome
 from orchestrator.core.decision_effect_service import enqueue_cycle_comment_effect
 from orchestrator.core.decision_precheck_mapping import (
-    BLOCKED_CLASSIFICATIONS,
     build_question_set,
-    case_state_for_decision,
-    decision_reason,
     merge_case_metadata,
-    normalize_clear_case_snapshot,
     serialize_result_snapshot,
 )
+from orchestrator.core.decision_state_reducer import case_state_for_decision, decision_reason
 from orchestrator.core.decision_resolution_service import serialize_slot_resolution
 from orchestrator.core.precheck_decision import precheck_missing_slots
 from orchestrator.storage.models import DecisionCase, DecisionCycle, DecisionEvent
@@ -80,18 +78,12 @@ def load_or_create_case(
 
 
 def existing_case_for_issue(*, session, tenant_id: str, issue_key: str) -> DecisionCase | None:
-    case = session.execute(
+    return session.execute(
         select(DecisionCase).where(
             DecisionCase.tenant_id == tenant_id,
             DecisionCase.issue_key == issue_key,
         )
     ).scalar_one_or_none()
-    if case is not None:
-        normalize_clear_case_snapshot(
-            case=case,
-            source=str(case.last_source or "jira_webhook"),
-        )
-    return case
 
 
 def decision_gate_closed_permanently(*, case: DecisionCase | None) -> bool:
@@ -132,8 +124,9 @@ def persist_decision_state(
     issue_description: str | None,
     decision,
     classification: str,
+    question_driven: bool,
     question_set_override: list[dict] | None,
-    question_reason_override: str | None,
+    question_reason: str | None,
     auto_resolved_answers,
     accepted_question_ids: set[str],
     issue_fingerprint_fn,
@@ -148,18 +141,15 @@ def persist_decision_state(
     )
     pre_check = decision.pre_check
     case_state = case_state_for_decision(decision=decision)
-    question_driven = classification in BLOCKED_CLASSIFICATIONS and decision.block_reason in {
-        "decision_gate_required",
-        "gtd_required",
-    }
     question_set = (
         list(question_set_override)
         if question_driven and isinstance(question_set_override, list)
         else build_question_set(pre_check=pre_check, classification=classification) if question_driven else []
     )
-    reason = (
-        str(question_reason_override or "").strip() or decision_reason(pre_check=pre_check, classification=classification)
-    ) if question_driven else None
+    reason = str(question_reason or "").strip() if question_driven else ""
+    if question_driven and not reason:
+        reason = str(decision_reason(pre_check=pre_check, classification=classification) or "").strip()
+    reason = reason or None
 
     current_active_cycle = active_cycle(session=session, case=case)
     cycle: DecisionCycle | None = None

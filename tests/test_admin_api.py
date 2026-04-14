@@ -1,7 +1,6 @@
 import os
 import unittest
 from datetime import datetime, timedelta, timezone
-from tempfile import TemporaryDirectory
 from urllib.parse import parse_qs, quote_plus, urlparse
 from unittest.mock import patch
 from types import SimpleNamespace
@@ -22,8 +21,8 @@ from orchestrator.core.run_logs import record_run_log_event
 from orchestrator.core.secrets import encrypt_value
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
-from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import (
+    DecisionCase,
     DiscordCommandSyncRuntimeState,
     JiraOAuthConnection,
     KnowledgeAsset,
@@ -48,38 +47,44 @@ from orchestrator.storage.models import (
     TenantUserCredential,
     TenantUserDiscordIdentity,
     WebhookJob,
+    WorkflowCheckpoint,
     WorkflowExecution,
+    WorkerRuntimeAuthRequest,
     WorkerRuntimeState,
 )
 from orchestrator.tools.github_app import InstallationRepository
+from tests.test_support.db_harness import SqliteTemplateApiTestCase
 from tests.workflow_test_support import add_human_input_request, add_run_with_workflow, add_workflow_attempt, make_run
 
 
-class AdminApiTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self.temp_dir = TemporaryDirectory()
-        self.database_url = f"sqlite:///{self.temp_dir.name}/admin_test.db"
+class AdminApiTests(SqliteTemplateApiTestCase):
+    _secrets_encryption_key: str
+    _provision_jira_webhook_patcher: object
 
-        os.environ["ORCHESTRATOR_DATABASE_URL"] = self.database_url
-        os.environ["ORCHESTRATOR_ADMIN_USERNAME"] = "admin"
-        os.environ["ORCHESTRATOR_ADMIN_PASSWORD"] = "secret"
-        os.environ["ORCHESTRATOR_ADMIN_TOKEN_SECRET"] = "admin-token-secret-for-tests-0123456789"
-        os.environ["ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET"] = "unit-test-secret"
-        os.environ["ORCHESTRATOR_ADMIN_UI_BASE_URL"] = "http://localhost:4100"
-        os.environ["ORCHESTRATOR_PUBLIC_API_BASE_URL"] = "http://localhost:4000"
-        os.environ["ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET"] = "jira-oauth-state-secret"
-        os.environ["ORCHESTRATOR_GITHUB_APP_SLUG"] = "master-builder-app"
-        os.environ["ORCHESTRATOR_SECRETS_ENCRYPTION_KEY"] = Fernet.generate_key().decode("utf-8")
-        os.environ["ORCHESTRATOR_CODEX_MODEL"] = "gpt-5.4"
-        os.environ["ORCHESTRATOR_CODEX_SUPPORTED_MODELS"] = "gpt-5.4,gpt-5.3-codex,gpt-5.3-codex-spark"
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls._secrets_encryption_key = Fernet.generate_key().decode("utf-8")
+        super().setUpClass()
 
-        get_settings.cache_clear()
-        reset_db_engine_cache()
-        reset_agent_observability_for_tests()
-        run_migrations(database_url=self.database_url)
+    @classmethod
+    def class_environment_overrides(cls) -> dict[str, str]:
+        return {
+            "ORCHESTRATOR_ADMIN_USERNAME": "admin",
+            "ORCHESTRATOR_ADMIN_PASSWORD": "secret",
+            "ORCHESTRATOR_ADMIN_TOKEN_SECRET": "admin-token-secret-for-tests-0123456789",
+            "ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET": "unit-test-secret",
+            "ORCHESTRATOR_ADMIN_UI_BASE_URL": "http://localhost:4100",
+            "ORCHESTRATOR_PUBLIC_API_BASE_URL": "http://localhost:4000",
+            "ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET": "jira-oauth-state-secret",
+            "ORCHESTRATOR_GITHUB_APP_SLUG": "master-builder-app",
+            "ORCHESTRATOR_SECRETS_ENCRYPTION_KEY": cls._secrets_encryption_key,
+            "ORCHESTRATOR_CODEX_MODEL": "gpt-5.4",
+            "ORCHESTRATOR_CODEX_SUPPORTED_MODELS": "gpt-5.4,gpt-5.3-codex,gpt-5.3-codex-spark",
+        }
 
-        self.client = TestClient(create_app())
-        seed_slug_secret_response = self.client.put(
+    @classmethod
+    def bootstrap_template_state(cls) -> None:
+        seed_slug_secret_response = cls._class_client.put(
             "/api/admin/secrets/platform%2FGITHUB_APP_SLUG",
             json={"value": "master-builder-app"},
             auth=("admin", "secret"),
@@ -89,41 +94,52 @@ class AdminApiTests(unittest.TestCase):
                 f"Failed to seed GITHUB_APP_SLUG secret for tests: {seed_slug_secret_response.text}"
             )
 
-        self.client.put(
+        cls._class_client.put(
             "/api/admin/secrets/platform%2FGITHUB_APP_ID",
             json={"value": "12345"},
             auth=("admin", "secret"),
         )
-        self.client.put(
+        cls._class_client.put(
             "/api/admin/secrets/platform%2FGITHUB_APP_PRIVATE_KEY",
             json={"value": "not-a-real-key-for-tests"},
             auth=("admin", "secret"),
         )
-        self.client.put(
+        cls._class_client.put(
             "/api/admin/secrets/platform%2FJIRA_OAUTH_CLIENT_ID",
             json={"value": "jira-client-id"},
             auth=("admin", "secret"),
         )
-        self.client.put(
+        cls._class_client.put(
             "/api/admin/secrets/platform%2FJIRA_OAUTH_CLIENT_SECRET",
             json={"value": "jira-client-secret"},
             auth=("admin", "secret"),
         )
 
+    def setUp(self) -> None:
+        self.database_url = self._start_test_database(name_prefix="admin-api")
+
+        get_settings.cache_clear()
+        reset_db_engine_cache()
+        reset_agent_observability_for_tests()
+
+        def _stub_provision_jira_webhook(**kwargs: object) -> SimpleNamespace:
+            _ = kwargs
+            return SimpleNamespace(
+                ok=True,
+                action="provision",
+                details="Provisioned 0 Jira webhook(s).",
+                webhook_ids=[],
+            )
+
+        self._provision_jira_webhook_patcher = patch(
+            "orchestrator.api.routes.admin_tenants.provision_jira_webhook",
+            side_effect=_stub_provision_jira_webhook,
+        )
+        self._provision_jira_webhook_patcher.start()
+
     def tearDown(self) -> None:
-        self.temp_dir.cleanup()
-        os.environ.pop("ORCHESTRATOR_DATABASE_URL", None)
-        os.environ.pop("ORCHESTRATOR_ADMIN_USERNAME", None)
-        os.environ.pop("ORCHESTRATOR_ADMIN_PASSWORD", None)
-        os.environ.pop("ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET", None)
-        os.environ.pop("ORCHESTRATOR_ADMIN_TOKEN_SECRET", None)
-        os.environ.pop("ORCHESTRATOR_ADMIN_UI_BASE_URL", None)
-        os.environ.pop("ORCHESTRATOR_PUBLIC_API_BASE_URL", None)
-        os.environ.pop("ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET", None)
-        os.environ.pop("ORCHESTRATOR_GITHUB_APP_SLUG", None)
-        os.environ.pop("ORCHESTRATOR_SECRETS_ENCRYPTION_KEY", None)
-        os.environ.pop("ORCHESTRATOR_CODEX_MODEL", None)
-        os.environ.pop("ORCHESTRATOR_CODEX_SUPPORTED_MODELS", None)
+        self._provision_jira_webhook_patcher.stop()
+        self._cleanup_test_database()
         os.environ.pop("ORCHESTRATOR_WORKER_CAPABILITIES", None)
 
         get_settings.cache_clear()
@@ -225,7 +241,7 @@ class AdminApiTests(unittest.TestCase):
         session_factory = create_session_factory(self.database_url)
         now = datetime.now(timezone.utc)
         with session_factory() as session:
-            add_workflow_attempt(
+            _workflow, run_row, checkpoint_row = add_workflow_attempt(
                 session,
                 workflow_id=workflow_id,
                 run_id=run_id,
@@ -245,9 +261,21 @@ class AdminApiTests(unittest.TestCase):
                 checkpoint_session_id="checkpoint-session" if checkpoint_kind == "pm" else None,
                 blocked_reason="human_input_expired" if workflow_status == "blocked" else None,
                 last_error=None if workflow_status != "failed" and run_status not in {"failed", "blocked"} else "run failed",
-                plan={"source": "test"} if checkpoint_id else None,
+                plan=(
+                    ExecutionSnapshot.empty(trigger_context={"source": "test"}).dump()
+                    if checkpoint_id
+                    else None
+                ),
                 now=now,
             )
+            if checkpoint_id:
+                run_snapshot = ExecutionSnapshot.require(run_row.plan, allow_empty=True)
+                run_snapshot.context.execution_context["pre_check_outcome"] = "ready_for_agent"
+                run_row.plan = run_snapshot.dump()
+                assert checkpoint_row is not None
+                checkpoint_snapshot = ExecutionSnapshot.empty(trigger_context={"source": "test"})
+                checkpoint_snapshot.context.execution_context["pre_check_outcome"] = "ready_for_agent"
+                checkpoint_row.payload_json = checkpoint_snapshot.dump()
             if pending_request_id:
                 request_status = "pending" if workflow_status == "waiting_for_input" else "answered"
                 add_human_input_request(
@@ -841,6 +869,116 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(repo_bootstrap.status_code, 200)
         self.assertEqual(repo_bootstrap.json(), [])
 
+    def test_create_tenant_auto_provisions_jira_webhook_when_jira_is_configured(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+
+        def _fake_provision_jira_webhook(**kwargs: object) -> SimpleNamespace:
+            tenant = kwargs["tenant"]
+            jira_config = dict(tenant.jira_config)
+            jira_config["managed_webhook_ids"] = [2002]
+            jira_config["webhook_last_provisioned_at"] = "2026-04-10T14:00:00+00:00"
+            jira_config["webhook_last_error"] = None
+            tenant.jira_config = jira_config
+            return SimpleNamespace(
+                ok=True,
+                action="provision",
+                details="Provisioned 1 Jira webhook(s).",
+                webhook_ids=[2002],
+            )
+
+        with patch(
+            "orchestrator.api.routes.admin_tenants.provision_jira_webhook",
+            side_effect=_fake_provision_jira_webhook,
+        ) as provision_mock:
+            response = self.client.post(
+                "/api/admin/tenants",
+                json=payload,
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(response.status_code, 201, response.text)
+        self.assertEqual(response.json()["jira"]["managed_webhook_ids"], [2002])
+        self.assertEqual(
+            response.json()["jira"]["webhook_last_provisioned_at"],
+            "2026-04-10T14:00:00+00:00",
+        )
+        provision_mock.assert_called_once()
+        self.assertFalse(provision_mock.call_args.kwargs["replace_existing"])
+
+    def test_create_tenant_skips_jira_webhook_provision_without_project_keys(self) -> None:
+        payload = self._tenant_payload()
+        payload["jira"]["project_keys"] = []
+        self._insert_jira_connection(connection_id="conn-1")
+
+        with patch("orchestrator.api.routes.admin_tenants.provision_jira_webhook") as provision_mock:
+            response = self.client.post(
+                "/api/admin/tenants",
+                json=payload,
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(response.status_code, 201, response.text)
+        provision_mock.assert_not_called()
+        self.assertEqual(response.json()["jira"]["managed_webhook_ids"], [])
+
+    def test_create_tenant_rejects_unknown_jira_connection_before_persisting(self) -> None:
+        payload = self._tenant_payload()
+
+        with patch(
+            "orchestrator.api.routes.admin_tenants.provision_jira_webhook",
+            return_value=SimpleNamespace(
+                ok=False,
+                action="provision",
+                details="Configured Jira connection was not found",
+                webhook_ids=[],
+            ),
+        ):
+            response = self.client.post(
+                "/api/admin/tenants",
+                json=payload,
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(response.status_code, 400, response.text)
+        self.assertEqual(response.json()["detail"], "Configured Jira connection was not found")
+
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            self.assertIsNone(session.get(Tenant, "tenant-a"))
+            self.assertIsNone(session.get(Project, "tenant-a-default"))
+            self.assertIsNone(session.get(TenantRunClaim, "tenant-a"))
+
+    def test_create_tenant_rolls_back_when_jira_webhook_provision_fails(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+
+        with patch(
+            "orchestrator.api.routes.admin_tenants.provision_jira_webhook",
+            return_value=SimpleNamespace(
+                ok=False,
+                action="provision",
+                details="Failed to provision Jira webhook: missing Jira admin permission",
+                webhook_ids=[],
+            ),
+        ) as provision_mock:
+            response = self.client.post(
+                "/api/admin/tenants",
+                json=payload,
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(response.status_code, 502, response.text)
+        self.assertIn("missing Jira admin permission", response.json()["detail"])
+        provision_mock.assert_called_once()
+        self.assertFalse(provision_mock.call_args.kwargs["replace_existing"])
+
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            self.assertIsNone(session.get(Tenant, "tenant-a"))
+            self.assertIsNone(session.get(Project, "tenant-a-default"))
+            self.assertIsNone(session.get(TenantRunClaim, "tenant-a"))
+
     def test_update_tenant_preserves_ready_trigger_mode_when_omitted(self) -> None:
         payload = self._tenant_payload()
         payload["jira"]["ready_trigger_mode"] = "transition_only"
@@ -1214,6 +1352,44 @@ class AdminApiTests(unittest.TestCase):
             self.assertEqual(project.secret_refs, body["secret_refs"])
             self.assertIsNone(session.get(ManagedSecret, f"project/tenant-a/{project_id}/RAILWAY_TOKEN"))
             self.assertIsNone(session.get(ManagedSecret, f"project/tenant-a/{project_id}/SUPABASE_SERVICE_ROLE_KEY"))
+
+    def test_project_create_auto_provisions_discord_channel_when_tenant_discord_is_installed(self) -> None:
+        payload = self._tenant_payload()
+        payload["discord"] = None
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_tenant.status_code, 201)
+
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            self.assertIsNotNone(tenant)
+            assert tenant is not None
+            tenant.discord_config = {"guild_id": "discord-guild-1", "notify_events": []}
+            tenant.updated_at = datetime.now(timezone.utc)
+            session.commit()
+
+        with patch(
+            "orchestrator.api.admin.route_helpers.resolve_project_discord_channel_binding",
+            return_value={"channel_id": "discord-project-channel-1"},
+        ) as resolve_channel_mock:
+            create_project = self.client.post(
+                "/api/admin/tenants/tenant-a/projects",
+                json={
+                    "name": "mobile-app",
+                    "github_repository": "https://github.com/example/mobile-app",
+                    "jira_project_key": "MBAPP",
+                },
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(create_project.status_code, 201, create_project.text)
+        self.assertEqual(create_project.json()["discord"], {"channel_id": "discord-project-channel-1"})
+        resolve_channel_mock.assert_called_once()
 
     def test_project_installs_crud_and_request_surfaces_round_trip(self) -> None:
         payload = self._tenant_payload()
@@ -1908,6 +2084,39 @@ class AdminApiTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 409, response.text)
 
+    def test_create_workflow_attempt_rejects_non_ready_precheck_plan(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201)
+
+        self._seed_workflow_attempt(
+            workflow_id="workflow-non-ready-checkpoint-1",
+            run_id="run-non-ready-checkpoint-1",
+            issue_key="TP-1000C",
+            issue_summary="Non-ready checkpoint workflow",
+            workflow_status="waiting_for_input",
+            run_status="waiting_for_input",
+            checkpoint_id="checkpoint-non-ready-1",
+            checkpoint_kind="pm",
+        )
+
+        with create_session_factory(self.database_url)() as session:
+            checkpoint = session.get(WorkflowCheckpoint, "checkpoint-non-ready-1")
+            assert checkpoint is not None
+            checkpoint_snapshot = ExecutionSnapshot.require(checkpoint.payload_json, allow_empty=True)
+            checkpoint_snapshot.context.execution_context["pre_check_outcome"] = "gtd_required"
+            checkpoint.payload_json = checkpoint_snapshot.dump()
+            session.commit()
+
+        response = self.client.post(
+            "/api/admin/workflows/workflow-non-ready-checkpoint-1/attempts",
+            json={"mode": "resume", "checkpoint_kind": "pm"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertIn("pre_check_outcome must be 'ready_for_agent'", response.json()["detail"])
+
     def test_create_workflow_attempt_from_terminal_workflow_creates_new_workflow_lineage(self) -> None:
         payload = self._tenant_payload()
         self._insert_jira_connection(connection_id="conn-1")
@@ -2039,6 +2248,7 @@ class AdminApiTests(unittest.TestCase):
                 trigger_context={"source": "manual_fix_request", "pr_number": 42}
             )
             snapshot.context.execution_context["pre_check_outcome"] = "ready_for_agent"
+            snapshot.context.execution_context["human_input_request_id"] = "stale-request"
             source_run.plan = snapshot.dump()
             session.commit()
 
@@ -2079,8 +2289,9 @@ class AdminApiTests(unittest.TestCase):
                 run.plan["context"]["execution_context"]["pre_check_outcome"],
                 "ready_for_agent",
             )
+            self.assertNotIn("human_input_request_id", run.plan["context"]["execution_context"])
 
-    def test_create_fresh_workflow_attempt_from_blocked_workflow_creates_new_workflow_lineage(self) -> None:
+    def test_create_fresh_workflow_attempt_from_blocked_workflow_strips_stale_human_input_state(self) -> None:
         payload = self._tenant_payload()
         self._insert_jira_connection(connection_id="conn-1")
         create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
@@ -2096,6 +2307,13 @@ class AdminApiTests(unittest.TestCase):
             checkpoint_id="checkpoint-blocked-fresh-1",
             checkpoint_kind="execution",
         )
+        with create_session_factory(self.database_url)() as session:
+            source_run = session.get(Run, "run-blocked-fresh-1")
+            assert source_run is not None
+            snapshot = ExecutionSnapshot.require(source_run.plan, allow_empty=True)
+            snapshot.context.execution_context["human_input_request_id"] = "stale-request"
+            source_run.plan = snapshot.dump()
+            session.commit()
 
         response = self.client.post(
             "/api/admin/workflows/workflow-blocked-fresh-1/attempts",
@@ -2104,20 +2322,205 @@ class AdminApiTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 201, response.text)
         body = response.json()
-        self.assertNotEqual(body["workflow_id"], "workflow-blocked-fresh-1")
-        self.assertEqual(body["attempt_number"], 1)
-        self.assertEqual(body["entry_mode"], "fresh")
-        self.assertEqual(body["entry_stage"], "orchestrated")
-        self.assertIsNone(body["entry_checkpoint_id"])
-
         session_factory = create_session_factory(self.database_url)
         with session_factory() as session:
-            workflow = session.get(WorkflowExecution, body["workflow_id"])
+            run = session.get(Run, body["run_id"])
+            self.assertIsNotNone(run)
+            assert run is not None
+            assert isinstance(run.plan, dict)
+            self.assertEqual(
+                run.plan["context"]["execution_context"]["pre_check_outcome"],
+                "ready_for_agent",
+            )
+            self.assertNotIn("human_input_request_id", run.plan["context"]["execution_context"])
+
+    def test_create_fresh_workflow_attempt_recovers_required_worker_capability_from_decision_case(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201)
+
+        self._seed_workflow_attempt(
+            workflow_id="workflow-terminal-fresh-capability",
+            run_id="run-terminal-fresh-capability",
+            issue_key="TP-1002D",
+            issue_summary="Terminal workflow fresh start with recovered capability",
+            workflow_status="failed",
+            run_status="failed",
+        )
+        with create_session_factory(self.database_url)() as session:
+            source_run = session.get(Run, "run-terminal-fresh-capability")
+            self.assertIsNotNone(source_run)
+            assert source_run is not None
+            source_run.pre_check_outcome = "ready_for_agent"
+            source_run.required_worker_capability = None
+            snapshot = ExecutionSnapshot.empty(trigger_context={"source": "manual_fix_request"})
+            snapshot.context.execution_context["pre_check_outcome"] = "ready_for_agent"
+            source_run.plan = snapshot.dump()
+            session.add(
+                DecisionCase(
+                    case_id="case-terminal-fresh-capability",
+                    tenant_id="tenant-a",
+                    project_id="tenant-a-default",
+                    issue_key="TP-1002D",
+                    state="clear",
+                    blocked_reason=None,
+                    classification="clear",
+                    issue_fingerprint="fingerprint-terminal-fresh-capability",
+                    active_cycle_id=None,
+                    last_source="jira",
+                    last_event_type="issue_updated",
+                    last_event_at=datetime.now(timezone.utc),
+                    required_worker_capability="macos",
+                    required_worker_label="worker:macos",
+                    required_worker_label_present=True,
+                    ready_label="agent:ready",
+                    ready_label_present=True,
+                    decision_gate_closed_permanently=True,
+                    decision_gate_closed_at=datetime.now(timezone.utc),
+                    decision_gate_closed_cycle_id="cycle-terminal-fresh-capability",
+                    metadata_json={"issue_labels": ["worker:macos", "agent:ready"]},
+                    created_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc),
+                )
+            )
+            session.commit()
+
+        response = self.client.post(
+            "/api/admin/workflows/workflow-terminal-fresh-capability/attempts",
+            json={"mode": "fresh"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 201, response.text)
+        body = response.json()
+
+        with create_session_factory(self.database_url)() as session:
+            run = session.get(Run, body["run_id"])
+            self.assertIsNotNone(run)
+            assert run is not None
+            self.assertEqual(run.required_worker_capability, "macos")
+
+    def test_create_fresh_workflow_attempt_persists_ready_precheck_for_pr_remediation(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201)
+
+        self._seed_workflow_attempt(
+            workflow_id="workflow-terminal-fresh-pr-remediation",
+            run_id="run-terminal-fresh-pr-remediation",
+            issue_key="TP-1002E",
+            issue_summary="Terminal workflow fresh start with PR remediation trigger",
+            workflow_status="failed",
+            run_status="failed",
+        )
+        with create_session_factory(self.database_url)() as session:
+            source_run = session.get(Run, "run-terminal-fresh-pr-remediation")
+            self.assertIsNotNone(source_run)
+            assert source_run is not None
+            source_run.pre_check_outcome = None
+            source_run.required_worker_capability = "linux"
+            snapshot = ExecutionSnapshot.empty(
+                trigger_context={
+                    "kind": "github_pr_remediation",
+                    "repo": "example/repo",
+                    "pull_request_number": 42,
+                    "head_sha": "abc123",
+                }
+            )
+            source_run.plan = snapshot.dump()
+            session.commit()
+
+        response = self.client.post(
+            "/api/admin/workflows/workflow-terminal-fresh-pr-remediation/attempts",
+            json={"mode": "fresh"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 201, response.text)
+        body = response.json()
+
+        with create_session_factory(self.database_url)() as session:
+            run = session.get(Run, body["run_id"])
+            self.assertIsNotNone(run)
+            assert run is not None
+            self.assertEqual(run.pre_check_outcome, "ready_for_agent")
+
+    def test_create_fresh_workflow_attempt_promotes_trigger_context_pr_url_to_workflow_and_run(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201)
+
+        self._seed_workflow_attempt(
+            workflow_id="workflow-terminal-fresh-pr-url",
+            run_id="run-terminal-fresh-pr-url",
+            issue_key="TP-1002F",
+            issue_summary="Terminal workflow fresh start with existing PR URL",
+            workflow_status="failed",
+            run_status="failed",
+        )
+        with create_session_factory(self.database_url)() as session:
+            source_run = session.get(Run, "run-terminal-fresh-pr-url")
+            workflow = session.get(WorkflowExecution, "workflow-terminal-fresh-pr-url")
+            self.assertIsNotNone(source_run)
             self.assertIsNotNone(workflow)
+            assert source_run is not None
             assert workflow is not None
-            self.assertEqual(workflow.source_workflow_id, "workflow-blocked-fresh-1")
-            self.assertEqual(workflow.source_run_id, "run-blocked-fresh-1")
-            self.assertEqual(workflow.status, "queued")
+            source_run.pr_url = None
+            workflow.pr_url = None
+            snapshot = ExecutionSnapshot.empty(
+                trigger_context={
+                    "source": "github_pr_review_feedback",
+                    "pr_number": 26,
+                    "pr_url": "https://github.com/example/repo/pull/26",
+                    "head_sha": "abc123",
+                }
+            )
+            snapshot.context.execution_context["pre_check_outcome"] = "ready_for_agent"
+            source_run.plan = snapshot.dump()
+            session.commit()
+
+        response = self.client.post(
+            "/api/admin/workflows/workflow-terminal-fresh-pr-url/attempts",
+            json={"mode": "fresh"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 201, response.text)
+        body = response.json()
+        self.assertEqual(body["pr_url"], "https://github.com/example/repo/pull/26")
+
+        with create_session_factory(self.database_url)() as session:
+            run = session.get(Run, body["run_id"])
+            workflow = session.get(WorkflowExecution, body["workflow_id"])
+            self.assertIsNotNone(run)
+            self.assertIsNotNone(workflow)
+            assert run is not None
+            assert workflow is not None
+            self.assertEqual(run.pr_url, "https://github.com/example/repo/pull/26")
+            self.assertEqual(workflow.pr_url, "https://github.com/example/repo/pull/26")
+
+    def test_create_fresh_workflow_attempt_rejects_missing_ready_precheck(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201)
+
+        self._seed_workflow_attempt(
+            workflow_id="workflow-fresh-missing-precheck-1",
+            run_id="run-fresh-missing-precheck-1",
+            issue_key="TP-1002C",
+            issue_summary="Fresh workflow missing precheck",
+            workflow_status="failed",
+            run_status="failed",
+        )
+
+        response = self.client.post(
+            "/api/admin/workflows/workflow-fresh-missing-precheck-1/attempts",
+            json={"mode": "fresh"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertIn("pre_check_outcome must be 'ready_for_agent'", response.json()["detail"])
 
     def test_fresh_workflow_attempt_rejects_checkpoint_kind(self) -> None:
         payload = self._tenant_payload()
@@ -4506,72 +4909,41 @@ class AdminApiTests(unittest.TestCase):
         )
         self.assertEqual(create_response.status_code, 201)
 
-        now = datetime.now(timezone.utc)
-        session_factory = create_session_factory(self.database_url)
-        with session_factory() as session:
-            session.add(
-                KnowledgeAsset(
+        with patch(
+            "orchestrator.api.routes.admin_knowledge.search_knowledge_debug",
+            return_value=[
+                SimpleNamespace(
+                    layer="knowledge_fact",
+                    score=0.98,
                     asset_id="debug-asset-1",
-                    tenant_id="tenant-a",
-                    project_id="tenant-a-default",
                     source_type="file_upload",
                     title="Apple auth rollout",
-                    mime_type="text/plain",
                     source_ref="notes/apple.txt",
-                    source_timestamp=now,
-                    checksum="debug-1",
-                    text_content="Production Bundle ID is com.example.girlpower",
-                    binary_content=None,
-                    chunk_count=1,
-                    status="ready",
-                    metadata_json={},
-                    created_at=now,
-                    updated_at=now,
-                )
-            )
-            session.add(
-                KnowledgeChunk(
-                    chunk_id="debug-chunk-1",
-                    asset_id="debug-asset-1",
-                    tenant_id="tenant-a",
-                    project_id="tenant-a-default",
-                    chunk_index=0,
-                    content="Production Bundle ID is com.example.girlpower",
-                    token_count=6,
-                    embedding=None,
-                    source_timestamp=now,
-                    created_at=now,
-                    updated_at=now,
-                )
-            )
-            session.add(
-                KnowledgeFact(
+                    source_timestamp="2026-01-01T00:00:00+00:00",
                     fact_id="debug-fact-1",
-                    asset_id="debug-asset-1",
                     chunk_id=None,
-                    tenant_id="tenant-a",
-                    project_id="tenant-a-default",
-                    fact_type="configuration",
-                    fact_key="production_bundle_id",
-                    fact_value="com.example.girlpower",
-                    approval_state="approved",
-                    slot_name="production_bundle_id",
-                    slot_value="com.example.girlpower",
-                    confidence=0.9,
-                    is_inferred=False,
-                    metadata_json={},
-                    source_timestamp=now,
-                    superseded_at=None,
-                    created_at=now,
-                    updated_at=now,
-                )
+                    snippet="com.example.girlpower",
+                    metadata={},
+                ),
+                SimpleNamespace(
+                    layer="knowledge_chunk",
+                    score=0.95,
+                    asset_id="debug-asset-1",
+                    source_type="file_upload",
+                    title="Apple auth rollout",
+                    source_ref="notes/apple.txt",
+                    source_timestamp="2026-01-01T00:00:00+00:00",
+                    fact_id=None,
+                    chunk_id="debug-chunk-1",
+                    snippet="Production Bundle ID is com.example.girlpower",
+                    metadata={},
+                ),
+            ],
+        ):
+            response = self.client.get(
+                "/api/admin/tenants/tenant-a/projects/tenant-a-default/knowledge/debug-search?query=production%20bundle%20id",
+                auth=("admin", "secret"),
             )
-            session.commit()
-
-        response = self.client.get(
-            "/api/admin/tenants/tenant-a/projects/tenant-a-default/knowledge/debug-search?query=production%20bundle%20id",
-            auth=("admin", "secret"),
-        )
 
         self.assertEqual(response.status_code, 200)
         body = response.json()
@@ -4956,6 +5328,130 @@ class AdminApiTests(unittest.TestCase):
         worker_service = next(service for service in payload["services"] if service["service_id"] == "workers")
         self.assertEqual(worker_service["status"], "degraded")
         self.assertIn("Invalid ORCHESTRATOR_WORKER_CAPABILITIES token(s): darwin", worker_service["summary"])
+
+    def test_admin_platform_status_reports_degraded_worker_runtime_instances(self) -> None:
+        session_factory = create_session_factory(self.database_url)
+        now = datetime.now(timezone.utc)
+        remediation_expires_at = now + timedelta(minutes=15)
+        with session_factory() as session:
+            session.add(
+                WorkerRuntimeState(
+                    service_instance_id="worker-macos-local:runs",
+                    agent_id="worker-macos-local",
+                    worker_mode="runs",
+                    capabilities_json=["macos"],
+                    runtime_dependencies_json={
+                        "codex_cli": {
+                            "state": "degraded",
+                            "summary": "Codex CLI is not authenticated on this worker.",
+                            "remediation_text": "Open this link",
+                            "remediation_expires_at": remediation_expires_at.isoformat(),
+                        }
+                    },
+                    state="degraded",
+                    started_at=now,
+                    last_heartbeat_at=now,
+                    updated_at=now,
+                )
+            )
+            session.commit()
+
+        response = self.client.get("/api/admin/status", auth=("admin", "secret"))
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        worker_service = next(service for service in payload["services"] if service["service_id"] == "workers")
+        self.assertEqual(worker_service["status"], "degraded")
+        self.assertIn("startup/runtime dependencies", worker_service["summary"])
+        instance = next(item for item in worker_service["instances"] if item["instance_id"] == "worker-macos-local:runs")
+        self.assertEqual(instance["status"], "degraded")
+        self.assertEqual(instance["runtime_dependencies"]["codex_cli"]["remediation_text"], "Open this link")
+        self.assertEqual(
+            instance["runtime_dependencies"]["codex_cli"]["remediation_expires_at"],
+            remediation_expires_at.isoformat(),
+        )
+        self.assertNotIn("remediation_text", instance)
+        self.assertNotIn("remediation_expires_at", instance)
+
+    def test_start_worker_runtime_login_session_creates_pending_request(self) -> None:
+        session_factory = create_session_factory(self.database_url)
+        now = datetime.now(timezone.utc)
+        with session_factory() as session:
+            session.add(
+                WorkerRuntimeState(
+                    service_instance_id="worker-macos-local:runs",
+                    agent_id="worker-macos-local",
+                    worker_mode="runs",
+                    capabilities_json=["macos"],
+                    runtime_kinds_json=["codex_cli"],
+                    runtime_dependencies_json={},
+                    state="degraded",
+                    started_at=now,
+                    last_heartbeat_at=now,
+                    updated_at=now,
+                )
+            )
+            session.commit()
+
+        response = self.client.post(
+            "/api/admin/workers/worker-macos-local:runs/runtime-dependencies/codex_cli/login-session",
+            auth=("admin", "secret"),
+        )
+
+        self.assertEqual(response.status_code, 202)
+        payload = response.json()
+        self.assertEqual(payload["service_instance_id"], "worker-macos-local:runs")
+        self.assertEqual(payload["runtime_kind"], "codex_cli")
+        self.assertEqual(payload["status"], "pending")
+        with session_factory() as session:
+            rows = session.execute(select(WorkerRuntimeAuthRequest)).scalars().all()
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0].status, "pending")
+
+    def test_get_worker_runtime_auth_request_returns_request(self) -> None:
+        session_factory = create_session_factory(self.database_url)
+        now = datetime.now(timezone.utc)
+        with session_factory() as session:
+            session.add(
+                WorkerRuntimeState(
+                    service_instance_id="worker-macos-local:runs",
+                    agent_id="worker-macos-local",
+                    worker_mode="runs",
+                    capabilities_json=["macos"],
+                    runtime_kinds_json=["codex_cli"],
+                    runtime_dependencies_json={},
+                    state="degraded",
+                    started_at=now,
+                    last_heartbeat_at=now,
+                    updated_at=now,
+                )
+            )
+            session.add(
+                WorkerRuntimeAuthRequest(
+                    request_id="request-lookup",
+                    service_instance_id="worker-macos-local:runs",
+                    runtime_kind="codex_cli",
+                    status="active",
+                    remediation_text="Open this link",
+                    requested_at=now,
+                    started_at=now,
+                    completed_at=None,
+                    expires_at=now,
+                    last_error=None,
+                )
+            )
+            session.commit()
+
+        response = self.client.get(
+            "/api/admin/workers/runtime-auth-requests/request-lookup",
+            auth=("admin", "secret"),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["request_id"], "request-lookup")
+        self.assertEqual(payload["status"], "active")
+        self.assertEqual(payload["remediation_text"], "Open this link")
 
 
 if __name__ == "__main__":

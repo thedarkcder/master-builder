@@ -8,13 +8,20 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from orchestrator.api.jira_oauth.connection_service import tenant_jira_oauth_context
-from orchestrator.api.webhooks.jira_webhook_precheck import (
+from orchestrator.api.webhooks.jira_admission_flow import (
     build_backlog_pre_run_check,
     evaluate_precheck_decision_with_labels,
 )
 from orchestrator.api.webhooks.jira_webhook_types import JiraWebhookContext, jira_webhook_response
 from orchestrator.core.communications import DiscordTenantNotificationAction, TransportAction
-from orchestrator.core.communications.enqueue_reason_contract import enqueue_reason_guidance
+from orchestrator.core.communications.jira_enqueue_presentation import (
+    format_backlog_pre_run_check_message,
+    format_jira_enqueue_skipped_message,
+)
+from orchestrator.core.decision_state_machine import (
+    ExecutionAdmissionReason,
+    build_execution_admission_block,
+)
 from orchestrator.tools.jira_oauth import JiraOAuthError
 from orchestrator.tools.jira_oauth_http import JiraOAuthHttpClient
 
@@ -136,12 +143,15 @@ def stage_handle_run_board_gate(
             context.issue_key,
             raw_board_id,
         )
+        admission = build_execution_admission_block(
+            reason=ExecutionAdmissionReason.BOARD_GATE_UNCONFIGURED,
+        )
         return JiraBoardGatePlan(
             response=jira_webhook_response(
                 context,
                 enqueued=False,
-                reason="board_gate_unconfigured",
-                guidance=enqueue_reason_guidance("board_gate_unconfigured"),
+                reason=admission.reason_code,
+                guidance=admission.guidance,
                 board_id=raw_board_id,
                 webhook_event=context.webhook_event,
             )
@@ -155,7 +165,7 @@ def stage_handle_run_board_gate(
     if location == "board":
         return None
     if location == "backlog":
-        reason = "issue_in_backlog"
+        reason = ExecutionAdmissionReason.ISSUE_IN_BACKLOG
         decision_result = evaluate_precheck_decision_with_labels(
             context=context,
             session=session,
@@ -186,8 +196,8 @@ def stage_handle_run_board_gate(
             response=jira_webhook_response(
                 context,
                 enqueued=False,
-                reason=reason,
-                guidance=enqueue_reason_guidance(reason),
+                reason=reason.value,
+                guidance=build_execution_admission_block(reason=reason).guidance,
                 board_id=board_id,
                 webhook_event=context.webhook_event,
                 detail=detail,
@@ -195,13 +205,17 @@ def stage_handle_run_board_gate(
             ),
             actions=actions,
         )
-    reason = "issue_not_on_board" if location == "not_on_board" else "board_gate_check_failed"
+    reason = (
+        ExecutionAdmissionReason.ISSUE_NOT_ON_BOARD
+        if location == "not_on_board"
+        else ExecutionAdmissionReason.BOARD_GATE_CHECK_FAILED
+    )
     logger.info(
         "jira_webhook_not_started request_id=%s tenant_id=%s issue_key=%s reason=%s board_id=%s detail=%s",
         context.request_id,
         context.tenant_id,
         context.issue_key,
-        reason,
+        reason.value,
         board_id,
         detail,
     )
@@ -209,8 +223,8 @@ def stage_handle_run_board_gate(
         response=jira_webhook_response(
             context,
             enqueued=False,
-            reason=reason,
-            guidance=enqueue_reason_guidance(reason),
+            reason=reason.value,
+            guidance=build_execution_admission_block(reason=reason).guidance,
             board_id=board_id,
             webhook_event=context.webhook_event,
             detail=detail,
@@ -218,7 +232,7 @@ def stage_handle_run_board_gate(
         actions=(
             _build_enqueue_skipped_notification_action(
                 context=context,
-                reason=reason,
+                reason=reason.value,
                 extra_detail=f"board_id={board_id}" if detail is None else f"board_id={board_id}; detail={detail}",
             ),
         ),
@@ -231,13 +245,11 @@ def _build_enqueue_skipped_notification_action(
     reason: str,
     extra_detail: str | None,
 ) -> DiscordTenantNotificationAction:
-    detail = f" ({extra_detail})" if extra_detail else ""
-    guidance = enqueue_reason_guidance(reason)
-    message = (
-        f"Jira webhook did not queue a run for `{context.issue_key}`.\n"
-        f"Reason: `{reason}`{detail}\n"
-        f"Guidance: {guidance}\n"
-        f"Status: `{context.issue_status or 'unknown'}`"
+    message = format_jira_enqueue_skipped_message(
+        issue_key=context.issue_key,
+        issue_status=context.issue_status,
+        reason=reason,
+        extra_detail=extra_detail,
     )
     return DiscordTenantNotificationAction(
         tenant_id=context.tenant_id,
@@ -252,48 +264,13 @@ def _build_backlog_pre_run_check_notification_action(
     board_id: int,
     pre_run_check: dict[str, object],
 ) -> DiscordTenantNotificationAction:
-    outcome = str(pre_run_check.get("outcome") or "").strip()
-    ready_label = pre_run_check.get("ready_label")
-    decision_gate_reason = pre_run_check.get("decision_gate_reason")
-    normalized_decision_gate_reason = (
-        " ".join(str(decision_gate_reason).strip().split())[:240]
-        if isinstance(decision_gate_reason, str) and str(decision_gate_reason).strip()
-        else None
-    )
-    gtd_missing_criteria = [
-        str(item).strip()
-        for item in (pre_run_check.get("gtd_missing_criteria") or [])
-        if str(item).strip()
-    ]
-    lines = [
-        f"New issue `{context.issue_key}` was added to the backlog on board `{board_id}`.",
-        "Run was not started (backlog-only event).",
-    ]
-    if context.issue_status:
-        lines.append(f"Issue status: `{context.issue_status}`")
-    if outcome == "ready_for_agent":
-        if isinstance(ready_label, str) and ready_label.strip():
-            lines.append(f"Pre-run check: labeled `{ready_label.strip()}` and ready for agent.")
-        else:
-            lines.append("Pre-run check: ready for agent.")
-    elif outcome == "decision_gate_required":
-        lines.append("Pre-run check: Decision Gate required before execution.")
-        if normalized_decision_gate_reason:
-            lines.append(f"Decision Gate reason: {normalized_decision_gate_reason}")
-    elif outcome == "gtd_required":
-        lines.append("Pre-run check: Good To Do details are incomplete.")
-        if gtd_missing_criteria:
-            lines.append("Missing GTD criteria: " + ", ".join(gtd_missing_criteria))
-    elif outcome == "missing_ready_label":
-        if isinstance(ready_label, str) and ready_label.strip():
-            lines.append(f"Pre-run check: missing ready label `{ready_label.strip()}`.")
-        else:
-            lines.append("Pre-run check: missing ready label.")
-    required_worker_label = str(pre_run_check.get("required_worker_label") or "").strip()
-    if required_worker_label:
-        lines.append(f"Required worker capability: `{required_worker_label}`.")
     return DiscordTenantNotificationAction(
         tenant_id=context.tenant_id,
         project_id=context.project.project_id if context.project is not None else None,
-        message="\n".join(lines),
+        message=format_backlog_pre_run_check_message(
+            issue_key=context.issue_key,
+            board_id=board_id,
+            issue_status=context.issue_status,
+            pre_run_check=pre_run_check,
+        ),
     )

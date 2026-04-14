@@ -16,12 +16,7 @@ import {
   upsertManagedSecret,
   type ManagedSecretRecord,
 } from "@/lib/api";
-
-function formatTimestamp(value: string | null): string {
-  if (!value) return "—";
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
-}
+import { formatTimestamp } from "@/lib/datetime";
 
 function toPlatformRef(rawRef: string): string {
   const normalized = rawRef.trim();

@@ -426,7 +426,7 @@ def _augment_prompt_with_knowledge_context(
                 query=query_text,
                 max_items=max(1, int(getattr(settings, "knowledge_context_top_k", 5))),
                 max_chars=max(500, int(getattr(settings, "knowledge_context_max_chars", 3200))),
-                embedding_access_mode=KnowledgeEmbeddingAccessMode.LOCAL_ONLY,
+                embedding_access_mode=KnowledgeEmbeddingAccessMode.BEST_EFFORT,
             )
     except Exception as exc:  # noqa: BLE001
         logger.debug(

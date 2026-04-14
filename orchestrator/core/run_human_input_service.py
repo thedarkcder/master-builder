@@ -21,6 +21,8 @@ from orchestrator.core.runs import (
     RUN_STATUS_WAITING_FOR_INPUT,
     RunBootstrap,
     enqueue_attempt_for_workflow_uncommitted,
+    resolve_required_worker_capability_from_plan,
+    resolve_precheck_outcome_from_plan,
 )
 from orchestrator.core.secrets import decrypt_value, encrypt_value
 from orchestrator.core.workflow.checkpoints import (
@@ -207,6 +209,7 @@ def create_human_input_request(
         updated_at=now,
     )
     run.status = RUN_STATUS_WAITING_FOR_INPUT
+    run.dispatch_claimed_at = None
     run.last_heartbeat_at = None
     run.worker_service_instance_id = None
     workflow.status = RUN_STATUS_WAITING_FOR_INPUT
@@ -449,6 +452,18 @@ def resume_workflow_from_human_input_answer(
     if checkpoint is None:
         raise ValueError("Checkpoint for human input request was not found")
     checkpoint_plan_snapshot = ExecutionSnapshot.require(checkpoint.payload_json, allow_empty=True)
+    persisted_precheck_outcome = (
+        str(getattr(source_run, "pre_check_outcome", "") or "").strip()
+        or resolve_precheck_outcome_from_plan(checkpoint.payload_json)
+        or resolve_precheck_outcome_from_plan(getattr(source_run, "plan", None))
+    )
+    persisted_required_worker_capability = (
+        str(getattr(source_run, "required_worker_capability", "") or "").strip()
+        or resolve_required_worker_capability_from_plan(checkpoint.payload_json)
+        or resolve_required_worker_capability_from_plan(getattr(source_run, "plan", None))
+    )
+    if persisted_precheck_outcome is not None:
+        checkpoint_plan_snapshot.context.execution_context["pre_check_outcome"] = persisted_precheck_outcome
     checkpoint_plan_snapshot.context.execution_context["human_input_request_id"] = request.request_id
     checkpoint_plan = checkpoint_plan_snapshot.dump()
 
@@ -464,6 +479,8 @@ def resume_workflow_from_human_input_answer(
             plan=checkpoint_plan,
             branch=source_run.branch,
             pr_url=source_run.pr_url,
+            precheck_outcome=persisted_precheck_outcome,
+            required_worker_capability=persisted_required_worker_capability,
         ),
     )
     if not enqueue_result.enqueued:

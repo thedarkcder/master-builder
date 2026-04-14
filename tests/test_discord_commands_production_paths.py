@@ -15,11 +15,20 @@ from fastapi.testclient import TestClient
 from orchestrator.api.main import create_app
 from orchestrator.core.config import get_settings
 from orchestrator.core.codex_runtime import CodexRuntime, CodexRuntimeError
+from orchestrator.core.decision_engine import DecisionEngineResult
+from orchestrator.core.decision_gate import DecisionGateResult
+from orchestrator.core.decision_types import (
+    DecisionClassification,
+    IngressDecision,
+    resolve_execution_gate_state,
+)
+from orchestrator.core.gtd import GoodToDoValidationResult
+from orchestrator.core.pre_run_check import PreRunCheckResult
 from orchestrator.core.secrets import encrypt_value
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
-from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import JiraOAuthConnection, Project, Tenant
-from orchestrator.tools.jira_oauth import JiraIssueBulkCreateResult, JiraIssueCreateResult
+from orchestrator.tools.jira_oauth import JiraIssueBulkCreateResult, JiraIssueCreateResult, JiraIssueDetail, JiraIssuePreview
+from tests.test_support.db_harness import SqliteTemplateDbTestCase
 
 pytestmark = pytest.mark.production_path
 
@@ -191,10 +200,10 @@ class _RuntimeQueue:
         return str(value)
 
 
-class DiscordCommandProductionPathTests(unittest.TestCase):
+class DiscordCommandProductionPathTests(SqliteTemplateDbTestCase):
     def setUp(self) -> None:
         self.temp_dir = TemporaryDirectory()
-        self.database_url = f"sqlite:///{self.temp_dir.name}/discord_command_production.db"
+        self.database_url = self._prepare_test_database(name_prefix="discord-command-production")
         self.checkout_dir = os.path.join(self.temp_dir.name, "checkouts")
 
         os.environ["ORCHESTRATOR_DATABASE_URL"] = self.database_url
@@ -205,7 +214,6 @@ class DiscordCommandProductionPathTests(unittest.TestCase):
 
         get_settings.cache_clear()
         reset_db_engine_cache()
-        run_migrations(database_url=self.database_url)
         self.session_factory = create_session_factory(database_url=self.database_url)
         self._seed_runtime_state()
         self.client = TestClient(create_app())
@@ -213,6 +221,7 @@ class DiscordCommandProductionPathTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.client.close()
         self.temp_dir.cleanup()
+        self._cleanup_test_database()
         os.environ.pop("ORCHESTRATOR_DATABASE_URL", None)
         os.environ.pop("ORCHESTRATOR_SECRETS_ENCRYPTION_KEY", None)
         os.environ.pop("ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR", None)
@@ -319,6 +328,53 @@ class DiscordCommandProductionPathTests(unittest.TestCase):
         )
         return runtime, queue
 
+    def _missing_ready_decision_result(self) -> DecisionEngineResult:
+        pre_check = PreRunCheckResult(
+            outcome="missing_ready_label",
+            ready_label="agent:ready",
+            ready_label_present=False,
+            required_worker_capability="linux",
+            required_worker_label="worker:linux",
+            required_worker_label_present=True,
+            decision_gate=DecisionGateResult(
+                triggered=False,
+                reason="Decision Gate not required",
+                missing_sections=(),
+                questions=(),
+                recommendation="Proceed",
+                tags=(),
+            ),
+            gtd=GoodToDoValidationResult(
+                valid=True,
+                missing_criteria=(),
+                clarification_questions=(),
+            ),
+        )
+        decision = IngressDecision(
+            source="discord_run",
+            pre_check=pre_check,
+            block_reason="missing_ready_label",
+            policy_error=None,
+            guidance="Issue is missing the configured ready label. (agent:ready)",
+            label_actions=(),
+        )
+        return DecisionEngineResult(
+            decision=decision,
+            issue_labels=[],
+            classification=DecisionClassification.CLEAR,
+            missing_slots=[],
+            auto_resolved_slots=[],
+            case_id="case-missing-ready",
+            case_state="blocked",
+            cycle_id=None,
+            outbox_effect_ids=(),
+            duplicate_event=False,
+            execution_gate=resolve_execution_gate_state(
+                decision=decision,
+                classification=DecisionClassification.CLEAR,
+            ),
+        )
+
     def _planned_seed_output(
         self,
         *,
@@ -359,23 +415,25 @@ class DiscordCommandProductionPathTests(unittest.TestCase):
         self.assertIn("!run", body["message"])
 
     def test_run_command_requires_ready_label_through_real_route(self) -> None:
-        fake_jira_client = _FakeJiraClient(
-            issue_key="TP-42",
-            summary="Cross-account relink policy",
-            status="To Do",
-            description="Clarify the device relink policy.",
-            labels=[],
-        )
-        fake_oauth = SimpleNamespace(
-            client=fake_jira_client,
-            connection=SimpleNamespace(cloud_id="cloud-1"),
-            access_token="access-token",
-        )
-
         with (
-            patch("orchestrator.api.discord.ask.context.tenant_jira_oauth_context", return_value=fake_oauth),
-            patch("orchestrator.api.discord.ask.context._refresh_jira_connection_tokens", return_value="access-token"),
-            patch("orchestrator.api.discord.ask.context._jira_oauth_client", return_value=fake_jira_client),
+            patch(
+                "orchestrator.api.discord.ingress.jira_runtime.fetch_jira_issue_preview",
+                return_value=JiraIssuePreview(key="TP-42", summary="Cross-account relink policy", status="To Do"),
+            ),
+            patch(
+                "orchestrator.api.discord.ingress.jira_runtime.fetch_jira_issue_detail",
+                return_value=JiraIssueDetail(
+                    key="TP-42",
+                    summary="Cross-account relink policy",
+                    status="To Do",
+                    description="Clarify the device relink policy.",
+                    labels=[],
+                ),
+            ),
+            patch(
+                "orchestrator.api.discord.ingress.executor._default_decision_clarification_port.evaluate_issue_clarification_state",
+                return_value=self._missing_ready_decision_result(),
+            ),
         ):
             response = self._post_command("!run TP-42")
 
