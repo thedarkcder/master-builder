@@ -42,12 +42,18 @@ from orchestrator.core.decision_state_repository import (
     existing_case_for_issue as existing_case_for_issue_state,
     persist_decision_state as persist_decision_state_repo,
 )
-from orchestrator.core.decision_state_reducer import (
-    DecisionStateReducerInput,
+from orchestrator.core.decision_state_machine import (
+    DecisionEvent as DecisionLifecycleEvent,
+    DecisionState,
     DecisionStateTransition,
+    blocking_reason_for_precheck,
+    guidance_for_precheck_block_reason,
+    resolve_execution_gate_state,
+    resolve_decision_state_transition,
+)
+from orchestrator.core.decision_state_reducer import (
     decision_from_snapshot as decision_from_snapshot_state,
     is_question_driven_state,
-    reduce_decision_state_transition,
 )
 from orchestrator.core.decision_effect_service import publish_decision_effects as publish_decision_effects_repo
 from orchestrator.core.decision_types import (
@@ -59,9 +65,6 @@ from orchestrator.core.decision_types import (
     IngressDecision,
     PrecheckOutcome,
     WorkerDecision,
-    blocking_reason_for_precheck,
-    guidance_for_precheck_block_reason,
-    resolve_execution_gate_state,
     tenant_ready_label,
 )
 from orchestrator.core.knowledge_base import SlotResolution, resolve_missing_slots_from_knowledge
@@ -569,8 +572,8 @@ def evaluate_decision_event(
         )
         existing_cycle.unresolved_question_ids_json = list(unresolved_question_ids)
         existing_cycle.updated_at = occurred_at
-    transition = reduce_decision_state_transition(
-        input_state=DecisionStateReducerInput(
+    transition = resolve_decision_state_transition(
+        state=DecisionState(
             has_case=existing_case is not None,
             has_open_cycle=existing_cycle is not None,
             unresolved_question_count=len(unresolved_question_ids),
@@ -580,7 +583,8 @@ def evaluate_decision_event(
             ),
             case_issue_fingerprint=str(getattr(existing_case, "issue_fingerprint", "") or "").strip(),
             current_issue_fingerprint=current_issue_fingerprint,
-        )
+        ),
+        event=DecisionLifecycleEvent.EVALUATE_INGRESS,
     )
 
     transition_result = _handle_transition_result_or_none(
