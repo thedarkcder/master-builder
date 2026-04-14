@@ -12,8 +12,7 @@ from orchestrator.api.webhooks.contracts import post_jira_comment
 from orchestrator.api.webhooks.jira_webhook_types import JiraWebhookContext, TODO_STATUS
 from orchestrator.core.communications import DiscordTenantNotificationAction, TransportAction
 from orchestrator.core.communications.execution_admission_format import (
-    build_jira_admission_notification_detail,
-    build_jira_admission_response_fields,
+    present_jira_admission,
 )
 from orchestrator.core.communications.jira_enqueue_presentation import (
     format_jira_enqueue_skipped_message,
@@ -436,11 +435,12 @@ def plan_jira_run_flow(
         content_admission = build_execution_admission_block(
             reason=ExecutionAdmissionReason.NO_RETRYABLE_RUN,
         )
+        content_presentation = present_jira_admission(admission=content_admission)
         return JiraRunPlan(
             content=jira_webhook_response_fn(
                 context,
                 enqueued=False,
-                **build_jira_admission_response_fields(admission=content_admission),
+                **content_presentation.response_fields,
                 trigger_reason=trigger_reason,
                 webhook_event=context.webhook_event,
             ),
@@ -491,6 +491,7 @@ def plan_jira_run_flow(
             ),
         )
     if admission.blocked:
+        admission_presentation = present_jira_admission(admission=admission)
         logger.info(
             "jira_webhook_not_started request_id=%s tenant_id=%s issue_key=%s reason=%s",
             context.request_id,
@@ -504,15 +505,13 @@ def plan_jira_run_flow(
                 enqueued=False,
                 trigger_reason=trigger_reason,
                 webhook_event=context.webhook_event,
-                **build_jira_admission_response_fields(
-                    admission=admission,
-                ),
+                **admission_presentation.response_fields,
             ),
             actions=(
                 build_jira_enqueue_skipped_notification_action(
                     context=context,
                     reason=admission.reason or ExecutionAdmissionReason.EXECUTION_BLOCKED,
-                    extra_detail=build_jira_admission_notification_detail(admission=admission),
+                    extra_detail=admission_presentation.notification_detail,
                 ),
             ),
         )
@@ -534,6 +533,7 @@ def plan_jira_run_flow(
             enqueue_result.run.run_id,
         )
         enqueue_admission = admission_from_enqueue_reason(raw_reason=enqueue_result.reason)
+        enqueue_presentation = present_jira_admission(admission=enqueue_admission)
         return JiraRunPlan(
             content=jira_webhook_response_fn(
                 context,
@@ -542,7 +542,7 @@ def plan_jira_run_flow(
                 trigger_reason=trigger_reason,
                 command=context.comment_command,
                 webhook_event=context.webhook_event,
-                **build_jira_admission_response_fields(admission=enqueue_admission),
+                **enqueue_presentation.response_fields,
             ),
             actions=(
                 build_jira_enqueue_skipped_notification_action(
