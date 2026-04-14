@@ -498,7 +498,13 @@ def _execution_context_for_run(
         or _normalize_optional_string(config.get("mariadb_database"))
         or _normalize_optional_string(config.get("database"))
     )
-    port = config.get("public_port") or (5432 if run.database_type == "postgres" else 3306)
+    port = (
+        config.get("postgres_port")
+        or config.get("mysql_port")
+        or config.get("mariadb_port")
+        or config.get("port")
+        or (5432 if run.database_type == "postgres" else 3306)
+    )
     if username is None or password is None or database_name is None:
         raise RuntimeError(f"Resource '{resource.key}' is missing database restore credentials")
     return DeploymentRestoreExecutionContext(
