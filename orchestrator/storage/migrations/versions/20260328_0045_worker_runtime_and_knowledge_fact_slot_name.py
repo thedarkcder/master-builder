@@ -10,7 +10,7 @@ from __future__ import annotations
 from alembic import op
 import sqlalchemy as sa
 from sqlalchemy import text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, ProgrammingError
 
 
 revision = "20260328_0045"
@@ -77,6 +77,15 @@ def _column_length(table_name: str, column_name: str) -> int | None:
     return None
 
 
+def _is_duplicate_table_error(exc: Exception) -> bool:
+    orig = getattr(exc, "orig", None)
+    sqlstate = str(getattr(orig, "pgcode", "") or getattr(orig, "sqlstate", "") or "").strip()
+    if sqlstate == "42P07":
+        return True
+    message = str(orig or exc)
+    return "already exists" in message.lower()
+
+
 def upgrade() -> None:
     bind = op.get_bind()
     is_sqlite = bind.dialect.name == "sqlite"
@@ -95,9 +104,9 @@ def upgrade() -> None:
                 sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
                 sa.PrimaryKeyConstraint("service_instance_id"),
             )
-        except IntegrityError:
+        except (IntegrityError, ProgrammingError) as exc:
             # Table/type may already exist (concurrent startup, partial run); confirm before ignoring.
-            if not _table_exists(bind, "worker_runtime_states"):
+            if not _is_duplicate_table_error(exc) and not _table_exists(bind, "worker_runtime_states"):
                 raise
 
     if _table_exists(bind, "worker_runtime_states"):

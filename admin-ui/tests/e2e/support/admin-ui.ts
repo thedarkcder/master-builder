@@ -331,7 +331,7 @@ export function makeProjectAutomation(overrides: Partial<ProjectAutomationRecord
     kind: "standup_voice_brief",
     enabled: true,
     timezone: "UTC",
-    days_of_week: [1, 2, 3, 4, 5],
+    days_of_week: [0, 1, 2, 3, 4],
     local_time: "09:30",
     fallback_lookback_hours: 24,
     last_successful_window_end_at: "2026-03-28T09:00:00Z",
