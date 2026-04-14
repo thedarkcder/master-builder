@@ -28,6 +28,7 @@ from orchestrator.core.webhook_job_queue import (
     enqueue_webhook_job,
 )
 from orchestrator.core.communications import HttpJsonResponseAction, IngressResult, TransportAction, TransportEnvelope
+from orchestrator.core.communications.execution_admission_format import present_jira_admission
 from orchestrator.core.decision_state_machine import (
     ExecutionAdmissionReason,
     build_execution_admission_block,
@@ -187,19 +188,19 @@ def _process_jira_webhook_context(
         admission = build_execution_admission_block(
             reason=ExecutionAdmissionReason.PROJECT_NOT_MAPPED,
         )
+        admission_presentation = present_jira_admission(admission=admission)
         return JiraWebhookPlan(
             content=jira_webhook_response(
                 context,
                 enqueued=False,
-                reason=admission.reason_code,
-                guidance=admission.guidance,
                 command=context.comment_command,
                 webhook_event=context.webhook_event,
+                **admission_presentation.response_fields,
             ),
             actions=(
                 build_jira_enqueue_skipped_notification_action(
                     context=context,
-                    reason="project_not_mapped",
+                    admission=admission,
                 ),
             ),
         )

@@ -4,6 +4,8 @@ from types import SimpleNamespace
 
 from orchestrator.core.communications.decision_clarification_presentation import (
     build_decision_clarification_presentation,
+    build_decision_clarification_response_fields,
+    present_discord_decision_clarification,
     render_decision_gate_feedback_message,
     render_decision_gate_remaining_questions_message,
 )
@@ -97,3 +99,59 @@ def test_render_decision_gate_remaining_questions_message_lists_questions() -> N
     assert "Need details." in message
     assert "- What is the fallback?" in message
     assert "- How do we test?" in message
+
+
+def test_build_decision_clarification_response_fields_serializes_typed_presentation() -> None:
+    presentation = build_decision_clarification_presentation(
+        decision_result=_decision_result(
+            classification="gtd",
+            decision_gate_reason="Decision Gate not required.",
+            gtd_missing_criteria=("Dependencies and risks identified",),
+            gtd_questions=("Which dependencies or risks may impact delivery?",),
+            missing_slots=("dependencies",),
+            auto_resolved_slots=("objective",),
+        ),
+    )
+
+    response_fields = build_decision_clarification_response_fields(
+        presentation=presentation,
+    )
+
+    assert response_fields == {
+        "classification": "gtd",
+        "decision_gate_reason": None,
+        "gtd_missing_criteria": ["Dependencies and risks identified"],
+        "questions": ["Which dependencies or risks may impact delivery?"],
+        "question_feedback": [],
+        "missing_slots": ["dependencies"],
+        "auto_resolved_slots": ["objective"],
+    }
+
+
+def test_present_discord_decision_clarification_prefers_feedback_rendering() -> None:
+    presentation = build_decision_clarification_presentation(
+        decision_result=_decision_result(
+            classification="decision_gate",
+            decision_gate_reason="Need owner decision.",
+            decision_gate_questions=("Who owns rollout?",),
+        ),
+        question_feedback=(
+            {
+                "question_id": "dg_1",
+                "question_text": "Who owns rollout?",
+                "note": "Owner role not specified",
+                "status": "open",
+            },
+        ),
+    )
+
+    result = present_discord_decision_clarification(
+        issue_key="GP-1",
+        presentation=presentation,
+        precheck_message_builder=lambda: ("fallback message", ["fallback question"]),
+    )
+
+    assert "Need owner decision." in result.message
+    assert "Missing detail: Owner role not specified" in result.message
+    assert result.response_fields["classification"] == "decision_gate"
+    assert result.response_fields["questions"] == ["Who owns rollout?"]
