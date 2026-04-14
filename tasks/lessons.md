@@ -136,3 +136,7 @@
 - Setup wizard steps must avoid mixing unrelated concerns (for example bot install and invite policy). Keep each step scoped to one decision and move secondary configuration to a dedicated later surface.
 - When the user asks for a new wizard step, implement the concrete step and wiring (state, API calls, navigation), not explanatory placeholder copy.
 - For step-based app routes, never hardcode allowed step keys in route guards. Derive them from the canonical step registry (`STEP_ORDER`) so newly added steps cannot 404.
+
+2026-04-14
+
+- When the user says a Jira remediation ticket is already fixed, do not rely on an earlier review summary or stale PR status. Re-verify the current repo path and targeted tests first, then update the ticket state based on that live evidence.

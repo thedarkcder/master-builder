@@ -24,4 +24,5 @@ coverage/
 admin-ui/tsconfig.tsbuildinfo
 mcp.json
 admin-ui/.next-playwright
+.runtime-home/
 .DS_Store
