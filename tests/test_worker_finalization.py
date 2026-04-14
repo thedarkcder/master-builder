@@ -59,6 +59,7 @@ class WorkflowFinalizationTests(unittest.TestCase):
                 stage_updates=[],
                 execution_context={"execution_branch": "run/gp-185"},
                 expected_worker_service_instance_id="worker-1",
+                expected_claim_id="claim-1",
             )
 
         self.assertIs(plan.run, finalized_run)
@@ -117,6 +118,7 @@ class WorkflowFinalizationTests(unittest.TestCase):
                 stage_updates=[],
                 execution_context=None,
                 expected_worker_service_instance_id="worker-1",
+                expected_claim_id="claim-1",
             )
 
         self.assertIs(plan.run, marked_run)

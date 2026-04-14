@@ -1289,7 +1289,7 @@ class WorkerRuntimeAuthRequest(Base):
     runtime_kind: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, index=True, default="pending")
     remediation_text: Mapped[str | None] = mapped_column(Text, nullable=True)
-    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
