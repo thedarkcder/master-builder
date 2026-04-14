@@ -6,20 +6,18 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from orchestrator.core.agent_tools import (
-    execute_agent_tool,
-    governed_allowed_tools_for_stage,
-    governed_tool_catalog_for_stage,
-    native_tool_catalog_for_stage,
-)
 from orchestrator.core.runtime_invocation import (
     AgentInvocationContext,
     invoke_runtime_json,
-    invoke_runtime_json_with_tools,
 )
 from orchestrator.core.codex_runtime import CodexRuntime, CodexRuntimeError
 from orchestrator.core.discord.personas import get_voice_room_persona_definition
 from orchestrator.core.prompt_templates import render_prompt
+from orchestrator.core.runtime_stage_session import (
+    RuntimeStageSession,
+    build_governed_tool_executor,
+    build_runtime_stage_tooling,
+)
 from orchestrator.core.worker_capability_normalization import parse_worker_capability
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.core.workflow.runner import (
@@ -32,13 +30,23 @@ from orchestrator.core.workflow.runner import (
 )
 
 
+def _stage_prompt_tool_context(*, tool_stage: str, runtime_command: str | None) -> dict[str, str]:
+    tooling = build_runtime_stage_tooling(policy_stage=tool_stage, runtime_command=runtime_command)
+    return tooling.governed_native_prompt_context()
+
+
+def _stage_has_governed_tools(*, tool_stage: str, runtime_command: str | None) -> bool:
+    tooling = build_runtime_stage_tooling(policy_stage=tool_stage, runtime_command=runtime_command)
+    return bool(tooling.governed_tools)
+
+
 def _discord_tool_bridge_suffix(*, tool_stage: str, runtime_command: str | None = None) -> str:
-    allowed = governed_allowed_tools_for_stage(tool_stage, runtime_command=runtime_command)
-    if not allowed:
+    tooling = build_runtime_stage_tooling(policy_stage=tool_stage, runtime_command=runtime_command)
+    if not tooling.governed_tools:
         return ""
     return "\n\n" + render_prompt(
         "discord/codex_tool_bridge_suffix.j2",
-        allowed_tools_json=json.dumps(sorted(allowed)),
+        allowed_tools_json=json.dumps(sorted(tooling.governed_tools)),
     )
 
 
@@ -49,25 +57,12 @@ def _codex_discord_execute_tool(
     invocation_context: AgentInvocationContext,
     tool_stage: str,
 ) -> Callable[[str, dict[str, object]], dict[str, object]]:
-    tenant_id = str(invocation_context.tenant_id or "").strip()
-    if not tenant_id:
-        raise RuntimeError("tenant_id is required for Discord tool execution")
-
-    def _run(tool_name: str, tool_args: dict[str, object]) -> dict[str, object]:
-        raw = execute_agent_tool(
-            session=session,
-            settings=settings,
-            tenant_id=tenant_id,
-            project_id=str(invocation_context.project_id or "").strip() or None,
-            run_id=None,
-            issue_key=str(invocation_context.issue_key or "").strip(),
-            stage=tool_stage,
-            tool_name=tool_name,
-            tool_args=dict(tool_args),
-        )
-        return dict(raw)
-
-    return _run
+    return build_governed_tool_executor(
+        session=session,
+        settings=settings,
+        context=invocation_context,
+        policy_stage=tool_stage,
+    )
 
 
 def _invoke_discord_json_maybe_tools(
@@ -82,32 +77,30 @@ def _invoke_discord_json_maybe_tools(
     max_tool_hops: int = 8,
 ) -> dict:
     runtime_command = str(getattr(runtime, "command", "") or "").strip()
-    allowed = governed_allowed_tools_for_stage(tool_stage, runtime_command=runtime_command)
-    if (
-        sqlalchemy_session is None
-        or settings is None
-        or not allowed
-        or not str(context.tenant_id or "").strip()
-    ):
-        return invoke_runtime_json(
-            runtime=runtime,
-            context=context,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-        )
-    bridged_user = user_prompt + _discord_tool_bridge_suffix(tool_stage=tool_stage, runtime_command=runtime_command)
-    return invoke_runtime_json_with_tools(
+    stage_session = RuntimeStageSession.create(
         runtime=runtime,
         context=context,
+        policy_stage=tool_stage,
+        execute_tool=(
+            _codex_discord_execute_tool(
+                session=sqlalchemy_session,
+                settings=settings,
+                invocation_context=context,
+                tool_stage=tool_stage,
+            )
+            if sqlalchemy_session is not None and settings is not None and str(context.tenant_id or "").strip()
+            else None
+        ),
+    )
+    bridged_user = user_prompt
+    if stage_session.tooling.governed_tools:
+        bridged_user += _discord_tool_bridge_suffix(
+            tool_stage=tool_stage,
+            runtime_command=runtime_command,
+        )
+    return stage_session.invoke_json(
         system_prompt=system_prompt,
         user_prompt=bridged_user,
-        allowed_tools=allowed,
-        execute_tool=_codex_discord_execute_tool(
-            session=sqlalchemy_session,
-            settings=settings,
-            invocation_context=context,
-            tool_stage=tool_stage,
-        ),
         max_tool_hops=max_tool_hops,
     )
 
@@ -212,28 +205,19 @@ class CodexWorkflowAgents:
             issue_description_chars=len(request.issue_description or ""),
             codex_session_id=self._resume_session_id_for_stage(request=request, stage=stage),
         )
-        governed_tools = sorted(
-            governed_allowed_tools_for_stage(stage, runtime_command=str(getattr(runtime, "command", "") or ""))
-        )
-        if not governed_tools:
-            return invoke_runtime_json(
-                runtime=runtime,
-                context=context,
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                require_json=False,
-            )
-        return invoke_runtime_json_with_tools(
+        stage_session = RuntimeStageSession.create(
             runtime=runtime,
             context=context,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            allowed_tools=set(governed_tools),
+            policy_stage=stage,
             execute_tool=lambda tool_name, tool_args: self._execute_stage_tool(
                 context=context,
                 tool_name=tool_name,
                 tool_args=tool_args,
             ),
+        )
+        return stage_session.invoke_json(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
             extra_on_log_line=self._stage_log_sink(request=request, stage=stage, attempt=attempt),
             require_json=False,
         )
@@ -311,12 +295,7 @@ class CodexWorkflowAgents:
                     [capability.value for capability in request.available_worker_capabilities]
                 ),
                 human_inputs_json=json.dumps(request.human_inputs),
-                governed_tools_json=json.dumps(
-                    governed_tool_catalog_for_stage("pm", runtime_command=runtime_command)
-                ),
-                native_tools_json=json.dumps(
-                    native_tool_catalog_for_stage("pm", runtime_command=runtime_command)
-                ),
+                **_stage_prompt_tool_context(tool_stage="pm", runtime_command=runtime_command),
             ),
             runtime_override=runtime,
         )
@@ -397,12 +376,7 @@ class CodexWorkflowAgents:
                 unresolved_prerequisites_json=json.dumps(plan.unresolved_prerequisites),
                 pm_outcome=plan.outcome,
                 human_inputs_json=json.dumps(request.human_inputs),
-                governed_tools_json=json.dumps(
-                    governed_tool_catalog_for_stage("dev", runtime_command=runtime_command)
-                ),
-                native_tools_json=json.dumps(
-                    native_tool_catalog_for_stage("dev", runtime_command=runtime_command)
-                ),
+                **_stage_prompt_tool_context(tool_stage="dev", runtime_command=runtime_command),
             ),
             runtime_override=runtime,
         )
@@ -456,12 +430,7 @@ class CodexWorkflowAgents:
                 unresolved_prerequisites_json=json.dumps(plan.unresolved_prerequisites),
                 dev_outcome=dev_result.outcome,
                 human_inputs_json=json.dumps(request.human_inputs),
-                governed_tools_json=json.dumps(
-                    governed_tool_catalog_for_stage("test", runtime_command=runtime_command)
-                ),
-                native_tools_json=json.dumps(
-                    native_tool_catalog_for_stage("test", runtime_command=runtime_command)
-                ),
+                **_stage_prompt_tool_context(tool_stage="test", runtime_command=runtime_command),
             ),
             runtime_override=runtime,
         )
@@ -523,12 +492,7 @@ class CodexWorkflowAgents:
                 human_inputs_json=json.dumps(request.human_inputs),
                 previous_review_summary_json=json.dumps(resume_source_state.get("review_summary") or []),
                 previous_review_feedback=str(resume_source_state.get("review_feedback") or "").strip() or "none",
-                governed_tools_json=json.dumps(
-                    governed_tool_catalog_for_stage("review", runtime_command=runtime_command)
-                ),
-                native_tools_json=json.dumps(
-                    native_tool_catalog_for_stage("review", runtime_command=runtime_command)
-                ),
+                **_stage_prompt_tool_context(tool_stage="review", runtime_command=runtime_command),
             ),
             runtime_override=runtime,
         )
@@ -795,7 +759,7 @@ def answer_voice_room_persona_with_codex(
     persona = get_voice_room_persona_definition(persona_id)
     normalized_history = history if isinstance(history, list) else []
     system_prompt = render_prompt(persona.system_prompt_template)
-    if sqlalchemy_session is not None and settings is not None and governed_allowed_tools_for_stage(
+    if sqlalchemy_session is not None and settings is not None and _stage_has_governed_tools(
         "discord_voice_room_persona",
         runtime_command=str(getattr(runtime, "command", "") or ""),
     ):

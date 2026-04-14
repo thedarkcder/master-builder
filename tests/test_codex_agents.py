@@ -350,7 +350,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
 
         with (
             patch("orchestrator.core.codex_agents.render_prompt", side_effect=lambda template_name, **_: template_name),
-            patch("orchestrator.core.codex_agents.invoke_runtime_json_with_tools", side_effect=_invoke_runtime_json),
+            patch("orchestrator.core.runtime_stage_session.invoke_runtime_json_with_tools", side_effect=_invoke_runtime_json),
         ):
             plan = agents.pm(request, 1, None, [], None, None, None)
             agents.dev(request, plan, 1, None)
@@ -418,7 +418,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
 
         with (
             patch("orchestrator.core.codex_agents.render_prompt", side_effect=_render_prompt),
-            patch("orchestrator.core.codex_agents.invoke_runtime_json_with_tools", return_value={"outcome": "continue", "summary": ["ok"], "feedback": None, "pr_url": None}),
+            patch("orchestrator.core.runtime_stage_session.invoke_runtime_json_with_tools", return_value={"outcome": "continue", "summary": ["ok"], "feedback": None, "pr_url": None}),
         ):
             agents.review(
                 request,

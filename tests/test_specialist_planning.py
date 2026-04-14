@@ -85,7 +85,7 @@ class SpecialistPlanningTests(unittest.TestCase):
 
         with (
             patch("orchestrator.core.specialist_planning.render_prompt", side_effect=_render_prompt),
-            patch("orchestrator.core.specialist_planning.invoke_runtime_json", side_effect=_invoke_runtime_json),
+            patch("orchestrator.core.runtime_stage_session.invoke_runtime_json", side_effect=_invoke_runtime_json),
         ):
             result = run_specialist_planning_fanout(
                 runtime=SimpleNamespace(),
@@ -164,7 +164,7 @@ class SpecialistPlanningTests(unittest.TestCase):
 
         with (
             patch("orchestrator.core.specialist_planning.render_prompt", return_value="prompt"),
-            patch("orchestrator.core.specialist_planning.invoke_runtime_json", side_effect=_invoke_runtime_json),
+            patch("orchestrator.core.runtime_stage_session.invoke_runtime_json", side_effect=_invoke_runtime_json),
         ):
             result = run_specialist_planning_fanout(runtime=SimpleNamespace(), request=request)
 
@@ -237,7 +237,7 @@ class SpecialistPlanningTests(unittest.TestCase):
 
         with (
             patch("orchestrator.core.specialist_planning.render_prompt", side_effect=_render_prompt),
-            patch("orchestrator.core.specialist_planning.invoke_runtime_json_with_tools", side_effect=_invoke_runtime_json_with_tools),
+            patch("orchestrator.core.runtime_stage_session.invoke_runtime_json_with_tools", side_effect=_invoke_runtime_json_with_tools),
         ):
             run_specialist_planning_fanout(
                 session=object(),
@@ -286,7 +286,7 @@ class SpecialistPlanningTests(unittest.TestCase):
 
         with (
             patch("orchestrator.core.specialist_planning.render_prompt", return_value="prompt"),
-            patch("orchestrator.core.specialist_planning.invoke_runtime_json", side_effect=_invoke_runtime_json),
+            patch("orchestrator.core.runtime_stage_session.invoke_runtime_json", side_effect=_invoke_runtime_json),
         ):
             result = run_specialist_planning_fanout(
                 runtime=SimpleNamespace(),

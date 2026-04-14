@@ -21,12 +21,14 @@ from orchestrator.core.pm_interview_service import (
     normalize_pm_interview_evidence,
     normalize_parent_feature_brief_with_runtime,
     plan_pm_interview_with_codex,
-    persist_parent_feature_brief_snapshot,
-    resolve_parent_feature_brief,
     resolve_pm_interview_case,
     resolve_pm_interview_case_match,
     select_next_pm_interview_question,
     upsert_pm_interview_case,
+)
+from orchestrator.core.parent_feature_brief_store import (
+    persist_parent_feature_brief_snapshot,
+    resolve_parent_feature_brief,
 )
 from orchestrator.core.runtime_invocation import AgentInvocationContext
 from orchestrator.storage.models import PMInterviewCase
@@ -319,6 +321,41 @@ class PMInterviewServiceTests(unittest.TestCase):
         self.assertEqual(stored.notes_json["source"], "jira_parent_brief_normalization")
         self.assertTrue(stored.notes_json["parent_brief_snapshot"])
 
+    def test_resolve_parent_feature_brief_excludes_incomplete_snapshots_by_default(self) -> None:
+        with self.session_factory() as session:
+            persist_parent_feature_brief_snapshot(
+                session=session,
+                tenant_id="route25",
+                project_id="route25-default",
+                parent_issue_key="TP-502",
+                source_text="Loose parent brief",
+                brief={
+                    "objective": "Needs clarification",
+                    "user_value": "Still incomplete",
+                },
+                notes={"source": "jira_parent_brief_normalization"},
+                status=PM_INTERVIEW_STATUS_QUESTION_PENDING,
+            )
+            session.commit()
+
+        with self.session_factory() as session:
+            completed_only = resolve_parent_feature_brief(
+                session=session,
+                tenant_id="route25",
+                parent_issue_key="TP-502",
+            )
+            latest_any_status = resolve_parent_feature_brief(
+                session=session,
+                tenant_id="route25",
+                parent_issue_key="TP-502",
+                include_incomplete=True,
+            )
+
+        self.assertIsNone(completed_only)
+        self.assertIsNotNone(latest_any_status)
+        assert latest_any_status is not None
+        self.assertEqual(latest_any_status.objective, "Needs clarification")
+
     def test_normalize_parent_feature_brief_with_runtime_returns_typed_brief(self) -> None:
         captured: dict[str, object] = {}
 
@@ -328,7 +365,7 @@ class PMInterviewServiceTests(unittest.TestCase):
 
         with (
             patch(
-                "orchestrator.core.pm_interview_service.invoke_runtime_json",
+                "orchestrator.core.runtime_stage_session.invoke_runtime_json",
                 return_value={
                     "brief": {
                         "objective": "Refactor the orchestration stack",
@@ -403,7 +440,7 @@ class PMInterviewServiceTests(unittest.TestCase):
 
         with (
             patch("orchestrator.core.pm_interview_service.render_prompt", side_effect=_render_prompt),
-            patch("orchestrator.core.pm_interview_service.invoke_runtime_json_with_tools", side_effect=_invoke_runtime_json_with_tools),
+            patch("orchestrator.core.runtime_stage_session.invoke_runtime_json_with_tools", side_effect=_invoke_runtime_json_with_tools),
         ):
             payload = normalize_parent_feature_brief_with_runtime(
                 session=object(),  # type: ignore[arg-type]
