@@ -29,13 +29,13 @@ import { formatTimestamp } from "@/lib/datetime";
 const PROJECT_AUTOMATION_KIND_STANDUP = "standup_voice_brief";
 const PROJECT_AUTOMATION_KIND_RETRO = "retro_voice_brief";
 const PROJECT_AUTOMATION_WEEKDAYS = [
-  { value: 0, label: "Sun" },
-  { value: 1, label: "Mon" },
-  { value: 2, label: "Tue" },
-  { value: 3, label: "Wed" },
-  { value: 4, label: "Thu" },
-  { value: 5, label: "Fri" },
-  { value: 6, label: "Sat" },
+  { value: 0, label: "Mon" },
+  { value: 1, label: "Tue" },
+  { value: 2, label: "Wed" },
+  { value: 3, label: "Thu" },
+  { value: 4, label: "Fri" },
+  { value: 5, label: "Sat" },
+  { value: 6, label: "Sun" },
 ];
 
 type AutomationExecutionRow = ProjectAutomationExecutionRecord & {
@@ -82,7 +82,7 @@ function createAutomationDraft(kind: string, overrides: Partial<ProjectAutomatio
     kind,
     enabled: false,
     timezone,
-    days_of_week: kind === PROJECT_AUTOMATION_KIND_STANDUP ? [1, 2, 3, 4, 5] : [5],
+    days_of_week: kind === PROJECT_AUTOMATION_KIND_STANDUP ? [0, 1, 2, 3, 4] : [4],
     local_time: kind === PROJECT_AUTOMATION_KIND_STANDUP ? "09:30" : "16:00",
     fallback_lookback_hours: kind === PROJECT_AUTOMATION_KIND_STANDUP ? 24 : 168,
     last_successful_window_end_at: null,
