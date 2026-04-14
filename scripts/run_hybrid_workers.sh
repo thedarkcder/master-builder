@@ -36,6 +36,8 @@ DOCKER_SERVICES=(
   api
   run-worker
   webhook-worker
+  deployment-host-bootstrap
+  deployment-host-agent
   project-automation
   knowledge-sync
   discord-gateway
@@ -104,12 +106,25 @@ wait_for_docker_services_ready() {
       health_status="${inspect_output##*|}"
 
       if [[ "$state_status" == "exited" || "$state_status" == "dead" ]]; then
+        if [[ "$service_name" == "deployment-host-bootstrap" && "$state_status" == "exited" ]]; then
+          if [[ "$health_status" == "none" ]]; then
+            local exit_code
+            exit_code="$(docker inspect --format '{{.State.ExitCode}}' "$container_id" 2>/dev/null || true)"
+            if [[ "$exit_code" == "0" ]]; then
+              continue
+            fi
+          fi
+        fi
         echo "Service '$service_name' container is not running (state=${state_status})."
         return 1
       fi
 
       if [[ "$service_name" == "postgres" || "$service_name" == "redis" || "$service_name" == "api" ]]; then
         if [[ "$health_status" != "healthy" ]]; then
+          all_ready="false"
+        fi
+      elif [[ "$service_name" == "deployment-host-bootstrap" ]]; then
+        if [[ "$state_status" == "running" ]]; then
           all_ready="false"
         fi
       elif [[ "$state_status" != "running" ]]; then
