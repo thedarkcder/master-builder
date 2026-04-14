@@ -188,3 +188,7 @@
 - When a runtime login modal starts a worker-owned auth request, do not stop after showing the initial instructions. Keep polling the auth request lifecycle and tell the user when it reaches `completed`, `failed`, or `expired`.
 - Do not duplicate nested remediation data into flattened top-level API fields “for convenience.” Keep one authoritative payload shape and make consumers read that directly.
 - When Next.js local auth routes hang while the dev server warns about an SWC mismatch, treat it as a local dev-runtime problem first. Reset the local install/runtime and prefer a stable webpack dev server default over changing auth route code to compensate.
+
+2026-04-14
+
+- When the user says a Jira remediation ticket is already fixed, do not rely on an earlier review summary or stale PR status. Re-verify the current repo path and targeted tests first, then update the ticket state based on that live evidence.
