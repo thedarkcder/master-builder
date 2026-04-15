@@ -4,8 +4,8 @@ from dataclasses import dataclass
 import unittest
 from unittest.mock import patch
 
-from orchestrator.core.workflow.execution_snapshot_migration import ExecutionSnapshotMigrationReport
 from orchestrator.core.workflow.execution_snapshot_startup import (
+    ExecutionSnapshotStartupReport,
     ensure_execution_snapshot_startup_bootstrap,
     run_execution_snapshot_startup_bootstrap,
 )
@@ -17,7 +17,7 @@ class _FakeSession:
 
     def execute(self, statement, params=None):  # noqa: ANN001, ANN201
         self.calls.append((str(statement), params))
-        return None
+        return []
 
     def commit(self) -> None:
         self.calls.append(("commit", None))
@@ -42,13 +42,11 @@ class _FakeSessionFactory:
         return _FakeSessionContext(self._session)
 
 
-def _ok_report() -> ExecutionSnapshotMigrationReport:
-    return ExecutionSnapshotMigrationReport(
+def _ok_report() -> ExecutionSnapshotStartupReport:
+    return ExecutionSnapshotStartupReport(
         scanned_runs=1,
-        converted_runs=0,
         invalid_runs=0,
         scanned_checkpoints=1,
-        converted_checkpoints=0,
         invalid_checkpoints=0,
         invalid_run_ids=(),
         invalid_checkpoint_ids=(),
@@ -81,8 +79,8 @@ class ExecutionSnapshotStartupBootstrapTests(unittest.TestCase):
                 side_effect=lambda _: True,
             ),
             patch(
-                "orchestrator.core.workflow.execution_snapshot_startup.migrate_execution_snapshots",
-                side_effect=lambda **_: _ok_report(),
+                "orchestrator.core.workflow.execution_snapshot_startup._validate_execution_snapshots",
+                return_value=_ok_report(),
             ),
         ):
             report = run_execution_snapshot_startup_bootstrap(
@@ -97,26 +95,24 @@ class ExecutionSnapshotStartupBootstrapTests(unittest.TestCase):
         self.assertEqual(session.calls[-1][0], "commit")
 
     def test_startup_bootstrap_logs_and_returns_report_on_invalid_rows(self) -> None:
-        session = _FakeSession(calls=[])
-        factory = _FakeSessionFactory(session)
-        invalid_report = ExecutionSnapshotMigrationReport(
+        invalid_report = ExecutionSnapshotStartupReport(
             scanned_runs=1,
-            converted_runs=0,
             invalid_runs=1,
             scanned_checkpoints=1,
-            converted_checkpoints=0,
             invalid_checkpoints=0,
             invalid_run_ids=("run-1",),
             invalid_checkpoint_ids=(),
         )
+        session = _FakeSession(calls=[])
+        factory = _FakeSessionFactory(session)
         with (
             patch(
                 "orchestrator.core.workflow.execution_snapshot_startup.is_postgres_database_url",
                 side_effect=lambda _: True,
             ),
             patch(
-                "orchestrator.core.workflow.execution_snapshot_startup.migrate_execution_snapshots",
-                side_effect=lambda **_: invalid_report,
+                "orchestrator.core.workflow.execution_snapshot_startup._validate_execution_snapshots",
+                return_value=invalid_report,
             ),
         ):
             with self.assertLogs(
@@ -149,12 +145,10 @@ class ExecutionSnapshotStartupBootstrapTests(unittest.TestCase):
     def test_ensure_startup_bootstrap_raises_on_invalid_rows(self) -> None:
         session = _FakeSession(calls=[])
         factory = _FakeSessionFactory(session)
-        invalid_report = ExecutionSnapshotMigrationReport(
+        invalid_report = ExecutionSnapshotStartupReport(
             scanned_runs=1,
-            converted_runs=0,
             invalid_runs=1,
             scanned_checkpoints=1,
-            converted_checkpoints=0,
             invalid_checkpoints=1,
             invalid_run_ids=("run-1",),
             invalid_checkpoint_ids=("cp-1",),
