@@ -58,9 +58,16 @@ def _deps(**overrides) -> RunDispatchWorkflowDeps:
             send_discord_message_fn=MagicMock(return_value=SimpleNamespace(sent=True, reason=None)),
             send_jira_message_fn=MagicMock(),
             lock_acquired_update_fn=MagicMock(
-                return_value={"stage": "lock_acquired", "discord_message": None, "jira_message": None}
+                side_effect=lambda **kwargs: {
+                    "stage": "lock_acquired",
+                    "tenant_id": kwargs["tenant_id"],
+                    "issue_key": kwargs["issue_key"],
+                    "run_id": kwargs["run_id"],
+                    "discord_message": "",
+                    "jira_message": "",
+                }
             ),
-            repo_setup_ready_update_fn=MagicMock(),
+            repo_setup_ready_update_fn=None,
             plan_posted_update_fn=MagicMock(),
             pr_opened_update_fn=MagicMock(),
             run_failed_update_fn=MagicMock(),

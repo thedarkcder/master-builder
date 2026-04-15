@@ -52,7 +52,7 @@ class WorkflowFinalizer:
         stage_updates: list[WorkerStageUpdate | dict[str, str]],
         execution_context: dict[str, str] | None,
         expected_worker_service_instance_id: str | None,
-        expected_claim_id: str | None,
+        expected_claim_id: str | None = None,
     ) -> FinalizationPlan:  # noqa: ANN001
         _record_completion_step_event(
             session=self._session,

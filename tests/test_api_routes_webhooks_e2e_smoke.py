@@ -464,6 +464,16 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 path="/api/admin/observability/platform",
                 auth=admin,
             ),
+            ("POST", "/api/admin/workers/{service_instance_id}/runtime-dependencies/{runtime_kind}/login-session"): RouteScenario(
+                path="/api/admin/workers/worker-missing/runtime-dependencies/openai/login-session",
+                auth=admin,
+                expected_statuses=(202, 404, 409),
+            ),
+            ("GET", "/api/admin/workers/runtime-auth-requests/{request_id}"): RouteScenario(
+                path="/api/admin/workers/runtime-auth-requests/request-missing",
+                auth=admin,
+                expected_statuses=(404,),
+            ),
             ("GET", "/api/admin/observability/webhook-jobs"): RouteScenario(
                 path="/api/admin/observability/webhook-jobs?tenant_id=route25&project_id=route25-default&limit=25&offset=0",
                 auth=admin,

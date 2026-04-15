@@ -7,6 +7,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from orchestrator.core.worker.stage_event_types import WorkerStageEvent
 from orchestrator.core.worker.stage_events import WorkerStageUpdate
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.storage.models import Project, Run, Tenant
@@ -36,11 +37,24 @@ class RunStageNotifier:
         self.stage_updates: list[WorkerStageUpdate] = []
 
     def append(self, stage_update: WorkerStageUpdate | dict[str, str]) -> None:
-        normalized = (
-            stage_update
-            if isinstance(stage_update, WorkerStageUpdate)
-            else WorkerStageUpdate.load(stage_update)
-        )
+        if isinstance(stage_update, WorkerStageUpdate):
+            normalized = stage_update
+        else:
+            normalized = WorkerStageUpdate.load(stage_update)
+            if normalized is None and isinstance(stage_update, dict):
+                stage_raw = str(stage_update.get("stage") or "").strip()
+                if stage_raw:
+                    try:
+                        normalized = WorkerStageUpdate(
+                            stage=WorkerStageEvent(stage_raw),
+                            tenant_id=str(getattr(self._run, "tenant_id", "") or "").strip(),
+                            issue_key=str(getattr(self._run, "issue_key", "") or "").strip(),
+                            run_id=str(getattr(self._run, "run_id", "") or "").strip(),
+                            jira_message=str(stage_update.get("jira_message") or "").strip(),
+                            discord_message=str(stage_update.get("discord_message") or "").strip(),
+                        )
+                    except ValueError:
+                        normalized = None
         if normalized is None:
             raise ValueError("stage_update must be a valid WorkerStageUpdate payload")
         self.stage_updates.append(normalized)
