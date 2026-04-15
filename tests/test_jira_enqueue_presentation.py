@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from orchestrator.core.communications.jira_enqueue_presentation import (
     BacklogPreRunCheckPresentation,
+    build_backlog_pre_run_check_presentation,
     format_backlog_pre_run_check_message,
     format_jira_enqueue_skipped_message,
     normalize_backlog_pre_run_check_text,
 )
+from orchestrator.core.decision_state_machine import build_execution_admission_block, ExecutionAdmissionReason
 from orchestrator.core.decision_types import PrecheckOutcome
 
 
@@ -13,7 +17,9 @@ def test_format_jira_enqueue_skipped_message_includes_reason_and_guidance() -> N
     message = format_jira_enqueue_skipped_message(
         issue_key="GP-1",
         issue_status="To Do",
-        reason="decision_gate_required",
+        admission=build_execution_admission_block(
+            reason=ExecutionAdmissionReason.DECISION_GATE_REQUIRED,
+        ),
         extra_detail="cycle_id=abc",
     )
     assert "GP-1" in message
@@ -41,3 +47,27 @@ def test_normalize_backlog_pre_run_check_text_truncates_long_values() -> None:
     assert value is not None
     assert value.endswith("...")
     assert len(value) == 20
+
+
+def test_build_backlog_pre_run_check_presentation_uses_typed_decision_result() -> None:
+    decision_result = SimpleNamespace(
+        decision=SimpleNamespace(
+            pre_check=SimpleNamespace(
+                outcome="gtd_required",
+                ready_label="agent:ready",
+                decision_gate_reason="Decision Gate not required",
+                gtd_missing_criteria=("dependencies_and_risks",),
+                required_worker_label="worker:linux",
+            )
+        )
+    )
+
+    presentation = build_backlog_pre_run_check_presentation(
+        decision_result=decision_result,
+        ready_label="agent:ready",
+    )
+
+    assert presentation.outcome is PrecheckOutcome.GTD_REQUIRED
+    assert presentation.ready_label == "agent:ready"
+    assert presentation.gtd_missing_criteria == ("dependencies_and_risks",)
+    assert presentation.required_worker_label == "worker:linux"

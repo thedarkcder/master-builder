@@ -9,6 +9,7 @@ from orchestrator.core.run_human_input_service import (
     create_human_input_request,
     resume_workflow_from_human_input_answer,
 )
+from orchestrator.core.run_enqueue_types import EnqueueFailureReason
 
 
 def test_create_human_input_request_snapshots_checkpoint_and_moves_run_to_waiting() -> None:
@@ -362,7 +363,11 @@ def test_resume_workflow_from_human_input_answer_rejects_unrelated_active_resume
     session.get.side_effect = lambda model, key: (
         source_run if key == "run-1" else checkpoint if key == "checkpoint-1" else None
     )
-    enqueue_result = SimpleNamespace(enqueued=False, reason="run_already_active", run=unrelated_active_run)
+    enqueue_result = SimpleNamespace(
+        enqueued=False,
+        reason=EnqueueFailureReason.RUN_ALREADY_ACTIVE,
+        run=unrelated_active_run,
+    )
 
     with patch(
         "orchestrator.core.run_human_input_service.enqueue_attempt_for_workflow_uncommitted",

@@ -52,18 +52,3 @@ def present_jira_admission(
         response_fields=response_fields,
         notification_detail=notification_detail,
     )
-
-
-def format_discord_admission_conflict_detail(*, admission: ExecutionAdmissionDecision) -> str:
-    return present_discord_admission_conflict(admission=admission).detail
-
-
-def build_jira_admission_response_fields(
-    *,
-    admission: ExecutionAdmissionDecision,
-) -> dict[str, str | None]:
-    return present_jira_admission(admission=admission).response_fields
-
-
-def build_jira_admission_notification_detail(*, admission: ExecutionAdmissionDecision) -> str | None:
-    return present_jira_admission(admission=admission).notification_detail

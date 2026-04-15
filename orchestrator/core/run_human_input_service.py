@@ -485,7 +485,7 @@ def resume_workflow_from_human_input_answer(
         ),
     )
     if not enqueue_result.enqueued:
-        if str(getattr(enqueue_result.reason, "value", enqueue_result.reason) or "").strip() == EnqueueFailureReason.RUN_ALREADY_ACTIVE.value:
+        if enqueue_result.reason is EnqueueFailureReason.RUN_ALREADY_ACTIVE:
             if _run_matches_human_input_request(run=enqueue_result.run, request_id=request.request_id):
                 request.status = INPUT_STATUS_CONSUMED
                 request.consumed_by_run_id = enqueue_result.run.run_id

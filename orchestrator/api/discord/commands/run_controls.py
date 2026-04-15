@@ -12,8 +12,8 @@ from orchestrator.api.schemas import DiscordCommandRequest, DiscordCommandRespon
 from orchestrator.core.runtime_invocation import AgentInvocationContext
 from orchestrator.core.codex_runtime import CodexRuntimeError
 from orchestrator.core.communications.command_pipeline import CommandScope
-from orchestrator.core.communications.enqueue_reason_contract import (
-    format_enqueue_conflict_detail,
+from orchestrator.core.communications.enqueue_conflict_presentation import (
+    present_discord_enqueue_conflict,
 )
 from orchestrator.core.communications.decision_clarification_presentation import (
     build_decision_clarification_presentation,
@@ -123,13 +123,14 @@ def _queue_run_from_issue_context(
         ).get("max_concurrent_runs"),
     )
     if not enqueue_result.enqueued:
+        conflict = present_discord_enqueue_conflict(
+            prefix=conflict_prefix,
+            reason=enqueue_result.reason,
+            enqueue_run_obj=enqueue_result.run,
+        )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=format_enqueue_conflict_detail(
-                prefix=conflict_prefix,
-                enqueue_reason=enqueue_result.reason,
-                enqueue_run_obj=enqueue_result.run,
-            ),
+            detail=conflict.detail,
         )
     return DiscordCommandResponse(
         ok=True,

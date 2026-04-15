@@ -10,6 +10,8 @@ from orchestrator.core.decision_state_machine import DecisionStateTransition
 from orchestrator.core.decision_state_machine import ExecutionAdmissionReason
 from orchestrator.core.decision_state_machine import decision_classification_for_precheck
 from orchestrator.core.decision_state_machine import decision_missing_slots_for_precheck
+from orchestrator.core.decision_state_machine import ingress_decision_from_precheck
+from orchestrator.core.decision_state_machine import ingress_policy_error_decision
 from orchestrator.core.decision_state_machine import reduce_decision_planner_result
 from orchestrator.core.decision_state_machine import resolve_worker_blocked_outcome
 from orchestrator.core.decision_state_machine import resolve_worker_decision_from_precheck
@@ -163,6 +165,28 @@ def test_decision_classification_and_missing_slots_are_canonical() -> None:
 
     assert decision_classification_for_precheck(pre_check) is DecisionClassification.GTD
     assert decision_missing_slots_for_precheck(pre_check) == ["how_to_test"]
+
+
+def test_ingress_decision_from_precheck_derives_block_reason_and_guidance() -> None:
+    decision = ingress_decision_from_precheck(
+        source="jira_webhook",
+        pre_check=_precheck(outcome="missing_ready_label", ready_label_present=False),
+    )
+
+    assert decision.block_reason == "missing_ready_label"
+    assert decision.guidance is not None
+    assert "ready" in decision.guidance.lower()
+
+
+def test_ingress_policy_error_decision_uses_policy_eval_failed_contract() -> None:
+    decision = ingress_policy_error_decision(
+        source="jira_webhook",
+        policy_error="runtime exploded",
+    )
+
+    assert decision.pre_check is None
+    assert decision.block_reason == "policy_eval_failed"
+    assert decision.policy_error == "runtime exploded"
 
 
 def test_reduce_decision_planner_result_is_canonical() -> None:
