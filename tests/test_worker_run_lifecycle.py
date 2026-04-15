@@ -1,5 +1,4 @@
 import os
-import unittest
 from datetime import datetime, timezone
 from unittest.mock import patch
 
@@ -18,6 +17,8 @@ from orchestrator.core.worker.run_lifecycle import (
     resolve_project_for_run,
     start_run,
 )
+from orchestrator.core.worker.stage_event_types import WorkerStageEvent
+from orchestrator.core.worker.stage_events import WorkerStageUpdate
 from orchestrator.core.workflow.runner import (
     PmPlan,
     WorkflowDiagnostics,
@@ -125,6 +126,25 @@ class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
         if live_stage_updates:
             snapshot.events.live_stage_updates = [dict(item) for item in live_stage_updates]
         return snapshot.dump()
+
+    @staticmethod
+    def _stage_update_payload(
+        *,
+        stage: WorkerStageEvent,
+        tenant_id: str = "tenant-a",
+        issue_key: str = "TA-200",
+        run_id: str = "run-stage-update",
+        jira_message: str = "Jira update",
+        discord_message: str = "Discord update",
+    ) -> dict[str, str]:
+        return WorkerStageUpdate(
+            stage=stage,
+            tenant_id=tenant_id,
+            issue_key=issue_key,
+            run_id=run_id,
+            jira_message=jira_message,
+            discord_message=discord_message,
+        ).to_payload()
 
     def test_resolve_project_for_run_and_bind_run_project(self) -> None:
         now = datetime.now(timezone.utc)
@@ -276,11 +296,30 @@ class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
                 session,
                 run=run,
                 workflow_result=result,
-                stage_updates=[{"stage": "run_failed"}],
+                stage_updates=[
+                    self._stage_update_payload(
+                        stage=WorkerStageEvent.RUN_FAILED,
+                        issue_key="TA-200",
+                        run_id="run-2",
+                        jira_message="failure details",
+                        discord_message="failure details",
+                    )
+                ],
             )
             self.assertEqual(finalized.status, "failed")
             self.assertEqual(finalized.last_error, "failure details")
-            self.assertEqual(finalized.plan["events"]["stage_updates"], [{"stage": "run_failed"}])
+            self.assertEqual(
+                finalized.plan["events"]["stage_updates"],
+                [
+                    self._stage_update_payload(
+                        stage=WorkerStageEvent.RUN_FAILED,
+                        issue_key="TA-200",
+                        run_id="run-2",
+                        jira_message="failure details",
+                        discord_message="failure details",
+                    )
+                ],
+            )
             self.assertEqual(
                 finalized.plan["context"]["trigger_context"],
                 {"source": "github_pr_review_feedback", "pr_number": 6},
@@ -356,7 +395,13 @@ class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
                     test_guidance=["pytest -q"],
                     attempts=1,
                 ),
-                stage_updates=[{"stage": "task_completed"}],
+                stage_updates=[
+                    self._stage_update_payload(
+                        stage=WorkerStageEvent.PLAN_POSTED,
+                        issue_key="TA-205",
+                        run_id="run-checkpoint",
+                    )
+                ],
                 expected_worker_service_instance_id="node-a:1234",
             )
 
@@ -476,7 +521,13 @@ class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
                 session,
                 run=run,
                 workflow_result=unsupported_result,
-                stage_updates=[{"stage": "task_completed"}],
+                stage_updates=[
+                    self._stage_update_payload(
+                        stage=WorkerStageEvent.PLAN_POSTED,
+                        issue_key="TA-998",
+                        run_id="run-unsupported-outcome",
+                    )
+                ],
                 expected_worker_service_instance_id="node-a:1234",
             )
             self.assertEqual(finalized.status, "failed")
@@ -520,7 +571,13 @@ class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
                 session,
                 run=run,
                 workflow_result=workflow_result,
-                stage_updates=[{"stage": "task_completed"}],
+                stage_updates=[
+                    self._stage_update_payload(
+                        stage=WorkerStageEvent.PLAN_POSTED,
+                        issue_key="TA-999",
+                        run_id="run-ownership-lost",
+                    )
+                ],
                 expected_worker_service_instance_id="node-a:1234",
             )
             self.assertEqual(finalized.status, "running")
@@ -579,7 +636,13 @@ class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
                     session,
                     run=run,
                     workflow_result=workflow_result,
-                    stage_updates=[{"stage": "run_requeued_capability_mismatch"}],
+                    stage_updates=[
+                        self._stage_update_payload(
+                            stage=WorkerStageEvent.RUN_REQUEUED_CAPABILITY_MISMATCH,
+                            issue_key="TA-202",
+                            run_id="run-capability-requeue",
+                        )
+                    ],
                     required_worker_capability="macos",
                     required_worker_label="macos",
                 )
@@ -655,7 +718,13 @@ class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
                     session,
                     run=run,
                     workflow_result=workflow_result,
-                    stage_updates=[{"stage": "run_requeued_stale_snapshot"}],
+                    stage_updates=[
+                        self._stage_update_payload(
+                            stage=WorkerStageEvent.RUN_REQUEUED_STALE_SNAPSHOT,
+                            issue_key="TA-203",
+                            run_id="run-stale-requeue",
+                        )
+                    ],
                     error="Branch snapshot stale: origin/main moved from aaa to bbb.",
                 )
 

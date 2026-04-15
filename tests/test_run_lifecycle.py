@@ -92,8 +92,20 @@ class RunLifecycleTests(unittest.TestCase):
 
     def test_enqueue_is_idempotent_for_active_issue(self) -> None:
         with self.session_factory() as session:
-            first = enqueue_run(session, tenant_id="tenant-runs", project_id=None, issue_key="TP-901")
-            second = enqueue_run(session, tenant_id="tenant-runs", project_id=None, issue_key="TP-901")
+            first = enqueue_run(
+                session,
+                tenant_id="tenant-runs",
+                project_id=None,
+                issue_key="TP-901",
+                precheck_outcome="ready_for_agent",
+            )
+            second = enqueue_run(
+                session,
+                tenant_id="tenant-runs",
+                project_id=None,
+                issue_key="TP-901",
+                precheck_outcome="ready_for_agent",
+            )
 
             self.assertTrue(first.enqueued)
             self.assertFalse(second.enqueued)
@@ -114,6 +126,7 @@ class RunLifecycleTests(unittest.TestCase):
                 project_id=None,
                 issue_key="TP-907",
                 dedupe_scope=RUN_DEDUPE_SCOPE_ISSUE_EXECUTION,
+                precheck_outcome="ready_for_agent",
             )
             remediation_run = enqueue_run(
                 session,
@@ -121,6 +134,7 @@ class RunLifecycleTests(unittest.TestCase):
                 project_id=None,
                 issue_key="TP-907",
                 dedupe_scope=RUN_DEDUPE_SCOPE_PR_REMEDIATION,
+                precheck_outcome="ready_for_agent",
             )
 
             self.assertTrue(issue_run.enqueued)
@@ -145,6 +159,7 @@ class RunLifecycleTests(unittest.TestCase):
                 project_id=None,
                 issue_key="TP-902",
                 delivery_id="delivery-xyz",
+                precheck_outcome="ready_for_agent",
             )
             second = enqueue_run(
                 session,
@@ -152,6 +167,7 @@ class RunLifecycleTests(unittest.TestCase):
                 project_id=None,
                 issue_key="TP-902",
                 delivery_id="delivery-xyz",
+                precheck_outcome="ready_for_agent",
             )
 
             self.assertTrue(first.enqueued)
@@ -167,6 +183,7 @@ class RunLifecycleTests(unittest.TestCase):
                 project_id=None,
                 issue_key="TP-910",
                 max_concurrent_runs=1,
+                precheck_outcome="ready_for_agent",
             )
             second = enqueue_run(
                 session,
@@ -174,6 +191,7 @@ class RunLifecycleTests(unittest.TestCase):
                 project_id=None,
                 issue_key="TP-911",
                 max_concurrent_runs=1,
+                precheck_outcome="ready_for_agent",
             )
 
             self.assertTrue(first.enqueued)
@@ -183,7 +201,13 @@ class RunLifecycleTests(unittest.TestCase):
 
     def test_running_to_success_updates_workflow_and_persists_timestamps(self) -> None:
         with self.session_factory() as session:
-            enqueue = enqueue_run(session, tenant_id="tenant-runs", project_id=None, issue_key="TP-903")
+            enqueue = enqueue_run(
+                session,
+                tenant_id="tenant-runs",
+                project_id=None,
+                issue_key="TP-903",
+                precheck_outcome="ready_for_agent",
+            )
             running = mark_run_running(session, run_id=enqueue.run.run_id)
             self.assertEqual(running.status, "running")
             self.assertIsNotNone(running.started_at)
@@ -206,7 +230,13 @@ class RunLifecycleTests(unittest.TestCase):
 
     def test_failure_path_marks_blocked_without_finishing_workflow(self) -> None:
         with self.session_factory() as session:
-            enqueue = enqueue_run(session, tenant_id="tenant-runs", project_id=None, issue_key="TP-904")
+            enqueue = enqueue_run(
+                session,
+                tenant_id="tenant-runs",
+                project_id=None,
+                issue_key="TP-904",
+                precheck_outcome="ready_for_agent",
+            )
             mark_run_running(session, run_id=enqueue.run.run_id)
             blocked = mark_run_terminal(
                 session,
@@ -227,7 +257,13 @@ class RunLifecycleTests(unittest.TestCase):
 
     def test_invalid_state_transition_is_rejected(self) -> None:
         with self.session_factory() as session:
-            enqueue = enqueue_run(session, tenant_id="tenant-runs", project_id=None, issue_key="TP-905")
+            enqueue = enqueue_run(
+                session,
+                tenant_id="tenant-runs",
+                project_id=None,
+                issue_key="TP-905",
+                precheck_outcome="ready_for_agent",
+            )
             mark_run_terminal(
                 session,
                 run_id=enqueue.run.run_id,
@@ -239,14 +275,26 @@ class RunLifecycleTests(unittest.TestCase):
 
     def test_enqueue_creates_new_workflow_after_terminal_run(self) -> None:
         with self.session_factory() as session:
-            first = enqueue_run(session, tenant_id="tenant-runs", project_id=None, issue_key="TP-906")
+            first = enqueue_run(
+                session,
+                tenant_id="tenant-runs",
+                project_id=None,
+                issue_key="TP-906",
+                precheck_outcome="ready_for_agent",
+            )
             mark_run_terminal(
                 session,
                 run_id=first.run.run_id,
                 terminal_status=RUN_STATUS_SUCCEEDED,
             )
 
-            second = enqueue_run(session, tenant_id="tenant-runs", project_id=None, issue_key="TP-906")
+            second = enqueue_run(
+                session,
+                tenant_id="tenant-runs",
+                project_id=None,
+                issue_key="TP-906",
+                precheck_outcome="ready_for_agent",
+            )
             self.assertTrue(second.enqueued)
             self.assertNotEqual(second.run.run_id, first.run.run_id)
             self.assertNotEqual(second.run.workflow_id, first.run.workflow_id)
