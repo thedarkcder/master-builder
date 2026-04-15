@@ -9,7 +9,9 @@ from orchestrator.core.decision_gate import DecisionGateResult
 from orchestrator.core.decision_planner import DecisionPlannerResult
 from orchestrator.core.decision_types import (
     DecisionClassification,
+    DecisionLabelAction,
     DecisionQuestionKind,
+    DecisionSource,
     ExecutionGateReason,
     ExecutionGateResolution,
     ExecutionGateState,
@@ -585,6 +587,41 @@ def guidance_for_precheck_block_reason(
     ).guidance
 
 
+def ingress_decision_from_precheck(
+    *,
+    source: DecisionSource,
+    pre_check: PreRunCheckResult,
+    policy_error: str | None = None,
+    label_actions: tuple[DecisionLabelAction, ...] = (),
+) -> IngressDecision:
+    block_reason = blocking_reason_for_precheck(pre_check)
+    return IngressDecision(
+        source=source,
+        pre_check=pre_check,
+        block_reason=block_reason,
+        guidance=guidance_for_precheck_block_reason(block_reason=block_reason),
+        policy_error=policy_error,
+        label_actions=label_actions,
+    )
+
+
+def ingress_policy_error_decision(
+    *,
+    source: DecisionSource,
+    policy_error: str,
+) -> IngressDecision:
+    return IngressDecision(
+        source=source,
+        pre_check=None,
+        block_reason=PrecheckOutcome.POLICY_EVAL_FAILED.value,
+        guidance=guidance_for_precheck_block_reason(
+            block_reason=PrecheckOutcome.POLICY_EVAL_FAILED.value,
+        ),
+        policy_error=policy_error,
+        label_actions=(),
+    )
+
+
 def resolve_readiness_decision(
     *,
     policy_error: str | None,
@@ -771,12 +808,9 @@ def _decision_with_planner_result(
                 clarification_questions=(),
             ),
         )
-        updated_block_reason = blocking_reason_for_precheck(updated_pre_check)
-        return IngressDecision(
+        return ingress_decision_from_precheck(
             source=decision.source,
             pre_check=updated_pre_check,
-            block_reason=updated_block_reason,
-            guidance=guidance_for_precheck_block_reason(block_reason=updated_block_reason),
             policy_error=None,
             label_actions=decision.label_actions,
         )
@@ -806,12 +840,9 @@ def _decision_with_planner_result(
             clarification_questions=gtd_questions,
         ),
     )
-    block_reason = _planner_block_reason(classification)
-    return IngressDecision(
+    return ingress_decision_from_precheck(
         source=decision.source,
         pre_check=updated_pre_check,
-        block_reason=block_reason,
-        guidance=guidance_for_precheck_block_reason(block_reason=block_reason),
         policy_error=decision.policy_error,
         label_actions=decision.label_actions,
     )
@@ -851,15 +882,9 @@ def decision_from_snapshot(
                 decision_gate=normalized_pre_check.decision_gate,
                 gtd=normalized_pre_check.gtd,
             )
-        normalized_block_reason = blocking_reason_for_precheck(normalized_pre_check)
-        return IngressDecision(
+        return ingress_decision_from_precheck(
             source=source,  # type: ignore[arg-type]
             pre_check=normalized_pre_check,
-            block_reason=normalized_block_reason,
-            guidance=guidance_for_precheck_block_reason(
-                block_reason=normalized_block_reason,
-                ready_label=str(getattr(normalized_pre_check, "ready_label", "") or "").strip() or None,
-            ),
             policy_error=None,
             label_actions=(),
         )

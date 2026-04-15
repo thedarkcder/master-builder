@@ -1,15 +1,5 @@
 from __future__ import annotations
 
-from typing import Protocol
-
-from orchestrator.core.run_enqueue_types import EnqueueFailureReason
-
-
-class _RunLike(Protocol):
-    run_id: str
-    status: str
-
-
 _ENQUEUE_REASON_GUIDANCE = {
     "run_already_active": "A run for this issue is already active.",
     "tenant_concurrency_limit_reached": "The tenant concurrency limit is reached; wait for an active run to finish.",
@@ -40,20 +30,3 @@ def enqueue_reason_guidance(reason: object) -> str:
         _normalize_enqueue_reason(reason),
         "Run was not queued due to current execution policy.",
     )
-
-
-def format_enqueue_conflict_detail(
-    *,
-    prefix: str,
-    enqueue_reason: EnqueueFailureReason | str,
-    enqueue_run_obj: _RunLike | None,
-) -> str:
-    normalized_reason = _normalize_enqueue_reason(enqueue_reason)
-    guidance = enqueue_reason_guidance(enqueue_reason)
-    if normalized_reason == EnqueueFailureReason.RUN_ALREADY_ACTIVE.value and enqueue_run_obj is not None:
-        return (
-            f"{prefix}: {normalized_reason} "
-            f"(active run: {enqueue_run_obj.run_id}, status: {enqueue_run_obj.status}). "
-            f"{guidance}"
-        )
-    return f"{prefix}: {normalized_reason}. {guidance}"

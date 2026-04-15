@@ -15,14 +15,11 @@ from orchestrator.core.communications.execution_admission_format import (
     present_jira_admission,
 )
 from orchestrator.core.communications.jira_enqueue_presentation import (
-    BacklogPreRunCheckPresentation,
-    format_jira_enqueue_skipped_message_from_admission,
-    normalize_backlog_pre_run_check_text,
+    format_jira_enqueue_skipped_message,
 )
 from orchestrator.core.decision_clarification_service import evaluate_issue_clarification_state
 from orchestrator.core.decision_engine import DecisionEngineResult, DecisionEventInput
 from orchestrator.core.decision_types import tenant_ready_label, tenant_ready_trigger_mode
-from orchestrator.core.decision_types import PrecheckOutcome
 from orchestrator.core.decision_state_machine import (
     ExecutionAdmissionReason,
     admission_from_enqueue_reason,
@@ -74,7 +71,7 @@ def build_jira_enqueue_skipped_notification_action(
     admission,
     extra_detail: str | None = None,
 ) -> DiscordTenantNotificationAction:
-    message = format_jira_enqueue_skipped_message_from_admission(
+    message = format_jira_enqueue_skipped_message(
         issue_key=context.issue_key,
         issue_status=context.issue_status,
         admission=admission,
@@ -167,30 +164,6 @@ def evaluate_precheck_decision_with_labels(
         current_description=effective_description,
     )
     return result
-
-
-def build_backlog_pre_run_check(
-    *,
-    context: JiraWebhookContext,
-    decision_result: DecisionEngineResult,
-) -> BacklogPreRunCheckPresentation:
-    pre_check = decision_result.decision.pre_check
-    if pre_check is None:
-        return BacklogPreRunCheckPresentation(
-            outcome=PrecheckOutcome.POLICY_EVAL_FAILED,
-            ready_label=resolve_ready_label_for_tenant(context.tenant),
-            decision_gate_reason="Precheck policy evaluation failed",
-        )
-    decision_gate_reason = normalize_backlog_pre_run_check_text(pre_check.decision_gate_reason)
-    parsed_outcome = PrecheckOutcome.parse(pre_check.outcome) or PrecheckOutcome.POLICY_EVAL_FAILED
-    return BacklogPreRunCheckPresentation(
-        outcome=parsed_outcome,
-        ready_label=pre_check.ready_label,
-        decision_gate_reason=decision_gate_reason,
-        gtd_missing_criteria=tuple(str(item).strip() for item in pre_check.gtd_missing_criteria if str(item).strip()),
-        required_worker_label=pre_check.required_worker_label,
-    )
-
 
 def _sync_precheck_questions_block(
     *,

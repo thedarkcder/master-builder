@@ -42,12 +42,12 @@ from orchestrator.core.decision_state_machine import (
     DecisionEvent as DecisionLifecycleEvent,
     DecisionState,
     DecisionStateTransition,
-    blocking_reason_for_precheck,
     coerce_clear_decision_from_case,
     decision_classification_for_precheck,
     decision_missing_slots_for_precheck,
     decision_from_snapshot as decision_from_snapshot_state,
-    guidance_for_precheck_block_reason,
+    ingress_decision_from_precheck,
+    ingress_policy_error_decision,
     is_question_driven_state,
     reduce_decision_planner_result,
     resolve_execution_gate_state,
@@ -103,13 +103,9 @@ def _terminally_closed_gate_decision(
         issue_labels=issue_labels,
         ready_label=ready_label,
     )
-    block_reason = blocking_reason_for_precheck(pre_check)
-    return IngressDecision(
+    return ingress_decision_from_precheck(
         source=source,
         pre_check=pre_check,
-        block_reason=block_reason,
-        guidance=guidance_for_precheck_block_reason(block_reason=block_reason),
-        policy_error=None,
         label_actions=derive_label_actions(pre_check),
     )
 
@@ -139,25 +135,15 @@ def evaluate_ingress_precheck(
             ready_label=ready_label,
         )
     except Exception as exc:  # noqa: BLE001
-        return IngressDecision(
+        return ingress_policy_error_decision(
             source=source,
-            pre_check=None,
-            block_reason=PrecheckOutcome.POLICY_EVAL_FAILED.value,
-            guidance=guidance_for_precheck_block_reason(
-                block_reason=PrecheckOutcome.POLICY_EVAL_FAILED.value,
-            ),
             policy_error=str(exc),
-            label_actions=(),
         )
 
     actions = derive_label_actions(pre_check)
-    block_reason = blocking_reason_for_precheck(pre_check)
-    return IngressDecision(
+    return ingress_decision_from_precheck(
         source=source,
         pre_check=pre_check,
-        block_reason=block_reason,
-        guidance=guidance_for_precheck_block_reason(block_reason=block_reason),
-        policy_error=None,
         label_actions=actions,
     )
 
@@ -756,11 +742,9 @@ def evaluate_decision_event(
             cycle=cycle,
             classification=classification.value,
         )
-        decision = IngressDecision(
+        decision = ingress_decision_from_precheck(
             source=decision.source,
             pre_check=pre_check_with_cycle,
-            block_reason=decision.block_reason,
-            guidance=decision.guidance,
             policy_error=decision.policy_error,
             label_actions=decision.label_actions,
         )

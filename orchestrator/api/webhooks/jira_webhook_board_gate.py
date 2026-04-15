@@ -9,7 +9,6 @@ from sqlalchemy.orm import Session
 
 from orchestrator.api.jira_oauth.connection_service import tenant_jira_oauth_context
 from orchestrator.api.webhooks.jira_admission_flow import (
-    build_backlog_pre_run_check,
     evaluate_precheck_decision_with_labels,
 )
 from orchestrator.api.webhooks.jira_webhook_types import JiraWebhookContext, jira_webhook_response
@@ -17,9 +16,11 @@ from orchestrator.core.communications import DiscordTenantNotificationAction, Tr
 from orchestrator.core.communications.execution_admission_format import present_jira_admission
 from orchestrator.core.communications.jira_enqueue_presentation import (
     BacklogPreRunCheckPresentation,
+    build_backlog_pre_run_check_presentation,
     format_backlog_pre_run_check_message,
-    format_jira_enqueue_skipped_message_from_admission,
+    format_jira_enqueue_skipped_message,
 )
+from orchestrator.core.decision_types import tenant_ready_label
 from orchestrator.core.decision_state_machine import (
     ExecutionAdmissionReason,
     build_execution_admission_block,
@@ -175,9 +176,9 @@ def stage_handle_run_board_gate(
             session=session,
             settings=settings,
         )
-        pre_run_check = build_backlog_pre_run_check(
-            context=context,
+        pre_run_check = build_backlog_pre_run_check_presentation(
             decision_result=decision_result,
+            ready_label=tenant_ready_label(context.tenant),
         )
         if context.webhook_event == "issue_created":
             actions = (_build_backlog_pre_run_check_notification_action(
@@ -249,7 +250,7 @@ def _build_enqueue_skipped_notification_action(
     admission,
     extra_detail: str | None,
 ) -> DiscordTenantNotificationAction:
-    message = format_jira_enqueue_skipped_message_from_admission(
+    message = format_jira_enqueue_skipped_message(
         issue_key=context.issue_key,
         issue_status=context.issue_status,
         admission=admission,

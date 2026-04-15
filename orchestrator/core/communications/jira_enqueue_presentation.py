@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from orchestrator.core.communications.enqueue_reason_contract import enqueue_reason_guidance
+from orchestrator.core.decision_engine import DecisionEngineResult
 from orchestrator.core.decision_state_machine import ExecutionAdmissionDecision
 from orchestrator.core.decision_types import PrecheckOutcome
 
@@ -25,6 +26,32 @@ class BacklogPreRunCheckPresentation:
         }
 
 
+def build_backlog_pre_run_check_presentation(
+    *,
+    decision_result: DecisionEngineResult,
+    ready_label: str | None,
+    policy_error_reason: str = "Precheck policy evaluation failed",
+) -> BacklogPreRunCheckPresentation:
+    pre_check = decision_result.decision.pre_check
+    if pre_check is None:
+        return BacklogPreRunCheckPresentation(
+            outcome=PrecheckOutcome.POLICY_EVAL_FAILED,
+            ready_label=ready_label,
+            decision_gate_reason=policy_error_reason,
+        )
+    decision_gate_reason = normalize_backlog_pre_run_check_text(pre_check.decision_gate_reason)
+    parsed_outcome = PrecheckOutcome.parse(pre_check.outcome) or PrecheckOutcome.POLICY_EVAL_FAILED
+    return BacklogPreRunCheckPresentation(
+        outcome=parsed_outcome,
+        ready_label=pre_check.ready_label,
+        decision_gate_reason=decision_gate_reason,
+        gtd_missing_criteria=tuple(
+            str(item).strip() for item in pre_check.gtd_missing_criteria if str(item).strip()
+        ),
+        required_worker_label=pre_check.required_worker_label,
+    )
+
+
 def normalize_backlog_pre_run_check_text(raw_value: str | None, *, max_chars: int = 240) -> str | None:
     if not isinstance(raw_value, str):
         return None
@@ -42,31 +69,16 @@ def format_jira_enqueue_skipped_message(
     *,
     issue_key: str,
     issue_status: str | None,
-    reason: str,
-    extra_detail: str | None = None,
-) -> str:
-    detail = f" ({extra_detail})" if extra_detail else ""
-    guidance = enqueue_reason_guidance(reason)
-    return (
-        f"Jira webhook did not queue a run for `{issue_key}`.\n"
-        f"Reason: `{reason}`{detail}\n"
-        f"Guidance: {guidance}\n"
-        f"Status: `{issue_status or 'unknown'}`"
-    )
-
-
-def format_jira_enqueue_skipped_message_from_admission(
-    *,
-    issue_key: str,
-    issue_status: str | None,
     admission: ExecutionAdmissionDecision,
     extra_detail: str | None = None,
 ) -> str:
-    return format_jira_enqueue_skipped_message(
-        issue_key=issue_key,
-        issue_status=issue_status,
-        reason=admission.reason_code,
-        extra_detail=extra_detail,
+    detail = f" ({extra_detail})" if extra_detail else ""
+    guidance = enqueue_reason_guidance(admission.reason_code)
+    return (
+        f"Jira webhook did not queue a run for `{issue_key}`.\n"
+        f"Reason: `{admission.reason_code}`{detail}\n"
+        f"Guidance: {guidance}\n"
+        f"Status: `{issue_status or 'unknown'}`"
     )
 
 
