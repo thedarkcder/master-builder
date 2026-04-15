@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import Any
-
 from orchestrator.core.agent_execution_profiles import list_supported_runtime_kinds
 from orchestrator.core.agent_runtime_resolver import resolve_execution_profile_for_selector
 from orchestrator.core.config import Settings
