@@ -16,6 +16,7 @@ from orchestrator.api.webhooks.jira_webhook_types import JiraWebhookContext, jir
 from orchestrator.core.communications import DiscordTenantNotificationAction, TransportAction
 from orchestrator.core.communications.execution_admission_format import present_jira_admission
 from orchestrator.core.communications.jira_enqueue_presentation import (
+    BacklogPreRunCheckPresentation,
     format_backlog_pre_run_check_message,
     format_jira_enqueue_skipped_message_from_admission,
 )
@@ -192,8 +193,8 @@ def stage_handle_run_board_gate(
             context.tenant_id,
             context.issue_key,
             board_id,
-            pre_run_check.get("outcome"),
-            pre_run_check.get("decision_gate_triggered"),
+            pre_run_check.outcome.value,
+            bool(pre_run_check.decision_gate_reason),
         )
         return JiraBoardGatePlan(
             response=jira_webhook_response(
@@ -202,7 +203,7 @@ def stage_handle_run_board_gate(
                 board_id=board_id,
                 webhook_event=context.webhook_event,
                 detail=detail,
-                pre_run_check=pre_run_check,
+                pre_run_check=pre_run_check.to_payload(),
                 **admission_presentation.response_fields,
             ),
             actions=actions,
@@ -265,7 +266,7 @@ def _build_backlog_pre_run_check_notification_action(
     *,
     context: JiraWebhookContext,
     board_id: int,
-    pre_run_check: dict[str, object],
+    pre_run_check: BacklogPreRunCheckPresentation,
 ) -> DiscordTenantNotificationAction:
     return DiscordTenantNotificationAction(
         tenant_id=context.tenant_id,
