@@ -1,8 +1,28 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from orchestrator.core.communications.enqueue_reason_contract import enqueue_reason_guidance
 from orchestrator.core.decision_state_machine import ExecutionAdmissionDecision
 from orchestrator.core.decision_types import PrecheckOutcome
+
+
+@dataclass(frozen=True)
+class BacklogPreRunCheckPresentation:
+    outcome: PrecheckOutcome
+    ready_label: str | None = None
+    decision_gate_reason: str | None = None
+    gtd_missing_criteria: tuple[str, ...] = ()
+    required_worker_label: str | None = None
+
+    def to_payload(self) -> dict[str, object]:
+        return {
+            "outcome": self.outcome.value,
+            "ready_label": self.ready_label,
+            "decision_gate_reason": self.decision_gate_reason,
+            "gtd_missing_criteria": list(self.gtd_missing_criteria),
+            "required_worker_label": self.required_worker_label,
+        }
 
 
 def normalize_backlog_pre_run_check_text(raw_value: str | None, *, max_chars: int = 240) -> str | None:
@@ -55,20 +75,12 @@ def format_backlog_pre_run_check_message(
     issue_key: str,
     board_id: int,
     issue_status: str | None,
-    pre_run_check: dict[str, object],
+    pre_run_check: BacklogPreRunCheckPresentation,
 ) -> str:
-    outcome = PrecheckOutcome.parse(pre_run_check.get("outcome"))
-    ready_label = pre_run_check.get("ready_label")
-    decision_gate_reason = normalize_backlog_pre_run_check_text(
-        pre_run_check.get("decision_gate_reason")
-        if isinstance(pre_run_check.get("decision_gate_reason"), str)
-        else None
-    )
-    gtd_missing_criteria = [
-        str(item).strip()
-        for item in (pre_run_check.get("gtd_missing_criteria") or [])
-        if str(item).strip()
-    ]
+    outcome = pre_run_check.outcome
+    ready_label = pre_run_check.ready_label
+    decision_gate_reason = normalize_backlog_pre_run_check_text(pre_run_check.decision_gate_reason)
+    gtd_missing_criteria = list(pre_run_check.gtd_missing_criteria)
     lines = [
         f"New issue `{issue_key}` was added to the backlog on board `{board_id}`.",
         "Run was not started (backlog-only event).",
@@ -93,7 +105,7 @@ def format_backlog_pre_run_check_message(
             lines.append(f"Pre-run check: missing ready label `{ready_label.strip()}`.")
         else:
             lines.append("Pre-run check: missing ready label.")
-    required_worker_label = str(pre_run_check.get("required_worker_label") or "").strip()
+    required_worker_label = str(pre_run_check.required_worker_label or "").strip()
     if required_worker_label:
         lines.append(f"Required worker capability: `{required_worker_label}`.")
     return "\n".join(lines)
