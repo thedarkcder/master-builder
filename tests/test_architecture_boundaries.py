@@ -645,6 +645,40 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             msg=f"decision_engine must consume canonical state-machine semantics directly: {violations}",
         )
 
+    def test_core_decision_runtime_modules_do_not_import_compat_wrappers(self) -> None:
+        modules = [
+            ROOT / "orchestrator" / "core" / "decision_engine.py",
+            ROOT / "orchestrator" / "core" / "decision_precheck_mapping.py",
+            ROOT / "orchestrator" / "core" / "decision_state_repository.py",
+        ]
+        forbidden_imports = {
+            "orchestrator.core.decision_reducer",
+            "orchestrator.core.precheck_decision",
+        }
+        violations: list[str] = []
+        for module_path in modules:
+            for module_name in _imported_modules(module_path):
+                if module_name in forbidden_imports:
+                    violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{module_name}")
+        self.assertEqual(
+            violations,
+            [],
+            msg=f"Core decision runtime modules must use canonical decision_state_machine helpers directly: {violations}",
+        )
+
+    def test_removed_decision_compatibility_facades_do_not_return(self) -> None:
+        removed_modules = [
+            ROOT / "orchestrator" / "core" / "decision_reducer.py",
+            ROOT / "orchestrator" / "core" / "decision_state_reducer.py",
+            ROOT / "orchestrator" / "core" / "precheck_decision.py",
+        ]
+        violations = [module_path.relative_to(ROOT).as_posix() for module_path in removed_modules if module_path.exists()]
+        self.assertEqual(
+            violations,
+            [],
+            msg=f"Decision compatibility facades should be removed once callers are migrated: {violations}",
+        )
+
     def test_api_and_worker_bootstrap_execution_snapshot_startup_migration(self) -> None:
         api_path = ROOT / "orchestrator" / "api" / "main.py"
         worker_path = ROOT / "orchestrator" / "worker.py"

@@ -229,7 +229,7 @@ class DiscordReplyCommandFlowTests(DiscordCommandReplyHarness):
                     },
                 ),
             ),
-            patch("orchestrator.api.discord.commands.run_controls.build_precheck_message") as build_message_mock,
+            patch("orchestrator.api.discord.commands.run_controls.build_runtime_precheck_message") as build_message_mock,
         ):
             response = self.client.post(
                 f"/discord/command/{self.tenant_id}",
@@ -421,7 +421,7 @@ class DiscordReplyCommandFlowTests(DiscordCommandReplyHarness):
             ),
             patch("orchestrator.core.decision_engine.plan_decision_questions", return_value=planner_result),
             patch(
-                "orchestrator.api.discord.commands.run_controls.build_precheck_message",
+                "orchestrator.api.discord.commands.run_controls.build_runtime_precheck_message",
                 return_value=(
                     "Dependencies and risks identified. Which dependencies or risks may impact delivery?",
                     ["Which dependencies or risks may impact delivery?"],

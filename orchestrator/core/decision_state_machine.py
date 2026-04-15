@@ -6,6 +6,7 @@ import hashlib
 
 from orchestrator.core.communications.enqueue_reason_contract import enqueue_reason_guidance
 from orchestrator.core.decision_gate import DecisionGateResult
+from orchestrator.core.decision_planner import DecisionPlannerResult
 from orchestrator.core.decision_types import (
     DecisionClassification,
     DecisionQuestionKind,
@@ -20,6 +21,9 @@ from orchestrator.core.decision_types import (
 )
 from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.pre_run_check import PreRunCheckResult
+from orchestrator.core.precheck_slot_registry import canonical_slot_id
+from orchestrator.core.runtime_payload_models import PlannerGateStatus
+from orchestrator.storage.models import DecisionCase
 
 
 class DecisionEvent(str, Enum):
@@ -222,6 +226,75 @@ def stable_short_hash(value: str) -> str:
     return hashlib.sha1(str(value).encode("utf-8")).hexdigest()[:10]
 
 
+def decision_classification_for_precheck(pre_check: object) -> DecisionClassification:
+    decision_gate = bool(getattr(pre_check, "decision_gate_triggered", False))
+    gtd_valid_raw = getattr(pre_check, "gtd_valid", None)
+    if isinstance(gtd_valid_raw, bool):
+        gtd_missing = not gtd_valid_raw
+    else:
+        gtd_missing = bool(getattr(pre_check, "gtd_missing_criteria", ()) or getattr(pre_check, "gtd_clarification_questions", ()))
+    if decision_gate and gtd_missing:
+        return DecisionClassification.BOTH
+    if decision_gate:
+        return DecisionClassification.DECISION_GATE
+    if gtd_missing:
+        return DecisionClassification.GTD
+    return DecisionClassification.CLEAR
+
+
+def _canonical_slot_name(raw_value: object) -> str:
+    return canonical_slot_id(raw_value)
+
+
+def decision_missing_slots_for_precheck(pre_check: object) -> list[str]:
+    slots: list[str] = []
+    decision_gate = getattr(pre_check, "decision_gate", None)
+    if decision_gate is not None:
+        missing_sections = getattr(decision_gate, "missing_sections", ())
+        if isinstance(missing_sections, (list, tuple)):
+            for item in missing_sections:
+                canonical = _canonical_slot_name(item)
+                if canonical and canonical not in slots:
+                    slots.append(canonical)
+    gtd_missing = getattr(pre_check, "gtd_missing_criteria", ())
+    if isinstance(gtd_missing, (list, tuple)):
+        for item in gtd_missing:
+            canonical = _canonical_slot_name(item)
+            if canonical and canonical not in slots:
+                slots.append(canonical)
+    return slots
+
+
+@dataclass(frozen=True)
+class ReducedPlannerDecision:
+    decision: IngressDecision
+    classification: DecisionClassification
+    question_set: list[dict[str, object]]
+    question_states: list[dict[str, object]]
+
+
+def planner_classification_for_gate_status(*, gate_status: PlannerGateStatus) -> DecisionClassification:
+    if gate_status is PlannerGateStatus.BLOCKED_DECISION_GATE:
+        return DecisionClassification.DECISION_GATE
+    if gate_status is PlannerGateStatus.BLOCKED_GTD:
+        return DecisionClassification.GTD
+    if gate_status is PlannerGateStatus.BLOCKED_BOTH:
+        return DecisionClassification.BOTH
+    return DecisionClassification.CLEAR
+
+
+def clear_decision_planner_result() -> DecisionPlannerResult:
+    return DecisionPlannerResult(
+        gate_status=PlannerGateStatus.CLEAR,
+        reason="",
+        questions=(),
+        question_states=(),
+        resolved_items=(),
+        missing_items=(),
+        captured_answer_summary=None,
+    )
+
+
 def build_question_set(*, pre_check: object, classification: str) -> list[dict]:
     if pre_check is None:
         return []
@@ -262,6 +335,40 @@ def build_question_set(*, pre_check: object, classification: str) -> list[dict]:
         deduped.append(item)
         seen.add(item_id)
     return deduped
+
+
+def reduce_decision_planner_result(
+    *,
+    decision: IngressDecision,
+    planner_result: DecisionPlannerResult,
+) -> ReducedPlannerDecision:
+    reduced_decision = _decision_with_planner_result(decision=decision, planner_result=planner_result)
+    return ReducedPlannerDecision(
+        decision=reduced_decision,
+        classification=planner_classification_for_gate_status(gate_status=planner_result.gate_status),
+        question_set=_planner_question_set(planner_result),
+        question_states=_planner_question_state_payload(planner_result),
+    )
+
+
+def coerce_clear_decision_from_case(*, decision: IngressDecision, case: DecisionCase) -> IngressDecision:
+    normalized_pre_check = (
+        decision.pre_check
+        if isinstance(decision.pre_check, PreRunCheckResult)
+        else _synthetic_clear_pre_check(case=case)
+    )
+    reduced = reduce_decision_planner_result(
+        decision=IngressDecision(
+            source=decision.source,
+            pre_check=normalized_pre_check,
+            block_reason=blocking_reason_for_precheck(normalized_pre_check),
+            guidance=None,
+            policy_error=None,
+            label_actions=decision.label_actions,
+        ),
+        planner_result=clear_decision_planner_result(),
+    )
+    return reduced.decision
 
 
 def apply_frozen_cycle_questions(
@@ -523,6 +630,19 @@ def case_state_for_decision(*, decision: IngressDecision) -> str:
     return "clear"
 
 
+def is_question_driven_state(*, classification: DecisionClassification | str, block_reason: str | None) -> bool:
+    parsed_classification = (
+        classification
+        if isinstance(classification, DecisionClassification)
+        else DecisionClassification.parse(classification)
+    )
+    parsed_block_reason = PrecheckOutcome.parse(block_reason)
+    return parsed_classification.blocks_execution and parsed_block_reason in {
+        PrecheckOutcome.DECISION_GATE_REQUIRED,
+        PrecheckOutcome.GTD_REQUIRED,
+    }
+
+
 def decision_reason(*, pre_check: object, classification: str) -> str | None:
     if pre_check is None:
         return None
@@ -541,6 +661,160 @@ def decision_reason(*, pre_check: object, classification: str) -> str | None:
         if missing:
             return "Missing GTD criteria: " + ", ".join(missing)
     return None
+
+
+def _planner_question_set(planner_result: DecisionPlannerResult) -> list[dict[str, object]]:
+    open_question_overrides = {
+        item.question_id: item
+        for item in planner_result.questions
+        if str(item.question_id or "").strip()
+    }
+    states = planner_result.question_states or planner_result.questions
+    question_set: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for item in states:
+        if item.question_id in seen:
+            continue
+        seen.add(item.question_id)
+        override = open_question_overrides.get(item.question_id)
+        question_set.append(
+            {
+                "id": item.question_id,
+                "kind": override.kind if override is not None else item.kind,
+                "text": override.question if override is not None else item.question,
+                "status": item.status,
+                "detail": override.detail if override is not None else item.detail,
+            }
+        )
+    return question_set
+
+
+def _planner_question_state_payload(planner_result: DecisionPlannerResult) -> list[dict[str, object]]:
+    open_question_overrides = {
+        item.question_id: item
+        for item in planner_result.questions
+        if str(item.question_id or "").strip()
+    }
+    return [
+        {
+            "question_id": item.question_id,
+            "kind": (
+                open_question_overrides[item.question_id].kind
+                if item.question_id in open_question_overrides
+                else item.kind
+            ),
+            "question": (
+                open_question_overrides[item.question_id].question
+                if item.question_id in open_question_overrides
+                else item.question
+            ),
+            "status": item.status,
+            "detail": (
+                open_question_overrides[item.question_id].detail
+                if item.question_id in open_question_overrides
+                else item.detail
+            ),
+        }
+        for item in (planner_result.question_states or planner_result.questions)
+    ]
+
+
+def _planner_block_reason(classification: DecisionClassification) -> str | None:
+    if classification.includes_decision_gate:
+        return PrecheckOutcome.DECISION_GATE_REQUIRED.value
+    if classification is DecisionClassification.GTD:
+        return PrecheckOutcome.GTD_REQUIRED.value
+    return None
+
+
+def _decision_with_planner_result(
+    *,
+    decision: IngressDecision,
+    planner_result: DecisionPlannerResult,
+) -> IngressDecision:
+    pre_check = decision.pre_check
+    if not isinstance(pre_check, PreRunCheckResult):
+        return decision
+    classification = planner_classification_for_gate_status(gate_status=planner_result.gate_status)
+    reason = planner_result.reason
+    decision_gate_questions = tuple(
+        item.question
+        for item in planner_result.questions
+        if item.kind == "decision_gate"
+    )
+    gtd_questions = tuple(
+        item.question
+        for item in planner_result.questions
+        if item.kind == "gtd"
+    )
+    missing_items = tuple(planner_result.missing_items)
+    if classification is DecisionClassification.CLEAR:
+        outcome = (
+            PrecheckOutcome.MISSING_READY_LABEL.value
+            if pre_check.ready_label_missing
+            else PrecheckOutcome.READY_FOR_AGENT.value
+        )
+        updated_pre_check = replace(
+            pre_check,
+            outcome=outcome,
+            decision_gate=DecisionGateResult(
+                triggered=False,
+                reason="Decision Gate not required",
+                missing_sections=(),
+                questions=(),
+                recommendation="Proceed with execution.",
+                tags=(),
+            ),
+            gtd=GoodToDoValidationResult(
+                valid=True,
+                missing_criteria=(),
+                clarification_questions=(),
+            ),
+        )
+        updated_block_reason = blocking_reason_for_precheck(updated_pre_check)
+        return IngressDecision(
+            source=decision.source,
+            pre_check=updated_pre_check,
+            block_reason=updated_block_reason,
+            guidance=guidance_for_precheck_block_reason(block_reason=updated_block_reason),
+            policy_error=None,
+            label_actions=decision.label_actions,
+        )
+
+    updated_pre_check = replace(
+        pre_check,
+        outcome=(
+            PrecheckOutcome.DECISION_GATE_REQUIRED.value
+            if classification.includes_decision_gate
+            else PrecheckOutcome.GTD_REQUIRED.value
+        ),
+        decision_gate=DecisionGateResult(
+            triggered=classification.includes_decision_gate,
+            reason=reason if classification.includes_decision_gate else "Decision Gate not required",
+            missing_sections=missing_items if classification.includes_decision_gate else (),
+            questions=decision_gate_questions,
+            recommendation=(
+                "Clarification required before execution."
+                if classification.includes_decision_gate
+                else pre_check.decision_gate.recommendation
+            ),
+            tags=pre_check.decision_gate.tags,
+        ),
+        gtd=GoodToDoValidationResult(
+            valid=not classification.includes_gtd,
+            missing_criteria=missing_items if classification.includes_gtd else (),
+            clarification_questions=gtd_questions,
+        ),
+    )
+    block_reason = _planner_block_reason(classification)
+    return IngressDecision(
+        source=decision.source,
+        pre_check=updated_pre_check,
+        block_reason=block_reason,
+        guidance=guidance_for_precheck_block_reason(block_reason=block_reason),
+        policy_error=decision.policy_error,
+        label_actions=decision.label_actions,
+    )
 
 
 def decision_from_snapshot(
@@ -565,34 +839,7 @@ def decision_from_snapshot(
     if DecisionClassification.parse(classification) is DecisionClassification.CLEAR:
         normalized_pre_check = pre_check
         if normalized_pre_check is None:
-            ready_label = str(getattr(case, "ready_label", "") or "").strip() or None
-            ready_label_present = bool(getattr(case, "ready_label_present", False))
-            outcome = (
-                PrecheckOutcome.MISSING_READY_LABEL.value
-                if ready_label and not ready_label_present
-                else PrecheckOutcome.READY_FOR_AGENT.value
-            )
-            normalized_pre_check = PreRunCheckResult(
-                outcome=outcome,
-                ready_label=ready_label,
-                ready_label_present=ready_label_present,
-                required_worker_capability=str(getattr(case, "required_worker_capability", "") or "").strip(),
-                required_worker_label=str(getattr(case, "required_worker_label", "") or "").strip(),
-                required_worker_label_present=bool(getattr(case, "required_worker_label_present", False)),
-                decision_gate=DecisionGateResult(
-                    triggered=False,
-                    reason="Decision Gate not required",
-                    missing_sections=(),
-                    questions=(),
-                    recommendation="Proceed with execution.",
-                    tags=(),
-                ),
-                gtd=GoodToDoValidationResult(
-                    valid=True,
-                    missing_criteria=(),
-                    clarification_questions=(),
-                ),
-            )
+            normalized_pre_check = _synthetic_clear_pre_check(case=case)
         if PrecheckOutcome.parse(getattr(normalized_pre_check, "outcome", None)) is PrecheckOutcome.DECISION_GATE_REQUIRED:
             normalized_pre_check = PreRunCheckResult(
                 outcome=PrecheckOutcome.READY_FOR_AGENT.value,
@@ -624,6 +871,37 @@ def decision_from_snapshot(
         guidance=str(snapshot.get("guidance") or "").strip() or None,
         policy_error=str(snapshot.get("policy_error") or "").strip() or None,
         label_actions=(),
+    )
+
+
+def _synthetic_clear_pre_check(*, case: DecisionCase) -> PreRunCheckResult:
+    ready_label = str(case.ready_label or "").strip() or None
+    ready_label_present = bool(case.ready_label_present)
+    outcome = (
+        PrecheckOutcome.MISSING_READY_LABEL.value
+        if ready_label and not ready_label_present
+        else PrecheckOutcome.READY_FOR_AGENT.value
+    )
+    return PreRunCheckResult(
+        outcome=outcome,
+        ready_label=ready_label,
+        ready_label_present=ready_label_present,
+        required_worker_capability=str(case.required_worker_capability or "").strip(),
+        required_worker_label=str(case.required_worker_label or "").strip(),
+        required_worker_label_present=bool(case.required_worker_label_present),
+        decision_gate=DecisionGateResult(
+            triggered=False,
+            reason="Decision Gate not required",
+            missing_sections=(),
+            questions=(),
+            recommendation="Proceed with execution.",
+            tags=(),
+        ),
+        gtd=GoodToDoValidationResult(
+            valid=True,
+            missing_criteria=(),
+            clarification_questions=(),
+        ),
     )
 
 
