@@ -96,18 +96,42 @@ class WorkerRunHealthTests(unittest.TestCase):
             assert refreshed.last_heartbeat_at is not None
             self.assertEqual(refreshed.last_heartbeat_at.replace(tzinfo=timezone.utc), now)
 
-            rejected = touch_run_heartbeat(
+    def test_touch_run_heartbeat_rejects_dispatching_runs(self) -> None:
+        now = datetime.now(timezone.utc)
+        with self.session_factory() as session:
+            add_run_with_workflow(
                 session,
-                run_id="run-heartbeat",
-                worker_service_instance_id="node-b:9999",
-                claim_id="claim-1",
-                heartbeat_at=now + timedelta(seconds=10),
+                make_run(
+                    run_id="run-dispatching-heartbeat",
+                    tenant_id="tenant-a",
+                    issue_key="TA-2",
+                    issue_summary="dispatching heartbeat",
+                    issue_description="desc",
+                    repo_url="https://github.com/example/a",
+                    created_at=now - timedelta(minutes=5),
+                    status="dispatching",
+                    started_at=None,
+                    dispatch_claimed_at=now - timedelta(minutes=4),
+                    last_heartbeat_at=None,
+                    worker_service_instance_id="node-a:1234",
+                    claim_id="claim-1",
+                ),
+                workflow_status="queued",
             )
-            self.assertFalse(rejected)
-            refreshed = session.get(Run, "run-heartbeat")
+            session.commit()
+
+            updated = touch_run_heartbeat(
+                session,
+                run_id="run-dispatching-heartbeat",
+                worker_service_instance_id="node-a:1234",
+                claim_id="claim-1",
+                heartbeat_at=now,
+            )
+
+            self.assertFalse(updated)
+            refreshed = session.get(Run, "run-dispatching-heartbeat")
             assert refreshed is not None
-            assert refreshed.last_heartbeat_at is not None
-            self.assertEqual(refreshed.last_heartbeat_at.replace(tzinfo=timezone.utc), now)
+            self.assertIsNone(refreshed.last_heartbeat_at)
 
     def test_recover_stale_running_runs_marks_failed_and_preserves_fresh_runs(self) -> None:
         now = datetime.now(timezone.utc)

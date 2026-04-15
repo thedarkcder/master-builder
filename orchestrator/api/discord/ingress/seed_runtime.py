@@ -5,8 +5,8 @@ import re
 from orchestrator.api.discord.ingress import jira_runtime
 from orchestrator.api.discord.seed.description import build_seed_issue_description
 from orchestrator.api.discord.seed.issue_service import (
-    seed_parent_issues_with_codex as _seed_parent_issues_with_codex_impl,
-    seed_issues_with_codex as _seed_issues_with_codex_impl,
+    seed_parent_issues_with_runtime as _seed_parent_issues_with_runtime_impl,
+    seed_issues_with_runtime as _seed_issues_with_runtime_impl,
     validate_seed_followup_context as _validate_seed_followup_context_impl,
 )
 from orchestrator.api.discord.seed.matching import select_seed_match
@@ -19,7 +19,7 @@ from orchestrator.core.config import get_settings
 ISSUE_KEY_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]+-\d+$")
 
 
-def build_codex_runtime(
+def build_issue_seed_runtime(
     *,
     session,
     settings,
@@ -36,7 +36,7 @@ def build_codex_runtime(
     )
 
 
-def seed_issues_with_codex(
+def seed_issues_with_runtime(
     *,
     session,
     tenant,
@@ -50,7 +50,7 @@ def seed_issues_with_codex(
     pm_status: str | None = None,
     planning_package: dict | None = None,
 ) -> tuple[str, dict]:  # noqa: ANN001
-    return _seed_issues_with_codex_impl(
+    return _seed_issues_with_runtime_impl(
         session=session,
         tenant=tenant,
         prompt_markdown=prompt_markdown,
@@ -61,14 +61,14 @@ def seed_issues_with_codex(
         codex_working_dir=codex_working_dir,
         tenant_project_keys_fn=tenant_project_keys,
         get_settings_fn=get_settings,
-        build_codex_runtime_fn=lambda **kwargs: build_codex_runtime(
+        build_runtime_fn=lambda **kwargs: build_issue_seed_runtime(
             session=kwargs.get("session"),
             settings=kwargs["settings"],
             tenant_id=getattr(tenant, "tenant_id", None),
             project_id=scoped_project_id,
             selector="discord.issue_seed",
         ),
-        plan_seed_issues_with_codex_fn=plan_seed_issues_with_codex,
+        plan_seed_issues_with_runtime_fn=plan_seed_issues_with_codex,
         codex_runtime_error_type=CodexRuntimeError,
         build_seed_issue_description_fn=build_seed_issue_description,
         issue_key_pattern=ISSUE_KEY_PATTERN,
@@ -80,7 +80,7 @@ def seed_issues_with_codex(
     )
 
 
-def seed_parent_issues_with_codex(
+def seed_parent_issues_with_runtime(
     *,
     session,
     tenant,
@@ -93,7 +93,7 @@ def seed_parent_issues_with_codex(
     pm_status: str | None = None,
     pm_interview_notes_json: dict | None = None,
 ) -> tuple[str, dict]:  # noqa: ANN001
-    return _seed_parent_issues_with_codex_impl(
+    return _seed_parent_issues_with_runtime_impl(
         session=session,
         tenant=tenant,
         prompt_markdown=prompt_markdown,
@@ -104,14 +104,14 @@ def seed_parent_issues_with_codex(
         codex_working_dir=codex_working_dir,
         tenant_project_keys_fn=tenant_project_keys,
         get_settings_fn=get_settings,
-        build_codex_runtime_fn=lambda **kwargs: build_codex_runtime(
+        build_runtime_fn=lambda **kwargs: build_issue_seed_runtime(
             session=kwargs.get("session"),
             settings=kwargs["settings"],
             tenant_id=getattr(tenant, "tenant_id", None),
             project_id=scoped_project_id,
             selector="discord.pm_seed",
         ),
-        plan_pm_parent_issues_with_codex_fn=plan_pm_parent_issues_with_codex,
+        plan_pm_parent_issues_with_runtime_fn=plan_pm_parent_issues_with_codex,
         codex_runtime_error_type=CodexRuntimeError,
         issue_key_pattern=ISSUE_KEY_PATTERN,
         tenant_jira_oauth_context_fn=jira_runtime.tenant_jira_oauth_context,

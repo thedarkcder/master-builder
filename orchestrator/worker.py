@@ -21,6 +21,7 @@ from orchestrator.core.logging import configure_logging
 from orchestrator.core.knowledge_prewarm import prewarm_knowledge_dependencies
 from orchestrator.core.platform_metrics import platform_metrics
 from orchestrator.core.project_policy import resolve_effective_policy
+from orchestrator.core.runtime_requirements import normalize_runtime_kinds
 from orchestrator.core.runs import (
     RUN_STATUS_BLOCKED,
     RUN_STATUS_CANCELLED,
@@ -29,6 +30,7 @@ from orchestrator.core.runs import (
     RUN_STATUS_RUNNING,
     RUN_STATUS_SUCCEEDED,
     RUN_STATUS_WAITING_FOR_INPUT,
+    RunStateTransitionError,
     mark_run_terminal,
 )
 from orchestrator.core.worker.run_health import (
@@ -43,7 +45,6 @@ from orchestrator.core.worker.queue_selector import (
 from orchestrator.core.worker.execution_service import (
     process_claimed_run_with_dependencies as _process_claimed_run_with_dependencies,
     process_next_webhook_job_with_dependencies as _process_next_webhook_job_with_dependencies,
-    process_next_queued_run_with_dependencies as _process_next_queued_run_with_dependencies,
 )
 from orchestrator.core.worker.queue_listener import (
     RunQueueNotificationBridge,
@@ -83,6 +84,7 @@ WORKER_CHILD_EXIT_DEPENDENCY_FAILURE = 4
 WORKER_CHILD_EXIT_RUNTIME_FAILURE = 5
 _VALID_POST_CHILD_RUN_STATUSES = {
     "queued",
+    "ownership_lost",
     RUN_STATUS_RUNNING,
     RUN_STATUS_WAITING_FOR_INPUT,
     RUN_STATUS_BLOCKED,
@@ -391,7 +393,7 @@ def _claim_next_run_once(
     session_factory: sessionmaker[Session],
     settings: Settings,
     service_instance_id: str,
-    ready_runtime_kinds: set[str],
+    ready_runtime_kinds: set[str] | None = None,
 ) -> ClaimedRunDispatch | None:
     capability_context = resolve_worker_capability_context(
         raw_value=getattr(settings, "worker_capabilities", None),
@@ -405,7 +407,9 @@ def _claim_next_run_once(
             failed_status="failed",
             worker_service_instance_id=service_instance_id,
             worker_capabilities=set(capability_context.available),
-            ready_runtime_kinds=ready_runtime_kinds,
+            ready_runtime_kinds=ready_runtime_kinds or set(
+                normalize_runtime_kinds(getattr(settings, "worker_runtime_kinds", None))
+            ),
             running_stale_timeout_seconds=max(
                 60,
                 int(getattr(settings, "worker_run_stale_timeout_seconds", 300)),
@@ -457,7 +461,7 @@ def _probe_claimable_run_once(
     *,
     session_factory: sessionmaker[Session],
     settings: Settings,
-    ready_runtime_kinds: set[str],
+    ready_runtime_kinds: set[str] | None = None,
 ) -> QueueClaimabilityProbe:
     capability_context = resolve_worker_capability_context(
         raw_value=getattr(settings, "worker_capabilities", None),
@@ -469,7 +473,9 @@ def _probe_claimable_run_once(
             queued_status="queued",
             running_status="running",
             worker_capabilities=set(capability_context.available),
-            ready_runtime_kinds=ready_runtime_kinds,
+            ready_runtime_kinds=ready_runtime_kinds or set(
+                normalize_runtime_kinds(getattr(settings, "worker_runtime_kinds", None))
+            ),
             running_stale_timeout_seconds=max(
                 60,
                 int(getattr(settings, "worker_run_stale_timeout_seconds", 300)),
@@ -590,13 +596,35 @@ def _reconcile_claimed_run_after_child_exit(
             return None
         status = str(getattr(run, "status", "") or "").strip().lower()
         if status == RUN_STATUS_DISPATCHING:
-            failed_run = mark_run_terminal(
-                session,
-                run_id=run_id,
-                terminal_status=RUN_STATUS_FAILED,
-                last_error=_CHILD_DISPATCH_STUCK_ERROR,
-                expected_claim_id=claim_id,
-            )
+            current_claim_id = str(getattr(run, "claim_id", "") or "").strip()
+            expected_claim_id = str(claim_id or "").strip()
+            if current_claim_id and current_claim_id != expected_claim_id:
+                logger.warning(
+                    "worker_child_post_exit_ownership_lost run_id=%s status=%s current_claim_id=%s expected_claim_id=%s",
+                    run_id,
+                    status,
+                    current_claim_id,
+                    expected_claim_id,
+                )
+                return "ownership_lost"
+            try:
+                failed_run = mark_run_terminal(
+                    session,
+                    run_id=run_id,
+                    terminal_status=RUN_STATUS_FAILED,
+                    last_error=_CHILD_DISPATCH_STUCK_ERROR,
+                    expected_claim_id=claim_id,
+                )
+            except RunStateTransitionError as exc:
+                if "Claim mismatch while terminalizing run" in str(exc):
+                    logger.warning(
+                        "worker_child_post_exit_claim_changed run_id=%s expected_claim_id=%s error=%s",
+                        run_id,
+                        expected_claim_id,
+                        exc,
+                    )
+                    return "ownership_lost"
+                raise
             return str(getattr(failed_run, "status", "") or "").strip().lower()
         return status
 

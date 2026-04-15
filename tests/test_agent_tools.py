@@ -10,7 +10,11 @@ import pytest
 from orchestrator.core.agent_tools import (
     allowed_tools_for_stage,
     execute_agent_tool,
+    governed_allowed_tools_for_stage,
+    governed_tool_catalog_for_stage,
     list_implemented_tools,
+    native_model_tools_for_stage,
+    native_tool_catalog_for_stage,
     tool_catalog_for_stage,
 )
 from orchestrator.core.knowledge_base import KnowledgeEmbeddingAccessMode
@@ -24,6 +28,8 @@ def test_allowed_tools_for_stage_dev_contains_github_and_jira() -> None:
     assert "github.create_branch" in tools
     assert "github.open_pr" in tools
     assert "jira.comment" in tools
+    assert "web.search" in tools
+    assert "browser.snapshot" in tools
     assert "project.check_runtime_bindings" in tools
     assert "exec.run_install" in tools
 
@@ -38,6 +44,45 @@ def test_allowed_tools_for_stage_pm_contains_evidence_tools() -> None:
     assert "project.check_runtime_bindings" in tools
     assert "project.request_install" in tools
     assert "run.request_human_input" in tools
+
+
+def test_allowed_tools_for_planning_stages_are_read_only_research_tools() -> None:
+    normalization_tools = allowed_tools_for_stage("pm_parent_brief_normalization")
+    architect_tools = allowed_tools_for_stage("engineering_planning")
+    security_tools = allowed_tools_for_stage("security_planning")
+    tester_tools = allowed_tools_for_stage("test_planning")
+
+    assert {"jira.get_issue", "knowledge.read", "knowledge.exact_read", "repo.read", "web.search", "web.fetch", "browser.open", "browser.snapshot"} <= normalization_tools
+    assert {"jira.get_issue", "knowledge.read", "knowledge.exact_read", "repo.read", "web.search", "web.fetch", "browser.open", "browser.snapshot"} <= architect_tools
+    assert {"project.list_installs", "project.check_runtime_bindings"} <= architect_tools
+    assert {"project.list_installs", "project.check_runtime_bindings"} <= security_tools
+    assert {"project.list_installs", "project.check_runtime_bindings"} <= tester_tools
+    for tools in (normalization_tools, architect_tools, security_tools, tester_tools):
+        assert "jira.comment" not in tools
+        assert "jira.transition" not in tools
+        assert "github.create_branch" not in tools
+        assert "github.open_pr" not in tools
+        assert "project.request_install" not in tools
+        assert "exec.run_install" not in tools
+        assert "run.request_human_input" not in tools
+
+
+def test_codex_runtime_splits_native_and_governed_tools_for_planning_stages() -> None:
+    architect_governed = governed_allowed_tools_for_stage("engineering_planning", runtime_command="codex")
+    architect_native = native_model_tools_for_stage("engineering_planning", runtime_command="codex")
+
+    assert {"jira.get_issue", "knowledge.read", "knowledge.exact_read", "repo.read"} <= architect_governed
+    assert {"project.list_installs", "project.check_runtime_bindings"} <= architect_governed
+    assert architect_native == {"web.search", "web.fetch", "browser.open", "browser.snapshot"}
+    assert architect_governed.isdisjoint(architect_native)
+
+
+def test_non_codex_runtime_does_not_expose_native_codex_tools() -> None:
+    governed = governed_allowed_tools_for_stage("engineering_planning", runtime_command="http://127.0.0.1:8000")
+    native = native_model_tools_for_stage("engineering_planning", runtime_command="http://127.0.0.1:8000")
+
+    assert native == set()
+    assert {"web.search", "web.fetch", "browser.open", "browser.snapshot"}.isdisjoint(governed)
 
 
 def test_allowed_tools_for_stage_dev_contains_human_input_request_tool() -> None:
@@ -84,6 +129,19 @@ def test_tool_catalog_for_stage_returns_structured_entries() -> None:
     assert "explicitly named project bindings" in str(runtime_tool["description"])
     assert "test" in runtime_tool["stages"]
 
+    browser_tool = next(item for item in tools if item["tool_name"] == "browser.snapshot")
+    assert browser_tool["category"] == "browser"
+    assert "UI inspection" in str(browser_tool["description"])
+
+
+def test_governed_and_native_tool_catalogs_split_for_codex_runtime() -> None:
+    governed = governed_tool_catalog_for_stage("dev", runtime_command="codex")
+    native = native_tool_catalog_for_stage("dev", runtime_command="codex")
+
+    assert any(item["tool_name"] == "github.open_pr" for item in governed)
+    assert all(item["tool_name"] not in {"web.search", "web.fetch", "browser.open", "browser.snapshot"} for item in governed)
+    assert {item["tool_name"] for item in native} == {"web.search", "web.fetch", "browser.open", "browser.snapshot"}
+
 
 def test_execute_agent_tool_rejects_disallowed_stage_tool() -> None:
     class _FakeContext:
@@ -101,6 +159,39 @@ def test_execute_agent_tool_rejects_disallowed_stage_tool() -> None:
                 stage="pm",
                 tool_name="github.open_pr",
                 tool_args={},
+            )
+
+
+def test_execute_agent_tool_rejects_native_runtime_tools_through_governed_bridge() -> None:
+    class _FakeTenant:
+        tenant_id = "example"
+        policy_config = {}
+
+    class _FakeProject:
+        project_id = "example-default"
+        github_repository = "https://github.com/acme/repo"
+        policy_overrides = {}
+
+    class _FakeContext:
+        tenant = _FakeTenant()
+        project = _FakeProject()
+        stage = "test_planning"
+        issue_key = "MAB-1"
+        run_id = None
+        repo_dir = Path("/tmp/repo")
+
+    with patch("orchestrator.core.agent_tools._resolve_context", return_value=_FakeContext()):
+        with pytest.raises(PermissionError):
+            execute_agent_tool(
+                session=None,  # type: ignore[arg-type]
+                settings=None,
+                tenant_id="example",
+                project_id="example-default",
+                run_id=None,
+                issue_key="MAB-1",
+                stage="test_planning",
+                tool_name="browser.snapshot",
+                tool_args={"url": "https://example.com/app"},
             )
 
 

@@ -8,6 +8,7 @@ from orchestrator.core.agent_runtime_resolver import resolve_execution_profile_f
 from orchestrator.core.config import Settings
 
 WORKFLOW_RUNTIME_SELECTORS: tuple[str, ...] = (
+    "repo_setup.prepare",
     "workflow.pm",
     "workflow.dev",
     "workflow.test",

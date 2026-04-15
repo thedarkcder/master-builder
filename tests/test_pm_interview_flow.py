@@ -15,7 +15,6 @@ class PmInterviewFlowTests(DiscordCommandApiTestHarness):
                 "orchestrator.api.discord.ingress.ask_runtime.collect_ask_context_with_history_context",
                 return_value=(None, None, [], {}, []),
             ),
-            patch("orchestrator.api.discord.commands.ask.build_codex_runtime"),
             patch(
                 "orchestrator.api.discord.commands.ask.plan_pm_interview_with_codex",
                 return_value={
@@ -46,7 +45,7 @@ class PmInterviewFlowTests(DiscordCommandApiTestHarness):
                 },
             ),
             patch(
-                "orchestrator.api.discord.ingress.seed_runtime.seed_parent_issues_with_codex",
+                "orchestrator.api.discord.ingress.seed_runtime.seed_parent_issues_with_runtime",
                 new=MagicMock(side_effect=AssertionError("PM interview should not seed Jira before completion")),
             ) as seed_mock,
         ):
@@ -75,19 +74,27 @@ class PmInterviewFlowTests(DiscordCommandApiTestHarness):
             recommendations=("Keep the first version link-only.",),
             acceptance_impacts=("Acceptance criteria should cover store fallback.",),
             open_behavior_questions=(),
+            architecture_summary=(
+                "Break the work into onboarding and profile slices.",
+                "Use one child ticket per implementation slice.",
+            ),
+            architecture_diagram="flowchart TD\n  Parent[Parent brief] --> Child[Engineering child]",
             stages=(
                 SimpleNamespace(
                     planning_state="engineering_planning",
+                    persona_id="architect",
                     to_payload=lambda: {
                         "findings": ["Break the work into onboarding and profile slices."],
                         "recommendations": ["Use one child ticket per implementation slice."],
                         "required_tasks": ["Implement share entry points"],
                         "open_behavior_questions": [],
                         "acceptance_impacts": ["Needs entry points in onboarding and profile."],
+                        "mermaid_diagram": "flowchart TD\n  Parent[Parent brief] --> Child[Engineering child]",
                     },
                 ),
                 SimpleNamespace(
                     planning_state="security_planning",
+                    persona_id="security",
                     to_payload=lambda: {
                         "findings": ["The link flow needs abuse controls."],
                         "recommendations": ["Enforce rate limiting."],
@@ -98,6 +105,7 @@ class PmInterviewFlowTests(DiscordCommandApiTestHarness):
                 ),
                 SimpleNamespace(
                     planning_state="test_planning",
+                    persona_id="qa",
                     to_payload=lambda: {
                         "findings": ["Regression coverage is required."],
                         "recommendations": ["Cover repeat-share misuse."],
@@ -142,7 +150,7 @@ class PmInterviewFlowTests(DiscordCommandApiTestHarness):
                 },
             ),
             patch(
-                "orchestrator.api.discord.ingress.seed_runtime.seed_parent_issues_with_codex",
+                "orchestrator.api.discord.ingress.seed_runtime.seed_parent_issues_with_runtime",
                 return_value=(
                     "PM parent issue upsert complete. Created 1: TP-501. Updated 0: none.",
                     {
@@ -159,7 +167,7 @@ class PmInterviewFlowTests(DiscordCommandApiTestHarness):
                 return_value=planning_result,
             ) as planning_mock,
             patch(
-                "orchestrator.api.discord.ingress.seed_runtime.seed_issues_with_codex",
+                "orchestrator.api.discord.ingress.seed_runtime.seed_issues_with_runtime",
                 return_value=(
                     "Issue upsert complete. Parent: TP-501. Created 2: TP-502, TP-503.",
                     {
@@ -194,6 +202,8 @@ class PmInterviewFlowTests(DiscordCommandApiTestHarness):
         planning_package = seed_children_mock.call_args.kwargs["planning_package"]
         self.assertEqual(planning_package["planning_state"], "planning_completed")
         self.assertEqual(len(planning_package["child_issues"]), 2)
+        self.assertIn("architecture", planning_package["specialist_outputs"])
+        self.assertIn("Parent[Parent brief] --> Child[Engineering child]", planning_package["architecture_diagram"])
         planning_mock.assert_called_once()
 
 

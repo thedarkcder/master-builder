@@ -13,6 +13,7 @@ from orchestrator.core.codex_agents import _invoke_discord_json_maybe_tools
 from orchestrator.core.runtime_invocation import AgentInvocationContext
 from orchestrator.core.codex_runtime import CodexRuntime, CodexRuntimeError
 from orchestrator.core.prompt_templates import render_prompt
+from orchestrator.core.runtime_stage_session import RuntimeStageSession
 from orchestrator.storage.models import PMInterviewCase
 
 PM_INTERVIEW_STATUS_DRAFTING = "drafting"
@@ -21,6 +22,8 @@ PM_INTERVIEW_STATUS_RESEARCHING = "researching"
 PM_INTERVIEW_STATUS_READY_TO_WRITE = "ready_to_write"
 PM_INTERVIEW_STATUS_PM_COMPLETED = "pm_completed"
 PM_INTERVIEW_STATUS_ABANDONED = "abandoned"
+PM_INTERVIEW_SOURCE_KIND_PARENT_BRIEF_SNAPSHOT = "parent_brief_snapshot"
+PM_INTERVIEW_PARENT_BRIEF_CHANNEL_ID = "jira-parent-sync"
 
 PM_INTERVIEW_ACTIVE_STATUSES = (
     PM_INTERVIEW_STATUS_DRAFTING,
@@ -822,6 +825,53 @@ def normalize_pm_interview_evidence(
     payload: Sequence[Mapping[str, Any] | PMInterviewEvidence] | None,
 ) -> tuple[PMInterviewEvidence, ...]:
     return _evidence_update_payloads(payload)
+
+
+def normalize_parent_feature_brief_with_runtime(
+    *,
+    session: Session | None = None,
+    settings: Any | None = None,
+    runtime: CodexRuntime,
+    parent_issue_key: str,
+    parent_summary: str,
+    parent_description: str,
+    invocation_context: AgentInvocationContext,
+) -> dict[str, Any]:
+    stage_session = RuntimeStageSession.create(
+        runtime=runtime,
+        context=invocation_context,
+        policy_stage="pm_parent_brief_normalization",
+        session=session,
+        settings=settings,
+        issue_key=parent_issue_key,
+    )
+    system_prompt = render_prompt("workflow/pm_parent_brief_normalization_system.j2")
+    user_prompt = render_prompt(
+        "workflow/pm_parent_brief_normalization_user.j2",
+        parent_issue_key=parent_issue_key,
+        parent_summary=parent_summary,
+        parent_description=parent_description,
+        **stage_session.tooling.governed_native_prompt_context(),
+    )
+    payload = stage_session.invoke_json(
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+    )
+    if not isinstance(payload, dict):
+        raise CodexRuntimeError("Codex did not return a parent brief normalization JSON object")
+    brief_payload = payload.get("brief")
+    if not isinstance(brief_payload, Mapping):
+        raise CodexRuntimeError("Codex did not return a normalized parent brief object")
+    normalized_brief = normalize_pm_interview_brief(brief_payload)
+    assessment = assess_pm_interview_brief(brief=normalized_brief.to_payload(), evidence=())
+    questions = _normalized_text_list(payload.get("open_questions"))
+    if not assessment.ready_to_write and not questions and assessment.next_question is not None:
+        questions = (format_pm_interview_question(assessment.next_question),)
+    return {
+        "brief": assessment.brief.to_payload(),
+        "open_questions": list(questions),
+        "ready_to_write": assessment.ready_to_write and not questions,
+    }
 
 
 def _question_payload(value: Mapping[str, Any] | PMInterviewQuestion | None) -> dict[str, Any]:

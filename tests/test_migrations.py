@@ -50,7 +50,7 @@ class MigrationTests(unittest.TestCase):
 
         duplicates = {revision_id: count for revision_id, count in Counter(revision_ids).items() if count > 1}
         self.assertEqual(duplicates, {})
-        self.assertEqual(script.get_heads(), ["20260410_0058"])
+        self.assertEqual(script.get_heads(), ["20260413_0064"])
 
     def test_jira_feature_migrations_chain_after_staging_worker_head(self) -> None:
         """Branch-specific migrations chained after staging merge head (20260328_0045)."""
@@ -113,6 +113,30 @@ class MigrationTests(unittest.TestCase):
             "20260410_0058_execution_snapshot_checkpoint_backfill.py": (
                 'revision = "20260410_0058"',
                 'down_revision = "20260410_0057"',
+            ),
+            "20260412_0059_run_queue_contract.py": (
+                'revision = "20260412_0059"',
+                'down_revision = "20260410_0058"',
+            ),
+            "20260412_0060_run_claim_id.py": (
+                'revision = "20260412_0060"',
+                'down_revision = "20260412_0059"',
+            ),
+            "20260412_0061_runtime_readiness.py": (
+                'revision = "20260412_0061"',
+                'down_revision = "20260412_0060"',
+            ),
+            "20260412_0062_worker_runtime_kinds.py": (
+                'revision = "20260412_0062"',
+                'down_revision = "20260412_0061"',
+            ),
+            "20260413_0063_worker_runtime_auth_requests.py": (
+                'revision = "20260413_0063"',
+                'down_revision = "20260412_0062"',
+            ),
+            "20260413_0064_merge_project_installs_and_worker_runtime_auth_heads.py": (
+                'revision = "20260413_0064"',
+                'down_revision = ("20260410_0058", "20260413_0063")',
             ),
         }
 

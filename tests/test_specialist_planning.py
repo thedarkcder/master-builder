@@ -11,6 +11,7 @@ from orchestrator.core.specialist_planning import (
     PLANNING_STATE_SECURITY,
     PLANNING_STATE_TEST,
     SpecialistPlanningRequest,
+    build_runtime_seed_planning_package,
     run_specialist_planning_fanout,
 )
 
@@ -64,6 +65,7 @@ class SpecialistPlanningTests(unittest.TestCase):
                     "required_tasks": ["Build invite service", "Persist invite state"],
                     "open_behavior_questions": [],
                     "acceptance_impacts": ["Invite flow works from Profile"],
+                    "mermaid_diagram": "flowchart TD\n  Share[Share entry] --> InviteService[Invite service]",
                 }
             if context.stage == PLANNING_STATE_SECURITY:
                 return {
@@ -83,7 +85,7 @@ class SpecialistPlanningTests(unittest.TestCase):
 
         with (
             patch("orchestrator.core.specialist_planning.render_prompt", side_effect=_render_prompt),
-            patch("orchestrator.core.specialist_planning.invoke_runtime_json", side_effect=_invoke_runtime_json),
+            patch("orchestrator.core.runtime_stage_session.invoke_runtime_json", side_effect=_invoke_runtime_json),
         ):
             result = run_specialist_planning_fanout(
                 runtime=SimpleNamespace(),
@@ -111,6 +113,15 @@ class SpecialistPlanningTests(unittest.TestCase):
         self.assertIn("Invite flow works from Profile", result.acceptance_impacts)
         self.assertEqual(result.open_behavior_questions, ())
         self.assertIsNone(result.block_reason)
+        self.assertEqual(
+            result.architecture_summary,
+            (
+                "Architecture should split invite creation from delivery",
+                "Use a dedicated invite service",
+                "Invite flow works from Profile",
+            ),
+        )
+        self.assertIn("Invite service", result.architecture_diagram or "")
         self.assertTrue(prompts)
         first_prompt_name, first_prompt_context = prompts[0]
         self.assertEqual(first_prompt_name, "workflow/pm_planning_architect_system.j2")
@@ -153,7 +164,7 @@ class SpecialistPlanningTests(unittest.TestCase):
 
         with (
             patch("orchestrator.core.specialist_planning.render_prompt", return_value="prompt"),
-            patch("orchestrator.core.specialist_planning.invoke_runtime_json", side_effect=_invoke_runtime_json),
+            patch("orchestrator.core.runtime_stage_session.invoke_runtime_json", side_effect=_invoke_runtime_json),
         ):
             result = run_specialist_planning_fanout(runtime=SimpleNamespace(), request=request)
 
@@ -172,14 +183,17 @@ class SpecialistPlanningTests(unittest.TestCase):
         from pathlib import Path
 
         prompts_dir = Path(__file__).resolve().parents[1] / "orchestrator" / "prompts" / "workflow"
-        for prompt_name in (
+        system_prompts = (
             "pm_planning_architect_system.j2",
             "pm_planning_security_system.j2",
             "pm_planning_tester_system.j2",
+        )
+        user_prompts = (
             "pm_planning_architect_user.j2",
             "pm_planning_security_user.j2",
             "pm_planning_tester_user.j2",
-        ):
+        )
+        for prompt_name in (*system_prompts, *user_prompts):
             prompt_text = (prompts_dir / prompt_name).read_text(encoding="utf-8")
             self.assertIn("Return strict JSON only with keys", prompt_text)
             self.assertIn("findings", prompt_text)
@@ -187,6 +201,119 @@ class SpecialistPlanningTests(unittest.TestCase):
             self.assertIn("required_tasks", prompt_text)
             self.assertIn("open_behavior_questions", prompt_text)
             self.assertIn("acceptance_impacts", prompt_text)
+            if "architect" in prompt_name:
+                self.assertIn("mermaid_diagram", prompt_text)
+            if prompt_name in user_prompts:
+                self.assertIn('"type":"tool_request"', prompt_text)
+                self.assertIn('"type":"final_response"', prompt_text)
+                self.assertIn("Allowed governed tools for this stage", prompt_text)
+                self.assertIn("Native Codex tools available directly in this runtime", prompt_text)
+            else:
+                self.assertIn('When the user message includes "Allowed governed tools" and "Native Codex tools" sections', prompt_text)
+
+    def test_fanout_uses_tool_bridge_when_session_and_settings_present(self) -> None:
+        request = self._request()
+        captured: dict[str, object] = {"stages": []}
+
+        def _render_prompt(template_name: str, **kwargs):  # noqa: ANN001
+            if template_name == "workflow/pm_planning_architect_user.j2":
+                captured["governed_tools_json"] = kwargs["governed_tools_json"]
+                captured["native_tools_json"] = kwargs["native_tools_json"]
+            return template_name
+
+        def _invoke_runtime_json_with_tools(*, context, user_prompt, allowed_tools, **kwargs):  # noqa: ANN001
+            _ = kwargs
+            captured["stages"].append(context.stage)
+            captured["user_prompt"] = user_prompt
+            captured["allowed_tools"] = set(allowed_tools)
+            return {
+                "findings": [],
+                "recommendations": [],
+                "required_tasks": [],
+                "open_behavior_questions": [],
+                "acceptance_impacts": [],
+                "mermaid_diagram": "",
+            }
+
+        with (
+            patch("orchestrator.core.specialist_planning.render_prompt", side_effect=_render_prompt),
+            patch("orchestrator.core.runtime_stage_session.invoke_runtime_json_with_tools", side_effect=_invoke_runtime_json_with_tools),
+        ):
+            run_specialist_planning_fanout(
+                session=object(),
+                settings=object(),
+                runtime=SimpleNamespace(command="codex"),
+                request=request,
+                runtime_for_selector=lambda _selector: SimpleNamespace(command="codex"),
+            )
+
+        self.assertIn(PLANNING_STATE_ENGINEERING, captured["stages"])
+        self.assertIn("knowledge.read", captured["allowed_tools"])
+        self.assertIn("repo.read", captured["allowed_tools"])
+        self.assertNotIn("web.search", captured["allowed_tools"])
+        self.assertIn("tool_name", str(captured["governed_tools_json"]))
+        self.assertIn("project.check_runtime_bindings", str(captured["governed_tools_json"]))
+        self.assertIn("web.search", str(captured["native_tools_json"]))
+        self.assertIn("browser.snapshot", str(captured["native_tools_json"]))
+
+    def test_build_runtime_seed_planning_package_keeps_architecture_artifacts(self) -> None:
+        def _invoke_runtime_json(*, context, system_prompt, user_prompt, runtime):  # noqa: ANN001
+            _ = (system_prompt, user_prompt, runtime)
+            if context.stage == PLANNING_STATE_ENGINEERING:
+                return {
+                    "findings": ["Architecture should split invite creation from delivery"],
+                    "recommendations": ["Use a dedicated invite service"],
+                    "required_tasks": ["Build invite service"],
+                    "open_behavior_questions": [],
+                    "acceptance_impacts": ["Invite flow works from Profile"],
+                    "mermaid_diagram": "flowchart TD\n  Share[Share entry] --> InviteService[Invite service]",
+                }
+            if context.stage == PLANNING_STATE_SECURITY:
+                return {
+                    "findings": ["Signed links prevent spoofing"],
+                    "recommendations": ["Verify expiry and signature server-side"],
+                    "required_tasks": ["Add signed invite tokens"],
+                    "open_behavior_questions": [],
+                    "acceptance_impacts": ["Unauthorized reuse is blocked"],
+                }
+            return {
+                "findings": ["Need malformed-link coverage"],
+                "recommendations": ["Add regression tests"],
+                "required_tasks": ["Add malformed-link test"],
+                "open_behavior_questions": [],
+                "acceptance_impacts": ["Acceptance criteria remain testable"],
+            }
+
+        with (
+            patch("orchestrator.core.specialist_planning.render_prompt", return_value="prompt"),
+            patch("orchestrator.core.runtime_stage_session.invoke_runtime_json", side_effect=_invoke_runtime_json),
+        ):
+            result = run_specialist_planning_fanout(
+                runtime=SimpleNamespace(),
+                request=self._request(),
+                runtime_for_selector=lambda _selector: SimpleNamespace(),
+            )
+
+        package = build_runtime_seed_planning_package(
+            result=result,
+            behavior_slice="Let users share the app with friends",
+        )
+
+        self.assertEqual(package["planning_state"], PLANNING_STATE_COMPLETED)
+        self.assertIn("architecture", package["specialist_outputs"])
+        self.assertEqual(
+            package["architecture_summary"],
+            [
+                "Architecture should split invite creation from delivery",
+                "Use a dedicated invite service",
+                "Invite flow works from Profile",
+            ],
+        )
+        self.assertIn("Invite service", str(package["architecture_diagram"]))
+        self.assertTrue(package["child_issues"])
+        self.assertIn("Deliver the behavior slice", package["child_issues"][0]["technical_objective"])
+        self.assertIn("functional requirement", package["child_issues"][0]["implementation_plan"][0])
+        self.assertIn("Decision owner: Engineering child team.", package["child_issues"][0]["implementation_decisions"][0])
 
 
 if __name__ == "__main__":
