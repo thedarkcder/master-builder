@@ -53,7 +53,7 @@ def _string_tuple(value: object) -> tuple[str, ...]:
 
 @dataclass(frozen=True)
 class PrecheckSnapshot:
-    outcome: str
+    outcome: PrecheckOutcome
     ready_label: str | None
     ready_label_present: bool
     required_worker_capability: str
@@ -65,7 +65,7 @@ class PrecheckSnapshot:
     @classmethod
     def from_precheck(cls, pre_check: PreRunCheckResult) -> "PrecheckSnapshot":
         return cls(
-            outcome=pre_check.outcome,
+            outcome=PrecheckOutcome.parse(pre_check.outcome) or PrecheckOutcome.POLICY_EVAL_FAILED,
             ready_label=pre_check.ready_label,
             ready_label_present=pre_check.ready_label_present,
             required_worker_capability=pre_check.required_worker_capability,
@@ -77,7 +77,7 @@ class PrecheckSnapshot:
 
     def to_precheck(self) -> PreRunCheckResult:
         return PreRunCheckResult(
-            outcome=self.outcome,
+            outcome=self.outcome.value,
             ready_label=self.ready_label,
             ready_label_present=self.ready_label_present,
             required_worker_capability=self.required_worker_capability,
@@ -95,8 +95,11 @@ class PrecheckSnapshot:
         gtd_payload = payload.get("gtd")
         if not isinstance(decision_gate_payload, dict) or not isinstance(gtd_payload, dict):
             return None
+        outcome = PrecheckOutcome.parse(payload.get("outcome"))
+        if outcome is None:
+            return None
         return cls(
-            outcome=str(payload.get("outcome") or "").strip(),
+            outcome=outcome,
             ready_label=str(payload.get("ready_label") or "").strip() or None,
             ready_label_present=bool(payload.get("ready_label_present", False)),
             required_worker_capability=str(payload.get("required_worker_capability") or "").strip(),
@@ -119,7 +122,7 @@ class PrecheckSnapshot:
 
     def dump(self) -> dict[str, object]:
         return {
-            "outcome": self.outcome,
+            "outcome": self.outcome.value,
             "ready_label": self.ready_label,
             "ready_label_present": self.ready_label_present,
             "required_worker_capability": self.required_worker_capability,
