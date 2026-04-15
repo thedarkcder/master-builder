@@ -15,7 +15,6 @@ from orchestrator.core.runs import (
     require_ready_for_agent_enqueue,
     resolve_enqueue_precheck_outcome,
     resolve_pr_url_for_enqueue,
-    resolve_precheck_outcome_from_plan,
     resolve_required_worker_capability_from_plan,
 )
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
@@ -149,11 +148,9 @@ def _resolve_project_for_fresh_start(*, session, workflow, source_run) -> Projec
 
 
 def _fresh_start_plan(*, source_run: Run | None) -> dict[str, object] | None:
-    if source_run is None or not isinstance(source_run.plan, dict):
+    if source_run is None or source_run.plan is None:
         return None
-    source_snapshot = ExecutionSnapshot.load(source_run.plan)
-    if source_snapshot is None:
-        return None
+    source_snapshot = ExecutionSnapshot.require(source_run.plan, allow_empty=False)
     next_snapshot = ExecutionSnapshot.empty(trigger_context=source_snapshot.context.trigger_context)
     precheck_outcome = (
         str(getattr(source_run, "pre_check_outcome", "") or "").strip()
@@ -162,6 +159,13 @@ def _fresh_start_plan(*, source_run: Run | None) -> dict[str, object] | None:
     if precheck_outcome:
         next_snapshot.context.execution_context["pre_check_outcome"] = precheck_outcome
     return next_snapshot.dump()
+
+
+def _checkpoint_resume_plan(*, checkpoint: WorkflowCheckpoint) -> dict[str, object]:
+    return ExecutionSnapshot.require(
+        checkpoint.payload_json,
+        allow_empty=False,
+    ).dump()
 
 
 def _resolve_precheck_outcome_for_admin_attempt(*, source_run: Run | None, plan: object | None) -> str | None:
@@ -420,7 +424,17 @@ def create_workflow_attempt(
         next_workflow.latest_checkpoint_id = selected_checkpoint.checkpoint_id if selected_checkpoint is not None else None
         next_workflow.updated_at = now
 
-    next_run_plan = _fresh_start_plan(source_run=source_run) if normalized_mode == "fresh" else dict(selected_checkpoint.payload_json or {})
+    try:
+        next_run_plan = (
+            _fresh_start_plan(source_run=source_run)
+            if normalized_mode == "fresh"
+            else _checkpoint_resume_plan(checkpoint=selected_checkpoint)
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Selected run/checkpoint has an unsupported execution snapshot shape",
+        ) from exc
     next_run_precheck_outcome = _resolve_precheck_outcome_for_admin_attempt(
         source_run=source_run,
         plan=next_run_plan,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.storage.models import Run, RunHumanInputRequest, WorkflowCheckpoint, WorkflowExecution
 
 
@@ -230,13 +231,16 @@ def add_workflow_attempt(
     )
     checkpoint = None
     if entry_checkpoint_id and checkpoint_kind:
+        effective_checkpoint_payload = checkpoint_payload
+        if effective_checkpoint_payload is None:
+            effective_checkpoint_payload = ExecutionSnapshot.empty().dump()
         checkpoint = WorkflowCheckpoint(
             checkpoint_id=entry_checkpoint_id,
             workflow_id=normalized_workflow_id,
             run_id=run_id,
             checkpoint_kind=checkpoint_kind,
             stage=checkpoint_stage or entry_stage,
-            payload_json=dict(checkpoint_payload or {}),
+            payload_json=dict(effective_checkpoint_payload),
             codex_session_id=checkpoint_session_id,
             created_at=timestamp,
             updated_at=timestamp,

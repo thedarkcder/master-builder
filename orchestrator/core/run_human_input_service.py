@@ -452,7 +452,7 @@ def resume_workflow_from_human_input_answer(
     checkpoint = session.get(WorkflowCheckpoint, request.checkpoint_id)
     if checkpoint is None:
         raise ValueError("Checkpoint for human input request was not found")
-    checkpoint_plan_snapshot = ExecutionSnapshot.require(checkpoint.payload_json, allow_empty=True)
+    checkpoint_plan_snapshot = ExecutionSnapshot.require(checkpoint.payload_json, allow_empty=False)
     persisted_precheck_outcome = (
         str(getattr(source_run, "pre_check_outcome", "") or "").strip()
         or resolve_precheck_outcome_from_plan(checkpoint.payload_json)
