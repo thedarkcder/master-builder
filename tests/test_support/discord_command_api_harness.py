@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from cryptography.fernet import Fernet
 from unittest.mock import patch
 
 from orchestrator.core.config import get_settings
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
-from orchestrator.storage.models import Project
+from orchestrator.storage.models import Project, Run, WorkflowExecution
 from tests.test_support.db_harness import SqliteTemplateApiTestCase
 
 
@@ -117,4 +118,85 @@ class DiscordCommandApiTestHarness(SqliteTemplateApiTestCase):
             discord_config = dict(project.discord_config or {})
             discord_config["allowed_user_ids"] = [str(value).strip() for value in user_ids if str(value).strip()]
             project.discord_config = discord_config
+            session.commit()
+
+    def _create_project(self, *, project_id: str, jira_project_key: str, channel_id: str) -> None:
+        with self.session_factory() as session:
+            now = datetime.now(timezone.utc)
+            session.add(
+                Project(
+                    project_id=project_id,
+                    tenant_id=self.tenant_id,
+                    name=project_id,
+                    github_repository=f"https://github.com/example/{project_id}",
+                    jira_project_key=jira_project_key,
+                    policy_overrides={},
+                    environment={},
+                    secret_refs={},
+                    discord_config={"channel_id": channel_id, "notify_events": []},
+                    is_archived=False,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.commit()
+
+    def _queue_run(self, *, run_id: str, issue_key: str, status: str, project_id: str | None = None) -> None:
+        with self.session_factory() as session:
+            now = datetime.now(timezone.utc)
+            workflow_id = f"workflow-{run_id}"
+            resolved_project_id = project_id or self.default_project_id
+            session.add(
+                WorkflowExecution(
+                    workflow_id=workflow_id,
+                    tenant_id=self.tenant_id,
+                    project_id=resolved_project_id,
+                    issue_key=issue_key,
+                    issue_summary=f"Issue {issue_key}",
+                    issue_description="desc",
+                    repo_url="https://github.com/example/repo",
+                    branch=None,
+                    pr_url=None,
+                    dedupe_scope="issue_execution",
+                    status=status,
+                    last_error=None,
+                    active_run_id=run_id,
+                    latest_checkpoint_id=None,
+                    source_workflow_id=None,
+                    source_run_id=None,
+                    blocked_reason=None,
+                    created_at=now,
+                    started_at=now if status == "running" else None,
+                    finished_at=None if status in {"queued", "running"} else now,
+                    updated_at=now,
+                )
+            )
+            session.add(
+                Run(
+                    run_id=run_id,
+                    workflow_id=workflow_id,
+                    tenant_id=self.tenant_id,
+                    project_id=resolved_project_id,
+                    issue_key=issue_key,
+                    issue_summary=f"Issue {issue_key}",
+                    issue_description="desc",
+                    repo_url="https://github.com/example/repo",
+                    branch=None,
+                    pr_url=None,
+                    attempt_number=1,
+                    parent_run_id=None,
+                    entry_mode="fresh",
+                    entry_stage="orchestrated",
+                    entry_checkpoint_id=None,
+                    dedupe_scope="issue_execution",
+                    status=status,
+                    last_error=None,
+                    plan=None,
+                    created_at=now,
+                    started_at=now if status == "running" else None,
+                    last_heartbeat_at=None,
+                    worker_service_instance_id=None,
+                    finished_at=None if status in {"queued", "running"} else now,
+                )
+            )
             session.commit()
