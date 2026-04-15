@@ -11,9 +11,12 @@ from orchestrator.core.decision_precheck_mapping import (
     merge_case_metadata,
     serialize_result_snapshot,
 )
-from orchestrator.core.decision_state_machine import case_state_for_decision, decision_reason
+from orchestrator.core.decision_state_machine import (
+    case_state_for_decision,
+    decision_missing_slots_for_precheck,
+    decision_reason,
+)
 from orchestrator.core.decision_resolution_service import serialize_slot_resolution
-from orchestrator.core.precheck_decision import precheck_missing_slots
 from orchestrator.storage.models import DecisionCase, DecisionCycle, DecisionEvent
 
 DECISION_GATE_CLOSURE_METADATA_KEY = "decision_gate_closure"
@@ -279,7 +282,7 @@ def persist_decision_state(
                 decision=decision,
                 classification=classification,
                 issue_labels=issue_labels,
-                missing_slots=precheck_missing_slots(pre_check) if pre_check is not None else [],
+                missing_slots=decision_missing_slots_for_precheck(pre_check) if pre_check is not None else [],
                 auto_resolved_slots=sorted(auto_resolved_answers.keys()),
             ),
         },

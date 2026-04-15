@@ -4,7 +4,7 @@ import unittest
 
 from orchestrator.core.decision_gate import DecisionGateResult
 from orchestrator.core.decision_planner import DecisionPlannerQuestion, DecisionPlannerResult
-from orchestrator.core.decision_reducer import reduce_planner_result
+from orchestrator.core.decision_state_machine import reduce_decision_planner_result
 from orchestrator.core.decision_types import DecisionClassification, IngressDecision, PrecheckOutcome
 from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.pre_run_check import PreRunCheckResult
@@ -55,7 +55,7 @@ class DecisionReducerTests(unittest.TestCase):
             captured_answer_summary=None,
         )
 
-        reduced = reduce_planner_result(decision=decision, planner_result=planner_result)
+        reduced = reduce_decision_planner_result(decision=decision, planner_result=planner_result)
 
         self.assertIs(reduced.classification, DecisionClassification.CLEAR)
         self.assertIsNotNone(reduced.decision.pre_check)
@@ -85,7 +85,7 @@ class DecisionReducerTests(unittest.TestCase):
             captured_answer_summary=None,
         )
 
-        reduced = reduce_planner_result(decision=decision, planner_result=planner_result)
+        reduced = reduce_decision_planner_result(decision=decision, planner_result=planner_result)
 
         self.assertIs(reduced.classification, DecisionClassification.DECISION_GATE)
         self.assertIsNotNone(reduced.decision.pre_check)

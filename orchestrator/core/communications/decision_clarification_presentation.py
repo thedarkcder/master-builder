@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from typing import Any, Callable, Iterable, Mapping
 
 from sqlalchemy.orm import Session
 
+from orchestrator.core.codex_runtime import CodexRuntime
 from orchestrator.core.decision_engine import DecisionEngineResult
 from orchestrator.core.decision_reply_service import unresolved_question_feedback_for_cycle
 from orchestrator.core.decision_types import DecisionClassification
+from orchestrator.core.prompt_templates import render_prompt
+from orchestrator.core.runtime_invocation import AgentInvocationContext, invoke_runtime_json
+from orchestrator.core.runtime_payload_models import PrecheckMessagePayload
 
 
 @dataclass(frozen=True)
@@ -36,6 +41,37 @@ class DecisionClarificationPresentation:
 class DiscordDecisionClarificationPresentation:
     message: str
     response_fields: dict[str, object]
+
+
+def build_runtime_precheck_message(
+    *,
+    runtime: CodexRuntime,
+    invocation_context: AgentInvocationContext,
+    issue_key: str,
+    classification: DecisionClassification,
+    decision_gate_reason: str,
+    decision_gate_questions: list[str],
+    gtd_missing_criteria: list[str],
+    gtd_questions: list[str],
+    missing_slots: list[str],
+) -> tuple[str, list[str]]:
+    payload = invoke_runtime_json(
+        runtime=runtime,
+        context=invocation_context,
+        system_prompt=render_prompt("policy/precheck_message_system.j2"),
+        user_prompt=render_prompt(
+            "policy/precheck_message_user.j2",
+            issue_key=issue_key,
+            classification=classification.value,
+            decision_gate_reason=decision_gate_reason,
+            decision_gate_questions_json=json.dumps(decision_gate_questions),
+            gtd_missing_criteria_json=json.dumps(gtd_missing_criteria),
+            gtd_questions_json=json.dumps(gtd_questions),
+            missing_slots_json=json.dumps(missing_slots),
+        ),
+    )
+    parsed_payload = PrecheckMessagePayload.from_payload(payload)
+    return parsed_payload.message, list(parsed_payload.questions)
 
 
 def load_cycle_question_feedback(*, session: Session, cycle_id: str | None) -> tuple[dict[str, str], ...]:

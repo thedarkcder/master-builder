@@ -41,11 +41,6 @@ DecisionSource = Literal[
     "worker_execution",
 ]
 
-def blocking_reason_for_precheck(pre_check: object) -> str | None:
-    from orchestrator.core.decision_state_machine import blocking_reason_for_precheck as _blocking_reason_for_precheck
-
-    return _blocking_reason_for_precheck(pre_check)
-
 
 @dataclass(frozen=True)
 class DecisionLabelAction:
@@ -64,6 +59,8 @@ class IngressDecision:
     label_actions: tuple[DecisionLabelAction, ...]
 
     def with_applied_labels(self, applied_labels: list[str]) -> IngressDecision:
+        from orchestrator.core.decision_state_machine import blocking_reason_for_precheck
+
         if self.pre_check is None or not applied_labels or not isinstance(self.pre_check, PreRunCheckResult):
             return self
         normalized_applied = {str(label).strip().casefold() for label in applied_labels if str(label).strip()}

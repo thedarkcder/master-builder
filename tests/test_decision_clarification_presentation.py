@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from orchestrator.core.communications.decision_clarification_presentation import (
     build_decision_clarification_presentation,
     build_decision_clarification_response_fields,
+    build_runtime_precheck_message,
     present_discord_decision_clarification,
     render_decision_gate_feedback_message,
     render_decision_gate_remaining_questions_message,
 )
+from orchestrator.core.codex_runtime import CodexRuntimeError
+from orchestrator.core.runtime_invocation import AgentInvocationContext
 from orchestrator.core.decision_types import DecisionClassification
 
 
@@ -155,3 +159,67 @@ def test_present_discord_decision_clarification_prefers_feedback_rendering() -> 
     assert "Missing detail: Owner role not specified" in result.message
     assert result.response_fields["classification"] == "decision_gate"
     assert result.response_fields["questions"] == ["Who owns rollout?"]
+
+
+def test_build_runtime_precheck_message_raises_when_runtime_payload_is_invalid() -> None:
+    runtime = SimpleNamespace()
+    with patch(
+        "orchestrator.core.communications.decision_clarification_presentation.invoke_runtime_json",
+        return_value={"message": "Need clarification", "questions": [], "classification": "invalid"},
+    ):
+        try:
+            build_runtime_precheck_message(
+                runtime=runtime,
+                invocation_context=AgentInvocationContext(
+                    channel="discord",
+                    tenant_id="tenant-1",
+                    project_id="project-1",
+                    command="reply",
+                    stage="precheck_message",
+                    working_dir=".",
+                    issue_key="GP-1",
+                ),
+                issue_key="GP-1",
+                classification=DecisionClassification.GTD,
+                decision_gate_reason="",
+                decision_gate_questions=[],
+                gtd_missing_criteria=["dependencies_and_risks"],
+                gtd_questions=["Which dependencies or risks may impact delivery?"],
+                missing_slots=["dependencies_and_risks"],
+            )
+        except RuntimeError as exc:
+            assert "invalid classification" in str(exc)
+        else:
+            raise AssertionError("invalid runtime payload should raise")
+
+
+def test_build_runtime_precheck_message_raises_runtime_errors_without_local_fallback() -> None:
+    runtime = SimpleNamespace()
+    with patch(
+        "orchestrator.core.communications.decision_clarification_presentation.invoke_runtime_json",
+        side_effect=CodexRuntimeError("runtime failed"),
+    ):
+        try:
+            build_runtime_precheck_message(
+                runtime=runtime,
+                invocation_context=AgentInvocationContext(
+                    channel="discord",
+                    tenant_id="tenant-1",
+                    project_id="project-1",
+                    command="reply",
+                    stage="precheck_message",
+                    working_dir=".",
+                    issue_key="GP-1",
+                ),
+                issue_key="GP-1",
+                classification=DecisionClassification.GTD,
+                decision_gate_reason="",
+                decision_gate_questions=[],
+                gtd_missing_criteria=["dependencies_and_risks"],
+                gtd_questions=["Which dependencies or risks may impact delivery?"],
+                missing_slots=["dependencies_and_risks"],
+            )
+        except CodexRuntimeError as exc:
+            assert "runtime failed" in str(exc)
+        else:
+            raise AssertionError("runtime errors should propagate")

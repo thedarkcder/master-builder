@@ -17,8 +17,9 @@ from orchestrator.core.communications.enqueue_reason_contract import (
 )
 from orchestrator.core.communications.decision_clarification_presentation import (
     build_decision_clarification_presentation,
-    present_discord_decision_clarification,
+    build_runtime_precheck_message,
     load_cycle_question_feedback,
+    present_discord_decision_clarification,
 )
 from orchestrator.core.communications.execution_admission_format import (
     present_discord_admission_conflict,
@@ -35,7 +36,6 @@ from orchestrator.core.followup_context_service import (
     close_followup_contexts,
 )
 from orchestrator.core.pre_run_check import evaluate_pre_run_check
-from orchestrator.core.precheck_decision import build_precheck_message
 from orchestrator.core.project_policy import resolve_effective_policy
 from orchestrator.core.run_gate_service import enqueue_issue_run_with_precheck
 from orchestrator.core.runs import cancel_run
@@ -465,7 +465,7 @@ def dispatch_run_control_command(
             clarification_response = present_discord_decision_clarification(
                 issue_key=issue_key,
                 presentation=clarification_presentation,
-                precheck_message_builder=lambda: build_precheck_message(
+                precheck_message_builder=lambda: build_runtime_precheck_message(
                     runtime=runtime,
                     invocation_context=AgentInvocationContext(
                         channel="discord",

@@ -3,10 +3,14 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from orchestrator.core.decision_gate import DecisionGateResult
+from orchestrator.core.decision_planner import DecisionPlannerQuestion, DecisionPlannerResult
 from orchestrator.core.decision_state_machine import DecisionEvent
 from orchestrator.core.decision_state_machine import DecisionState
 from orchestrator.core.decision_state_machine import DecisionStateTransition
 from orchestrator.core.decision_state_machine import ExecutionAdmissionReason
+from orchestrator.core.decision_state_machine import decision_classification_for_precheck
+from orchestrator.core.decision_state_machine import decision_missing_slots_for_precheck
+from orchestrator.core.decision_state_machine import reduce_decision_planner_result
 from orchestrator.core.decision_state_machine import resolve_worker_blocked_outcome
 from orchestrator.core.decision_state_machine import resolve_worker_decision_from_precheck
 from orchestrator.core.decision_state_machine import resolve_decision_state_transition
@@ -17,6 +21,7 @@ from orchestrator.core.decision_types import DecisionClassification
 from orchestrator.core.decision_types import ExecutionGateState
 from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.pre_run_check import PreRunCheckResult
+from orchestrator.core.runtime_payload_models import PlannerGateStatus
 
 
 def _precheck(
@@ -151,3 +156,44 @@ def test_resolve_worker_blocked_outcome_handles_missing_ready_label() -> None:
     assert outcome.block_reason == "missing_ready_label"
     assert outcome.ready_label == "agent:ready"
     assert "agent:ready" in outcome.reason
+
+
+def test_decision_classification_and_missing_slots_are_canonical() -> None:
+    pre_check = _precheck(outcome="gtd_required")
+
+    assert decision_classification_for_precheck(pre_check) is DecisionClassification.GTD
+    assert decision_missing_slots_for_precheck(pre_check) == ["how_to_test"]
+
+
+def test_reduce_decision_planner_result_is_canonical() -> None:
+    decision = SimpleNamespace(
+        source="jira_webhook",
+        pre_check=_precheck(outcome="decision_gate_required"),
+        block_reason="decision_gate_required",
+        guidance=None,
+        policy_error=None,
+        label_actions=(),
+    )
+    planner_result = DecisionPlannerResult(
+        gate_status=PlannerGateStatus.BLOCKED_DECISION_GATE,
+        reason="Need owner",
+        questions=(
+            DecisionPlannerQuestion(
+                question_id="dg_owner",
+                kind="decision_gate",
+                question="Who owns this?",
+                status="open",
+                detail=None,
+            ),
+        ),
+        question_states=(),
+        resolved_items=(),
+        missing_items=("decision_owner",),
+        captured_answer_summary=None,
+    )
+
+    reduced = reduce_decision_planner_result(decision=decision, planner_result=planner_result)
+
+    assert reduced.classification is DecisionClassification.DECISION_GATE
+    assert reduced.question_set[0]["id"] == "dg_owner"
+    assert reduced.decision.block_reason == "decision_gate_required"
