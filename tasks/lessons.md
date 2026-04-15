@@ -209,3 +209,4 @@
 - When the user asks to continue work on a new branch after a feature branch has already accumulated prerequisite refactors, branch from the current feature branch unless they explicitly want a clean cut from `staging`.
 - When the user says to continue a refactor seam, do not stop at the first green checkpoint just to summarize progress. Keep going until the seam reaches the next clear architectural boundary or a real blocker appears.
 - Do not degrade enum-backed domain contracts to raw strings just to break an import cycle. Extract the enum into a leaf module and keep the typed seam intact, using strings only at serialization boundaries.
+- When a downstream adapter already sits at a serialization boundary, do not widen its signature to accept both enums and strings “for convenience.” Keep the typed contract in the upstream domain object and keep the adapter boundary simple.
