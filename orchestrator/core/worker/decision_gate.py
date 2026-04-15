@@ -3,7 +3,6 @@ from __future__ import annotations
 import logging
 from types import SimpleNamespace
 from orchestrator.core.dashboard_links import admin_run_url
-from orchestrator.core.decision_types import WorkerStageEvent
 from orchestrator.core.jira_links import tenant_jira_issue_url
 from orchestrator.core.runs import mark_run_terminal
 from orchestrator.core.worker.run_not_ready import derive_run_not_ready_outcome
@@ -157,12 +156,8 @@ def apply_decision_gate(
         requeue_target=None,
         requeue_reason=None,
     )
-    snapshot.events.stage_updates = [stage_update]
-    snapshot.context.execution_context["run_not_ready"] = {
-        "ready_label": run_not_ready.ready_label,
-        "reason": run_not_ready.reason,
-        "block_reason": run_not_ready.block_reason,
-    }
+    snapshot.events.stage_updates = [stage_update.to_payload()]
+    snapshot.context.execution_context["run_not_ready"] = run_not_ready.dump()
     snapshot.context.execution_context["pre_check_outcome"] = run_not_ready.pre_check_outcome
     run.plan = snapshot.dump()
     terminal_run = terminalizer(
@@ -178,23 +173,23 @@ def apply_decision_gate(
             session=session,
             tenant=tenant,
             project=project,
-            message=stage_update["discord_message"],
+            message=stage_update.discord_message,
             settings=settings,
-            event=WorkerStageEvent.DECISION_GATE_REQUIRED.value,
+            event=stage_update.event_name,
             open_thread=False,
         )
         send_jira_message_fn(
             session=session,
             tenant=tenant,
             issue_key=run.issue_key,
-            stage=stage_update["stage"],
-            message=stage_update["jira_message"],
+            stage=stage_update.event_name,
+            message=stage_update.jira_message,
             settings=settings,
         )
     except Exception as exc:  # noqa: BLE001
         send_error = str(exc)
     return terminal_run, {
-        "stage_update": stage_update,
+        "stage_update": stage_update.to_payload(),
         "send_result": send_result,
         "send_error": send_error,
     }

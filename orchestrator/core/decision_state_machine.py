@@ -371,6 +371,39 @@ class WorkerBlockedOutcome:
     block_reason: str | None
     pre_check_outcome: str | None
 
+    @classmethod
+    def load(cls, payload: object) -> WorkerBlockedOutcome | None:
+        if not isinstance(payload, dict):
+            return None
+        next_steps_raw = payload.get("next_steps")
+        next_steps = (
+            tuple(str(item).strip() for item in next_steps_raw if str(item).strip())
+            if isinstance(next_steps_raw, (list, tuple))
+            else ()
+        )
+        reason = str(payload.get("reason") or "").strip()
+        if not reason:
+            return None
+        ready_label = str(payload.get("ready_label") or "").strip() or None
+        block_reason = str(payload.get("block_reason") or "").strip() or None
+        pre_check_outcome = str(payload.get("pre_check_outcome") or "").strip() or None
+        return cls(
+            reason=reason,
+            next_steps=next_steps,
+            ready_label=ready_label,
+            block_reason=block_reason,
+            pre_check_outcome=pre_check_outcome,
+        )
+
+    def dump(self) -> dict[str, object]:
+        return {
+            "reason": self.reason,
+            "next_steps": list(self.next_steps),
+            "ready_label": self.ready_label,
+            "block_reason": self.block_reason,
+            "pre_check_outcome": self.pre_check_outcome,
+        }
+
 
 def blocking_reason_for_precheck(pre_check: object) -> str | None:
     return blocking_reason_for_outcome(getattr(pre_check, "outcome", None))

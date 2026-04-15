@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Protocol
 
+from orchestrator.core.run_enqueue_types import EnqueueFailureReason
+
 
 class _RunLike(Protocol):
     run_id: str
@@ -29,9 +31,13 @@ _ENQUEUE_REASON_GUIDANCE = {
 }
 
 
-def enqueue_reason_guidance(reason: str) -> str:
+def _normalize_enqueue_reason(reason: object) -> str:
+    return str(getattr(reason, "value", reason) or "").strip()
+
+
+def enqueue_reason_guidance(reason: object) -> str:
     return _ENQUEUE_REASON_GUIDANCE.get(
-        reason,
+        _normalize_enqueue_reason(reason),
         "Run was not queued due to current execution policy.",
     )
 
@@ -39,14 +45,15 @@ def enqueue_reason_guidance(reason: str) -> str:
 def format_enqueue_conflict_detail(
     *,
     prefix: str,
-    enqueue_reason: str,
+    enqueue_reason: EnqueueFailureReason | str,
     enqueue_run_obj: _RunLike | None,
 ) -> str:
+    normalized_reason = _normalize_enqueue_reason(enqueue_reason)
     guidance = enqueue_reason_guidance(enqueue_reason)
-    if enqueue_reason == "run_already_active" and enqueue_run_obj is not None:
+    if normalized_reason == EnqueueFailureReason.RUN_ALREADY_ACTIVE.value and enqueue_run_obj is not None:
         return (
-            f"{prefix}: {enqueue_reason} "
+            f"{prefix}: {normalized_reason} "
             f"(active run: {enqueue_run_obj.run_id}, status: {enqueue_run_obj.status}). "
             f"{guidance}"
         )
-    return f"{prefix}: {enqueue_reason}. {guidance}"
+    return f"{prefix}: {normalized_reason}. {guidance}"

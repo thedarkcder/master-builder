@@ -127,7 +127,7 @@ def _queue_run_from_issue_context(
             status_code=status.HTTP_409_CONFLICT,
             detail=format_enqueue_conflict_detail(
                 prefix=conflict_prefix,
-                enqueue_reason=str(enqueue_result.reason),
+                enqueue_reason=enqueue_result.reason,
                 enqueue_run_obj=enqueue_result.run,
             ),
         )

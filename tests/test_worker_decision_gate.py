@@ -379,6 +379,10 @@ def test_apply_decision_gate_preserves_trigger_context_on_block() -> None:
     assert isinstance(run.plan, dict)
     assert run.plan["context"]["trigger_context"] == {"source": "github_pr_review_feedback", "pr_number": 6}
     assert run.plan["events"]["stage_updates"][0]["stage"] == "run_not_ready"
+    assert run.plan["context"]["execution_context"]["run_not_ready"]["ready_label"] == "agent:ready"
+    assert run.plan["context"]["execution_context"]["run_not_ready"]["next_steps"] == [
+        "Apply ready label `agent:ready` to the Jira issue, then retry the run."
+    ]
     assert session.refresh_attribute_names[0] == ["plan"]
 
 
