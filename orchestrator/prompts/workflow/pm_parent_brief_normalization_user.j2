@@ -1,0 +1,24 @@
+Parent issue key: {{ parent_issue_key }}
+Parent summary: {{ parent_summary }}
+Parent description:
+{{ parent_description }}
+Allowed governed tools for this stage: {{ governed_tools_json }}
+Native Codex tools available directly in this runtime: {{ native_tools_json }}
+
+Structured tool bridge:
+- Use native Codex tools directly when they are available in this runtime. Do not emit tool_request for native Codex tools.
+- To call an allowed governed tool, return JSON only:
+  {"type":"tool_request","tool_name":"<allowed tool>","tool_args":{...},"reason":"<optional short reason>"}
+- When normalization is complete, return JSON only:
+  {"type":"final_response","result":{...}}
+- Do not shell out to `python -m orchestrator agent-tool`.
+
+Normalize this parent issue into the typed product brief contract.
+Preserve the requested behavior, business intent, and constraints from the ticket text.
+Assume the parent may have been written by a non-technical stakeholder.
+Do not ask implementation or architecture questions.
+If the ticket text is too ambiguous, ask only the smallest set of stakeholder-safe product or non-functional questions needed before child-ticket planning can proceed.
+
+Return strict JSON only with keys:
+- brief
+- open_questions

@@ -127,6 +127,24 @@ def plan_posted_update(
     )
 
 
+def repo_setup_ready_update(
+    *,
+    tenant_id: str,
+    issue_key: str | None,
+    run_id: str,
+    jira_url: str | None,
+    run_url: str | None = None,
+) -> dict[str, str]:
+    return _build_stage_update(
+        tenant_id=tenant_id,
+        issue_key=issue_key,
+        run_id=run_id,
+        stage=WorkerStageEvent.REPO_SETUP_READY,
+        jira_url=jira_url,
+        run_url=run_url,
+    )
+
+
 def pr_opened_update(
     *,
     tenant_id: str,
@@ -167,6 +185,30 @@ def run_failed_update(
         next_steps=(
             "Review diagnostics and follow-up issue payload.",
             "Apply fix and move issue back to To Do when ready.",
+        ),
+    )
+
+
+def run_requeued_repo_setup_update(
+    *,
+    tenant_id: str,
+    issue_key: str | None,
+    run_id: str,
+    jira_url: str | None,
+    run_url: str | None = None,
+    error: str,
+) -> dict[str, str]:
+    return _build_stage_update(
+        tenant_id=tenant_id,
+        issue_key=issue_key,
+        run_id=run_id,
+        stage=WorkerStageEvent.RUN_REQUEUED_REPO_SETUP,
+        jira_url=jira_url,
+        run_url=run_url,
+        error=error,
+        next_steps=(
+            "A fresh repo-setup attempt will prepare the execution repo before workflow execution resumes.",
+            "No workflow agent work was started on this attempt.",
         ),
     )
 

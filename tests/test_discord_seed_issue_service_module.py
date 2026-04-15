@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 from fastapi import HTTPException
 
-from orchestrator.api.discord.seed.issue_service import seed_issues_with_codex, seed_parent_issues_with_codex
+from orchestrator.api.discord.seed.issue_service import seed_issues_with_runtime, seed_parent_issues_with_runtime
 from orchestrator.tools.jira_oauth import JiraIssueCreateResult, JiraOAuthError
 
 
@@ -67,12 +67,13 @@ def _planning_package(*, planning_state: str, child_issues: list[dict] | None = 
     return {
         "planning_state": planning_state,
         "specialist_outputs": {
-            "engineering": {
+            "architecture": {
                 "findings": ["Architectural boundaries should stay modular."],
                 "recommendations": ["Use a dedicated planning package before Jira write."],
                 "required_tasks": ["Implement shared planning package merge"],
                 "open_behavior_questions": [],
                 "acceptance_impacts": ["Parent stays PM-only until planning completes."],
+                "mermaid_diagram": "flowchart TD\n  Parent[Parent brief] --> Planner[Planning runtime]",
             },
             "security": {
                 "findings": ["Security review must be explicit."],
@@ -89,6 +90,11 @@ def _planning_package(*, planning_state: str, child_issues: list[dict] | None = 
                 "acceptance_impacts": ["Child creation waits for planning completion."],
             },
         },
+        "architecture_summary": [
+            "Architectural boundaries should stay modular.",
+            "Use a dedicated planning package before Jira write.",
+        ],
+        "architecture_diagram": "flowchart TD\n  Parent[Parent brief] --> Planner[Planning runtime]",
         "child_issues": children,
     }
 
@@ -108,7 +114,7 @@ def _adf_text(value: object) -> str:
 def test_seed_issues_scopes_allowed_project_keys() -> None:
     tenant = SimpleNamespace(tenant_id="tenant-a")
     with __import__("pytest").raises(HTTPException) as exc_ctx:
-        seed_issues_with_codex(
+        seed_issues_with_runtime(
             session=MagicMock(),
             tenant=tenant,
             prompt_markdown="seed issues",
@@ -119,8 +125,8 @@ def test_seed_issues_scopes_allowed_project_keys() -> None:
             codex_working_dir="/tmp",
             tenant_project_keys_fn=lambda **_kwargs: ["GP", "YANA"],
             get_settings_fn=lambda: SimpleNamespace(),
-            build_codex_runtime_fn=lambda **_kwargs: object(),
-            plan_seed_issues_with_codex_fn=lambda **_kwargs: _seed_payload(project_key="YANA"),
+            build_runtime_fn=lambda **_kwargs: object(),
+            plan_seed_issues_with_runtime_fn=lambda **_kwargs: _seed_payload(project_key="YANA"),
             codex_runtime_error_type=RuntimeError,
             build_seed_issue_description_fn=lambda **_kwargs: "",
             issue_key_pattern=__import__("re").compile(r"^[A-Z]+-\d+$"),
@@ -155,7 +161,7 @@ def test_seed_issues_creates_parent_and_engineering_child() -> None:
         def add_issue_link(self, **_kwargs):  # type: ignore[no-untyped-def]
             return {}
 
-    message, data = seed_issues_with_codex(
+    message, data = seed_issues_with_runtime(
         session=MagicMock(),
         tenant=tenant,
         prompt_markdown="seed issues",
@@ -166,8 +172,8 @@ def test_seed_issues_creates_parent_and_engineering_child() -> None:
         codex_working_dir="/tmp",
         tenant_project_keys_fn=lambda **_kwargs: ["GP"],
         get_settings_fn=lambda: SimpleNamespace(),
-        build_codex_runtime_fn=lambda **_kwargs: object(),
-        plan_seed_issues_with_codex_fn=lambda **_kwargs: _seed_payload(),
+        build_runtime_fn=lambda **_kwargs: object(),
+        plan_seed_issues_with_runtime_fn=lambda **_kwargs: _seed_payload(),
         codex_runtime_error_type=RuntimeError,
         build_seed_issue_description_fn=lambda **_kwargs: {},
         issue_key_pattern=__import__("re").compile(r"^[A-Z]+-\d+$"),
@@ -218,7 +224,7 @@ def test_seed_issues_falls_back_to_linked_task_when_subtasks_unavailable() -> No
             linked.append((kwargs["inward_issue_key"], kwargs["outward_issue_key"]))
             return {}
 
-    message, data = seed_issues_with_codex(
+    message, data = seed_issues_with_runtime(
         session=MagicMock(),
         tenant=tenant,
         prompt_markdown="seed issues",
@@ -229,8 +235,8 @@ def test_seed_issues_falls_back_to_linked_task_when_subtasks_unavailable() -> No
         codex_working_dir="/tmp",
         tenant_project_keys_fn=lambda **_kwargs: ["GP"],
         get_settings_fn=lambda: SimpleNamespace(),
-        build_codex_runtime_fn=lambda **_kwargs: object(),
-        plan_seed_issues_with_codex_fn=lambda **_kwargs: _seed_payload(),
+        build_runtime_fn=lambda **_kwargs: object(),
+        plan_seed_issues_with_runtime_fn=lambda **_kwargs: _seed_payload(),
         codex_runtime_error_type=RuntimeError,
         build_seed_issue_description_fn=lambda **_kwargs: {},
         issue_key_pattern=__import__("re").compile(r"^[A-Z]+-\d+$"),
@@ -252,7 +258,7 @@ def test_seed_issues_falls_back_to_linked_task_when_subtasks_unavailable() -> No
 def test_seed_issues_with_incomplete_oauth_context_returns_controlled_502() -> None:
     tenant = SimpleNamespace(tenant_id="tenant-a")
     with __import__("pytest").raises(HTTPException) as exc_ctx:
-        seed_issues_with_codex(
+        seed_issues_with_runtime(
             session=MagicMock(),
             tenant=tenant,
             prompt_markdown="seed issues",
@@ -263,8 +269,8 @@ def test_seed_issues_with_incomplete_oauth_context_returns_controlled_502() -> N
             codex_working_dir="/tmp",
             tenant_project_keys_fn=lambda **_kwargs: ["GP"],
             get_settings_fn=lambda: SimpleNamespace(),
-            build_codex_runtime_fn=lambda **_kwargs: object(),
-            plan_seed_issues_with_codex_fn=lambda **_kwargs: _seed_payload(),
+            build_runtime_fn=lambda **_kwargs: object(),
+            plan_seed_issues_with_runtime_fn=lambda **_kwargs: _seed_payload(),
             codex_runtime_error_type=RuntimeError,
             build_seed_issue_description_fn=lambda **_kwargs: {},
             issue_key_pattern=__import__("re").compile(r"^[A-Z]+-\d+$"),
@@ -300,7 +306,7 @@ def test_seed_issues_normalizes_blank_parent_issue_type_to_project_supported_sto
         def add_issue_link(self, **_kwargs):  # type: ignore[no-untyped-def]
             return {}
 
-    _, data = seed_issues_with_codex(
+    _, data = seed_issues_with_runtime(
         session=MagicMock(),
         tenant=tenant,
         prompt_markdown="seed issues",
@@ -311,8 +317,8 @@ def test_seed_issues_normalizes_blank_parent_issue_type_to_project_supported_sto
         codex_working_dir="/tmp",
         tenant_project_keys_fn=lambda **_kwargs: ["GP"],
         get_settings_fn=lambda: SimpleNamespace(),
-        build_codex_runtime_fn=lambda **_kwargs: object(),
-        plan_seed_issues_with_codex_fn=lambda **_kwargs: _seed_payload(parent_issue_type=""),
+        build_runtime_fn=lambda **_kwargs: object(),
+        plan_seed_issues_with_runtime_fn=lambda **_kwargs: _seed_payload(parent_issue_type=""),
         codex_runtime_error_type=RuntimeError,
         build_seed_issue_description_fn=lambda **_kwargs: {},
         issue_key_pattern=__import__("re").compile(r"^[A-Z]+-\d+$"),
@@ -352,7 +358,7 @@ def test_seed_issues_keeps_single_behavior_parent_at_story_when_multiple_childre
         def add_issue_link(self, **_kwargs):  # type: ignore[no-untyped-def]
             return {}
 
-    _, data = seed_issues_with_codex(
+    _, data = seed_issues_with_runtime(
         session=MagicMock(),
         tenant=tenant,
         prompt_markdown="seed issues",
@@ -363,8 +369,8 @@ def test_seed_issues_keeps_single_behavior_parent_at_story_when_multiple_childre
         codex_working_dir="/tmp",
         tenant_project_keys_fn=lambda **_kwargs: ["GP"],
         get_settings_fn=lambda: SimpleNamespace(),
-        build_codex_runtime_fn=lambda **_kwargs: object(),
-        plan_seed_issues_with_codex_fn=lambda **_kwargs: _seed_payload(parent_issue_type="", child_count=2),
+        build_runtime_fn=lambda **_kwargs: object(),
+        plan_seed_issues_with_runtime_fn=lambda **_kwargs: _seed_payload(parent_issue_type="", child_count=2),
         codex_runtime_error_type=RuntimeError,
         build_seed_issue_description_fn=lambda **_kwargs: {},
         issue_key_pattern=__import__("re").compile(r"^[A-Z]+-\d+$"),
@@ -408,7 +414,7 @@ def test_seed_issues_promotes_parent_to_epic_when_pm_brief_signals_initiative_sc
     payload["parent_issue"]["summary"] = "Checkout recovery initiative"
     payload["parent_issue"]["objective"] = "Coordinate a multi-story recovery initiative across checkout."
 
-    _, data = seed_issues_with_codex(
+    _, data = seed_issues_with_runtime(
         session=MagicMock(),
         tenant=tenant,
         prompt_markdown="seed issues",
@@ -419,8 +425,8 @@ def test_seed_issues_promotes_parent_to_epic_when_pm_brief_signals_initiative_sc
         codex_working_dir="/tmp",
         tenant_project_keys_fn=lambda **_kwargs: ["GP"],
         get_settings_fn=lambda: SimpleNamespace(),
-        build_codex_runtime_fn=lambda **_kwargs: object(),
-        plan_seed_issues_with_codex_fn=lambda **_kwargs: payload,
+        build_runtime_fn=lambda **_kwargs: object(),
+        plan_seed_issues_with_runtime_fn=lambda **_kwargs: payload,
         codex_runtime_error_type=RuntimeError,
         build_seed_issue_description_fn=lambda **_kwargs: {},
         issue_key_pattern=__import__("re").compile(r"^[A-Z]+-\d+$"),
@@ -455,7 +461,7 @@ def test_seed_parent_issues_rejects_incomplete_pm_status_before_jira_write() -> 
             return None
 
     with __import__("pytest").raises(HTTPException) as exc_ctx:
-        seed_parent_issues_with_codex(
+        seed_parent_issues_with_runtime(
             session=MagicMock(),
             tenant=tenant,
             prompt_markdown="pm batch",
@@ -466,8 +472,8 @@ def test_seed_parent_issues_rejects_incomplete_pm_status_before_jira_write() -> 
             codex_working_dir="/tmp",
             tenant_project_keys_fn=lambda **_kwargs: ["GP"],
             get_settings_fn=lambda: SimpleNamespace(),
-            build_codex_runtime_fn=lambda **_kwargs: object(),
-            plan_pm_parent_issues_with_codex_fn=lambda **_kwargs: {
+            build_runtime_fn=lambda **_kwargs: object(),
+            plan_pm_parent_issues_with_runtime_fn=lambda **_kwargs: {
                 "project_key": "GP",
                 "issues": [_seed_payload()["parent_issue"]],
                 "questions": [],
@@ -493,7 +499,7 @@ def test_seed_parent_issues_blocks_when_stage_spi_not_ready() -> None:
     tenant = SimpleNamespace(tenant_id="tenant-a")
 
     with __import__("pytest").raises(HTTPException) as exc_ctx:
-        seed_parent_issues_with_codex(
+        seed_parent_issues_with_runtime(
             session=MagicMock(),
             tenant=tenant,
             prompt_markdown="pm batch",
@@ -504,8 +510,8 @@ def test_seed_parent_issues_blocks_when_stage_spi_not_ready() -> None:
             codex_working_dir="/tmp",
             tenant_project_keys_fn=lambda **_kwargs: ["GP"],
             get_settings_fn=lambda: SimpleNamespace(stage_spi_enabled=True),
-            build_codex_runtime_fn=lambda **_kwargs: (_ for _ in ()).throw(AssertionError("should not build runtime")),
-            plan_pm_parent_issues_with_codex_fn=lambda **_kwargs: (_ for _ in ()).throw(AssertionError("should not plan")),
+            build_runtime_fn=lambda **_kwargs: (_ for _ in ()).throw(AssertionError("should not build runtime")),
+            plan_pm_parent_issues_with_runtime_fn=lambda **_kwargs: (_ for _ in ()).throw(AssertionError("should not plan")),
             codex_runtime_error_type=RuntimeError,
             issue_key_pattern=__import__("re").compile(r"^[A-Z]+-\d+$"),
             tenant_jira_oauth_context_fn=lambda **_kwargs: {},
@@ -545,7 +551,7 @@ def test_seed_issues_blocks_children_until_planning_completes_and_keeps_parent_p
         def add_issue_link(self, **_kwargs):  # type: ignore[no-untyped-def]
             return {}
 
-    message, data = seed_issues_with_codex(
+    message, data = seed_issues_with_runtime(
         session=MagicMock(),
         tenant=tenant,
         prompt_markdown="seed issues",
@@ -556,8 +562,8 @@ def test_seed_issues_blocks_children_until_planning_completes_and_keeps_parent_p
         codex_working_dir="/tmp",
         tenant_project_keys_fn=lambda **_kwargs: ["GP"],
         get_settings_fn=lambda: SimpleNamespace(),
-        build_codex_runtime_fn=lambda **_kwargs: object(),
-        plan_seed_issues_with_codex_fn=lambda **_kwargs: _seed_payload(),
+        build_runtime_fn=lambda **_kwargs: object(),
+        plan_seed_issues_with_runtime_fn=lambda **_kwargs: _seed_payload(),
         codex_runtime_error_type=RuntimeError,
         build_seed_issue_description_fn=lambda **_kwargs: {},
         issue_key_pattern=__import__("re").compile(r"^[A-Z]+-\d+$"),
@@ -581,6 +587,9 @@ def test_seed_issues_blocks_children_until_planning_completes_and_keeps_parent_p
     parent_description = _adf_text(created[0].description)
     assert "PM status: pm_completed" in parent_description
     assert "Planning state: planning_drafting" in parent_description
+    assert "Architecture Context" in parent_description
+    assert "Architectural boundaries should stay modular." in parent_description
+    assert "Parent[Parent brief] --> Planner[Planning runtime]" in parent_description
 
 
 def test_seed_issues_merges_planning_package_context_into_child_ticket_descriptions() -> None:
@@ -605,7 +614,7 @@ def test_seed_issues_merges_planning_package_context_into_child_ticket_descripti
         def add_issue_link(self, **_kwargs):  # type: ignore[no-untyped-def]
             return {}
 
-    _, data = seed_issues_with_codex(
+    _, data = seed_issues_with_runtime(
         session=MagicMock(),
         tenant=tenant,
         prompt_markdown="seed issues",
@@ -616,8 +625,8 @@ def test_seed_issues_merges_planning_package_context_into_child_ticket_descripti
         codex_working_dir="/tmp",
         tenant_project_keys_fn=lambda **_kwargs: ["GP"],
         get_settings_fn=lambda: SimpleNamespace(),
-        build_codex_runtime_fn=lambda **_kwargs: object(),
-        plan_seed_issues_with_codex_fn=lambda **_kwargs: _seed_payload(),
+        build_runtime_fn=lambda **_kwargs: object(),
+        plan_seed_issues_with_runtime_fn=lambda **_kwargs: _seed_payload(),
         codex_runtime_error_type=RuntimeError,
         build_seed_issue_description_fn=lambda **_kwargs: {},
         issue_key_pattern=__import__("re").compile(r"^[A-Z]+-\d+$"),
@@ -641,6 +650,10 @@ def test_seed_issues_merges_planning_package_context_into_child_ticket_descripti
                     "risks": ["Descriptions may grow too large"],
                     "how_to_test": ["Assert merged planning context appears in the child description"],
                     "done_criteria": ["Child ticket reflects specialist planning context"],
+                    "implementation_decisions": [
+                        "Decision owner: Engineering child team.",
+                        "Approval path: child PR review and architecture review when boundaries or platform risk change.",
+                    ],
                     "labels": ["engineering"],
                 }
             ],
@@ -651,7 +664,9 @@ def test_seed_issues_merges_planning_package_context_into_child_ticket_descripti
     assert data["created_children"] == ["GP-2"]
     assert len(created) == 2
     child_description = _adf_text(created[1].description)
+    assert "Implementation Decisions" in child_description
+    assert "Decision owner: Engineering child team." in child_description
     assert "Specialist Planning Context" in child_description
-    assert "Engineering Findings: Architectural boundaries should stay modular." in child_description
+    assert "Architecture Findings: Architectural boundaries should stay modular." in child_description
     assert "Security Findings: Security review must be explicit." in child_description
     assert "Testing Recommendations: Add regression coverage for the handoff." in child_description

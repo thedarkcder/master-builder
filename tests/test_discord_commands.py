@@ -13,7 +13,7 @@ from orchestrator.api.discord.ask.context import project_filter_jql
 from orchestrator.api.discord.ingress.ask_runtime import ask_board_message, collect_ask_context, collect_github_ask_context
 from orchestrator.api.discord.ingress.bug_runtime import create_discord_bug_issue
 from orchestrator.api.discord.ingress.executor import execute_discord_command
-from orchestrator.api.discord.ingress.seed_runtime import build_seed_issue_description, seed_issues_with_codex
+from orchestrator.api.discord.ingress.seed_runtime import build_seed_issue_description, seed_issues_with_runtime
 from orchestrator.api.discord.shared.state import store_seed_followup_context
 from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.core.config import get_settings
@@ -1261,7 +1261,6 @@ class DiscordCommandApiTests(DiscordCommandApiTestHarness):
                 "orchestrator.api.discord.ingress.ask_runtime.collect_ask_context_with_history_context",
                 return_value=(None, None, [{"key": "TP-20", "summary": "Do thing", "status": "To Do"}], {"To Do": 1}, []),
             ),
-            patch("orchestrator.api.discord.commands.ask.build_codex_runtime"),
             patch(
                 "orchestrator.api.discord.commands.ask.plan_pm_interview_with_codex",
                 return_value={
@@ -1290,7 +1289,7 @@ class DiscordCommandApiTests(DiscordCommandApiTestHarness):
                 },
             ) as plan_mock,
             patch(
-                "orchestrator.api.discord.ingress.seed_runtime.seed_parent_issues_with_codex",
+                "orchestrator.api.discord.ingress.seed_runtime.seed_parent_issues_with_runtime",
                 side_effect=AssertionError("Incomplete PM interview should not seed Jira"),
             ) as seed_mock,
         ):
@@ -1332,19 +1331,27 @@ class DiscordCommandApiTests(DiscordCommandApiTestHarness):
             recommendations=("Keep the first cut focused on customer-visible recovery.",),
             acceptance_impacts=("Acceptance criteria must mention fallback UX.",),
             open_behavior_questions=(),
+            architecture_summary=(
+                "Split telemetry and UX work.",
+                "One child ticket per implementation slice.",
+            ),
+            architecture_diagram="flowchart TD\n  Parent[Parent brief] --> Child[Engineering child]",
             stages=(
                 SimpleNamespace(
                     planning_state="engineering_planning",
+                    persona_id="architect",
                     to_payload=lambda: {
                         "findings": ["Split telemetry and UX work."],
                         "recommendations": ["One child ticket per implementation slice."],
                         "required_tasks": ["Implement retry telemetry"],
                         "open_behavior_questions": [],
                         "acceptance_impacts": ["Telemetry needs explicit coverage."],
+                        "mermaid_diagram": "flowchart TD\n  Parent[Parent brief] --> Child[Engineering child]",
                     },
                 ),
                 SimpleNamespace(
                     planning_state="security_planning",
+                    persona_id="security",
                     to_payload=lambda: {
                         "findings": ["Protect retry events from abuse."],
                         "recommendations": ["Add misuse checks."],
@@ -1355,6 +1362,7 @@ class DiscordCommandApiTests(DiscordCommandApiTestHarness):
                 ),
                 SimpleNamespace(
                     planning_state="test_planning",
+                    persona_id="qa",
                     to_payload=lambda: {
                         "findings": ["Regression coverage is required."],
                         "recommendations": ["Automate the failure-recovery path."],
@@ -1371,7 +1379,6 @@ class DiscordCommandApiTests(DiscordCommandApiTestHarness):
                 "orchestrator.api.discord.ingress.ask_runtime.collect_ask_context_with_history_context",
                 return_value=(None, None, [{"key": "TP-20", "summary": "Do thing", "status": "To Do"}], {"To Do": 1}, []),
             ),
-            patch("orchestrator.api.discord.commands.ask.build_codex_runtime"),
             patch(
                 "orchestrator.api.discord.commands.ask.plan_pm_interview_with_codex",
                 return_value={
@@ -1400,7 +1407,7 @@ class DiscordCommandApiTests(DiscordCommandApiTestHarness):
                 },
             ) as plan_mock,
             patch(
-                "orchestrator.api.discord.ingress.seed_runtime.seed_parent_issues_with_codex",
+                "orchestrator.api.discord.ingress.seed_runtime.seed_parent_issues_with_runtime",
                 return_value=(
                     "PM parent issue upsert complete. Created 1: TP-501. Updated 0: none.",
                     {
@@ -1417,7 +1424,7 @@ class DiscordCommandApiTests(DiscordCommandApiTestHarness):
                 return_value=planning_result,
             ) as planning_mock,
             patch(
-                "orchestrator.api.discord.ingress.seed_runtime.seed_issues_with_codex",
+                "orchestrator.api.discord.ingress.seed_runtime.seed_issues_with_runtime",
                 return_value=(
                     "Issue upsert complete. Parent: TP-501. Created 2: TP-502, TP-503.",
                     {
@@ -1465,7 +1472,6 @@ class DiscordCommandApiTests(DiscordCommandApiTestHarness):
                     "orchestrator.api.discord.ingress.ask_runtime.collect_ask_context_with_history_context",
                     return_value=(None, None, [{"key": "TP-20", "summary": "Do thing", "status": "To Do"}], {"To Do": 1}, []),
                 ),
-                patch("orchestrator.api.discord.commands.ask.build_codex_runtime"),
                 patch(
                     "orchestrator.api.discord.commands.ask.plan_pm_interview_with_codex",
                     return_value={
@@ -1493,7 +1499,7 @@ class DiscordCommandApiTests(DiscordCommandApiTestHarness):
                         "ready_to_write": True,
                     },
                 ),
-                patch("orchestrator.api.discord.ingress.seed_runtime.seed_parent_issues_with_codex") as seed_mock,
+                patch("orchestrator.api.discord.ingress.seed_runtime.seed_parent_issues_with_runtime") as seed_mock,
             ):
                 command_response = execute_discord_command(
                     tenant_id=self.tenant_id,
@@ -1596,7 +1602,6 @@ class DiscordCommandApiTests(DiscordCommandApiTestHarness):
                 "orchestrator.api.discord.ingress.ask_runtime.collect_ask_context_with_history_context",
                 return_value=(None, None, [{"key": "TP-20", "summary": "Do thing", "status": "To Do"}], {"To Do": 1}, []),
             ),
-            patch("orchestrator.api.discord.commands.ask.build_codex_runtime"),
             patch(
                 "orchestrator.api.discord.commands.ask.plan_pm_interview_with_codex",
                 return_value={
@@ -1656,7 +1661,6 @@ class DiscordCommandApiTests(DiscordCommandApiTestHarness):
                 "orchestrator.api.discord.ingress.ask_runtime.collect_ask_context_with_history_context",
                 return_value=(None, None, [{"key": "TP-20", "summary": "Do thing", "status": "To Do"}], {"To Do": 1}, [{"question": "voice earlier", "answer": "security: older reply"}]),
             ),
-            patch("orchestrator.api.discord.commands.ask.build_codex_runtime"),
             patch(
                 "orchestrator.api.discord.commands.ask.plan_pm_interview_with_codex",
                 return_value={
@@ -2015,9 +2019,6 @@ class DiscordCommandApiTests(DiscordCommandApiTestHarness):
                 return_value=(None, None, [{"key": "TP-20", "summary": "Do thing", "status": "To Do"}], {"To Do": 1}, []),
             ),
             patch(
-                "orchestrator.api.discord.commands.ask.build_codex_runtime",
-            ),
-            patch(
                 "orchestrator.api.discord.commands.ask.plan_discord_ask_intent_with_codex",
                 return_value={"mode": "command", "summary": "Queue the issue run now", "command": "!run TP-20"},
             ),
@@ -2065,7 +2066,6 @@ class DiscordCommandApiTests(DiscordCommandApiTestHarness):
                 "orchestrator.api.discord.ingress.ask_runtime.collect_ask_context_with_history_context",
                 return_value=(None, None, [{"key": "OTH-20", "summary": "Do thing", "status": "To Do"}], {"To Do": 1}, []),
             ),
-            patch("orchestrator.api.discord.commands.ask.build_codex_runtime"),
             patch(
                 "orchestrator.api.discord.commands.ask.plan_discord_ask_intent_with_codex",
                 return_value={"mode": "answer", "summary": "Board answer"},
@@ -2108,7 +2108,6 @@ class DiscordCommandApiTests(DiscordCommandApiTestHarness):
                 return_value=(None, None, [{"key": "TP-20", "summary": "Do thing", "status": "To Do"}], {"To Do": 1}, []),
             ),
             patch("orchestrator.api.discord.ingress.ask_runtime.collect_github_ask_context", return_value=github_context),
-            patch("orchestrator.api.discord.commands.ask.build_codex_runtime"),
             patch(
                 "orchestrator.api.discord.commands.ask.plan_discord_ask_intent_with_codex",
                 return_value={"mode": "answer", "summary": "Board answer"},
@@ -2148,7 +2147,6 @@ class DiscordCommandApiTests(DiscordCommandApiTestHarness):
         with (
             self.session_factory() as session,
             patch("orchestrator.api.discord.ingress.ask_runtime.collect_ask_context_with_history_context", side_effect=_collect_stub),
-            patch("orchestrator.api.discord.commands.ask.build_codex_runtime"),
             patch(
                 "orchestrator.api.discord.commands.ask.plan_discord_ask_intent_with_codex",
                 return_value={"mode": "answer", "summary": "answer"},
@@ -2197,7 +2195,6 @@ class DiscordCommandApiTests(DiscordCommandApiTestHarness):
                 return_value=(None, None, [], {}, []),
             ),
             patch("orchestrator.api.discord.ingress.ask_runtime.collect_github_ask_context", return_value=github_context),
-            patch("orchestrator.api.discord.commands.ask.build_codex_runtime"),
             patch(
                 "orchestrator.api.discord.commands.ask.plan_discord_ask_intent_with_codex",
                 return_value={"mode": "answer", "summary": "answer"},
@@ -2414,7 +2411,6 @@ class DiscordCommandApiTests(DiscordCommandApiTestHarness):
         with (
             self.session_factory() as session,
             patch("orchestrator.api.discord.ingress.ask_runtime.collect_ask_context_with_history_context", side_effect=_collect_stub),
-            patch("orchestrator.api.discord.commands.ask.build_codex_runtime"),
             patch(
                 "orchestrator.api.discord.commands.ask.plan_discord_ask_intent_with_codex",
                 return_value={"mode": "answer", "summary": "answer"},
@@ -2542,7 +2538,6 @@ class DiscordCommandApiTests(DiscordCommandApiTestHarness):
                 "orchestrator.api.discord.commands.ask.plan_discord_ask_intent_with_codex",
                 return_value={"mode": "answer", "summary": "answer"},
             ),
-            patch("orchestrator.api.discord.commands.ask.build_codex_runtime"),
             patch("orchestrator.api.discord.commands.ask.answer_board_question_with_runtime", return_value="DM scoped answer"),
         ):
             response = self.client.post(
@@ -2575,7 +2570,6 @@ class DiscordCommandApiTests(DiscordCommandApiTestHarness):
                 "orchestrator.api.discord.commands.ask.plan_discord_ask_intent_with_codex",
                 return_value={"mode": "answer", "summary": "answer"},
             ),
-            patch("orchestrator.api.discord.commands.ask.build_codex_runtime"),
             patch("orchestrator.api.discord.commands.ask.answer_board_question_with_runtime", return_value="Scoped answer"),
         ):
             mapped = self.client.post(
@@ -2653,7 +2647,6 @@ class DiscordCommandApiTests(DiscordCommandApiTestHarness):
             self.session_factory() as session,
             patch("orchestrator.api.discord.ingress.ask_history_runtime.existing_issue_keys_for_tenant", return_value=set()),
             patch("orchestrator.api.discord.ingress.ask_runtime.collect_ask_context_with_history_context", side_effect=_collect_stub),
-            patch("orchestrator.api.discord.commands.ask.build_codex_runtime"),
             patch(
                 "orchestrator.api.discord.commands.ask.plan_discord_ask_intent_with_codex",
                 return_value={"mode": "answer", "summary": "answer"},
@@ -2777,7 +2770,7 @@ class DiscordCommandApiTests(DiscordCommandApiTestHarness):
         with (
             self.session_factory() as session,
             patch(
-                "orchestrator.api.discord.ingress.seed_runtime.seed_parent_issues_with_codex",
+                "orchestrator.api.discord.ingress.seed_runtime.seed_parent_issues_with_runtime",
                 return_value=(
                     "PM parent issue upsert complete. Updated 1: TP-11. Created 0: none.",
                     {
@@ -2829,7 +2822,7 @@ class DiscordCommandApiTests(DiscordCommandApiTestHarness):
         with (
             self.session_factory() as session,
             patch(
-                "orchestrator.api.discord.ingress.seed_runtime.seed_parent_issues_with_codex",
+                "orchestrator.api.discord.ingress.seed_runtime.seed_parent_issues_with_runtime",
                 return_value=(
                     "PM parent issue upsert complete. Updated 1: TP-11. Created 0: none.",
                     {
@@ -2929,7 +2922,7 @@ class DiscordCommandApiTests(DiscordCommandApiTestHarness):
 
     def test_issues_seed_calls_codex_seed_flow(self) -> None:
         with patch(
-            "orchestrator.api.discord.ingress.seed_runtime.seed_parent_issues_with_codex",
+            "orchestrator.api.discord.ingress.seed_runtime.seed_parent_issues_with_runtime",
             return_value=(
                 "PM parent issue upsert complete. Created 2: TP-1, TP-2. Updated 0: none.",
                 {"created_parent_issue_keys": ["TP-1", "TP-2"]},
@@ -2951,7 +2944,7 @@ class DiscordCommandApiTests(DiscordCommandApiTestHarness):
 
     def test_issues_seed_with_incomplete_oauth_context_returns_controlled_502(self) -> None:
         with (
-            patch("orchestrator.api.discord.ingress.seed_runtime.build_codex_runtime", return_value=object()),
+            patch("orchestrator.api.discord.ingress.seed_runtime.build_issue_seed_runtime", return_value=object()),
             patch(
                 "orchestrator.api.discord.ingress.seed_runtime.plan_pm_parent_issues_with_codex",
                 return_value={
@@ -3038,7 +3031,7 @@ class DiscordCommandApiTests(DiscordCommandApiTestHarness):
 
         with (
             self.session_factory() as session,
-            patch("orchestrator.api.discord.ingress.seed_runtime.build_codex_runtime", return_value=object()),
+            patch("orchestrator.api.discord.ingress.seed_runtime.build_issue_seed_runtime", return_value=object()),
             patch(
                 "orchestrator.api.discord.ingress.seed_runtime.plan_seed_issues_with_codex",
                 return_value={
@@ -3081,7 +3074,7 @@ class DiscordCommandApiTests(DiscordCommandApiTestHarness):
         ):
             tenant = session.get(Tenant, self.tenant_id)
             self.assertIsNotNone(tenant)
-            message, data = seed_issues_with_codex(
+            message, data = seed_issues_with_runtime(
                 session=session,
                 tenant=tenant,
                 prompt_markdown="Seed issues from spec",
@@ -3144,7 +3137,7 @@ class DiscordCommandApiTests(DiscordCommandApiTestHarness):
         fake_client = _FakeClient()
         with (
             self.session_factory() as session,
-            patch("orchestrator.api.discord.ingress.seed_runtime.build_codex_runtime", return_value=object()),
+            patch("orchestrator.api.discord.ingress.seed_runtime.build_issue_seed_runtime", return_value=object()),
             patch(
                 "orchestrator.api.discord.ingress.seed_runtime.plan_seed_issues_with_codex",
                 return_value={
@@ -3186,7 +3179,7 @@ class DiscordCommandApiTests(DiscordCommandApiTestHarness):
         ):
             tenant = session.get(Tenant, self.tenant_id)
             self.assertIsNotNone(tenant)
-            message, data = seed_issues_with_codex(
+            message, data = seed_issues_with_runtime(
                 session=session,
                 tenant=tenant,
                 prompt_markdown="Seed issues from spec",
