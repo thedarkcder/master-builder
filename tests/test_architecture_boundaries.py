@@ -706,7 +706,6 @@ class ArchitectureBoundaryTests(unittest.TestCase):
 
     def test_runtime_modules_do_not_import_execution_snapshot_migration_directly(self) -> None:
         allowed_importers = {
-            "orchestrator/cli.py",
             "orchestrator/core/workflow/execution_snapshot_startup.py",
         }
         violations: list[str] = []
