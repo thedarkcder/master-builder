@@ -4,7 +4,6 @@ from dataclasses import dataclass, replace
 from enum import Enum
 import hashlib
 
-from orchestrator.core.communications.enqueue_reason_contract import enqueue_reason_guidance
 from orchestrator.core.decision_gate import DecisionGateResult
 from orchestrator.core.decision_planner import DecisionPlannerResult
 from orchestrator.core.decision_types import (
@@ -466,6 +465,44 @@ class ExecutionAdmissionReason(str, Enum):
     BOARD_GATE_CHECK_FAILED = "board_gate_check_failed"
     BOARD_GATE_UNCONFIGURED = "board_gate_unconfigured"
 
+    @property
+    def guidance(self) -> str:
+        if self is ExecutionAdmissionReason.DECISION_GATE_REQUIRED:
+            return "Decision Gate is required before execution. Reply with the missing clarifications."
+        if self is ExecutionAdmissionReason.GTD_REQUIRED:
+            return "Good To Do details are incomplete. Add the missing GTD details, then rerun."
+        if self is ExecutionAdmissionReason.MISSING_READY_LABEL:
+            return "Issue is missing the configured ready label."
+        if self is ExecutionAdmissionReason.EXECUTION_BLOCKED:
+            return "Execution readiness checks failed. Resolve sync/capability blockers, then rerun."
+        if self is ExecutionAdmissionReason.POLICY_EVAL_FAILED:
+            return "Pre-run policy evaluation failed. Resolve policy/runtime errors before rerunning."
+        if self is ExecutionAdmissionReason.NO_RETRYABLE_RUN:
+            return "No failed/blocked/cancelled run is available to retry for this issue."
+        if self is ExecutionAdmissionReason.RUN_ALREADY_ACTIVE:
+            return "A run for this issue is already active."
+        if self is ExecutionAdmissionReason.DUPLICATE_DELIVERY:
+            return "This webhook delivery was already processed."
+        if self is ExecutionAdmissionReason.TENANT_CONCURRENCY_LIMIT_REACHED:
+            return "The tenant concurrency limit is reached; wait for an active run to finish."
+        if self is ExecutionAdmissionReason.PR_REMEDIATION_ATTEMPT_LIMIT_REACHED:
+            return "Automatic PR remediation attempt limit reached for this commit head."
+        if self is ExecutionAdmissionReason.PROJECT_NOT_MAPPED:
+            return "Issue key is not mapped to an active project."
+        if self is ExecutionAdmissionReason.READY_FOR_AGENT_BACKLOG:
+            return "Issue is ready-for-agent in backlog; move it to To Do to start execution."
+        if self is ExecutionAdmissionReason.ISSUE_IN_BACKLOG:
+            return "Issue is currently in backlog for the configured board; move it onto the board before running."
+        if self is ExecutionAdmissionReason.ISSUE_NOT_ON_BOARD:
+            return "Issue is not present on the configured board; place it on the board before running."
+        if self is ExecutionAdmissionReason.BOARD_GATE_CHECK_FAILED:
+            return "Board-location gate check failed; verify Jira OAuth connection/scopes and board configuration."
+        if self is ExecutionAdmissionReason.BOARD_GATE_UNCONFIGURED:
+            return "Run board gating is enabled but no valid board id is configured."
+        if self is ExecutionAdmissionReason.DUPLICATE_RUN:
+            return "Run was not queued due to current execution policy."
+        return "Run was not queued due to current execution policy."
+
 
 @dataclass(frozen=True)
 class RunGateBlock:
@@ -562,7 +599,12 @@ def execution_gate_reason_for_precheck_outcome(
     reason_code = outcome.value
     normalized_detail = str(detail or "").strip() or None
     normalized_ready_label = str(ready_label or "").strip() or None
-    guidance = enqueue_reason_guidance(reason_code)
+    parsed_reason = parse_execution_admission_reason(reason_code)
+    guidance = (
+        parsed_reason.guidance
+        if parsed_reason is not None
+        else "Run was not queued due to current execution policy."
+    )
     if outcome is PrecheckOutcome.MISSING_READY_LABEL and normalized_ready_label:
         guidance = f"{guidance} ({normalized_ready_label})"
     return ExecutionGateReason(
@@ -995,7 +1037,7 @@ def build_execution_admission_block(
 ) -> ExecutionAdmissionDecision:
     normalized_detail = str(detail or "").strip() or None
     normalized_ready_label = str(ready_label or "").strip() or None
-    guidance = enqueue_reason_guidance(reason.value)
+    guidance = reason.guidance
     if reason is ExecutionAdmissionReason.MISSING_READY_LABEL and normalized_ready_label:
         guidance = f"{guidance} ({normalized_ready_label})"
     return ExecutionAdmissionDecision(

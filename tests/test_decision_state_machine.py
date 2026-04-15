@@ -135,6 +135,12 @@ def test_resolve_execution_admission_blocks_from_canonical_gate_state() -> None:
     assert admission.can_enqueue is False
     assert admission.reason is ExecutionAdmissionReason.DECISION_GATE_REQUIRED
     assert admission.reason_code == "decision_gate_required"
+    assert "Decision Gate is required" in (admission.guidance or "")
+
+
+def test_execution_admission_reason_owns_guidance() -> None:
+    assert "concurrency limit" in ExecutionAdmissionReason.TENANT_CONCURRENCY_LIMIT_REACHED.guidance.lower()
+    assert "ready label" in ExecutionAdmissionReason.MISSING_READY_LABEL.guidance.lower()
 
 
 def test_resolve_worker_decision_from_precheck_creates_blocked_gate_payload() -> None:
