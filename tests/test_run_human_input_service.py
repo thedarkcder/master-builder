@@ -385,6 +385,51 @@ def test_resume_workflow_from_human_input_answer_rejects_unrelated_active_resume
             raise AssertionError("Expected ValueError for unrelated active resume run")
 
 
+def test_resume_workflow_from_human_input_answer_rejects_non_canonical_checkpoint_payload() -> None:
+    session = MagicMock()
+    request = SimpleNamespace(
+        request_id="request-1",
+        workflow_id="workflow-1",
+        checkpoint_id="checkpoint-1",
+        source_run_id="run-1",
+        status="answered",
+        consumed_by_run_id=None,
+        tenant_id="route25",
+        source_stage="review",
+    )
+    source_run = SimpleNamespace(
+        run_id="run-1",
+        branch="feature/GP-122",
+        pr_url="https://github.com/example/repo/pull/123",
+        required_worker_capability="macos",
+        plan=ExecutionSnapshot.empty(trigger_context={"source": "manual"}).dump(),
+        pre_check_outcome="ready_for_agent",
+    )
+    checkpoint = SimpleNamespace(
+        checkpoint_id="checkpoint-1",
+        payload_json={},
+    )
+    lock_query = MagicMock()
+    lock_query.scalars.return_value.one_or_none.return_value = request
+    existing_resume_query = MagicMock()
+    existing_resume_query.scalars.return_value.all.return_value = []
+    session.execute.side_effect = [lock_query, existing_resume_query]
+    session.get.side_effect = lambda model, key: (
+        source_run if key == "run-1" else checkpoint if key == "checkpoint-1" else None
+    )
+
+    try:
+        resume_workflow_from_human_input_answer(
+            session=session,
+            settings=SimpleNamespace(secrets_encryption_key="secret-key"),
+            request=request,
+        )
+    except ValueError as exc:
+        assert "Unsupported execution snapshot version/shape" in str(exc)
+    else:
+        raise AssertionError("Expected ValueError for non-canonical checkpoint payload")
+
+
 def test_create_human_input_request_commits_before_dispatching_discord_message() -> None:
     session = MagicMock()
     tenant = SimpleNamespace(tenant_id="route25")

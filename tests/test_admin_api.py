@@ -1390,6 +1390,40 @@ class AdminApiTests(AdminApiTestHarness):
         self.assertEqual(response.status_code, 409, response.text)
         self.assertIn("pre_check_outcome must be 'ready_for_agent'", response.json()["detail"])
 
+    def test_create_workflow_attempt_rejects_non_canonical_checkpoint_payload(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201)
+
+        self._seed_workflow_attempt(
+            workflow_id="workflow-invalid-checkpoint-1",
+            run_id="run-invalid-checkpoint-1",
+            issue_key="TP-1000D",
+            issue_summary="Invalid checkpoint workflow",
+            workflow_status="waiting_for_input",
+            run_status="waiting_for_input",
+            checkpoint_id="checkpoint-invalid-1",
+            checkpoint_kind="pm",
+        )
+
+        with create_session_factory(self.database_url)() as session:
+            checkpoint = session.get(WorkflowCheckpoint, "checkpoint-invalid-1")
+            assert checkpoint is not None
+            checkpoint.payload_json = {}
+            session.commit()
+
+        response = self.client.post(
+            "/api/admin/workflows/workflow-invalid-checkpoint-1/attempts",
+            json={"mode": "resume", "checkpoint_kind": "pm"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertEqual(
+            response.json()["detail"],
+            "Selected run/checkpoint has an unsupported execution snapshot shape",
+        )
+
     def test_create_workflow_attempt_from_terminal_workflow_creates_new_workflow_lineage(self) -> None:
         payload = self._tenant_payload()
         self._insert_jira_connection(connection_id="conn-1")
