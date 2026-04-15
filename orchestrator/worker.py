@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from sqlalchemy import and_, func, or_, select
+from sqlalchemy.exc import OperationalError as SQLAlchemyOperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
 from orchestrator.api.admin.tenant_crud import purge_expired_archived_tenants
@@ -82,6 +83,9 @@ WORKER_CHILD_EXIT_PROCESSED = 0
 WORKER_CHILD_EXIT_IDLE = 3
 WORKER_CHILD_EXIT_DEPENDENCY_FAILURE = 4
 WORKER_CHILD_EXIT_RUNTIME_FAILURE = 5
+WORKER_STARTUP_DB_RETRY_MAX_ATTEMPTS = 6
+WORKER_STARTUP_DB_RETRY_BASE_DELAY_SECONDS = 1.0
+WORKER_STARTUP_DB_RETRY_MAX_DELAY_SECONDS = 8.0
 _VALID_POST_CHILD_RUN_STATUSES = {
     "queued",
     "ownership_lost",
@@ -455,6 +459,41 @@ def _resolve_worker_child_timeout_seconds(*, settings: Settings) -> int:
         int(getattr(settings, "workflow_orchestrated_run_timeout_minutes", 90)),
     )
     return max(60, workflow_timeout_minutes * 60)
+
+
+def _worker_startup_db_retry_delay_seconds(*, attempt: int) -> float:
+    bounded_attempt = max(1, int(attempt))
+    return min(
+        WORKER_STARTUP_DB_RETRY_MAX_DELAY_SECONDS,
+        WORKER_STARTUP_DB_RETRY_BASE_DELAY_SECONDS * (2 ** (bounded_attempt - 1)),
+    )
+
+
+def _is_retryable_worker_startup_db_error(exc: BaseException) -> bool:
+    if not isinstance(exc, SQLAlchemyOperationalError):
+        return False
+    message = " ".join(
+        part
+        for part in (
+            str(getattr(exc, "orig", "") or "").strip(),
+            str(exc).strip(),
+        )
+        if part
+    ).lower()
+    if not message:
+        return False
+    return any(
+        needle in message
+        for needle in (
+            "database system is in recovery mode",
+            "connection failed",
+            "could not connect",
+            "connection refused",
+            "server closed the connection unexpectedly",
+            "the database system is starting up",
+            "timeout expired",
+        )
+    )
 
 
 def _probe_claimable_run_once(
@@ -853,6 +892,8 @@ async def run_worker(*, mode: str = WORKER_MODE_RUNS) -> None:
     next_readiness_refresh_at: datetime | None = None
     next_auth_request_refresh_at: datetime | None = None
     runtime_block_logged_keys: tuple[str, ...] = ()
+    startup_db_access_verified = False
+    startup_db_retry_attempts = 0
     try:
         listener.start()
         await asyncio.to_thread(
@@ -1035,46 +1076,85 @@ async def run_worker(*, mode: str = WORKER_MODE_RUNS) -> None:
                 session_factory=session_factory,
             )
             while drain_requested and len(active_children) < parallel_slots and not stop_event.is_set():
-                if mode == WORKER_MODE_RUNS:
-                    claimed_run = await asyncio.to_thread(
-                        _claim_next_run_once,
-                        session_factory=session_factory,
-                        settings=settings,
-                        service_instance_id=service_instance_id,
-                        ready_runtime_kinds=runtime_dependency_snapshot.ready_runtime_kinds,
-                    )
-                    if claimed_run is None:
-                        run_probe = await asyncio.to_thread(
-                            _probe_claimable_run_once,
+                try:
+                    if mode == WORKER_MODE_RUNS:
+                        claimed_run = await asyncio.to_thread(
+                            _claim_next_run_once,
                             session_factory=session_factory,
                             settings=settings,
+                            service_instance_id=service_instance_id,
                             ready_runtime_kinds=runtime_dependency_snapshot.ready_runtime_kinds,
                         )
+                        if claimed_run is None:
+                            run_probe = await asyncio.to_thread(
+                                _probe_claimable_run_once,
+                                session_factory=session_factory,
+                                settings=settings,
+                                ready_runtime_kinds=runtime_dependency_snapshot.ready_runtime_kinds,
+                            )
+                            startup_db_access_verified = True
+                            startup_db_retry_attempts = 0
+                            logger.info(
+                                "worker_no_claimable_run reason=%s run_id=%s tenant_id=%s issue_key=%s",
+                                run_probe.reason.value,
+                                run_probe.run_id,
+                                run_probe.tenant_id,
+                                run_probe.issue_key,
+                            )
+                            drain_requested = False
+                            break
+                        startup_db_access_verified = True
+                        startup_db_retry_attempts = 0
                         logger.info(
-                            "worker_no_claimable_run reason=%s run_id=%s tenant_id=%s issue_key=%s",
-                            run_probe.reason.value,
-                            run_probe.run_id,
-                            run_probe.tenant_id,
-                            run_probe.issue_key,
+                            "worker_claimed_run_for_child run_id=%s tenant_id=%s issue_key=%s worker_service_instance_id=%s claim_id=%s",
+                            claimed_run.run_id,
+                            claimed_run.tenant_id,
+                            claimed_run.issue_key,
+                            service_instance_id,
+                            claimed_run.claim_id,
                         )
-                        drain_requested = False
-                        break
-                    logger.info(
-                        "worker_claimed_run_for_child run_id=%s tenant_id=%s issue_key=%s worker_service_instance_id=%s claim_id=%s",
-                        claimed_run.run_id,
-                        claimed_run.tenant_id,
-                        claimed_run.issue_key,
-                        service_instance_id,
-                        claimed_run.claim_id,
-                    )
-                else:
-                    has_webhook_job = await asyncio.to_thread(
-                        _has_available_webhook_job_once,
-                        session_factory=session_factory,
-                    )
-                    if not has_webhook_job:
-                        drain_requested = False
-                        break
+                    else:
+                        has_webhook_job = await asyncio.to_thread(
+                            _has_available_webhook_job_once,
+                            session_factory=session_factory,
+                        )
+                        startup_db_access_verified = True
+                        startup_db_retry_attempts = 0
+                        if not has_webhook_job:
+                            drain_requested = False
+                            break
+                except Exception as exc:
+                    if (
+                        not startup_db_access_verified
+                        and _is_retryable_worker_startup_db_error(exc)
+                    ):
+                        startup_db_retry_attempts += 1
+                        retry_delay_seconds = _worker_startup_db_retry_delay_seconds(
+                            attempt=startup_db_retry_attempts
+                        )
+                        logger.warning(
+                            "worker_startup_database_unavailable mode=%s attempt=%s max_attempts=%s retry_in_seconds=%.1f error=%s",
+                            mode,
+                            startup_db_retry_attempts,
+                            WORKER_STARTUP_DB_RETRY_MAX_ATTEMPTS,
+                            retry_delay_seconds,
+                            exc,
+                        )
+                        if startup_db_retry_attempts >= WORKER_STARTUP_DB_RETRY_MAX_ATTEMPTS:
+                            logger.exception(
+                                "worker_startup_database_retry_exhausted mode=%s attempts=%s",
+                                mode,
+                                startup_db_retry_attempts,
+                            )
+                            raise
+                        await wait_for_wake_or_stop(
+                            wake_event=wake_event,
+                            stop_event=stop_event,
+                            timeout_seconds=retry_delay_seconds,
+                        )
+                        drain_requested = True
+                        continue
+                    raise
                 child = await _spawn_worker_child_process(
                     mode=mode,
                     wake_event=wake_event,
