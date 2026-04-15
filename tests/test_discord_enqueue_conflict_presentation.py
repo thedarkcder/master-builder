@@ -27,3 +27,7 @@ def test_present_discord_enqueue_conflict_uses_typed_reason_guidance() -> None:
 
     assert "tenant_concurrency_limit_reached" in presentation.detail
     assert "concurrency limit" in presentation.detail.lower()
+
+
+def test_enqueue_failure_reason_owns_guidance() -> None:
+    assert "already active" in EnqueueFailureReason.RUN_ALREADY_ACTIVE.guidance.lower()

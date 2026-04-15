@@ -5,7 +5,6 @@ from datetime import datetime
 from enum import Enum
 from typing import Literal
 
-from orchestrator.core.communications.enqueue_reason_contract import enqueue_reason_guidance
 from orchestrator.core.decision_gate import DecisionGateResult
 from orchestrator.core.pre_run_check import PreRunCheckResult
 from orchestrator.core.worker.stage_event_types import WorkerStageEvent
@@ -59,7 +58,10 @@ class IngressDecision:
     label_actions: tuple[DecisionLabelAction, ...]
 
     def with_applied_labels(self, applied_labels: list[str]) -> IngressDecision:
-        from orchestrator.core.decision_state_machine import blocking_reason_for_precheck
+        from orchestrator.core.decision_state_machine import (
+            blocking_reason_for_precheck,
+            guidance_for_precheck_block_reason,
+        )
 
         if self.pre_check is None or not applied_labels or not isinstance(self.pre_check, PreRunCheckResult):
             return self
@@ -86,7 +88,14 @@ class IngressDecision:
             source=self.source,
             pre_check=updated_pre_check,
             block_reason=updated_block_reason,
-            guidance=enqueue_reason_guidance(updated_block_reason) if updated_block_reason else None,
+            guidance=(
+                guidance_for_precheck_block_reason(
+                    block_reason=updated_block_reason,
+                    ready_label=getattr(updated_pre_check, "ready_label", None),
+                )
+                if updated_block_reason
+                else None
+            ),
             policy_error=self.policy_error,
             label_actions=self.label_actions,
         )

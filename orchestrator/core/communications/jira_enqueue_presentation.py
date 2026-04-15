@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from orchestrator.core.communications.enqueue_reason_contract import enqueue_reason_guidance
 from orchestrator.core.decision_engine import DecisionEngineResult
 from orchestrator.core.decision_state_machine import ExecutionAdmissionDecision
 from orchestrator.core.decision_types import PrecheckOutcome
@@ -73,7 +72,7 @@ def format_jira_enqueue_skipped_message(
     extra_detail: str | None = None,
 ) -> str:
     detail = f" ({extra_detail})" if extra_detail else ""
-    guidance = enqueue_reason_guidance(admission.reason_code)
+    guidance = str(admission.guidance or "").strip() or "Run was not queued due to current execution policy."
     return (
         f"Jira webhook did not queue a run for `{issue_key}`.\n"
         f"Reason: `{admission.reason_code}`{detail}\n"
