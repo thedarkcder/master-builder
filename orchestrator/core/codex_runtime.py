@@ -12,12 +12,12 @@ from urllib import error as urllib_error
 from urllib import request as urllib_request
 from collections.abc import Callable
 from dataclasses import dataclass
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from orchestrator.core.agent_execution_profiles import AgentExecutionProfile
 from orchestrator.core.config import Settings
+from orchestrator.core.codex_runtime_home import prepare_runtime_home
 from orchestrator.core.platform_secret_service import platform_secret_service
 
 _JSON_BLOCK_PATTERN = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL | re.IGNORECASE)
@@ -593,34 +593,6 @@ def _ensure_http_conversation_session(
     return session
 
 
-def _running_inside_container() -> bool:
-    return Path("/.dockerenv").exists()
-
-
-def _runtime_home_root(*, settings: Settings) -> Path:
-    configured_root = str(getattr(settings, "runtime_home", "") or "").strip()
-    if configured_root:
-        return Path(configured_root)
-    normalized_home = str(os.environ.get("HOME") or "").strip()
-    if _running_inside_container() and normalized_home:
-        return Path(normalized_home)
-    return Path(__file__).resolve().parents[2] / ".runtime-home"
-
-def _runtime_home_for_kind(*, settings: Settings, runtime_kind: str) -> Path:
-    return _runtime_home_root(settings=settings) / runtime_kind
-
-
-def _seed_runtime_home_from_repo_config(*, runtime_home: Path) -> None:
-    source_dir = Path(__file__).resolve().parents[2] / ".codex"
-    if not source_dir.is_dir():
-        return
-    target_dir = runtime_home / ".codex"
-    if target_dir.exists():
-        return
-    runtime_home.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(source_dir, target_dir, dirs_exist_ok=True)
-
-
 def _build_codex_subprocess_env(
     *,
     settings: Settings,
@@ -633,11 +605,10 @@ def _build_codex_subprocess_env(
         if value:
             env[key] = value
     _ = working_dir
-    subprocess_home = _runtime_home_for_kind(
+    subprocess_home = prepare_runtime_home(
         settings=settings,
         runtime_kind=str(runtime_kind or "codex_cli").strip().lower() or "codex_cli",
     )
-    _seed_runtime_home_from_repo_config(runtime_home=subprocess_home)
     subprocess_home.mkdir(parents=True, exist_ok=True)
     env["HOME"] = str(subprocess_home)
     env["XDG_CONFIG_HOME"] = str(subprocess_home / ".config")

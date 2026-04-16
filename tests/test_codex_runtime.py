@@ -206,6 +206,8 @@ class BuildHttpRuntimeTests(unittest.TestCase):
             codex_stderr_log_mode="all",
             codex_hang_detection_quiet_seconds=300,
             codex_hang_detection_report_interval_seconds=120,
+            runtime_home="",
+            agent_id="worker-macos-local",
         )
 
     def test_openai_runtime_preserves_message_history_across_resume_calls(self) -> None:
@@ -437,6 +439,8 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             codex_stderr_log_mode="all",
             codex_hang_detection_quiet_seconds=300,
             codex_hang_detection_report_interval_seconds=120,
+            runtime_home="/tmp/master-builder-test-runtime-home",
+            agent_id="worker-macos-local",
         )
 
     def test_build_with_request_override(self) -> None:
@@ -645,8 +649,9 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             else:
                 os.environ["XDG_CONFIG_HOME"] = original_xdg
 
-    def test_cli_request_scopes_home_to_working_directory(self) -> None:
+    def test_cli_request_uses_stable_runtime_home_outside_repo(self) -> None:
         settings = self._settings()
+        settings.runtime_home = ""
 
         class _FakePipe:
             def readline(self) -> str:
@@ -682,18 +687,20 @@ class BuildCodexRuntimeTests(unittest.TestCase):
         with TemporaryDirectory() as temp_dir:
             working_dir = str(Path(temp_dir) / "checkout")
             Path(working_dir).mkdir(parents=True, exist_ok=True)
-            with (
-                patch("orchestrator.core.codex_runtime.shutil.which", return_value="/usr/bin/codex"),
-                patch("orchestrator.core.codex_runtime.subprocess.Popen", side_effect=fake_popen) as popen_mock,
-            ):
-                runtime = build_codex_runtime(settings=settings)
-                self.assertEqual(
-                    runtime.run_text(system_prompt="s", user_prompt="u", working_dir=working_dir),
-                    "json-output",
-                )
+            runtime_home_root = Path(temp_dir) / "home"
+            with patch.dict(os.environ, {"HOME": str(runtime_home_root)}, clear=False):
+                with (
+                    patch("orchestrator.core.codex_runtime.shutil.which", return_value="/usr/bin/codex"),
+                    patch("orchestrator.core.codex_runtime.subprocess.Popen", side_effect=fake_popen) as popen_mock,
+                ):
+                    runtime = build_codex_runtime(settings=settings)
+                    self.assertEqual(
+                        runtime.run_text(system_prompt="s", user_prompt="u", working_dir=working_dir),
+                        "json-output",
+                    )
 
             child_env = popen_mock.call_args.kwargs["env"]
-            expected_runtime_home = str(Path.cwd() / ".runtime-home" / "codex_cli")
+            expected_runtime_home = str(runtime_home_root / ".master-builder" / "runtime" / "worker-macos-local")
             self.assertEqual(child_env["HOME"], expected_runtime_home)
             self.assertEqual(child_env["XDG_CONFIG_HOME"], str(Path(expected_runtime_home) / ".config"))
 
