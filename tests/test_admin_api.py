@@ -4695,11 +4695,85 @@ class AdminApiTests(AdminApiTestHarness):
         self.assertEqual(instance["status"], "degraded")
         self.assertEqual(instance["runtime_dependencies"]["codex_cli"]["remediation_text"], "Open this link")
         self.assertEqual(
+            instance["runtime_dependencies"]["codex_cli"]["login_service_instance_id"],
+            "worker-macos-local:runs",
+        )
+        self.assertEqual(
             instance["runtime_dependencies"]["codex_cli"]["remediation_expires_at"],
             remediation_expires_at.isoformat(),
         )
         self.assertNotIn("remediation_text", instance)
         self.assertNotIn("remediation_expires_at", instance)
+
+    def test_admin_platform_status_does_not_hide_linux_runtime_login_behind_ready_macos_worker(self) -> None:
+        session_factory = create_session_factory(self.database_url)
+        now = datetime.now(timezone.utc)
+        remediation_expires_at = now + timedelta(minutes=15)
+        with session_factory() as session:
+            session.add(
+                WorkerRuntimeState(
+                    service_instance_id="worker-macos-local:runs",
+                    agent_id="worker-macos-local",
+                    worker_mode="runs",
+                    capabilities_json=["macos"],
+                    runtime_dependencies_json={
+                        "codex_cli": {
+                            "state": "ready",
+                            "summary": "Codex CLI is authenticated and ready.",
+                        }
+                    },
+                    state="idle",
+                    started_at=now,
+                    last_heartbeat_at=now,
+                    updated_at=now,
+                )
+            )
+            session.add(
+                WorkerRuntimeState(
+                    service_instance_id="worker-linux-local:runs",
+                    agent_id="worker-linux-local",
+                    worker_mode="runs",
+                    capabilities_json=["linux"],
+                    runtime_dependencies_json={
+                        "codex_cli": {
+                            "state": "degraded",
+                            "summary": "Codex CLI is not authenticated on this worker.",
+                            "remediation_text": "Open Docker login",
+                            "remediation_expires_at": remediation_expires_at.isoformat(),
+                        }
+                    },
+                    state="degraded",
+                    started_at=now,
+                    last_heartbeat_at=now,
+                    updated_at=now,
+                )
+            )
+            session.commit()
+
+        response = self.client.get("/api/admin/status", auth=("admin", "secret"))
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        worker_service = next(service for service in payload["services"] if service["service_id"] == "workers")
+        self.assertEqual(worker_service["status"], "degraded")
+        self.assertEqual(worker_service["runtime_dependencies"]["codex_cli"]["state"], "degraded")
+        self.assertEqual(
+            worker_service["runtime_dependencies"]["codex_cli"]["login_service_instance_id"],
+            "worker-linux-local:runs",
+        )
+        self.assertIn("authentication differs across worker instances", worker_service["runtime_dependencies"]["codex_cli"]["summary"])
+        macos_instance = next(item for item in worker_service["instances"] if item["instance_id"] == "worker-macos-local:runs")
+        self.assertEqual(macos_instance["runtime_dependencies"]["codex_cli"]["state"], "ready")
+        self.assertEqual(
+            macos_instance["runtime_dependencies"]["codex_cli"]["login_service_instance_id"],
+            "worker-macos-local:runs",
+        )
+        linux_instance = next(item for item in worker_service["instances"] if item["instance_id"] == "worker-linux-local:runs")
+        self.assertEqual(linux_instance["runtime_dependencies"]["codex_cli"]["state"], "degraded")
+        self.assertEqual(
+            linux_instance["runtime_dependencies"]["codex_cli"]["login_service_instance_id"],
+            "worker-linux-local:runs",
+        )
 
     def test_start_worker_runtime_login_session_creates_pending_request(self) -> None:
         session_factory = create_session_factory(self.database_url)

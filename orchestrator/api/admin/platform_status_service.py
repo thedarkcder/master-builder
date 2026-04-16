@@ -35,6 +35,17 @@ def _capability_label(value: str) -> str:
     return normalized.capitalize()
 
 
+def _runtime_kind_label(value: str) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized == "codex_cli":
+        return "Codex CLI"
+    if normalized == "chat_cli":
+        return "Chat CLI"
+    if normalized == "claude_cli":
+        return "Claude CLI"
+    return " ".join(part.capitalize() for part in normalized.replace("-", "_").split("_") if part)
+
+
 def _worker_row_capabilities(row: WorkerRuntimeState) -> list[str]:
     capabilities, _invalid = parse_worker_capabilities_diagnostics(row.capabilities_json)
     return [_capability_label(item.value) for item in sorted(capabilities, key=lambda item: item.value)]
@@ -53,7 +64,9 @@ def _runtime_dependencies_payload(row: WorkerRuntimeState) -> dict[str, dict[str
         runtime_kind = str(raw_kind or "").strip().lower()
         if not runtime_kind or not isinstance(raw_entry, dict):
             continue
-        payload[runtime_kind] = dict(raw_entry)
+        entry = dict(raw_entry)
+        entry["login_service_instance_id"] = row.service_instance_id
+        payload[runtime_kind] = entry
     return payload
 
 
@@ -198,7 +211,7 @@ def _runtime_dependency_severity(state: object | None) -> int:
 def _service_runtime_dependencies(*, instances: list[PlatformServiceInstanceRead]) -> dict[str, dict[str, object]]:
     preferred_instances = [instance for instance in instances if instance.status not in {"stale", "stopped"}]
     candidate_instances = preferred_instances or instances
-    selected: dict[str, tuple[int, PlatformServiceInstanceRead, dict[str, object]]] = {}
+    grouped: dict[str, list[tuple[int, PlatformServiceInstanceRead, dict[str, object]]]] = {}
     for instance in candidate_instances:
         for runtime_kind, raw_dependency in (instance.runtime_dependencies or {}).items():
             runtime_kind_key = str(runtime_kind or "").strip().lower()
@@ -206,13 +219,26 @@ def _service_runtime_dependencies(*, instances: list[PlatformServiceInstanceRead
                 continue
             dependency = dict(raw_dependency)
             severity = _runtime_dependency_severity(dependency.get("state"))
-            current = selected.get(runtime_kind_key)
-            if current is None or severity < current[0]:
-                selected[runtime_kind_key] = (severity, instance, dependency)
+            grouped.setdefault(runtime_kind_key, []).append((severity, instance, dependency))
     payload: dict[str, dict[str, object]] = {}
-    for runtime_kind, (_severity, instance, dependency) in sorted(selected.items()):
+    for runtime_kind, candidates in sorted(grouped.items()):
+        blocked_candidates = [candidate for candidate in candidates if candidate[0] > 0]
+        selected_candidates = blocked_candidates or candidates
+        _severity, instance, dependency = max(
+            selected_candidates,
+            key=lambda candidate: (
+                candidate[0],
+                1 if str(candidate[2].get("remediation_text") or "").strip() else 0,
+            ),
+        )
         entry = dict(dependency)
         entry["login_service_instance_id"] = instance.instance_id
+        states = {str(candidate[2].get("state") or "").strip().lower() for candidate in candidates}
+        if len(states) > 1 and str(entry.get("state") or "").strip().lower() != "ready":
+            entry["summary"] = (
+                f"{_runtime_kind_label(runtime_kind)} authentication differs across worker instances. "
+                "Use the affected worker or login action to authenticate the missing runtime."
+            )
         payload[runtime_kind] = entry
     return payload
 
