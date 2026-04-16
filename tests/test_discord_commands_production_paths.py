@@ -519,7 +519,7 @@ class DiscordCommandProductionPathTests(SqliteTemplateDbTestCase):
             project = session.get(Project, "route25-default")
             assert tenant is not None
             assert project is not None
-            tenant.policy_config = {**dict(tenant.policy_config or {}), "codex_model": "gpt-5.3-codex-spark"}
+            tenant.policy_config = {**dict(tenant.policy_config or {}), "codex_model": "gpt-5.4-mini"}
             project.policy_overrides = {**dict(project.policy_overrides or {}), "codex_model": "gpt-5.4"}
             session.commit()
 
@@ -551,7 +551,7 @@ class DiscordCommandProductionPathTests(SqliteTemplateDbTestCase):
             project = session.get(Project, "route25-default")
             assert tenant is not None
             assert project is not None
-            tenant.policy_config = {**dict(tenant.policy_config or {}), "codex_model": "gpt-5.3-codex-spark"}
+            tenant.policy_config = {**dict(tenant.policy_config or {}), "codex_model": "gpt-5.4-mini"}
             project.policy_overrides = {**dict(project.policy_overrides or {}), "codex_model": "gpt-5.4"}
             session.commit()
 
@@ -669,7 +669,7 @@ class DiscordCommandProductionPathTests(SqliteTemplateDbTestCase):
 
         self.assertEqual(response.status_code, 503)
         self.assertIn("usage limit", response.json()["detail"].lower())
-        self.assertIn("gpt-5.3-codex-spark", response.json()["detail"].lower())
+        self.assertIn("gpt-5.4 mini", response.json()["detail"].lower())
         self.assertEqual(queue.calls, 1)
 
     def test_issues_seed_returns_controlled_error_for_incomplete_jira_context(self) -> None:

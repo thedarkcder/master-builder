@@ -22,7 +22,7 @@ class AdminRuntimeAndSecretApiTests(AdminApiTestHarness):
         self.assertEqual(body["default_model"], "gpt-5.4")
         self.assertEqual(body["default_reasoning_effort"], "medium")
         self.assertEqual(body["runtime_kind"], "codex_cli")
-        self.assertEqual([item["id"] for item in body["models"]], ["gpt-5.4", "gpt-5.3-codex", "gpt-5.3-codex-spark"])
+        self.assertEqual([item["id"] for item in body["models"]], ["gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex"])
         self.assertEqual([item["id"] for item in body["reasoning_efforts"]], ["medium", "low", "high"])
 
     def test_list_codex_models_for_engineering_profile_uses_profile_runtime(self) -> None:

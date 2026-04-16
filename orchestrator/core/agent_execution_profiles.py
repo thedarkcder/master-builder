@@ -241,7 +241,7 @@ def merge_agent_routing(
 def _select_fast_codex_model(*, default_model: str, configured_models: str | None) -> str:
     options = parse_supported_codex_models(default_model=default_model, configured_models=configured_models)
     for candidate in options:
-        if candidate.model_id == "gpt-5.3-codex-spark":
+        if candidate.model_id == "gpt-5.4-mini":
             return candidate.model_id
     if len(options) >= 2:
         return options[1].model_id

@@ -492,7 +492,7 @@ class AdminApiTests(AdminApiTestHarness):
                     "knowledge_base_enabled": False,
                     "knowledge_auto_answer_mode": "safe",
                     "allowed_commands": ["git status"],
-                    "codex_model": "gpt-5.3-codex-spark",
+                    "codex_model": "gpt-5.4-mini",
                     "codex_reasoning_effort": "high",
                 },
                 "environment": {"APP_ENV": "stage"},
@@ -509,7 +509,7 @@ class AdminApiTests(AdminApiTestHarness):
             {"API_TOKEN": "RUNNER_TOKEN_NEXT"},
         )
         self.assertIsNone(update_project.json()["discord"])
-        self.assertEqual(update_project.json()["policy_overrides"]["codex_model"], "gpt-5.3-codex-spark")
+        self.assertEqual(update_project.json()["policy_overrides"]["codex_model"], "gpt-5.4-mini")
         self.assertFalse(update_project.json()["policy_overrides"]["allow_code_reviews"])
         self.assertFalse(update_project.json()["policy_overrides"]["allow_pr_remediation"])
         self.assertFalse(update_project.json()["policy_overrides"]["allow_manual_pr_fix_requests"])
@@ -518,7 +518,7 @@ class AdminApiTests(AdminApiTestHarness):
         self.assertEqual(update_project.json()["policy_overrides"]["knowledge_auto_answer_mode"], "safe")
         self.assertEqual(update_project.json()["policy_overrides"]["allowed_commands"], ["git status"])
         self.assertEqual(update_project.json()["policy_overrides"]["codex_reasoning_effort"], "high")
-        self.assertEqual(update_project.json()["effective_policy"]["codex_model"], "gpt-5.3-codex-spark")
+        self.assertEqual(update_project.json()["effective_policy"]["codex_model"], "gpt-5.4-mini")
         self.assertEqual(update_project.json()["effective_policy"]["codex_reasoning_effort"], "high")
         self.assertFalse(update_project.json()["effective_policy"]["allow_code_reviews"])
         self.assertFalse(update_project.json()["effective_policy"]["allow_pr_remediation"])

@@ -5,8 +5,8 @@ from typing import Any
 
 _KNOWN_MODEL_METADATA: dict[str, tuple[str, str | None]] = {
     "gpt-5.4": ("GPT-5.4", "Latest general Codex-capable model"),
+    "gpt-5.4-mini": ("GPT-5.4 Mini", "Lower-latency general Codex-capable model"),
     "gpt-5.3-codex": ("GPT-5.3 Codex", "Primary coding model"),
-    "gpt-5.3-codex-spark": ("GPT-5.3 Codex Spark", "Lower-latency coding model"),
 }
 _REASONING_EFFORTS = ("low", "medium", "high")
 

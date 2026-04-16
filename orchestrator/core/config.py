@@ -62,7 +62,7 @@ class Settings(BaseSettings):
     codex_cli_command: str = "codex"
     codex_sandbox_mode: str = "workspace-write"
     codex_model: str = "gpt-5.4"
-    codex_supported_models: str = "gpt-5.4,gpt-5.3-codex,gpt-5.3-codex-spark"
+    codex_supported_models: str = "gpt-5.4,gpt-5.4-mini,gpt-5.3-codex"
     chat_cli_command: str = ""
     claude_cli_command: str = ""
     chat_model: str = "gpt-5.4"
