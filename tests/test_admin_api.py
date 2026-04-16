@@ -4560,6 +4560,16 @@ class AdminApiTests(AdminApiTestHarness):
         self.assertEqual(payload["items"][0]["related_run_id"], "run-pending-1")
         self.assertNotIn("owner_id", payload["items"][0])
 
+        paged_response = self.client.get(
+            "/api/admin/observability/webhook-jobs?tenant_id=route25&project_id=route25-default&limit=1&offset=1",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(paged_response.status_code, 200)
+        paged_payload = paged_response.json()
+        self.assertEqual(paged_payload["total"], 3)
+        self.assertEqual(len(paged_payload["items"]), 1)
+        self.assertEqual(paged_payload["items"][0]["job_id"], "job-pending-1")
+
         missing_project_response = self.client.get(
             "/api/admin/observability/webhook-jobs?tenant_id=route25&status=pending&limit=10&offset=0",
             auth=("admin", "secret"),
