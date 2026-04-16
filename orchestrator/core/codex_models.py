@@ -29,7 +29,6 @@ def normalize_codex_model(value: Any) -> str | None:
     normalized = str(value or "").strip()
     return normalized or None
 
-
 def normalize_codex_reasoning_effort(value: Any) -> str | None:
     normalized = str(value or "").strip().lower()
     if normalized in _REASONING_EFFORTS:
@@ -37,11 +36,15 @@ def normalize_codex_reasoning_effort(value: Any) -> str | None:
     return None
 
 
-def parse_supported_codex_models(*, default_model: str, configured_models: str | None) -> list[CodexModelOption]:
-    normalized_default = normalize_codex_model(default_model) or "gpt-5.4"
+def parse_supported_codex_models(*, default_model: str | None, configured_models: str | None) -> list[CodexModelOption]:
+    normalized_default = normalize_codex_model(default_model)
     seen: set[str] = set()
     ordered_model_ids: list[str] = []
-    for candidate in [normalized_default, *(str(configured_models or "").split(","))]:
+    candidates: list[str] = []
+    if normalized_default is not None:
+        candidates.append(normalized_default)
+    candidates.extend(str(configured_models or "").split(","))
+    for candidate in candidates:
         normalized = normalize_codex_model(candidate)
         if normalized is None or normalized in seen:
             continue
@@ -91,7 +94,10 @@ def resolve_effective_codex_model(
     tenant_model = normalize_codex_model((tenant_policy or {}).get("codex_model"))
     if tenant_model is not None:
         return tenant_model
-    return normalize_codex_model(default_model) or "gpt-5.4"
+    resolved_default = normalize_codex_model(default_model)
+    if resolved_default is None:
+        raise ValueError("default_model must be provided when resolving effective codex model")
+    return resolved_default
 
 
 def resolve_effective_codex_reasoning_effort(

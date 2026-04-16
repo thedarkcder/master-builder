@@ -15,7 +15,12 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
-from orchestrator.core.agent_execution_profiles import AgentExecutionProfile
+from orchestrator.core.agent_execution_profiles import (
+    AgentExecutionProfile,
+    PROFILE_ENGINEERING_EXECUTION_DEFAULT,
+    build_agent_execution_profile,
+    default_execution_profiles,
+)
 from orchestrator.core.config import Settings
 from orchestrator.core.codex_runtime_home import prepare_runtime_home
 from orchestrator.core.platform_secret_service import platform_secret_service
@@ -627,14 +632,24 @@ def build_codex_runtime(
     settings: Settings,
     request_override: Callable[[str, str, str | None], str] | None = None,
 ) -> CodexRuntime:
-    return build_cli_runtime(
+    if not str(settings.codex_cli_command or "").strip():
+        raise CodexRuntimeError("Codex CLI command is not configured")
+    default_profiles = default_execution_profiles(
+        default_codex_cli_command=settings.codex_cli_command,
+        default_codex_reasoning_effort=settings.codex_reasoning_effort,
+        default_codex_supported_models=getattr(settings, "codex_supported_models", None),
+        default_chat_cli_command=getattr(settings, "chat_cli_command", ""),
+        default_chat_reasoning_effort=getattr(settings, "chat_reasoning_effort", None),
+        default_claude_cli_command=getattr(settings, "claude_cli_command", ""),
+    )
+    return build_runtime_for_execution_profile(
         session=session,
         settings=settings,
         request_override=request_override,
-        cli_command_override=settings.codex_cli_command,
-        runtime_kind_override="codex_cli",
-        default_model_override=settings.codex_model,
-        default_reasoning_effort_override=settings.codex_reasoning_effort,
+        profile=build_agent_execution_profile(
+            profile_name=PROFILE_ENGINEERING_EXECUTION_DEFAULT,
+            profiles=default_profiles,
+        ),
     )
 
 
@@ -666,13 +681,15 @@ def build_runtime_for_execution_profile(
             base_url=profile.base_url,
             api_key=api_key,
             request_override=request_override,
-            default_model_override=str(profile.model or "").strip() or settings.codex_model,
+            default_model_override=str(profile.model or "").strip(),
             default_reasoning_effort_override=(
                 str(profile.reasoning_effort or "").strip().lower() or settings.codex_reasoning_effort
             ),
         )
     normalized_cli_command = str(profile.cli_command or "").strip() or settings.codex_cli_command
-    normalized_model = str(profile.model or "").strip() or settings.codex_model
+    normalized_model = str(profile.model or "").strip()
+    if not normalized_model:
+        raise CodexRuntimeError(f"Execution profile '{profile.profile_name}' is missing a model")
     normalized_reasoning_effort = (
         str(profile.reasoning_effort or "").strip().lower()
         or settings.codex_reasoning_effort
@@ -785,7 +802,9 @@ def build_http_runtime(
         )
 
     normalized_runtime_kind = str(runtime_kind or "").strip().lower()
-    normalized_model = str(default_model_override or settings.codex_model or "").strip() or settings.codex_model
+    normalized_model = str(default_model_override or "").strip()
+    if not normalized_model:
+        raise CodexRuntimeError(f"Runtime kind '{normalized_runtime_kind}' requires an explicit model")
     normalized_reasoning_effort = (
         str(default_reasoning_effort_override or settings.codex_reasoning_effort or "").strip().lower()
         or settings.codex_reasoning_effort
@@ -973,7 +992,7 @@ def build_cli_runtime(
                 return request_override(system_prompt, user_prompt)  # type: ignore[misc]
 
         return CodexRuntime(
-            model=str(default_model_override or settings.codex_model or "").strip() or settings.codex_model,
+            model=str(default_model_override or "").strip(),
             max_output_tokens=settings.codex_max_output_tokens,
             command="override",
             _request=_request_with_override,
@@ -1018,7 +1037,9 @@ def build_cli_runtime(
                 or settings.codex_reasoning_effort
             )
         normalized_resume_session_id = str(resume_session_id or "").strip()
-        default_model = str(default_model_override or settings.codex_model).strip() or settings.codex_model
+        default_model = str(default_model_override or "").strip()
+        if not default_model:
+            raise CodexRuntimeError("CLI runtime requires an explicit model")
         resolved_model = str(model_override or default_model).strip() or default_model
         session_callback_invoked = False
         command: list[str]
@@ -1216,7 +1237,7 @@ def build_cli_runtime(
             raise CodexRuntimeError("Codex CLI returned empty output")
 
     return CodexRuntime(
-        model=str(default_model_override or settings.codex_model or "").strip() or settings.codex_model,
+        model=str(default_model_override or "").strip(),
         max_output_tokens=settings.codex_max_output_tokens,
         command=codex_command,
         _request=_request,
