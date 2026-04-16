@@ -116,3 +116,48 @@ class WorkflowRequestFactoryTests(unittest.TestCase):
             self.assertTrue(request.allow_pr_creation)
             self.assertEqual(request.integration_branch, "feature/TP-1")
             self.assertEqual(run.branch, "feature/TP-1")
+
+    def test_build_rejects_non_canonical_resume_checkpoint_payload(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            tenant, run, effective_policy, settings = self._base_inputs(tmp_dir)
+            run.entry_mode = "resume"
+            run.entry_stage = "pm"
+            run.entry_checkpoint_id = "checkpoint-1"
+            project = SimpleNamespace(
+                project_id="project-1",
+                name="Project",
+                github_repository="https://github.com/example/repo",
+                jira_project_key="TP",
+                environment={},
+            )
+            checkout_dir = (
+                Path(tmp_dir)
+                / "tenant-1"
+                / "project-1"
+                / "runs"
+                / "run-1"
+                / "workspaces"
+                / "worker-a"
+                / "repo"
+            )
+            checkout_dir.mkdir(parents=True, exist_ok=True)
+            checkpoint = SimpleNamespace(
+                checkpoint_id="checkpoint-1",
+                checkpoint_kind="pm",
+                payload_json={},
+                codex_session_id=None,
+            )
+            with patch(
+                "orchestrator.core.worker.workflow_request_factory.prepare_execution_repo_for_run",
+                return_value=self._prepared_repo(checkout_dir),
+            ):
+                with self.assertRaisesRegex(ValueError, "Unsupported execution snapshot version/shape"):
+                    build_workflow_request(
+                        session=self._session_with_no_human_inputs(),
+                        tenant=tenant,
+                        run=run,
+                        project=project,
+                        effective_policy=effective_policy,
+                        settings=settings,
+                        entry_checkpoint_fn=lambda **_: checkpoint,
+                    )

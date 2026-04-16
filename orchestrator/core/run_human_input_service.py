@@ -15,6 +15,7 @@ from orchestrator.core.followup_context_service import (
     upsert_followup_context,
 )
 from orchestrator.core.discord.notifications import send_tenant_discord_message
+from orchestrator.core.run_enqueue_types import EnqueueFailureReason
 from orchestrator.core.runs import (
     NON_TERMINAL_RUN_STATUSES,
     RUN_STATUS_BLOCKED,
@@ -451,7 +452,7 @@ def resume_workflow_from_human_input_answer(
     checkpoint = session.get(WorkflowCheckpoint, request.checkpoint_id)
     if checkpoint is None:
         raise ValueError("Checkpoint for human input request was not found")
-    checkpoint_plan_snapshot = ExecutionSnapshot.require(checkpoint.payload_json, allow_empty=True)
+    checkpoint_plan_snapshot = ExecutionSnapshot.require(checkpoint.payload_json, allow_empty=False)
     persisted_precheck_outcome = (
         str(getattr(source_run, "pre_check_outcome", "") or "").strip()
         or resolve_precheck_outcome_from_plan(checkpoint.payload_json)
@@ -484,7 +485,7 @@ def resume_workflow_from_human_input_answer(
         ),
     )
     if not enqueue_result.enqueued:
-        if enqueue_result.reason == "run_already_active":
+        if enqueue_result.reason is EnqueueFailureReason.RUN_ALREADY_ACTIVE:
             if _run_matches_human_input_request(run=enqueue_result.run, request_id=request.request_id):
                 request.status = INPUT_STATUS_CONSUMED
                 request.consumed_by_run_id = enqueue_result.run.run_id

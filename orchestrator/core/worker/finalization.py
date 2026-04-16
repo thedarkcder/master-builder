@@ -7,6 +7,7 @@ from traceback import format_exception
 from uuid import uuid4
 
 from orchestrator.core.run_logs import record_run_log_event
+from orchestrator.core.worker.stage_events import WorkerStageUpdate
 from orchestrator.core.runs import mark_run_terminal
 from orchestrator.core.worker.manual_pr_remediation_completion import publish_manual_pr_remediation_completion
 from orchestrator.core.workflow.runner import WorkflowResult
@@ -48,10 +49,10 @@ class WorkflowFinalizer:
         *,
         run,
         workflow_result: WorkflowResult,
-        stage_updates: list[dict[str, str]],
+        stage_updates: list[WorkerStageUpdate | dict[str, str]],
         execution_context: dict[str, str] | None,
         expected_worker_service_instance_id: str | None,
-        expected_claim_id: str | None,
+        expected_claim_id: str | None = None,
     ) -> FinalizationPlan:  # noqa: ANN001
         _record_completion_step_event(
             session=self._session,

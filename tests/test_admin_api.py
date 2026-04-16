@@ -5,7 +5,6 @@ from urllib.parse import parse_qs, quote_plus, urlparse
 from unittest.mock import patch
 from types import SimpleNamespace
 
-from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
@@ -15,23 +14,20 @@ from orchestrator.api.admin.project_normalization import resolve_project_discord
 from orchestrator.core.config import get_settings
 from orchestrator.core.agent_observability import (
     record_agent_lifecycle_event,
-    reset_agent_observability_for_tests,
 )
 from orchestrator.core.run_logs import record_run_log_event
 from orchestrator.core.secrets import encrypt_value
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
-from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
+from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import (
     DecisionCase,
     DiscordCommandSyncRuntimeState,
-    JiraOAuthConnection,
     KnowledgeAsset,
     KnowledgeChunk,
     KnowledgeFact,
     KnowledgeJiraSyncRuntimeState,
     KnowledgeSource,
     ManagedSecret,
-    PlatformSetting,
     Project,
     ProjectAutomation,
     ProjectInstallRequest,
@@ -53,735 +49,12 @@ from orchestrator.storage.models import (
     WorkerRuntimeState,
 )
 from orchestrator.tools.github_app import InstallationRepository
-from tests.test_support.db_harness import SqliteTemplateApiTestCase
-from tests.workflow_test_support import add_human_input_request, add_run_with_workflow, add_workflow_attempt, make_run
+from tests.test_support.admin_api_harness import AdminApiTestHarness
+from tests.workflow_test_support import add_workflow_attempt
 
 
-class AdminApiTests(SqliteTemplateApiTestCase):
-    _secrets_encryption_key: str
-    _provision_jira_webhook_patcher: object
+class AdminApiTests(AdminApiTestHarness):
 
-    @classmethod
-    def setUpClass(cls) -> None:
-        cls._secrets_encryption_key = Fernet.generate_key().decode("utf-8")
-        super().setUpClass()
-
-    @classmethod
-    def class_environment_overrides(cls) -> dict[str, str]:
-        return {
-            "ORCHESTRATOR_ADMIN_USERNAME": "admin",
-            "ORCHESTRATOR_ADMIN_PASSWORD": "secret",
-            "ORCHESTRATOR_ADMIN_TOKEN_SECRET": "admin-token-secret-for-tests-0123456789",
-            "ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET": "unit-test-secret",
-            "ORCHESTRATOR_ADMIN_UI_BASE_URL": "http://localhost:4100",
-            "ORCHESTRATOR_PUBLIC_API_BASE_URL": "http://localhost:4000",
-            "ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET": "jira-oauth-state-secret",
-            "ORCHESTRATOR_GITHUB_APP_SLUG": "master-builder-app",
-            "ORCHESTRATOR_SECRETS_ENCRYPTION_KEY": cls._secrets_encryption_key,
-            "ORCHESTRATOR_CODEX_MODEL": "gpt-5.4",
-            "ORCHESTRATOR_CODEX_SUPPORTED_MODELS": "gpt-5.4,gpt-5.3-codex,gpt-5.3-codex-spark",
-        }
-
-    @classmethod
-    def bootstrap_template_state(cls) -> None:
-        seed_slug_secret_response = cls._class_client.put(
-            "/api/admin/secrets/platform%2FGITHUB_APP_SLUG",
-            json={"value": "master-builder-app"},
-            auth=("admin", "secret"),
-        )
-        if seed_slug_secret_response.status_code != 200:
-            raise RuntimeError(
-                f"Failed to seed GITHUB_APP_SLUG secret for tests: {seed_slug_secret_response.text}"
-            )
-
-        cls._class_client.put(
-            "/api/admin/secrets/platform%2FGITHUB_APP_ID",
-            json={"value": "12345"},
-            auth=("admin", "secret"),
-        )
-        cls._class_client.put(
-            "/api/admin/secrets/platform%2FGITHUB_APP_PRIVATE_KEY",
-            json={"value": "not-a-real-key-for-tests"},
-            auth=("admin", "secret"),
-        )
-        cls._class_client.put(
-            "/api/admin/secrets/platform%2FJIRA_OAUTH_CLIENT_ID",
-            json={"value": "jira-client-id"},
-            auth=("admin", "secret"),
-        )
-        cls._class_client.put(
-            "/api/admin/secrets/platform%2FJIRA_OAUTH_CLIENT_SECRET",
-            json={"value": "jira-client-secret"},
-            auth=("admin", "secret"),
-        )
-
-    def setUp(self) -> None:
-        self.database_url = self._start_test_database(name_prefix="admin-api")
-
-        get_settings.cache_clear()
-        reset_db_engine_cache()
-        reset_agent_observability_for_tests()
-
-        def _stub_provision_jira_webhook(**kwargs: object) -> SimpleNamespace:
-            _ = kwargs
-            return SimpleNamespace(
-                ok=True,
-                action="provision",
-                details="Provisioned 0 Jira webhook(s).",
-                webhook_ids=[],
-            )
-
-        self._provision_jira_webhook_patcher = patch(
-            "orchestrator.api.routes.admin_tenants.provision_jira_webhook",
-            side_effect=_stub_provision_jira_webhook,
-        )
-        self._provision_jira_webhook_patcher.start()
-
-    def tearDown(self) -> None:
-        self._provision_jira_webhook_patcher.stop()
-        self._cleanup_test_database()
-        os.environ.pop("ORCHESTRATOR_WORKER_CAPABILITIES", None)
-
-        get_settings.cache_clear()
-        reset_db_engine_cache()
-        reset_agent_observability_for_tests()
-
-    def _tenant_payload(self) -> dict:
-        return {
-            "name": "Tenant A",
-            "is_enabled": True,
-            "jira": {
-                "connection_id": "conn-1",
-                "project_keys": ["TP"],
-                "ready_statuses": ["Ready for Agent"],
-                "ready_jql": 'project = TP AND status = "Ready for Agent"',
-                "ready_label": "agent:ready",
-                "in_progress_label": "agent:in-progress",
-                "blocked_label": "agent:blocked",
-                "done_label": "agent:done",
-                "webhook_secret_ref": "secret/webhook",
-            },
-            "github": {
-                "mode": "github_app",
-                "webhook_secret_ref": "secret/github-webhook",
-                "installation_id": "12345",
-            },
-            "repos": {
-                "allowlist": ["https://github.com/example/repo"],
-                "mapping_rules_by_project_key": {"TP": "https://github.com/example/repo"},
-                "mapping_rules_by_component": {},
-                "fallback_repo": None,
-            },
-            "policy": {
-                "allow_jira_transitions": False,
-                "allow_pr_creation": True,
-                "allow_code_reviews": True,
-                "allow_pr_remediation": True,
-                "allow_manual_pr_fix_requests": True,
-                "allow_label_mutations": True,
-                "max_runtime_minutes": 30,
-                "max_dev_test_review_loops": 2,
-                "max_concurrent_runs": 2,
-                "allowed_commands": ["python -m unittest"],
-                "require_agents_md": False,
-                "codex_model": "gpt-5.4",
-                "codex_reasoning_effort": "medium",
-            },
-            "discord": {
-                "channel_id": "discord-channel-1",
-                "notify_events": ["run_started"],
-            },
-        }
-
-    def _insert_jira_connection(self, connection_id: str = "conn-1") -> None:
-        session_factory = create_session_factory(self.database_url)
-        settings = get_settings()
-        now = datetime.now(timezone.utc)
-        with session_factory() as session:
-            session.add(
-                JiraOAuthConnection(
-                    connection_id=connection_id,
-                    account_id="account-1",
-                    account_email="test@example.com",
-                    cloud_id="cloud-1",
-                    site_url="https://example.atlassian.net",
-                    scopes=["read:jira-work", "write:jira-work"],
-                    access_token_encrypted=encrypt_value(
-                        plaintext="access-token",
-                        encryption_key=settings.secrets_encryption_key,
-                    ),
-                    refresh_token_encrypted=encrypt_value(
-                        plaintext="refresh-token",
-                        encryption_key=settings.secrets_encryption_key,
-                    ),
-                    access_token_expires_at=now + timedelta(hours=1),
-                    created_at=now,
-                    updated_at=now,
-                )
-            )
-            session.commit()
-
-    def _seed_workflow_attempt(
-        self,
-        *,
-        workflow_id: str,
-        run_id: str,
-        tenant_id: str = "tenant-a",
-        project_id: str = "tenant-a-default",
-        issue_key: str = "TP-1",
-        issue_summary: str = "workflow attempt",
-        issue_description: str | None = "desc",
-        workflow_status: str = "queued",
-        run_status: str = "queued",
-        checkpoint_id: str | None = None,
-        checkpoint_kind: str | None = None,
-        checkpoint_stage: str | None = None,
-        pending_request_id: str | None = None,
-    ) -> None:
-        session_factory = create_session_factory(self.database_url)
-        now = datetime.now(timezone.utc)
-        with session_factory() as session:
-            _workflow, run_row, checkpoint_row = add_workflow_attempt(
-                session,
-                workflow_id=workflow_id,
-                run_id=run_id,
-                tenant_id=tenant_id,
-                project_id=project_id,
-                issue_key=issue_key,
-                issue_summary=issue_summary,
-                issue_description=issue_description,
-                repo_url="https://github.com/example/repo",
-                branch="feature/test",
-                workflow_status=workflow_status,
-                run_status=run_status,
-                entry_checkpoint_id=checkpoint_id,
-                checkpoint_kind=checkpoint_kind,
-                checkpoint_stage=checkpoint_stage or ("pm" if checkpoint_kind == "pm" else "test"),
-                checkpoint_payload={"checkpoint": checkpoint_kind, "run_id": run_id},
-                checkpoint_session_id="checkpoint-session" if checkpoint_kind == "pm" else None,
-                blocked_reason="human_input_expired" if workflow_status == "blocked" else None,
-                last_error=None if workflow_status != "failed" and run_status not in {"failed", "blocked"} else "run failed",
-                plan=(
-                    ExecutionSnapshot.empty(trigger_context={"source": "test"}).dump()
-                    if checkpoint_id
-                    else None
-                ),
-                now=now,
-            )
-            if checkpoint_id:
-                run_snapshot = ExecutionSnapshot.require(run_row.plan, allow_empty=True)
-                run_snapshot.context.execution_context["pre_check_outcome"] = "ready_for_agent"
-                run_row.plan = run_snapshot.dump()
-                assert checkpoint_row is not None
-                checkpoint_snapshot = ExecutionSnapshot.empty(trigger_context={"source": "test"})
-                checkpoint_snapshot.context.execution_context["pre_check_outcome"] = "ready_for_agent"
-                checkpoint_row.payload_json = checkpoint_snapshot.dump()
-            if pending_request_id:
-                request_status = "pending" if workflow_status == "waiting_for_input" else "answered"
-                add_human_input_request(
-                    session,
-                    request_id=pending_request_id,
-                    tenant_id=tenant_id,
-                    project_id=project_id,
-                    workflow_id=workflow_id,
-                    checkpoint_id=checkpoint_id or "checkpoint-missing",
-                    source_run_id=run_id,
-                    issue_key=issue_key,
-                    source_stage="pm",
-                    request_type="human_reply",
-                    status=request_status,
-                    now=now,
-                )
-            session.commit()
-
-    def _persist_run(self, session, *, workflow_status: str | None = None, **run_kwargs) -> Run:
-        run = make_run(**run_kwargs)
-        add_run_with_workflow(session, run, workflow_status=workflow_status)
-        return run
-
-    def test_admin_routes_require_auth(self) -> None:
-        response = self.client.get("/api/admin/tenants")
-        self.assertEqual(response.status_code, 401)
-
-    def test_list_codex_models(self) -> None:
-        response = self.client.get("/api/admin/codex/models", auth=("admin", "secret"))
-        self.assertEqual(response.status_code, 200)
-        body = response.json()
-        self.assertEqual(body["default_model"], "gpt-5.4")
-        self.assertEqual(body["default_reasoning_effort"], "medium")
-        self.assertEqual(body["runtime_kind"], "codex_cli")
-        self.assertEqual([item["id"] for item in body["models"]], ["gpt-5.4", "gpt-5.3-codex", "gpt-5.3-codex-spark"])
-        self.assertEqual([item["id"] for item in body["reasoning_efforts"]], ["medium", "low", "high"])
-
-    def test_list_codex_models_for_engineering_profile_uses_profile_runtime(self) -> None:
-        self.client.post(
-            "/api/admin/agent-runtime-profiles",
-            json={
-                "profile_name": "engineering_execution_custom",
-                "runtime_kind": "claude_cli",
-                "cli_command": "claude",
-                "model": "claude-sonnet-4-0",
-                "reasoning_effort": "medium",
-                "tool_bridge_allowed": True,
-                "fallback_profile": "engineering_execution_default",
-                "base_url": None,
-                "api_key_secret_ref": None,
-            },
-            auth=("admin", "secret"),
-        )
-        update_response = self.client.put(
-            "/api/admin/agent-runtime-profiles/engineering_execution",
-            json={
-                "runtime_kind": "claude_cli",
-                "cli_command": "claude",
-                "model": "claude-sonnet-4-0",
-                "reasoning_effort": "medium",
-                "tool_bridge_allowed": True,
-                "fallback_profile": None,
-                "base_url": None,
-                "api_key_secret_ref": None,
-            },
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(update_response.status_code, 200)
-
-        response = self.client.get(
-            "/api/admin/codex/models?profile_name=engineering_execution",
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(response.status_code, 200)
-        body = response.json()
-        self.assertEqual(body["runtime_kind"], "claude_cli")
-        self.assertEqual(body["profile_name"], "engineering_execution")
-        self.assertIn("claude-sonnet-4-0", [item["id"] for item in body["models"]])
-
-    def test_list_codex_models_for_lm_studio_includes_reasoning_efforts(self) -> None:
-        response = self.client.get(
-            "/api/admin/codex/models?runtime_kind=lm_studio",
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(response.status_code, 200)
-        body = response.json()
-        self.assertEqual(body["runtime_kind"], "lm_studio")
-        self.assertEqual([item["id"] for item in body["reasoning_efforts"]], ["medium", "low", "high"])
-
-    def test_admin_login_issues_bearer_token(self) -> None:
-        login_response = self.client.post(
-            "/api/admin/auth/login",
-            json={"username": "admin", "password": "secret"},
-        )
-        self.assertEqual(login_response.status_code, 200)
-        token = login_response.json()["access_token"]
-        self.assertTrue(token)
-        self.assertEqual(login_response.json()["token_type"], "bearer")
-
-        me_response = self.client.get(
-            "/api/admin/auth/me",
-            headers={"Authorization": f"Bearer {token}"},
-        )
-        self.assertEqual(me_response.status_code, 200)
-        self.assertEqual(me_response.json()["username"], "admin")
-
-        tenants_response = self.client.get(
-            "/api/admin/tenants",
-            headers={"Authorization": f"Bearer {token}"},
-        )
-        self.assertEqual(tenants_response.status_code, 200)
-
-    def test_admin_login_rejects_invalid_credentials(self) -> None:
-        login_response = self.client.post(
-            "/api/admin/auth/login",
-            json={"username": "admin", "password": "wrong"},
-        )
-        self.assertEqual(login_response.status_code, 401)
-
-    def test_managed_secret_upsert_and_resolve(self) -> None:
-        put_response = self.client.put(
-            "/api/admin/secrets/platform%2Fsecret%2Fgithub-webhook",
-            json={"value": "managed-webhook-secret"},
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(put_response.status_code, 200)
-        self.assertEqual(put_response.json()["secret_ref"], "platform/secret/github-webhook")
-        self.assertEqual(put_response.json()["source"], "managed")
-
-        list_response = self.client.get("/api/admin/secrets", auth=("admin", "secret"))
-        self.assertEqual(list_response.status_code, 200)
-        refs = [item["secret_ref"] for item in list_response.json()]
-        self.assertIn("platform/secret/github-webhook", refs)
-
-        resolve_response = self.client.post(
-            "/api/admin/secrets/resolve",
-            json={"secret_ref": "platform/secret/github-webhook"},
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(resolve_response.status_code, 200)
-        self.assertTrue(resolve_response.json()["resolved"])
-        self.assertEqual(resolve_response.json()["source"], "managed")
-
-    def test_agent_runtime_routes_default_response(self) -> None:
-        response = self.client.get("/api/admin/agent-runtimes", auth=("admin", "secret"))
-        self.assertEqual(response.status_code, 200)
-        body = response.json()
-        self.assertEqual(body["role_routing"], {})
-        self.assertEqual(body["name_routing"], {})
-        self.assertEqual(body["selector_routing"], {})
-        self.assertIn("pm", body["available_roles"])
-        self.assertIn("voice_room_pm", body["available_named_agents"])
-        self.assertNotIn("discord.voice_entry_router", body["available_named_agents"])
-        self.assertIn("discord.voice_entry_router", body["available_selectors"])
-        self.assertIn("workflow.standup_voice_brief", body["available_selectors"])
-        self.assertIn("workflow.retro_voice_brief", body["available_selectors"])
-        self.assertIn("pm_conversation_fast", body["available_profiles"])
-        self.assertEqual(body["effective_defaults"]["role_routing"]["pm"], "pm_conversation_default")
-        self.assertEqual(body["effective_defaults"]["name_routing"]["workflow_dev_default"], "engineering_execution_default")
-        self.assertEqual(body["effective_defaults"]["selector_routing"]["discord.voice_room_pm"], "pm_conversation")
-
-    def test_agent_runtime_tools_catalog_response(self) -> None:
-        response = self.client.get("/api/admin/agent-runtime-tools", auth=("admin", "secret"))
-        self.assertEqual(response.status_code, 200)
-        body = response.json()
-        self.assertIn("available_stages", body)
-        self.assertIn("tools", body)
-        self.assertIn("pm", body["available_stages"])
-        repo_read = next(item for item in body["tools"] if item["tool_name"] == "repo.read")
-        self.assertEqual(repo_read["category"], "repo")
-        self.assertIn("dev", repo_read["stages"])
-        self.assertIn("pm", repo_read["stages"])
-        self.assertTrue(repo_read["description"])
-
-    def test_agent_runtime_profiles_crud_and_reset(self) -> None:
-        create_response = self.client.post(
-            "/api/admin/agent-runtime-profiles",
-            json={
-                "profile_name": "openai_engineering_fast",
-                "runtime_kind": "openai",
-                "cli_command": "",
-                "model": "gpt-5.4",
-                "reasoning_effort": "low",
-                "tool_bridge_allowed": True,
-                "fallback_profile": "engineering_execution_default",
-                "base_url": "https://api.openai.com/v1",
-                "api_key_secret_ref": "platform/openai_api_key",
-            },
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(create_response.status_code, 200)
-        self.assertEqual(create_response.json()["profile_name"], "openai_engineering_fast")
-        self.assertEqual(create_response.json()["runtime_kind"], "openai")
-        self.assertEqual(create_response.json()["base_url"], "https://api.openai.com/v1")
-
-        list_response = self.client.get("/api/admin/agent-runtime-profiles", auth=("admin", "secret"))
-        self.assertEqual(list_response.status_code, 200)
-        self.assertIn("openai_engineering_fast", list_response.json()["profiles"])
-
-        update_response = self.client.put(
-            "/api/admin/agent-runtime-profiles/engineering_execution_default",
-            json={
-                "runtime_kind": "claude_cli",
-                "cli_command": "claude",
-                "model": "claude-sonnet-4-0",
-                "reasoning_effort": "medium",
-                "tool_bridge_allowed": True,
-                "fallback_profile": None,
-                "base_url": None,
-                "api_key_secret_ref": None,
-            },
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(update_response.status_code, 200)
-        self.assertTrue(update_response.json()["is_builtin"])
-        self.assertTrue(update_response.json()["is_overridden"])
-        self.assertEqual(update_response.json()["runtime_kind"], "claude_cli")
-
-        reset_response = self.client.post(
-            "/api/admin/agent-runtime-profiles/engineering_execution_default/reset",
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(reset_response.status_code, 200)
-        self.assertEqual(reset_response.json()["runtime_kind"], "codex_cli")
-        self.assertFalse(reset_response.json()["is_overridden"])
-
-        delete_response = self.client.delete(
-            "/api/admin/agent-runtime-profiles/openai_engineering_fast",
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(delete_response.status_code, 200)
-        self.assertNotIn("openai_engineering_fast", delete_response.json()["profiles"])
-
-    def test_agent_runtime_profiles_reject_invalid_provider_configuration(self) -> None:
-        response = self.client.post(
-            "/api/admin/agent-runtime-profiles",
-            json={
-                "profile_name": "bad_openai_profile",
-                "runtime_kind": "openai",
-                "cli_command": "",
-                "model": "gpt-5.4",
-                "reasoning_effort": "medium",
-                "tool_bridge_allowed": True,
-                "fallback_profile": None,
-                "base_url": None,
-                "api_key_secret_ref": None,
-            },
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("api_key_secret_ref is required", response.text)
-
-    def test_agent_runtime_profiles_accept_reasoning_for_lm_studio(self) -> None:
-        response = self.client.post(
-            "/api/admin/agent-runtime-profiles",
-            json={
-                "profile_name": "lm_studio_reasoning",
-                "runtime_kind": "lm_studio",
-                "cli_command": "",
-                "model": "local-model",
-                "reasoning_effort": "high",
-                "tool_bridge_allowed": True,
-                "fallback_profile": None,
-                "base_url": "http://localhost:1234/v1",
-                "api_key_secret_ref": None,
-            },
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["runtime_kind"], "lm_studio")
-        self.assertEqual(response.json()["reasoning_effort"], "high")
-
-    def test_agent_runtime_routes_upsert_and_reset(self) -> None:
-        put_response = self.client.put(
-            "/api/admin/agent-runtimes",
-            json={
-                "role_routing": {"pm": "pm_conversation_fast"},
-                "name_routing": {"workflow_review_default": "engineering_execution_deep"},
-                "selector_routing": {
-                    "discord.voice_room_pm": "pm_conversation_fast",
-                    "workflow.standup_voice_brief": "general_planning_default",
-                    "workflow.retro_voice_brief": "general_planning_default",
-                },
-            },
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(put_response.status_code, 200)
-        body = put_response.json()
-        self.assertEqual(body["role_routing"]["pm"], "pm_conversation_fast")
-        self.assertEqual(body["name_routing"]["workflow_review_default"], "engineering_execution_deep")
-        self.assertEqual(body["selector_routing"]["discord.voice_room_pm"], "pm_conversation_fast")
-        self.assertEqual(body["selector_routing"]["workflow.standup_voice_brief"], "general_planning_default")
-        self.assertEqual(body["selector_routing"]["workflow.retro_voice_brief"], "general_planning_default")
-
-        get_response = self.client.get("/api/admin/agent-runtimes", auth=("admin", "secret"))
-        self.assertEqual(get_response.status_code, 200)
-        self.assertEqual(get_response.json()["role_routing"]["pm"], "pm_conversation_fast")
-        self.assertEqual(get_response.json()["selector_routing"]["discord.voice_room_pm"], "pm_conversation_fast")
-        self.assertEqual(
-            get_response.json()["selector_routing"]["workflow.standup_voice_brief"],
-            "general_planning_default",
-        )
-        self.assertEqual(
-            get_response.json()["selector_routing"]["workflow.retro_voice_brief"],
-            "general_planning_default",
-        )
-
-        session_factory = create_session_factory(self.database_url)
-        with session_factory() as session:
-            row = session.get(PlatformSetting, "agent_runtime_routing")
-            self.assertIsNotNone(row)
-            self.assertEqual(row.value_json["role_routing"]["pm"], "pm_conversation_fast")
-            self.assertEqual(row.value_json["name_routing"]["workflow_review_default"], "engineering_execution_deep")
-            self.assertEqual(row.value_json["selector_routing"]["discord.voice_room_pm"], "pm_conversation_fast")
-            self.assertEqual(
-                row.value_json["selector_routing"]["workflow.standup_voice_brief"],
-                "general_planning_default",
-            )
-            self.assertEqual(
-                row.value_json["selector_routing"]["workflow.retro_voice_brief"],
-                "general_planning_default",
-            )
-
-        reset_response = self.client.post("/api/admin/agent-runtimes/reset", auth=("admin", "secret"))
-        self.assertEqual(reset_response.status_code, 200)
-        self.assertEqual(reset_response.json()["role_routing"], {})
-        self.assertEqual(reset_response.json()["name_routing"], {})
-        self.assertEqual(reset_response.json()["selector_routing"], {})
-
-    def test_agent_runtime_routes_reject_unknown_role_and_profile(self) -> None:
-        response = self.client.put(
-            "/api/admin/agent-runtimes",
-            json={
-                "role_routing": {"unknown-role": "pm_conversation_fast"},
-                "name_routing": {"workflow_review_default": "missing-profile"},
-            },
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("Unknown agent role", response.text)
-
-    def test_agent_runtime_routes_reject_unknown_selector(self) -> None:
-        response = self.client.put(
-            "/api/admin/agent-runtimes",
-            json={
-                "selector_routing": {"unknown-selector": "pm_conversation_fast"},
-            },
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("Unknown selector", response.text)
-
-    def test_agent_runtime_routes_normalize_legacy_voice_router_selector(self) -> None:
-        response = self.client.put(
-            "/api/admin/agent-runtimes",
-            json={
-                "selector_routing": {"discord.voice_room_router": "general_planning_default"},
-            },
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(
-            response.json()["selector_routing"]["discord.voice_entry_router"],
-            "general_planning_default",
-        )
-        self.assertNotIn("discord.voice_room_router", response.json()["selector_routing"])
-
-    def test_platform_secret_list_excludes_tenant_and_project_scoped_refs(self) -> None:
-        create_response = self.client.post(
-            "/api/admin/tenants",
-            json=self._tenant_payload(),
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(create_response.status_code, 201)
-
-        self.client.put(
-            "/api/admin/secrets/platform%2FDISCORD_BOT_TOKEN",
-            json={"value": "platform-token"},
-            auth=("admin", "secret"),
-        )
-        self.client.put(
-            "/api/admin/tenants/tenant-a/secrets/DISCORD_BOT_TOKEN",
-            json={"value": "tenant-token"},
-            auth=("admin", "secret"),
-        )
-
-        platform_response = self.client.get("/api/admin/secrets", auth=("admin", "secret"))
-        self.assertEqual(platform_response.status_code, 200)
-        platform_refs = {item["secret_ref"] for item in platform_response.json()}
-        self.assertIn("platform/DISCORD_BOT_TOKEN", platform_refs)
-        self.assertNotIn("tenant/tenant-a/DISCORD_BOT_TOKEN", platform_refs)
-
-        tenant_response = self.client.get("/api/admin/tenants/tenant-a/secrets", auth=("admin", "secret"))
-        self.assertEqual(tenant_response.status_code, 200)
-        tenant_refs = {item["secret_ref"] for item in tenant_response.json()}
-        self.assertIn("tenant/tenant-a/DISCORD_BOT_TOKEN", tenant_refs)
-
-    def test_platform_secrets_endpoint_rejects_tenant_scoped_secret_ref(self) -> None:
-        response = self.client.put(
-            "/api/admin/secrets/tenant%2Ftenant-a%2FDISCORD_BOT_TOKEN",
-            json={"value": "tenant-token"},
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("Platform secrets must use platform/* refs", response.json()["detail"])
-
-    def test_platform_secret_resolve_rejects_tenant_scoped_secret_ref(self) -> None:
-        response = self.client.post(
-            "/api/admin/secrets/resolve",
-            json={"secret_ref": "tenant/tenant-a/DISCORD_BOT_TOKEN"},
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("Platform secrets must use platform/* refs", response.json()["detail"])
-
-    def test_tenant_secret_endpoints_require_existing_tenant(self) -> None:
-        list_response = self.client.get("/api/admin/tenants/missing/secrets", auth=("admin", "secret"))
-        self.assertEqual(list_response.status_code, 404)
-        self.assertIn("Tenant not found", list_response.json()["detail"])
-
-        put_response = self.client.put(
-            "/api/admin/tenants/missing/secrets/DISCORD_BOT_TOKEN",
-            json={"value": "token"},
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(put_response.status_code, 404)
-
-        resolve_response = self.client.post(
-            "/api/admin/tenants/missing/secrets/resolve",
-            json={"secret_ref": "DISCORD_BOT_TOKEN"},
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(resolve_response.status_code, 404)
-
-        delete_response = self.client.delete(
-            "/api/admin/tenants/missing/secrets/DISCORD_BOT_TOKEN",
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(delete_response.status_code, 404)
-
-    def test_tenant_secret_rejects_prefixed_secret_key(self) -> None:
-        create_response = self.client.post(
-            "/api/admin/tenants",
-            json=self._tenant_payload(),
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(create_response.status_code, 201)
-
-        response = self.client.put(
-            "/api/admin/tenants/tenant-a/secrets/platform%2FDISCORD_BOT_TOKEN",
-            json={"value": "token"},
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("Tenant secret key must not include a scope prefix", response.json()["detail"])
-
-    def test_managed_secret_delete(self) -> None:
-        put_response = self.client.put(
-            "/api/admin/secrets/platform%2Ftemporary-secret",
-            json={"value": "temp-value"},
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(put_response.status_code, 200)
-
-        delete_response = self.client.delete(
-            "/api/admin/secrets/platform%2Ftemporary-secret",
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(delete_response.status_code, 204)
-
-        resolve_response = self.client.post(
-            "/api/admin/secrets/resolve",
-            json={"secret_ref": "platform/temporary-secret"},
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(resolve_response.status_code, 200)
-        self.assertFalse(resolve_response.json()["resolved"])
-        self.assertEqual(resolve_response.json()["source"], "missing")
-
-        missing_delete_response = self.client.delete(
-            "/api/admin/secrets/platform%2Ftemporary-secret",
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(missing_delete_response.status_code, 404)
-
-    def test_jira_connect_uses_managed_secret_when_env_not_set(self) -> None:
-        os.environ.pop("JIRA_OAUTH_CLIENT_ID", None)
-        os.environ.pop("JIRA_OAUTH_CLIENT_SECRET", None)
-
-        self.client.put(
-            "/api/admin/secrets/platform%2FJIRA_OAUTH_CLIENT_ID",
-            json={"value": "jira-client-id-managed"},
-            auth=("admin", "secret"),
-        )
-        self.client.put(
-            "/api/admin/secrets/platform%2FJIRA_OAUTH_CLIENT_SECRET",
-            json={"value": "jira-client-secret-managed"},
-            auth=("admin", "secret"),
-        )
-
-        response = self.client.post(
-            "/api/admin/jira/connect/start?return_to=wizard",
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(response.status_code, 200)
-        self.assertIn("jira-client-id-managed", response.json()["authorize_url"])
 
     def test_create_and_update_tenant(self) -> None:
         payload = self._tenant_payload()
@@ -1219,7 +492,7 @@ class AdminApiTests(SqliteTemplateApiTestCase):
                     "knowledge_base_enabled": False,
                     "knowledge_auto_answer_mode": "safe",
                     "allowed_commands": ["git status"],
-                    "codex_model": "gpt-5.3-codex-spark",
+                    "codex_model": "gpt-5.4-mini",
                     "codex_reasoning_effort": "high",
                 },
                 "environment": {"APP_ENV": "stage"},
@@ -1236,7 +509,7 @@ class AdminApiTests(SqliteTemplateApiTestCase):
             {"API_TOKEN": "RUNNER_TOKEN_NEXT"},
         )
         self.assertIsNone(update_project.json()["discord"])
-        self.assertEqual(update_project.json()["policy_overrides"]["codex_model"], "gpt-5.3-codex-spark")
+        self.assertEqual(update_project.json()["policy_overrides"]["codex_model"], "gpt-5.4-mini")
         self.assertFalse(update_project.json()["policy_overrides"]["allow_code_reviews"])
         self.assertFalse(update_project.json()["policy_overrides"]["allow_pr_remediation"])
         self.assertFalse(update_project.json()["policy_overrides"]["allow_manual_pr_fix_requests"])
@@ -1245,7 +518,7 @@ class AdminApiTests(SqliteTemplateApiTestCase):
         self.assertEqual(update_project.json()["policy_overrides"]["knowledge_auto_answer_mode"], "safe")
         self.assertEqual(update_project.json()["policy_overrides"]["allowed_commands"], ["git status"])
         self.assertEqual(update_project.json()["policy_overrides"]["codex_reasoning_effort"], "high")
-        self.assertEqual(update_project.json()["effective_policy"]["codex_model"], "gpt-5.3-codex-spark")
+        self.assertEqual(update_project.json()["effective_policy"]["codex_model"], "gpt-5.4-mini")
         self.assertEqual(update_project.json()["effective_policy"]["codex_reasoning_effort"], "high")
         self.assertFalse(update_project.json()["effective_policy"]["allow_code_reviews"])
         self.assertFalse(update_project.json()["effective_policy"]["allow_pr_remediation"])
@@ -2116,6 +1389,40 @@ class AdminApiTests(SqliteTemplateApiTestCase):
         )
         self.assertEqual(response.status_code, 409, response.text)
         self.assertIn("pre_check_outcome must be 'ready_for_agent'", response.json()["detail"])
+
+    def test_create_workflow_attempt_rejects_non_canonical_checkpoint_payload(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201)
+
+        self._seed_workflow_attempt(
+            workflow_id="workflow-invalid-checkpoint-1",
+            run_id="run-invalid-checkpoint-1",
+            issue_key="TP-1000D",
+            issue_summary="Invalid checkpoint workflow",
+            workflow_status="waiting_for_input",
+            run_status="waiting_for_input",
+            checkpoint_id="checkpoint-invalid-1",
+            checkpoint_kind="pm",
+        )
+
+        with create_session_factory(self.database_url)() as session:
+            checkpoint = session.get(WorkflowCheckpoint, "checkpoint-invalid-1")
+            assert checkpoint is not None
+            checkpoint.payload_json = {}
+            session.commit()
+
+        response = self.client.post(
+            "/api/admin/workflows/workflow-invalid-checkpoint-1/attempts",
+            json={"mode": "resume", "checkpoint_kind": "pm"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertEqual(
+            response.json()["detail"],
+            "Selected run/checkpoint has an unsupported execution snapshot shape",
+        )
 
     def test_create_workflow_attempt_from_terminal_workflow_creates_new_workflow_lineage(self) -> None:
         payload = self._tenant_payload()
@@ -5183,7 +4490,7 @@ class AdminApiTests(SqliteTemplateApiTestCase):
                         attempt_count=0,
                         last_error=None,
                         payload_json={},
-                        context_json={},
+                        context_json={"related_run_id": "run-pending-1"},
                         created_at=now - timedelta(minutes=3),
                         updated_at=now - timedelta(minutes=3),
                         started_at=None,
@@ -5250,6 +4557,18 @@ class AdminApiTests(SqliteTemplateApiTestCase):
         self.assertEqual(payload["summary"]["failed_count"], 1)
         self.assertEqual(payload["items"][0]["job_id"], "job-pending-1")
         self.assertEqual(payload["items"][0]["status"], "pending")
+        self.assertEqual(payload["items"][0]["related_run_id"], "run-pending-1")
+        self.assertNotIn("owner_id", payload["items"][0])
+
+        paged_response = self.client.get(
+            "/api/admin/observability/webhook-jobs?tenant_id=example&project_id=example-default&limit=1&offset=1",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(paged_response.status_code, 200)
+        paged_payload = paged_response.json()
+        self.assertEqual(paged_payload["total"], 3)
+        self.assertEqual(len(paged_payload["items"]), 1)
+        self.assertEqual(paged_payload["items"][0]["job_id"], "job-pending-1")
 
         missing_project_response = self.client.get(
             "/api/admin/observability/webhook-jobs?tenant_id=example&status=pending&limit=10&offset=0",
@@ -5363,6 +4682,15 @@ class AdminApiTests(SqliteTemplateApiTestCase):
         worker_service = next(service for service in payload["services"] if service["service_id"] == "workers")
         self.assertEqual(worker_service["status"], "degraded")
         self.assertIn("startup/runtime dependencies", worker_service["summary"])
+        self.assertIn("Shared runtime login is still required", worker_service["summary"])
+        self.assertEqual(
+            worker_service["runtime_dependencies"]["codex_cli"]["login_service_instance_id"],
+            "worker-macos-local:runs",
+        )
+        self.assertEqual(
+            worker_service["runtime_dependencies"]["codex_cli"]["remediation_text"],
+            "Open this link",
+        )
         instance = next(item for item in worker_service["instances"] if item["instance_id"] == "worker-macos-local:runs")
         self.assertEqual(instance["status"], "degraded")
         self.assertEqual(instance["runtime_dependencies"]["codex_cli"]["remediation_text"], "Open this link")

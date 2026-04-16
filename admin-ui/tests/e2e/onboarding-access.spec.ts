@@ -400,19 +400,23 @@ test("lets a platform admin create a workspace through the setup wizard and bloc
   await expect(page).toHaveURL(/github_install=success/);
   await page.getByRole("button", { name: /^Next$/ }).click();
 
-  await expect(page).toHaveURL(/\/tenants\/new\/discord$/);
-  await page.getByRole("button", { name: /(Reinstall|Install) Discord Bot/ }).click();
-  await expect(page).toHaveURL(/discord_install=success/);
-  await page.getByLabel("Invite channel").fill("channel-789");
-  await page.getByRole("button", { name: /^Next$/ }).click();
-
   await expect(page).toHaveURL(/\/tenants\/new\/repos$/);
   await expect(page.locator("select").first()).toContainText("thedarkcder/master-builder");
   await page.getByRole("button", { name: /^Next$/ }).click();
 
+  await expect(page).toHaveURL(/\/tenants\/new\/discord$/);
+  await page.getByRole("button", { name: /(Reinstall|Install) Discord Bot/ }).click();
+  await expect(page).toHaveURL(/discord_install=success/);
+  await page.getByRole("button", { name: /^Next$/ }).click();
+
+  await expect(page).toHaveURL(/\/tenants\/new\/invite$/);
+  await page.getByRole("button", { name: /^Next$/ }).click();
+
   await expect(page).toHaveURL(/\/tenants\/new\/review$/);
   await page.getByRole("button", { name: "Save workspace" }).click();
-  await expect(page.getByRole("link", { name: "Open workspace settings" })).toBeVisible();
+  await expect(page).toHaveURL(/\/beta-workspace\/dashboard$/, { timeout: 15000 });
+  await expect(page.getByRole("heading", { name: "Recent Runs" })).toBeVisible();
+  await expect(page.getByText("Connection Status")).toBeVisible();
 });
 
 test("opens the tenant workspace from the selector for tenant users", async ({ page }) => {
@@ -466,8 +470,8 @@ test("opens the tenant workspace from the selector for tenant users", async ({ p
     page.waitForURL(/\/example\/dashboard$/, { timeout: 15000 }),
     page.getByRole("link", { name: /Route 25/ }).click(),
   ]);
-  await expect(page.getByRole("heading", { name: "Route 25" })).toBeVisible();
-  await expect(page.getByText("Tenant workspace overview.")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Recent Delivery" })).toBeVisible();
+  await expect(page.getByText("Connection Status")).toBeVisible();
 });
 
 test("lets standard tenant users open Projects without showing project-management actions", async ({ page }) => {
@@ -592,7 +596,6 @@ test("lets standard tenant users open Projects without showing project-managemen
 
   await page.goto("/example/projects");
 
-  await expect(page.getByRole("heading", { name: "Projects" })).toBeVisible();
   await expect(page.locator('a[href="/example/projects/route-web/runs"]').last()).toBeVisible();
   await expect(page.getByRole("link", { name: "All projects" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Add project" })).toHaveCount(0);
@@ -789,7 +792,7 @@ test("lets tenant admins manage team settings from dedicated Team tabs", async (
 
   await page.goto("/example/team/members");
 
-  await expect(page.getByRole("heading", { name: "Team" })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Team tabs" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Members" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Teams" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Invites" })).toBeVisible();
@@ -799,7 +802,7 @@ test("lets tenant admins manage team settings from dedicated Team tabs", async (
 
   await page.getByRole("link", { name: "Teams" }).click();
   await expect(page.getByRole("heading", { name: "Teams" })).toBeVisible();
-  await expect(page.getByText("Create groups and decide what each team can access.")).toBeVisible();
+  await expect(page.getByText("Delivery team")).toBeVisible();
   await expect(page.getByPlaceholder("Team name")).toHaveCount(0);
   await page.getByRole("button", { name: "New team" }).click();
   await expect(page.getByRole("button", { name: "Manage workspace" }).first()).toBeVisible();
@@ -812,7 +815,7 @@ test("lets tenant admins manage team settings from dedicated Team tabs", async (
 
   await page.getByRole("link", { name: "Invites" }).click();
   await expect(page.getByRole("heading", { name: "Invites" })).toBeVisible();
-  await expect(page.getByText("Invite people to the workspace and choose their access.")).toBeVisible();
+  await expect(page.getByText("Assign teams")).toBeVisible();
   await expect(page.getByText("Team IDs, comma separated")).toHaveCount(0);
   await expect(page.locator('select[aria-label="Role"]')).toContainText("Business member");
   await expect(page.locator('select[aria-label="Experience view"]')).toHaveCount(0);
@@ -871,15 +874,16 @@ test("redirects platform super admins to the tenant selector after archiving a p
     },
   ]);
 
-  await page.goto("/example/projects/route-web/settings");
-  await page.getByRole("button", { name: /Governance/ }).click();
+  await page.goto("/example/projects/route-web/danger");
+  await expect(page.getByRole("heading", { name: "Danger zone" })).toBeVisible();
+  await page.getByRole("button", { name: "Archive project…" }).click();
   await page.getByPlaceholder("Route Web").fill("Route Web");
-  await page.getByRole("button", { name: "Archive project" }).click();
+  await page.getByRole("button", { name: "Archive project", exact: true }).click();
 
   await expect(page).toHaveURL(/\/tenants\/select$/, { timeout: 15000 });
 
   await page.goto("/example/projects");
-  await expect(page.locator('a[href="/example/projects/route-web"]').last()).toHaveCount(0);
+  await expect(page.locator('a[href="/example/projects/route-web/runs"]').last()).toHaveCount(0);
 });
 
 test("shows a standalone tenant archive confirmation page and moves the tenant into the archived workspace list", async ({
@@ -952,9 +956,11 @@ test("shows a standalone tenant archive confirmation page and moves the tenant i
     await dialog.accept();
   });
 
-  await page.goto("/auth-workspace-one-1774668649405-k03pkj/settings/config");
+  await page.goto("/auth-workspace-one-1774668649405-k03pkj/settings/danger");
+  await expect(page.getByRole("heading", { name: "Danger zone" })).toBeVisible();
+  await page.getByRole("button", { name: "Archive workspace…" }).click();
   await page.getByPlaceholder("Auth Workspace One 1774668649405-k03pkj").fill("Auth Workspace One 1774668649405-k03pkj");
-  await page.getByRole("button", { name: "Archive workspace" }).click();
+  await page.getByRole("button", { name: "Archive workspace", exact: true }).click();
 
   await expect(page).toHaveURL(/\/auth-workspace-one-1774668649405-k03pkj\/archived/, { timeout: 15000 });
   await expect(page.getByRole("heading", { name: "Workspace archived" })).toBeVisible();
@@ -995,12 +1001,12 @@ test("pages the workspace selector when there are many active workspaces", async
   await expect(page.getByText("Workspace 1")).toBeVisible();
   await expect(page.getByText("Workspace 6")).toBeVisible();
   await expect(page.getByText("Workspace 7")).toHaveCount(0);
-  await expect(page.getByText("8 active workspaces • Page 1 of 2")).toBeVisible();
-  await page.getByRole("button", { name: "Next →" }).click();
+  await expect(page.getByText("8 active workspaces · Page 1 of 2")).toBeVisible();
+  await page.getByRole("button", { name: "Next", exact: true }).click();
   await expect(page.getByText("Workspace 1")).toHaveCount(0);
   await expect(page.getByText("Workspace 7")).toBeVisible();
   await expect(page.getByText("Workspace 8")).toBeVisible();
-  await expect(page.getByText("8 active workspaces • Page 2 of 2")).toBeVisible();
+  await expect(page.getByText("8 active workspaces · Page 2 of 2")).toBeVisible();
 });
 
 test("redirects tenant admins to workspace setup after archiving a project", async ({ page }) => {
@@ -1061,10 +1067,11 @@ test("redirects tenant admins to workspace setup after archiving a project", asy
     },
   ]);
 
-  await page.goto("/example/projects/route-web/settings");
-  await page.getByRole("button", { name: /Governance/ }).click();
+  await page.goto("/example/projects/route-web/danger");
+  await expect(page.getByRole("heading", { name: "Danger zone" })).toBeVisible();
+  await page.getByRole("button", { name: "Archive project…" }).click();
   await page.getByPlaceholder("Route Web").fill("Route Web");
-  await page.getByRole("button", { name: "Archive project" }).click();
+  await page.getByRole("button", { name: "Archive project", exact: true }).click();
 
   await expect(page).toHaveURL(/\/tenants\/new\/basics\?tenant_id=example$/, { timeout: 15000 });
 });
@@ -1113,7 +1120,7 @@ test("hides team navigation for invited users without team-management access", a
 
   await page.goto("/example/dashboard");
 
-  await expect(page.getByRole("heading", { name: "Route 25" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Recent Delivery" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Team" })).toHaveCount(0);
   await expect(page.getByRole("link", { name: "Profile" })).toBeVisible();
 });
@@ -1170,7 +1177,8 @@ test("hides Discord link actions when platform Discord OAuth is unavailable", as
 
   await page.goto(`/${tenantId}/profile`);
 
-  await expect(page.getByRole("heading", { name: "Profile", exact: true })).toBeVisible();
+  await expect(page.getByLabel("Profile tabs").getByRole("link", { name: "Profile" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Account" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Link Discord" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Relink Discord" })).toHaveCount(0);
   await expect(page.getByText("Discord linking is unavailable until platform Discord OAuth is configured.")).toBeVisible();
@@ -1269,7 +1277,8 @@ test("lets a tenant user manage profile details, experience, and password from P
 
   await page.goto(`/${encodedTenantId}/profile`);
 
-  await expect(page.getByRole("heading", { name: "Profile", exact: true })).toBeVisible();
+  await expect(page.getByLabel("Profile tabs").getByRole("link", { name: "Profile" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Account" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Security" })).toBeVisible();
   await page.getByLabel("Full name").fill("Person Renamed");
   await page.getByLabel("Experience preference").selectOption("non_technical");
@@ -1348,8 +1357,7 @@ test("resumes the wizard on the Discord step after a successful install callback
   await expect(page.getByText("Workspace ready for Discord install")).toBeVisible();
   await expect(page.getByText("Guild ID:")).toContainText("guild-123");
 
-  await page.getByLabel("Invite channel").fill("channel-789");
   await page.getByRole("button", { name: /^Next$/ }).click();
 
-  await expect(page).toHaveURL(/\/tenants\/new\/repos$/);
+  await expect(page).toHaveURL(/\/tenants\/new\/invite$/);
 });

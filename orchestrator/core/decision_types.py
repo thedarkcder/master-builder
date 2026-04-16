@@ -5,9 +5,29 @@ from datetime import datetime
 from enum import Enum
 from typing import Literal
 
-from orchestrator.core.communications.enqueue_reason_contract import enqueue_reason_guidance
 from orchestrator.core.decision_gate import DecisionGateResult
 from orchestrator.core.pre_run_check import PreRunCheckResult
+from orchestrator.core.worker.stage_event_types import WorkerStageEvent
+
+__all__ = [
+    "DecisionSource",
+    "DecisionLabelAction",
+    "IngressDecision",
+    "WorkerDecision",
+    "DecisionClassification",
+    "DecisionQuestionKind",
+    "PrecheckOutcome",
+    "JiraConfigKey",
+    "ReadinessState",
+    "ReadinessDecision",
+    "DecisionQuestionStatus",
+    "ExecutionGateState",
+    "WorkerStageEvent",
+    "ExecutionGateReason",
+    "ExecutionGateResolution",
+    "DecisionEventInput",
+    "DecisionEngineResult",
+]
 
 DecisionSource = Literal[
     "jira_webhook",
@@ -19,9 +39,6 @@ DecisionSource = Literal[
     "github_pr_remediation",
     "worker_execution",
 ]
-
-def blocking_reason_for_precheck(pre_check: object) -> str | None:
-    return blocking_reason_for_outcome(getattr(pre_check, "outcome", None))
 
 
 @dataclass(frozen=True)
@@ -41,6 +58,11 @@ class IngressDecision:
     label_actions: tuple[DecisionLabelAction, ...]
 
     def with_applied_labels(self, applied_labels: list[str]) -> IngressDecision:
+        from orchestrator.core.decision_state_machine import (
+            blocking_reason_for_precheck,
+            guidance_for_precheck_block_reason,
+        )
+
         if self.pre_check is None or not applied_labels or not isinstance(self.pre_check, PreRunCheckResult):
             return self
         normalized_applied = {str(label).strip().casefold() for label in applied_labels if str(label).strip()}
@@ -66,7 +88,14 @@ class IngressDecision:
             source=self.source,
             pre_check=updated_pre_check,
             block_reason=updated_block_reason,
-            guidance=enqueue_reason_guidance(updated_block_reason) if updated_block_reason else None,
+            guidance=(
+                guidance_for_precheck_block_reason(
+                    block_reason=updated_block_reason,
+                    ready_label=getattr(updated_pre_check, "ready_label", None),
+                )
+                if updated_block_reason
+                else None
+            ),
             policy_error=self.policy_error,
             label_actions=self.label_actions,
         )
@@ -167,46 +196,6 @@ class ReadinessDecision:
     reason_code: PrecheckOutcome | None = None
 
 
-def blocking_reason_for_outcome(outcome: object) -> str | None:
-    parsed = PrecheckOutcome.parse(outcome)
-    if parsed is None or not parsed.is_decision_block and parsed is not PrecheckOutcome.MISSING_READY_LABEL:
-        return None
-    return parsed.value
-
-
-def resolve_readiness_decision(
-    *,
-    policy_error: str | None,
-    block_reason: str | None,
-    classification: object,
-) -> ReadinessDecision:
-    if str(policy_error or "").strip():
-        return ReadinessDecision(
-            state=ReadinessState.POLICY_ERROR,
-            reason_code=PrecheckOutcome.POLICY_EVAL_FAILED,
-        )
-
-    parsed_block_reason = PrecheckOutcome.parse(block_reason)
-    if parsed_block_reason is PrecheckOutcome.MISSING_READY_LABEL:
-        return ReadinessDecision(
-            state=ReadinessState.BLOCKED_READY_LABEL,
-            reason_code=PrecheckOutcome.MISSING_READY_LABEL,
-        )
-    if parsed_block_reason is not None and parsed_block_reason.is_decision_block:
-        return ReadinessDecision(
-            state=ReadinessState.BLOCKED_DECISION,
-            reason_code=parsed_block_reason,
-        )
-
-    normalized_classification = DecisionClassification.parse(classification)
-    if normalized_classification.blocks_execution:
-        return ReadinessDecision(
-            state=ReadinessState.BLOCKED_DECISION,
-            reason_code=PrecheckOutcome.DECISION_GATE_REQUIRED,
-        )
-    return ReadinessDecision(state=ReadinessState.READY)
-
-
 def tenant_ready_label(tenant: object | None) -> str | None:
     return tenant_jira_config_text(tenant=tenant, key=JiraConfigKey.READY_LABEL)
 
@@ -295,19 +284,6 @@ class ExecutionGateState(str, Enum):
     POLICY_ERROR = "policy_error"
 
 
-class WorkerStageEvent(str, Enum):
-    DECISION_GATE_REQUIRED = "decision_gate_required"
-    RUN_NOT_READY = "run_not_ready"
-    LOCK_ACQUIRED = "lock_acquired"
-    REPO_SETUP_READY = "repo_setup_ready"
-    PLAN_POSTED = "plan_posted"
-    PR_OPENED = "pr_opened"
-    RUN_FAILED = "run_failed"
-    RUN_REQUEUED_REPO_SETUP = "run_requeued_repo_setup"
-    RUN_REQUEUED_CAPABILITY_MISMATCH = "run_requeued_capability_mismatch"
-    RUN_REQUEUED_STALE_SNAPSHOT = "run_requeued_stale_snapshot"
-
-
 @dataclass(frozen=True)
 class ExecutionGateReason:
     reason_code: str
@@ -320,40 +296,6 @@ class ExecutionGateReason:
 class ExecutionGateResolution:
     state: ExecutionGateState
     reason: ExecutionGateReason | None = None
-
-
-def execution_gate_reason_for_precheck_outcome(
-    *,
-    outcome: PrecheckOutcome,
-    detail: str | None = None,
-    ready_label: str | None = None,
-) -> ExecutionGateReason:
-    reason_code = outcome.value
-    normalized_detail = str(detail or "").strip() or None
-    normalized_ready_label = str(ready_label or "").strip() or None
-    guidance = enqueue_reason_guidance(reason_code)
-    if outcome is PrecheckOutcome.MISSING_READY_LABEL and normalized_ready_label:
-        guidance = f"{guidance} ({normalized_ready_label})"
-    return ExecutionGateReason(
-        reason_code=reason_code,
-        guidance=guidance,
-        detail=normalized_detail,
-        ready_label=normalized_ready_label,
-    )
-
-
-def guidance_for_precheck_block_reason(
-    *,
-    block_reason: str | None,
-    ready_label: str | None = None,
-) -> str | None:
-    parsed = PrecheckOutcome.parse(block_reason)
-    if parsed is None:
-        return None
-    return execution_gate_reason_for_precheck_outcome(
-        outcome=parsed,
-        ready_label=ready_label,
-    ).guidance
 
 
 @dataclass(frozen=True)
@@ -395,45 +337,3 @@ class DecisionEngineResult:
     @property
     def classification_code(self) -> str:
         return self.classification.value
-
-
-def resolve_execution_gate_state(
-    *,
-    decision: IngressDecision,
-    classification: object,
-) -> ExecutionGateResolution:
-    readiness = resolve_readiness_decision(
-        policy_error=decision.policy_error,
-        block_reason=decision.block_reason,
-        classification=classification,
-    )
-    if decision.pre_check is None or readiness.state == ReadinessState.POLICY_ERROR:
-        return ExecutionGateResolution(
-            state=ExecutionGateState.POLICY_ERROR,
-            reason=execution_gate_reason_for_precheck_outcome(
-                outcome=PrecheckOutcome.POLICY_EVAL_FAILED,
-                detail=str(decision.policy_error or "").strip() or None,
-            ),
-        )
-
-    if readiness.state == ReadinessState.BLOCKED_READY_LABEL:
-        ready_label = str(getattr(decision.pre_check, "ready_label", "") or "").strip() or None
-        return ExecutionGateResolution(
-            state=ExecutionGateState.BLOCK_READY_LABEL,
-            reason=execution_gate_reason_for_precheck_outcome(
-                outcome=PrecheckOutcome.MISSING_READY_LABEL,
-                ready_label=ready_label,
-            ),
-        )
-
-    if readiness.state == ReadinessState.BLOCKED_DECISION:
-        detail = str(getattr(decision.pre_check, "decision_gate_reason", "") or "").strip() or None
-        return ExecutionGateResolution(
-            state=ExecutionGateState.BLOCK_DECISION,
-            reason=execution_gate_reason_for_precheck_outcome(
-                outcome=readiness.reason_code or PrecheckOutcome.DECISION_GATE_REQUIRED,
-                detail=detail,
-            ),
-        )
-
-    return ExecutionGateResolution(state=ExecutionGateState.ALLOW_EXECUTION)

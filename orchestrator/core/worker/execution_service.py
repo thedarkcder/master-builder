@@ -7,7 +7,6 @@ from types import SimpleNamespace
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import sessionmaker
 
-from orchestrator.api.jira_oauth.connection_service import tenant_jira_oauth_context
 from orchestrator.core.config import Settings, get_settings
 from orchestrator.core.agent_observability import record_agent_lifecycle_event
 from orchestrator.core.discord.notifications import send_tenant_discord_message
