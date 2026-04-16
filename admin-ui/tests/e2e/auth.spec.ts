@@ -449,6 +449,123 @@ test("shows a dedicated Agent runtimes page without duplicating platform status 
   await expect(page.getByText("pm, dev, test, review, orchestrator, decision_planner")).toBeVisible();
 });
 
+test("loads models for the selected runtime kind instead of the original profile runtime", async ({ page }) => {
+  await seedAdminSession(page);
+
+  await installBffApiMocks(page, [
+    {
+      method: "GET",
+      pathname: "/api/bff/api/app/auth/me",
+      handler: (route) => fulfillJson(route, makePlatformAdminPrincipal()),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/tenants",
+      handler: (route) => fulfillJson(route, [makeTenant()]),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/runs",
+      handler: (route) => fulfillJson(route, []),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/secrets",
+      handler: (route) => fulfillJson(route, []),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/agent-runtimes",
+      handler: (route) =>
+        fulfillJson(route, {
+          role_routing: {},
+          name_routing: {},
+          selector_routing: {},
+          available_roles: ["engineering"],
+          available_named_agents: ["workflow_dev_default"],
+          available_selectors: [],
+          available_profiles: {
+            pm_conversation_default: {
+              profile_name: "pm_conversation_default",
+              runtime_kind: "chat_cli",
+              cli_command: "chat",
+              model: "gpt-5.4-mini",
+              reasoning_effort: "medium",
+              tool_bridge_allowed: false,
+              fallback_profile: null,
+            },
+          },
+          effective_defaults: {
+            role_routing: { engineering: "pm_conversation_default" },
+            name_routing: { workflow_dev_default: "pm_conversation_default" },
+            selector_routing: {},
+          },
+        }),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/agent-runtime-profiles",
+      handler: (route) =>
+        fulfillJson(route, {
+          profiles: {
+            pm_conversation_default: {
+              profile_name: "pm_conversation_default",
+              runtime_kind: "chat_cli",
+              cli_command: "chat",
+              model: "gpt-5.4-mini",
+              reasoning_effort: "medium",
+              tool_bridge_allowed: false,
+              fallback_profile: null,
+              base_url: null,
+              api_key_secret_ref: null,
+              is_builtin: true,
+              is_overridden: false,
+              can_delete: false,
+              can_reset: false,
+              usage_references: ["role:pm"],
+            },
+          },
+        }),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/agent-runtime-tools",
+      handler: (route) =>
+        fulfillJson(route, {
+          available_stages: ["pm", "dev"],
+          tools: [],
+        }),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/codex/models",
+      handler: async (route, url) => {
+        const runtimeKind = url.searchParams.get("runtime_kind");
+        const profileName = url.searchParams.get("profile_name");
+        const resolvedRuntimeKind = profileName === "pm_conversation_default" ? "chat_cli" : runtimeKind ?? "codex_cli";
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(makeModelCatalog(resolvedRuntimeKind)),
+        });
+      },
+    },
+  ]);
+
+  await page.goto("/platform/agent-runtimes");
+  await page.getByRole("button", { name: "Profiles" }).click();
+  await page.getByRole("row").filter({ hasText: "pm_conversation_default" }).click();
+
+  await expect(page.getByLabel("Runtime")).toHaveValue("chat_cli");
+  await expect(page.locator('select[aria-label="Model"] option[value="gpt-5.4-mini"]')).toHaveCount(1);
+  await expect(page.locator('select[aria-label="Model"] option[value="gpt-5.4"]')).toHaveCount(0);
+
+  await page.getByLabel("Runtime").selectOption("codex_cli");
+  await expect(page.getByLabel("Model", { exact: true })).toHaveValue("");
+  await expect(page.locator('select[aria-label="Model"] option[value="gpt-5.4"]')).toHaveCount(1);
+  await expect(page.locator('select[aria-label="Model"] option[value="gpt-5.4-mini"]')).toHaveCount(0);
+});
+
 test("covers runtime profile form permutations across every provider on create and update", async ({ page }) => {
   await seedAdminSession(page);
 
