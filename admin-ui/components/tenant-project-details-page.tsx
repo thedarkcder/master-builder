@@ -234,6 +234,9 @@ export function TenantProjectDetailsPage() {
   const [webhookSummary, setWebhookSummary] = useState<WebhookQueueSummaryRecord | null>(null);
   const [webhookBusy, setWebhookBusy] = useState(false);
   const [webhookStatusLine, setWebhookStatusLine] = useState("");
+  const [webhookQueryFilter, setWebhookQueryFilter] = useState("");
+  const [webhookStatusFilter, setWebhookStatusFilter] = useState<"all" | string>("all");
+  const [webhookTransportFilter, setWebhookTransportFilter] = useState<"all" | string>("all");
   const [activeSettingsSection, setActiveSettingsSection] = useState<SettingsSection>("general");
   const [runIssueFilter, setRunIssueFilter] = useState("");
   const [runStatusFilter, setRunStatusFilter] = useState<RunStatus | "all">("all");
@@ -271,6 +274,38 @@ export function TenantProjectDetailsPage() {
     () => (allowProjectManagement ? TABS : TABS.filter((tab) => tab.id === "overview" || tab.id === "runs")),
     [allowProjectManagement],
   );
+  const webhookStatusOptions = useMemo(
+    () => Array.from(new Set(webhookJobs.map((job) => job.status).filter(Boolean))).sort(),
+    [webhookJobs],
+  );
+  const webhookTransportOptions = useMemo(
+    () => Array.from(new Set(webhookJobs.map((job) => job.transport).filter(Boolean))).sort(),
+    [webhookJobs],
+  );
+  const filteredWebhookJobs = useMemo(() => {
+    const normalizedQuery = webhookQueryFilter.trim().toLowerCase();
+    return webhookJobs.filter((job) => {
+      if (webhookStatusFilter !== "all" && job.status !== webhookStatusFilter) {
+        return false;
+      }
+      if (webhookTransportFilter !== "all" && job.transport !== webhookTransportFilter) {
+        return false;
+      }
+      if (!normalizedQuery) {
+        return true;
+      }
+      const haystack = [
+        job.subject_key,
+        job.transport,
+        job.status,
+        job.related_run_id ?? "",
+        job.last_error ?? "",
+      ]
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(normalizedQuery);
+    });
+  }, [webhookJobs, webhookQueryFilter, webhookStatusFilter, webhookTransportFilter]);
 
   async function loadOptions() {
     if (!credentials) return;
@@ -1623,9 +1658,86 @@ export function TenantProjectDetailsPage() {
               </Button>
             </div>
 
+            <div className="flex flex-col gap-3 border-b px-5 py-3 sm:flex-row sm:items-end">
+              <div className="min-w-0 flex-1">
+                <label className="mb-1 block text-xs font-medium text-muted-foreground" htmlFor="webhook-filter-query">
+                  Issue / run / error
+                </label>
+                <Input
+                  id="webhook-filter-query"
+                  value={webhookQueryFilter}
+                  onChange={(event) => setWebhookQueryFilter(event.target.value)}
+                  placeholder="Filter by issue key, run id, or error"
+                  className="h-9"
+                />
+              </div>
+              <div className="w-full sm:w-40">
+                <label className="mb-1 block text-xs font-medium text-muted-foreground" htmlFor="webhook-filter-status">
+                  Status
+                </label>
+                <select
+                  id="webhook-filter-status"
+                  value={webhookStatusFilter}
+                  onChange={(event) => setWebhookStatusFilter(event.target.value)}
+                  className="h-9 w-full rounded-md border bg-background px-3 text-sm"
+                >
+                  <option value="all">All statuses</option>
+                  {webhookStatusOptions.map((status) => (
+                    <option key={status} value={status}>
+                      {status}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="w-full sm:w-44">
+                <label className="mb-1 block text-xs font-medium text-muted-foreground" htmlFor="webhook-filter-transport">
+                  Transport
+                </label>
+                <select
+                  id="webhook-filter-transport"
+                  value={webhookTransportFilter}
+                  onChange={(event) => setWebhookTransportFilter(event.target.value)}
+                  className="h-9 w-full rounded-md border bg-background px-3 text-sm"
+                >
+                  <option value="all">All transports</option>
+                  {webhookTransportOptions.map((transport) => (
+                    <option key={transport} value={transport}>
+                      {transport}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex items-center justify-between gap-3 sm:pb-1">
+                <span className="text-xs text-muted-foreground">
+                  {filteredWebhookJobs.length} of {webhookJobs.length}
+                </span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 px-2 text-xs"
+                  onClick={() => {
+                    setWebhookQueryFilter("");
+                    setWebhookStatusFilter("all");
+                    setWebhookTransportFilter("all");
+                  }}
+                  disabled={
+                    webhookQueryFilter.length === 0 &&
+                    webhookStatusFilter === "all" &&
+                    webhookTransportFilter === "all"
+                  }
+                >
+                  Clear
+                </Button>
+              </div>
+            </div>
+
             {webhookJobs.length === 0 ? (
               <div className="px-5 py-12 text-center text-sm text-muted-foreground">
                 No webhook jobs found for this project.
+              </div>
+            ) : filteredWebhookJobs.length === 0 ? (
+              <div className="px-5 py-12 text-center text-sm text-muted-foreground">
+                No webhook jobs match the current filters.
               </div>
             ) : (
               <Table>
@@ -1641,7 +1753,7 @@ export function TenantProjectDetailsPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {webhookJobs.map((job) => (
+                  {filteredWebhookJobs.map((job) => (
                     <TableRow key={job.job_id}>
                       <TableCell className="pl-5">
                         <StatusBadge status={job.status} />
