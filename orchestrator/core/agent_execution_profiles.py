@@ -97,6 +97,7 @@ _DEFAULT_ROUTING = {
     "workflow.design_planning": PROFILE_GENERAL_PLANNING,
     "workflow.design_review": PROFILE_GENERAL_PLANNING,
     "workflow.design_feedback": PROFILE_GENERAL_PLANNING,
+    "workflow.jira_issue_intake_routing": PROFILE_PM_CONVERSATION,
 }
 _KNOWN_AGENT_ROLES = (
     AGENT_ROLE_PM,
