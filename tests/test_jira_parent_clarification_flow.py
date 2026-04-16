@@ -514,6 +514,179 @@ class JiraParentClarificationFlowTests(JiraWebhookHarness):
         self.assertEqual(case.status, "pm_completed")
         self.assertIn("90 day retention window", str(case.brief_json))
 
+    def test_webhook_parent_pm_reply_does_not_post_new_questions_after_pm_completion(self) -> None:
+        now = datetime.now(timezone.utc)
+        with self.session_factory() as session:
+            session.add(
+                PMInterviewCase(
+                    case_id="pm-case-980b",
+                    tenant_id="tenant-webhook",
+                    project_id="project-1",
+                    request_id="pm-request-980b",
+                    parent_issue_key="TP-980B",
+                    source_kind="jira_parent",
+                    status="question_pending",
+                    channel_id="jira-parent-sync",
+                    thread_channel_id=None,
+                    root_message_id=None,
+                    owner_user_id="jira-user-980b",
+                    source_text="Identity redesign parent",
+                    brief_json={
+                        "objective": "Tenant identity redesign",
+                        "user_value": "Admins can manage identity safely",
+                        "target_user": "Tenant admins",
+                        "acceptance_criteria": ["Invitations can be sent"],
+                        "scope_in": ["Tenant identity", "Invitation TTL"],
+                        "scope_out": ["SSO overhaul"],
+                        "ui_references": ["Admin settings"],
+                        "constraints": [],
+                        "risks": ["Audit export misuse"],
+                        "success_outcomes": ["Admins can export audit logs within policy"],
+                    },
+                    evidence_json=[],
+                    question_history_json=[],
+                    current_question_json={"slot_key": "constraints", "question": "What audit retention window should v1 support?", "examples": []},
+                    next_question_json={"slot_key": "constraints", "question": "What audit retention window should v1 support?", "examples": []},
+                    missing_slots_json=["constraints"],
+                    notes_json={"source": "jira_parent_brief_normalization"},
+                    created_at=now,
+                    updated_at=now,
+                    closed_at=None,
+                )
+            )
+            session.add(
+                FollowupContext(
+                    context_id="ctx-pm-jira-980b",
+                    tenant_id="tenant-webhook",
+                    project_id="project-1",
+                    context_type="pm_interview",
+                    status="active",
+                    channel_id="TP-980B",
+                    thread_channel_id=None,
+                    root_message_id="jira-question-980b",
+                    owner_user_id="jira-user-980b",
+                    origin_command="pm",
+                    issue_key="TP-980B",
+                    request_id="pm-interview-jira:TP-980B",
+                    run_id=None,
+                    metadata_json={
+                        "transport": "jira_issue_comment",
+                        "reply_scope": "issue_comment_stream_from_root",
+                        "pm_request_id": "pm-request-980b",
+                    },
+                    created_at=now,
+                    updated_at=now,
+                    closed_at=None,
+                )
+            )
+            session.commit()
+
+        payload = self._jira_issue_payload(issue_key="TP-980B", labels=["pm-parent", "sync-blocked"], status_name="To Do")
+        payload["webhookEvent"] = "comment_created"
+        payload["comment"] = {
+            "id": 2004,
+            "author": {"accountId": "jira-user-980b"},
+            "body": {
+                "type": "doc",
+                "version": 1,
+                "content": [
+                    {
+                        "type": "paragraph",
+                        "content": [{"type": "text", "text": "Use a 90 day audit retention window in v1."}],
+                    }
+                ],
+            },
+        }
+
+        class _FakeClient:
+            def __init__(self) -> None:
+                self.updated_fields: list[dict] = []
+                self.replaced_labels: list[dict] = []
+
+            def get_issue_detail(self, **kwargs):  # noqa: ANN003
+                return JiraIssueDetail(
+                    key="TP-980B",
+                    summary="Identity redesign",
+                    status="To Do",
+                    description="Loose parent description",
+                    labels=["pm-parent", "sync-blocked"],
+                )
+
+            def update_issue_fields(self, **kwargs):  # noqa: ANN003
+                self.updated_fields.append(kwargs)
+                return None
+
+            def replace_issue_labels(self, **kwargs):  # noqa: ANN003
+                self.replaced_labels.append(kwargs)
+                return None
+
+        oauth_context = SimpleNamespace(
+            client=_FakeClient(),
+            access_token="tok",
+            connection=SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
+        )
+        with (
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_jira_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.build_runtime_for_selector", return_value=object()),
+            patch(
+                "orchestrator.core.pm_interview_followup_service.plan_pm_interview_with_codex",
+                return_value={
+                    "message": "Retention is now clear.",
+                    "brief": {
+                        "objective": "Tenant identity redesign",
+                        "user_value": "Admins can manage identity safely",
+                        "target_user": "Tenant admins",
+                        "acceptance_criteria": ["Invitations can be sent", "Audit retention is enforced"],
+                        "scope_in": ["Tenant identity", "Invitation TTL"],
+                        "scope_out": ["SSO overhaul"],
+                        "ui_references": ["Admin settings"],
+                        "constraints": ["90 day retention window"],
+                        "risks": ["Audit export misuse"],
+                        "success_outcomes": ["Admins can export audit logs within policy"],
+                        "recommendation": "Proceed with planning.",
+                        "open_questions": [],
+                        "next_steps": [],
+                    },
+                    "status": "pm_completed",
+                    "ready_to_write": True,
+                },
+            ),
+            patch(
+                "orchestrator.core.jira_parent_child_sync_service._ParentBriefPlanner.plan_backlog_parent",
+                return_value=(SimpleNamespace(planning_state="planning_blocked", open_behavior_questions=("Where should the user start this flow?",)), {"planning": "package"}),
+            ),
+            patch(
+                "orchestrator.api.webhooks.jira_parent_child_sync.seed_issues_with_runtime",
+                return_value=(
+                    "updated",
+                    {
+                        "updated_children": [],
+                        "created_children": [],
+                        "requires_input": True,
+                        "questions": ["Where should the user start this flow?"],
+                        "parent_revision": "rev-980b",
+                        "children_sync_status": "children_syncing",
+                    },
+                ),
+            ) as seed_mock,
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.create_jira_comment", return_value=({"id": "jira-question-980b-2"}, None)) as create_comment_mock,
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.post_jira_comment", return_value=(True, None)) as post_comment_mock,
+        ):
+            response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+            processed = self._process_one_webhook_job()
+
+        self._assert_jira_issue_event_queued(response, issue_key="TP-980B")
+        self.assertIsNotNone(processed)
+        assert processed is not None
+        self.assertEqual(processed.status, "done")
+        seed_mock.assert_called_once()
+        create_comment_mock.assert_not_called()
+        post_comment_mock.assert_called_once()
+        self.assertIn(
+            "Internal follow-up is required",
+            str(post_comment_mock.call_args.kwargs["comment"]),
+        )
+
     def test_webhook_parent_pm_reply_posts_next_jira_question_when_more_detail_is_needed(self) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:

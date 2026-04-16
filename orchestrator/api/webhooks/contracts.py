@@ -125,7 +125,6 @@ def post_jira_comment(
     )
     return created is not None or error is None, error
 
-
 def extract_delivery_id(request: Request) -> str | None:
     header_candidates = (
         "X-Atlassian-Webhook-Identifier",

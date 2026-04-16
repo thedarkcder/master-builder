@@ -174,7 +174,7 @@ class _JiraParentIssueGateway:
         brief_payload: dict[str, object],
         sync_status: str,
         planning_state: str | None,
-        open_questions: list[str] | None,
+        open_questions: list[object] | None,
     ) -> None:
         _rewrite_parent_issue_from_brief(
             oauth=self._oauth_context(),
@@ -192,7 +192,7 @@ class _JiraParentIssueGateway:
             target_label=target_label,
         )
 
-    def post_parent_brief_questions(self, *, parent_issue_key: str, questions: list[str]) -> bool:
+    def post_parent_brief_questions(self, *, parent_issue_key: str, questions: list[object]) -> bool:
         return _post_parent_brief_questions_to_discord(
             session=self._session,
             settings=self._settings,
@@ -206,28 +206,18 @@ class _JiraParentIssueGateway:
         self,
         *,
         parent_issue_key: str,
-        questions: list[str],
-        discord_failed: bool,
+        questions: list[object],
     ) -> tuple[dict[str, Any] | None, str | None]:
         created_comment, error = _post_parent_brief_questions_to_jira(
             session=self._session,
             tenant=self._context.tenant,
+            project_id=self._context.project_id,
             issue_key=parent_issue_key,
             payload=dict(self._context.payload or {}),
             questions=questions,
             settings=self._settings,
             create_jira_comment_fn=self._create_jira_comment_fn,
-            discord_failed=discord_failed,
         )
-        if error is None:
-            _persist_parent_brief_jira_followup(
-                session=self._session,
-                tenant=self._context.tenant,
-                project_id=self._context.project_id,
-                parent_issue_key=parent_issue_key,
-                questions=questions,
-                posted_comment_id=_extract_created_comment_id(created_comment),
-            )
         return created_comment, error
 
     def post_sync_note(self, *, issue_key: str, body: str) -> None:
@@ -608,13 +598,54 @@ def _extract_jira_issue_mention_target(*, payload: dict[str, Any]) -> tuple[str 
     return None, None
 
 
+def _question_text(value: object) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, dict):
+        for key in ("question", "stakeholder_question", "original_question"):
+            candidate = str(value.get(key) or "").strip()
+            if candidate:
+                return candidate
+    return str(value or "").strip()
+
+
+def _question_why_it_matters(value: object) -> str | None:
+    if not isinstance(value, dict):
+        return None
+    why = str(value.get("why_it_matters") or value.get("reason") or "").strip()
+    return why or None
+
+
+def _build_jira_question_list_items(*, questions: list[object]) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for raw_question in questions:
+        question_text = _question_text(raw_question)
+        if not question_text:
+            continue
+        list_item_content: list[dict[str, Any]] = [
+            {
+                "type": "paragraph",
+                "content": [{"type": "text", "text": question_text}],
+            }
+        ]
+        why_it_matters = _question_why_it_matters(raw_question)
+        if why_it_matters:
+            list_item_content.append(
+                {
+                    "type": "paragraph",
+                    "content": [{"type": "text", "text": f"Why it matters: {why_it_matters}"}],
+                }
+            )
+        items.append({"type": "listItem", "content": list_item_content})
+    return items
+
+
 def _jira_question_comment_adf(
     *,
     issue_key: str,
-    questions: list[str],
+    questions: list[object],
     mention_account_id: str | None,
     mention_display_name: str | None,
-    discord_failed: bool,
 ) -> dict[str, Any]:
     intro_content: list[dict[str, Any]] = [
         {
@@ -642,24 +673,10 @@ def _jira_question_comment_adf(
             ),
         }
     )
+    question_items = _build_jira_question_list_items(questions=questions)
     content: list[dict[str, Any]] = [
         {"type": "paragraph", "content": intro_content},
-        {
-            "type": "orderedList",
-            "content": [
-                {
-                    "type": "listItem",
-                    "content": [
-                        {
-                            "type": "paragraph",
-                            "content": [{"type": "text", "text": question.strip()}],
-                        }
-                    ],
-                }
-                for question in questions
-                if question.strip()
-            ],
-        },
+        {"type": "orderedList", "content": question_items},
     ]
     return {"type": "doc", "version": 1, "content": content}
 
@@ -668,27 +685,37 @@ def _post_parent_brief_questions_to_jira(
     *,
     session: Session,
     tenant,
+    project_id: str | None,
     issue_key: str,
     payload: dict[str, Any],
-    questions: list[str],
+    questions: list[object],
     settings,  # noqa: ANN001
     create_jira_comment_fn,
-    discord_failed: bool,
 ) -> tuple[dict[str, Any] | None, str | None]:  # noqa: ANN001
     mention_account_id, mention_display_name = _extract_jira_issue_mention_target(payload=payload)
-    return create_jira_comment_fn(
+    comment = _jira_question_comment_adf(
+        issue_key=issue_key,
+        questions=questions,
+        mention_account_id=mention_account_id,
+        mention_display_name=mention_display_name,
+    )
+    created_comment, error = create_jira_comment_fn(
         session=session,
         tenant=tenant,
         issue_key=issue_key,
-        comment=_jira_question_comment_adf(
-            issue_key=issue_key,
-            questions=questions,
-            mention_account_id=mention_account_id,
-            mention_display_name=mention_display_name,
-            discord_failed=discord_failed,
-        ),
+        comment=comment,
         settings=settings,
     )
+    if error is None:
+        _persist_parent_brief_jira_followup(
+            session=session,
+            tenant=tenant,
+            project_id=project_id,
+            parent_issue_key=issue_key,
+            questions=questions,
+            posted_comment_id=_extract_created_comment_id(created_comment),
+        )
+    return created_comment, error
 
 
 def _persist_parent_brief_jira_followup(
@@ -697,7 +724,7 @@ def _persist_parent_brief_jira_followup(
     tenant,
     project_id: str | None,
     parent_issue_key: str,
-    questions: list[str],
+    questions: list[object],
     posted_comment_id: str | None,
 ) -> None:
     parent_case = resolve_parent_feature_case(
@@ -752,7 +779,7 @@ def _persist_parent_brief_jira_followup(
         request_id=_pm_interview_jira_followup_request_id(parent_issue_key=parent_issue_key),
         metadata={
             "parent_issue_key": parent_issue_key,
-            "questions": list(questions),
+            "questions": [item for item in questions if _question_text(item)],
             "source": "jira_parent_brief_normalization",
             "transport": _PM_INTERVIEW_JIRA_TRANSPORT,
             "reply_scope": _PM_INTERVIEW_JIRA_REPLY_SCOPE,
@@ -947,7 +974,7 @@ def _resolve_parent_product_brief(
     parent_detail: JiraIssueDetail,
     build_runtime_for_selector_fn,
     refresh: bool = False,
-) -> tuple[dict[str, object], list[str]]:
+) -> tuple[dict[str, object], list[object]]:
     canonical_brief = None if refresh else resolve_parent_feature_brief(
         session=session,
         tenant_id=tenant_id,
@@ -980,7 +1007,7 @@ def _resolve_parent_product_brief(
         ),
     )
     brief_payload = dict(normalization.get("brief") or {})
-    open_questions = [str(value).strip() for value in normalization.get("open_questions", []) if str(value).strip()]
+    open_questions = [value for value in normalization.get("open_questions", []) if _question_text(value)]
     persist_parent_feature_brief_snapshot(
         session=session,
         tenant_id=tenant_id,
@@ -1006,12 +1033,12 @@ def _rewrite_parent_issue_from_brief(
     planning_state: str | None = None,
     architecture_summary: list[str] | None = None,
     architecture_diagram: str | None = None,
-    open_questions: list[str] | None = None,
+    open_questions: list[object] | None = None,
 ) -> None:
     normalized_open_questions = [
-        str(value).strip()
+        _question_text(value)
         for value in (open_questions if open_questions is not None else brief_payload.get("open_questions", []))
-        if str(value).strip()
+        if _question_text(value)
     ]
     description = build_parent_feature_description(
         objective=str(brief_payload.get("objective") or "").strip(),
@@ -1072,8 +1099,8 @@ def _rewrite_parent_issue_from_brief(
     )
 
 
-def _format_parent_brief_questions_for_discord(*, parent_issue_key: str, questions: list[str]) -> str:
-    question_lines = "\n".join(f"- {value}" for value in questions if value.strip())
+def _format_parent_brief_questions_for_discord(*, parent_issue_key: str, questions: list[object]) -> str:
+    question_lines = "\n".join(f"- {_question_text(value)}" for value in questions if _question_text(value))
     return (
         f"Decision needed for `{parent_issue_key}` before I can finish backlog planning.\n"
         "Please reply in this thread with the missing product behavior:\n"
@@ -1088,7 +1115,7 @@ def _post_parent_brief_questions_to_discord(
     tenant,
     project_id: str | None,
     parent_issue_key: str,
-    questions: list[str],
+    questions: list[object],
 ) -> bool:
     if not questions:
         return False
@@ -1797,7 +1824,7 @@ def handle_pm_interview_reply(
         issue_id_or_key=context.issue_key,
     )
     brief_payload = followup_result.assessment.brief.to_payload()
-    next_questions: list[str] = []
+    next_questions: list[object] = []
     if followup_result.assessment.next_question is not None:
         next_questions.append(format_pm_interview_question(followup_result.assessment.next_question))
     if not next_questions:
@@ -1809,7 +1836,7 @@ def handle_pm_interview_reply(
             issue_detail=parent_detail,
             target_label="sync-blocked",
         )
-        posted_to_discord = _post_parent_brief_questions_to_discord(
+        _post_parent_brief_questions_to_discord(
             session=session,
             settings=settings,
             tenant=context.tenant,
@@ -1817,25 +1844,16 @@ def handle_pm_interview_reply(
             parent_issue_key=context.issue_key,
             questions=next_questions,
         )
-        created_comment, error = _post_parent_brief_questions_to_jira(
+        _created_comment, error = _post_parent_brief_questions_to_jira(
             session=session,
             tenant=context.tenant,
+            project_id=context.project_id,
             issue_key=context.issue_key,
             payload=dict(context.payload or {}),
             questions=next_questions,
             settings=settings,
             create_jira_comment_fn=create_jira_comment_fn,
-            discord_failed=not posted_to_discord,
         )
-        if error is None:
-            _persist_parent_brief_jira_followup(
-                session=session,
-                tenant=context.tenant,
-                project_id=context.project_id,
-                parent_issue_key=context.issue_key,
-                questions=next_questions,
-                posted_comment_id=_extract_created_comment_id(created_comment),
-            )
         session.commit()
         return JiraParentChildSyncResult(
             handled=True,
@@ -1917,49 +1935,27 @@ def handle_pm_interview_reply(
         )
 
     if planning_result.planning_state != PLANNING_STATE_COMPLETED or bool(seed_data.get("requires_input")):
-        questions = list(planning_result.open_behavior_questions) or [
-            str(value).strip()
-            for value in seed_data.get("questions", [])
-            if str(value).strip()
-        ]
         _update_issue_sync_label(
             oauth=oauth,
             issue_detail=parent_detail,
             target_label="sync-blocked",
         )
-        posted_to_discord = _post_parent_brief_questions_to_discord(
-            session=session,
-            settings=settings,
-            tenant=context.tenant,
-            project_id=context.project_id,
-            parent_issue_key=context.issue_key,
-            questions=questions,
-        )
-        created_comment, error = _post_parent_brief_questions_to_jira(
+        _post_sync_note(
             session=session,
             tenant=context.tenant,
             issue_key=context.issue_key,
-            payload=dict(context.payload or {}),
-            questions=questions,
             settings=settings,
-            create_jira_comment_fn=create_jira_comment_fn,
-            discord_failed=not posted_to_discord,
+            body=(
+                "PM clarification was recorded, but backlog planning could not complete from the confirmed brief. "
+                "Internal follow-up is required before engineering child tickets can be refreshed."
+            ),
+            post_jira_comment_fn=post_jira_comment_fn,
         )
-        if error is None:
-            _persist_parent_brief_jira_followup(
-                session=session,
-                tenant=context.tenant,
-                project_id=context.project_id,
-                parent_issue_key=context.issue_key,
-                questions=questions,
-                posted_comment_id=_extract_created_comment_id(created_comment),
-            )
         session.commit()
         return JiraParentChildSyncResult(
             handled=True,
-            reason="pm_interview_followup_still_blocked",
+            reason="pm_interview_followup_planning_blocked",
             extra={
-                "questions": questions,
                 "parent_revision": seed_data.get("parent_revision"),
                 "children_sync_status": seed_data.get("children_sync_status"),
                 "webhook_event": context.webhook_event,

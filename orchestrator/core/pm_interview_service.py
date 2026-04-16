@@ -59,12 +59,9 @@ class PMInterviewQuestion:
 class PMInterviewBrief:
     objective: str = ""
     user_value: str = ""
-    target_user: str = ""
-    primary_journey: str = ""
     acceptance_criteria: tuple[str, ...] = ()
     scope_in: tuple[str, ...] = ()
     scope_out: tuple[str, ...] = ()
-    ui_references: tuple[str, ...] = ()
     constraints: tuple[str, ...] = ()
     risks: tuple[str, ...] = ()
     success_outcomes: tuple[str, ...] = ()
@@ -76,12 +73,9 @@ class PMInterviewBrief:
         return {
             "objective": self.objective,
             "user_value": self.user_value,
-            "target_user": self.target_user,
-            "primary_journey": self.primary_journey,
             "acceptance_criteria": list(self.acceptance_criteria),
             "scope_in": list(self.scope_in),
             "scope_out": list(self.scope_out),
-            "ui_references": list(self.ui_references),
             "constraints": list(self.constraints),
             "risks": list(self.risks),
             "success_outcomes": list(self.success_outcomes),
@@ -167,24 +161,6 @@ _PM_INTERVIEW_SLOT_DEFINITIONS: tuple[PMInterviewSlotDefinition, ...] = (
         ),
     ),
     PMInterviewSlotDefinition(
-        slot_key="target_user",
-        question="Who is this feature for?",
-        examples=(
-            "New users",
-            "Paid account owners",
-            "Team admins",
-        ),
-    ),
-    PMInterviewSlotDefinition(
-        slot_key="primary_journey",
-        question="Where should the user start this flow?",
-        examples=(
-            "From the profile screen",
-            "From onboarding",
-            "From billing settings",
-        ),
-    ),
-    PMInterviewSlotDefinition(
         slot_key="acceptance_criteria",
         question="What should happen when the feature works?",
         examples=(
@@ -209,15 +185,6 @@ _PM_INTERVIEW_SLOT_DEFINITIONS: tuple[PMInterviewSlotDefinition, ...] = (
             "Rewards or referral tracking",
             "Support tooling changes",
             "Admin-only workflows",
-        ),
-    ),
-    PMInterviewSlotDefinition(
-        slot_key="ui_references",
-        question="Do you have a design or screen reference we should follow?",
-        examples=(
-            "Profile page",
-            "Onboarding screen",
-            "No design reference yet",
         ),
     ),
     PMInterviewSlotDefinition(
@@ -321,12 +288,9 @@ def normalize_pm_interview_brief(payload: Mapping[str, Any] | PMInterviewBrief |
     return PMInterviewBrief(
         objective=_normalized_text(mapping.get("objective")),
         user_value=_normalized_text(mapping.get("user_value")),
-        target_user=_normalized_text(mapping.get("target_user")),
-        primary_journey=_normalized_text(mapping.get("primary_journey")),
         acceptance_criteria=_normalized_text_list(mapping.get("acceptance_criteria")),
         scope_in=_normalized_text_list(mapping.get("scope_in")),
         scope_out=_normalized_text_list(mapping.get("scope_out")),
-        ui_references=_normalized_text_list(mapping.get("ui_references")),
         constraints=_normalized_text_list(mapping.get("constraints")),
         risks=_normalized_text_list(mapping.get("risks")),
         success_outcomes=_normalized_text_list(mapping.get("success_outcomes")),
@@ -347,14 +311,13 @@ def merge_pm_interview_brief(
     merged_payload: dict[str, object] = {}
     for key, current_value in current_payload.items():
         update_value = update_payload.get(key)
-        if key in {"objective", "user_value", "target_user", "primary_journey", "recommendation"}:
+        if key in {"objective", "user_value", "recommendation"}:
             merged_payload[key] = _merge_scalar_text(str(current_value), update_value)
             continue
         if key in {
             "acceptance_criteria",
             "scope_in",
             "scope_out",
-            "ui_references",
             "constraints",
             "risks",
             "success_outcomes",
