@@ -1217,6 +1217,7 @@ class PlatformServiceStatusRead(BaseModel):
     summary: str
     updated_at: datetime | None = None
     capabilities: list[str] = Field(default_factory=list)
+    runtime_dependencies: dict[str, dict[str, object]] = Field(default_factory=dict)
     instances: list[PlatformServiceInstanceRead] = Field(default_factory=list)
 
 

@@ -494,6 +494,7 @@ export type PlatformServiceStatusRecord = {
   summary: string;
   updated_at: string | null;
   capabilities: string[];
+  runtime_dependencies?: Record<string, PlatformRuntimeDependencyRecord>;
   instances?: PlatformServiceInstanceRecord[];
 };
 
@@ -502,6 +503,7 @@ export type PlatformRuntimeDependencyRecord = {
   summary?: string;
   remediation_text?: string | null;
   remediation_expires_at?: string | null;
+  login_service_instance_id?: string | null;
 };
 
 export type WorkerRuntimeAuthRequestRecord = {

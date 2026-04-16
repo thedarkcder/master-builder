@@ -4670,6 +4670,15 @@ class AdminApiTests(AdminApiTestHarness):
         worker_service = next(service for service in payload["services"] if service["service_id"] == "workers")
         self.assertEqual(worker_service["status"], "degraded")
         self.assertIn("startup/runtime dependencies", worker_service["summary"])
+        self.assertIn("Shared runtime login is still required", worker_service["summary"])
+        self.assertEqual(
+            worker_service["runtime_dependencies"]["codex_cli"]["login_service_instance_id"],
+            "worker-macos-local:runs",
+        )
+        self.assertEqual(
+            worker_service["runtime_dependencies"]["codex_cli"]["remediation_text"],
+            "Open this link",
+        )
         instance = next(item for item in worker_service["instances"] if item["instance_id"] == "worker-macos-local:runs")
         self.assertEqual(instance["status"], "degraded")
         self.assertEqual(instance["runtime_dependencies"]["codex_cli"]["remediation_text"], "Open this link")

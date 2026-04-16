@@ -189,6 +189,77 @@ function RuntimeLoginModal({
   );
 }
 
+function RuntimeDependenciesPanel({
+  heading,
+  runtimeDependencies,
+  startingRuntimeKind,
+  onOpenRuntimeLogin,
+}: {
+  heading: string;
+  runtimeDependencies: RuntimeDependencyEntry[];
+  startingRuntimeKind: string | null;
+  onOpenRuntimeLogin: (serviceInstanceId: string, runtimeKind: string, dependency?: PlatformRuntimeDependencyRecord | null) => void;
+}) {
+  if (!runtimeDependencies.length) {
+    return null;
+  }
+  return (
+    <div className="space-y-3 border-t pt-4">
+      <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">{heading}</p>
+      <div className="space-y-3">
+        {runtimeDependencies.map(({ runtimeKind, dependency }) => {
+          const remediationText = dependency.remediation_text?.trim() || null;
+          const loginServiceInstanceId = dependency.login_service_instance_id?.trim() || null;
+          const isStarting = loginServiceInstanceId
+            ? startingRuntimeKind === `${loginServiceInstanceId}:${runtimeKind}`
+            : false;
+          return (
+            <div key={runtimeKind} className="rounded-lg border bg-background/80 p-3">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0 space-y-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="text-sm font-medium">{formatRuntimeKindLabel(runtimeKind)}</p>
+                    <span
+                      className={cn(
+                        "rounded-full border px-2 py-0.5 text-[11px] font-semibold capitalize",
+                        runtimeStatusClasses(dependency.state),
+                      )}
+                    >
+                      {dependency.state ?? "unknown"}
+                    </span>
+                  </div>
+                  {dependency.summary ? <p className="text-sm text-muted-foreground">{dependency.summary}</p> : null}
+                  <p className="text-xs text-muted-foreground">
+                    Status: {formatRuntimeLoginStatus(runtimeKind, dependency.state)}
+                  </p>
+                  {dependency.remediation_expires_at ? (
+                    <p className="text-xs text-muted-foreground">
+                      Instructions expire {formatTimestamp(dependency.remediation_expires_at)}
+                    </p>
+                  ) : null}
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  {dependency.state !== "ready" && loginServiceInstanceId ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={isStarting}
+                      onClick={() => onOpenRuntimeLogin(loginServiceInstanceId, runtimeKind, dependency)}
+                    >
+                      {isStarting ? "Starting login…" : remediationText ? "View login instructions" : "Login"}
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function InstanceCard({
   instance,
   startingRuntimeKind,
@@ -196,7 +267,7 @@ function InstanceCard({
 }: {
   instance: PlatformServiceInstanceRecord;
   startingRuntimeKind: string | null;
-  onOpenRuntimeLogin: (instance: PlatformServiceInstanceRecord, runtimeKind: string) => void;
+  onOpenRuntimeLogin: (serviceInstanceId: string, runtimeKind: string, dependency?: PlatformRuntimeDependencyRecord | null) => void;
 }) {
   const heartbeatAt = instance.last_heartbeat_at ?? instance.updated_at;
   const runtimeDependencies = useMemo<RuntimeDependencyEntry[]>(() => {
@@ -241,66 +312,14 @@ function InstanceCard({
         <span>{formatTimestamp(heartbeatAt, "No recent update")}</span>
         {instance.current_run_id ? <span>Run {instance.current_run_id}</span> : null}
       </div>
-      {runtimeDependencies.length ? (
-        <div className="mt-4 space-y-3 border-t pt-4">
-          <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
-            Runtime dependencies
-          </p>
-          <div className="space-y-3">
-            {runtimeDependencies.map(({ runtimeKind, dependency }) => {
-              const remediationText = dependency.remediation_text?.trim() || null;
-              const isStarting = startingRuntimeKind === `${instance.instance_id}:${runtimeKind}`;
-              return (
-                <div key={runtimeKind} className="rounded-lg border bg-background/80 p-3">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div className="min-w-0 space-y-1">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <p className="text-sm font-medium">{formatRuntimeKindLabel(runtimeKind)}</p>
-                        <span
-                          className={cn(
-                            "rounded-full border px-2 py-0.5 text-[11px] font-semibold capitalize",
-                            runtimeStatusClasses(dependency.state),
-                          )}
-                        >
-                          {dependency.state ?? "unknown"}
-                        </span>
-                      </div>
-                      {dependency.summary ? (
-                        <p className="text-sm text-muted-foreground">{dependency.summary}</p>
-                      ) : null}
-                      <p className="text-xs text-muted-foreground">
-                        Status: {formatRuntimeLoginStatus(runtimeKind, dependency.state)}
-                      </p>
-                      {dependency.remediation_expires_at ? (
-                        <p className="text-xs text-muted-foreground">
-                          Instructions expire {formatTimestamp(dependency.remediation_expires_at)}
-                        </p>
-                      ) : null}
-                    </div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      {dependency.state !== "ready" ? (
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          disabled={isStarting}
-                          onClick={() => onOpenRuntimeLogin(instance, runtimeKind)}
-                        >
-                          {isStarting
-                            ? "Starting login…"
-                            : remediationText
-                              ? "View login instructions"
-                              : "Login"}
-                        </Button>
-                      ) : null}
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      ) : null}
+      <div className="mt-4">
+        <RuntimeDependenciesPanel
+          heading="Runtime dependencies"
+          runtimeDependencies={runtimeDependencies}
+          startingRuntimeKind={startingRuntimeKind}
+          onOpenRuntimeLogin={onOpenRuntimeLogin}
+        />
+      </div>
       </div>
   );
 }
@@ -312,10 +331,16 @@ function ServiceRow({
 }: {
   service: PlatformServiceStatusRecord;
   startingRuntimeKind: string | null;
-  onOpenRuntimeLogin: (instance: PlatformServiceInstanceRecord, runtimeKind: string) => void;
+  onOpenRuntimeLogin: (serviceInstanceId: string, runtimeKind: string, dependency?: PlatformRuntimeDependencyRecord | null) => void;
 }) {
   const Icon = serviceIcons[service.service_id as keyof typeof serviceIcons] ?? Activity;
   const hasInstances = (service.instances?.length ?? 0) > 0;
+  const runtimeDependencies = useMemo<RuntimeDependencyEntry[]>(() => {
+    return Object.entries(service.runtime_dependencies ?? {})
+      .filter(([, dependency]) => dependency && (dependency.summary || dependency.remediation_text))
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([runtimeKind, dependency]) => ({ runtimeKind, dependency }));
+  }, [service.runtime_dependencies]);
 
   return (
     <div className="grid gap-4 border-t px-6 py-5 first:border-t-0">
@@ -348,6 +373,12 @@ function ServiceRow({
         </span>
         <p className="text-xs text-muted-foreground">{formatTimestamp(service.updated_at)}</p>
       </div>
+      <RuntimeDependenciesPanel
+        heading="Shared runtime dependencies"
+        runtimeDependencies={runtimeDependencies}
+        startingRuntimeKind={startingRuntimeKind}
+        onOpenRuntimeLogin={onOpenRuntimeLogin}
+      />
       {hasInstances ? (
         <div className="space-y-3 rounded-xl bg-muted/10 p-4">
           <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
@@ -433,14 +464,17 @@ export default function PlatformStatusPage() {
     }
   }
 
-  async function openRuntimeLoginModal(instance: PlatformServiceInstanceRecord, runtimeKind: string): Promise<void> {
+  async function openRuntimeLoginModal(
+    serviceInstanceId: string,
+    runtimeKind: string,
+    existingDependency?: PlatformRuntimeDependencyRecord | null,
+  ): Promise<void> {
     const runtimeLabel = formatRuntimeKindLabel(runtimeKind);
-    const runtimeKey = `${instance.instance_id}:${runtimeKind}`;
-    const existingDependency = instance.runtime_dependencies?.[runtimeKind] ?? null;
+    const runtimeKey = `${serviceInstanceId}:${runtimeKind}`;
     const existingInstructions = existingDependency?.remediation_text?.trim() || null;
 
     setLoginModalState({
-      serviceInstanceId: instance.instance_id,
+      serviceInstanceId,
       runtimeKind,
       runtimeLabel,
       requestId: null,
@@ -457,9 +491,9 @@ export default function PlatformStatusPage() {
 
     setStartingRuntimeKey(runtimeKey);
     try {
-      const request = await handleStartLoginSession(instance.instance_id, runtimeKind);
+      const request = await handleStartLoginSession(serviceInstanceId, runtimeKind);
       setLoginModalState({
-        serviceInstanceId: instance.instance_id,
+        serviceInstanceId,
         runtimeKind,
         runtimeLabel,
         requestId: request.request_id,
@@ -471,7 +505,7 @@ export default function PlatformStatusPage() {
       });
     } catch (error) {
       setLoginModalState({
-        serviceInstanceId: instance.instance_id,
+        serviceInstanceId,
         runtimeKind,
         runtimeLabel,
         requestId: null,
@@ -617,8 +651,8 @@ export default function PlatformStatusPage() {
                 key={service.service_id}
                 service={service}
                 startingRuntimeKind={startingRuntimeKey}
-                onOpenRuntimeLogin={(instance, runtimeKind) => {
-                  void openRuntimeLoginModal(instance, runtimeKind);
+                onOpenRuntimeLogin={(serviceInstanceId, runtimeKind, dependency) => {
+                  void openRuntimeLoginModal(serviceInstanceId, runtimeKind, dependency);
                 }}
               />
             ))}

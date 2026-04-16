@@ -184,6 +184,39 @@ def _worker_capabilities(
     return [_capability_label(item) for item in sorted(capability_ids)]
 
 
+def _runtime_dependency_severity(state: object | None) -> int:
+    normalized = str(state or "").strip().lower()
+    if normalized == "ready":
+        return 0
+    if normalized == "degraded":
+        return 1
+    if normalized == "unavailable":
+        return 2
+    return 3
+
+
+def _service_runtime_dependencies(*, instances: list[PlatformServiceInstanceRead]) -> dict[str, dict[str, object]]:
+    preferred_instances = [instance for instance in instances if instance.status not in {"stale", "stopped"}]
+    candidate_instances = preferred_instances or instances
+    selected: dict[str, tuple[int, PlatformServiceInstanceRead, dict[str, object]]] = {}
+    for instance in candidate_instances:
+        for runtime_kind, raw_dependency in (instance.runtime_dependencies or {}).items():
+            runtime_kind_key = str(runtime_kind or "").strip().lower()
+            if not runtime_kind_key or not isinstance(raw_dependency, dict):
+                continue
+            dependency = dict(raw_dependency)
+            severity = _runtime_dependency_severity(dependency.get("state"))
+            current = selected.get(runtime_kind_key)
+            if current is None or severity < current[0]:
+                selected[runtime_kind_key] = (severity, instance, dependency)
+    payload: dict[str, dict[str, object]] = {}
+    for runtime_kind, (_severity, instance, dependency) in sorted(selected.items()):
+        entry = dict(dependency)
+        entry["login_service_instance_id"] = instance.instance_id
+        payload[runtime_kind] = entry
+    return payload
+
+
 def _api_status() -> PlatformServiceStatusRead:
     return PlatformServiceStatusRead(
         service_id="api",
@@ -192,6 +225,7 @@ def _api_status() -> PlatformServiceStatusRead:
         summary="Serving admin and workspace requests.",
         updated_at=_utcnow(),
         capabilities=[],
+        runtime_dependencies={},
     )
 
 
@@ -205,6 +239,7 @@ def _worker_status(*, session, settings: Settings) -> PlatformServiceStatusRead:
         instances=instances,
         configured_capabilities=configured_capabilities,
     )
+    runtime_dependencies = _service_runtime_dependencies(instances=instances)
     fresh_instances = [instance for instance in instances if instance.status not in {"stale", "stopped"}]
     stale_instances = [instance for instance in instances if instance.status == "stale"]
     degraded_instances = [instance for instance in fresh_instances if instance.status == "degraded"]
@@ -250,6 +285,17 @@ def _worker_status(*, session, settings: Settings) -> PlatformServiceStatusRead:
             f"Allowed values: {allowed}."
         )
         status = "degraded"
+    blocked_shared_runtime_kinds = [
+        runtime_kind
+        for runtime_kind, dependency in runtime_dependencies.items()
+        if str(dependency.get("state") or "").strip().lower() != "ready"
+    ]
+    if blocked_shared_runtime_kinds:
+        label = ", ".join(sorted(blocked_shared_runtime_kinds))
+        summary = (
+            f"{summary} Shared runtime login is still required for {label}; "
+            "that auth state is reused by containers that mount the same Codex home volume."
+        )
 
     return PlatformServiceStatusRead(
         service_id="workers",
@@ -258,6 +304,7 @@ def _worker_status(*, session, settings: Settings) -> PlatformServiceStatusRead:
         summary=summary,
         updated_at=latest_heartbeat,
         capabilities=capabilities,
+        runtime_dependencies=runtime_dependencies,
         instances=instances,
     )
 
@@ -290,6 +337,7 @@ def _knowledge_sync_status(*, session, settings: Settings) -> PlatformServiceSta
         summary=summary,
         updated_at=updated_at,
         capabilities=[],
+        runtime_dependencies={},
     )
 
 
@@ -315,6 +363,7 @@ def _discord_commands_status(*, session) -> PlatformServiceStatusRead:  # noqa: 
         summary=summary,
         updated_at=updated_at,
         capabilities=[],
+        runtime_dependencies={},
     )
 
 
