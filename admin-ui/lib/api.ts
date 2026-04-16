@@ -542,11 +542,11 @@ export type WebhookQueueJobRecord = {
   tenant_id: string | null;
   project_id: string | null;
   subject_key: string;
+  related_run_id: string | null;
   dedupe_key: string | null;
   request_id: string;
   event_type: string | null;
   status: "pending" | "processing" | "failed" | "done" | string;
-  owner_id: string | null;
   lease_expires_at: string | null;
   available_at: string;
   attempt_count: number;
