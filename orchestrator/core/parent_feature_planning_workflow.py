@@ -218,10 +218,6 @@ class ParentFeaturePlanningWorkflow:
             )
 
         if not child_details:
-            issue_gateway.post_sync_note(
-                issue_key=context.issue_key,
-                body="Parent feature changed, but there are no engineering child tickets to refresh.",
-            )
             return ParentFeaturePlanningWorkflowResult(
                 handled=True,
                 reason="pm_parent_no_children",
@@ -395,25 +391,24 @@ class ParentFeaturePlanningWorkflow:
         session: Session,
         settings,  # noqa: ANN001
         parent_detail,
-        questions: list[str],
+        questions: list[object],
         body_prefix: str,
         reason: str,
         extra: dict[str, object] | None = None,
     ) -> ParentFeaturePlanningWorkflowResult:
-        _ = (session, settings)
+        _ = (session, settings, body_prefix)
         issue_gateway = self._deps.issue_gateway
         issue_gateway.update_issue_sync_label(
             issue_detail=parent_detail,
             target_label="sync-blocked",
         )
-        posted_to_discord = issue_gateway.post_parent_brief_questions(
+        issue_gateway.post_parent_brief_questions(
             parent_issue_key=parent_detail.key,
             questions=questions,
         )
         issue_gateway.post_parent_brief_questions_jira(
             parent_issue_key=parent_detail.key,
             questions=questions,
-            discord_failed=not posted_to_discord,
         )
         payload = dict(extra or {})
         payload.update({"questions": questions, "webhook_event": context.webhook_event})

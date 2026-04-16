@@ -218,3 +218,8 @@
 - When the user asks to debug or requeue a live container-backed workflow, do not switch to a host-side local worker workaround without explicit approval. Stay on the real container/runtime path unless the user opts into an alternate execution path.
 - When the user says runtime profiles are the source of truth, do not paper over stale global model defaults with alias rewrites. First find the actual config source feeding the running stack and remove the obsolete override there.
 - When the user says runtime selection must stay vendor-agnostic, do not reintroduce vendor-specific default model helpers or runtime-level fallbacks. Keep model ownership inside the resolved execution profiles and make generic runtime code consume `profile.model` directly.
+
+- 2026-04-16: When the user corrects the transport behavior, do not silently replace it with a different UX. Verify the actual transport/thread primitive first, then implement exactly that behavior or state the constraint.
+- 2026-04-16: Do not let a generic PM interview schema leak unrelated required fields into a ticket-specific clarification flow. If the parent-brief contract is narrower, downstream completion checks must validate that narrower contract, not generic slots like `primary_journey`.
+- 2026-04-16: When the PM runtime marks a brief complete, treat that as authoritative. Do not reopen the same brief with downstream fallback questions; surface downstream planner gaps as internal/system failures instead.
+- 2026-04-16: When the user identifies generic PM fields as invalid for the contract, remove them from the contract itself instead of merely making them optional. Keep prompts, dataclasses, and slot assertions aligned.
