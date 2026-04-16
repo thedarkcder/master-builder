@@ -23,6 +23,7 @@ export default defineConfig({
     timeout: 120_000,
     reuseExistingServer: !process.env.CI,
     env: {
+      AUTH_TRUST_HOST: "true",
       NEXT_TELEMETRY_DISABLED: "1",
       NEXT_DIST_DIR: ".next-playwright",
     },

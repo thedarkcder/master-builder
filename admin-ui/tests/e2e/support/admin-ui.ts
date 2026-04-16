@@ -193,6 +193,13 @@ async function seedAuthenticatedSession(
   ]);
 
   await installAuthSessionMock(page, { principal, userEmail, userName });
+  await installBffApiMocks(page, [
+    {
+      method: "GET",
+      pathname: "/api/bff/api/app/auth/me",
+      handler: (route) => fulfillJson(route, principal),
+    },
+  ]);
 }
 
 export async function mockCredentialSignIn(
