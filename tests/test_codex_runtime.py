@@ -193,11 +193,34 @@ class CodexRuntimeTests(unittest.TestCase):
         )
 
 
+class BuildCodexRuntimeDefaultProfileTests(unittest.TestCase):
+    def test_build_codex_runtime_does_not_require_global_codex_model_setting(self) -> None:
+        settings = SimpleNamespace(
+            database_url="postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator",
+            codex_max_output_tokens=512,
+            codex_cli_command="codex",
+            codex_sandbox_mode="workspace-write",
+            codex_tool_database_url="",
+            codex_reasoning_effort="medium",
+            codex_stderr_log_mode="all",
+            codex_hang_detection_quiet_seconds=300,
+            codex_hang_detection_report_interval_seconds=120,
+            runtime_home="",
+            agent_id="worker-macos-local",
+        )
+
+        runtime = build_codex_runtime(
+            settings=settings,
+            request_override=lambda _system, _user, _working_dir=None: '{"ok": true}',
+        )
+
+        self.assertEqual(runtime.model, "gpt-5.4")
+
+
 class BuildHttpRuntimeTests(unittest.TestCase):
     def _settings(self) -> SimpleNamespace:
         return SimpleNamespace(
             database_url="postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator",
-            codex_model="gpt-5.4",
             codex_max_output_tokens=4096,
             codex_cli_command="codex",
             codex_sandbox_mode="workspace-write",
@@ -273,6 +296,7 @@ class BuildHttpRuntimeTests(unittest.TestCase):
                 runtime_kind="openai",
                 base_url="https://example-openai.test/v1",
                 api_key="secret",
+                default_model_override="gpt-5.4",
             )
             captured_session_ids: list[str] = []
             first = runtime.run_json(
@@ -382,6 +406,7 @@ class BuildHttpRuntimeTests(unittest.TestCase):
                 runtime_kind="claude",
                 base_url="https://example-claude.test",
                 api_key="secret",
+                default_model_override="claude-sonnet-4-0",
             )
             captured_session_ids: list[str] = []
             first = runtime.run_json(
@@ -430,7 +455,6 @@ class BuildCodexRuntimeTests(unittest.TestCase):
     def _settings(self) -> SimpleNamespace:
         return SimpleNamespace(
             database_url="postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator",
-            codex_model="gpt-5-codex",
             codex_max_output_tokens=4096,
             codex_cli_command="codex",
             codex_sandbox_mode="workspace-write",

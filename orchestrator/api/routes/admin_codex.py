@@ -33,11 +33,9 @@ def list_codex_models(
     settings = get_settings()
     default_profiles = default_execution_profiles(
         default_codex_cli_command=settings.codex_cli_command,
-        default_codex_model=settings.codex_model,
         default_codex_reasoning_effort=settings.codex_reasoning_effort,
         default_codex_supported_models=settings.codex_supported_models,
         default_chat_cli_command=settings.chat_cli_command,
-        default_chat_model=settings.chat_model,
         default_chat_reasoning_effort=settings.chat_reasoning_effort,
         default_claude_cli_command=getattr(settings, "claude_cli_command", ""),
     )
@@ -47,15 +45,26 @@ def list_codex_models(
     normalized_profile_name = str(profile_name or "").strip() or None
     if normalized_profile_name and normalized_profile_name not in merged_profiles:
         raise HTTPException(status_code=404, detail="Execution profile not found")
-    resolved_runtime_kind = (
-        build_agent_execution_profile(profile_name=normalized_profile_name, profiles=merged_profiles).runtime_kind
+    resolved_profile = (
+        build_agent_execution_profile(profile_name=normalized_profile_name, profiles=merged_profiles)
         if normalized_profile_name
+        else None
+    )
+    resolved_runtime_kind = (
+        resolved_profile.runtime_kind
+        if resolved_profile is not None
         else str(runtime_kind or "codex_cli").strip().lower() or "codex_cli"
     )
+    options = collect_models_for_runtime_kind(
+        runtime_kind=resolved_runtime_kind,
+        default_model=resolved_profile.model if resolved_profile is not None else None,
+        codex_supported_models=settings.codex_supported_models,
+        profiles=merged_profiles,
+    )
     resolved_default_model = (
-        build_agent_execution_profile(profile_name=normalized_profile_name, profiles=merged_profiles).model
-        if normalized_profile_name
-        else settings.codex_model
+        resolved_profile.model
+        if resolved_profile is not None
+        else (options[0].model_id if options else "")
     )
     return CodexModelCatalogRead(
         default_model=resolved_default_model,
@@ -68,12 +77,7 @@ def list_codex_models(
                 label=option.label,
                 description=option.description,
             )
-            for option in collect_models_for_runtime_kind(
-                runtime_kind=resolved_runtime_kind,
-                default_model=resolved_default_model,
-                codex_supported_models=settings.codex_supported_models,
-                profiles=merged_profiles,
-            )
+            for option in options
         ],
         reasoning_efforts=[
             CodexReasoningOptionRead(
