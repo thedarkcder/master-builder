@@ -50,6 +50,7 @@ from orchestrator.core.parent_feature_planning_workflow import (
     ParentFeaturePlanningWorkflow,
     ParentFeaturePlanningWorkflowDeps,
 )
+from orchestrator.core.webhook_job_errors import RetryableWebhookJobError
 from orchestrator.storage.models import FollowupContext, Project
 from orchestrator.tools.discord_api import DiscordApiClient, DiscordApiError
 from orchestrator.tools.jira_oauth import JiraIssueDetail
@@ -1766,6 +1767,15 @@ def handle_pm_interview_reply(
             status_counts={},
             settings=settings,
         )
+    except CodexRuntimeError as exc:
+        logger.warning(
+            "jira_pm_interview_reply_retryable_failure request_id=%s tenant_id=%s issue_key=%s error=%s",
+            context.request_id,
+            context.tenant_id,
+            context.issue_key,
+            exc,
+        )
+        raise RetryableWebhookJobError(str(exc), retry_after_seconds=30) from exc
     except Exception as exc:  # noqa: BLE001
         logger.exception(
             "jira_pm_interview_reply_failed request_id=%s tenant_id=%s issue_key=%s error=%s",

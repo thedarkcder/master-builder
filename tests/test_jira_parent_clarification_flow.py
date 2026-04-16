@@ -5,6 +5,7 @@ from unittest.mock import patch
 import pytest
 from sqlalchemy import select
 
+from orchestrator.core.codex_runtime import CodexRuntimeError
 from orchestrator.storage.models import FollowupContext, PMInterviewCase
 from orchestrator.tools.jira_oauth import JiraIssueDetail
 from tests.test_support.jira_webhook_harness import JiraWebhookHarness
@@ -680,6 +681,111 @@ class JiraParentClarificationFlowTests(JiraWebhookHarness):
         jira_followup = next(row for row in followups if row.channel_id == "TP-981")
         self.assertEqual(jira_followup.root_message_id, "jira-question-981b")
         self.assertEqual(case.status, "question_pending")
+
+    def test_webhook_pm_interview_reply_runtime_failure_requeues_job(self) -> None:
+        now = datetime.now(timezone.utc)
+        with self.session_factory() as session:
+            session.add(
+                PMInterviewCase(
+                    case_id="pm-case-982",
+                    tenant_id="tenant-webhook",
+                    project_id="project-1",
+                    request_id="pm-request-982",
+                    parent_issue_key="TP-982",
+                    source_kind="jira_parent",
+                    status="question_pending",
+                    channel_id="jira-parent-sync",
+                    thread_channel_id=None,
+                    root_message_id=None,
+                    owner_user_id="jira-user-982",
+                    source_text="Identity redesign parent",
+                    brief_json={"objective": "Tenant identity redesign"},
+                    evidence_json=[],
+                    question_history_json=[],
+                    current_question_json={"slot_key": "constraints", "question": "What audit retention window should v1 support?", "examples": []},
+                    next_question_json={"slot_key": "constraints", "question": "What audit retention window should v1 support?", "examples": []},
+                    missing_slots_json=["constraints"],
+                    notes_json={"source": "jira_parent_brief_normalization"},
+                    created_at=now,
+                    updated_at=now,
+                    closed_at=None,
+                )
+            )
+            session.add(
+                FollowupContext(
+                    context_id="ctx-pm-jira-982",
+                    tenant_id="tenant-webhook",
+                    project_id="project-1",
+                    context_type="pm_interview",
+                    status="active",
+                    channel_id="TP-982",
+                    thread_channel_id=None,
+                    root_message_id="jira-question-982",
+                    owner_user_id="jira-user-982",
+                    origin_command="pm",
+                    issue_key="TP-982",
+                    request_id="pm-interview-jira:TP-982",
+                    run_id=None,
+                    metadata_json={
+                        "transport": "jira_issue_comment",
+                        "reply_scope": "issue_comment_stream_from_root",
+                        "pm_request_id": "pm-request-982",
+                    },
+                    created_at=now,
+                    updated_at=now,
+                    closed_at=None,
+                )
+            )
+            session.commit()
+
+        payload = self._jira_issue_payload(issue_key="TP-982", labels=["pm-parent", "sync-blocked"], status_name="To Do")
+        payload["webhookEvent"] = "comment_created"
+        payload["comment"] = {
+            "id": 2004,
+            "author": {"accountId": "jira-user-982"},
+            "body": {
+                "type": "doc",
+                "version": 1,
+                "content": [
+                    {
+                        "type": "paragraph",
+                        "content": [{"type": "text", "text": "Retention should be one year."}],
+                    }
+                ],
+            },
+        }
+
+        class _FakeClient:
+            def get_issue_detail(self, **kwargs):  # noqa: ANN003
+                return JiraIssueDetail(
+                    key="TP-982",
+                    summary="Identity redesign",
+                    status="To Do",
+                    description="Loose parent description",
+                    labels=["pm-parent", "sync-blocked"],
+                )
+
+        oauth_context = SimpleNamespace(
+            client=_FakeClient(),
+            access_token="tok",
+            connection=SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
+        )
+        with (
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_jira_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.build_runtime_for_selector", return_value=object()),
+            patch(
+                "orchestrator.core.pm_interview_followup_service.plan_pm_interview_with_codex",
+                side_effect=CodexRuntimeError("Runtime HTTP request failed: [Errno 101] Network is unreachable"),
+            ),
+        ):
+            response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+            processed = self._process_one_webhook_job()
+
+        self._assert_jira_issue_event_queued(response, issue_key="TP-982")
+        self.assertIsNotNone(processed)
+        assert processed is not None
+        self.assertEqual(processed.status, "pending")
+        self.assertIn("Network is unreachable", str(processed.last_error))
 
     def test_webhook_parent_run_command_is_not_consumed_by_engineering_clarification_reply(self) -> None:
         with self.session_factory() as session:

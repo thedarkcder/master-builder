@@ -141,12 +141,19 @@ def _copy_path_if_missing(*, source_path: Path, target_path: Path) -> None:
         if target_path.exists():
             return
         target_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source_path, target_path)
+        try:
+            shutil.copy2(source_path, target_path)
+        except FileNotFoundError:
+            return
         return
     if not source_path.is_dir():
         return
     target_path.mkdir(parents=True, exist_ok=True)
-    for child in sorted(source_path.iterdir(), key=lambda item: item.name):
+    try:
+        children = sorted(source_path.iterdir(), key=lambda item: item.name)
+    except FileNotFoundError:
+        return
+    for child in children:
         _copy_path_if_missing(
             source_path=child,
             target_path=target_path / child.name,
