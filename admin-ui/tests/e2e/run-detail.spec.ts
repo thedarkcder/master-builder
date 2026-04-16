@@ -167,7 +167,7 @@ test("offers execution resume when review state exists and posts the workflow at
   await expect(page.getByTestId("rerun-option-execution")).toBeVisible();
   await page.getByTestId("rerun-option-execution").click();
 
-  expect(rerunPayload).toEqual({ mode: "resume", checkpoint_kind: "execution" });
+  await expect.poll(() => rerunPayload).toEqual({ mode: "resume", checkpoint_kind: "execution" });
   await expect(page).toHaveURL(/8e8957f2-79f8-4dc8-8deb-786b2c93828d$/, { timeout: 15000 });
 });
 
@@ -200,7 +200,7 @@ test("offers start from the start as a fresh rerun with no checkpoint payload", 
   await expect(page.getByTestId("rerun-option-fresh")).toBeVisible();
   await page.getByTestId("rerun-option-fresh").click();
 
-  expect(rerunPayload).toEqual({ mode: "fresh" });
+  await expect.poll(() => rerunPayload).toEqual({ mode: "fresh" });
   await expect(page).toHaveURL(/8e8957f2-79f8-4dc8-8deb-786b2c93828d$/, { timeout: 15000 });
 });
 
@@ -238,6 +238,6 @@ test("force rerun cancels the active run and starts fresh with no checkpoint pay
   await page.getByRole("button", { name: "Force Rerun" }).click();
 
   expect(cancelCalled).toBe(true);
-  expect(rerunPayload).toEqual({ mode: "fresh" });
+  await expect.poll(() => rerunPayload).toEqual({ mode: "fresh" });
   await expect(page).toHaveURL(/8e8957f2-79f8-4dc8-8deb-786b2c93828d$/, { timeout: 15000 });
 });

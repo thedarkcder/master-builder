@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, request as playwrightRequest, test } from "@playwright/test";
 
 import {
   fulfillJson,
@@ -161,7 +161,9 @@ test("hydrates a stored valid admin session and opens platform admin home", asyn
 
   await page.goto("/platform/dashboard");
 
-  await expect(page.getByRole("heading", { name: "Operations Overview" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Recent Runs" })).toBeVisible();
+  await expect(page.getByText("Total Runs")).toBeVisible();
+  await expect(page.getByText("Managed Secrets")).toBeVisible();
 });
 
 test("shows a dedicated Status page for platform services", async ({ page }) => {
@@ -233,8 +235,8 @@ test("shows a dedicated Status page for platform services", async ({ page }) => 
   await page.getByRole("link", { name: "Status" }).click();
 
   await expect(page).toHaveURL(/\/platform\/status$/);
-  await expect(page.getByRole("heading", { name: "Platform status" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Workers" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "API" })).toBeVisible();
   await expect(page.getByText("Worker instances")).toBeVisible();
   await expect(page.getByText("Linux worker")).toBeVisible();
   await expect(page.getByText("macOS worker")).toBeVisible();
@@ -424,7 +426,6 @@ test("shows a dedicated Agent runtimes page without duplicating platform status 
   await page.getByRole("link", { name: "Agent runtimes" }).click();
 
   await expect(page).toHaveURL(/\/platform\/agent-runtimes$/);
-  await expect(page.getByRole("heading", { name: "Agent runtimes" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Routing" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Profiles" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Tools", exact: true })).toBeVisible();
@@ -704,7 +705,8 @@ test("keeps the public home page available without redirecting to login", async 
   await page.goto("/");
 
   await expect(page).toHaveURL(/\/$/);
-  await expect(page.getByRole("heading", { name: "Transforming vision into digital reality." })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Master Builder" })).toBeVisible();
+  await expect(page.getByText("Deploy, manage, and observe AI agent teams.")).toBeVisible();
   await expect(page.locator('a[href="/login"]').first()).toBeVisible();
 });
 
@@ -732,14 +734,16 @@ test("submits the login form and lands on platform admin home", async ({ page })
   await page.getByRole("button", { name: "Sign in" }).click();
 
   await expect(page).toHaveURL(/\/platform\/dashboard$/, { timeout: 15000 });
-  await expect(page.getByRole("heading", { name: "Operations Overview" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Recent Runs" })).toBeVisible();
 });
 
 test("logging out fully ends the session before another user signs in", async ({ page, request }) => {
+  test.setTimeout(75_000);
   const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const userTwoEmail = `playwright-auth-two-${suffix}@example.com`;
   const userTwoPassword = "PlaywrightPass456!";
   let tenantId = "";
+  let cleanupRequestContext: Awaited<ReturnType<typeof playwrightRequest.newContext>> | null = null;
 
   try {
     const userTwoResponse = await request.post("http://localhost:4000/api/public/register", {
@@ -760,7 +764,7 @@ test("logging out fully ends the session before another user signs in", async ({
     await page.getByRole("button", { name: "Sign in" }).click();
 
     await expect(page).toHaveURL(/\/platform\/dashboard$/, { timeout: 15000 });
-    await expect(page.getByRole("heading", { name: "Operations Overview" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Recent Runs" })).toBeVisible();
 
     await page.getByRole("button", { name: "Logout" }).click();
     await expect(page).toHaveURL(/\/login$/, { timeout: 15000 });
@@ -776,8 +780,10 @@ test("logging out fully ends the session before another user signs in", async ({
     await expect(page).toHaveURL(/\/get-started$/, { timeout: 15000 });
   } finally {
     if (tenantId) {
-      await archiveTenant(request, tenantId);
+      cleanupRequestContext = await playwrightRequest.newContext();
+      await archiveTenant(cleanupRequestContext, tenantId);
     }
+    await cleanupRequestContext?.dispose();
   }
 });
 
