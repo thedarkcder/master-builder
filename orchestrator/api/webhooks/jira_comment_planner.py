@@ -8,6 +8,7 @@ from orchestrator.core.decision_state_machine import (
     ExecutionAdmissionReason,
     build_execution_admission_block,
 )
+from orchestrator.core.communications.execution_admission_format import present_jira_admission
 
 
 @dataclass(frozen=True)
@@ -43,15 +44,15 @@ def plan_jira_comment_flow(
         admission = build_execution_admission_block(
             reason=ExecutionAdmissionReason.PROJECT_NOT_MAPPED,
         )
+        admission_presentation = present_jira_admission(admission=admission)
         return JiraCommentPlan(
             content=jira_webhook_comment_flow.jira_webhook_response(
                 context,
                 enqueued=False,
-                reason=admission.reason_code,
-                guidance=admission.guidance,
                 command=context.comment_command,
                 webhook_event=context.webhook_event,
                 removed_history_entries=removed_history_entries,
+                **admission_presentation.response_fields,
             ),
             removed_history_entries=removed_history_entries,
         )

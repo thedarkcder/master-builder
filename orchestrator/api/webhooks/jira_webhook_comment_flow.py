@@ -24,6 +24,7 @@ from orchestrator.api.webhooks.jira_parent_child_sync import (
 from orchestrator.api.webhooks.jira_webhook_types import JiraWebhookContext, jira_webhook_response
 from orchestrator.core.communications.decision_clarification_presentation import (
     build_decision_clarification_presentation,
+    build_decision_clarification_response_fields,
     load_cycle_question_feedback,
 )
 from orchestrator.core.codex_runtime import CodexRuntimeError
@@ -237,11 +238,11 @@ def stage_handle_comment_decision_reply(
         context,
         enqueued=False,
         reason="decision_reply_recorded",
-        classification=clarification_presentation.classification,
         cycle_id=decision_result.cycle_id,
-        questions=list(clarification_presentation.questions),
-        question_feedback=list(clarification_presentation.question_feedback),
         webhook_event=context.webhook_event,
+        **build_decision_clarification_response_fields(
+            presentation=clarification_presentation,
+        ),
     )
 
 

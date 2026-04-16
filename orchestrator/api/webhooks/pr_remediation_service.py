@@ -354,6 +354,23 @@ def enqueue_pr_remediation_if_needed(
             head_sha=head_sha,
         )
 
+    if manual_fix_request is None and not issue_created:
+        latest_run = _latest_issue_run(
+            session=session,
+            tenant_id=tenant.tenant_id,
+            project_id=project.project_id,
+            issue_key=issue_key,
+        )
+        return PrRemediationResult(
+            triggered=True,
+            issue_key=issue_key,
+            issue_created=False,
+            enqueued=False,
+            reason="existing_issue_already_tracked",
+            run=latest_run,
+            head_sha=head_sha,
+        )
+
     normalized_max_attempts = _coerce_positive_int(max_attempts_per_head)
     if normalized_max_attempts is not None and head_sha:
         attempt_count = count_pr_remediation_attempts(

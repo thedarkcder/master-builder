@@ -797,10 +797,10 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             patch("orchestrator.core.codex_runtime.subprocess.Popen", side_effect=fake_popen) as popen_mock,
         ):
             runtime = build_codex_runtime(settings=settings)
-            runtime.run_text(system_prompt="s", user_prompt="u", model_override="gpt-5.3-codex-spark")
+            runtime.run_text(system_prompt="s", user_prompt="u", model_override="gpt-5.4-mini")
 
         args = popen_mock.call_args.args[0]
-        self.assertEqual(args[args.index("--model") + 1], "gpt-5.3-codex-spark")
+        self.assertEqual(args[args.index("--model") + 1], "gpt-5.4-mini")
         self.assertEqual(args[2:6], ["--disable", "apps", "--disable", "plugins"])
         call_args = list(popen_mock.call_args.args[0])
         sandbox_idx = call_args.index("--sandbox") + 1

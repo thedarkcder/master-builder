@@ -37,7 +37,8 @@ def send_stage_update_to_jira(
 ) -> None:  # noqa: ANN001
     if not issue_key or not message.strip():
         return
-    if stage not in JIRA_STAGE_COMMENT_EVENTS:
+    normalized_stage = str(stage or "").strip()
+    if not normalized_stage or normalized_stage not in JIRA_STAGE_COMMENT_EVENTS:
         return
 
     connection_id = tenant_jira_config_text(tenant=tenant, key=JiraConfigKey.CONNECTION_ID)
@@ -46,7 +47,7 @@ def send_stage_update_to_jira(
             "worker_jira_stage_update_not_sent tenant_id=%s issue_key=%s stage=%s reason=missing_connection",
             tenant.tenant_id,
             issue_key,
-            stage,
+            normalized_stage,
         )
         return
 
@@ -56,7 +57,7 @@ def send_stage_update_to_jira(
             "worker_jira_stage_update_not_sent tenant_id=%s issue_key=%s stage=%s reason=connection_not_found",
             tenant.tenant_id,
             issue_key,
-            stage,
+            normalized_stage,
         )
         return
 
@@ -79,7 +80,7 @@ def send_stage_update_to_jira(
             "worker_jira_stage_update_send_failed tenant_id=%s issue_key=%s stage=%s error=%s",
             tenant.tenant_id,
             issue_key,
-            stage,
+            normalized_stage,
             exc,
         )
 

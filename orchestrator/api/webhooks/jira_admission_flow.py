@@ -12,12 +12,10 @@ from orchestrator.api.webhooks.contracts import post_jira_comment
 from orchestrator.api.webhooks.jira_webhook_types import JiraWebhookContext, TODO_STATUS
 from orchestrator.core.communications import DiscordTenantNotificationAction, TransportAction
 from orchestrator.core.communications.execution_admission_format import (
-    build_jira_admission_notification_detail,
-    build_jira_admission_response_fields,
+    present_jira_admission,
 )
 from orchestrator.core.communications.jira_enqueue_presentation import (
     format_jira_enqueue_skipped_message,
-    normalize_backlog_pre_run_check_text,
 )
 from orchestrator.core.decision_clarification_service import evaluate_issue_clarification_state
 from orchestrator.core.decision_engine import DecisionEngineResult, DecisionEventInput
@@ -70,16 +68,13 @@ def resolve_ready_label_for_tenant(tenant) -> str | None:  # noqa: ANN001
 def build_jira_enqueue_skipped_notification_action(
     *,
     context,
-    reason: ExecutionAdmissionReason | str,
+    admission,
     extra_detail: str | None = None,
 ) -> DiscordTenantNotificationAction:
-    normalized_reason = (
-        reason.value if isinstance(reason, ExecutionAdmissionReason) else str(reason or "").strip()
-    )
     message = format_jira_enqueue_skipped_message(
         issue_key=context.issue_key,
         issue_status=context.issue_status,
-        reason=normalized_reason,
+        admission=admission,
         extra_detail=extra_detail,
     )
     return DiscordTenantNotificationAction(
@@ -169,47 +164,6 @@ def evaluate_precheck_decision_with_labels(
         current_description=effective_description,
     )
     return result
-
-
-def build_backlog_pre_run_check(
-    *,
-    context: JiraWebhookContext,
-    decision_result: DecisionEngineResult,
-) -> dict[str, object]:
-    pre_check = decision_result.decision.pre_check
-    if pre_check is None:
-        return {
-            "outcome": "policy_eval_failed",
-            "ready_label": resolve_ready_label_for_tenant(context.tenant),
-            "ready_label_present": False,
-            "required_worker_capability": "",
-            "required_worker_label": "",
-            "required_worker_label_present": True,
-            "decision_gate_triggered": False,
-            "decision_gate_reason": "Precheck policy evaluation failed",
-            "gtd_valid": False,
-            "gtd_missing_criteria": [],
-            "gtd_clarification_questions": [],
-            "auto_resolved_slots": list(decision_result.auto_resolved_slots),
-            "cycle_id": decision_result.cycle_id,
-        }
-    decision_gate_reason = normalize_backlog_pre_run_check_text(pre_check.decision_gate_reason)
-    return {
-        "outcome": pre_check.outcome,
-        "ready_label": pre_check.ready_label,
-        "ready_label_present": pre_check.ready_label_present,
-        "required_worker_capability": pre_check.required_worker_capability,
-        "required_worker_label": pre_check.required_worker_label,
-        "required_worker_label_present": pre_check.required_worker_label_present,
-        "decision_gate_triggered": pre_check.decision_gate_triggered,
-        "decision_gate_reason": decision_gate_reason,
-        "gtd_valid": pre_check.gtd_valid,
-        "gtd_missing_criteria": list(pre_check.gtd_missing_criteria),
-        "gtd_clarification_questions": list(pre_check.gtd_clarification_questions),
-        "auto_resolved_slots": list(decision_result.auto_resolved_slots),
-        "cycle_id": decision_result.cycle_id,
-    }
-
 
 def _sync_precheck_questions_block(
     *,
@@ -380,6 +334,7 @@ def plan_jira_run_flow(
         admission = build_execution_admission_block(
             reason=ExecutionAdmissionReason.READY_FOR_AGENT_BACKLOG,
         )
+        admission_presentation = present_jira_admission(admission=admission)
         logger.info(
             "jira_webhook_not_started request_id=%s tenant_id=%s issue_key=%s reason=ready_for_agent_backlog issue_status=%s",
             context.request_id,
@@ -391,11 +346,10 @@ def plan_jira_run_flow(
             content=jira_webhook_response_fn(
                 context,
                 enqueued=False,
-                reason=admission.reason_code,
-                guidance=admission.guidance,
                 ready_for_agent=True,
                 trigger_reason=trigger_reason,
                 webhook_event=context.webhook_event,
+                **admission_presentation.response_fields,
             )
         )
 
@@ -436,18 +390,19 @@ def plan_jira_run_flow(
         content_admission = build_execution_admission_block(
             reason=ExecutionAdmissionReason.NO_RETRYABLE_RUN,
         )
+        content_presentation = present_jira_admission(admission=content_admission)
         return JiraRunPlan(
             content=jira_webhook_response_fn(
                 context,
                 enqueued=False,
-                **build_jira_admission_response_fields(admission=content_admission),
+                **content_presentation.response_fields,
                 trigger_reason=trigger_reason,
                 webhook_event=context.webhook_event,
             ),
             actions=(
                 build_jira_enqueue_skipped_notification_action(
                     context=context,
-                    reason=content_admission.reason or ExecutionAdmissionReason.NO_RETRYABLE_RUN,
+                    admission=content_admission,
                 ),
             ),
         )
@@ -473,24 +428,25 @@ def plan_jira_run_flow(
             reason=ExecutionAdmissionReason.POLICY_EVAL_FAILED,
             detail=precheck_decision.policy_error,
         )
+        content_presentation = present_jira_admission(admission=content_admission)
         return JiraRunPlan(
             content=jira_webhook_response_fn(
                 context,
                 enqueued=False,
-                reason=content_admission.reason_code,
-                guidance=content_admission.guidance,
                 trigger_reason=trigger_reason,
                 webhook_event=context.webhook_event,
+                **content_presentation.response_fields,
             ),
             actions=(
                 build_jira_enqueue_skipped_notification_action(
                     context=context,
-                    reason=content_admission.reason or ExecutionAdmissionReason.POLICY_EVAL_FAILED,
+                    admission=content_admission,
                     extra_detail=precheck_decision.policy_error,
                 ),
             ),
         )
     if admission.blocked:
+        admission_presentation = present_jira_admission(admission=admission)
         logger.info(
             "jira_webhook_not_started request_id=%s tenant_id=%s issue_key=%s reason=%s",
             context.request_id,
@@ -504,15 +460,13 @@ def plan_jira_run_flow(
                 enqueued=False,
                 trigger_reason=trigger_reason,
                 webhook_event=context.webhook_event,
-                **build_jira_admission_response_fields(
-                    admission=admission,
-                ),
+                **admission_presentation.response_fields,
             ),
             actions=(
                 build_jira_enqueue_skipped_notification_action(
                     context=context,
-                    reason=admission.reason or ExecutionAdmissionReason.EXECUTION_BLOCKED,
-                    extra_detail=build_jira_admission_notification_detail(admission=admission),
+                    admission=admission,
+                    extra_detail=admission_presentation.notification_detail,
                 ),
             ),
         )
@@ -534,6 +488,7 @@ def plan_jira_run_flow(
             enqueue_result.run.run_id,
         )
         enqueue_admission = admission_from_enqueue_reason(raw_reason=enqueue_result.reason)
+        enqueue_presentation = present_jira_admission(admission=enqueue_admission)
         return JiraRunPlan(
             content=jira_webhook_response_fn(
                 context,
@@ -542,12 +497,12 @@ def plan_jira_run_flow(
                 trigger_reason=trigger_reason,
                 command=context.comment_command,
                 webhook_event=context.webhook_event,
-                **build_jira_admission_response_fields(admission=enqueue_admission),
+                **enqueue_presentation.response_fields,
             ),
             actions=(
                 build_jira_enqueue_skipped_notification_action(
                     context=context,
-                    reason=enqueue_admission.reason or ExecutionAdmissionReason.EXECUTION_BLOCKED,
+                    admission=enqueue_admission,
                     extra_detail=f"run_id={enqueue_result.run.run_id}",
                 ),
             ),

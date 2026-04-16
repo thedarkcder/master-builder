@@ -100,17 +100,12 @@ def build_workflow_request(
     entry_mode = str(getattr(run, "entry_mode", "fresh") or "fresh").strip().lower() or "fresh"
     entry_stage = str(getattr(run, "entry_stage", "") or "").strip().lower() or None
     checkpoint = entry_checkpoint_fn(session=session, run=run)
-    checkpoint_payload = dict(checkpoint.payload_json) if checkpoint is not None else None
-    if checkpoint_payload is not None and ExecutionSnapshot.load(checkpoint_payload) is None:
-        logger.warning(
-            "Resume checkpoint payload is not a supported execution snapshot shape; "
-            "executor will handle resume failure safely "
-            "(workflow_id=%s, run_id=%s, checkpoint_id=%s)",
-            run.workflow_id,
-            run.run_id,
-            checkpoint.checkpoint_id if checkpoint is not None else None,
-        )
-        checkpoint_payload = None
+    checkpoint_payload = None
+    if checkpoint is not None:
+        checkpoint_payload = ExecutionSnapshot.require(
+            checkpoint.payload_json,
+            allow_empty=False,
+        ).dump()
     project_environment = getattr(project, "environment", {}) if project is not None else {}
     default_branch = project_environment.get("default_branch") if isinstance(project_environment, dict) else None
     remediation_base_branch = extract_remediation_base_ref(parsed_trigger_context, normalize_branch)

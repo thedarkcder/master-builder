@@ -65,7 +65,7 @@ def classify_github_trigger_state(
 ) -> GitHubTriggerState:
     normalized_event = str(github_event or "").strip().lower()
     return GitHubTriggerState(
-        full_review_trigger=normalized_event in {"pull_request", "check_run", "check_suite"},
+        full_review_trigger=normalized_event == "pull_request",
         remediation_trigger=_is_remediation_trigger(
             github_event=normalized_event,
             normalized_action=normalized_action,

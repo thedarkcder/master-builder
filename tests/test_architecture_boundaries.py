@@ -584,23 +584,25 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             msg=f"Transport modules must import unified decision_state_machine boundary only: {violations}",
         )
 
-    def test_decision_transition_logic_lives_in_decision_state_reducer_only(self) -> None:
-        reducer_module = ROOT / "orchestrator" / "core" / "decision_state_reducer.py"
-        self.assertTrue(reducer_module.exists(), msg="decision_state_reducer.py must exist as the transition boundary")
+    def test_decision_transition_logic_lives_in_decision_state_machine_boundary(self) -> None:
+        state_machine_module = ROOT / "orchestrator" / "core" / "decision_state_machine.py"
+        self.assertTrue(state_machine_module.exists(), msg="decision_state_machine.py must exist as the canonical transition boundary")
 
         forbidden_modules = [
-            ROOT / "orchestrator" / "core" / "decision_state_machine.py",
             ROOT / "orchestrator" / "core" / "decision_precheck_mapping.py",
             ROOT / "orchestrator" / "core" / "decision_state_repository.py",
         ]
         forbidden_symbols = {
             "DecisionStateTransition",
-            "DecisionStateReducerInput",
-            "reduce_decision_state_transition",
+            "DecisionState",
+            "resolve_decision_state_transition",
+            "resolve_readiness_decision",
+            "resolve_execution_gate_state",
+            "resolve_execution_admission",
             "case_state_for_decision",
             "decision_reason",
-            "decision_from_snapshot",
-            "worker_blocking_gate",
+            "resolve_worker_decision_from_precheck",
+            "resolve_worker_blocked_outcome",
         }
         violations: list[str] = []
         for module_path in forbidden_modules:
@@ -611,16 +613,16 @@ class ArchitectureBoundaryTests(unittest.TestCase):
         self.assertEqual(
             violations,
             [],
-            msg=f"Decision transition/classification semantics must only live in decision_state_reducer: {violations}",
+            msg=f"Canonical decision/readiness semantics must only live in decision_state_machine: {violations}",
         )
 
-    def test_decision_engine_uses_reducer_boundary_for_transition_semantics(self) -> None:
+    def test_decision_engine_uses_state_machine_boundary_for_transition_semantics(self) -> None:
         module_path = ROOT / "orchestrator" / "core" / "decision_engine.py"
         imports = _imported_modules(module_path)
         self.assertIn(
-            "orchestrator.core.decision_state_reducer",
+            "orchestrator.core.decision_state_machine",
             imports,
-            msg="decision_engine must import transition semantics from decision_state_reducer",
+            msg="decision_engine must import transition semantics from decision_state_machine",
         )
 
         tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
@@ -628,7 +630,7 @@ class ArchitectureBoundaryTests(unittest.TestCase):
         for node in ast.walk(tree):
             if not isinstance(node, ast.ImportFrom):
                 continue
-            if node.module != "orchestrator.core.decision_state_machine":
+            if node.module != "orchestrator.core.decision_state_reducer":
                 if node.module == "orchestrator.core.decision_precheck_mapping":
                     for alias in node.names:
                         if alias.name == "decision_from_snapshot":
@@ -640,7 +642,41 @@ class ArchitectureBoundaryTests(unittest.TestCase):
         self.assertEqual(
             violations,
             [],
-            msg=f"decision_engine must consume reducer boundary semantics directly: {violations}",
+            msg=f"decision_engine must consume canonical state-machine semantics directly: {violations}",
+        )
+
+    def test_core_decision_runtime_modules_do_not_import_compat_wrappers(self) -> None:
+        modules = [
+            ROOT / "orchestrator" / "core" / "decision_engine.py",
+            ROOT / "orchestrator" / "core" / "decision_precheck_mapping.py",
+            ROOT / "orchestrator" / "core" / "decision_state_repository.py",
+        ]
+        forbidden_imports = {
+            "orchestrator.core.decision_reducer",
+            "orchestrator.core.precheck_decision",
+        }
+        violations: list[str] = []
+        for module_path in modules:
+            for module_name in _imported_modules(module_path):
+                if module_name in forbidden_imports:
+                    violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{module_name}")
+        self.assertEqual(
+            violations,
+            [],
+            msg=f"Core decision runtime modules must use canonical decision_state_machine helpers directly: {violations}",
+        )
+
+    def test_removed_decision_compatibility_facades_do_not_return(self) -> None:
+        removed_modules = [
+            ROOT / "orchestrator" / "core" / "decision_reducer.py",
+            ROOT / "orchestrator" / "core" / "decision_state_reducer.py",
+            ROOT / "orchestrator" / "core" / "precheck_decision.py",
+        ]
+        violations = [module_path.relative_to(ROOT).as_posix() for module_path in removed_modules if module_path.exists()]
+        self.assertEqual(
+            violations,
+            [],
+            msg=f"Decision compatibility facades should be removed once callers are migrated: {violations}",
         )
 
     def test_api_and_worker_bootstrap_execution_snapshot_startup_migration(self) -> None:
@@ -667,6 +703,35 @@ class ArchitectureBoundaryTests(unittest.TestCase):
                 call_ok,
                 msg=f"{module_path.relative_to(ROOT).as_posix()} must invoke shared execution snapshot startup bootstrap.",
             )
+
+    def test_legacy_execution_snapshot_migration_module_is_removed(self) -> None:
+        legacy_module = ROOT / "orchestrator" / "core" / "workflow" / "execution_snapshot_migration.py"
+        self.assertFalse(
+            legacy_module.exists(),
+            msg="Legacy execution snapshot runtime conversion module should be removed after cutover.",
+        )
+
+    def test_legacy_decision_snapshot_codec_module_is_removed(self) -> None:
+        legacy_module = ROOT / "orchestrator" / "core" / "decision_snapshot_codec.py"
+        self.assertFalse(
+            legacy_module.exists(),
+            msg="Legacy decision_snapshot_codec module should be removed after state-machine cutover.",
+        )
+
+    def test_runtime_modules_do_not_import_decision_snapshot_codec_directly(self) -> None:
+        violations: list[str] = []
+        for module_path in sorted(ORCHESTRATOR_ROOT.rglob("*.py")):
+            for module_name in _imported_modules(module_path):
+                if module_name == "orchestrator.core.decision_snapshot_codec":
+                    violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{module_name}")
+        self.assertEqual(
+            violations,
+            [],
+            msg=(
+                "Decision snapshot helpers must flow through the canonical decision_state_machine boundary: "
+                f"{violations}"
+            ),
+        )
 
 
 if __name__ == "__main__":

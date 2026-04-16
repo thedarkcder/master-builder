@@ -1,25 +1,23 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum
-from typing import Any, Iterable, Mapping
+import json
+from typing import Any, Callable, Iterable, Mapping
 
 from sqlalchemy.orm import Session
 
+from orchestrator.core.codex_runtime import CodexRuntime
 from orchestrator.core.decision_engine import DecisionEngineResult
 from orchestrator.core.decision_reply_service import unresolved_question_feedback_for_cycle
-
-
-class ClarificationMode(str, Enum):
-    CLEAR = "clear"
-    DECISION_GATE = "decision_gate"
-    GTD = "gtd"
-    BOTH = "both"
+from orchestrator.core.decision_types import DecisionClassification
+from orchestrator.core.prompt_templates import render_prompt
+from orchestrator.core.runtime_invocation import AgentInvocationContext, invoke_runtime_json
+from orchestrator.core.runtime_payload_models import PrecheckMessagePayload
 
 
 @dataclass(frozen=True)
 class DecisionClarificationPresentation:
-    mode: ClarificationMode
+    mode: DecisionClassification
     recheck_required: bool
     decision_gate_reason: str | None
     decision_gate_questions: tuple[str, ...]
@@ -36,7 +34,44 @@ class DecisionClarificationPresentation:
 
     @property
     def requires_decision_gate_feedback(self) -> bool:
-        return self.mode in {ClarificationMode.DECISION_GATE, ClarificationMode.BOTH}
+        return self.mode in {DecisionClassification.DECISION_GATE, DecisionClassification.BOTH}
+
+
+@dataclass(frozen=True)
+class DiscordDecisionClarificationPresentation:
+    message: str
+    response_fields: dict[str, object]
+
+
+def build_runtime_precheck_message(
+    *,
+    runtime: CodexRuntime,
+    invocation_context: AgentInvocationContext,
+    issue_key: str,
+    classification: DecisionClassification,
+    decision_gate_reason: str,
+    decision_gate_questions: list[str],
+    gtd_missing_criteria: list[str],
+    gtd_questions: list[str],
+    missing_slots: list[str],
+) -> tuple[str, list[str]]:
+    payload = invoke_runtime_json(
+        runtime=runtime,
+        context=invocation_context,
+        system_prompt=render_prompt("policy/precheck_message_system.j2"),
+        user_prompt=render_prompt(
+            "policy/precheck_message_user.j2",
+            issue_key=issue_key,
+            classification=classification.value,
+            decision_gate_reason=decision_gate_reason,
+            decision_gate_questions_json=json.dumps(decision_gate_questions),
+            gtd_missing_criteria_json=json.dumps(gtd_missing_criteria),
+            gtd_questions_json=json.dumps(gtd_questions),
+            missing_slots_json=json.dumps(missing_slots),
+        ),
+    )
+    parsed_payload = PrecheckMessagePayload.from_payload(payload)
+    return parsed_payload.message, list(parsed_payload.questions)
 
 
 def load_cycle_question_feedback(*, session: Session, cycle_id: str | None) -> tuple[dict[str, str], ...]:
@@ -51,11 +86,7 @@ def build_decision_clarification_presentation(
     decision_result: DecisionEngineResult,
     question_feedback: Iterable[Mapping[str, Any]] = (),
 ) -> DecisionClarificationPresentation:
-    raw_classification = str(getattr(decision_result, "classification", "") or "").strip().lower()
-    try:
-        mode = ClarificationMode(raw_classification or ClarificationMode.CLEAR.value)
-    except ValueError:
-        mode = ClarificationMode.CLEAR
+    mode = DecisionClassification.parse(getattr(decision_result, "classification", None))
     pre_check = getattr(getattr(decision_result, "decision", None), "pre_check", None)
     normalized_feedback = _normalize_question_feedback(question_feedback)
     missing_slots = tuple(
@@ -74,9 +105,9 @@ def build_decision_clarification_presentation(
         )
         if slot
     )
-    if pre_check is None or mode is ClarificationMode.CLEAR:
+    if pre_check is None or mode is DecisionClassification.CLEAR:
         return DecisionClarificationPresentation(
-            mode=ClarificationMode.CLEAR,
+            mode=DecisionClassification.CLEAR,
             recheck_required=False,
             decision_gate_reason=None,
             decision_gate_questions=(),
@@ -115,7 +146,7 @@ def build_decision_clarification_presentation(
         if question
     )
 
-    if mode in {ClarificationMode.DECISION_GATE, ClarificationMode.BOTH} and normalized_feedback:
+    if mode in {DecisionClassification.DECISION_GATE, DecisionClassification.BOTH} and normalized_feedback:
         questions = _dedupe(
             tuple(
                 question_text
@@ -132,7 +163,7 @@ def build_decision_clarification_presentation(
         mode=mode,
         recheck_required=True,
         decision_gate_reason=(
-            decision_gate_reason if mode in {ClarificationMode.DECISION_GATE, ClarificationMode.BOTH} else None
+            decision_gate_reason if mode in {DecisionClassification.DECISION_GATE, DecisionClassification.BOTH} else None
         ),
         decision_gate_questions=decision_gate_questions,
         gtd_missing_criteria=gtd_missing_criteria,
@@ -141,6 +172,54 @@ def build_decision_clarification_presentation(
         question_feedback=normalized_feedback,
         missing_slots=missing_slots,
         auto_resolved_slots=auto_resolved_slots,
+    )
+
+
+def build_decision_clarification_response_fields(
+    *,
+    presentation: DecisionClarificationPresentation,
+    questions: Iterable[str] | None = None,
+) -> dict[str, object]:
+    effective_questions = _dedupe(questions or presentation.questions)
+    return {
+        "classification": presentation.mode.value,
+        "decision_gate_reason": presentation.decision_gate_reason,
+        "gtd_missing_criteria": list(presentation.gtd_missing_criteria),
+        "questions": list(effective_questions),
+        "question_feedback": list(presentation.question_feedback),
+        "missing_slots": list(presentation.missing_slots),
+        "auto_resolved_slots": list(presentation.auto_resolved_slots),
+    }
+
+
+def present_discord_decision_clarification(
+    *,
+    issue_key: str,
+    presentation: DecisionClarificationPresentation,
+    precheck_message_builder: Callable[[], tuple[str, list[str]]],
+) -> DiscordDecisionClarificationPresentation:
+    if presentation.requires_decision_gate_feedback and presentation.question_feedback:
+        message = render_decision_gate_feedback_message(
+            issue_key=issue_key,
+            reason=presentation.decision_gate_reason or "clarification required",
+            question_feedback=presentation.question_feedback,
+        )
+        generated_questions = list(presentation.questions)
+    elif presentation.requires_decision_gate_feedback:
+        message = render_decision_gate_remaining_questions_message(
+            issue_key=issue_key,
+            reason=presentation.decision_gate_reason or "clarification required",
+            questions=presentation.decision_gate_questions,
+        )
+        generated_questions = list(presentation.questions)
+    else:
+        message, generated_questions = precheck_message_builder()
+    return DiscordDecisionClarificationPresentation(
+        message=message,
+        response_fields=build_decision_clarification_response_fields(
+            presentation=presentation,
+            questions=generated_questions,
+        ),
     )
 
 

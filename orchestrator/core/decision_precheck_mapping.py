@@ -9,16 +9,17 @@ from typing import Any, Callable
 
 from sqlalchemy.orm import Session
 
-from orchestrator.core.decision_snapshot_codec import (
+from orchestrator.core.knowledge_base import SlotResolution
+from orchestrator.core.pre_run_check import PreRunCheckResult, evaluate_pre_run_check
+from orchestrator.core.decision_state_machine import (
     DecisionResultSnapshot,
     PrecheckSnapshot,
     apply_frozen_cycle_questions,
     build_question_set as build_question_set_codec,
+    decision_missing_slots_for_precheck,
+    decision_from_snapshot,
+    resolve_execution_gate_state,
 )
-from orchestrator.core.knowledge_base import SlotResolution
-from orchestrator.core.pre_run_check import PreRunCheckResult, evaluate_pre_run_check
-from orchestrator.core.precheck_decision import precheck_missing_slots
-from orchestrator.core.decision_state_reducer import decision_from_snapshot
 from orchestrator.core.decision_types import (
     DecisionClassification,
     DecisionSource,
@@ -26,7 +27,6 @@ from orchestrator.core.decision_types import (
     DecisionLabelAction,
     IngressDecision,
     PrecheckOutcome,
-    resolve_execution_gate_state,
     tenant_ready_label,
 )
 from orchestrator.storage.models import DecisionCycle
@@ -303,7 +303,7 @@ def merge_case_metadata(
         decision=decision,
         classification=classification,
         issue_labels=issue_labels,
-        missing_slots=precheck_missing_slots(decision.pre_check) if decision.pre_check is not None else [],
+        missing_slots=decision_missing_slots_for_precheck(decision.pre_check) if decision.pre_check is not None else [],
         auto_resolved_slots=sorted(resolved_answers.keys()),
     )
     return metadata

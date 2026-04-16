@@ -3,7 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from orchestrator.core.decision_gate import DecisionGateResult
-from orchestrator.core.decision_snapshot_codec import (
+from orchestrator.core.decision_state_machine import (
     DecisionResultSnapshot,
     PrecheckSnapshot,
     apply_frozen_cycle_questions,

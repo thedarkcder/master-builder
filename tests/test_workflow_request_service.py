@@ -412,7 +412,7 @@ class WorkflowRequestServiceTests(unittest.TestCase):
                 ["restore auth flow"],
             )
 
-    def test_build_workflow_request_drops_unsupported_resume_checkpoint_payload(self) -> None:
+    def test_build_workflow_request_rejects_unsupported_resume_checkpoint_payload(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             tenant, run, effective_policy, settings = self._base_inputs(tmp_dir)
             run.entry_mode = "resume"
@@ -451,19 +451,18 @@ class WorkflowRequestServiceTests(unittest.TestCase):
                     ),
                 ),
             ):
-                request = build_workflow_request_for_run(
-                    session=self._session_with_no_human_inputs(),
-                    tenant=tenant,
-                    run=run,
-                    project=project,
-                    effective_policy=effective_policy,
-                    settings=settings,
-                )
-
-            self.assertEqual(request.entry_mode, "resume")
-            self.assertEqual(request.entry_stage, "dev")
-            self.assertEqual(request.checkpoint_id, "checkpoint-1")
-            self.assertIsNone(request.checkpoint_payload)
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "Unsupported execution snapshot version/shape",
+                ):
+                    build_workflow_request_for_run(
+                        session=self._session_with_no_human_inputs(),
+                        tenant=tenant,
+                        run=run,
+                        project=project,
+                        effective_policy=effective_policy,
+                        settings=settings,
+                    )
 
     def test_build_workflow_request_prefers_remediation_trigger_branch_and_base(self) -> None:
         with TemporaryDirectory() as tmp_dir:
