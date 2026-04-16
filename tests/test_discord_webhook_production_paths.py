@@ -96,7 +96,7 @@ class DiscordWebhookProductionPathTests(unittest.TestCase):
             "orchestrator.core.worker.webhook_job_service.execute_tenant_discord_ingress_command",
             side_effect=HTTPException(
                 status_code=503,
-                detail="Codex board assistant is unavailable: You've hit your usage limit for GPT-5.3-Codex-Spark.",
+                detail="Codex board assistant is unavailable: You've hit your usage limit for GPT-5.4 Mini.",
             ),
         ):
             response = self.client.post(
