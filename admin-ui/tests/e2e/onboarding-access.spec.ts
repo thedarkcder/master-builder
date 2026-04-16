@@ -1002,7 +1002,7 @@ test("pages the workspace selector when there are many active workspaces", async
   await expect(page.getByText("Workspace 6")).toBeVisible();
   await expect(page.getByText("Workspace 7")).toHaveCount(0);
   await expect(page.getByText("8 active workspaces · Page 1 of 2")).toBeVisible();
-  await page.getByRole("button", { name: "Next" }).click();
+  await page.getByRole("button", { name: "Next", exact: true }).click();
   await expect(page.getByText("Workspace 1")).toHaveCount(0);
   await expect(page.getByText("Workspace 7")).toBeVisible();
   await expect(page.getByText("Workspace 8")).toBeVisible();

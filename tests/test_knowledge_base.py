@@ -46,15 +46,20 @@ def test_build_knowledge_text_embedding_model_respects_cache_dir_and_offline_env
 
 def test_embed_texts_uses_local_cache_for_runtime_embedding_access() -> None:
     fake_model = SimpleNamespace(embed=lambda texts: [[0.1] for _ in texts])
+    previous_unavailable_until = knowledge_base_module._embedding_model_unavailable_until_epoch
 
-    with patch(
-        "orchestrator.core.knowledge_base._knowledge_text_embedding_model",
-        return_value=fake_model,
-    ) as model_mock:
-        vectors = _embed_texts(
-            ["bundle id"],
-            embedding_access_mode=KnowledgeEmbeddingAccessMode.BEST_EFFORT,
-        )
+    try:
+        knowledge_base_module._embedding_model_unavailable_until_epoch = 0.0
+        with patch(
+            "orchestrator.core.knowledge_base._knowledge_text_embedding_model",
+            return_value=fake_model,
+        ) as model_mock:
+            vectors = _embed_texts(
+                ["bundle id"],
+                embedding_access_mode=KnowledgeEmbeddingAccessMode.BEST_EFFORT,
+            )
+    finally:
+        knowledge_base_module._embedding_model_unavailable_until_epoch = previous_unavailable_until
 
     model_mock.assert_called_once_with(True)
     assert vectors == [[0.1]]
