@@ -82,19 +82,19 @@ def upsert_followup_context(
     ]
     identifier_filters = []
     if normalized_thread_channel_id:
-        identifier_filters.append(FollowupContext.thread_channel_id == normalized_thread_channel_id)
-    if normalized_request_id:
-        identifier_filters.append(FollowupContext.request_id == normalized_request_id)
-    if normalized_root_message_id:
-        identifier_filters.append(FollowupContext.root_message_id == normalized_root_message_id)
-    if normalized_issue_key:
-        identifier_filters.append(FollowupContext.issue_key == normalized_issue_key)
+        identifier_filters = [FollowupContext.thread_channel_id == normalized_thread_channel_id]
+    elif normalized_request_id:
+        identifier_filters = [FollowupContext.request_id == normalized_request_id]
+    elif normalized_root_message_id:
+        identifier_filters = [FollowupContext.root_message_id == normalized_root_message_id]
+    elif normalized_issue_key:
+        identifier_filters = [FollowupContext.issue_key == normalized_issue_key]
     existing = None
     if identifier_filters:
         existing = (
             session.execute(
                 select(FollowupContext)
-                .where(*filters, or_(*identifier_filters))
+                .where(*filters, *identifier_filters)
                 .order_by(FollowupContext.updated_at.desc())
                 .limit(1)
             )

@@ -16,6 +16,7 @@ from orchestrator.api.webhooks.jira_admission_flow import (
 )
 from orchestrator.api.webhooks.jira_event_classifier import evaluate_jira_trigger_state
 from orchestrator.api.webhooks.jira_parent_child_sync import handle_parent_feature_sync
+from orchestrator.api.webhooks.jira_webhook_board_gate import resolve_project_issue_board_location
 from orchestrator.api.webhooks.jira_webhook_types import (
     JiraWebhookContext,
     JiraWebhookContextSnapshot,
@@ -68,16 +69,24 @@ def _maybe_apply_runtime_issue_intake_routing(
     context: JiraWebhookContext,
     session: Session,
     settings,  # noqa: ANN001
-) -> None:
+) -> str | None:
     normalized_event = str(context.webhook_event or "").strip().lower()
     normalized_status = str(context.issue_status or "").strip().casefold()
     normalized_labels = {str(label).strip().casefold() for label in context.issue_labels or []}
     if normalized_event not in {"issue_created", "issue_updated"}:
-        return
-    if normalized_status != "backlog":
-        return
+        return None
     if _PM_PARENT_LABEL in normalized_labels or _ENGINEERING_CHILD_LABEL in normalized_labels:
-        return
+        return None
+    board_location, _detail = resolve_project_issue_board_location(
+        context=context,
+        session=session,
+        settings=settings,
+    )
+    if board_location is None:
+        if normalized_status != "backlog":
+            return None
+    elif board_location != "backlog":
+        return None
     runtime = build_runtime_for_selector(
         session=session,
         settings=settings,
@@ -106,7 +115,7 @@ def _maybe_apply_runtime_issue_intake_routing(
     )
     target_label = _route_label_for_issue_intake(routing["route"])
     if not target_label or target_label in normalized_labels:
-        return
+        return None
     oauth = tenant_jira_oauth_context(
         session=session,
         tenant=context.tenant,
@@ -119,6 +128,8 @@ def _maybe_apply_runtime_issue_intake_routing(
         labels=[target_label],
     )
     context.issue_labels.append(target_label)
+    if target_label == _PM_PARENT_LABEL and normalized_event == "issue_updated":
+        context.payload["_mb_pm_parent_routed_from_backlog"] = True
     logger.info(
         "jira_issue_intake_routed request_id=%s tenant_id=%s issue_key=%s route=%s confidence=%s reason=%s",
         context.request_id,
@@ -128,6 +139,7 @@ def _maybe_apply_runtime_issue_intake_routing(
         routing["confidence"],
         routing["reason"],
     )
+    return target_label
 
 async def build_jira_webhook_ingress_result(
     *,

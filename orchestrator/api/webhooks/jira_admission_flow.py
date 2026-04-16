@@ -241,6 +241,25 @@ def plan_jira_run_flow(
 ) -> JiraRunPlan:
     from orchestrator.api.webhooks import jira_webhook_board_gate
 
+    normalized_labels = {str(label).strip().casefold() for label in context.issue_labels or []}
+    if "pm-parent" in normalized_labels or "sync-blocked" in normalized_labels:
+        logger.info(
+            "jira_webhook_ignored request_id=%s tenant_id=%s issue_key=%s reason=pm_parent_or_sync_blocked labels=%s",
+            context.request_id,
+            context.tenant_id,
+            context.issue_key,
+            ",".join(sorted(normalized_labels)),
+        )
+        return JiraRunPlan(
+            content=jira_webhook_response_fn(
+                context,
+                enqueued=False,
+                reason="pm_parent_or_sync_blocked",
+                issue_status=context.issue_status,
+                webhook_event=context.webhook_event,
+            )
+        )
+
     backlog_followup_response = jira_webhook_board_gate.stage_handle_backlog_followup_issue_created(
         context=context
     )

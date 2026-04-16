@@ -19,6 +19,7 @@ from orchestrator.api.webhooks.github_payload_contracts import (
 from orchestrator.api.webhooks.jira_payload_contracts import (
     adf_to_text,
     extract_changed_fields,
+    extract_jira_comment_id,
     extract_issue_payload,
     extract_jira_comment_author_account_id,
     extract_jira_comment_text,
@@ -48,6 +49,7 @@ __all__ = [
     "adf_to_text",
     "extract_changed_fields",
     "extract_delivery_id",
+    "extract_jira_comment_id",
     "extract_installation_id",
     "extract_issue_payload",
     "extract_jira_comment_author_account_id",
@@ -58,6 +60,7 @@ __all__ = [
     "find_tenant_by_installation_id",
     "normalize_jira_webhook_event",
     "parse_jira_comment_command",
+    "create_jira_comment",
     "post_jira_comment",
     "record_jira_webhook_receipt",
     "resolve_active_project_for_issue",
@@ -69,23 +72,23 @@ __all__ = [
 ]
 
 
-def post_jira_comment(
+def create_jira_comment(
     *,
     session: Session,
     tenant: Tenant,
     issue_key: str,
     comment: str | dict,
     settings,  # noqa: ANN001
-) -> tuple[bool, str | None]:
+) -> tuple[dict | None, str | None]:
     try:
         oauth = tenant_jira_oauth_context(session=session, tenant=tenant, settings=settings)
-        oauth.client.add_issue_comment(
+        created = oauth.client.add_issue_comment(
             access_token=oauth.access_token,
             cloud_id=oauth.connection.cloud_id,
             issue_id_or_key=issue_key,
             comment=comment,
         )
-        return True, None
+        return created if isinstance(created, dict) else None, None
     except HTTPException as exc:
         logger.exception(
             "jira_comment_post_failed_http tenant_id=%s issue_key=%s detail=%s error=%s",
@@ -94,7 +97,7 @@ def post_jira_comment(
             exc.detail,
             exc,
         )
-        return False, str(exc.detail)
+        return None, str(exc.detail)
     except (JiraOAuthError, ValueError) as exc:
         logger.exception(
             "jira_comment_post_failed tenant_id=%s issue_key=%s error=%s",
@@ -102,7 +105,25 @@ def post_jira_comment(
             issue_key,
             exc,
         )
-        return False, str(exc)
+        return None, str(exc)
+
+
+def post_jira_comment(
+    *,
+    session: Session,
+    tenant: Tenant,
+    issue_key: str,
+    comment: str | dict,
+    settings,  # noqa: ANN001
+) -> tuple[bool, str | None]:
+    created, error = create_jira_comment(
+        session=session,
+        tenant=tenant,
+        issue_key=issue_key,
+        comment=comment,
+        settings=settings,
+    )
+    return created is not None or error is None, error
 
 
 def extract_delivery_id(request: Request) -> str | None:
