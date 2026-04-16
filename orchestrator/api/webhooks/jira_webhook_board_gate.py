@@ -123,6 +123,31 @@ def _fetch_issue_board_location(
     return "not_on_board", None
 
 
+def resolve_project_issue_board_location(
+    *,
+    context: JiraWebhookContext,
+    session: Session,
+    settings,  # noqa: ANN001
+) -> tuple[str | None, str | None]:
+    raw_board_id = None
+    if context.project is not None:
+        raw_board_id = (context.project.policy_overrides or {}).get("run_board_id")
+    if raw_board_id is None:
+        return None, None
+    try:
+        board_id = int(raw_board_id)
+    except (TypeError, ValueError):
+        board_id = 0
+    if board_id <= 0:
+        return None, None
+    return _fetch_issue_board_location(
+        context=context,
+        session=session,
+        settings=settings,
+        board_id=board_id,
+    )
+
+
 def stage_handle_run_board_gate(
     *,
     context: JiraWebhookContext,
@@ -159,11 +184,10 @@ def stage_handle_run_board_gate(
                 **admission_presentation.response_fields,
             )
         )
-    location, detail = _fetch_issue_board_location(
+    location, detail = resolve_project_issue_board_location(
         context=context,
         session=session,
         settings=settings,
-        board_id=board_id,
     )
     if location == "board":
         return None

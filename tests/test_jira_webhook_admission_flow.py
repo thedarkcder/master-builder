@@ -5,6 +5,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 from sqlalchemy import select
 
+from orchestrator.api.webhooks.jira_admission_flow import plan_jira_run_flow
+from orchestrator.api.webhooks.jira_webhook_types import jira_webhook_response
 from orchestrator.api.webhooks.jira_webhook_types import JiraWebhookContext
 from orchestrator.core.config import get_settings
 from orchestrator.core.decision_gate import DecisionGateResult
@@ -20,6 +22,46 @@ pytestmark = pytest.mark.contract
 
 
 class JiraWebhookAdmissionFlowTests(JiraWebhookHarness):
+    def test_webhook_pm_parent_or_sync_blocked_issue_never_surfaces_ready_for_agent(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-webhook")
+            project = session.execute(
+                select(Project)
+                .where(Project.tenant_id == "tenant-webhook", Project.jira_project_key == "TP")
+                .limit(1)
+            ).scalar_one()
+            assert tenant is not None
+            context = JiraWebhookContext(
+                request_id="req-pm-parent",
+                tenant_id="tenant-webhook",
+                tenant=tenant,
+                payload={},
+                webhook_event="issue_updated",
+                issue_key="TP-776",
+                issue_labels=["pm-parent", "agent:ready"],
+                issue_status="To Do",
+                issue_status_category_key="new",
+                issue_summary="Parent issue should not enqueue",
+                issue_description="Still blocked on PM clarification.",
+                comment_command=None,
+                comment_command_argument=None,
+                comment_command_error=None,
+                delivery_id="delivery-pm-parent",
+                project=project,
+            )
+
+            plan = plan_jira_run_flow(
+                context=context,
+                session=session,
+                settings=get_settings(),
+                evaluate_jira_trigger_state_fn=MagicMock(),
+                jira_webhook_response_fn=jira_webhook_response,
+            )
+
+        self.assertEqual(plan.content["reason"], "pm_parent_or_sync_blocked")
+        self.assertFalse(plan.content["enqueued"])
+        self.assertNotIn("ready_for_agent", plan.content)
+
     def test_webhook_backlog_pre_run_check_reports_ready_for_agent_without_enqueue(self) -> None:
         with self.session_factory() as session:
             project = session.execute(

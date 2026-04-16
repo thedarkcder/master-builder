@@ -44,7 +44,8 @@ class ParentFeaturePlanningWorkflow:
         normalized_labels = {str(label).strip().casefold() for label in context.issue_labels or []}
         if context.webhook_event not in {"issue_created", "issue_updated"} or "pm-parent" not in normalized_labels:
             return ParentFeaturePlanningWorkflowResult(handled=False)
-        if context.webhook_event == "issue_created":
+        routed_from_backlog = bool(context.payload.get("_mb_pm_parent_routed_from_backlog"))
+        if context.webhook_event == "issue_created" or routed_from_backlog:
             return self._handle_issue_created(context=context, session=session, settings=settings)
         return self._handle_issue_updated(context=context, session=session, settings=settings)
 
