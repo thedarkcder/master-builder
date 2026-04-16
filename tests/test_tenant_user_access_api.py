@@ -293,7 +293,7 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
                         attempt_count=0,
                         last_error=None,
                         payload_json={},
-                        context_json={},
+                        context_json={"related_run_id": "tenant-run-11"},
                         created_at=now,
                         updated_at=now,
                         started_at=None,
@@ -337,6 +337,8 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
         payload = response.json()
         self.assertEqual(payload["total"], 1)
         self.assertEqual(payload["items"][0]["job_id"], "tenant-webhook-job-1")
+        self.assertEqual(payload["items"][0]["related_run_id"], "tenant-run-11")
+        self.assertNotIn("owner_id", payload["items"][0])
         self.assertEqual(payload["summary"]["pending_count"], 1)
         self.assertEqual(payload["summary"]["failed_count"], 0)
 

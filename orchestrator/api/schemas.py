@@ -1231,11 +1231,11 @@ class WebhookQueueJobRead(BaseModel):
     tenant_id: str | None = None
     project_id: str | None = None
     subject_key: str
+    related_run_id: str | None = None
     dedupe_key: str | None = None
     request_id: str
     event_type: str | None = None
     status: str
-    owner_id: str | None = None
     lease_expires_at: datetime | None = None
     available_at: datetime
     attempt_count: int

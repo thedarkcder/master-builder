@@ -1634,7 +1634,8 @@ export function TenantProjectDetailsPage() {
                     <TableHead className="pl-5">Status</TableHead>
                     <TableHead>Transport</TableHead>
                     <TableHead>Subject</TableHead>
-                    <TableHead>Owner</TableHead>
+                    <TableHead>Arrived</TableHead>
+                    <TableHead>Run</TableHead>
                     <TableHead>Attempts</TableHead>
                     <TableHead>Last Error</TableHead>
                   </TableRow>
@@ -1649,8 +1650,24 @@ export function TenantProjectDetailsPage() {
                       <TableCell className="max-w-[280px] truncate font-mono text-xs" title={job.subject_key}>
                         {job.subject_key}
                       </TableCell>
-                      <TableCell className="max-w-[220px] truncate font-mono text-xs" title={job.owner_id ?? ""}>
-                        {job.owner_id ?? "—"}
+                      <TableCell className="text-xs text-muted-foreground">
+                        {formatTimestamp(job.created_at, "—")}
+                      </TableCell>
+                      <TableCell className="font-mono text-xs">
+                        {job.related_run_id ? (
+                          <Link
+                            href={buildRunDetailPath({
+                              tenantId: params.tenantId,
+                              projectId: params.projectId,
+                              runId: job.related_run_id,
+                            })}
+                            className="text-primary underline-offset-4 hover:underline"
+                          >
+                            {job.related_run_id}
+                          </Link>
+                        ) : (
+                          "—"
+                        )}
                       </TableCell>
                       <TableCell className="text-xs">{job.attempt_count}</TableCell>
                       <TableCell className="max-w-[300px] truncate text-xs text-muted-foreground" title={job.last_error ?? ""}>

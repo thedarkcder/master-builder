@@ -4490,7 +4490,7 @@ class AdminApiTests(AdminApiTestHarness):
                         attempt_count=0,
                         last_error=None,
                         payload_json={},
-                        context_json={},
+                        context_json={"related_run_id": "run-pending-1"},
                         created_at=now - timedelta(minutes=3),
                         updated_at=now - timedelta(minutes=3),
                         started_at=None,
@@ -4557,6 +4557,8 @@ class AdminApiTests(AdminApiTestHarness):
         self.assertEqual(payload["summary"]["failed_count"], 1)
         self.assertEqual(payload["items"][0]["job_id"], "job-pending-1")
         self.assertEqual(payload["items"][0]["status"], "pending")
+        self.assertEqual(payload["items"][0]["related_run_id"], "run-pending-1")
+        self.assertNotIn("owner_id", payload["items"][0])
 
         missing_project_response = self.client.get(
             "/api/admin/observability/webhook-jobs?tenant_id=example&status=pending&limit=10&offset=0",
