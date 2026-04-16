@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from sqlalchemy import select
 
+from orchestrator.api.webhooks.jira_application import JiraWebhookPlan
 from orchestrator.core.pm_interview_service import PM_INTERVIEW_STATUS_QUESTION_PENDING
 from orchestrator.core.parent_feature_brief_store import persist_parent_feature_brief_snapshot
 from orchestrator.storage.models import FollowupContext, PMInterviewCase, Project, Tenant
@@ -17,6 +18,180 @@ pytestmark = pytest.mark.contract
 
 
 class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
+    def test_webhook_unlabeled_backlog_issue_created_auto_routes_pm_parent_and_seeds_engineering_children(self) -> None:
+        payload = self._jira_issue_payload(issue_key="TP-990", labels=[], status_name="Backlog")
+        payload["webhookEvent"] = "jira:issue_created"
+
+        class _FakeClient:
+            def __init__(self) -> None:
+                self.labels: list[str] = []
+                self.updated_fields: list[dict] = []
+                self.added_labels: list[dict] = []
+
+            def get_issue_detail(self, **kwargs):
+                return JiraIssueDetail(
+                    key="TP-990",
+                    summary="Runtime routing reset",
+                    status="Backlog",
+                    description="Need the system to route new Jira issues automatically and create child tickets when needed.",
+                    labels=list(self.labels),
+                )
+
+            def add_issue_labels(self, **kwargs):
+                self.added_labels.append(kwargs)
+                for label in kwargs.get("labels", []):
+                    if label not in self.labels:
+                        self.labels.append(label)
+                return None
+
+            def update_issue_fields(self, **kwargs):
+                self.updated_fields.append(kwargs)
+                return None
+
+        oauth_context = SimpleNamespace(
+            client=_FakeClient(),
+            access_token="tok",
+            connection=SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
+        )
+        with (
+            patch("orchestrator.core.worker.webhook_job_service.tenant_jira_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.webhooks.jira_application.tenant_jira_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_jira_oauth_context", return_value=oauth_context),
+            patch(
+                "orchestrator.api.webhooks.jira_application.classify_jira_issue_intake_with_runtime",
+                return_value={"route": "pm_parent", "reason": "Needs PM breakdown", "confidence": "high"},
+            ),
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.build_runtime_for_selector", return_value=object()),
+            patch(
+                "orchestrator.core.jira_parent_child_sync_service.normalize_parent_feature_brief_with_runtime",
+                return_value={
+                    "brief": {
+                        "objective": "Automatically route new Jira issues",
+                        "user_value": "Users can drop issues into backlog without remembering special labels.",
+                        "acceptance_criteria": ["Parent issues create engineering child tickets automatically."],
+                        "scope_in": ["Backlog intake routing"],
+                        "scope_out": [],
+                        "ui_references": [],
+                        "constraints": [],
+                        "risks": [],
+                        "success_outcomes": [],
+                        "recommendation": "Route as a PM parent and seed children.",
+                        "open_questions": [],
+                        "next_steps": [],
+                    },
+                    "open_questions": [],
+                    "ready_to_write": True,
+                },
+            ),
+            patch(
+                "orchestrator.core.jira_parent_child_sync_service.run_specialist_planning_fanout",
+                return_value=SimpleNamespace(
+                    planning_state="planning_completed",
+                    required_tasks=("Create child tickets automatically",),
+                    findings=("Issue needs PM decomposition before execution.",),
+                    recommendations=("Seed engineering child tickets from the parent brief.",),
+                    acceptance_impacts=("Parent planning should happen automatically in backlog.",),
+                    open_behavior_questions=(),
+                    architecture_summary=("Seed engineering child tickets from the parent brief.",),
+                    architecture_diagram="",
+                    stages=(
+                        SimpleNamespace(
+                            planning_state="engineering_planning",
+                            persona_id="architect",
+                            to_payload=lambda: {
+                                "findings": ["Issue needs PM decomposition before execution."],
+                                "recommendations": ["Seed engineering child tickets from the parent brief."],
+                                "required_tasks": ["Create child tickets automatically"],
+                                "open_behavior_questions": [],
+                                "acceptance_impacts": ["Parent planning should happen automatically in backlog."],
+                            },
+                        ),
+                    ),
+                ),
+            ),
+            patch(
+                "orchestrator.api.webhooks.jira_parent_child_sync.seed_issues_with_runtime",
+                return_value=(
+                    "seeded",
+                    {
+                        "updated_parent": "TP-990",
+                        "updated_children": [],
+                        "created_children": ["TP-991"],
+                        "requires_input": False,
+                        "parent_revision": "rev-990",
+                        "children_sync_status": "children_current",
+                    },
+                ),
+            ) as seed_mock,
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.post_jira_comment", return_value=(True, None)),
+            patch("orchestrator.api.webhooks.jira_application.plan_jira_run_flow") as run_flow_mock,
+        ):
+            response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+            processed = self._process_one_webhook_job()
+
+        self._assert_jira_issue_event_queued(response, issue_key="TP-990")
+        self.assertIsNotNone(processed)
+        assert processed is not None
+        self.assertEqual(processed.status, "done")
+        self.assertEqual(oauth_context.client.labels, ["pm-parent"])
+        seed_mock.assert_called_once()
+        run_flow_mock.assert_not_called()
+
+    def test_webhook_unlabeled_backlog_issue_created_auto_routes_engineering_child(self) -> None:
+        payload = self._jira_issue_payload(issue_key="TP-992", labels=[], status_name="Backlog")
+        payload["webhookEvent"] = "jira:issue_created"
+
+        class _FakeClient:
+            def __init__(self) -> None:
+                self.labels: list[str] = []
+                self.added_labels: list[dict] = []
+
+            def get_issue_detail(self, **kwargs):
+                return JiraIssueDetail(
+                    key="TP-992",
+                    summary="Fix the queue selector duplicate scan ordering",
+                    status="Backlog",
+                    description="Tight implementation slice for queue selection ordering.",
+                    labels=list(self.labels),
+                )
+
+            def add_issue_labels(self, **kwargs):
+                self.added_labels.append(kwargs)
+                for label in kwargs.get("labels", []):
+                    if label not in self.labels:
+                        self.labels.append(label)
+                return None
+
+        oauth_context = SimpleNamespace(
+            client=_FakeClient(),
+            access_token="tok",
+            connection=SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
+        )
+        with (
+            patch("orchestrator.core.worker.webhook_job_service.tenant_jira_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.webhooks.jira_application.tenant_jira_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_jira_oauth_context", return_value=oauth_context),
+            patch(
+                "orchestrator.api.webhooks.jira_application.classify_jira_issue_intake_with_runtime",
+                return_value={"route": "engineering_child", "reason": "Already implementation scoped", "confidence": "high"},
+            ),
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.seed_issues_with_runtime") as seed_mock,
+            patch(
+                "orchestrator.api.webhooks.jira_application.plan_jira_run_flow",
+                return_value=JiraWebhookPlan(content={"reason": "issue_in_backlog"}),
+            ) as run_flow_mock,
+        ):
+            response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+            processed = self._process_one_webhook_job()
+
+        self._assert_jira_issue_event_queued(response, issue_key="TP-992")
+        self.assertIsNotNone(processed)
+        assert processed is not None
+        self.assertEqual(processed.status, "done")
+        self.assertEqual(oauth_context.client.labels, ["engineering-child"])
+        seed_mock.assert_not_called()
+        run_flow_mock.assert_called_once()
+
     def test_webhook_pm_parent_material_change_refreshes_engineering_children(self) -> None:
         payload = self._jira_issue_payload(issue_key="TP-950", labels=["pm-parent"], status_name="To Do")
         payload["changelog"] = {"items": [{"field": "description", "fromString": "old", "toString": "new"}]}
@@ -543,6 +718,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
     def test_webhook_pm_parent_issue_created_blocked_questions_post_back_to_discord(self) -> None:
         payload = self._jira_issue_payload(issue_key="TP-987", labels=["pm-parent"], status_name="Backlog")
         payload["webhookEvent"] = "jira:issue_created"
+        payload["issue"]["fields"]["reporter"] = {"accountId": "jira-user-987", "displayName": "Casey Reporter"}
 
         class _FakeClient:
             def __init__(self) -> None:
@@ -630,6 +806,14 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
         self.assertTrue(oauth_context.client.updated_fields)
         self.assertEqual(len(oauth_context.client.replaced_labels), 1)
         self.assertGreaterEqual(comment_mock.call_count, 1)
+        jira_question_comment = comment_mock.call_args_list[0].kwargs["comment"]
+        self.assertEqual(jira_question_comment["type"], "doc")
+        intro_content = jira_question_comment["content"][0]["content"]
+        self.assertEqual(intro_content[0]["type"], "mention")
+        self.assertEqual(intro_content[0]["attrs"]["id"], "jira-user-987")
+        ordered_questions = jira_question_comment["content"][1]["content"]
+        self.assertEqual(len(ordered_questions), 1)
+        self.assertIn("Who owns release-train supervision", ordered_questions[0]["content"][0]["content"][0]["text"])
         with self.session_factory() as session:
             followup = session.execute(
                 select(FollowupContext).where(
@@ -652,6 +836,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
     def test_webhook_pm_parent_issue_created_blocks_cleanly_when_discord_followup_fails(self) -> None:
         payload = self._jira_issue_payload(issue_key="TP-987A", labels=["pm-parent"], status_name="Backlog")
         payload["webhookEvent"] = "jira:issue_created"
+        payload["issue"]["fields"]["reporter"] = {"accountId": "jira-user-987A", "displayName": "Casey Reporter"}
 
         class _FakeClient:
             def __init__(self) -> None:
@@ -733,8 +918,9 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
         self.assertEqual(len(oauth_context.client.replaced_labels), 1)
         self.assertGreaterEqual(comment_mock.call_count, 1)
         blocked_comment = comment_mock.call_args_list[0].kwargs["comment"]
-        self.assertIn("brief normalization is blocked pending clarification", blocked_comment)
-        self.assertIn("Discord PM follow-up could not be created", blocked_comment)
+        self.assertEqual(blocked_comment["type"], "doc")
+        self.assertEqual(blocked_comment["content"][0]["content"][0]["attrs"]["id"], "jira-user-987A")
+        self.assertIn("Discord PM follow-up could not be created", blocked_comment["content"][2]["content"][0]["text"])
         with self.session_factory() as session:
             followup = session.execute(
                 select(FollowupContext).where(

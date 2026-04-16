@@ -409,15 +409,10 @@ class ParentFeaturePlanningWorkflow:
             parent_issue_key=parent_detail.key,
             questions=questions,
         )
-        question_block = " ".join(questions)
-        communication_note = (
-            " Discord PM follow-up could not be created, so continue clarification on the Jira parent issue for now."
-            if not posted_to_discord
-            else ""
-        )
-        issue_gateway.post_sync_note(
-            issue_key=context.issue_key,
-            body=f"{body_prefix} {question_block}{communication_note}",
+        issue_gateway.post_parent_brief_questions_jira(
+            parent_issue_key=parent_detail.key,
+            questions=questions,
+            discord_failed=not posted_to_discord,
         )
         payload = dict(extra or {})
         payload.update({"questions": questions, "webhook_event": context.webhook_event})

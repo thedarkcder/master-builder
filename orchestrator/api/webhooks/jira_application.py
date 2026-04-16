@@ -8,6 +8,7 @@ from fastapi import status
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from orchestrator.api.jira_oauth.connection_service import tenant_jira_oauth_context
 from orchestrator.api.webhooks.jira_comment_planner import plan_jira_comment_flow
 from orchestrator.api.webhooks.jira_admission_flow import (
     build_jira_enqueue_skipped_notification_action,
@@ -22,6 +23,7 @@ from orchestrator.api.webhooks.jira_webhook_types import (
     jira_webhook_response,
     snapshot_jira_webhook_context,
 )
+from orchestrator.core.agent_runtime_resolver import build_runtime_for_selector
 from orchestrator.core.webhook_job_queue import (
     WEBHOOK_TRANSPORT_JIRA,
     WebhookJobEnqueueRequest,
@@ -33,12 +35,16 @@ from orchestrator.core.decision_state_machine import (
     ExecutionAdmissionReason,
     build_execution_admission_block,
 )
+from orchestrator.core.jira_issue_intake_routing import classify_jira_issue_intake_with_runtime
 from orchestrator.core.observability import reset_log_context, set_log_context
+from orchestrator.core.runtime_invocation import AgentInvocationContext
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import Tenant
 from orchestrator.storage.run_queue_events import notify_webhook_job_enqueued
 
 logger = logging.getLogger(__name__)
+_PM_PARENT_LABEL = "pm-parent"
+_ENGINEERING_CHILD_LABEL = "engineering-child"
 
 
 @dataclass(frozen=True)
@@ -46,6 +52,82 @@ class JiraWebhookPlan:
     content: dict
     actions: tuple[TransportAction, ...] = ()
     status_code: int = 200
+
+
+def _route_label_for_issue_intake(route: str) -> str | None:
+    normalized = str(route or "").strip().lower()
+    if normalized == "pm_parent":
+        return _PM_PARENT_LABEL
+    if normalized == "engineering_child":
+        return _ENGINEERING_CHILD_LABEL
+    return None
+
+
+def _maybe_apply_runtime_issue_intake_routing(
+    *,
+    context: JiraWebhookContext,
+    session: Session,
+    settings,  # noqa: ANN001
+) -> None:
+    normalized_event = str(context.webhook_event or "").strip().lower()
+    normalized_status = str(context.issue_status or "").strip().casefold()
+    normalized_labels = {str(label).strip().casefold() for label in context.issue_labels or []}
+    if normalized_event not in {"issue_created", "issue_updated"}:
+        return
+    if normalized_status != "backlog":
+        return
+    if _PM_PARENT_LABEL in normalized_labels or _ENGINEERING_CHILD_LABEL in normalized_labels:
+        return
+    runtime = build_runtime_for_selector(
+        session=session,
+        settings=settings,
+        tenant_id=context.tenant_id,
+        project_id=context.project.project_id if context.project is not None else None,
+        selector="workflow.jira_issue_intake_routing",
+    )
+    routing = classify_jira_issue_intake_with_runtime(
+        runtime=runtime,
+        issue_key=context.issue_key,
+        issue_summary=str(context.issue_summary or "").strip(),
+        issue_description=str(context.issue_description or "").strip(),
+        issue_status=context.issue_status,
+        issue_labels=context.issue_labels,
+        webhook_event=context.webhook_event,
+        invocation_context=AgentInvocationContext(
+            channel="jira_webhook",
+            tenant_id=context.tenant_id,
+            project_id=context.project.project_id if context.project is not None else None,
+            command="jira_webhook",
+            stage="jira_issue_intake_routing",
+            working_dir=".",
+            issue_key=context.issue_key,
+            issue_description_chars=len(str(context.issue_description or "")),
+        ),
+    )
+    target_label = _route_label_for_issue_intake(routing["route"])
+    if not target_label or target_label in normalized_labels:
+        return
+    oauth = tenant_jira_oauth_context(
+        session=session,
+        tenant=context.tenant,
+        settings=settings,
+    )
+    oauth.client.add_issue_labels(
+        access_token=oauth.access_token,
+        cloud_id=oauth.connection.cloud_id,
+        issue_id_or_key=context.issue_key,
+        labels=[target_label],
+    )
+    context.issue_labels.append(target_label)
+    logger.info(
+        "jira_issue_intake_routed request_id=%s tenant_id=%s issue_key=%s route=%s confidence=%s reason=%s",
+        context.request_id,
+        context.tenant_id,
+        context.issue_key,
+        routing["route"],
+        routing["confidence"],
+        routing["reason"],
+    )
 
 async def build_jira_webhook_ingress_result(
     *,
@@ -204,6 +286,12 @@ def _process_jira_webhook_context(
                 ),
             ),
         )
+
+    _maybe_apply_runtime_issue_intake_routing(
+        context=context,
+        session=session,
+        settings=settings,
+    )
 
     parent_sync_response = handle_parent_feature_sync(
         context=context,

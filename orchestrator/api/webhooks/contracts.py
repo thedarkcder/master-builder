@@ -74,7 +74,7 @@ def post_jira_comment(
     session: Session,
     tenant: Tenant,
     issue_key: str,
-    comment: str,
+    comment: str | dict,
     settings,  # noqa: ANN001
 ) -> tuple[bool, str | None]:
     try:

@@ -174,6 +174,24 @@ class _JiraParentIssueGateway:
             questions=questions,
         )
 
+    def post_parent_brief_questions_jira(
+        self,
+        *,
+        parent_issue_key: str,
+        questions: list[str],
+        discord_failed: bool,
+    ) -> tuple[bool, str | None]:
+        return _post_parent_brief_questions_to_jira(
+            session=self._session,
+            tenant=self._context.tenant,
+            issue_key=parent_issue_key,
+            payload=dict(self._context.payload or {}),
+            questions=questions,
+            settings=self._settings,
+            post_jira_comment_fn=self._post_jira_comment_fn,
+            discord_failed=discord_failed,
+        )
+
     def post_sync_note(self, *, issue_key: str, body: str) -> None:
         _post_sync_note(
             session=self._session,
@@ -536,6 +554,110 @@ def _build_clarification_followup_prompt(
 
 def _sync_note(*, body: str) -> str:
     return f"{_SYSTEM_COMMENT_MARKER} {body}".strip()
+
+
+def _extract_jira_issue_mention_target(*, payload: dict[str, Any]) -> tuple[str | None, str | None]:
+    issue = payload.get("issue") if isinstance(payload, dict) else None
+    fields = issue.get("fields") if isinstance(issue, dict) and isinstance(issue.get("fields"), dict) else {}
+    for field_name in ("reporter", "assignee"):
+        actor = fields.get(field_name)
+        if not isinstance(actor, dict):
+            continue
+        account_id = str(actor.get("accountId") or "").strip() or None
+        display_name = str(actor.get("displayName") or "").strip() or None
+        if account_id:
+            return account_id, display_name
+    return None, None
+
+
+def _jira_question_comment_adf(
+    *,
+    issue_key: str,
+    questions: list[str],
+    mention_account_id: str | None,
+    mention_display_name: str | None,
+    discord_failed: bool,
+) -> dict[str, Any]:
+    intro_content: list[dict[str, Any]] = []
+    if mention_account_id:
+        intro_content.append(
+            {
+                "type": "mention",
+                "attrs": {
+                    "id": mention_account_id,
+                    "text": f"@{mention_display_name or 'reporter'}",
+                },
+            }
+        )
+        intro_content.append({"type": "text", "text": " "})
+    intro_content.append(
+        {
+            "type": "text",
+            "text": (
+                f"Master Builder needs product clarification on {issue_key} before PM planning can continue. "
+                "Please reply on this Jira issue with answers to the questions below."
+            ),
+        }
+    )
+    content: list[dict[str, Any]] = [
+        {"type": "paragraph", "content": intro_content},
+        {
+            "type": "orderedList",
+            "content": [
+                {
+                    "type": "listItem",
+                    "content": [
+                        {
+                            "type": "paragraph",
+                            "content": [{"type": "text", "text": question.strip()}],
+                        }
+                    ],
+                }
+                for question in questions
+                if question.strip()
+            ],
+        },
+    ]
+    if discord_failed:
+        content.append(
+            {
+                "type": "paragraph",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Discord PM follow-up could not be created, so keep the clarification on this Jira issue for now.",
+                    }
+                ],
+            }
+        )
+    return {"type": "doc", "version": 1, "content": content}
+
+
+def _post_parent_brief_questions_to_jira(
+    *,
+    session: Session,
+    tenant,
+    issue_key: str,
+    payload: dict[str, Any],
+    questions: list[str],
+    settings,  # noqa: ANN001
+    post_jira_comment_fn,
+    discord_failed: bool,
+) -> tuple[bool, str | None]:  # noqa: ANN001
+    mention_account_id, mention_display_name = _extract_jira_issue_mention_target(payload=payload)
+    return post_jira_comment_fn(
+        session=session,
+        tenant=tenant,
+        issue_key=issue_key,
+        comment=_jira_question_comment_adf(
+            issue_key=issue_key,
+            questions=questions,
+            mention_account_id=mention_account_id,
+            mention_display_name=mention_display_name,
+            discord_failed=discord_failed,
+        ),
+        settings=settings,
+    )
 
 
 def _post_sync_note(
