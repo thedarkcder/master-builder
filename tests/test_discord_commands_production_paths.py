@@ -659,7 +659,7 @@ class DiscordCommandProductionPathTests(SqliteTemplateDbTestCase):
         runtime, queue = self._seed_runtime(
             [
                 CodexRuntimeError(
-                    "Codex CLI command failed (exit=1): You've hit your usage limit for GPT-5.3-Codex-Spark. Switch to another model now, or try again later."
+                    "Codex CLI command failed (exit=1): You've hit your usage limit for GPT-5.4 Mini. Switch to another model now, or try again later."
                 ),
             ]
         )
