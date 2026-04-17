@@ -152,6 +152,38 @@ def test_resolve_platform_secret_ref_rejects_unscoped_ref() -> None:
         module.decrypt_secret_value = original_decrypt  # type: ignore[assignment]
 
 
+def test_resolve_secret_ref_lazily_reencrypts_legacy_managed_secret_when_provider_enabled() -> None:
+    session = MagicMock()
+    session.bind = None
+    row = MagicMock(value_encrypted="legacy-ciphertext", updated_at=None)
+    session.get.return_value = row
+
+    import orchestrator.core.secret_manager as module
+
+    settings = MagicMock()
+    with (
+        patch.object(module, "get_settings", return_value=settings),
+        patch.object(module, "reencrypt_legacy_secret_value", return_value="provider-ciphertext") as rewrite_mock,
+        patch.object(module, "decrypt_secret_value", return_value="managed-secret") as decrypt_mock,
+    ):
+        resolved = resolve_secret_ref(
+            session,
+            secret_ref="tenant/t1/SECRET_NAME",
+            encryption_key="legacy-key",
+        )
+
+    assert resolved == "managed-secret"
+    assert row.value_encrypted == "provider-ciphertext"
+    session.commit.assert_called_once()
+    rewrite_mock.assert_called_once()
+    decrypt_mock.assert_called_once_with(
+        ciphertext="provider-ciphertext",
+        settings=settings,
+        encryption_key="legacy-key",
+        context={"kind": "managed_secret", "secret_ref": "tenant/t1/SECRET_NAME"},
+    )
+
+
 def test_resolve_platform_secret_ref_rejects_invalid_scopes() -> None:
     session = MagicMock()
     session.bind = None

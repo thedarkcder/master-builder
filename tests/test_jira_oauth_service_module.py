@@ -126,6 +126,36 @@ class JiraOauthServiceModuleTests(unittest.TestCase):
 
         self.assertEqual(token, "cached-token")
 
+    def test_refresh_jira_connection_tokens_fast_path_lazily_reencrypts_legacy_tokens(self) -> None:
+        session = MagicMock()
+        settings = SimpleNamespace(secrets_encryption_key="enc")
+        future_expiry = datetime.now(timezone.utc) + timedelta(minutes=10)
+        connection = SimpleNamespace(
+            connection_id="conn-1",
+            access_token_expires_at=future_expiry,
+            access_token_encrypted="legacy-access",
+            refresh_token_encrypted="legacy-refresh",
+            scopes=["read:jira-work"],
+            updated_at=None,
+        )
+
+        with (
+            patch(
+                "orchestrator.api.jira_oauth.service.reencrypt_legacy_secret_value",
+                side_effect=["provider-access", "provider-refresh"],
+            ) as rewrite_mock,
+            patch("orchestrator.api.jira_oauth.service.decrypt_secret_value", return_value="cached-token") as decrypt_mock,
+        ):
+            token = refresh_jira_connection_tokens(session, connection=connection, settings=settings, tenant_id="t1")
+
+        self.assertEqual(token, "cached-token")
+        self.assertEqual(connection.access_token_encrypted, "provider-access")
+        self.assertEqual(connection.refresh_token_encrypted, "provider-refresh")
+        session.commit.assert_called_once()
+        self.assertEqual(rewrite_mock.call_count, 2)
+        decrypt_mock.assert_called_once()
+        self.assertEqual(decrypt_mock.call_args.kwargs["ciphertext"], "provider-access")
+
 
 if __name__ == "__main__":
     unittest.main()
