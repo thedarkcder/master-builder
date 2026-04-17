@@ -21,6 +21,15 @@ def get_workflow_type_by_system_key(session: Session, *, system_key: str) -> Wor
     return workflow_type
 
 
+def get_workflow_type_by_handler_key(session: Session, *, handler_key: str) -> WorkflowType:
+    workflow_type = session.execute(
+        select(WorkflowType).where(WorkflowType.handler_key == str(handler_key or "").strip())
+    ).scalar_one_or_none()
+    if workflow_type is None:
+        raise LookupError(f"Workflow type not found for handler key: {handler_key}")
+    return workflow_type
+
+
 def list_workflow_type_operations(session: Session, *, workflow_type_key: str) -> list[WorkflowTypeOperation]:
     return session.execute(
         select(WorkflowTypeOperation)

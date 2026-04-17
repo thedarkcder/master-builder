@@ -24,7 +24,7 @@ from orchestrator.api.schemas import (
     WorkflowTypeTemporalConfigRead,
 )
 from orchestrator.core.config import get_settings
-from orchestrator.core.workflow_engine_factory import build_workflow_engine, create_session_factory_for_engine
+from orchestrator.core.workflow_runtime import build_workflow_runtime
 from orchestrator.core.workflow_operation_executor import (
     execute_workflow_operation_retry,
     supports_workflow_operation_retry,
@@ -232,6 +232,11 @@ def _workflow_type_engine_config_read(*, workflow_type: WorkflowType) -> Workflo
     )
 
 
+def _workflow_type_capabilities_read(*, workflow_type: WorkflowType) -> dict[str, object]:
+    raw = workflow_type.capabilities_json if isinstance(workflow_type.capabilities_json, dict) else {}
+    return dict(raw)
+
+
 def _workflow_type_retry_policy_config_read(*, raw_config: dict | None) -> WorkflowTypeOperationRetryConfigRead:
     raw = raw_config if isinstance(raw_config, dict) else {}
     return WorkflowTypeOperationRetryConfigRead(
@@ -249,12 +254,11 @@ def _workflow_type_retry_policy_config_read(*, raw_config: dict | None) -> Workf
 
 
 def _workflow_uses_run_state_path(*, workflow_type: WorkflowTypeRead) -> bool:
-    return "run_attempt_execution" in _workflow_type_operation_types(workflow_type=workflow_type)
+    return str(workflow_type.capabilities.get("state_path_kind") or "").strip().lower() == "run"
 
 
 def _workflow_supports_child_issue_links(*, workflow_type: WorkflowTypeRead) -> bool:
-    operation_types = _workflow_type_operation_types(workflow_type=workflow_type)
-    return "jira_child_fanout" in operation_types or "jira_child_promotion" in operation_types
+    return bool(workflow_type.capabilities.get("child_issue_links"))
 
 
 def _workflow_operation_reads(
@@ -368,6 +372,7 @@ def _workflow_operation_reads(
             description=workflow_type.description,
             orchestration_backend=workflow_type.orchestration_backend,
             engine_config=_workflow_type_engine_config_read(workflow_type=workflow_type),
+            capabilities=_workflow_type_capabilities_read(workflow_type=workflow_type),
             operations=type_reads,
         ),
         operation_reads,
@@ -669,6 +674,7 @@ def _workflow_type_detail(
         description=workflow_type.description,
         orchestration_backend=workflow_type.orchestration_backend,
         engine_config=_workflow_type_engine_config_read(workflow_type=workflow_type),
+        capabilities=_workflow_type_capabilities_read(workflow_type=workflow_type),
         operations=definition_reads,
     )
     execution_query = (
@@ -697,6 +703,7 @@ def _workflow_type_detail(
         description=type_read.description,
         orchestration_backend=type_read.orchestration_backend,
         engine_config=type_read.engine_config,
+        capabilities=type_read.capabilities,
         operations=type_read.operations,
         execution_modes=list(ATTEMPT_ENTRY_MODES),
         conditional_paths=_workflow_type_conditional_paths(workflow_type=type_read),
@@ -1273,10 +1280,9 @@ def retry_workflow_operation(
         )
 
     settings = get_settings()
-    session_factory = create_session_factory_for_engine(session=session, settings=settings)
-    engine = build_workflow_engine(
+    runtime = build_workflow_runtime(
+        session=session,
         settings=settings,
-        workflow=workflow,
         process_claimed_run_fn=process_claimed_run,
         build_runner_fn=build_workflow_runner_for_session,
         runtime_kwargs_fn=build_run_process_kwargs,
@@ -1287,10 +1293,7 @@ def retry_workflow_operation(
             seed_issues_with_runtime_fn=seed_issues_with_runtime_fn,
         ),
     )
-    engine.retry_workflow_operation(
-        session=session,
-        settings=settings,
-        session_factory=session_factory,
+    runtime.retry_operation(
         workflow=workflow,
         operation=operation,
     )

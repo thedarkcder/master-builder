@@ -61,7 +61,7 @@ class MigrationTests(unittest.TestCase):
 
         duplicates = {revision_id: count for revision_id, count in Counter(revision_ids).items() if count > 1}
         self.assertEqual(duplicates, {})
-        self.assertEqual(script.get_heads(), ["20260413_0064"])
+        self.assertEqual(script.get_heads(), ["20260417_0075"])
 
     def test_parent_planning_rename_migration_drops_discovered_workflow_foreign_keys(self) -> None:
         module = self._load_migration_module(

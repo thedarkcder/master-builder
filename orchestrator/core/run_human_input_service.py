@@ -14,10 +14,7 @@ from orchestrator.core.followup_context_service import (
     close_followup_contexts,
     upsert_followup_context,
 )
-from orchestrator.core.workflow_engine_factory import (
-    build_workflow_engine,
-    create_session_factory_for_engine,
-)
+from orchestrator.core.workflow_runtime import build_workflow_runtime
 from orchestrator.core.discord.notifications import send_tenant_discord_message
 from orchestrator.core.run_enqueue_types import EnqueueFailureReason
 from orchestrator.core.runs import (
@@ -427,17 +424,14 @@ def resume_workflow_from_human_input_answer(
     workflow = session.get(WorkflowExecution, request.workflow_id)
     if workflow is None:
         raise ValueError(f"Workflow for human input request was not found: {request.workflow_id}")
-    engine = build_workflow_engine(
+    runtime = build_workflow_runtime(
+        session=session,
         settings=settings,
-        workflow=workflow,
         process_claimed_run_fn=None,
         build_runner_fn=None,
         runtime_kwargs_fn=None,
     )
-    return engine.resume_workflow(
-        session=session,
-        settings=settings,
-        session_factory=create_session_factory_for_engine(session=session, settings=settings),
+    return runtime.resume_input(
         workflow=workflow,
         request=request,
     )

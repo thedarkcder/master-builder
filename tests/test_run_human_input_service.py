@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, sentinel
 
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.core.run_human_input_service import (
+    _resume_workflow_from_human_input_answer_legacy,
     answer_human_input_request,
     create_human_input_request,
     resume_workflow_from_human_input_answer,
@@ -213,7 +214,7 @@ def test_resume_workflow_from_human_input_answer_creates_resume_attempt_and_cons
             reply_text="use qa-apple@example.com",
             source_ref="discord:message-1",
         )
-        result = resume_workflow_from_human_input_answer(
+        result = _resume_workflow_from_human_input_answer_legacy(
             session=session,
             settings=SimpleNamespace(secrets_encryption_key="secret-key"),
             request=answered,
@@ -278,7 +279,7 @@ def test_resume_workflow_from_human_input_answer_carries_precheck_from_source_ru
         ) as enqueue_run_mock,
         patch("orchestrator.core.run_human_input_service.close_followup_contexts"),
     ):
-        result = resume_workflow_from_human_input_answer(
+        result = _resume_workflow_from_human_input_answer_legacy(
             session=session,
             settings=SimpleNamespace(secrets_encryption_key="secret-key"),
             request=request,
@@ -290,6 +291,29 @@ def test_resume_workflow_from_human_input_answer_carries_precheck_from_source_ru
     assert snapshot.context.execution_context.get("human_input_request_id") == "request-1"
     assert snapshot.context.execution_context.get("pre_check_outcome") == "ready_for_agent"
     assert bootstrap.required_worker_capability == "macos"
+
+
+def test_resume_workflow_from_human_input_answer_delegates_to_workflow_runtime() -> None:
+    session = MagicMock()
+    request = SimpleNamespace(
+        request_id="request-1",
+        workflow_id="workflow-1",
+        status="answered",
+    )
+    workflow = SimpleNamespace(workflow_id="workflow-1")
+    runtime = MagicMock()
+    runtime.resume_input.return_value = sentinel.resumed_run
+    session.get.side_effect = lambda model, key: request if key == "request-1" else workflow if key == "workflow-1" else None
+
+    with patch("orchestrator.core.run_human_input_service.build_workflow_runtime", return_value=runtime):
+        result = resume_workflow_from_human_input_answer(
+            session=session,
+            settings=SimpleNamespace(secrets_encryption_key="secret-key"),
+            request=request,
+        )
+
+    assert result is sentinel.resumed_run
+    runtime.resume_input.assert_called_once_with(workflow=workflow, request=request)
 
 
 def test_resume_workflow_from_human_input_answer_reuses_existing_resume_run() -> None:
@@ -374,7 +398,7 @@ def test_resume_workflow_from_human_input_answer_rejects_unrelated_active_resume
         return_value=enqueue_result,
     ):
         try:
-            resume_workflow_from_human_input_answer(
+            _resume_workflow_from_human_input_answer_legacy(
                 session=session,
                 settings=SimpleNamespace(secrets_encryption_key="secret-key"),
                 request=request,
@@ -419,7 +443,7 @@ def test_resume_workflow_from_human_input_answer_rejects_non_canonical_checkpoin
     )
 
     try:
-        resume_workflow_from_human_input_answer(
+        _resume_workflow_from_human_input_answer_legacy(
             session=session,
             settings=SimpleNamespace(secrets_encryption_key="secret-key"),
             request=request,

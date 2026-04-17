@@ -1658,9 +1658,11 @@ class AdminApiTests(AdminApiTestHarness):
             )
             session.commit()
 
-        class _FakeEngine:
-            def retry_workflow_operation(self, *, session, workflow, operation, **kwargs):  # noqa: ANN001
-                _ = kwargs
+        class _FakeRuntime:
+            def __init__(self, runtime_session) -> None:
+                self._session = runtime_session
+
+            def retry_operation(self, *, workflow, operation):  # noqa: ANN001
                 current = datetime.now(timezone.utc)
                 workflow.status = "running"
                 workflow.last_error = None
@@ -1670,7 +1672,7 @@ class AdminApiTests(AdminApiTestHarness):
                 operation.started_at = current
                 operation.finished_at = None
                 operation.updated_at = current
-                session.add(
+                self._session.add(
                     WorkflowOperationAttempt(
                         attempt_id="attempt-2",
                         operation_id=operation.operation_id,
@@ -1694,7 +1696,10 @@ class AdminApiTests(AdminApiTestHarness):
 
         fake_jira_adapter = SimpleNamespace(list_child_issue_previews=lambda **_kwargs: [])
         with (
-            patch("orchestrator.api.admin.workflows_service.build_workflow_engine", return_value=_FakeEngine()),
+            patch(
+                "orchestrator.api.admin.workflows_service.build_workflow_runtime",
+                side_effect=lambda **kwargs: _FakeRuntime(kwargs["session"]),
+            ),
             patch.object(
                 __import__("orchestrator.api.routes.admin_runs", fromlist=["workflow_integration_adapter_provider"]).workflow_integration_adapter_provider,
                 "jira",

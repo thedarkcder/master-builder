@@ -11,6 +11,7 @@ from orchestrator.storage.models import WorkflowOperation, WorkflowOperationAtte
 
 OPERATION_STATUS_PENDING = "pending"
 OPERATION_STATUS_RUNNING = "running"
+OPERATION_STATUS_WAITING_FOR_INPUT = "waiting_for_input"
 OPERATION_STATUS_RETRYING = "retrying"
 OPERATION_STATUS_FAILED = "failed"
 OPERATION_STATUS_COMPLETED = "completed"

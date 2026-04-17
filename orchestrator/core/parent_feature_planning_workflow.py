@@ -7,9 +7,9 @@ from typing import Any, Callable
 from sqlalchemy.orm import Session
 
 from orchestrator.core.specialist_planning import PLANNING_STATE_COMPLETED
-from orchestrator.core.parent_planning_workflow_projection import (
-    classify_parent_planning_failure,
-    ensure_parent_planning_workflow,
+from orchestrator.core.workflow_execution_projection import (
+    classify_external_workflow_failure,
+    ensure_issue_workflow_execution,
 )
 
 logger = logging.getLogger(__name__)
@@ -27,6 +27,7 @@ class ParentFeaturePlanningWorkflowDeps:
     issue_gateway: Any
     brief_planner: Any
     child_sync_gateway: Any
+    workflow_type: Any
     project_key_for_issue_fn: Callable[[str], str]
     extract_changed_fields_fn: Callable[..., list[str]]
     extract_status_transition_fn: Callable[..., tuple[str | None, str | None]]
@@ -58,8 +59,9 @@ class ParentFeaturePlanningWorkflow:
         brief_planner = self._deps.brief_planner
         child_sync_gateway = self._deps.child_sync_gateway
         parent_detail = issue_gateway.load_parent_detail(context.issue_key)
-        workflow_projection = ensure_parent_planning_workflow(
+        workflow_projection = ensure_issue_workflow_execution(
             session=session,
+            workflow_type=self._deps.workflow_type,
             tenant_id=context.tenant_id,
             project_id=context.project_id,
             issue_key=parent_detail.key,
@@ -123,7 +125,7 @@ class ParentFeaturePlanningWorkflow:
                 context.issue_key,
                 exc,
             )
-            category, retryable = classify_parent_planning_failure(error=exc)
+            category, retryable = classify_external_workflow_failure(error=exc)
             workflow_projection.mark_operation_failed(
                 operation_type="jira_child_fanout",
                 category=category,
@@ -227,8 +229,9 @@ class ParentFeaturePlanningWorkflow:
             )
 
         parent_detail = issue_gateway.load_parent_detail(context.issue_key)
-        workflow_projection = ensure_parent_planning_workflow(
+        workflow_projection = ensure_issue_workflow_execution(
             session=session,
+            workflow_type=self._deps.workflow_type,
             tenant_id=context.tenant_id,
             project_id=context.project_id,
             issue_key=parent_detail.key,
@@ -302,7 +305,7 @@ class ParentFeaturePlanningWorkflow:
                 context.issue_key,
                 exc,
             )
-            category, retryable = classify_parent_planning_failure(error=exc)
+            category, retryable = classify_external_workflow_failure(error=exc)
             workflow_projection.mark_operation_failed(
                 operation_type="jira_child_fanout",
                 category=category,
@@ -422,8 +425,9 @@ class ParentFeaturePlanningWorkflow:
     ) -> ParentFeaturePlanningWorkflowResult:
         issue_gateway = self._deps.issue_gateway
         parent_detail = issue_gateway.load_parent_detail(context.issue_key)
-        workflow_projection = ensure_parent_planning_workflow(
+        workflow_projection = ensure_issue_workflow_execution(
             session=session,
+            workflow_type=self._deps.workflow_type,
             tenant_id=context.tenant_id,
             project_id=context.project_id,
             issue_key=parent_detail.key,

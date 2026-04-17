@@ -10,10 +10,7 @@ from orchestrator.core.config import Settings, get_settings
 from orchestrator.core.agent_observability import record_agent_lifecycle_event
 from orchestrator.core.discord.notifications import send_tenant_discord_message
 from orchestrator.core.jira_links import tenant_jira_issue_url
-from orchestrator.core.workflow_engine_factory import (
-    build_workflow_engine,
-    create_session_factory_for_engine,
-)
+from orchestrator.core.workflow_runtime import build_workflow_runtime
 from orchestrator.core.worker.webhook_job_service import process_next_webhook_job
 from orchestrator.core.worker.jira_stage_service import send_stage_update_to_jira as _send_stage_update_to_jira
 from orchestrator.core.worker.jira_stage_service import transition_issue_status as _transition_issue_status
@@ -156,17 +153,14 @@ def process_claimed_run_with_dependencies(
         raise RuntimeError(
             f"Claimed run handoff failed: workflow {claimed_run.workflow_id} missing for run {claimed_run.run_id}"
         )
-    engine = build_workflow_engine(
+    runtime = build_workflow_runtime(
+        session=session,
         settings=settings,
-        workflow=workflow,
         process_claimed_run_fn=_process_claimed_run_impl,
         build_runner_fn=lambda *, session: runner,
         runtime_kwargs_fn=build_run_process_kwargs,
     )
-    result = engine.start_workflow(
-        session=session,
-        settings=settings,
-        session_factory=create_session_factory_for_engine(session=session, settings=settings),
+    result = runtime.start_execution(
         workflow=workflow,
         run=claimed_run,
         claim_id=expected_claim_id,
