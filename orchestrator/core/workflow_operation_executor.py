@@ -131,7 +131,7 @@ def supports_workflow_operation_retry(*, operation_type: str) -> bool:
 def _execute_jira_parent_update(
     *,
     context: _OperationExecutionContext,
-    integration_adapter_provider,
+    integration_router,
     build_runtime_for_selector_fn,
     seed_issues_with_runtime_fn,
 ) -> WorkflowOperationHandle:
@@ -146,7 +146,7 @@ def _execute_jira_parent_update(
             f"No confirmed parent brief snapshot is available for {context.workflow.issue_key}"
         )
 
-    jira_adapter = integration_adapter_provider.jira(
+    jira_adapter = integration_router.jira(
         session=context.session,
         tenant=context.tenant,
         settings=context.settings,
@@ -215,7 +215,7 @@ def _execute_jira_parent_update(
 def _execute_jira_child_fanout(
     *,
     context: _OperationExecutionContext,
-    integration_adapter_provider,
+    integration_router,
     build_runtime_for_selector_fn,
     seed_issues_with_runtime_fn,
 ) -> WorkflowOperationHandle:
@@ -229,7 +229,7 @@ def _execute_jira_child_fanout(
             f"No confirmed parent brief snapshot is available for {context.workflow.issue_key}"
         )
 
-    jira_adapter = integration_adapter_provider.jira(
+    jira_adapter = integration_router.jira(
         session=context.session,
         tenant=context.tenant,
         settings=context.settings,
@@ -351,7 +351,7 @@ def execute_workflow_operation_retry(
     session_factory: sessionmaker[Session],
     workflow: WorkflowExecution,
     operation: WorkflowOperation,
-    integration_adapter_provider,
+    integration_router,
     build_runtime_for_selector_fn: Callable[..., Any],
     seed_issues_with_runtime_fn: Callable[..., Any],
 ) -> WorkflowOperationHandle:
@@ -398,7 +398,7 @@ def execute_workflow_operation_retry(
             tenant=tenant,
             project=project,
         ),
-        integration_adapter_provider=integration_adapter_provider,
+        integration_router=integration_router,
         build_runtime_for_selector_fn=build_runtime_for_selector_fn,
         seed_issues_with_runtime_fn=seed_issues_with_runtime_fn,
     )

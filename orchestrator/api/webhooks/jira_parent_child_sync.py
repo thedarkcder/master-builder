@@ -20,6 +20,7 @@ from orchestrator.core.workflow_integration_provider import (
     JiraWorkflowConnectionProvider,
     WorkflowIntegrationAdapterProvider,
 )
+from orchestrator.core.workflow_integration_router import WorkflowIntegrationRouter
 from orchestrator.core.workflow_runtime import build_workflow_runtime
 from orchestrator.core.jira_parent_child_sync_service import (
     JiraParentChildSyncContext,
@@ -32,11 +33,13 @@ from orchestrator.core.jira_parent_child_sync_service import (
 )
 
 
-def _build_workflow_integration_adapter_provider() -> WorkflowIntegrationAdapterProvider:
-    return WorkflowIntegrationAdapterProvider(
-        jira_provider=JiraWorkflowConnectionProvider(
-            oauth_context_resolver=tenant_jira_oauth_context,
-            list_child_issue_previews_for_parent_fn=list_child_issue_previews_for_parent,
+def _build_workflow_integration_router() -> WorkflowIntegrationRouter:
+    return WorkflowIntegrationRouter(
+        adapter_provider=WorkflowIntegrationAdapterProvider(
+            jira_provider=JiraWorkflowConnectionProvider(
+                oauth_context_resolver=tenant_jira_oauth_context,
+                list_child_issue_previews_for_parent_fn=list_child_issue_previews_for_parent,
+            )
         )
     )
 
@@ -84,7 +87,7 @@ def handle_parent_feature_sync(
         context=_build_service_context(context=context),
         session=session,
         settings=settings,
-        integration_adapter_provider=_build_workflow_integration_adapter_provider(),
+        integration_router=_build_workflow_integration_router(),
         extract_changed_fields_fn=extract_changed_fields,
         extract_status_transition_fn=extract_status_transition,
         build_workflow_runtime_fn=build_workflow_runtime,
@@ -106,7 +109,7 @@ def handle_engineering_clarification_command(
         context=_build_service_context(context=context),
         session=session,
         settings=settings,
-        integration_adapter_provider=_build_workflow_integration_adapter_provider(),
+        integration_router=_build_workflow_integration_router(),
         build_runtime_for_selector_fn=build_runtime_for_selector,
         classify_engineering_clarification_with_codex_fn=classify_engineering_clarification_with_codex,
         post_jira_comment_fn=post_jira_comment,
@@ -124,7 +127,7 @@ def handle_engineering_clarification_reply(
         context=_build_service_context(context=context),
         session=session,
         settings=settings,
-        integration_adapter_provider=_build_workflow_integration_adapter_provider(),
+        integration_router=_build_workflow_integration_router(),
         seed_issues_with_runtime_fn=seed_issues_with_runtime,
         post_jira_comment_fn=post_jira_comment,
         create_jira_comment_fn=create_jira_comment,
@@ -143,7 +146,7 @@ def handle_pm_interview_reply(
         context=_build_service_context(context=context),
         session=session,
         settings=settings,
-        integration_adapter_provider=_build_workflow_integration_adapter_provider(),
+        integration_router=_build_workflow_integration_router(),
         build_runtime_for_selector_fn=build_runtime_for_selector,
         seed_issues_with_runtime_fn=seed_issues_with_runtime,
         post_jira_comment_fn=post_jira_comment,
