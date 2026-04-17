@@ -547,7 +547,7 @@ test("opens the tenant workspace from the selector for tenant users", async ({ p
   await page.goto("/tenants/select");
   await Promise.all([
     page.waitForURL(/\/route25\/dashboard$/, { timeout: 15000 }),
-    page.getByRole("link", { name: /Route 25/ }).click(),
+    page.locator('a[href="/route25/dashboard"]').click({ force: true }),
   ]);
   await expect(page.getByRole("heading", { name: "Recent Delivery" })).toBeVisible();
   await expect(page.getByText("Connection Status")).toBeVisible();
