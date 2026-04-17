@@ -199,7 +199,7 @@ export default function AgentRuntimesPage() {
       setRoleRouting(response.role_routing);
       setNameRouting(response.name_routing);
       setSelectorRouting(response.selector_routing);
-      setRoutingStatusLine("Loaded platform agent runtime routing.");
+      setRoutingStatusLine("");
     } catch (error) {
       setRoutingStatusLine(`Failed to load agent runtimes: ${(error as Error).message}`);
     } finally {

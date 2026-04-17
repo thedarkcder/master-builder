@@ -419,6 +419,85 @@ test("lets a platform admin create a workspace through the setup wizard and bloc
   await expect(page.getByText("Connection Status")).toBeVisible();
 });
 
+test("formats Jira webhook timestamps on the tenant Jira settings page", async ({ page }) => {
+  const principal = makePlatformAdminPrincipal();
+  const tenant = makeTenant({
+    tenant_id: "example",
+    jira: { ...makeTenant().jira, connection_id: "jira-conn-123", project_keys: ["BETA"] },
+  });
+  const rawTimestamp = "2026-04-17T09:55:34.475760+00:00";
+
+  await seedAdminSession(page);
+  await installBffApiMocks(page, [
+    {
+      method: "GET",
+      pathname: "/api/bff/api/app/auth/me",
+      handler: (route) => fulfillJson(route, principal),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/codex/models",
+      handler: (route) =>
+        fulfillJson(route, {
+          default_model: "gpt-5.4",
+          default_reasoning_effort: "medium",
+          models: [{ id: "gpt-5.4", label: "GPT-5.4" }],
+          reasoning_efforts: [{ id: "medium", label: "Medium" }],
+        }),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/tenants/example",
+      handler: (route) => fulfillJson(route, tenant),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/tenants/example/projects",
+      handler: (route) => fulfillJson(route, []),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/tenants/example/notifications",
+      handler: (route) => fulfillJson(route, { notifications: [] }),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/tenants/example/jira/webhooks/diagnostics",
+      handler: (route) =>
+        fulfillJson(route, {
+          tenant_id: "example",
+          connected: true,
+          webhook_url: "https://api.example.test/jira/webhook/example",
+          managed_webhook_ids: [1001],
+          last_provisioned_at: "2026-04-17T09:50:00Z",
+          last_received_at: rawTimestamp,
+          last_delivery_id: "delivery-1",
+          last_issue_key: "BETA-42",
+          last_error: null,
+          recent_delivery_window_minutes: 60,
+          recent_delivery_ok: true,
+        }),
+    },
+  ]);
+
+  await page.goto("/example/settings/jira");
+
+  const expectedTimestamp = await page.evaluate((timestamp) => {
+    return new Intl.DateTimeFormat(undefined, {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    }).format(new Date(timestamp));
+  }, rawTimestamp);
+
+  const lastReceivedRow = page.locator("p").filter({ hasText: "Last received:" });
+  await expect(lastReceivedRow).toContainText(expectedTimestamp);
+  await expect(lastReceivedRow).not.toContainText(rawTimestamp);
+});
+
 test("opens the tenant workspace from the selector for tenant users", async ({ page }) => {
   const membership = makeMembership({
     tenant_id: "example",

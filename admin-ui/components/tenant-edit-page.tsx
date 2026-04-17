@@ -46,6 +46,7 @@ import {
   type ProjectUpdatePayload
 } from "@/lib/api";
 import { canAccessPlatformAdmin, getTenantArchiveConfirmationRoute, getTenantSettingsRoute } from "@/lib/auth-routing";
+import { formatTimestamp } from "@/lib/datetime";
 import { recordToFormValues } from "@/lib/tenant-form";
 import { cn } from "@/lib/utils";
 
@@ -660,7 +661,7 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
                 {jiraWebhook?.managed_webhook_ids.length ? jiraWebhook.managed_webhook_ids.join(", ") : "-"}
               </p>
               <p>
-                <strong>Last received:</strong> {jiraWebhook?.last_received_at ?? "-"}
+                <strong>Last received:</strong> {formatTimestamp(jiraWebhook?.last_received_at, "-")}
               </p>
               <p>
                 <strong>Last issue key:</strong> {jiraWebhook?.last_issue_key ?? "-"}
