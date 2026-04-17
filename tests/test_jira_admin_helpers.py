@@ -216,26 +216,20 @@ class JiraOAuthHelpersTests(unittest.TestCase):
         self.assertEqual(expired_connection.scopes, ["new"])
         session.commit.assert_called()
 
-    def test_refresh_tokens_fast_path_lazily_reencrypts_legacy_tokens(self) -> None:
+    def test_refresh_tokens_fast_path_does_not_commit(self) -> None:
         session = MagicMock()
         now = datetime.now(timezone.utc)
         settings = SimpleNamespace(secrets_encryption_key="k")
         connection = SimpleNamespace(
             connection_id="conn-1",
             access_token_expires_at=now + timedelta(minutes=5),
-            access_token_encrypted="legacy-access",
-            refresh_token_encrypted="legacy-refresh",
+            access_token_encrypted="provider-access",
+            refresh_token_encrypted="provider-refresh",
             scopes=["read:jira-user"],
             updated_at=now,
         )
 
-        with (
-            patch(
-                "orchestrator.api.admin.jira_oauth_helpers.reencrypt_legacy_secret_value",
-                side_effect=["provider-access", "provider-refresh"],
-            ) as rewrite_mock,
-            patch("orchestrator.api.admin.jira_oauth_helpers.decrypt_secret_value", return_value="current-token") as decrypt_mock,
-        ):
+        with patch("orchestrator.api.admin.jira_oauth_helpers.decrypt_secret_value", return_value="current-token") as decrypt_mock:
             token = jira_oauth_helpers.refresh_jira_connection_tokens(
                 session,
                 connection=connection,
@@ -243,10 +237,7 @@ class JiraOAuthHelpersTests(unittest.TestCase):
             )
 
         self.assertEqual(token, "current-token")
-        self.assertEqual(connection.access_token_encrypted, "provider-access")
-        self.assertEqual(connection.refresh_token_encrypted, "provider-refresh")
-        session.commit.assert_called_once()
-        self.assertEqual(rewrite_mock.call_count, 2)
+        session.commit.assert_not_called()
         decrypt_mock.assert_called_once()
         self.assertEqual(decrypt_mock.call_args.kwargs["ciphertext"], "provider-access")
 

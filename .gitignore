@@ -28,3 +28,4 @@ admin-ui/.next-playwright
 .DS_Store
 .runtime-home/
 .codex/tmp/
+.codex/tmp/secret-crypto-cutover-inventory.md

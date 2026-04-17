@@ -15,7 +15,6 @@ from orchestrator.core.secret_crypto import (
     encrypt_secret_value,
     jira_oauth_token_crypto_context,
     managed_secret_crypto_context,
-    reencrypt_legacy_secret_value,
 )
 from orchestrator.core.secrets import encrypt_value
 
@@ -68,7 +67,7 @@ class SecretCryptoTests(unittest.TestCase):
         ciphertext = encrypt_secret_value(plaintext="hello", settings=settings, encryption_key=key)
         self.assertEqual(decrypt_secret_value(ciphertext=ciphertext, settings=settings, encryption_key=key), "hello")
 
-    def test_provider_mode_reads_legacy_fernet_payloads_during_rollout(self) -> None:
+    def test_provider_mode_rejects_legacy_fernet_payloads_after_cutover(self) -> None:
         key = Fernet.generate_key().decode("utf-8")
         settings = SimpleNamespace(
             secret_crypto_provider="vault_transit",
@@ -82,35 +81,8 @@ class SecretCryptoTests(unittest.TestCase):
             gcp_kms_key_name="",
         )
         ciphertext = encrypt_value(plaintext="hello", encryption_key=key)
-        self.assertEqual(decrypt_secret_value(ciphertext=ciphertext, settings=settings), "hello")
-
-    def test_provider_mode_can_reencrypt_legacy_fernet_payloads(self) -> None:
-        key = Fernet.generate_key().decode("utf-8")
-        settings = SimpleNamespace(
-            secret_crypto_provider="fake",
-            secrets_encryption_key=key,
-            vault_addr="",
-            vault_token="",
-            vault_namespace="",
-            vault_transit_key="",
-            aws_kms_region="",
-            aws_kms_key_id="",
-            gcp_kms_key_name="",
-        )
-        ciphertext = encrypt_value(plaintext="hello", encryption_key=key)
-        service = SecretCryptoService(provider=_FakeWrappedKeyProvider())
-        with patch("orchestrator.core.secret_crypto.secret_crypto_service", return_value=service):
-            rewritten = reencrypt_legacy_secret_value(
-                ciphertext=ciphertext,
-                settings=settings,
-                context=managed_secret_crypto_context("platform/API_KEY"),
-            )
-        self.assertIsNotNone(rewritten)
-        assert rewritten is not None
-        self.assertEqual(
-            service.decrypt(payload=rewritten, context=managed_secret_crypto_context("platform/API_KEY")),
-            "hello",
-        )
+        with self.assertRaisesRegex(SecretCryptoError, "not valid JSON"):
+            decrypt_secret_value(ciphertext=ciphertext, settings=settings)
 
     def test_provider_backed_helpers_use_context(self) -> None:
         settings = SimpleNamespace(

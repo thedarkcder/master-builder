@@ -9,7 +9,6 @@ from orchestrator.core.secret_crypto import (
     decrypt_secret_value,
     encrypt_secret_value,
     jira_oauth_token_crypto_context,
-    reencrypt_legacy_secret_value,
 )
 from orchestrator.core.platform_secret_service import (
     PLATFORM_SECRET_JIRA_OAUTH_CLIENT_ID_REF,
@@ -93,29 +92,6 @@ def refresh_jira_connection_tokens(
             connection_id=connection.connection_id,
             token_field="access_token",
         )
-        refresh_context = jira_oauth_token_crypto_context(
-            connection_id=connection.connection_id,
-            token_field="refresh_token",
-        )
-        rewritten_access = reencrypt_legacy_secret_value(
-            ciphertext=connection.access_token_encrypted,
-            settings=settings,
-            encryption_key=settings.secrets_encryption_key,
-            context=access_context,
-        )
-        rewritten_refresh = reencrypt_legacy_secret_value(
-            ciphertext=connection.refresh_token_encrypted,
-            settings=settings,
-            encryption_key=settings.secrets_encryption_key,
-            context=refresh_context,
-        )
-        if rewritten_access is not None:
-            connection.access_token_encrypted = rewritten_access
-        if rewritten_refresh is not None:
-            connection.refresh_token_encrypted = rewritten_refresh
-        if rewritten_access is not None or rewritten_refresh is not None:
-            connection.updated_at = now
-            session.commit()
         return decrypt_secret_value(
             ciphertext=connection.access_token_encrypted,
             settings=settings,

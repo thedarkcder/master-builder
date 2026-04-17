@@ -326,11 +326,6 @@ def secret_crypto_provider_name(settings, *, encryption_key: str = "") -> str:
     raise SecretCryptoError("Secret crypto provider is not configured")
 
 
-def has_provider_backed_secret_crypto(settings) -> bool:
-    provider_name = str(getattr(settings, "secret_crypto_provider", "") or "").strip().lower()
-    return provider_name in {"vault_transit", "aws_kms", "gcp_kms"}
-
-
 @lru_cache(maxsize=16)
 def _cached_service(
     provider_name: str,
@@ -411,28 +406,4 @@ def decrypt_secret_value(
         from orchestrator.core.secrets import decrypt_value
 
         return decrypt_value(ciphertext=ciphertext, encryption_key=encryption_key or settings.secrets_encryption_key)
-    normalized_ciphertext = str(ciphertext or "").strip()
-    if not normalized_ciphertext.startswith("{"):
-        from orchestrator.core.secrets import decrypt_value
-
-        return decrypt_value(ciphertext=ciphertext, encryption_key=encryption_key or settings.secrets_encryption_key)
     return secret_crypto_service(settings).decrypt(payload=ciphertext, context=context)
-
-
-def reencrypt_legacy_secret_value(
-    *,
-    ciphertext: str,
-    settings,
-    encryption_key: str = "",
-    context: Mapping[str, str] | None = None,
-) -> str | None:
-    provider_name = secret_crypto_provider_name(settings, encryption_key=encryption_key)
-    if provider_name == "fernet_legacy":
-        return None
-    normalized_ciphertext = str(ciphertext or "").strip()
-    if not normalized_ciphertext or normalized_ciphertext.startswith("{"):
-        return None
-    from orchestrator.core.secrets import decrypt_value
-
-    plaintext = decrypt_value(ciphertext=ciphertext, encryption_key=encryption_key or settings.secrets_encryption_key)
-    return secret_crypto_service(settings).encrypt(plaintext=plaintext, context=context)

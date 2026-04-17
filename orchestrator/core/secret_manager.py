@@ -14,7 +14,6 @@ from orchestrator.core.secret_crypto import (
     decrypt_secret_value,
     encrypt_secret_value,
     managed_secret_crypto_context,
-    reencrypt_legacy_secret_value,
 )
 from orchestrator.storage.models import ManagedSecret
 
@@ -123,16 +122,6 @@ def resolve_secret_ref(
     if row is not None:
         settings = get_settings()
         secret_context = managed_secret_crypto_context(normalized_ref)
-        rewritten_ciphertext = reencrypt_legacy_secret_value(
-            ciphertext=row.value_encrypted,
-            settings=settings,
-            encryption_key=encryption_key,
-            context=secret_context,
-        )
-        if rewritten_ciphertext is not None:
-            row.value_encrypted = rewritten_ciphertext
-            row.updated_at = datetime.now(timezone.utc)
-            session.commit()
         return decrypt_secret_value(
             ciphertext=row.value_encrypted,
             settings=settings,
