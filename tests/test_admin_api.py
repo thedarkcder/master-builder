@@ -11,6 +11,7 @@ from sqlalchemy import select
 from orchestrator.api.main import create_app
 from orchestrator.api.admin.tenant_crud import purge_expired_archived_tenants
 from orchestrator.api.admin.project_normalization import resolve_project_discord_channel_name
+from orchestrator.core.admin_notifications import AdminNotificationScope, notification_fingerprint_for
 from orchestrator.core.config import get_settings
 from orchestrator.core.agent_observability import (
     record_agent_lifecycle_event,
@@ -207,7 +208,11 @@ class AdminApiTests(AdminApiTestHarness):
                     detail="Reconnect Jira.",
                     action_label="Reconnect Jira",
                     action_path=None,
-                    fingerprint="jira_connection:reauth_required:conn-1",
+                    fingerprint=notification_fingerprint_for(
+                        scope=AdminNotificationScope(scope_type="jira_connection", scope_id="conn-1"),
+                        kind="reauth_required",
+                        dedupe_key="reauth_required",
+                    ),
                     status="open",
                     context_json={"connection_id": "conn-1"},
                     first_emitted_at=now,

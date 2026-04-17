@@ -7,6 +7,7 @@ import pytest
 from sqlalchemy import select
 
 from orchestrator.api.webhooks.jira_application import JiraWebhookPlan
+from orchestrator.api.discord.seed.description import build_parent_feature_description
 from orchestrator.core.followup_context_service import FOLLOWUP_CONTEXT_PM_INTERVIEW, upsert_followup_context
 from orchestrator.core.pm_interview_service import PM_INTERVIEW_STATUS_QUESTION_PENDING
 from orchestrator.core.parent_feature_brief_store import persist_parent_feature_brief_snapshot
@@ -1069,6 +1070,133 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
         self.assertEqual(followups[0].root_message_id, "jira-comment-987A")
         self.assertEqual(snapshot.status, PM_INTERVIEW_STATUS_QUESTION_PENDING)
 
+    def test_webhook_pm_parent_issue_created_planning_block_posts_formatted_jira_questions(self) -> None:
+        payload = self._jira_issue_payload(issue_key="TP-987C", labels=["pm-parent"], status_name="Backlog")
+        payload["webhookEvent"] = "jira:issue_created"
+        payload["issue"]["fields"]["reporter"] = {"accountId": "jira-user-987C", "displayName": "Casey Reporter"}
+
+        class _FakeClient:
+            def __init__(self) -> None:
+                self.updated_fields: list[dict] = []
+                self.replaced_labels: list[dict] = []
+
+            def get_issue_detail(self, **kwargs):
+                return JiraIssueDetail(
+                    key="TP-987C",
+                    summary="Runtime architecture reset",
+                    status="Backlog",
+                    description="Loose parent description",
+                    labels=["pm-parent", "sync-current"],
+                )
+
+            def update_issue_fields(self, **kwargs):
+                self.updated_fields.append(kwargs)
+                return None
+
+            def replace_issue_labels(self, **kwargs):
+                self.replaced_labels.append(kwargs)
+                return None
+
+        oauth_context = SimpleNamespace(
+            client=_FakeClient(),
+            access_token="tok",
+            connection=SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
+        )
+        with (
+            patch("orchestrator.core.worker.webhook_job_service.tenant_jira_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_jira_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.build_runtime_for_selector", return_value=object()),
+            patch(
+                "orchestrator.core.jira_parent_child_sync_service.normalize_parent_feature_brief_with_runtime",
+                return_value={
+                    "brief": {
+                        "objective": "Runtime architecture reset",
+                        "user_value": "Orchestration behavior is easier to evolve",
+                        "acceptance_criteria": ["Planning can proceed"],
+                        "scope_in": ["Architecture reset"],
+                        "scope_out": [],
+                        "ui_references": [],
+                        "constraints": [],
+                        "risks": [],
+                        "success_outcomes": [],
+                        "recommendation": "Clarify ownership before fanout.",
+                        "open_questions": [],
+                        "next_steps": [],
+                    },
+                    "open_questions": [],
+                    "ready_to_write": True,
+                },
+            ),
+            patch(
+                "orchestrator.core.jira_parent_child_sync_service.run_specialist_planning_fanout",
+                return_value=SimpleNamespace(
+                    planning_state="planning_needs_clarification",
+                    required_tasks=(),
+                    findings=(),
+                    recommendations=(),
+                    acceptance_impacts=(),
+                    open_behavior_questions=(
+                        {
+                            "id": "Q-1",
+                            "question": "What is the required user-visible behavior when a broken identity link is detected for a still-active sensitive session?",
+                            "why_it_matters": "This defines the recovery and assurance contract.",
+                        },
+                        {
+                            "id": "Q-2",
+                            "question": "What cooldown or rate-limit behavior should users see on repeated auth-initiation attempts?",
+                        },
+                    ),
+                    architecture_summary=(),
+                    architecture_diagram="",
+                    stages=(),
+                ),
+            ),
+            patch(
+                "orchestrator.api.webhooks.jira_parent_child_sync.seed_issues_with_runtime",
+                return_value=(
+                    "blocked",
+                    {
+                        "updated_parent": "TP-987C",
+                        "updated_children": [],
+                        "created_children": [],
+                        "requires_input": True,
+                        "questions": [],
+                        "parent_revision": "rev-987C",
+                        "children_sync_status": "planning_blocked",
+                    },
+                ),
+            ) as seed_mock,
+            patch("orchestrator.core.jira_parent_child_sync_service.resolve_platform_secret_ref", return_value=None),
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.create_jira_comment", return_value=({"id": "jira-comment-987C"}, None)) as create_comment_mock,
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.post_jira_comment", return_value=(True, None)),
+            patch("orchestrator.api.webhooks.jira_application.plan_jira_run_flow") as run_flow_mock,
+        ):
+            response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+            processed = self._process_one_webhook_job()
+
+        self._assert_jira_issue_event_queued(response, issue_key="TP-987C")
+        self.assertIsNotNone(processed)
+        assert processed is not None
+        self.assertEqual(processed.status, "done")
+        seed_mock.assert_called_once()
+        run_flow_mock.assert_not_called()
+        create_comment_mock.assert_called_once()
+        blocked_comment = create_comment_mock.call_args.kwargs["comment"]
+        ordered_questions = blocked_comment["content"][1]["content"]
+        self.assertEqual(len(ordered_questions), 2)
+        self.assertIn(
+            "What is the required user-visible behavior when a broken identity link is detected",
+            ordered_questions[0]["content"][0]["content"][0]["text"],
+        )
+        self.assertIn(
+            "Why it matters: This defines the recovery and assurance contract.",
+            ordered_questions[0]["content"][1]["content"][0]["text"],
+        )
+        self.assertIn(
+            "What cooldown or rate-limit behavior should users see on repeated auth-initiation attempts?",
+            ordered_questions[1]["content"][0]["content"][0]["text"],
+        )
+
     def test_webhook_pm_parent_issue_updated_posts_formatted_jira_clarification_comment(self) -> None:
         payload = self._jira_issue_payload(issue_key="TP-987B", labels=["pm-parent"], status_name="Backlog")
         payload["webhookEvent"] = "jira:issue_updated"
@@ -1215,6 +1343,148 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                 )
             ).scalars().one()
         self.assertEqual(followup.root_message_id, "jira-comment-987B-2")
+
+    def test_webhook_pm_parent_issue_updated_same_open_questions_is_idempotent(self) -> None:
+        payload = self._jira_issue_payload(issue_key="TP-987B2", labels=["pm-parent"], status_name="Backlog")
+        payload["webhookEvent"] = "jira:issue_updated"
+        payload["issue"]["fields"]["reporter"] = {"accountId": "jira-user-987B2", "displayName": "Casey Reporter"}
+        payload["changelog"] = {"items": [{"field": "description"}]}
+        open_questions = [
+            {
+                "id": "Q-1",
+                "question": "What must happen on a step-up-protected action when MFA is not enabled?",
+                "why_it_matters": "This defines the baseline assurance contract.",
+            },
+            {
+                "id": "Q-2",
+                "question": "What tenant metadata can be shown before entry?",
+                "why_it_matters": "This closes tenant-enumeration leakage.",
+            },
+        ]
+        rendered_description = build_parent_feature_description(
+            objective="Identity redesign",
+            user_value="Tenant access is explicit",
+            recommendation="Clarify MFA fallback and tenant metadata exposure.",
+            scope_in=["Identity redesign"],
+            scope_out=[],
+            acceptance_criteria=["Planning can proceed"],
+            ui_references=[],
+            success_outcomes=[],
+            dependencies_and_risks=[],
+            open_questions=[item["question"] for item in open_questions],
+            parent_revision="normalized-parent-brief",
+            sync_status="sync-blocked",
+            pm_status="pm_completed",
+            planning_state="brief_normalized",
+            architecture_summary=None,
+            architecture_diagram=None,
+        )
+
+        class _FakeClient:
+            def __init__(self) -> None:
+                self.updated_fields: list[dict] = []
+                self.replaced_labels: list[dict] = []
+
+            def get_issue_detail(self, **kwargs):
+                return JiraIssueDetail(
+                    key="TP-987B2",
+                    summary="Identity redesign",
+                    status="Backlog",
+                    description=rendered_description,
+                    labels=["pm-parent", "sync-blocked"],
+                )
+
+            def update_issue_fields(self, **kwargs):
+                self.updated_fields.append(kwargs)
+                return None
+
+            def replace_issue_labels(self, **kwargs):
+                self.replaced_labels.append(kwargs)
+                return None
+
+        oauth_context = SimpleNamespace(
+            client=_FakeClient(),
+            access_token="tok",
+            connection=SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
+        )
+        with self.session_factory() as session:
+            persist_parent_feature_brief_snapshot(
+                session=session,
+                tenant_id="tenant-webhook",
+                project_id="project-1",
+                parent_issue_key="TP-987B2",
+                source_text="Existing parent description",
+                brief={"objective": "Identity redesign"},
+                notes={"source": "test"},
+                status=PM_INTERVIEW_STATUS_QUESTION_PENDING,
+            )
+            upsert_followup_context(
+                session=session,
+                tenant_id="tenant-webhook",
+                project_id="project-1",
+                context_type=FOLLOWUP_CONTEXT_PM_INTERVIEW,
+                channel_id="TP-987B2",
+                issue_key="TP-987B2",
+                request_id="pm-interview-jira:TP-987B2",
+                root_message_id="jira-comment-987B2",
+                metadata={
+                    "parent_issue_key": "TP-987B2",
+                    "questions": open_questions,
+                    "transport": "jira_issue_comment",
+                    "reply_scope": "issue_comment_stream_from_root",
+                    "pm_request_id": "pm-request-987B2",
+                },
+            )
+            session.commit()
+
+        with (
+            patch("orchestrator.core.worker.webhook_job_service.tenant_jira_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_jira_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.build_runtime_for_selector", return_value=object()),
+            patch(
+                "orchestrator.core.jira_parent_child_sync_service.normalize_parent_feature_brief_with_runtime",
+                return_value={
+                    "brief": {
+                        "objective": "Identity redesign",
+                        "user_value": "Tenant access is explicit",
+                        "acceptance_criteria": ["Planning can proceed"],
+                        "scope_in": ["Identity redesign"],
+                        "scope_out": [],
+                        "constraints": [],
+                        "risks": [],
+                        "success_outcomes": [],
+                        "recommendation": "Clarify MFA fallback and tenant metadata exposure.",
+                        "open_questions": [item["question"] for item in open_questions],
+                        "next_steps": [],
+                    },
+                    "open_questions": open_questions,
+                    "ready_to_write": False,
+                },
+            ),
+            patch(
+                "orchestrator.core.jira_parent_child_sync_service.resolve_parent_feature_case",
+                return_value=SimpleNamespace(
+                    request_id="pm-request-987B2",
+                    channel_id="discord-channel-1",
+                    thread_channel_id="discord-thread-1",
+                    root_message_id="root-msg-987B2",
+                    owner_user_id="discord-user-1",
+                    source_kind="jira_parent",
+                ),
+            ),
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.create_jira_comment", return_value=({"id": "jira-comment-987B2-2"}, None)) as create_comment_mock,
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.post_jira_comment", return_value=(True, None)),
+            patch("orchestrator.api.webhooks.jira_application.plan_jira_run_flow") as run_flow_mock,
+        ):
+            response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+            processed = self._process_one_webhook_job()
+
+        self._assert_jira_issue_event_queued(response, issue_key="TP-987B2")
+        self.assertIsNotNone(processed)
+        assert processed is not None
+        self.assertEqual(processed.status, "done")
+        create_comment_mock.assert_not_called()
+        run_flow_mock.assert_not_called()
 
     def test_webhook_pm_parent_issue_updated_with_no_children_posts_no_sync_note(self) -> None:
         payload = self._jira_issue_payload(issue_key="TP-987C", labels=["pm-parent"], status_name="Backlog")

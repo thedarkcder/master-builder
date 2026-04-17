@@ -6,6 +6,7 @@ import pytest
 from sqlalchemy import select
 
 from orchestrator.core.codex_runtime import CodexRuntimeError
+from orchestrator.core.clarification_projection_service import clarification_state_fingerprint
 from orchestrator.storage.models import FollowupContext, PMInterviewCase
 from orchestrator.tools.jira_oauth import JiraIssueDetail
 from tests.test_support.jira_webhook_harness import JiraWebhookHarness
@@ -332,6 +333,113 @@ class JiraParentClarificationFlowTests(JiraWebhookHarness):
         assert processed is not None
         self.assertEqual(processed.status, "done")
         self.assertTrue(seed_mock.call_args.kwargs["allow_create"])
+
+    def test_webhook_parent_comment_same_open_engineering_questions_is_idempotent(self) -> None:
+        question_text = "Should manual fallback be included in this feature?"
+        with self.session_factory() as session:
+            session.add(
+                FollowupContext(
+                    context_id="ctx-clarify-same-state",
+                    tenant_id="tenant-webhook",
+                    project_id="project-1",
+                    context_type="engineering_clarification",
+                    status="active",
+                    channel_id=None,
+                    thread_channel_id=None,
+                    root_message_id="jira-comment-955b",
+                    issue_key="TP-955B",
+                    request_id="engineering-clarification:TP-955B",
+                    run_id=None,
+                    metadata_json={
+                        "affected_child_keys": ["TP-956B"],
+                        "questions": [
+                            {
+                                "source_child_key": "TP-956B",
+                                "original_question": "Should we also track manual fallback?",
+                                "stakeholder_question": question_text,
+                            }
+                        ],
+                        "question_state_fingerprint": clarification_state_fingerprint(
+                            questions=[{"question": question_text}]
+                        ),
+                    },
+                    created_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc),
+                    closed_at=None,
+                )
+            )
+            session.commit()
+
+        payload = self._jira_issue_payload(issue_key="TP-955B", labels=["pm-parent"], status_name="To Do")
+        payload["webhookEvent"] = "comment_created"
+        payload["comment"] = {
+            "author": {"accountId": "jira-user-6"},
+            "body": {
+                "type": "doc",
+                "version": 1,
+                "content": [
+                    {
+                        "type": "paragraph",
+                        "content": [{"type": "text", "text": "Yes, include manual fallback and tracking."}],
+                    }
+                ],
+            },
+        }
+
+        class _FakeClient:
+            def get_issue_detail(self, **kwargs):  # noqa: ANN003
+                issue_key = kwargs["issue_id_or_key"]
+                if issue_key == "TP-955B":
+                    return JiraIssueDetail(
+                        key="TP-955B",
+                        summary="Checkout recovery",
+                        status="To Do",
+                        description="Objective\nCheckout recovery parent",
+                        labels=["pm-parent", "sync-blocked"],
+                    )
+                return JiraIssueDetail(
+                    key="TP-956B",
+                    summary="Retry UI behavior",
+                    status="To Do",
+                    description="Technical Objective\nRetry UI\nParent Feature Link\nTP-955B: Checkout recovery",
+                    labels=["engineering-child", "parent-tp-955b", "sync-blocked"],
+                )
+
+        oauth_context = SimpleNamespace(
+            client=_FakeClient(),
+            access_token="tok",
+            connection=SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
+        )
+        with (
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_jira_oauth_context", return_value=oauth_context),
+            patch(
+                "orchestrator.api.webhooks.jira_parent_child_sync.seed_issues_with_runtime",
+                return_value=(
+                    "blocked",
+                    {
+                        "updated_parent": "TP-955B",
+                        "updated_children": [],
+                        "created_children": [],
+                        "requires_input": True,
+                        "questions": [{"question": question_text}],
+                        "parent_revision": "rev-955b",
+                        "children_sync_status": "sync-blocked",
+                    },
+                ),
+            ) as seed_mock,
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.create_jira_comment", return_value=({"id": "jira-comment-955c"}, None)) as create_comment_mock,
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.post_jira_comment", return_value=(True, None)) as post_comment_mock,
+        ):
+            response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+            processed = self._process_one_webhook_job()
+
+        self._assert_jira_issue_event_queued(response, issue_key="TP-955B")
+        self.assertIsNotNone(processed)
+        assert processed is not None
+        self.assertEqual(processed.status, "done")
+        self.assertTrue(seed_mock.called)
+        create_comment_mock.assert_not_called()
+        post_comment_mock.assert_not_called()
 
     def test_webhook_parent_pm_reply_consumes_jira_anchor_and_refreshes_children(self) -> None:
         now = datetime.now(timezone.utc)

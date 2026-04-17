@@ -113,6 +113,7 @@ def handle_engineering_clarification_reply(
         tenant_jira_oauth_context_fn=tenant_jira_oauth_context,
         seed_issues_with_runtime_fn=seed_issues_with_runtime,
         post_jira_comment_fn=post_jira_comment,
+        create_jira_comment_fn=create_jira_comment,
         extract_jira_comment_text_fn=extract_jira_comment_text,
     )
     return _webhook_response_from_result(context=context, result=result)
