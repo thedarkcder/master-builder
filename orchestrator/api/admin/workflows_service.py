@@ -28,8 +28,8 @@ from orchestrator.api.schemas import (
 )
 from orchestrator.core.config import get_settings
 from orchestrator.core.workflow_attempt_factory import build_workflow_execution_for_attempt
+from orchestrator.core.workflow_execution_lifecycle import reconcile_execution_with_active_run_state
 from orchestrator.core.workflow_runtime import build_workflow_runtime
-from orchestrator.core.workflow_run_state import reconcile_workflow_with_active_run
 from orchestrator.core.workflow_operation_executor import (
     execute_workflow_operation_retry,
     supports_workflow_operation_retry,
@@ -80,8 +80,8 @@ def _reconcile_workflow_status_with_active_attempt(*, session, workflow) -> None
     active_run = session.get(Run, active_run_id)
     if active_run is None:
         return
-    reconcile_workflow_with_active_run(
-        workflow,
+    reconcile_execution_with_active_run_state(
+        workflow=workflow,
         active_run=active_run,
         now=_now(),
     )

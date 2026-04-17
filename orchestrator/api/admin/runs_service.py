@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 
 from sqlalchemy import and_, desc, or_, select
 from fastapi import HTTPException, status
 
-from orchestrator.storage.models import AgentLifecycleEvent, RunLogEvent, WorkflowExecution
+from orchestrator.core.runs import RunStateTransitionError, cancel_run as cancel_run_execution
+from orchestrator.storage.models import AgentLifecycleEvent, RunLogEvent
 
 
 def _with_issue_url(payload, issue_url: str | None):  # noqa: ANN001
@@ -106,22 +107,16 @@ def cancel_run_admin(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Cannot cancel run {run_id} from terminal status {run.status}",
         )
-    workflow = session.get(WorkflowExecution, run.workflow_id)
-    if workflow is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow not found for run")
-
-    now = datetime.now(timezone.utc)
-    run.status = "cancelled"
-    run.last_error = f"Cancelled by {cancelled_by}"
-    run.started_at = run.started_at or now
-    run.finished_at = now
-    workflow.status = "cancelled"
-    workflow.last_error = run.last_error
-    workflow.finished_at = now
-    workflow.updated_at = now
-    session.commit()
-    session.refresh(run)
-    return run_to_schema_fn(run)
+    try:
+        return run_to_schema_fn(
+            cancel_run_execution(
+                session,
+                run_id=run_id,
+                cancelled_by=cancelled_by,
+            )
+        )
+    except RunStateTransitionError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
 
 def list_run_events(*, session, run_id: str, run_model, run_event_schema_cls, limit: int = 200):  # noqa: ANN001

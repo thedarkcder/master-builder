@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from orchestrator.core.agent_observability import record_agent_lifecycle_event
 from orchestrator.core.config import Settings, get_settings
 from orchestrator.core.run_logs import record_run_log_event
+from orchestrator.core.workflow_execution_lifecycle import apply_execution_failure
 from orchestrator.core.runs import RUN_STATUS_DISPATCHING, RUN_STATUS_FAILED, RUN_STATUS_RUNNING
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import Run, WorkflowExecution
@@ -140,10 +141,11 @@ def recover_stale_running_runs(
             continue
         workflow = session.get(WorkflowExecution, row.workflow_id)
         if workflow is not None and workflow.status in {"queued", RUN_STATUS_RUNNING}:
-            workflow.status = RUN_STATUS_FAILED
-            workflow.last_error = message
-            workflow.finished_at = recovered_at
-            workflow.updated_at = recovered_at
+            apply_execution_failure(
+                workflow=workflow,
+                message=message,
+                now=recovered_at,
+            )
         record_run_log_event(
             session=session,
             tenant_id=row.tenant_id,
