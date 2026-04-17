@@ -26,6 +26,15 @@ class ParentFeaturePlanningWorkflowDeps:
     parent_board_entry_target_status_fn: Callable[..., str | None]
 
 
+@dataclass(frozen=True)
+class _ParentPlanningFanoutResult:
+    planning_result: Any
+    seed_data: dict[str, Any]
+    updated_children: list[str]
+    created_children: list[str]
+    changed_children: list[str]
+
+
 class ParentFeaturePlanningWorkflow:
     def __init__(self, *, deps: ParentFeaturePlanningWorkflowDeps) -> None:
         self._deps = deps
@@ -56,7 +65,6 @@ class ParentFeaturePlanningWorkflow:
     def _handle_issue_created(self, *, context, session: Session, settings, lifecycle) -> WorkflowAdvanceOutcome:  # noqa: ANN001
         issue_gateway = self._deps.issue_gateway
         brief_planner = self._deps.brief_planner
-        child_sync_gateway = self._deps.child_sync_gateway
         parent_detail = issue_gateway.load_parent_detail(context.issue_key)
         lifecycle.ensure_issue_execution(
             issue_summary=parent_detail.summary,
@@ -67,18 +75,14 @@ class ParentFeaturePlanningWorkflow:
             parent_detail=parent_detail,
             refresh=False,
         )
-        issue_gateway.rewrite_parent_issue_from_brief(
+        self._rewrite_parent_from_brief(
+            issue_gateway=issue_gateway,
             parent_detail=parent_detail,
             brief_payload=product_brief,
-            sync_status="sync-blocked" if normalization_questions else "children_syncing",
-            planning_state="brief_normalized",
-            open_questions=normalization_questions or None,
+            normalization_questions=normalization_questions,
         )
         if normalization_questions:
-            lifecycle.mark_operation_completed(
-                operation_type="jira_parent_update",
-                summary="Parent Jira issue synced with the latest normalized brief draft.",
-            )
+            self._mark_parent_synced(lifecycle=lifecycle, draft=True)
             return self._block_parent_brief(
                 context=context,
                 session=session,
@@ -90,62 +94,26 @@ class ParentFeaturePlanningWorkflow:
                 reason="pm_parent_issue_created_brief_blocked",
                 waiting_operation_type="brief_normalization",
             )
-        lifecycle.mark_operation_completed(
-            operation_type="brief_normalization",
-            summary="Parent brief normalized from the Jira source issue.",
-        )
-        lifecycle.mark_operation_completed(
-            operation_type="jira_parent_update",
-            summary="Parent Jira issue synced with the normalized brief.",
-        )
-
-        planning_result, planning_package = brief_planner.plan_backlog_parent(
-            parent_detail=parent_detail,
-            product_brief=product_brief,
-            project_key=project_key,
-        )
+        self._mark_brief_normalized(lifecycle=lifecycle, source="source issue")
         try:
-            seed_data = child_sync_gateway.seed_parent_backlog_children(
+            fanout = self._plan_and_seed_children(
                 parent_detail=parent_detail,
+                product_brief=product_brief,
                 project_key=project_key,
-                planning_package=planning_package,
-                planning_state=planning_result.planning_state,
             )
         except Exception as exc:  # noqa: BLE001
-            logger.exception(
-                "jira_parent_issue_created_seed_failed request_id=%s tenant_id=%s issue_key=%s error=%s",
-                context.request_id,
-                context.tenant_id,
-                context.issue_key,
-                exc,
-            )
-            category, retryable = classify_external_workflow_failure(error=exc)
-            lifecycle.mark_operation_failed(
-                operation_type="jira_child_fanout",
-                category=category,
-                message=str(exc),
-                retryable=retryable,
-            )
-            issue_gateway.update_issue_sync_label(
-                issue_detail=parent_detail,
-                target_label="sync-blocked",
-            )
-            issue_gateway.post_sync_note(
-                issue_key=context.issue_key,
-                body=f"Parent feature was created in backlog, but engineering child planning failed. Error: {exc}",
-            )
-            return lifecycle.build_outcome(
-                handled=True,
-                reason="pm_parent_issue_created_seed_failed",
-                extra={"webhook_event": context.webhook_event},
+            return self._handle_fanout_failure(
+                context=context,
+                issue_gateway=issue_gateway,
+                lifecycle=lifecycle,
+                error=exc,
+                failure_reason="pm_parent_issue_created_seed_failed",
+                sync_note_body=f"Parent feature was created in backlog, but engineering child planning failed. Error: {exc}",
             )
 
-        updated_children, created_children, changed_children = child_sync_gateway.combined_child_updates(seed_data=seed_data)
-        if planning_result.planning_state != PLANNING_STATE_COMPLETED or bool(seed_data.get("requires_input")):
-            questions = list(planning_result.open_behavior_questions) or [
-                value
-                for value in seed_data.get("questions", [])
-                if str(value).strip()
+        if fanout.planning_result.planning_state != PLANNING_STATE_COMPLETED or bool(fanout.seed_data.get("requires_input")):
+            questions = list(fanout.planning_result.open_behavior_questions) or [
+                value for value in fanout.seed_data.get("questions", []) if str(value).strip()
             ]
             return self._block_parent_brief(
                 context=context,
@@ -160,28 +128,24 @@ class ParentFeaturePlanningWorkflow:
                 reason="pm_parent_issue_created_seed_blocked",
                 waiting_operation_type="backlog_planning",
                 extra={
-                    "parent_revision": seed_data.get("parent_revision"),
-                    "children_sync_status": seed_data.get("children_sync_status"),
+                    "parent_revision": fanout.seed_data.get("parent_revision"),
+                    "children_sync_status": fanout.seed_data.get("children_sync_status"),
                 },
             )
-        lifecycle.mark_operation_completed(
-            operation_type="backlog_planning",
-            summary="Backlog planning completed from the normalized parent brief.",
+        self._mark_fanout_completed(
+            lifecycle=lifecycle,
+            planning_summary="Backlog planning completed from the normalized parent brief.",
+            fanout_summary="Engineering child tickets were created or refreshed from the parent planning package.",
         )
-        lifecycle.mark_operation_completed(
-            operation_type="jira_child_fanout",
-            summary="Engineering child tickets were created or refreshed from the parent planning package.",
-        )
-        lifecycle.mark_completed_if_ready()
 
         issue_gateway.post_sync_note(
             issue_key=context.issue_key,
             body=(
                 "Backlog parent feature planning complete. "
-                f"{child_sync_gateway.sync_completion_note(updated_children=updated_children, created_children=created_children)}"
+                f"{self._deps.child_sync_gateway.sync_completion_note(updated_children=fanout.updated_children, created_children=fanout.created_children)}"
             ),
         )
-        for child_key in changed_children:
+        for child_key in fanout.changed_children:
             issue_gateway.post_sync_note(
                 issue_key=child_key,
                 body=f"Created or refreshed from parent feature {context.issue_key} during backlog planning.",
@@ -190,9 +154,9 @@ class ParentFeaturePlanningWorkflow:
             handled=True,
             reason="pm_parent_issue_created_seed_completed",
             extra={
-                "updated_children": changed_children,
-                "parent_revision": seed_data.get("parent_revision"),
-                "children_sync_status": seed_data.get("children_sync_status"),
+                "updated_children": fanout.changed_children,
+                "parent_revision": fanout.seed_data.get("parent_revision"),
+                "children_sync_status": fanout.seed_data.get("children_sync_status"),
                 "webhook_event": context.webhook_event,
             },
         )
@@ -200,7 +164,6 @@ class ParentFeaturePlanningWorkflow:
     def _handle_issue_updated(self, *, context, session: Session, settings, lifecycle) -> WorkflowAdvanceOutcome:  # noqa: ANN001
         issue_gateway = self._deps.issue_gateway
         brief_planner = self._deps.brief_planner
-        child_sync_gateway = self._deps.child_sync_gateway
         material_changed_fields = self._deps.material_parent_changed_fields_fn(
             payload=context.payload,
             extract_changed_fields_fn=self._deps.extract_changed_fields_fn,
@@ -237,18 +200,14 @@ class ParentFeaturePlanningWorkflow:
             parent_detail=parent_detail,
             refresh=True,
         )
-        issue_gateway.rewrite_parent_issue_from_brief(
+        self._rewrite_parent_from_brief(
+            issue_gateway=issue_gateway,
             parent_detail=parent_detail,
             brief_payload=product_brief,
-            sync_status="sync-blocked" if normalization_questions else "children_syncing",
-            planning_state="brief_normalized",
-            open_questions=normalization_questions or None,
+            normalization_questions=normalization_questions,
         )
         if normalization_questions:
-            lifecycle.mark_operation_completed(
-                operation_type="jira_parent_update",
-                summary="Parent Jira issue synced with the latest normalized brief draft.",
-            )
+            self._mark_parent_synced(lifecycle=lifecycle, draft=True)
             blocked_issue_keys = [context.issue_key, *[detail.key for detail in child_details]]
             issue_gateway.mark_issues_sync_blocked(issue_keys=blocked_issue_keys)
             return self._block_parent_brief(
@@ -263,14 +222,7 @@ class ParentFeaturePlanningWorkflow:
                 waiting_operation_type="brief_normalization",
                 extra={"changed_fields": material_changed_fields},
             )
-        lifecycle.mark_operation_completed(
-            operation_type="brief_normalization",
-            summary="Parent brief normalized from the Jira source issue.",
-        )
-        lifecycle.mark_operation_completed(
-            operation_type="jira_parent_update",
-            summary="Parent Jira issue synced with the normalized brief.",
-        )
+        self._mark_brief_normalized(lifecycle=lifecycle, source="source issue")
 
         if not child_details:
             lifecycle.mark_completed_if_ready()
@@ -281,20 +233,13 @@ class ParentFeaturePlanningWorkflow:
             )
 
         try:
-            seed_data = child_sync_gateway.refresh_parent_children(
+            seed_data = self._deps.child_sync_gateway.refresh_parent_children(
                 parent_detail=parent_detail,
                 child_details=child_details,
                 changed_fields=material_changed_fields,
                 project_key=project_key,
             )
         except Exception as exc:  # noqa: BLE001
-            logger.exception(
-                "jira_parent_sync_failed request_id=%s tenant_id=%s issue_key=%s error=%s",
-                context.request_id,
-                context.tenant_id,
-                context.issue_key,
-                exc,
-            )
             category, retryable = classify_external_workflow_failure(error=exc)
             lifecycle.mark_operation_failed(
                 operation_type="jira_child_fanout",
@@ -326,7 +271,7 @@ class ParentFeaturePlanningWorkflow:
                 },
             )
 
-        updated_children, created_children, changed_children = child_sync_gateway.combined_child_updates(seed_data=seed_data)
+        updated_children, created_children, changed_children = self._deps.child_sync_gateway.combined_child_updates(seed_data=seed_data)
         if bool(seed_data.get("requires_input")):
             blocked_issue_keys = [context.issue_key, *[detail.key for detail in child_details]]
             issue_gateway.mark_issues_sync_blocked(issue_keys=blocked_issue_keys)
@@ -372,20 +317,16 @@ class ParentFeaturePlanningWorkflow:
                     "webhook_event": context.webhook_event,
                 },
             )
-        lifecycle.mark_operation_completed(
-            operation_type="backlog_planning",
-            summary="Backlog planning completed from the normalized parent brief.",
+        self._mark_fanout_completed(
+            lifecycle=lifecycle,
+            planning_summary="Backlog planning completed from the normalized parent brief.",
+            fanout_summary="Engineering child tickets were refreshed from the parent planning package.",
         )
-        lifecycle.mark_operation_completed(
-            operation_type="jira_child_fanout",
-            summary="Engineering child tickets were refreshed from the parent planning package.",
-        )
-        lifecycle.mark_completed_if_ready()
 
         issue_gateway.post_sync_note(
             issue_key=context.issue_key,
             body=(
-                f"{child_sync_gateway.sync_completion_note(updated_children=updated_children, created_children=created_children)} "
+                f"{self._deps.child_sync_gateway.sync_completion_note(updated_children=updated_children, created_children=created_children)} "
                 f"Changed fields: {', '.join(material_changed_fields)}."
             ),
         )
@@ -574,8 +515,6 @@ class ParentFeaturePlanningWorkflow:
         lifecycle,
     ) -> WorkflowAdvanceOutcome:
         issue_gateway = self._deps.issue_gateway
-        brief_planner = self._deps.brief_planner
-        child_sync_gateway = self._deps.child_sync_gateway
         parent_detail = issue_gateway.load_parent_detail(context.issue_key)
         lifecycle.ensure_issue_execution(
             issue_summary=parent_detail.summary,
@@ -629,64 +568,31 @@ class ParentFeaturePlanningWorkflow:
                 },
             )
 
-        issue_gateway.rewrite_parent_issue_from_brief(
+        self._rewrite_parent_from_brief(
+            issue_gateway=issue_gateway,
             parent_detail=parent_detail,
             brief_payload=brief_payload,
-            sync_status="children_syncing",
-            planning_state="brief_normalized",
-            open_questions=None,
+            normalization_questions=(),
         )
-        lifecycle.mark_operation_completed(
-            operation_type="brief_normalization",
-            summary="Parent brief normalized from PM clarification answers.",
-        )
-        lifecycle.mark_operation_completed(
-            operation_type="jira_parent_update",
-            summary="Parent Jira issue synced with the confirmed brief.",
-        )
+        self._mark_brief_normalized(lifecycle=lifecycle, source="PM clarification answers")
 
-        planning_result, planning_package = brief_planner.plan_backlog_parent(
-            parent_detail=parent_detail,
-            product_brief=brief_payload,
-            project_key=project_key,
-        )
         try:
-            seed_data = child_sync_gateway.seed_parent_backlog_children(
+            fanout = self._plan_and_seed_children(
                 parent_detail=parent_detail,
+                product_brief=brief_payload,
                 project_key=project_key,
-                planning_package=planning_package,
-                planning_state=planning_result.planning_state,
             )
         except Exception as exc:  # noqa: BLE001
-            logger.exception(
-                "jira_pm_interview_followup_seed_failed request_id=%s tenant_id=%s issue_key=%s error=%s",
-                context.request_id,
-                context.tenant_id,
-                context.issue_key,
-                exc,
-            )
-            category, retryable = classify_external_workflow_failure(error=exc)
-            lifecycle.mark_operation_failed(
-                operation_type="jira_child_fanout",
-                category=category,
-                message=str(exc),
-                retryable=retryable,
-            )
-            issue_gateway.update_issue_sync_label(
-                issue_detail=parent_detail,
-                target_label="sync-blocked",
-            )
-            issue_gateway.post_sync_note(
-                issue_key=context.issue_key,
-                body=f"PM clarification was recorded, but backlog planning failed: {exc}",
-            )
-            return lifecycle.build_outcome(
-                handled=True,
-                reason="pm_interview_followup_seed_failed",
-                extra={"error": str(exc), "webhook_event": context.webhook_event},
+            return self._handle_fanout_failure(
+                context=context,
+                issue_gateway=issue_gateway,
+                lifecycle=lifecycle,
+                error=exc,
+                failure_reason="pm_interview_followup_seed_failed",
+                sync_note_body=f"PM clarification was recorded, but backlog planning failed: {exc}",
             )
 
-        if planning_result.planning_state != PLANNING_STATE_COMPLETED or bool(seed_data.get("requires_input")):
+        if fanout.planning_result.planning_state != PLANNING_STATE_COMPLETED or bool(fanout.seed_data.get("requires_input")):
             lifecycle.mark_waiting_for_input(
                 operation_type="backlog_planning",
                 summary="Backlog planning still needs clarification before child fanout can complete.",
@@ -706,30 +612,25 @@ class ParentFeaturePlanningWorkflow:
                 handled=True,
                 reason="pm_interview_followup_planning_blocked",
                 extra={
-                    "parent_revision": seed_data.get("parent_revision"),
-                    "children_sync_status": seed_data.get("children_sync_status"),
+                    "parent_revision": fanout.seed_data.get("parent_revision"),
+                    "children_sync_status": fanout.seed_data.get("children_sync_status"),
                     "webhook_event": context.webhook_event,
                 },
             )
 
-        lifecycle.mark_operation_completed(
-            operation_type="backlog_planning",
-            summary="Backlog planning completed from the confirmed parent brief.",
+        self._mark_fanout_completed(
+            lifecycle=lifecycle,
+            planning_summary="Backlog planning completed from the confirmed parent brief.",
+            fanout_summary="Engineering child tickets were created or refreshed from the confirmed brief.",
         )
-        lifecycle.mark_operation_completed(
-            operation_type="jira_child_fanout",
-            summary="Engineering child tickets were created or refreshed from the confirmed brief.",
-        )
-        lifecycle.mark_completed_if_ready()
-        updated_children, created_children, changed_children = child_sync_gateway.combined_child_updates(seed_data=seed_data)
         issue_gateway.post_sync_note(
             issue_key=context.issue_key,
             body=(
                 "Product clarification was applied and backlog planning is current again. "
-                f"{child_sync_gateway.sync_completion_note(updated_children=updated_children, created_children=created_children)}"
+                f"{self._deps.child_sync_gateway.sync_completion_note(updated_children=fanout.updated_children, created_children=fanout.created_children)}"
             ),
         )
-        for child_key in changed_children:
+        for child_key in fanout.changed_children:
             issue_gateway.post_sync_note(
                 issue_key=child_key,
                 body=f"Updated from parent feature {context.issue_key} after PM clarification.",
@@ -738,9 +639,126 @@ class ParentFeaturePlanningWorkflow:
             handled=True,
             reason="pm_interview_followup_resolved",
             extra={
-                "updated_children": changed_children,
-                "parent_revision": seed_data.get("parent_revision"),
-                "children_sync_status": seed_data.get("children_sync_status"),
+                "updated_children": fanout.changed_children,
+                "parent_revision": fanout.seed_data.get("parent_revision"),
+                "children_sync_status": fanout.seed_data.get("children_sync_status"),
                 "webhook_event": context.webhook_event,
             },
+        )
+
+    def _rewrite_parent_from_brief(
+        self,
+        *,
+        issue_gateway,
+        parent_detail,
+        brief_payload: dict[str, Any],
+        normalization_questions: list[object] | tuple[object, ...],
+    ) -> None:
+        issue_gateway.rewrite_parent_issue_from_brief(
+            parent_detail=parent_detail,
+            brief_payload=brief_payload,
+            sync_status="sync-blocked" if normalization_questions else "children_syncing",
+            planning_state="brief_normalized",
+            open_questions=list(normalization_questions) or None,
+        )
+
+    def _mark_parent_synced(self, *, lifecycle, draft: bool) -> None:
+        lifecycle.mark_operation_completed(
+            operation_type="jira_parent_update",
+            summary=(
+                "Parent Jira issue synced with the latest normalized brief draft."
+                if draft
+                else "Parent Jira issue synced with the normalized brief."
+            ),
+        )
+
+    def _mark_brief_normalized(self, *, lifecycle, source: str) -> None:
+        lifecycle.mark_operation_completed(
+            operation_type="brief_normalization",
+            summary=f"Parent brief normalized from the {source}.",
+        )
+        self._mark_parent_synced(lifecycle=lifecycle, draft=False)
+
+    def _plan_and_seed_children(
+        self,
+        *,
+        parent_detail,
+        product_brief: dict[str, Any],
+        project_key: str,
+    ) -> _ParentPlanningFanoutResult:
+        planning_result, planning_package = self._deps.brief_planner.plan_backlog_parent(
+            parent_detail=parent_detail,
+            product_brief=product_brief,
+            project_key=project_key,
+        )
+        seed_data = self._deps.child_sync_gateway.seed_parent_backlog_children(
+            parent_detail=parent_detail,
+            project_key=project_key,
+            planning_package=planning_package,
+            planning_state=planning_result.planning_state,
+        )
+        updated_children, created_children, changed_children = self._deps.child_sync_gateway.combined_child_updates(
+            seed_data=seed_data
+        )
+        return _ParentPlanningFanoutResult(
+            planning_result=planning_result,
+            seed_data=seed_data,
+            updated_children=updated_children,
+            created_children=created_children,
+            changed_children=changed_children,
+        )
+
+    def _mark_fanout_completed(
+        self,
+        *,
+        lifecycle,
+        planning_summary: str,
+        fanout_summary: str,
+    ) -> None:
+        lifecycle.mark_operation_completed(
+            operation_type="backlog_planning",
+            summary=planning_summary,
+        )
+        lifecycle.mark_operation_completed(
+            operation_type="jira_child_fanout",
+            summary=fanout_summary,
+        )
+        lifecycle.mark_completed_if_ready()
+
+    def _handle_fanout_failure(
+        self,
+        *,
+        context,
+        issue_gateway,
+        lifecycle,
+        error: Exception,
+        failure_reason: str,
+        sync_note_body: str,
+    ) -> WorkflowAdvanceOutcome:
+        logger.exception(
+            "parent_planning_fanout_failed request_id=%s tenant_id=%s issue_key=%s error=%s",
+            context.request_id,
+            context.tenant_id,
+            context.issue_key,
+            error,
+        )
+        category, retryable = classify_external_workflow_failure(error=error)
+        lifecycle.mark_operation_failed(
+            operation_type="jira_child_fanout",
+            category=category,
+            message=str(error),
+            retryable=retryable,
+        )
+        issue_gateway.update_issue_sync_label(
+            issue_detail=issue_gateway.load_parent_detail(context.issue_key),
+            target_label="sync-blocked",
+        )
+        issue_gateway.post_sync_note(
+            issue_key=context.issue_key,
+            body=sync_note_body,
+        )
+        return lifecycle.build_outcome(
+            handled=True,
+            reason=failure_reason,
+            extra={"error": str(error), "webhook_event": context.webhook_event},
         )
