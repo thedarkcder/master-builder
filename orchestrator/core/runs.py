@@ -457,6 +457,7 @@ def enqueue_run(
         repo_url=repo_url,
         branch=bootstrap.branch if bootstrap is not None else None,
         pr_url=normalized_pr_url,
+        orchestration_backend=str(get_settings().orchestration_backend or "legacy").strip().lower() or "legacy",
         dedupe_scope=normalized_dedupe_scope,
         status=RUN_STATUS_QUEUED,
         last_error=None,
@@ -676,6 +677,7 @@ def _enqueue_attempt_for_workflow(
         finished_at=None,
     )
     workflow.status = RUN_STATUS_QUEUED
+    workflow.orchestration_backend = str(workflow.orchestration_backend or get_settings().orchestration_backend or "legacy").strip().lower() or "legacy"
     workflow.last_error = None
     workflow.active_run_id = run.run_id
     workflow.latest_checkpoint_id = bootstrap.entry_checkpoint_id or workflow.latest_checkpoint_id

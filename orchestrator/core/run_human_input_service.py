@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
 
@@ -13,6 +14,10 @@ from orchestrator.core.followup_context_service import (
     FOLLOWUP_CONTEXT_HUMAN_INPUT,
     close_followup_contexts,
     upsert_followup_context,
+)
+from orchestrator.core.workflow_engine_factory import (
+    build_workflow_engine,
+    create_session_factory_for_engine,
 )
 from orchestrator.core.discord.notifications import send_tenant_discord_message
 from orchestrator.core.run_enqueue_types import EnqueueFailureReason
@@ -408,6 +413,46 @@ def answer_human_input_request(
 
 
 def resume_workflow_from_human_input_answer(
+    *,
+    session: Session,
+    settings,
+    request: RunHumanInputRequest,
+) -> Run:
+    request_id = str(getattr(request, "request_id", "") or "").strip()
+    if not request_id:
+        raise ValueError("Human input request id is required")
+    persisted_request = session.get(RunHumanInputRequest, request_id)
+    if persisted_request is not None:
+        request = persisted_request
+
+    workflow = session.get(WorkflowExecution, request.workflow_id)
+    if workflow is None:
+        backend = str(getattr(settings, "orchestration_backend", "legacy") or "legacy").strip().lower()
+        if backend != "legacy":
+            raise ValueError("Workflow for human input request was not found")
+        workflow = SimpleNamespace(
+            workflow_id=request.workflow_id,
+            orchestration_backend=backend,
+            status=str(getattr(request, "status", "") or "").strip().lower() or INPUT_STATUS_PENDING,
+            active_run_id=getattr(request, "consumed_by_run_id", None) or getattr(request, "source_run_id", None),
+        )
+    engine = build_workflow_engine(
+        settings=settings,
+        workflow=workflow,
+        process_claimed_run_fn=None,
+        build_runner_fn=None,
+        runtime_kwargs_fn=None,
+    )
+    return engine.resume_workflow(
+        session=session,
+        settings=settings,
+        session_factory=create_session_factory_for_engine(session=session, settings=settings),
+        workflow=workflow,
+        request=request,
+    )
+
+
+def _resume_workflow_from_human_input_answer_legacy(
     *,
     session: Session,
     settings,

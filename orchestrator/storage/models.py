@@ -466,6 +466,7 @@ class WorkflowExecution(Base):
     repo_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     branch: Mapped[str | None] = mapped_column(String(255), nullable=True)
     pr_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    orchestration_backend: Mapped[str] = mapped_column(String(32), nullable=False, default="legacy")
     dedupe_scope: Mapped[str] = mapped_column(String(32), nullable=False, default="issue_execution")
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -638,6 +639,94 @@ class RunHumanInputRequest(Base):
     answered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class WorkflowOperation(Base):
+    __tablename__ = "workflow_operations"
+    __table_args__ = (
+        Index("ix_workflow_operations_workflow_id", "workflow_id"),
+        Index("ix_workflow_operations_run_id", "run_id"),
+        Index("ix_workflow_operations_status", "status"),
+        UniqueConstraint("workflow_id", "idempotency_key", name="uq_workflow_operations_idempotency"),
+    )
+
+    operation_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workflow_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("workflow_executions.workflow_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    run_id: Mapped[str | None] = mapped_column(
+        String(64),
+        ForeignKey("runs.run_id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    operation_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    target_system: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    target_ref: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    blocker_id: Mapped[str | None] = mapped_column(
+        String(64),
+        ForeignKey("workflow_blockers.blocker_id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class WorkflowOperationAttempt(Base):
+    __tablename__ = "workflow_operation_attempts"
+    __table_args__ = (
+        Index("ix_workflow_operation_attempts_operation_id", "operation_id"),
+        Index("ix_workflow_operation_attempts_status", "status"),
+        UniqueConstraint("operation_id", "attempt_number", name="uq_workflow_operation_attempt_number"),
+    )
+
+    attempt_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    operation_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("workflow_operations.operation_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    attempt_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    error_category: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    retryable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class WorkflowBlocker(Base):
+    __tablename__ = "workflow_blockers"
+    __table_args__ = (
+        Index("ix_workflow_blockers_workflow_id", "workflow_id"),
+        Index("ix_workflow_blockers_status", "status"),
+    )
+
+    blocker_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workflow_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("workflow_executions.workflow_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    operation_id: Mapped[str | None] = mapped_column(
+        String(64),
+        ForeignKey("workflow_operations.operation_id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    category: Mapped[str] = mapped_column(String(64), nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="open")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 

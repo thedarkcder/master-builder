@@ -7,6 +7,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import desc, or_, select
 from sqlalchemy.exc import IntegrityError
 
+from orchestrator.api.admin.schema_mappers import workflow_blocker_to_schema, workflow_operation_to_schema
 from orchestrator.core.config import get_settings
 from orchestrator.core.runtime_requirements import resolve_required_runtime_kinds_for_workflow
 from orchestrator.core.worker_capabilities import infer_required_worker_capability
@@ -25,8 +26,11 @@ from orchestrator.storage.models import (
     Project,
     Run,
     RunHumanInputRequest,
+    WorkflowBlocker,
     WorkflowCheckpoint,
     WorkflowExecution,
+    WorkflowOperation,
+    WorkflowOperationAttempt,
 )
 from orchestrator.storage.run_queue_events import notify_run_enqueued
 
@@ -98,6 +102,35 @@ def _workflow_runs(*, session, workflow_id: str) -> list[Run]:  # noqa: ANN001
     ).scalars().all()
 
 
+def _workflow_operations(*, session, workflow_id: str) -> list[WorkflowOperation]:  # noqa: ANN001
+    return session.execute(
+        select(WorkflowOperation)
+        .where(WorkflowOperation.workflow_id == workflow_id)
+        .order_by(desc(WorkflowOperation.created_at))
+    ).scalars().all()
+
+
+def _workflow_operation_attempts_by_operation(*, session, workflow_id: str) -> dict[str, list[WorkflowOperationAttempt]]:  # noqa: ANN001
+    rows = session.execute(
+        select(WorkflowOperationAttempt, WorkflowOperation)
+        .join(WorkflowOperation, WorkflowOperation.operation_id == WorkflowOperationAttempt.operation_id)
+        .where(WorkflowOperation.workflow_id == workflow_id)
+        .order_by(WorkflowOperationAttempt.attempt_number.asc())
+    ).all()
+    grouped: dict[str, list[WorkflowOperationAttempt]] = {}
+    for attempt, operation in rows:
+        grouped.setdefault(operation.operation_id, []).append(attempt)
+    return grouped
+
+
+def _workflow_blockers(*, session, workflow_id: str) -> list[WorkflowBlocker]:  # noqa: ANN001
+    return session.execute(
+        select(WorkflowBlocker)
+        .where(WorkflowBlocker.workflow_id == workflow_id)
+        .order_by(desc(WorkflowBlocker.created_at))
+    ).scalars().all()
+
+
 def _latest_run_for_workflow(*, session, workflow_id: str) -> Run | None:  # noqa: ANN001
     return session.execute(
         select(Run)
@@ -113,11 +146,23 @@ def _workflow_schema(*, session, workflow, workflow_to_schema_fn, run_to_schema_
         if workflow.latest_checkpoint_id
         else None
     )
+    operation_attempts = _workflow_operation_attempts_by_operation(session=session, workflow_id=workflow.workflow_id)
     return workflow_to_schema_fn(
         workflow,
         runs=[run_to_schema_fn(run) for run in _workflow_runs(session=session, workflow_id=workflow.workflow_id)],
         pending_input_request_id=_pending_input_request_id(session=session, workflow_id=workflow.workflow_id),
         latest_checkpoint_kind=latest_checkpoint.checkpoint_kind if latest_checkpoint is not None else None,
+        operations=[
+            workflow_operation_to_schema(
+                operation,
+                attempts=operation_attempts.get(operation.operation_id, []),
+            )
+            for operation in _workflow_operations(session=session, workflow_id=workflow.workflow_id)
+        ],
+        blockers=[
+            workflow_blocker_to_schema(blocker)
+            for blocker in _workflow_blockers(session=session, workflow_id=workflow.workflow_id)
+        ],
     )
 
 
@@ -401,6 +446,7 @@ def create_workflow_attempt(
             repo_url=workflow.repo_url,
             branch=None if normalized_mode == "fresh" else workflow.branch,
             pr_url=None if normalized_mode == "fresh" else workflow.pr_url,
+            orchestration_backend=str(workflow.orchestration_backend or get_settings().orchestration_backend or "legacy").strip().lower() or "legacy",
             dedupe_scope=workflow.dedupe_scope,
             status="queued",
             last_error=None,
