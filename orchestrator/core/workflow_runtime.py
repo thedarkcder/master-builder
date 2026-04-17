@@ -49,15 +49,15 @@ class WorkflowAdvanceRequest:
 
 
 @dataclass(frozen=True)
-class WorkflowAdvanceResult:
+class WorkflowAdvanceOutcome:
     handled: bool
     reason: str | None = None
     extra: dict[str, object] = field(default_factory=dict)
-    mutations: tuple["WorkflowLifecycleMutation", ...] = ()
+    transition_plan: "WorkflowTransitionPlan" | None = None
 
 
 @dataclass(frozen=True)
-class WorkflowLifecycleMutation:
+class WorkflowTransitionStep:
     kind: str
     payload: dict[str, Any] = field(default_factory=dict)
 
@@ -90,12 +90,20 @@ class WorkflowAdvanceLifecycle(Protocol):
 
 
 @dataclass
-class WorkflowAdvanceMutationCollector:
-    _mutations: list[WorkflowLifecycleMutation] = field(default_factory=list)
+class WorkflowTransitionPlan:
+    steps: tuple[WorkflowTransitionStep, ...] = ()
+
+    def __bool__(self) -> bool:
+        return bool(self.steps)
+
+
+@dataclass
+class WorkflowTransitionPlanner:
+    _steps: list[WorkflowTransitionStep] = field(default_factory=list)
 
     def ensure_issue_execution(self, *, issue_summary: str | None, issue_description: object | None) -> None:
-        self._mutations.append(
-            WorkflowLifecycleMutation(
+        self._steps.append(
+            WorkflowTransitionStep(
                 kind="ensure_issue_execution",
                 payload={
                     "issue_summary": issue_summary,
@@ -105,11 +113,11 @@ class WorkflowAdvanceMutationCollector:
         )
 
     def mark_running(self) -> None:
-        self._mutations.append(WorkflowLifecycleMutation(kind="mark_running"))
+        self._steps.append(WorkflowTransitionStep(kind="mark_running"))
 
     def mark_operation_completed(self, *, operation_type: str, summary: str) -> None:
-        self._mutations.append(
-            WorkflowLifecycleMutation(
+        self._steps.append(
+            WorkflowTransitionStep(
                 kind="mark_operation_completed",
                 payload={
                     "operation_type": operation_type,
@@ -126,8 +134,8 @@ class WorkflowAdvanceMutationCollector:
         message: str,
         retryable: bool,
     ) -> None:
-        self._mutations.append(
-            WorkflowLifecycleMutation(
+        self._steps.append(
+            WorkflowTransitionStep(
                 kind="mark_operation_failed",
                 payload={
                     "operation_type": operation_type,
@@ -139,8 +147,8 @@ class WorkflowAdvanceMutationCollector:
         )
 
     def mark_waiting_for_input(self, *, operation_type: str, summary: str) -> None:
-        self._mutations.append(
-            WorkflowLifecycleMutation(
+        self._steps.append(
+            WorkflowTransitionStep(
                 kind="mark_waiting_for_input",
                 payload={
                     "operation_type": operation_type,
@@ -150,41 +158,41 @@ class WorkflowAdvanceMutationCollector:
         )
 
     def mark_completed_if_ready(self) -> None:
-        self._mutations.append(WorkflowLifecycleMutation(kind="mark_completed_if_ready"))
+        self._steps.append(WorkflowTransitionStep(kind="mark_completed_if_ready"))
 
-    def build_result(
+    def build_outcome(
         self,
         *,
         handled: bool,
         reason: str | None = None,
         extra: dict[str, object] | None = None,
-    ) -> WorkflowAdvanceResult:
-        return WorkflowAdvanceResult(
+    ) -> WorkflowAdvanceOutcome:
+        return WorkflowAdvanceOutcome(
             handled=handled,
             reason=reason,
             extra=dict(extra or {}),
-            mutations=tuple(self._mutations),
+            transition_plan=WorkflowTransitionPlan(steps=tuple(self._steps)),
         )
 
 
-def apply_workflow_lifecycle_mutations(
+def apply_workflow_transition_plan(
     *,
     session: Session,
     workflow_type: Any,
     tenant_id: str,
     project_id: str | None,
     issue_key: str,
-    mutations: tuple[WorkflowLifecycleMutation, ...],
+    transition_plan: WorkflowTransitionPlan | None,
 ) -> None:
-    if not mutations:
+    if not transition_plan:
         return
     projection = None
     issue_summary = None
     issue_description = None
-    for mutation in mutations:
-        if mutation.kind == "ensure_issue_execution":
-            issue_summary = mutation.payload.get("issue_summary")
-            issue_description = mutation.payload.get("issue_description")
+    for step in transition_plan.steps:
+        if step.kind == "ensure_issue_execution":
+            issue_summary = step.payload.get("issue_summary")
+            issue_description = step.payload.get("issue_description")
             projection = ensure_issue_workflow_execution(
                 session=session,
                 workflow_type=workflow_type,
@@ -205,18 +213,18 @@ def apply_workflow_lifecycle_mutations(
                 issue_summary=issue_summary,
                 issue_description=issue_description,
             )
-        if mutation.kind == "mark_running":
+        if step.kind == "mark_running":
             projection.mark_running()
-        elif mutation.kind == "mark_operation_completed":
-            projection.mark_operation_completed(**mutation.payload)
-        elif mutation.kind == "mark_operation_failed":
-            projection.mark_operation_failed(**mutation.payload)
-        elif mutation.kind == "mark_waiting_for_input":
-            projection.mark_waiting_for_input(**mutation.payload)
-        elif mutation.kind == "mark_completed_if_ready":
+        elif step.kind == "mark_operation_completed":
+            projection.mark_operation_completed(**step.payload)
+        elif step.kind == "mark_operation_failed":
+            projection.mark_operation_failed(**step.payload)
+        elif step.kind == "mark_waiting_for_input":
+            projection.mark_waiting_for_input(**step.payload)
+        elif step.kind == "mark_completed_if_ready":
             projection.mark_completed_if_ready()
         else:  # pragma: no cover - defensive against invalid mutation kinds
-            raise RuntimeError(f"Unsupported workflow lifecycle mutation kind: {mutation.kind}")
+            raise RuntimeError(f"Unsupported workflow transition step kind: {step.kind}")
 
 
 class WorkflowAdvanceHandler(Protocol):
@@ -227,7 +235,7 @@ class WorkflowAdvanceHandler(Protocol):
         settings: Settings,
         workflow_type,
         request: WorkflowAdvanceRequest,
-    ) -> WorkflowAdvanceResult:
+    ) -> WorkflowAdvanceOutcome:
         ...
 
 
@@ -257,7 +265,7 @@ class WorkflowRuntime:
         self,
         *,
         request: WorkflowAdvanceRequest,
-    ) -> WorkflowAdvanceResult:
+    ) -> WorkflowAdvanceOutcome:
         if self._deps.resolve_advance_handler_fn is None:
             raise RuntimeError("Workflow advance handler resolution is not configured")
         workflow_type = get_workflow_type_by_handler_key(
@@ -271,13 +279,13 @@ class WorkflowRuntime:
             workflow_type=workflow_type,
             request=request,
         )
-        apply_workflow_lifecycle_mutations(
+        apply_workflow_transition_plan(
             session=self._session,
             workflow_type=workflow_type,
             tenant_id=request.tenant_id,
             project_id=request.project_id,
             issue_key=request.issue_key,
-            mutations=result.mutations,
+            transition_plan=result.transition_plan,
         )
         return result
 

@@ -59,10 +59,11 @@ from orchestrator.core.parent_feature_planning_workflow import (
     ParentFeaturePlanningWorkflowDeps,
 )
 from orchestrator.core.workflow_runtime import (
-    WorkflowAdvanceMutationCollector,
+    WorkflowAdvanceOutcome,
     WorkflowAdvanceRequest,
-    WorkflowAdvanceResult,
-    apply_workflow_lifecycle_mutations,
+    WorkflowTransitionPlan,
+    WorkflowTransitionPlanner,
+    apply_workflow_transition_plan,
 )
 from orchestrator.core.workflow_execution_projection import (
     classify_external_workflow_failure,
@@ -138,7 +139,7 @@ class JiraParentChildSyncResult:
     handled: bool
     reason: str | None = None
     extra: dict[str, object] = field(default_factory=dict)
-    mutations: tuple[object, ...] = ()
+    transition_plan: WorkflowTransitionPlan | None = None
 
 
 def _jira_sync_result_from_advance_result(
@@ -148,22 +149,22 @@ def _jira_sync_result_from_advance_result(
     tenant_id: str,
     project_id: str | None,
     issue_key: str,
-    result: WorkflowAdvanceResult,
+    result: WorkflowAdvanceOutcome,
 ) -> JiraParentChildSyncResult:
-    if result.mutations:
-        apply_workflow_lifecycle_mutations(
+    if result.transition_plan:
+        apply_workflow_transition_plan(
             session=session,
             workflow_type=workflow_type,
             tenant_id=tenant_id,
             project_id=project_id,
             issue_key=issue_key,
-            mutations=result.mutations,
+            transition_plan=result.transition_plan,
         )
     return JiraParentChildSyncResult(
         handled=result.handled,
         reason=result.reason,
         extra=dict(result.extra or {}),
-        mutations=tuple(result.mutations or ()),
+        transition_plan=result.transition_plan,
     )
 
 
@@ -194,7 +195,7 @@ class ParentFeatureWorkflowAdvanceHandler:
         settings,  # noqa: ANN001
         workflow_type,
         request: WorkflowAdvanceRequest,
-    ) -> WorkflowAdvanceResult:
+    ) -> WorkflowAdvanceOutcome:
         context = JiraParentChildSyncContext(
             request_id=str(request.payload.get("request_id") or "").strip() or f"workflow-advance:{request.issue_key}",
             tenant_id=request.tenant_id,
@@ -2050,7 +2051,7 @@ def handle_pm_interview_reply(
         if existing_workflow is not None
         else get_workflow_type_by_handler_key(session, handler_key="jira_parent_feature")
     )
-    lifecycle = WorkflowAdvanceMutationCollector()
+    lifecycle = WorkflowTransitionPlanner()
     lifecycle.ensure_issue_execution(
         issue_summary=parent_detail.summary,
         issue_description=parent_detail.description,
@@ -2100,7 +2101,7 @@ def handle_pm_interview_reply(
                 settings=settings,
                 create_jira_comment_fn=create_jira_comment_fn,
             )
-        advance_result = lifecycle.build_result(
+        advance_result = lifecycle.build_outcome(
             handled=True,
             reason="pm_interview_still_open",
             extra={
@@ -2197,7 +2198,7 @@ def handle_pm_interview_reply(
             body=f"PM clarification was recorded, but backlog planning failed: {exc}",
             post_jira_comment_fn=post_jira_comment_fn,
         )
-        advance_result = lifecycle.build_result(
+        advance_result = lifecycle.build_outcome(
             handled=True,
             reason="pm_interview_followup_seed_failed",
             extra={"error": str(exc), "webhook_event": context.webhook_event},
@@ -2234,7 +2235,7 @@ def handle_pm_interview_reply(
             ),
             post_jira_comment_fn=post_jira_comment_fn,
         )
-        advance_result = lifecycle.build_result(
+        advance_result = lifecycle.build_outcome(
             handled=True,
             reason="pm_interview_followup_planning_blocked",
             extra={
@@ -2297,7 +2298,7 @@ def handle_pm_interview_reply(
             body=f"Updated from parent feature {context.issue_key} after PM clarification.",
             post_jira_comment_fn=post_jira_comment_fn,
         )
-    advance_result = lifecycle.build_result(
+    advance_result = lifecycle.build_outcome(
         handled=True,
         reason="pm_interview_followup_resolved",
         extra={
