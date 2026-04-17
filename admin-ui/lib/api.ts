@@ -712,6 +712,14 @@ export type WorkflowTypeOperationRecord = {
   operation_type: string;
   label: string;
   retry_policy: string;
+  retry_policy_config: {
+    manual_retry_enabled: boolean;
+    max_attempts: number;
+    initial_interval_seconds: number;
+    max_interval_seconds: number;
+    backoff_coefficient: number;
+    non_retryable_error_categories: string[];
+  };
   description: string | null;
   required: boolean;
   status: string | null;
@@ -721,6 +729,15 @@ export type WorkflowTypeRecord = {
   key: string;
   label: string;
   description: string | null;
+  orchestration_backend: string;
+  engine_config: {
+    temporal: {
+      workflow_name: string;
+      task_queue: string;
+      activity_start_to_close_timeout_seconds: number;
+      human_input_resume_timeout_seconds: number;
+    } | null;
+  };
   operations: WorkflowTypeOperationRecord[];
 };
 
@@ -749,12 +766,45 @@ export type WorkflowTypeDetailRecord = {
   key: string;
   label: string;
   description: string | null;
+  orchestration_backend: string;
+  engine_config: {
+    temporal: {
+      workflow_name: string;
+      task_queue: string;
+      activity_start_to_close_timeout_seconds: number;
+      human_input_resume_timeout_seconds: number;
+    } | null;
+  };
   operations: WorkflowTypeOperationRecord[];
   execution_modes: string[];
   conditional_paths: string[];
   execution_count: number;
   latest_execution_at: string | null;
   recent_executions: WorkflowExecutionPreviewRecord[];
+};
+
+export type WorkflowTypeUpdatePayload = {
+  orchestration_backend: string;
+  engine_config: {
+    temporal: {
+      workflow_name: string;
+      task_queue: string;
+      activity_start_to_close_timeout_seconds: number;
+      human_input_resume_timeout_seconds: number;
+    } | null;
+  };
+  operations: Array<{
+    operation_type: string;
+    retry_policy: string;
+    retry_policy_config: {
+      manual_retry_enabled: boolean;
+      max_attempts: number;
+      initial_interval_seconds: number;
+      max_interval_seconds: number;
+      backoff_coefficient: number;
+      non_retryable_error_categories: string[];
+    };
+  }>;
 };
 
 export type WorkflowStatePathEntryRecord = {
@@ -806,6 +856,8 @@ export type WorkflowOperationRecord = {
   target_system: string | null;
   target_ref: string | null;
   summary: string | null;
+  can_retry: boolean;
+  retry_unavailable_reason: string | null;
   attempts: WorkflowOperationAttemptRecord[];
 };
 
@@ -2511,6 +2563,21 @@ export function getWorkflowType(
   return request<WorkflowTypeDetailRecord>(
     credentials,
     `/api/admin/workflow-types/${encodeURIComponent(workflowTypeKey)}${suffix}`,
+  );
+}
+
+export function updateWorkflowType(
+  credentials: Credentials,
+  workflowTypeKey: string,
+  payload: WorkflowTypeUpdatePayload,
+): Promise<WorkflowTypeDetailRecord> {
+  return request<WorkflowTypeDetailRecord>(
+    credentials,
+    `/api/admin/workflow-types/${encodeURIComponent(workflowTypeKey)}`,
+    {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    },
   );
 }
 

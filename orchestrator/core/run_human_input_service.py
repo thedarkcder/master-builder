@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
 
@@ -427,15 +426,7 @@ def resume_workflow_from_human_input_answer(
 
     workflow = session.get(WorkflowExecution, request.workflow_id)
     if workflow is None:
-        backend = str(getattr(settings, "orchestration_backend", "legacy") or "legacy").strip().lower()
-        if backend != "legacy":
-            raise ValueError("Workflow for human input request was not found")
-        workflow = SimpleNamespace(
-            workflow_id=request.workflow_id,
-            orchestration_backend=backend,
-            status=str(getattr(request, "status", "") or "").strip().lower() or INPUT_STATUS_PENDING,
-            active_run_id=getattr(request, "consumed_by_run_id", None) or getattr(request, "source_run_id", None),
-        )
+        raise ValueError(f"Workflow for human input request was not found: {request.workflow_id}")
     engine = build_workflow_engine(
         settings=settings,
         workflow=workflow,

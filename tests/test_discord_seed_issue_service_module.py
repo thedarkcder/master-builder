@@ -7,6 +7,7 @@ from fastapi import HTTPException
 
 from orchestrator.api.discord.seed.issue_service import seed_issues_with_runtime, seed_parent_issues_with_runtime
 from orchestrator.tools.jira_oauth import JiraIssueCreateResult, JiraOAuthError
+from orchestrator.tools.jira_oauth_issue_service import MAX_JIRA_ADF_DOCUMENT_BYTES, _to_adf_description
 
 
 def _seed_payload(*, project_key: str = "GP", parent_issue_type: str = "Story", child_count: int = 1) -> dict:
@@ -670,3 +671,122 @@ def test_seed_issues_merges_planning_package_context_into_child_ticket_descripti
     assert "Architecture Findings: Architectural boundaries should stay modular." in child_description
     assert "Security Findings: Security review must be explicit." in child_description
     assert "Testing Recommendations: Add regression coverage for the handoff." in child_description
+
+
+def test_seed_issues_truncates_large_jira_descriptions_before_write() -> None:
+    tenant = SimpleNamespace(tenant_id="tenant-a")
+    created_payloads: list[object] = []
+    updated_payloads: list[object] = []
+    huge_line = "Architecture context " + ("X" * 10_000)
+
+    class _FakeClient:
+        def list_project_issue_types_for_create(self, **_kwargs):  # type: ignore[no-untyped-def]
+            return ["Epic", "Story", "Task", "Issue"]
+
+        def search_issues_by_jql(self, **_kwargs):  # type: ignore[no-untyped-def]
+            return []
+
+        def create_issue(self, **kwargs):  # type: ignore[no-untyped-def]
+            issue = kwargs["issue"]
+            bounded = _to_adf_description(issue.description)
+            serialized = __import__("json").dumps(
+                bounded,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8")
+            assert len(serialized) <= MAX_JIRA_ADF_DOCUMENT_BYTES
+            created_payloads.append(bounded)
+            return JiraIssueCreateResult(key="GP-1" if not issue.parent_issue_key else "GP-2", issue_id="1")
+
+        def update_issue_fields(self, **kwargs):  # type: ignore[no-untyped-def]
+            bounded = _to_adf_description(kwargs["description"])
+            serialized = __import__("json").dumps(
+                bounded,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8")
+            assert len(serialized) <= MAX_JIRA_ADF_DOCUMENT_BYTES
+            updated_payloads.append(bounded)
+            return None
+
+        def add_issue_link(self, **_kwargs):  # type: ignore[no-untyped-def]
+            return {}
+
+    _, data = seed_issues_with_runtime(
+        session=MagicMock(),
+        tenant=tenant,
+        prompt_markdown="seed issues",
+        scoped_project_id="project-a",
+        force_issue_keys=None,
+        allow_create=True,
+        scoped_project_keys=["GP"],
+        codex_working_dir="/tmp",
+        tenant_project_keys_fn=lambda **_kwargs: ["GP"],
+        get_settings_fn=lambda: SimpleNamespace(),
+        build_runtime_fn=lambda **_kwargs: object(),
+        plan_seed_issues_with_runtime_fn=lambda **_kwargs: _seed_payload(),
+        codex_runtime_error_type=RuntimeError,
+        build_seed_issue_description_fn=lambda **_kwargs: {},
+        issue_key_pattern=__import__("re").compile(r"^[A-Z]+-\d+$"),
+        tenant_jira_oauth_context_fn=lambda **_kwargs: {
+            "client": _FakeClient(),
+            "access_token": "token",
+            "connection": SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
+        },
+        select_seed_match_fn=lambda **_kwargs: None,
+        pm_status="pm_completed",
+        planning_package={
+            "planning_state": "planning_completed",
+            "specialist_outputs": {
+                "architecture": {
+                    "findings": [huge_line, huge_line, huge_line],
+                    "recommendations": [huge_line, huge_line],
+                    "required_tasks": [huge_line],
+                    "open_behavior_questions": [],
+                    "acceptance_impacts": [huge_line],
+                    "mermaid_diagram": "flowchart TD\n" + ("A-->B\n" * 5000),
+                },
+                "security": {
+                    "findings": [huge_line],
+                    "recommendations": [huge_line],
+                    "required_tasks": [],
+                    "open_behavior_questions": [],
+                    "acceptance_impacts": [huge_line],
+                },
+                "testing": {
+                    "findings": [huge_line],
+                    "recommendations": [huge_line],
+                    "required_tasks": [huge_line],
+                    "open_behavior_questions": [],
+                    "acceptance_impacts": [huge_line],
+                },
+            },
+            "architecture_summary": [huge_line, huge_line, huge_line],
+            "architecture_diagram": "flowchart TD\n" + ("Parent-->Planner\n" * 5000),
+            "child_issues": [
+                {
+                    "summary": "Implement checkout planner merge",
+                    "issue_type": "Sub-task",
+                    "behavior_slice": huge_line,
+                    "technical_objective": huge_line,
+                    "implementation_plan": [huge_line, huge_line, huge_line],
+                    "technical_dependencies": [huge_line],
+                    "risks": [huge_line],
+                    "how_to_test": [huge_line],
+                    "done_criteria": [huge_line, huge_line],
+                    "implementation_decisions": [huge_line, huge_line],
+                    "labels": ["engineering"],
+                }
+            ],
+        },
+    )
+
+    assert data["children_sync_status"] == "children_current"
+    assert len(created_payloads) == 2
+    assert len(updated_payloads) == 1
+    created_text = _adf_text(created_payloads[0])
+    child_text = _adf_text(created_payloads[1])
+    updated_text = _adf_text(updated_payloads[0])
+    assert "Content truncated to fit Jira content size limit." not in created_text
+    assert "Content truncated to fit Jira content size limit." not in child_text
+    assert "Content truncated to fit Jira content size limit." not in updated_text

@@ -13,6 +13,7 @@ from orchestrator.core.jira_parent_child_sync_service import (
     PLANNING_STATE_COMPLETED,
     _ParentBriefPlanner,
     _ParentChildSyncGateway,
+    _rewrite_parent_issue_from_brief,
     JiraParentChildSyncContext,
 )
 from orchestrator.core.parent_feature_brief_store import resolve_parent_feature_brief
@@ -106,10 +107,115 @@ def _classify_operation_failure(*, error: Exception) -> tuple[str, bool]:
     return "external_failure", False
 
 
+def _workflow_operation_retry_executor_reasons() -> dict[str, str]:
+    return {
+        "jira_comment_projection": "Retry requires the original outbound Jira comment payload, which is not yet persisted.",
+        "discord_followup_projection": "Retry requires the original outbound Discord payload, which is not yet persisted.",
+        "notification_emit": "Retry requires the original notification projection payload, which is not yet persisted.",
+    }
+
+
+def workflow_operation_retry_unavailable_reason(*, operation_type: str) -> str | None:
+    normalized = str(operation_type or "").strip()
+    if not normalized:
+        return "Workflow operation type is missing."
+    if normalized in _workflow_operation_retry_executor_reasons():
+        return _workflow_operation_retry_executor_reasons()[normalized]
+    return None
+
+
+def supports_workflow_operation_retry(*, operation_type: str) -> bool:
+    return workflow_operation_retry_unavailable_reason(operation_type=operation_type) is None
+
+
+def _execute_jira_parent_update(
+    *,
+    context: _OperationExecutionContext,
+    integration_adapter_provider,
+    build_runtime_for_selector_fn,
+    seed_issues_with_runtime_fn,
+) -> WorkflowOperationHandle:
+    _ = build_runtime_for_selector_fn, seed_issues_with_runtime_fn
+    brief = resolve_parent_feature_brief(
+        session=context.session,
+        tenant_id=context.tenant.tenant_id,
+        parent_issue_key=context.workflow.issue_key,
+    )
+    if brief is None:
+        raise InvalidWorkflowOperationError(
+            f"No confirmed parent brief snapshot is available for {context.workflow.issue_key}"
+        )
+
+    jira_adapter = integration_adapter_provider.jira(
+        session=context.session,
+        tenant=context.tenant,
+        settings=context.settings,
+    )
+    oauth = jira_adapter.oauth_context
+    parent_detail = jira_adapter.get_issue_detail(issue_id_or_key=context.workflow.issue_key)
+
+    attempt = start_workflow_operation_attempt(context.session, operation=context.operation)
+    context.workflow.status = "running"
+    context.workflow.last_error = None
+    context.workflow.finished_at = None
+    context.workflow.updated_at = _now()
+
+    try:
+        _rewrite_parent_issue_from_brief(
+            oauth=oauth,
+            parent_detail=parent_detail,
+            brief_payload=brief.to_payload(),
+            sync_status="children_syncing",
+            planning_state="brief_normalized",
+            open_questions=[],
+        )
+    except Exception as exc:  # noqa: BLE001
+        category, retryable = _classify_operation_failure(error=exc)
+        logger.exception(
+            "workflow_operation_execution_failed workflow_id=%s operation_id=%s operation_type=%s error=%s",
+            context.workflow.workflow_id,
+            context.operation.operation_id,
+            context.operation.operation_type,
+            exc,
+        )
+        fail_workflow_operation(
+            context.session,
+            operation=context.operation,
+            attempt=attempt,
+            category=category,
+            message=str(exc),
+            retryable=retryable,
+        )
+        context.workflow.status = "failed"
+        context.workflow.last_error = str(exc)
+        context.workflow.finished_at = _now()
+        context.workflow.updated_at = _now()
+        return WorkflowOperationHandle(
+            operation_id=context.operation.operation_id,
+            workflow_id=context.workflow.workflow_id,
+            operation_type=context.operation.operation_type,
+            status=context.operation.status,
+        )
+
+    complete_workflow_operation(
+        context.session,
+        operation=context.operation,
+        attempt=attempt,
+        summary="Parent Jira issue synced from the confirmed brief.",
+    )
+    _recompute_workflow_status(session=context.session, workflow=context.workflow)
+    return WorkflowOperationHandle(
+        operation_id=context.operation.operation_id,
+        workflow_id=context.workflow.workflow_id,
+        operation_type=context.operation.operation_type,
+        status=context.operation.status,
+    )
+
+
 def _execute_jira_child_fanout(
     *,
     context: _OperationExecutionContext,
-    tenant_jira_oauth_context_fn,
+    integration_adapter_provider,
     build_runtime_for_selector_fn,
     seed_issues_with_runtime_fn,
 ) -> WorkflowOperationHandle:
@@ -123,16 +229,12 @@ def _execute_jira_child_fanout(
             f"No confirmed parent brief snapshot is available for {context.workflow.issue_key}"
         )
 
-    oauth = tenant_jira_oauth_context_fn(
+    jira_adapter = integration_adapter_provider.jira(
         session=context.session,
         tenant=context.tenant,
         settings=context.settings,
     )
-    parent_detail = oauth.client.get_issue_detail(
-        access_token=oauth.access_token,
-        cloud_id=oauth.connection.cloud_id,
-        issue_id_or_key=context.workflow.issue_key,
-    )
+    parent_detail = jira_adapter.get_issue_detail(issue_id_or_key=context.workflow.issue_key)
     sync_context = JiraParentChildSyncContext(
         request_id=f"workflow-operation:{context.operation.operation_id}",
         tenant_id=context.tenant.tenant_id,
@@ -249,7 +351,7 @@ def execute_workflow_operation_retry(
     session_factory: sessionmaker[Session],
     workflow: WorkflowExecution,
     operation: WorkflowOperation,
-    tenant_jira_oauth_context_fn: Callable[..., Any],
+    integration_adapter_provider,
     build_runtime_for_selector_fn: Callable[..., Any],
     seed_issues_with_runtime_fn: Callable[..., Any],
 ) -> WorkflowOperationHandle:
@@ -276,13 +378,15 @@ def execute_workflow_operation_retry(
         raise InvalidWorkflowOperationError("Project Jira key is required for Jira workflow operations")
 
     executors: dict[str, Callable[..., WorkflowOperationHandle]] = {
+        "jira_parent_update": _execute_jira_parent_update,
         "jira_child_fanout": _execute_jira_child_fanout,
     }
     executor = executors.get(operation.operation_type)
     if executor is None:
-        raise UnsupportedWorkflowOperationError(
-            f"No workflow operation executor is registered for {operation.operation_type}"
-        )
+        unavailable_reason = workflow_operation_retry_unavailable_reason(operation_type=operation.operation_type)
+        if unavailable_reason:
+            raise UnsupportedWorkflowOperationError(unavailable_reason)
+        raise UnsupportedWorkflowOperationError(f"No workflow operation executor is registered for {operation.operation_type}")
 
     return executor(
         context=_OperationExecutionContext(
@@ -294,7 +398,7 @@ def execute_workflow_operation_retry(
             tenant=tenant,
             project=project,
         ),
-        tenant_jira_oauth_context_fn=tenant_jira_oauth_context_fn,
+        integration_adapter_provider=integration_adapter_provider,
         build_runtime_for_selector_fn=build_runtime_for_selector_fn,
         seed_issues_with_runtime_fn=seed_issues_with_runtime_fn,
     )

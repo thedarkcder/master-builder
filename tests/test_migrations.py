@@ -3,6 +3,7 @@ import os
 import unittest
 from collections import Counter
 from datetime import datetime, timezone
+import importlib.util
 from tempfile import TemporaryDirectory
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -19,6 +20,16 @@ from orchestrator.storage.migrations import run_migrations
 
 
 class MigrationTests(unittest.TestCase):
+    def _load_migration_module(self, filename: str, module_name: str):
+        root = Path(__file__).resolve().parents[1]
+        path = root / "orchestrator" / "storage" / "migrations" / "versions" / filename
+        spec = importlib.util.spec_from_file_location(module_name, path)
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
     def _alembic_upgrade(self, database_url: str, revision: str) -> None:
         root = Path(__file__).resolve().parents[1]
         config = Config(str(root / "alembic.ini"))
@@ -51,6 +62,130 @@ class MigrationTests(unittest.TestCase):
         duplicates = {revision_id: count for revision_id, count in Counter(revision_ids).items() if count > 1}
         self.assertEqual(duplicates, {})
         self.assertEqual(script.get_heads(), ["20260413_0064"])
+
+    def test_parent_planning_rename_migration_drops_discovered_workflow_foreign_keys(self) -> None:
+        module = self._load_migration_module(
+            "20260417_0071_parent_planning_type_rename_and_promotion.py",
+            "migration_20260417_0071_drop_fks",
+        )
+
+        bind = MagicMock()
+        bind.dialect.name = "postgresql"
+
+        class FakeInspector:
+            def get_table_names(self):
+                return ["runs", "workflow_operations", "workflow_executions", "other_table"]
+
+            def get_foreign_keys(self, table_name):
+                mapping = {
+                    "runs": [
+                        {
+                            "name": "fk_runs_workflow_ref",
+                            "referred_table": "workflow_executions",
+                            "referred_columns": ["workflow_id"],
+                            "constrained_columns": ["workflow_id"],
+                        }
+                    ],
+                    "workflow_operations": [
+                        {
+                            "name": "workflow_operations_workflow_id_fkey",
+                            "referred_table": "workflow_executions",
+                            "referred_columns": ["workflow_id"],
+                            "constrained_columns": ["workflow_id"],
+                        }
+                    ],
+                    "workflow_executions": [
+                        {
+                            "name": "workflow_executions_source_workflow_id_fkey",
+                            "referred_table": "workflow_executions",
+                            "referred_columns": ["workflow_id"],
+                            "constrained_columns": ["source_workflow_id"],
+                        }
+                    ],
+                    "other_table": [
+                        {
+                            "name": "other_table_tenant_id_fkey",
+                            "referred_table": "tenants",
+                            "referred_columns": ["tenant_id"],
+                            "constrained_columns": ["tenant_id"],
+                        }
+                    ],
+                }
+                return mapping.get(table_name, [])
+
+        op_mock = MagicMock()
+        with patch.object(module, "op", op_mock), patch.object(module.sa, "inspect", return_value=FakeInspector()):
+            module._drop_workflow_id_foreign_keys(bind)
+
+        dropped = [call.args[:2] for call in op_mock.drop_constraint.call_args_list]
+        self.assertEqual(
+            dropped,
+            [
+                ("fk_runs_workflow_ref", "runs"),
+                ("workflow_operations_workflow_id_fkey", "workflow_operations"),
+                ("workflow_executions_source_workflow_id_fkey", "workflow_executions"),
+            ],
+        )
+
+    def test_parent_planning_rename_migration_recreates_missing_canonical_workflow_foreign_keys(self) -> None:
+        module = self._load_migration_module(
+            "20260417_0071_parent_planning_type_rename_and_promotion.py",
+            "migration_20260417_0071_create_fks",
+        )
+
+        bind = MagicMock()
+        bind.dialect.name = "postgresql"
+
+        class FakeInspector:
+            def get_table_names(self):
+                return [
+                    "project_install_requests",
+                    "workflow_executions",
+                    "workflow_checkpoints",
+                    "runs",
+                    "run_human_input_requests",
+                    "workflow_operations",
+                ]
+
+            def get_columns(self, table_name):
+                columns = {
+                    "project_install_requests": [{"name": "workflow_id"}],
+                    "workflow_executions": [{"name": "source_workflow_id"}],
+                    "workflow_checkpoints": [{"name": "workflow_id"}],
+                    "runs": [{"name": "workflow_id"}],
+                    "run_human_input_requests": [{"name": "workflow_id"}],
+                    "workflow_operations": [{"name": "workflow_id"}],
+                }
+                return columns[table_name]
+
+            def get_foreign_keys(self, table_name):
+                if table_name == "workflow_operations":
+                    return [
+                        {
+                            "name": "workflow_operations_workflow_id_fkey",
+                            "referred_table": "workflow_executions",
+                            "referred_columns": ["workflow_id"],
+                            "constrained_columns": ["workflow_id"],
+                        }
+                    ]
+                return []
+
+        op_mock = MagicMock()
+        op_mock.get_bind.return_value = bind
+        with patch.object(module, "op", op_mock), patch.object(module.sa, "inspect", return_value=FakeInspector()):
+            module._create_workflow_id_foreign_keys(bind)
+
+        created = [call.args[:3] for call in op_mock.create_foreign_key.call_args_list]
+        self.assertEqual(
+            created,
+            [
+                ("project_install_requests_workflow_id_fkey", "project_install_requests", "workflow_executions"),
+                ("workflow_executions_source_workflow_id_fkey", "workflow_executions", "workflow_executions"),
+                ("workflow_checkpoints_workflow_id_fkey", "workflow_checkpoints", "workflow_executions"),
+                ("runs_workflow_id_fkey", "runs", "workflow_executions"),
+                ("run_human_input_requests_workflow_id_fkey", "run_human_input_requests", "workflow_executions"),
+            ],
+        )
 
     def test_jira_feature_migrations_chain_after_staging_worker_head(self) -> None:
         """Branch-specific migrations chained after staging merge head (20260328_0045)."""

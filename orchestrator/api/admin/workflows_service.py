@@ -10,21 +10,30 @@ from sqlalchemy.exc import IntegrityError
 from orchestrator.api.admin.schema_mappers import workflow_operation_to_schema
 from orchestrator.api.schemas import (
     WorkflowActionRead,
+    WorkflowTypeEngineConfigRead,
     WorkflowExecutionPreviewRead,
     WorkflowLinkRead,
     WorkflowOperationRead,
     WorkflowStatePathEntryRead,
     WorkflowTypeDetailRead,
     WorkflowTypeOperationRead,
+    WorkflowTypeOperationRetryConfigRead,
     WorkflowTypeRead,
     WorkflowTypeSummaryRead,
+    WorkflowTypeUpdateRequest,
+    WorkflowTypeTemporalConfigRead,
 )
 from orchestrator.core.config import get_settings
 from orchestrator.core.workflow_engine_factory import build_workflow_engine, create_session_factory_for_engine
-from orchestrator.core.workflow_operation_executor import execute_workflow_operation_retry
+from orchestrator.core.workflow_operation_executor import (
+    execute_workflow_operation_retry,
+    supports_workflow_operation_retry,
+    workflow_operation_retry_unavailable_reason,
+)
 from orchestrator.core.jira_links import tenant_jira_issue_url
 from orchestrator.core.runtime_requirements import resolve_required_runtime_kinds_for_workflow
 from orchestrator.core.workflow_type_catalog import get_workflow_type, list_workflow_type_operations
+from orchestrator.core.workflow_type_catalog import update_workflow_type_configuration
 from orchestrator.core.worker_capabilities import infer_required_worker_capability
 from orchestrator.core.worker.execution_service import build_run_process_kwargs
 from orchestrator.core.worker.process_service import process_claimed_run
@@ -195,6 +204,59 @@ def _operation_status_by_type(
     }
 
 
+def _workflow_type_operation_types(*, workflow_type: WorkflowTypeRead) -> set[str]:
+    return {
+        str(definition.operation_type or "").strip()
+        for definition in workflow_type.operations
+        if str(definition.operation_type or "").strip()
+    }
+
+
+def _workflow_type_engine_config_read(*, workflow_type: WorkflowType) -> WorkflowTypeEngineConfigRead:
+    raw = workflow_type.engine_config_json if isinstance(workflow_type.engine_config_json, dict) else {}
+    temporal = raw.get("temporal") if isinstance(raw.get("temporal"), dict) else None
+    normalized_backend = str(workflow_type.orchestration_backend or "").strip().lower()
+    if normalized_backend == "temporal" and temporal is None:
+        raise ValueError(
+            f"Workflow type {workflow_type.workflow_type_key} is missing temporal engine configuration"
+        )
+    if temporal is None:
+        return WorkflowTypeEngineConfigRead()
+    return WorkflowTypeEngineConfigRead(
+        temporal=WorkflowTypeTemporalConfigRead(
+            workflow_name=str(temporal.get("workflow_name") or "").strip(),
+            task_queue=str(temporal.get("task_queue") or "").strip(),
+            activity_start_to_close_timeout_seconds=int(temporal.get("activity_start_to_close_timeout_seconds") or 0),
+            human_input_resume_timeout_seconds=int(temporal.get("human_input_resume_timeout_seconds") or 0),
+        )
+    )
+
+
+def _workflow_type_retry_policy_config_read(*, raw_config: dict | None) -> WorkflowTypeOperationRetryConfigRead:
+    raw = raw_config if isinstance(raw_config, dict) else {}
+    return WorkflowTypeOperationRetryConfigRead(
+        manual_retry_enabled=bool(raw.get("manual_retry_enabled", True)),
+        max_attempts=int(raw.get("max_attempts") or 1),
+        initial_interval_seconds=int(raw.get("initial_interval_seconds") or 0),
+        max_interval_seconds=int(raw.get("max_interval_seconds") or 0),
+        backoff_coefficient=float(raw.get("backoff_coefficient") or 1.0),
+        non_retryable_error_categories=[
+            str(value).strip()
+            for value in (raw.get("non_retryable_error_categories") or [])
+            if str(value).strip()
+        ],
+    )
+
+
+def _workflow_uses_run_state_path(*, workflow_type: WorkflowTypeRead) -> bool:
+    return "run_attempt_execution" in _workflow_type_operation_types(workflow_type=workflow_type)
+
+
+def _workflow_supports_child_issue_links(*, workflow_type: WorkflowTypeRead) -> bool:
+    operation_types = _workflow_type_operation_types(workflow_type=workflow_type)
+    return "jira_child_fanout" in operation_types or "jira_child_promotion" in operation_types
+
+
 def _workflow_operation_reads(
     *,
     session,
@@ -206,6 +268,28 @@ def _workflow_operation_reads(
     definitions = list_workflow_type_operations(session, workflow_type_key=workflow_type.workflow_type_key)
     status_by_type = _operation_status_by_type(operations=operations)
 
+    def _operation_retry_state(
+        *,
+        retry_policy_config: WorkflowTypeOperationRetryConfigRead | None,
+        operation_type: str,
+        current: WorkflowOperation | None,
+    ) -> tuple[bool, str | None]:
+        if current is None:
+            return False, "Operation has not started yet."
+        attempts = operation_attempts.get(current.operation_id, [])
+        latest_attempt = attempts[-1] if attempts else None
+        if latest_attempt is None:
+            return False, "Operation has no attempt history to retry."
+        if retry_policy_config is None:
+            return False, "Operation is not defined in its workflow type."
+        if not retry_policy_config.manual_retry_enabled:
+            return False, "Manual retry is disabled by the workflow type."
+        if not bool(latest_attempt.retryable):
+            return False, "Latest attempt is not marked retryable."
+        if not supports_workflow_operation_retry(operation_type=operation_type):
+            return False, workflow_operation_retry_unavailable_reason(operation_type=operation_type)
+        return True, None
+
     def _default_operation_status(definition_operation_type: str) -> str:
         if definition_operation_type == "run_attempt_execution":
             return str(workflow.status or "").strip() or "pending"
@@ -216,21 +300,28 @@ def _workflow_operation_reads(
             operation_type=definition.operation_type,
             label=definition.label,
             retry_policy=definition.retry_policy,
+            retry_policy_config=_workflow_type_retry_policy_config_read(raw_config=definition.retry_policy_config_json),
             description=definition.description,
             required=bool(definition.required),
-                status=(
-                    status_by_type[definition.operation_type].status
-                    if definition.operation_type in status_by_type
-                    else _default_operation_status(definition.operation_type)
-                ),
-            )
-            for definition in definitions
-        ]
+            status=(
+                status_by_type[definition.operation_type].status
+                if definition.operation_type in status_by_type
+                else _default_operation_status(definition.operation_type)
+            ),
+        )
+        for definition in definitions
+    ]
 
     operation_reads: list[WorkflowOperationRead] = []
     defined_operation_types = {definition.operation_type for definition in definitions}
     for definition in definitions:
         current = status_by_type.get(definition.operation_type)
+        retry_policy_config = _workflow_type_retry_policy_config_read(raw_config=definition.retry_policy_config_json)
+        can_retry, retry_unavailable_reason = _operation_retry_state(
+            retry_policy_config=retry_policy_config,
+            operation_type=definition.operation_type,
+            current=current,
+        )
         operation_reads.append(
             workflow_operation_to_schema(
                 current,
@@ -251,26 +342,23 @@ def _workflow_operation_reads(
                 required=bool(definition.required),
                 definition_only=current is None,
                 attempts=(operation_attempts.get(current.operation_id, []) if current is not None else []),
+                can_retry=can_retry,
+                retry_unavailable_reason=retry_unavailable_reason,
             )
         )
 
-    for operation in operations:
-        operation_type = str(operation.operation_type or "").strip()
-        if not operation_type or operation_type in defined_operation_types:
-            continue
-        operation_reads.append(
-            workflow_operation_to_schema(
-                operation,
-                operation_id=operation.operation_id,
-                operation_type=operation_type,
-                status=operation.status,
-                label=operation_type.replace("_", " ").title(),
-                retry_policy=None,
-                description=operation.summary,
-                required=True,
-                definition_only=False,
-                attempts=operation_attempts.get(operation.operation_id, []),
-            )
+    undefined_operation_types = sorted(
+        {
+            str(operation.operation_type or "").strip()
+            for operation in operations
+            if str(operation.operation_type or "").strip()
+            and str(operation.operation_type or "").strip() not in defined_operation_types
+        }
+    )
+    if undefined_operation_types:
+        raise ValueError(
+            "Workflow execution references undefined operations for "
+            f"{workflow.workflow_type_key}: {', '.join(undefined_operation_types)}"
         )
 
     return (
@@ -278,6 +366,8 @@ def _workflow_operation_reads(
             key=workflow_type.workflow_type_key,
             label=workflow_type.label,
             description=workflow_type.description,
+            orchestration_backend=workflow_type.orchestration_backend,
+            engine_config=_workflow_type_engine_config_read(workflow_type=workflow_type),
             operations=type_reads,
         ),
         operation_reads,
@@ -432,12 +522,12 @@ def _workflow_links(
     *,
     session,
     workflow: WorkflowExecution,
+    workflow_type: WorkflowTypeRead,
     tenant: Tenant | None,
     project: Project | None,
     followup_contexts: list[FollowupContext],
     workflow_runs: list[Run],
-    tenant_jira_oauth_context_fn=None,
-    list_child_issue_previews_for_parent_fn=None,
+    integration_adapter_provider=None,
 ) -> list[WorkflowLinkRead]:  # noqa: ANN001
     links: list[WorkflowLinkRead] = []
     jira_url = tenant_jira_issue_url(session=session, tenant=tenant, issue_key=workflow.issue_key) if tenant is not None else None
@@ -454,23 +544,17 @@ def _workflow_links(
     if (
         tenant is not None
         and project is not None
-        and workflow.workflow_type_key == "legacy-parent-planning"
-        and tenant_jira_oauth_context_fn is not None
-        and list_child_issue_previews_for_parent_fn is not None
+        and _workflow_supports_child_issue_links(workflow_type=workflow_type)
+        and integration_adapter_provider is not None
         and str(project.jira_project_key or "").strip()
     ):
         try:
-            oauth_context = tenant_jira_oauth_context_fn(
+            jira_adapter = integration_adapter_provider.jira(
                 session=session,
                 tenant=tenant,
                 settings=get_settings(),
             )
-            child_previews = list_child_issue_previews_for_parent_fn(
-                oauth={
-                    "client": oauth_context.client,
-                    "access_token": oauth_context.access_token,
-                    "cloud_id": oauth_context.connection.cloud_id,
-                },
+            child_previews = jira_adapter.list_child_issue_previews(
                 project_key=project.jira_project_key,
                 parent_issue_key=workflow.issue_key,
             )
@@ -531,7 +615,11 @@ def _workflow_execution_preview(*, session, workflow: WorkflowExecution) -> Work
         operation_attempts=_workflow_operation_attempts_by_operation(session=session, workflow_id=workflow.workflow_id),
     )
     latest_run = _latest_run_for_workflow(session=session, workflow_id=workflow.workflow_id)
-    state_path = _run_stage_path(latest_run=latest_run) if workflow.workflow_type_key == "issue_execution" else _operation_path(workflow_type=workflow_type, operations=operations)
+    state_path = (
+        _run_stage_path(latest_run=latest_run)
+        if _workflow_uses_run_state_path(workflow_type=workflow_type)
+        else _operation_path(workflow_type=workflow_type, operations=operations)
+    )
     waiting_on = _waiting_on(pending_request=pending_request, operations=operations)
     return WorkflowExecutionPreviewRead(
         workflow_id=workflow.workflow_id,
@@ -568,6 +656,7 @@ def _workflow_type_detail(
             operation_type=definition.operation_type,
             label=definition.label,
             retry_policy=definition.retry_policy,
+            retry_policy_config=_workflow_type_retry_policy_config_read(raw_config=definition.retry_policy_config_json),
             description=definition.description,
             required=bool(definition.required),
             status=None,
@@ -578,6 +667,8 @@ def _workflow_type_detail(
         key=workflow_type.workflow_type_key,
         label=workflow_type.label,
         description=workflow_type.description,
+        orchestration_backend=workflow_type.orchestration_backend,
+        engine_config=_workflow_type_engine_config_read(workflow_type=workflow_type),
         operations=definition_reads,
     )
     execution_query = (
@@ -604,6 +695,8 @@ def _workflow_type_detail(
         key=type_read.key,
         label=type_read.label,
         description=type_read.description,
+        orchestration_backend=type_read.orchestration_backend,
+        engine_config=type_read.engine_config,
         operations=type_read.operations,
         execution_modes=list(ATTEMPT_ENTRY_MODES),
         conditional_paths=_workflow_type_conditional_paths(workflow_type=type_read),
@@ -619,8 +712,7 @@ def _workflow_schema(
     workflow,
     workflow_to_schema_fn,
     run_to_schema_fn,
-    tenant_jira_oauth_context_fn=None,
-    list_child_issue_previews_for_parent_fn=None,
+    integration_adapter_provider=None,
 ):  # noqa: ANN001
     latest_checkpoint = session.get(WorkflowCheckpoint, workflow.latest_checkpoint_id) if workflow.latest_checkpoint_id else None
     workflow_runs = _workflow_runs(session=session, workflow_id=workflow.workflow_id)
@@ -634,7 +726,11 @@ def _workflow_schema(
         operation_attempts=operation_attempts,
     )
     latest_run = workflow_runs[-1] if workflow_runs else None
-    state_path = _run_stage_path(latest_run=latest_run) if workflow.workflow_type_key == "issue_execution" else _operation_path(workflow_type=workflow_type, operations=operations)
+    state_path = (
+        _run_stage_path(latest_run=latest_run)
+        if _workflow_uses_run_state_path(workflow_type=workflow_type)
+        else _operation_path(workflow_type=workflow_type, operations=operations)
+    )
     completed_steps, failed_steps, pending_steps, retrying_steps = _step_buckets(state_path=state_path)
     waiting_on = _waiting_on(pending_request=pending_request, operations=operations)
     tenant = session.get(Tenant, workflow.tenant_id)
@@ -661,12 +757,12 @@ def _workflow_schema(
         links=_workflow_links(
             session=session,
             workflow=workflow,
+            workflow_type=workflow_type,
             tenant=tenant,
             project=project,
             followup_contexts=followup_contexts,
             workflow_runs=workflow_runs,
-            tenant_jira_oauth_context_fn=tenant_jira_oauth_context_fn,
-            list_child_issue_previews_for_parent_fn=list_child_issue_previews_for_parent_fn,
+            integration_adapter_provider=integration_adapter_provider,
         ),
         operations=operation_reads,
     )
@@ -874,6 +970,35 @@ def get_workflow_type_detail(
     return _workflow_type_detail(session=session, workflow_type=workflow_type, tenant_id=tenant_id)
 
 
+def update_workflow_type_detail(
+    *,
+    session,
+    workflow_type_key: str,
+    tenant_id: str | None,
+    payload: WorkflowTypeUpdateRequest,
+):  # noqa: ANN001
+    del tenant_id
+    try:
+        workflow_type = update_workflow_type_configuration(
+            session,
+            workflow_type_key=workflow_type_key,
+            orchestration_backend=payload.orchestration_backend,
+            engine_config=payload.engine_config.model_dump(),
+            operation_updates={
+                str(operation.operation_type or "").strip(): {
+                    "retry_policy": operation.retry_policy,
+                    "retry_policy_config": operation.retry_policy_config.model_dump(),
+                }
+                for operation in payload.operations
+            },
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    session.commit()
+    session.refresh(workflow_type)
+    return _workflow_type_detail(session=session, workflow_type=workflow_type, tenant_id=None)
+
+
 def list_workflows(
     *,
     session,
@@ -920,8 +1045,7 @@ def get_workflow(
     workflow_id: str,
     workflow_to_schema_fn,
     run_to_schema_fn,
-    tenant_jira_oauth_context_fn=None,
-    list_child_issue_previews_for_parent_fn=None,
+    integration_adapter_provider=None,
 ):  # noqa: ANN001
     workflow = session.get(WorkflowExecution, workflow_id)
     if workflow is None:
@@ -931,8 +1055,7 @@ def get_workflow(
         workflow=workflow,
         workflow_to_schema_fn=workflow_to_schema_fn,
         run_to_schema_fn=run_to_schema_fn,
-        tenant_jira_oauth_context_fn=tenant_jira_oauth_context_fn,
-        list_child_issue_previews_for_parent_fn=list_child_issue_previews_for_parent_fn,
+        integration_adapter_provider=integration_adapter_provider,
     )
 
 
@@ -987,6 +1110,7 @@ def create_workflow_attempt(
 
     now = _now()
     next_workflow = workflow
+    orchestration_backend = str(workflow.orchestration_backend).strip().lower()
     if not same_workflow:
         next_workflow = WorkflowExecution(
             workflow_id=str(uuid4()),
@@ -999,7 +1123,7 @@ def create_workflow_attempt(
             repo_url=workflow.repo_url,
             branch=None if normalized_mode == "fresh" else workflow.branch,
             pr_url=None if normalized_mode == "fresh" else workflow.pr_url,
-            orchestration_backend=str(workflow.orchestration_backend or get_settings().orchestration_backend or "legacy").strip().lower() or "legacy",
+            orchestration_backend=orchestration_backend,
             dedupe_scope=workflow.dedupe_scope,
             status="queued",
             last_error=None,
@@ -1123,8 +1247,7 @@ def retry_workflow_operation(
     operation_id: str,
     workflow_to_schema_fn,
     run_to_schema_fn,
-    tenant_jira_oauth_context_fn,
-    list_child_issue_previews_for_parent_fn,
+    integration_adapter_provider,
     build_runtime_for_selector_fn,
     seed_issues_with_runtime_fn,
 ):  # noqa: ANN001
@@ -1142,6 +1265,12 @@ def retry_workflow_operation(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Workflow operation has no attempt history to retry")
     if not bool(latest_attempt.retryable):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Workflow operation is not retryable")
+    if not supports_workflow_operation_retry(operation_type=operation.operation_type):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=workflow_operation_retry_unavailable_reason(operation_type=operation.operation_type)
+            or "Workflow operation does not support retry",
+        )
 
     settings = get_settings()
     session_factory = create_session_factory_for_engine(session=session, settings=settings)
@@ -1153,7 +1282,7 @@ def retry_workflow_operation(
         runtime_kwargs_fn=build_run_process_kwargs,
         retry_workflow_operation_fn=lambda **kwargs: execute_workflow_operation_retry(
             **kwargs,
-            tenant_jira_oauth_context_fn=tenant_jira_oauth_context_fn,
+            integration_adapter_provider=integration_adapter_provider,
             build_runtime_for_selector_fn=build_runtime_for_selector_fn,
             seed_issues_with_runtime_fn=seed_issues_with_runtime_fn,
         ),
@@ -1171,6 +1300,5 @@ def retry_workflow_operation(
         workflow=workflow,
         workflow_to_schema_fn=workflow_to_schema_fn,
         run_to_schema_fn=run_to_schema_fn,
-        tenant_jira_oauth_context_fn=tenant_jira_oauth_context_fn,
-        list_child_issue_previews_for_parent_fn=list_child_issue_previews_for_parent_fn,
+        integration_adapter_provider=integration_adapter_provider,
     )

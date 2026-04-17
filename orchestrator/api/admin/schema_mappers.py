@@ -102,6 +102,8 @@ def workflow_operation_to_schema(
     required: bool,
     definition_only: bool,
     attempts: list[WorkflowOperationAttempt],
+    can_retry: bool = False,
+    retry_unavailable_reason: str | None = None,
 ) -> WorkflowOperationRead:
     return WorkflowOperationRead(
         operation_id=operation_id,
@@ -116,6 +118,8 @@ def workflow_operation_to_schema(
         target_system=(operation.target_system if operation is not None else None),
         target_ref=(operation.target_ref if operation is not None else None),
         summary=(operation.summary if operation is not None else description),
+        can_retry=can_retry,
+        retry_unavailable_reason=retry_unavailable_reason,
         attempts=[workflow_operation_attempt_to_schema(attempt) for attempt in attempts],
     )
 
@@ -150,7 +154,7 @@ def workflow_to_schema(
         repo_url=workflow.repo_url,
         branch=workflow.branch,
         pr_url=workflow.pr_url,
-        orchestration_backend=str(workflow.orchestration_backend or "").strip() or "legacy",
+        orchestration_backend=str(workflow.orchestration_backend or "").strip(),
         dedupe_scope=workflow.dedupe_scope,
         status=workflow.status,
         workflow_type=workflow_type,

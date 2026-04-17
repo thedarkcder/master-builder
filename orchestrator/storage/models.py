@@ -4,6 +4,7 @@ from datetime import datetime
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     DateTime,
     Float,
     ForeignKey,
@@ -438,6 +439,10 @@ class WorkflowExecution(Base):
         Index("ix_workflow_executions_project_id", "project_id"),
         Index("ix_workflow_executions_issue_key", "issue_key"),
         Index("ix_workflow_executions_status", "status"),
+        CheckConstraint(
+            "orchestration_backend IN ('legacy', 'temporal', 'database')",
+            name="ck_workflow_executions_orchestration_backend",
+        ),
         Index(
             "uq_workflow_executions_active_scope",
             "tenant_id",
@@ -472,7 +477,7 @@ class WorkflowExecution(Base):
     repo_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     branch: Mapped[str | None] = mapped_column(String(255), nullable=True)
     pr_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
-    orchestration_backend: Mapped[str] = mapped_column(String(32), nullable=False, default="legacy")
+    orchestration_backend: Mapped[str] = mapped_column(String(32), nullable=False)
     dedupe_scope: Mapped[str] = mapped_column(String(32), nullable=False, default="issue_execution")
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -521,8 +526,17 @@ class WorkflowCheckpoint(Base):
 
 class WorkflowType(Base):
     __tablename__ = "workflow_types"
+    __table_args__ = (
+        CheckConstraint(
+            "orchestration_backend IN ('legacy', 'temporal', 'database')",
+            name="ck_workflow_types_orchestration_backend",
+        ),
+    )
 
     workflow_type_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    system_key: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    orchestration_backend: Mapped[str] = mapped_column(String(32), nullable=False)
+    engine_config_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     label: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -546,6 +560,7 @@ class WorkflowTypeOperation(Base):
     operation_type: Mapped[str] = mapped_column(String(64), nullable=False)
     label: Mapped[str] = mapped_column(String(255), nullable=False)
     retry_policy: Mapped[str] = mapped_column(Text, nullable=False)
+    retry_policy_config_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False)

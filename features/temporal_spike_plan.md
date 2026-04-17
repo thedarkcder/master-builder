@@ -13,7 +13,7 @@
 
   - one canonical RunExecutionWorkflow
   - one shared Operation / Attempt / Projection model
-  - one orchestration adapter boundary so Temporal is infrastructure, not the
+  - one WorkflowRuntime boundary so Temporal is infrastructure, not the
     business model
 
   Recommended branch intent:
@@ -53,6 +53,20 @@
   - workflow IDs are app-owned business IDs, not Temporal-owned semantics
   - UI, notifications, and admin views read app projections, not Temporal directly
 
+  WorkflowRuntime shape:
+
+  - start(workflow_type_key, subject)
+  - advance(execution_id, event)
+  - resume_input(execution_id, request_id)
+  - retry_operation(execution_id, operation_id)
+
+  Internal ports:
+
+  - WorkflowStore
+  - WorkflowEngine
+  - WorkflowIntegrationRouter
+  - WorkflowProjectionPublisher
+
   ### 3. Introduce a first-class operation/effect model
 
   Every required side effect after a state transition becomes a durable operation.
@@ -76,7 +90,8 @@
 
   - a workflow is not complete until all required operations are either:
       - completed, or
-      - in a durable failed state or waiting-for-input state with explicit retry/failure metadata
+      - in a durable failed state, or
+      - in a waiting-for-input state with explicit retry/failure metadata
   - retry semantics are based on operation policy, not webhook delivery
   - external writes are idempotent by operation key and effect fingerprint
 
@@ -143,9 +158,9 @@
   - a Jira-style side-effect failure can be represented as:
       - workflow state
       - operation status
-      - blocker
       - notification
-  - existing admin screens can show failed state from app tables without Temporal
+      - retry/failure metadata
+  - existing admin screens can show failed or waiting-for-input state from app tables without Temporal
 
   ### Phase 2: Temporal-backed RunExecutionWorkflow
 

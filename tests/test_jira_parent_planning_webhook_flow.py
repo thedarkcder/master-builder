@@ -11,7 +11,15 @@ from orchestrator.api.discord.seed.description import build_parent_feature_descr
 from orchestrator.core.followup_context_service import FOLLOWUP_CONTEXT_PM_INTERVIEW, upsert_followup_context
 from orchestrator.core.pm_interview_service import PM_INTERVIEW_STATUS_QUESTION_PENDING
 from orchestrator.core.parent_feature_brief_store import persist_parent_feature_brief_snapshot
-from orchestrator.storage.models import FollowupContext, PMInterviewCase, Project, Tenant
+from orchestrator.storage.models import (
+    FollowupContext,
+    PMInterviewCase,
+    Project,
+    Tenant,
+    WorkflowExecution,
+    WorkflowOperation,
+    WorkflowOperationAttempt,
+)
 from orchestrator.tools.jira_oauth import JiraIssueDetail, JiraIssuePreview
 from tests.test_support.jira_webhook_api_harness import JiraWebhookTestsHarness
 
@@ -825,6 +833,28 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
         self.assertEqual(snapshot.parent_issue_key, "TP-983")
         self.assertEqual(snapshot.brief_json["objective"], "Runtime architecture reset")
         self.assertEqual(snapshot.notes_json["source"], "jira_parent_brief_normalization")
+        with self.session_factory() as session:
+            workflow = session.get(WorkflowExecution, "parent_planning:TP-983")
+            self.assertIsNotNone(workflow)
+            assert workflow is not None
+            self.assertEqual(workflow.status, "completed")
+            operations = session.execute(
+                select(WorkflowOperation).where(WorkflowOperation.workflow_id == workflow.workflow_id)
+            ).scalars().all()
+        status_by_type = {operation.operation_type: operation.status for operation in operations}
+        self.assertEqual(
+            status_by_type,
+            {
+                "brief_normalization": "completed",
+                "jira_parent_update": "completed",
+                "jira_comment_projection": "pending",
+                "discord_followup_projection": "pending",
+                "backlog_planning": "completed",
+                "jira_child_fanout": "completed",
+                "jira_child_promotion": "pending",
+                "notification_emit": "pending",
+            },
+        )
         self.assertTrue(oauth_context.client.updated_fields)
         rewritten_description = oauth_context.client.updated_fields[0]["description"]
         self.assertIn("Objective", str(rewritten_description))
@@ -1052,7 +1082,19 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
             snapshot = session.execute(
                 select(PMInterviewCase).where(PMInterviewCase.request_id == "parent-brief:TP-987")
             ).scalars().one()
+            workflow = session.get(WorkflowExecution, "parent_planning:TP-987")
+            self.assertIsNotNone(workflow)
+            assert workflow is not None
+            operations = session.execute(
+                select(WorkflowOperation).where(WorkflowOperation.workflow_id == workflow.workflow_id)
+            ).scalars().all()
         self.assertEqual(snapshot.status, PM_INTERVIEW_STATUS_QUESTION_PENDING)
+        self.assertEqual(workflow.status, "waiting_for_input")
+        status_by_type = {operation.operation_type: operation.status for operation in operations}
+        self.assertEqual(status_by_type["brief_normalization"], "waiting_for_input")
+        self.assertEqual(status_by_type["jira_parent_update"], "completed")
+        self.assertEqual(status_by_type["jira_comment_projection"], "completed")
+        self.assertEqual(status_by_type["discord_followup_projection"], "completed")
 
     def test_webhook_pm_parent_issue_created_blocks_cleanly_when_discord_followup_fails(self) -> None:
         payload = self._jira_issue_payload(issue_key="TP-987A", labels=["pm-parent"], status_name="Backlog")
@@ -1288,6 +1330,118 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
             "What cooldown or rate-limit behavior should users see on repeated auth-initiation attempts?",
             ordered_questions[1]["content"][0]["content"][0]["text"],
         )
+
+    def test_webhook_pm_parent_issue_created_seed_failure_records_failed_execution_operation(self) -> None:
+        payload = self._jira_issue_payload(issue_key="TP-987D", labels=["pm-parent"], status_name="Backlog")
+        payload["webhookEvent"] = "jira:issue_created"
+
+        class _FakeClient:
+            def __init__(self) -> None:
+                self.updated_fields: list[dict] = []
+                self.replaced_labels: list[dict] = []
+
+            def get_issue_detail(self, **kwargs):
+                return JiraIssueDetail(
+                    key="TP-987D",
+                    summary="Identity redesign",
+                    status="Backlog",
+                    description="Updated parent description",
+                    labels=["pm-parent", "sync-current"],
+                )
+
+            def update_issue_fields(self, **kwargs):
+                self.updated_fields.append(kwargs)
+                return None
+
+            def replace_issue_labels(self, **kwargs):
+                self.replaced_labels.append(kwargs)
+                return None
+
+        oauth_context = SimpleNamespace(
+            client=_FakeClient(),
+            access_token="tok",
+            connection=SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
+        )
+        with (
+            patch("orchestrator.core.worker.webhook_job_service.tenant_jira_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_jira_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.build_runtime_for_selector", return_value=object()),
+            patch(
+                "orchestrator.core.jira_parent_child_sync_service.normalize_parent_feature_brief_with_runtime",
+                return_value={
+                    "brief": {
+                        "objective": "Identity redesign",
+                        "user_value": "Tenant access is explicit",
+                        "acceptance_criteria": ["Planning can proceed"],
+                        "scope_in": ["Identity redesign"],
+                        "scope_out": [],
+                        "ui_references": [],
+                        "constraints": [],
+                        "risks": [],
+                        "success_outcomes": [],
+                        "recommendation": "Proceed to engineering child fanout.",
+                        "open_questions": [],
+                        "next_steps": [],
+                    },
+                    "open_questions": [],
+                    "ready_to_write": True,
+                },
+            ),
+            patch(
+                "orchestrator.core.jira_parent_child_sync_service.run_specialist_planning_fanout",
+                return_value=SimpleNamespace(
+                    planning_state="planning_completed",
+                    required_tasks=(),
+                    findings=(),
+                    recommendations=(),
+                    acceptance_impacts=(),
+                    open_behavior_questions=(),
+                    architecture_summary=(),
+                    architecture_diagram="",
+                    stages=(),
+                ),
+            ),
+            patch(
+                "orchestrator.api.webhooks.jira_parent_child_sync.seed_issues_with_runtime",
+                side_effect=RuntimeError(
+                    'Failed to seed Jira issues: Jira API request failed (400): {"errorMessages":["CONTENT_LIMIT_EXCEEDED"],"errors":{}}'
+                ),
+            ),
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.post_jira_comment", return_value=(True, None)),
+            patch("orchestrator.api.webhooks.jira_application.plan_jira_run_flow") as run_flow_mock,
+        ):
+            response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+            processed = self._process_one_webhook_job()
+
+        self._assert_jira_issue_event_queued(response, issue_key="TP-987D")
+        self.assertIsNotNone(processed)
+        assert processed is not None
+        self.assertEqual(processed.status, "done")
+        run_flow_mock.assert_not_called()
+        with self.session_factory() as session:
+            workflow = session.get(WorkflowExecution, "parent_planning:TP-987D")
+            self.assertIsNotNone(workflow)
+            assert workflow is not None
+            operation = session.execute(
+                select(WorkflowOperation).where(
+                    WorkflowOperation.workflow_id == workflow.workflow_id,
+                    WorkflowOperation.operation_type == "jira_child_fanout",
+                )
+            ).scalar_one()
+            latest_attempt = session.execute(
+                select(WorkflowOperationAttempt)
+                .where(WorkflowOperationAttempt.operation_id == operation.operation_id)
+                .order_by(WorkflowOperationAttempt.attempt_number.desc())
+            ).scalars().first()
+        self.assertEqual(workflow.status, "failed")
+        self.assertIn("CONTENT_LIMIT_EXCEEDED", str(workflow.last_error))
+        self.assertEqual(operation.status, "failed")
+        self.assertIn("CONTENT_LIMIT_EXCEEDED", str(operation.summary))
+        self.assertIsNotNone(latest_attempt)
+        assert latest_attempt is not None
+        self.assertEqual(latest_attempt.status, "failed")
+        self.assertEqual(latest_attempt.error_category, "content_limit")
+        self.assertTrue(latest_attempt.retryable)
 
     def test_webhook_pm_parent_issue_updated_posts_formatted_jira_clarification_comment(self) -> None:
         payload = self._jira_issue_payload(issue_key="TP-987B", labels=["pm-parent"], status_name="Backlog")

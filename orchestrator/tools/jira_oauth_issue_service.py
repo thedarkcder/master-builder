@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import copy
+import json
 import logging
 from datetime import datetime, timezone
 from typing import Any
@@ -18,6 +20,9 @@ from orchestrator.tools.jira_oauth_models import (
 )
 
 logger = logging.getLogger(__name__)
+
+MAX_JIRA_ADF_DOCUMENT_BYTES = 28_000
+_JIRA_ADF_TRUNCATION_NOTICE = "Content truncated to fit Jira content size limit."
 
 
 class JiraOAuthIssueService:
@@ -691,7 +696,7 @@ class JiraOAuthIssueService:
 def _to_adf_description(text: str | dict[str, Any]) -> dict[str, Any]:
     if isinstance(text, dict):
         if text.get("type") == "doc" and isinstance(text.get("content"), list):
-            return text
+            return _truncate_adf_document_to_limit(text)
         text = ""
     elif text is None:
         text = ""
@@ -702,11 +707,83 @@ def _to_adf_description(text: str | dict[str, Any]) -> dict[str, Any]:
     if not lines:
         lines = ["No description provided"]
     paragraphs = [{"type": "paragraph", "content": [{"type": "text", "text": line}]} for line in lines]
-    return {
+    return _truncate_adf_document_to_limit({
         "type": "doc",
         "version": 1,
         "content": paragraphs,
+    })
+
+
+def _adf_document_size_bytes(document: dict[str, Any]) -> int:
+    return len(json.dumps(document, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
+
+
+def _truncation_paragraph() -> dict[str, Any]:
+    return {
+        "type": "paragraph",
+        "content": [{"type": "text", "text": _JIRA_ADF_TRUNCATION_NOTICE}],
     }
+
+
+def _ensure_truncation_notice(document: dict[str, Any]) -> None:
+    content = document.setdefault("content", [])
+    if not isinstance(content, list):
+        document["content"] = []
+        content = document["content"]
+    if not content:
+        content.append(_truncation_paragraph())
+        return
+    last = content[-1]
+    if _adf_to_plain_text(last).strip() == _JIRA_ADF_TRUNCATION_NOTICE:
+        return
+    content.append(_truncation_paragraph())
+
+
+def _collect_text_nodes(node: Any) -> list[dict[str, Any]]:
+    nodes: list[dict[str, Any]] = []
+    if isinstance(node, dict):
+        if isinstance(node.get("text"), str):
+            nodes.append(node)
+        content = node.get("content")
+        if isinstance(content, list):
+            for child in content:
+                nodes.extend(_collect_text_nodes(child))
+    elif isinstance(node, list):
+        for child in node:
+            nodes.extend(_collect_text_nodes(child))
+    return nodes
+
+
+def _truncate_adf_document_to_limit(document: dict[str, Any]) -> dict[str, Any]:
+    candidate = copy.deepcopy(document)
+    if _adf_document_size_bytes(candidate) <= MAX_JIRA_ADF_DOCUMENT_BYTES:
+        return candidate
+
+    _ensure_truncation_notice(candidate)
+    content = candidate.get("content")
+    if not isinstance(content, list):
+        return {"type": "doc", "version": 1, "content": [_truncation_paragraph()]}
+
+    while _adf_document_size_bytes(candidate) > MAX_JIRA_ADF_DOCUMENT_BYTES and len(content) > 1:
+        content.pop(-2)
+
+    if _adf_document_size_bytes(candidate) <= MAX_JIRA_ADF_DOCUMENT_BYTES:
+        return candidate
+
+    text_nodes = _collect_text_nodes(content[:-1])
+    for node in reversed(text_nodes):
+        text = str(node.get("text") or "")
+        while text and _adf_document_size_bytes(candidate) > MAX_JIRA_ADF_DOCUMENT_BYTES:
+            overflow = _adf_document_size_bytes(candidate) - MAX_JIRA_ADF_DOCUMENT_BYTES
+            shrink_by = max(64, overflow + 8)
+            next_len = max(0, len(text) - shrink_by)
+            text = text[:next_len].rstrip()
+            node["text"] = f"{text}…" if text else ""
+        if _adf_document_size_bytes(candidate) <= MAX_JIRA_ADF_DOCUMENT_BYTES:
+            return candidate
+
+    minimal = {"type": "doc", "version": 1, "content": [_truncation_paragraph()]}
+    return minimal
 
 
 def _adf_to_plain_text(node: object) -> str:

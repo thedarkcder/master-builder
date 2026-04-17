@@ -8,6 +8,7 @@ from orchestrator.tools.jira_oauth import (
     JiraOAuthClientConfig,
     _to_adf_description,
 )
+from orchestrator.tools.jira_oauth_issue_service import MAX_JIRA_ADF_DOCUMENT_BYTES
 
 
 class JiraOAuthTests(unittest.TestCase):
@@ -198,6 +199,29 @@ class JiraOAuthTests(unittest.TestCase):
             ],
         }
         self.assertEqual(_to_adf_description(adf_doc), adf_doc)
+
+    def test_to_adf_description_truncates_large_doc_to_fit_jira_limit(self) -> None:
+        adf_doc = {
+            "type": "doc",
+            "version": 1,
+            "content": [
+                {
+                    "type": "paragraph",
+                    "content": [{"type": "text", "text": "A" * 20_000}],
+                },
+                {
+                    "type": "paragraph",
+                    "content": [{"type": "text", "text": "B" * 20_000}],
+                },
+            ],
+        }
+
+        limited = _to_adf_description(adf_doc)
+
+        serialized = __import__("json").dumps(limited, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        self.assertLessEqual(len(serialized), MAX_JIRA_ADF_DOCUMENT_BYTES)
+        flattened = __import__("json").dumps(limited)
+        self.assertIn("Content truncated to fit Jira content size limit.", flattened)
 
     def test_client_delegates_to_callback_issue_and_webhook_services(self) -> None:
         client = JiraOAuthClient(

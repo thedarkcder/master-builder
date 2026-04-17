@@ -1446,9 +1446,71 @@ class AdminApiTests(AdminApiTestHarness):
         detail_body = detail_response.json()
         self.assertEqual(detail_body["key"], "issue_execution")
         self.assertEqual(detail_body["operations"][0]["operation_type"], "run_attempt_execution")
+        self.assertEqual(detail_body["orchestration_backend"], "temporal")
+        self.assertEqual(detail_body["engine_config"]["temporal"]["workflow_name"], "DevelopmentTeamRunWorkflow")
+        self.assertIn("manual_retry_enabled", detail_body["operations"][0]["retry_policy_config"])
         self.assertIn("fresh", detail_body["execution_modes"])
         self.assertEqual(detail_body["recent_executions"][0]["workflow_id"], "workflow-read-1")
         self.assertEqual(detail_body["recent_executions"][0]["waiting_on"], "human_input")
+
+        update_response = self.client.put(
+            "/api/admin/workflow-types/issue_execution",
+            json={
+                "orchestration_backend": "temporal",
+                "engine_config": {
+                    "temporal": {
+                        "workflow_name": "DevelopmentTeamRunWorkflow",
+                        "task_queue": "custom-queue",
+                        "activity_start_to_close_timeout_seconds": 3600,
+                        "human_input_resume_timeout_seconds": 1800,
+                    }
+                },
+                "operations": [
+                    {
+                        "operation_type": "run_attempt_execution",
+                        "retry_policy": "Retry transient worker failures with bounded backoff.",
+                        "retry_policy_config": {
+                            "manual_retry_enabled": True,
+                            "max_attempts": 7,
+                            "initial_interval_seconds": 45,
+                            "max_interval_seconds": 2400,
+                            "backoff_coefficient": 2.5,
+                            "non_retryable_error_categories": ["authorization_failed"],
+                        },
+                    },
+                    {
+                        "operation_type": "human_input_resume",
+                        "retry_policy": "Only retry on transient infrastructure failures.",
+                        "retry_policy_config": {
+                            "manual_retry_enabled": False,
+                            "max_attempts": 1,
+                            "initial_interval_seconds": 0,
+                            "max_interval_seconds": 0,
+                            "backoff_coefficient": 1.0,
+                            "non_retryable_error_categories": ["missing_input", "contract_invalid"],
+                        },
+                    },
+                    {
+                        "operation_type": "notification_emit",
+                        "retry_policy": "Retry notification delivery with idempotent writes.",
+                        "retry_policy_config": {
+                            "manual_retry_enabled": False,
+                            "max_attempts": 5,
+                            "initial_interval_seconds": 30,
+                            "max_interval_seconds": 900,
+                            "backoff_coefficient": 2.0,
+                            "non_retryable_error_categories": [],
+                        },
+                    },
+                ],
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(update_response.status_code, 200, update_response.text)
+        updated_body = update_response.json()
+        self.assertEqual(updated_body["engine_config"]["temporal"]["task_queue"], "custom-queue")
+        updated_operation = next(item for item in updated_body["operations"] if item["operation_type"] == "run_attempt_execution")
+        self.assertEqual(updated_operation["retry_policy_config"]["max_attempts"], 7)
 
     def test_get_workflow_includes_child_issue_links_for_parent_planning(self) -> None:
         payload = self._tenant_payload()
@@ -1461,8 +1523,8 @@ class AdminApiTests(AdminApiTestHarness):
         with session_factory() as session:
             session.add(
                 WorkflowExecution(
-                    workflow_id="legacy-parent-planning:MAB-215",
-                    workflow_type_key="legacy-parent-planning",
+                    workflow_id="parent_planning:MAB-215",
+                    workflow_type_key="parent_planning",
                     tenant_id="tenant-a",
                     project_id="tenant-a-default",
                     issue_key="MAB-215",
@@ -1487,28 +1549,22 @@ class AdminApiTests(AdminApiTestHarness):
             )
             session.commit()
 
-        with (
-            patch(
-                "orchestrator.api.routes.admin_runs.tenant_jira_oauth_context",
-                return_value=SimpleNamespace(
-                    client=SimpleNamespace(),
-                    access_token="access-token",
-                    connection=SimpleNamespace(cloud_id="cloud-1"),
-                ),
-            ),
-            patch(
-                "orchestrator.api.routes.admin_runs.list_child_issue_previews_for_parent",
-                return_value=[
-                    SimpleNamespace(
-                        key="MAB-300",
-                        summary="Create tenant assurance boundary",
-                        status="To Do",
-                    )
-                ],
-            ),
+        fake_jira_adapter = SimpleNamespace(
+            list_child_issue_previews=lambda **_kwargs: [
+                SimpleNamespace(
+                    key="MAB-300",
+                    summary="Create tenant assurance boundary",
+                    status="To Do",
+                )
+            ]
+        )
+        with patch.object(
+            __import__("orchestrator.api.routes.admin_runs", fromlist=["workflow_integration_adapter_provider"]).workflow_integration_adapter_provider,
+            "jira",
+            return_value=fake_jira_adapter,
         ):
             response = self.client.get(
-                "/api/admin/workflows/legacy-parent-planning:MAB-215",
+                "/api/admin/workflows/parent_planning:MAB-215",
                 auth=("admin", "secret"),
             )
 
@@ -1521,14 +1577,18 @@ class AdminApiTests(AdminApiTestHarness):
         self.assertEqual(
             operation_types,
             [
+                "brief_normalization",
                 "jira_parent_update",
                 "jira_comment_projection",
                 "discord_followup_projection",
+                "backlog_planning",
                 "jira_child_fanout",
+                "jira_child_promotion",
                 "notification_emit",
             ],
         )
-        self.assertEqual(body["operations"][3]["status"], "pending")
+        self.assertEqual(body["operations"][5]["status"], "pending")
+        self.assertEqual(body["operations"][6]["status"], "pending")
         self.assertEqual(body["failure_reason"], 'Failed to seed Jira issues: Jira API request failed (400): {"errorMessages":["CONTENT_LIMIT_EXCEEDED"],"errors":{}}')
 
     def test_retry_workflow_operation_returns_refreshed_workflow(self) -> None:
@@ -1541,8 +1601,8 @@ class AdminApiTests(AdminApiTestHarness):
         session_factory = create_session_factory(self.database_url)
         with session_factory() as session:
             workflow = WorkflowExecution(
-                workflow_id="legacy-parent-planning:MAB-215",
-                workflow_type_key="legacy-parent-planning",
+                workflow_id="parent_planning:MAB-215",
+                workflow_type_key="parent_planning",
                 tenant_id="tenant-a",
                 project_id="tenant-a-default",
                 issue_key="MAB-215",
@@ -1632,20 +1692,17 @@ class AdminApiTests(AdminApiTestHarness):
                     status=operation.status,
                 )
 
+        fake_jira_adapter = SimpleNamespace(list_child_issue_previews=lambda **_kwargs: [])
         with (
             patch("orchestrator.api.admin.workflows_service.build_workflow_engine", return_value=_FakeEngine()),
-            patch(
-                "orchestrator.api.routes.admin_runs.tenant_jira_oauth_context",
-                return_value=SimpleNamespace(
-                    client=SimpleNamespace(),
-                    access_token="access-token",
-                    connection=SimpleNamespace(cloud_id="cloud-1"),
-                ),
+            patch.object(
+                __import__("orchestrator.api.routes.admin_runs", fromlist=["workflow_integration_adapter_provider"]).workflow_integration_adapter_provider,
+                "jira",
+                return_value=fake_jira_adapter,
             ),
-            patch("orchestrator.api.routes.admin_runs.list_child_issue_previews_for_parent", return_value=[]),
         ):
             response = self.client.post(
-                "/api/admin/workflows/legacy-parent-planning:MAB-215/operations/operation-jira-child-fanout/retry",
+                "/api/admin/workflows/parent_planning:MAB-215/operations/operation-jira-child-fanout/retry",
                 auth=("admin", "secret"),
             )
 
