@@ -78,6 +78,28 @@ def test_workflow_runtime_delegates_start_resume_query_and_retry(monkeypatch):
             assert kwargs["session_factory"] is session_factory
 
 
+def test_workflow_runtime_delegates_attempt_creation(monkeypatch):
+    session = sentinel.session
+    settings = sentinel.settings
+    bootstrap = sentinel.bootstrap
+    enqueue_result = sentinel.enqueue_result
+
+    monkeypatch.setattr(
+        "orchestrator.core.workflow_runtime.enqueue_attempt_for_workflow_uncommitted",
+        lambda *args, **kwargs: enqueue_result,
+    )
+
+    runtime = build_workflow_runtime(
+        session=session,
+        settings=settings,
+        process_claimed_run_fn=sentinel.process_claimed_run_fn,
+        build_runner_fn=sentinel.build_runner_fn,
+        runtime_kwargs_fn=sentinel.runtime_kwargs_fn,
+    )
+
+    assert runtime.create_attempt(workflow_id="wf-123", bootstrap=bootstrap, commit=False) is enqueue_result
+
+
 def test_workflow_runtime_delegates_advance_to_handler_resolved_from_workflow_type(monkeypatch):
     session = sentinel.session
     settings = sentinel.settings

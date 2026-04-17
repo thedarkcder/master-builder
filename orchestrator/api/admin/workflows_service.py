@@ -27,15 +27,9 @@ from orchestrator.api.schemas import (
     WorkflowTypeTemporalConfigRead,
 )
 from orchestrator.core.config import get_settings
-from orchestrator.core.workflow_attempt_factory import (
-    build_run_attempt,
-    build_workflow_execution_for_attempt,
-)
+from orchestrator.core.workflow_attempt_factory import build_workflow_execution_for_attempt
 from orchestrator.core.workflow_runtime import build_workflow_runtime
-from orchestrator.core.workflow_run_state import (
-    project_workflow_for_new_run_attempt,
-    reconcile_workflow_with_active_run,
-)
+from orchestrator.core.workflow_run_state import reconcile_workflow_with_active_run
 from orchestrator.core.workflow_operation_executor import (
     execute_workflow_operation_retry,
     supports_workflow_operation_retry,
@@ -50,6 +44,7 @@ from orchestrator.core.worker.execution_service import build_run_process_kwargs
 from orchestrator.core.worker.process_service import process_claimed_run
 from orchestrator.core.worker.runtime_factory import build_workflow_runner_for_session
 from orchestrator.core.runs import (
+    RunBootstrap,
     RunStateTransitionError,
     require_ready_for_agent_enqueue,
     resolve_enqueue_precheck_outcome,
@@ -72,7 +67,6 @@ from orchestrator.storage.models import (
     WorkflowOperationAttempt,
     WorkflowType,
 )
-from orchestrator.storage.run_queue_events import notify_run_enqueued
 
 
 def _now() -> datetime:
@@ -1151,7 +1145,7 @@ def create_workflow_attempt(
             pr_url=None if normalized_mode == "fresh" else workflow.pr_url,
             orchestration_backend=orchestration_backend,
             dedupe_scope=workflow.dedupe_scope,
-            status="queued",
+            status="pending",
             latest_checkpoint_id=selected_checkpoint.checkpoint_id if selected_checkpoint is not None else None,
             source_workflow_id=workflow.workflow_id,
             source_run_id=(
@@ -1163,6 +1157,7 @@ def create_workflow_attempt(
             updated_at=now,
         )
         session.add(next_workflow)
+        session.flush()
     else:
         _cancel_open_input_requests(session=session, workflow_id=workflow.workflow_id)
         next_workflow.latest_checkpoint_id = selected_checkpoint.checkpoint_id if selected_checkpoint is not None else None
@@ -1201,54 +1196,56 @@ def create_workflow_attempt(
     )
     next_workflow.pr_url = next_run_pr_url
 
-    next_run = build_run_attempt(
-        run_id=str(uuid4()),
-        workflow_id=next_workflow.workflow_id,
-        tenant_id=next_workflow.tenant_id,
-        project_id=project.project_id,
-        issue_key=next_workflow.issue_key,
-        issue_summary=next_workflow.issue_summary,
-        issue_description=next_workflow.issue_description,
-        repo_url=next_workflow.repo_url,
-        branch=next_workflow.branch,
-        pr_url=next_run_pr_url,
-        attempt_number=1 if not same_workflow else _next_attempt_number(session=session, workflow_id=workflow.workflow_id),
-        parent_run_id=(
-            source_run.run_id
-            if normalized_mode == "fresh" and source_run is not None
-            else selected_checkpoint.run_id if selected_checkpoint is not None else None
-        ),
-        entry_mode=normalized_mode,
-        entry_stage="orchestrated" if normalized_mode == "fresh" else selected_checkpoint.stage,
-        entry_checkpoint_id=None if normalized_mode == "fresh" else selected_checkpoint.checkpoint_id,
-        dedupe_scope=next_workflow.dedupe_scope,
-        plan=next_run_plan,
-        status="queued",
-        pre_check_outcome=next_run_precheck_outcome,
-        required_worker_capability=next_run_required_worker_capability,
-        required_runtime_kinds_json=next_run_required_runtime_kinds,
-        created_at=now,
+    runtime = build_workflow_runtime(
+        session=session,
+        settings=get_settings(),
+        process_claimed_run_fn=None,
+        build_runner_fn=None,
+        runtime_kwargs_fn=None,
     )
-    _require_ready_for_queue(
-        source="admin_workflow_attempt",
-        plan=next_run.plan,
-        precheck_outcome=next_run.pre_check_outcome,
-    )
-    session.add(next_run)
-    project_workflow_for_new_run_attempt(
-        next_workflow,
-        run=next_run,
-        latest_checkpoint_id=next_workflow.latest_checkpoint_id,
-        orchestration_backend=orchestration_backend if not same_workflow else None,
-        now=now,
-    )
-    notify_run_enqueued(
-        session,
-        tenant_id=next_workflow.tenant_id,
-        project_id=next_workflow.project_id,
-        run_id=next_run.run_id,
-        issue_key=next_workflow.issue_key,
-    )
+    try:
+        enqueue_result = runtime.create_attempt(
+            workflow_id=next_workflow.workflow_id,
+            bootstrap=RunBootstrap(
+                workflow_id=next_workflow.workflow_id,
+                parent_run_id=(
+                    source_run.run_id
+                    if normalized_mode == "fresh" and source_run is not None
+                    else selected_checkpoint.run_id if selected_checkpoint is not None else None
+                ),
+                entry_mode=normalized_mode,
+                entry_stage="orchestrated" if normalized_mode == "fresh" else selected_checkpoint.stage,
+                entry_checkpoint_id=None if normalized_mode == "fresh" else selected_checkpoint.checkpoint_id,
+                plan=next_run_plan,
+                branch=next_workflow.branch,
+                pr_url=next_run_pr_url,
+                precheck_outcome=next_run_precheck_outcome,
+                required_worker_capability=next_run_required_worker_capability,
+                required_runtime_kinds_json=next_run_required_runtime_kinds,
+            ),
+            commit=False,
+        )
+    except IntegrityError as error:
+        session.rollback()
+        if _is_active_scope_unique_violation(error):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "A queued or in-progress workflow already exists for this issue "
+                    "and dedupe scope. Resume the active workflow instead."
+                ),
+            ) from error
+        raise
+    except RunStateTransitionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+    if not enqueue_result.enqueued:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Workflow already has an active attempt",
+        )
     try:
         session.commit()
     except IntegrityError as error:
@@ -1262,8 +1259,8 @@ def create_workflow_attempt(
                 ),
             ) from error
         raise
-    session.refresh(next_run)
-    return run_to_schema_fn(next_run)
+    session.refresh(enqueue_result.run)
+    return run_to_schema_fn(enqueue_result.run)
 
 
 def retry_workflow_operation(

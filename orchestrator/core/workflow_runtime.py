@@ -11,6 +11,12 @@ from orchestrator.core.workflow_engine_factory import (
     build_workflow_engine,
     create_session_factory_for_engine,
 )
+from orchestrator.core.runs import (
+    EnqueueRunResult,
+    RunBootstrap,
+    enqueue_attempt_for_workflow,
+    enqueue_attempt_for_workflow_uncommitted,
+)
 from orchestrator.core.workflow_execution_projection import ensure_issue_workflow_execution
 from orchestrator.core.workflow_operation_service import WorkflowOperationHandle
 from orchestrator.core.workflow_type_catalog import get_workflow_type_by_handler_key
@@ -289,6 +295,20 @@ class WorkflowRuntime:
             workflow=workflow,
             run=run,
             claim_id=claim_id,
+        )
+
+    def create_attempt(
+        self,
+        *,
+        workflow_id: str,
+        bootstrap: RunBootstrap,
+        commit: bool = True,
+    ) -> EnqueueRunResult:
+        enqueue = enqueue_attempt_for_workflow if commit else enqueue_attempt_for_workflow_uncommitted
+        return enqueue(
+            self._session,
+            workflow_id=workflow_id,
+            bootstrap=bootstrap,
         )
 
     def resume_input(

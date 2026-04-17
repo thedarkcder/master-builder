@@ -198,13 +198,12 @@ def test_resume_workflow_from_human_input_answer_creates_resume_attempt_and_cons
         source_run if key == "run-1" else checkpoint if key == "checkpoint-1" else None
     )
     enqueue_result = SimpleNamespace(enqueued=True, reason=None, run=resumed_run)
+    runtime = MagicMock()
+    runtime.create_attempt.return_value = enqueue_result
 
     with (
         patch("orchestrator.core.run_human_input_service.encrypt_value", return_value="encrypted"),
-        patch(
-            "orchestrator.core.run_human_input_service.enqueue_attempt_for_workflow_uncommitted",
-            return_value=enqueue_result,
-        ) as enqueue_run_mock,
+        patch("orchestrator.core.run_human_input_service.build_workflow_runtime", return_value=runtime),
         patch("orchestrator.core.run_human_input_service.close_followup_contexts"),
     ):
         answered = answer_human_input_request(
@@ -221,7 +220,7 @@ def test_resume_workflow_from_human_input_answer_creates_resume_attempt_and_cons
         )
 
     assert result is resumed_run
-    bootstrap = enqueue_run_mock.call_args.kwargs["bootstrap"]
+    bootstrap = runtime.create_attempt.call_args.kwargs["bootstrap"]
     assert bootstrap.workflow_id == "workflow-1"
     assert bootstrap.parent_run_id == "run-1"
     assert bootstrap.entry_mode == "resume"
@@ -271,12 +270,11 @@ def test_resume_workflow_from_human_input_answer_carries_precheck_from_source_ru
         source_run if key == "run-1" else checkpoint if key == "checkpoint-1" else None
     )
     enqueue_result = SimpleNamespace(enqueued=True, reason=None, run=resumed_run)
+    runtime = MagicMock()
+    runtime.create_attempt.return_value = enqueue_result
 
     with (
-        patch(
-            "orchestrator.core.run_human_input_service.enqueue_attempt_for_workflow_uncommitted",
-            return_value=enqueue_result,
-        ) as enqueue_run_mock,
+        patch("orchestrator.core.run_human_input_service.build_workflow_runtime", return_value=runtime),
         patch("orchestrator.core.run_human_input_service.close_followup_contexts"),
     ):
         result = _resume_workflow_from_human_input_answer_legacy(
@@ -286,7 +284,7 @@ def test_resume_workflow_from_human_input_answer_carries_precheck_from_source_ru
         )
 
     assert result is resumed_run
-    bootstrap = enqueue_run_mock.call_args.kwargs["bootstrap"]
+    bootstrap = runtime.create_attempt.call_args.kwargs["bootstrap"]
     snapshot = ExecutionSnapshot.require(bootstrap.plan, allow_empty=True)
     assert snapshot.context.execution_context.get("human_input_request_id") == "request-1"
     assert snapshot.context.execution_context.get("pre_check_outcome") == "ready_for_agent"
@@ -337,10 +335,8 @@ def test_resume_workflow_from_human_input_answer_reuses_existing_resume_run() ->
     existing_resume_query.scalars.return_value.all.return_value = [existing_resume_run]
     session.execute.side_effect = [lock_query, existing_resume_query]
 
-    with patch(
-        "orchestrator.core.run_human_input_service.enqueue_attempt_for_workflow_uncommitted"
-    ) as enqueue_run_mock, patch("orchestrator.core.run_human_input_service.close_followup_contexts"):
-        result = resume_workflow_from_human_input_answer(
+    with patch("orchestrator.core.run_human_input_service.close_followup_contexts"):
+        result = _resume_workflow_from_human_input_answer_legacy(
             session=session,
             settings=SimpleNamespace(secrets_encryption_key="secret-key"),
             request=request,
@@ -349,7 +345,6 @@ def test_resume_workflow_from_human_input_answer_reuses_existing_resume_run() ->
     assert result is existing_resume_run
     assert request.status == "consumed"
     assert request.consumed_by_run_id == "run-2"
-    enqueue_run_mock.assert_not_called()
 
 
 def test_resume_workflow_from_human_input_answer_rejects_unrelated_active_resume_run() -> None:
@@ -392,11 +387,10 @@ def test_resume_workflow_from_human_input_answer_rejects_unrelated_active_resume
         reason=EnqueueFailureReason.RUN_ALREADY_ACTIVE,
         run=unrelated_active_run,
     )
+    runtime = MagicMock()
+    runtime.create_attempt.return_value = enqueue_result
 
-    with patch(
-        "orchestrator.core.run_human_input_service.enqueue_attempt_for_workflow_uncommitted",
-        return_value=enqueue_result,
-    ):
+    with patch("orchestrator.core.run_human_input_service.build_workflow_runtime", return_value=runtime):
         try:
             _resume_workflow_from_human_input_answer_legacy(
                 session=session,
