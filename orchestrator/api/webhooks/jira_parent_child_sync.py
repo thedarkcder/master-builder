@@ -16,6 +16,11 @@ from orchestrator.api.webhooks.contracts import (
 from orchestrator.api.webhooks.jira_webhook_types import JiraWebhookContext, jira_webhook_response
 from orchestrator.core.agent_runtime_resolver import build_runtime_for_selector
 from orchestrator.core.codex_agents import classify_engineering_clarification_with_codex
+from orchestrator.core.workflow_integration_provider import (
+    JiraWorkflowConnectionProvider,
+    WorkflowIntegrationAdapterProvider,
+)
+from orchestrator.core.workflow_runtime import build_workflow_runtime
 from orchestrator.core.jira_parent_child_sync_service import (
     JiraParentChildSyncContext,
     JiraParentChildSyncResult,
@@ -25,6 +30,15 @@ from orchestrator.core.jira_parent_child_sync_service import (
     handle_parent_feature_sync as handle_parent_feature_sync_service,
     is_system_generated_comment as is_system_generated_comment_service,
 )
+
+
+def _build_workflow_integration_adapter_provider() -> WorkflowIntegrationAdapterProvider:
+    return WorkflowIntegrationAdapterProvider(
+        jira_provider=JiraWorkflowConnectionProvider(
+            oauth_context_resolver=tenant_jira_oauth_context,
+            list_child_issue_previews_for_parent_fn=list_child_issue_previews_for_parent,
+        )
+    )
 
 def _build_service_context(*, context: JiraWebhookContext) -> JiraParentChildSyncContext:
     return JiraParentChildSyncContext(
@@ -70,10 +84,10 @@ def handle_parent_feature_sync(
         context=_build_service_context(context=context),
         session=session,
         settings=settings,
-        tenant_jira_oauth_context_fn=tenant_jira_oauth_context,
+        integration_adapter_provider=_build_workflow_integration_adapter_provider(),
         extract_changed_fields_fn=extract_changed_fields,
         extract_status_transition_fn=extract_status_transition,
-        list_child_issue_previews_for_parent_fn=list_child_issue_previews_for_parent,
+        build_workflow_runtime_fn=build_workflow_runtime,
         build_runtime_for_selector_fn=build_runtime_for_selector,
         seed_issues_with_runtime_fn=seed_issues_with_runtime,
         post_jira_comment_fn=post_jira_comment,

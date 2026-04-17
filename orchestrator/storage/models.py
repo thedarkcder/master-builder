@@ -531,12 +531,15 @@ class WorkflowType(Base):
             "orchestration_backend IN ('legacy', 'temporal', 'database')",
             name="ck_workflow_types_orchestration_backend",
         ),
+        UniqueConstraint("handler_key", name="uq_workflow_types_handler_key"),
     )
 
     workflow_type_key: Mapped[str] = mapped_column(String(64), primary_key=True)
     system_key: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    handler_key: Mapped[str] = mapped_column(String(64), nullable=False)
     orchestration_backend: Mapped[str] = mapped_column(String(32), nullable=False)
     engine_config_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    capabilities_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     label: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

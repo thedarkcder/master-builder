@@ -1096,6 +1096,7 @@ class WorkflowTypeRead(BaseModel):
     description: str | None = None
     orchestration_backend: Literal["legacy", "temporal", "database"]
     engine_config: WorkflowTypeEngineConfigRead = Field(default_factory=WorkflowTypeEngineConfigRead)
+    capabilities: dict[str, object] = Field(default_factory=dict)
     operations: list[WorkflowTypeOperationRead] = Field(default_factory=list)
 
 
@@ -1126,6 +1127,7 @@ class WorkflowTypeDetailRead(BaseModel):
     description: str | None = None
     orchestration_backend: Literal["legacy", "temporal", "database"]
     engine_config: WorkflowTypeEngineConfigRead = Field(default_factory=WorkflowTypeEngineConfigRead)
+    capabilities: dict[str, object] = Field(default_factory=dict)
     operations: list[WorkflowTypeOperationRead] = Field(default_factory=list)
     execution_modes: list[str] = Field(default_factory=list)
     conditional_paths: list[str] = Field(default_factory=list)

@@ -4,33 +4,39 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
 
-from sqlalchemy import select
+from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
 from orchestrator.core.workflow_operation_service import (
     OPERATION_STATUS_COMPLETED,
+    OPERATION_STATUS_WAITING_FOR_INPUT,
     complete_workflow_operation,
     fail_workflow_operation,
     start_workflow_operation_attempt,
     upsert_workflow_operation,
 )
-from orchestrator.core.workflow_type_catalog import (
-    get_workflow_type_by_system_key,
-    list_workflow_type_operations,
-)
-from orchestrator.storage.models import WorkflowExecution, WorkflowOperation
-
-PARENT_PLANNING_WORKFLOW_SYSTEM_KEY = "parent_planning"
-WORKFLOW_DEDUPE_SCOPE_PARENT_PLANNING = "parent_planning"
-OPERATION_STATUS_WAITING_FOR_INPUT = "waiting_for_input"
+from orchestrator.core.workflow_type_catalog import list_workflow_type_operations
+from orchestrator.storage.models import WorkflowExecution, WorkflowOperation, WorkflowType
 
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def parent_planning_workflow_id(*, workflow_type_key: str, issue_key: str) -> str:
+def workflow_execution_id(*, workflow_type_key: str, issue_key: str) -> str:
     return f"{str(workflow_type_key or '').strip()}:{str(issue_key or '').strip().upper()}"
+
+
+def classify_external_workflow_failure(*, error: Exception) -> tuple[str, bool]:
+    message = str(error or "").strip()
+    lowered = message.lower()
+    if "CONTENT_LIMIT_EXCEEDED" in message:
+        return "content_limit", True
+    if "429" in message or "rate limit" in lowered:
+        return "rate_limited", True
+    if "502" in message or "503" in message or "504" in message or "timed out" in lowered:
+        return "transient_external_failure", True
+    return "external_failure", False
 
 
 def _target_system_for_operation(operation_type: str) -> str | None:
@@ -55,7 +61,7 @@ def _normalize_issue_description(issue_description: object | None) -> str | None
 
 
 @dataclass
-class ParentPlanningWorkflowProjection:
+class WorkflowExecutionProjection:
     session: Session
     workflow: WorkflowExecution
 
@@ -172,32 +178,17 @@ class ParentPlanningWorkflowProjection:
             self.workflow.updated_at = now
 
 
-def classify_parent_planning_failure(*, error: Exception) -> tuple[str, bool]:
-    message = str(error or "").strip()
-    lowered = message.lower()
-    if "CONTENT_LIMIT_EXCEEDED" in message:
-        return "content_limit", True
-    if "429" in message or "rate limit" in lowered:
-        return "rate_limited", True
-    if "502" in message or "503" in message or "504" in message or "timed out" in lowered:
-        return "transient_external_failure", True
-    return "external_failure", False
-
-
-def ensure_parent_planning_workflow(
+def ensure_issue_workflow_execution(
     *,
     session: Session,
+    workflow_type: WorkflowType,
     tenant_id: str,
     project_id: str | None,
     issue_key: str,
     issue_summary: str | None,
     issue_description: object | None,
-) -> ParentPlanningWorkflowProjection:
-    workflow_type = get_workflow_type_by_system_key(
-        session,
-        system_key=PARENT_PLANNING_WORKFLOW_SYSTEM_KEY,
-    )
-    workflow_id = parent_planning_workflow_id(
+) -> WorkflowExecutionProjection:
+    workflow_id = workflow_execution_id(
         workflow_type_key=workflow_type.workflow_type_key,
         issue_key=issue_key,
     )
@@ -217,7 +208,7 @@ def ensure_parent_planning_workflow(
             branch=None,
             pr_url=None,
             orchestration_backend=workflow_type.orchestration_backend,
-            dedupe_scope=WORKFLOW_DEDUPE_SCOPE_PARENT_PLANNING,
+            dedupe_scope=workflow_type.system_key,
             status="running",
             last_error=None,
             active_run_id=None,
@@ -236,8 +227,26 @@ def ensure_parent_planning_workflow(
         workflow.issue_summary = issue_summary
         workflow.issue_description = normalized_issue_description
         workflow.orchestration_backend = workflow_type.orchestration_backend
+        workflow.dedupe_scope = workflow_type.system_key
         workflow.updated_at = now
-    projection = ParentPlanningWorkflowProjection(session=session, workflow=workflow)
+    projection = WorkflowExecutionProjection(session=session, workflow=workflow)
     projection.ensure_operations()
     projection.mark_running()
     return projection
+
+
+def resolve_latest_issue_workflow(
+    *,
+    session: Session,
+    tenant_id: str,
+    issue_key: str,
+) -> WorkflowExecution | None:
+    return session.execute(
+        select(WorkflowExecution)
+        .where(
+            WorkflowExecution.tenant_id == str(tenant_id or "").strip(),
+            WorkflowExecution.issue_key == str(issue_key or "").strip().upper(),
+        )
+        .order_by(desc(WorkflowExecution.created_at))
+        .limit(1)
+    ).scalar_one_or_none()

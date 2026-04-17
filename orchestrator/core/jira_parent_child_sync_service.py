@@ -4,6 +4,7 @@ import re
 from dataclasses import dataclass
 from dataclasses import field
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Any
 
 from sqlalchemy import select
@@ -57,10 +58,13 @@ from orchestrator.core.parent_feature_planning_workflow import (
     ParentFeaturePlanningWorkflow,
     ParentFeaturePlanningWorkflowDeps,
 )
-from orchestrator.core.parent_planning_workflow_projection import (
-    classify_parent_planning_failure,
-    ensure_parent_planning_workflow,
+from orchestrator.core.workflow_runtime import WorkflowAdvanceRequest, WorkflowAdvanceResult
+from orchestrator.core.workflow_execution_projection import (
+    classify_external_workflow_failure,
+    ensure_issue_workflow_execution,
+    resolve_latest_issue_workflow,
 )
+from orchestrator.core.workflow_type_catalog import get_workflow_type
 from orchestrator.core.webhook_job_errors import RetryableWebhookJobError
 from orchestrator.storage.models import FollowupContext, Project
 from orchestrator.tools.discord_api import DiscordApiClient, DiscordApiError
@@ -132,6 +136,122 @@ class JiraParentChildSyncResult:
     extra: dict[str, object] = field(default_factory=dict)
 
 
+class ParentFeatureWorkflowAdvanceHandler:
+    def __init__(
+        self,
+        *,
+        integration_adapter_provider,
+        extract_changed_fields_fn,
+        extract_status_transition_fn,
+        build_runtime_for_selector_fn,
+        seed_issues_with_runtime_fn,
+        post_jira_comment_fn,
+        create_jira_comment_fn,
+    ) -> None:
+        self._integration_adapter_provider = integration_adapter_provider
+        self._extract_changed_fields_fn = extract_changed_fields_fn
+        self._extract_status_transition_fn = extract_status_transition_fn
+        self._build_runtime_for_selector_fn = build_runtime_for_selector_fn
+        self._seed_issues_with_runtime_fn = seed_issues_with_runtime_fn
+        self._post_jira_comment_fn = post_jira_comment_fn
+        self._create_jira_comment_fn = create_jira_comment_fn
+
+    def advance(
+        self,
+        *,
+        session: Session,
+        settings,  # noqa: ANN001
+        workflow_type,
+        request: WorkflowAdvanceRequest,
+    ) -> WorkflowAdvanceResult:
+        context = JiraParentChildSyncContext(
+            request_id=str(request.payload.get("request_id") or "").strip() or f"workflow-advance:{request.issue_key}",
+            tenant_id=request.tenant_id,
+            tenant=request.tenant,
+            project_id=request.project_id,
+            issue_key=request.issue_key,
+            issue_labels=list(request.issue_labels),
+            payload=dict(request.payload),
+            webhook_event=request.webhook_event,
+            comment_command=request.comment_command,
+            comment_command_argument=request.comment_command_argument,
+        )
+        issue_gateway = _JiraParentIssueGateway(
+            session=session,
+            settings=settings,
+            context=context,
+            integration_adapter_provider=self._integration_adapter_provider,
+            post_jira_comment_fn=self._post_jira_comment_fn,
+            create_jira_comment_fn=self._create_jira_comment_fn,
+        )
+        brief_planner = _ParentBriefPlanner(
+            session=session,
+            settings=settings,
+            context=context,
+            build_runtime_for_selector_fn=self._build_runtime_for_selector_fn,
+        )
+        child_sync_gateway = _ParentChildSyncGateway(
+            session=session,
+            context=context,
+            seed_issues_with_runtime_fn=self._seed_issues_with_runtime_fn,
+        )
+        workflow = ParentFeaturePlanningWorkflow(
+            deps=ParentFeaturePlanningWorkflowDeps(
+                issue_gateway=issue_gateway,
+                brief_planner=brief_planner,
+                child_sync_gateway=child_sync_gateway,
+                workflow_type=workflow_type,
+                project_key_for_issue_fn=_project_key_for_issue,
+                material_parent_changed_fields_fn=_material_parent_changed_fields,
+                parent_board_entry_target_status_fn=_parent_board_entry_target_status,
+                extract_changed_fields_fn=self._extract_changed_fields_fn,
+                extract_status_transition_fn=self._extract_status_transition_fn,
+            )
+        )
+        result = workflow.handle(
+            context=context,
+            session=session,
+            settings=settings,
+        )
+        return WorkflowAdvanceResult(
+            handled=result.handled,
+            reason=result.reason,
+            extra=dict(result.extra or {}),
+        )
+
+
+def build_workflow_advance_handler_resolver(
+    *,
+    integration_adapter_provider,
+    extract_changed_fields_fn,
+    extract_status_transition_fn,
+    build_runtime_for_selector_fn,
+    seed_issues_with_runtime_fn,
+    post_jira_comment_fn,
+    create_jira_comment_fn,
+):
+    handlers = {
+        "jira_parent_feature": ParentFeatureWorkflowAdvanceHandler(
+            integration_adapter_provider=integration_adapter_provider,
+            extract_changed_fields_fn=extract_changed_fields_fn,
+            extract_status_transition_fn=extract_status_transition_fn,
+            build_runtime_for_selector_fn=build_runtime_for_selector_fn,
+            seed_issues_with_runtime_fn=seed_issues_with_runtime_fn,
+            post_jira_comment_fn=post_jira_comment_fn,
+            create_jira_comment_fn=create_jira_comment_fn,
+        )
+    }
+
+    def _resolve(handler_key: str):
+        normalized = str(handler_key or "").strip()
+        handler = handlers.get(normalized)
+        if handler is None:
+            raise LookupError(f"No workflow advance handler is registered for {handler_key}")
+        return handler
+
+    return _resolve
+
+
 class _JiraParentIssueGateway:
     def __init__(
         self,
@@ -139,44 +259,47 @@ class _JiraParentIssueGateway:
         session: Session,
         settings,  # noqa: ANN001
         context: JiraParentChildSyncContext,
-        tenant_jira_oauth_context_fn,
-        list_child_issue_previews_for_parent_fn,
+        integration_adapter_provider,
         post_jira_comment_fn,
         create_jira_comment_fn,
     ) -> None:
         self._session = session
         self._settings = settings
         self._context = context
-        self._tenant_jira_oauth_context_fn = tenant_jira_oauth_context_fn
-        self._list_child_issue_previews_for_parent_fn = list_child_issue_previews_for_parent_fn
+        self._integration_adapter_provider = integration_adapter_provider
         self._post_jira_comment_fn = post_jira_comment_fn
         self._create_jira_comment_fn = create_jira_comment_fn
-        self._oauth = None
+        self._jira_adapter = None
 
-    def _oauth_context(self):
-        if self._oauth is None:
-            self._oauth = self._tenant_jira_oauth_context_fn(
+    def _jira(self):
+        if self._jira_adapter is None:
+            self._jira_adapter = self._integration_adapter_provider.jira(
                 session=self._session,
                 tenant=self._context.tenant,
                 settings=self._settings,
             )
-        return self._oauth
+        return self._jira_adapter
+
+    def _oauth_context(self):
+        jira = self._jira()
+        return SimpleNamespace(
+            client=jira.client,
+            access_token=jira.access_token,
+            connection=SimpleNamespace(cloud_id=jira.cloud_id, site_url=jira.site_url),
+        )
 
     def load_parent_detail(self, issue_key: str) -> JiraIssueDetail:
-        oauth = self._oauth_context()
-        return oauth.client.get_issue_detail(
-            access_token=oauth.access_token,
-            cloud_id=oauth.connection.cloud_id,
-            issue_id_or_key=issue_key,
-        )
+        return self._jira().get_issue_detail(issue_id_or_key=issue_key)
 
     def load_child_details(self, *, project_key: str, parent_issue_key: str) -> list[JiraIssueDetail]:
-        return _load_child_details(
-            oauth=self._oauth_context(),
+        previews = self._jira().list_child_issue_previews(
             project_key=project_key,
             parent_issue_key=parent_issue_key,
-            list_child_issue_previews_for_parent_fn=self._list_child_issue_previews_for_parent_fn,
         )
+        return [
+            self._jira().get_issue_detail(issue_id_or_key=preview.key)
+            for preview in previews
+        ]
 
     def rewrite_parent_issue_from_brief(
         self,
@@ -902,34 +1025,6 @@ def _active_issue_followup_contexts(
     ).scalars().all()
 
 
-def _load_child_details(
-    *,
-    oauth,
-    project_key: str,
-    parent_issue_key: str,
-    list_child_issue_previews_for_parent_fn,
-) -> list[JiraIssueDetail]:  # noqa: ANN001
-    child_previews = list_child_issue_previews_for_parent_fn(
-        oauth={
-            "client": oauth.client,
-            "access_token": oauth.access_token,
-            "cloud_id": oauth.connection.cloud_id,
-        },
-        project_key=project_key,
-        parent_issue_key=parent_issue_key,
-    )
-    details: list[JiraIssueDetail] = []
-    for preview in child_previews:
-        details.append(
-            oauth.client.get_issue_detail(
-                access_token=oauth.access_token,
-                cloud_id=oauth.connection.cloud_id,
-                issue_id_or_key=preview.key,
-            )
-        )
-    return details
-
-
 def _mark_issues_sync_blocked(
     *,
     oauth,
@@ -1309,51 +1404,44 @@ def handle_parent_feature_sync(
     context: JiraParentChildSyncContext,
     session: Session,
     settings,  # noqa: ANN001
-    tenant_jira_oauth_context_fn,
+    integration_adapter_provider,
     extract_changed_fields_fn,
     extract_status_transition_fn,
-    list_child_issue_previews_for_parent_fn,
+    build_workflow_runtime_fn,
     build_runtime_for_selector_fn,
     seed_issues_with_runtime_fn,
     post_jira_comment_fn,
     create_jira_comment_fn,
 ) -> JiraParentChildSyncResult:  # noqa: ANN001
-    issue_gateway = _JiraParentIssueGateway(
+    runtime = build_workflow_runtime_fn(
         session=session,
         settings=settings,
-        context=context,
-        tenant_jira_oauth_context_fn=tenant_jira_oauth_context_fn,
-        list_child_issue_previews_for_parent_fn=list_child_issue_previews_for_parent_fn,
-        post_jira_comment_fn=post_jira_comment_fn,
-        create_jira_comment_fn=create_jira_comment_fn,
-    )
-    brief_planner = _ParentBriefPlanner(
-        session=session,
-        settings=settings,
-        context=context,
-        build_runtime_for_selector_fn=build_runtime_for_selector_fn,
-    )
-    child_sync_gateway = _ParentChildSyncGateway(
-        session=session,
-        context=context,
-        seed_issues_with_runtime_fn=seed_issues_with_runtime_fn,
-    )
-    workflow = ParentFeaturePlanningWorkflow(
-        deps=ParentFeaturePlanningWorkflowDeps(
-            issue_gateway=issue_gateway,
-            brief_planner=brief_planner,
-            child_sync_gateway=child_sync_gateway,
-            project_key_for_issue_fn=_project_key_for_issue,
-            material_parent_changed_fields_fn=_material_parent_changed_fields,
-            parent_board_entry_target_status_fn=_parent_board_entry_target_status,
+        process_claimed_run_fn=None,
+        build_runner_fn=None,
+        runtime_kwargs_fn=None,
+        resolve_advance_handler_fn=build_workflow_advance_handler_resolver(
+            integration_adapter_provider=integration_adapter_provider,
             extract_changed_fields_fn=extract_changed_fields_fn,
             extract_status_transition_fn=extract_status_transition_fn,
-        )
+            build_runtime_for_selector_fn=build_runtime_for_selector_fn,
+            seed_issues_with_runtime_fn=seed_issues_with_runtime_fn,
+            post_jira_comment_fn=post_jira_comment_fn,
+            create_jira_comment_fn=create_jira_comment_fn,
+        ),
     )
-    result = workflow.handle(
-        context=context,
-        session=session,
-        settings=settings,
+    result = runtime.advance(
+        request=WorkflowAdvanceRequest(
+            workflow_handler_key="jira_parent_feature",
+            tenant_id=context.tenant_id,
+            tenant=context.tenant,
+            project_id=context.project_id,
+            issue_key=context.issue_key,
+            issue_labels=tuple(context.issue_labels or []),
+            payload={**dict(context.payload or {}), "request_id": context.request_id},
+            webhook_event=context.webhook_event,
+            comment_command=context.comment_command,
+            comment_command_argument=context.comment_command_argument,
+        )
     )
     return JiraParentChildSyncResult(
         handled=result.handled,
@@ -1887,8 +1975,17 @@ def handle_pm_interview_reply(
         cloud_id=oauth.connection.cloud_id,
         issue_id_or_key=context.issue_key,
     )
-    workflow_projection = ensure_parent_planning_workflow(
+    existing_workflow = resolve_latest_issue_workflow(
         session=session,
+        tenant_id=context.tenant_id,
+        issue_key=parent_detail.key,
+    )
+    if existing_workflow is None:
+        raise RuntimeError(f"No workflow execution exists for parent issue {parent_detail.key}")
+    workflow_type = get_workflow_type(session, workflow_type_key=existing_workflow.workflow_type_key)
+    workflow_projection = ensure_issue_workflow_execution(
+        session=session,
+        workflow_type=workflow_type,
         tenant_id=context.tenant_id,
         project_id=context.project_id,
         issue_key=parent_detail.key,
@@ -2008,7 +2105,7 @@ def handle_pm_interview_reply(
             context.issue_key,
             exc,
         )
-        category, retryable = classify_parent_planning_failure(error=exc)
+        category, retryable = classify_external_workflow_failure(error=exc)
         workflow_projection.mark_operation_failed(
             operation_type="jira_child_fanout",
             category=category,
