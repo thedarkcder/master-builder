@@ -29,6 +29,7 @@ from orchestrator.api.admin.workflows_service import (
     list_workflows as list_workflows_impl,
     list_workflow_types as list_workflow_types_impl,
     retry_workflow_operation as retry_workflow_operation_impl,
+    update_workflow_type_detail as update_workflow_type_detail_impl,
 )
 from orchestrator.api.dependencies import get_session
 from orchestrator.api.schemas import (
@@ -39,13 +40,13 @@ from orchestrator.api.schemas import (
     WorkflowRead,
     WorkflowTypeDetailRead,
     WorkflowTypeSummaryRead,
+    WorkflowTypeUpdateRequest,
 )
 from orchestrator.api.discord.ingress.seed_runtime import seed_issues_with_runtime
-from orchestrator.api.discord.seed.issue_service import list_child_issue_previews_for_parent
-from orchestrator.api.jira_oauth.connection_service import tenant_jira_oauth_context
 from orchestrator.core.config import get_settings
 from orchestrator.core.agent_runtime_resolver import build_runtime_for_selector
 from orchestrator.core.jira_links import tenant_jira_issue_url
+from orchestrator.core.workflow_integration_provider import WorkflowIntegrationAdapterProvider
 from orchestrator.core.security import (
     AuthenticatedPrincipal,
     require_admin,
@@ -55,6 +56,7 @@ from orchestrator.core.security import (
 from orchestrator.storage.models import Run, Tenant, WorkflowExecution
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
+workflow_integration_adapter_provider = WorkflowIntegrationAdapterProvider()
 
 try:
     import psycopg
@@ -193,6 +195,21 @@ def get_workflow_type_detail(
     )
 
 
+@router.put("/workflow-types/{workflow_type_key}", response_model=WorkflowTypeDetailRead)
+def update_workflow_type_detail(
+    workflow_type_key: str,
+    payload: WorkflowTypeUpdateRequest,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> WorkflowTypeDetailRead:
+    return update_workflow_type_detail_impl(
+        session=session,
+        workflow_type_key=workflow_type_key,
+        tenant_id=None,
+        payload=payload,
+    )
+
+
 @router.get("/workflows/{workflow_id}", response_model=WorkflowRead)
 def get_workflow(
     workflow_id: str,
@@ -209,8 +226,7 @@ def get_workflow(
         workflow_id=workflow_id,
         workflow_to_schema_fn=workflow_to_schema,
         run_to_schema_fn=run_to_schema,
-        tenant_jira_oauth_context_fn=tenant_jira_oauth_context,
-        list_child_issue_previews_for_parent_fn=list_child_issue_previews_for_parent,
+        integration_adapter_provider=workflow_integration_adapter_provider,
     )
 
 
@@ -244,8 +260,7 @@ def retry_workflow_operation(
         operation_id=operation_id,
         workflow_to_schema_fn=workflow_to_schema,
         run_to_schema_fn=run_to_schema,
-        tenant_jira_oauth_context_fn=tenant_jira_oauth_context,
-        list_child_issue_previews_for_parent_fn=list_child_issue_previews_for_parent,
+        integration_adapter_provider=workflow_integration_adapter_provider,
         build_runtime_for_selector_fn=build_runtime_for_selector,
         seed_issues_with_runtime_fn=seed_issues_with_runtime,
     )

@@ -57,6 +57,10 @@ from orchestrator.core.parent_feature_planning_workflow import (
     ParentFeaturePlanningWorkflow,
     ParentFeaturePlanningWorkflowDeps,
 )
+from orchestrator.core.parent_planning_workflow_projection import (
+    classify_parent_planning_failure,
+    ensure_parent_planning_workflow,
+)
 from orchestrator.core.webhook_job_errors import RetryableWebhookJobError
 from orchestrator.storage.models import FollowupContext, Project
 from orchestrator.tools.discord_api import DiscordApiClient, DiscordApiError
@@ -1883,6 +1887,14 @@ def handle_pm_interview_reply(
         cloud_id=oauth.connection.cloud_id,
         issue_id_or_key=context.issue_key,
     )
+    workflow_projection = ensure_parent_planning_workflow(
+        session=session,
+        tenant_id=context.tenant_id,
+        project_id=context.project_id,
+        issue_key=parent_detail.key,
+        issue_summary=parent_detail.summary,
+        issue_description=parent_detail.description,
+    )
     brief_payload = followup_result.assessment.brief.to_payload()
     next_questions: list[object] = []
     if followup_result.assessment.next_question is not None:
@@ -1895,6 +1907,10 @@ def handle_pm_interview_reply(
             oauth=oauth,
             issue_detail=parent_detail,
             target_label="sync-blocked",
+        )
+        workflow_projection.mark_waiting_for_input(
+            operation_type="brief_normalization",
+            summary="Parent brief still needs product clarification before planning can continue.",
         )
         error = None
         if not has_matching_active_clarification_state(
@@ -1953,6 +1969,14 @@ def handle_pm_interview_reply(
         planning_state="brief_normalized",
         open_questions=[],
     )
+    workflow_projection.mark_operation_completed(
+        operation_type="brief_normalization",
+        summary="Parent brief normalized from PM clarification answers.",
+    )
+    workflow_projection.mark_operation_completed(
+        operation_type="jira_parent_update",
+        summary="Parent Jira issue synced with the confirmed brief.",
+    )
     planner = _ParentBriefPlanner(
         session=session,
         settings=settings,
@@ -1984,6 +2008,13 @@ def handle_pm_interview_reply(
             context.issue_key,
             exc,
         )
+        category, retryable = classify_parent_planning_failure(error=exc)
+        workflow_projection.mark_operation_failed(
+            operation_type="jira_child_fanout",
+            category=category,
+            message=str(exc),
+            retryable=retryable,
+        )
         _update_issue_sync_label(
             oauth=oauth,
             issue_detail=parent_detail,
@@ -2005,6 +2036,10 @@ def handle_pm_interview_reply(
         )
 
     if planning_result.planning_state != PLANNING_STATE_COMPLETED or bool(seed_data.get("requires_input")):
+        workflow_projection.mark_waiting_for_input(
+            operation_type="backlog_planning",
+            summary="Backlog planning still needs clarification before child fanout can complete.",
+        )
         _update_issue_sync_label(
             oauth=oauth,
             issue_detail=parent_detail,
@@ -2045,6 +2080,15 @@ def handle_pm_interview_reply(
         context_type=FOLLOWUP_CONTEXT_PM_INTERVIEW,
         issue_key=context.issue_key,
     )
+    workflow_projection.mark_operation_completed(
+        operation_type="backlog_planning",
+        summary="Backlog planning completed from the confirmed parent brief.",
+    )
+    workflow_projection.mark_operation_completed(
+        operation_type="jira_child_fanout",
+        summary="Engineering child tickets were created or refreshed from the confirmed brief.",
+    )
+    workflow_projection.mark_completed_if_ready()
     updated_children, created_children, changed_children = child_sync_gateway.combined_child_updates(seed_data=seed_data)
     _post_sync_note(
         session=session,

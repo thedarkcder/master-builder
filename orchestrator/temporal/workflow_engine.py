@@ -8,13 +8,14 @@ from sqlalchemy.orm import Session, sessionmaker
 from orchestrator.core.config import Settings
 from orchestrator.core.workflow_engine import WorkflowEngineState
 from orchestrator.core.workflow_operation_service import WorkflowOperationHandle
+from orchestrator.core.workflow_type_catalog import get_workflow_type
 from orchestrator.storage.models import Run, RunHumanInputRequest, WorkflowExecution, WorkflowOperation
-from orchestrator.temporal.client import connect_temporal_client, temporal_task_queue
+from orchestrator.temporal.client import connect_temporal_client
 from orchestrator.temporal.payloads import (
     DevelopmentTeamRunWorkflowInput,
     HumanInputResumeInput,
 )
-from orchestrator.temporal.workflows.development_team_run import DevelopmentTeamRunWorkflow
+from orchestrator.temporal.workflow_registry import resolve_temporal_workflow_definition
 
 try:  # pragma: no cover - exercised when temporal backend is enabled
     from temporalio.exceptions import WorkflowAlreadyStartedError
@@ -49,6 +50,29 @@ def _run_sync(awaitable):  # noqa: ANN001, ANN201
     return result.get("value")
 
 
+def _temporal_config_for_workflow(*, session: Session, workflow: WorkflowExecution, settings: Settings) -> tuple[object, str]:
+    workflow_type = get_workflow_type(session, workflow_type_key=workflow.workflow_type_key)
+    backend = str(workflow_type.orchestration_backend or "").strip().lower()
+    if backend != "temporal":
+        raise RuntimeError(
+            f"Workflow type {workflow_type.workflow_type_key} is not configured for the temporal engine"
+        )
+    raw_config = workflow_type.engine_config_json if isinstance(workflow_type.engine_config_json, dict) else {}
+    temporal = raw_config.get("temporal") if isinstance(raw_config.get("temporal"), dict) else {}
+    workflow_name = str(temporal.get("workflow_name") or "").strip()
+    if not workflow_name:
+        raise RuntimeError(
+            f"Workflow type {workflow_type.workflow_type_key} is missing temporal.engine_config.workflow_name"
+        )
+    task_queue = str(temporal.get("task_queue") or "").strip()
+    if not task_queue:
+        raise RuntimeError(
+            f"Workflow type {workflow_type.workflow_type_key} is missing temporal.engine_config.task_queue"
+        )
+    workflow_defn = resolve_temporal_workflow_definition(workflow_name=workflow_name)
+    return workflow_defn, task_queue
+
+
 class TemporalWorkflowEngine:
     backend = "temporal"
 
@@ -72,6 +96,7 @@ class TemporalWorkflowEngine:
 
         async def _start() -> None:
             client = await connect_temporal_client(settings)
+            workflow_defn, task_queue = _temporal_config_for_workflow(session=session, workflow=workflow, settings=settings)
             payload = DevelopmentTeamRunWorkflowInput(
                 workflow_id=workflow.workflow_id,
                 run_id=run.run_id,
@@ -82,10 +107,10 @@ class TemporalWorkflowEngine:
             )
             try:
                 await client.start_workflow(
-                    DevelopmentTeamRunWorkflow.run,
+                    workflow_defn.run,
                     payload,
                     id=_temporal_workflow_handle_id(workflow_id=workflow.workflow_id),
-                    task_queue=temporal_task_queue(settings),
+                    task_queue=task_queue,
                 )
             except WorkflowAlreadyStartedError:
                 return
@@ -106,12 +131,13 @@ class TemporalWorkflowEngine:
 
         async def _resume() -> str | None:
             client = await connect_temporal_client(settings)
+            workflow_defn, _ = _temporal_config_for_workflow(session=session, workflow=workflow, settings=settings)
             handle = client.get_workflow_handle_for(
-                DevelopmentTeamRunWorkflow,
+                workflow_defn,
                 _temporal_workflow_handle_id(workflow_id=workflow.workflow_id),
             )
             return await handle.execute_update(
-                DevelopmentTeamRunWorkflow.resume_human_input,
+                workflow_defn.resume_human_input,
                 HumanInputResumeInput(request_id=request.request_id),
             )
 

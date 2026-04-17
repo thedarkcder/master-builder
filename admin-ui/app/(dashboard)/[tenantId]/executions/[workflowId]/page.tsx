@@ -64,7 +64,7 @@ export default function TenantExecutionDetailPage() {
   }, [ready, credentials, loadWorkflow]);
 
   const hasRetryableAttempt = useMemo(
-    () => (workflow?.operations ?? []).some((operation) => operation.attempts.some((attempt) => attempt.retryable)),
+    () => (workflow?.operations ?? []).some((operation) => operation.can_retry),
     [workflow?.operations],
   );
 
@@ -278,12 +278,16 @@ export default function TenantExecutionDetailPage() {
                         )}
                       </TableCell>
                       <TableCell className="text-sm text-muted-foreground">
-                        {attempt?.retryable ? "Yes" : "No"}
+                        {operation.can_retry ? "Yes" : "No"}
                       </TableCell>
                       <TableCell className="max-w-[440px] text-sm text-muted-foreground">
                         <div className="space-y-1">
                           <p className="line-clamp-3">
-                            {attempt?.error_message?.trim() || operation.summary?.trim() || operation.description?.trim() || "—"}
+                            {attempt?.error_message?.trim()
+                              || operation.summary?.trim()
+                              || operation.retry_unavailable_reason?.trim()
+                              || operation.description?.trim()
+                              || "—"}
                           </p>
                           <p className="text-xs text-muted-foreground">
                             {operation.retry_policy?.trim() || "No retry policy recorded."}
@@ -296,7 +300,7 @@ export default function TenantExecutionDetailPage() {
                           variant="outline"
                           className="h-8"
                           onClick={() => void handleRetryOperation(operation)}
-                          disabled={!attempt?.retryable || operation.definition_only || retryingOperationId === operation.operation_id}
+                          disabled={!operation.can_retry || operation.definition_only || retryingOperationId === operation.operation_id}
                         >
                           <RefreshCw className={cn("mr-1.5 h-3.5 w-3.5", retryingOperationId === operation.operation_id && "animate-spin")} />
                           Retry operation

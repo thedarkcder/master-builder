@@ -11,7 +11,7 @@ test("shows workflow definitions and retries a failed execution operation", asyn
   await seedAdminSession(page);
 
   const workflow = makeWorkflow({
-    workflow_id: "legacy-parent-planning:MAB-215",
+    workflow_id: "parent_planning:MAB-215",
     tenant_id: "route25",
     project_id: "route25-default",
     issue_key: "MAB-215",
@@ -20,7 +20,7 @@ test("shows workflow definitions and retries a failed execution operation", asyn
     dedupe_scope: "parent_planning",
     status: "failed",
     workflow_type: {
-      key: "legacy-parent-planning",
+      key: "parent_planning",
       label: "Parent Planning",
       description: "Parent planning workflow",
       operations: [
@@ -28,11 +28,21 @@ test("shows workflow definitions and retries a failed execution operation", asyn
           operation_type: "jira_child_fanout",
           label: "Fan out engineering child tickets",
           retry_policy: "Retry transient Jira failures. Fail on permanent Jira validation errors such as content limits.",
+          retry_policy_config: {
+            manual_retry_enabled: true,
+            max_attempts: 4,
+            initial_interval_seconds: 60,
+            max_interval_seconds: 1800,
+            backoff_coefficient: 2,
+            non_retryable_error_categories: ["content_limit", "contract_invalid", "authorization_failed"],
+          },
           description: "Create or refresh engineering child tickets.",
           required: true,
           status: "failed",
         },
       ],
+      orchestration_backend: "legacy",
+      engine_config: { temporal: null },
     },
     current_state: "failed",
     waiting_on: null,
@@ -69,6 +79,8 @@ test("shows workflow definitions and retries a failed execution operation", asyn
         target_ref: "MAB-215",
         summary:
           'Failed to seed Jira issues: Jira API request failed (400): {"errorMessages":["CONTENT_LIMIT_EXCEEDED"],"errors":{}}',
+        can_retry: true,
+        retry_unavailable_reason: null,
         attempts: [
           {
             attempt_id: "attempt-1",
@@ -104,6 +116,8 @@ test("shows workflow definitions and retries a failed execution operation", asyn
       {
         ...workflow.operations[0],
         status: "running",
+        can_retry: false,
+        retry_unavailable_reason: "Latest attempt is not marked retryable.",
         attempts: [
           ...workflow.operations[0].attempts,
           {
@@ -149,7 +163,7 @@ test("shows workflow definitions and retries a failed execution operation", asyn
 
   await page.getByRole("link", { name: "Parent Planning" }).click();
 
-  await expect(page).toHaveURL(/\/route25\/workflows\/legacy-parent-planning$/);
+  await expect(page).toHaveURL(/\/route25\/workflows\/parent_planning$/);
   await expect(page.getByText("Execution modes")).toBeVisible();
   await expect(page.getByText("fresh, restart, resume")).toBeVisible();
   await expect(page.getByText("Recent executions")).toBeVisible();
@@ -157,7 +171,7 @@ test("shows workflow definitions and retries a failed execution operation", asyn
 
   await page.getByRole("link", { name: "Identity and authorization v1 contract" }).click();
 
-  await expect(page).toHaveURL(/\/route25\/executions\/legacy-parent-planning%3AMAB-215$/);
+  await expect(page).toHaveURL(/\/route25\/executions\/parent_planning%3AMAB-215$/);
   await expect(page.getByText("Workflow type")).toBeVisible();
   await expect(page.getByText("Parent Planning")).toBeVisible();
   await expect(page.getByText("Fan out engineering child tickets")).toBeVisible();
@@ -169,7 +183,7 @@ test("shows workflow definitions and retries a failed execution operation", asyn
   await page.getByRole("button", { name: "Retry operation" }).click();
 
   expect(retriedOperation).toEqual({
-    workflowId: "legacy-parent-planning:MAB-215",
+    workflowId: "parent_planning:MAB-215",
     operationId: "operation-jira-child-fanout",
   });
   await expect(page.getByText("Retried Fan out engineering child tickets.")).toBeVisible();

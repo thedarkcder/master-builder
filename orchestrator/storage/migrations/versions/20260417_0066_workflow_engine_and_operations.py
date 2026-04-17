@@ -20,11 +20,14 @@ depends_on = None
 def upgrade() -> None:
     op.add_column(
         "workflow_executions",
-        sa.Column("orchestration_backend", sa.String(length=32), nullable=False, server_default="legacy"),
+        sa.Column("orchestration_backend", sa.String(length=32), nullable=True),
     )
     op.execute("UPDATE workflow_executions SET orchestration_backend = 'legacy' WHERE orchestration_backend IS NULL")
     if op.get_bind().dialect.name != "sqlite":
-        op.alter_column("workflow_executions", "orchestration_backend", server_default=None)
+        op.alter_column("workflow_executions", "orchestration_backend", nullable=False)
+    else:
+        with op.batch_alter_table("workflow_executions") as batch_op:
+            batch_op.alter_column("orchestration_backend", nullable=False)
 
     op.create_table(
         "workflow_operations",

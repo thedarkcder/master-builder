@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_serializer, model_validator
 
@@ -1034,22 +1035,67 @@ class WorkflowOperationRead(BaseModel):
     target_system: str | None = None
     target_ref: str | None = None
     summary: str | None = None
+    can_retry: bool = False
+    retry_unavailable_reason: str | None = None
     attempts: list[WorkflowOperationAttemptRead] = Field(default_factory=list)
+
+
+class WorkflowTypeOperationRetryConfigRead(BaseModel):
+    manual_retry_enabled: bool = True
+    max_attempts: int = Field(default=1, ge=1)
+    initial_interval_seconds: int = Field(default=0, ge=0)
+    max_interval_seconds: int = Field(default=0, ge=0)
+    backoff_coefficient: float = Field(default=1.0, ge=1.0)
+    non_retryable_error_categories: list[str] = Field(default_factory=list)
+
+
+class WorkflowTypeOperationRetryConfigUpdate(BaseModel):
+    manual_retry_enabled: bool = True
+    max_attempts: int = Field(default=1, ge=1)
+    initial_interval_seconds: int = Field(default=0, ge=0)
+    max_interval_seconds: int = Field(default=0, ge=0)
+    backoff_coefficient: float = Field(default=1.0, ge=1.0)
+    non_retryable_error_categories: list[str] = Field(default_factory=list)
 
 
 class WorkflowTypeOperationRead(BaseModel):
     operation_type: str
     label: str
     retry_policy: str
+    retry_policy_config: WorkflowTypeOperationRetryConfigRead = Field(default_factory=WorkflowTypeOperationRetryConfigRead)
     description: str | None = None
     required: bool = True
     status: str | None = None
+
+
+class WorkflowTypeTemporalConfigRead(BaseModel):
+    workflow_name: str
+    task_queue: str
+    activity_start_to_close_timeout_seconds: int = Field(ge=1)
+    human_input_resume_timeout_seconds: int = Field(ge=1)
+
+
+class WorkflowTypeTemporalConfigUpdate(BaseModel):
+    workflow_name: str = Field(min_length=1)
+    task_queue: str = Field(min_length=1)
+    activity_start_to_close_timeout_seconds: int = Field(ge=1)
+    human_input_resume_timeout_seconds: int = Field(ge=1)
+
+
+class WorkflowTypeEngineConfigRead(BaseModel):
+    temporal: WorkflowTypeTemporalConfigRead | None = None
+
+
+class WorkflowTypeEngineConfigUpdate(BaseModel):
+    temporal: WorkflowTypeTemporalConfigUpdate | None = None
 
 
 class WorkflowTypeRead(BaseModel):
     key: str
     label: str
     description: str | None = None
+    orchestration_backend: Literal["legacy", "temporal", "database"]
+    engine_config: WorkflowTypeEngineConfigRead = Field(default_factory=WorkflowTypeEngineConfigRead)
     operations: list[WorkflowTypeOperationRead] = Field(default_factory=list)
 
 
@@ -1078,12 +1124,36 @@ class WorkflowTypeDetailRead(BaseModel):
     key: str
     label: str
     description: str | None = None
+    orchestration_backend: Literal["legacy", "temporal", "database"]
+    engine_config: WorkflowTypeEngineConfigRead = Field(default_factory=WorkflowTypeEngineConfigRead)
     operations: list[WorkflowTypeOperationRead] = Field(default_factory=list)
     execution_modes: list[str] = Field(default_factory=list)
     conditional_paths: list[str] = Field(default_factory=list)
     execution_count: int = 0
     latest_execution_at: datetime | None = None
     recent_executions: list[WorkflowExecutionPreviewRead] = Field(default_factory=list)
+
+
+class WorkflowTypeOperationConfigUpdate(BaseModel):
+    operation_type: str
+    retry_policy: str = Field(min_length=1)
+    retry_policy_config: WorkflowTypeOperationRetryConfigUpdate
+
+
+class WorkflowTypeUpdateRequest(BaseModel):
+    orchestration_backend: Literal["legacy", "temporal", "database"]
+    engine_config: WorkflowTypeEngineConfigUpdate = Field(default_factory=WorkflowTypeEngineConfigUpdate)
+    operations: list[WorkflowTypeOperationConfigUpdate] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_engine_contract(self) -> WorkflowTypeUpdateRequest:
+        if self.orchestration_backend == "temporal":
+            if self.engine_config.temporal is None:
+                raise ValueError("Temporal workflows require engine_config.temporal")
+            return self
+        if self.engine_config.temporal is not None:
+            raise ValueError("engine_config.temporal is only valid for temporal workflows")
+        return self
 
 
 class WorkflowStatePathEntryRead(BaseModel):
@@ -1119,7 +1189,7 @@ class WorkflowRead(BaseModel):
     repo_url: str | None = None
     branch: str | None = None
     pr_url: str | None = None
-    orchestration_backend: str = "legacy"
+    orchestration_backend: Literal["legacy", "temporal", "database"]
     dedupe_scope: str
     status: str
     workflow_type: WorkflowTypeRead

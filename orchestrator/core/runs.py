@@ -13,6 +13,7 @@ from orchestrator.core.config import get_settings
 from orchestrator.core.run_enqueue_types import EnqueueFailureReason
 from orchestrator.core.runtime_requirements import resolve_required_runtime_kinds_for_workflow
 from orchestrator.core.worker_capability_normalization import parse_worker_capability
+from orchestrator.core.workflow_type_catalog import get_workflow_type
 from orchestrator.core.workflow.execution_snapshot import (
     ExecutionSnapshot,
     load_parsed_trigger_context_from_plan,
@@ -445,6 +446,8 @@ def enqueue_run(
         project_id=project_id,
         bootstrap=bootstrap,
     )
+    workflow_type = get_workflow_type(session, workflow_type_key="issue_execution")
+    orchestration_backend = str(workflow_type.orchestration_backend).strip().lower()
     workflow_id = str(uuid4())
     run_id = str(uuid4())
     workflow = WorkflowExecution(
@@ -458,7 +461,7 @@ def enqueue_run(
         repo_url=repo_url,
         branch=bootstrap.branch if bootstrap is not None else None,
         pr_url=normalized_pr_url,
-        orchestration_backend=str(get_settings().orchestration_backend or "legacy").strip().lower() or "legacy",
+        orchestration_backend=orchestration_backend,
         dedupe_scope=normalized_dedupe_scope,
         status=RUN_STATUS_QUEUED,
         last_error=None,
@@ -676,8 +679,10 @@ def _enqueue_attempt_for_workflow(
         worker_service_instance_id=None,
         finished_at=None,
     )
+    workflow_type = get_workflow_type(session, workflow_type_key=workflow.workflow_type_key)
+    orchestration_backend = str(workflow_type.orchestration_backend).strip().lower()
     workflow.status = RUN_STATUS_QUEUED
-    workflow.orchestration_backend = str(workflow.orchestration_backend or get_settings().orchestration_backend or "legacy").strip().lower() or "legacy"
+    workflow.orchestration_backend = orchestration_backend
     workflow.last_error = None
     workflow.active_run_id = run.run_id
     workflow.latest_checkpoint_id = bootstrap.entry_checkpoint_id or workflow.latest_checkpoint_id

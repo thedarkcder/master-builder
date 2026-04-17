@@ -8,23 +8,21 @@ from orchestrator.core.workflow_engine import WorkflowEngine
 from orchestrator.storage.models import WorkflowExecution
 
 
-def resolve_workflow_backend(*, settings: Settings, workflow: WorkflowExecution | None = None) -> str:
-    backend = str(getattr(workflow, "orchestration_backend", "") or "").strip().lower()
-    if backend:
-        return backend
-    return str(getattr(settings, "orchestration_backend", "legacy") or "legacy").strip().lower()
+def resolve_workflow_backend(*, workflow: WorkflowExecution) -> str:
+    return str(workflow.orchestration_backend).strip().lower()
 
 
 def build_workflow_engine(
     *,
-    settings: Settings,
-    workflow: WorkflowExecution | None = None,
+    settings,
+    workflow: WorkflowExecution,
     process_claimed_run_fn,
     build_runner_fn,
     runtime_kwargs_fn,
     retry_workflow_operation_fn=None,
 ) -> WorkflowEngine:
-    backend = resolve_workflow_backend(settings=settings, workflow=workflow)
+    _ = settings
+    backend = resolve_workflow_backend(workflow=workflow)
     if backend == "temporal":
         from orchestrator.temporal.workflow_engine import TemporalWorkflowEngine
 

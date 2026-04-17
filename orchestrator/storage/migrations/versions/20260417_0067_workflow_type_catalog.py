@@ -183,7 +183,7 @@ def upgrade() -> None:
                 "label": "Project clarification comments",
                 "retry_policy": "Retry transient Jira failures. Keep one outward write per unresolved clarification state.",
                 "description": "Post Jira clarification comments and system follow-ups.",
-                "required": True,
+                "required": False,
                 "sort_order": 20,
                 "created_at": now,
                 "updated_at": now,
