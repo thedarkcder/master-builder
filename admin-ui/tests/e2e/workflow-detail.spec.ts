@@ -23,6 +23,26 @@ test("shows workflow definitions and retries a failed execution operation", asyn
       key: "parent_planning",
       label: "Parent Planning",
       description: "Parent planning workflow",
+      capabilities: {
+        child_issue_links: true,
+      },
+      lifecycle: {
+        state_path_kind: "operation",
+        execution_modes: ["fresh", "resume"],
+        conditional_paths: ["Human input clarification", "Retry failed operation", "Child issue fanout"],
+        states: [
+          { key: "running", label: "Running", terminal: false, waits_for_input: false },
+          { key: "waiting_for_input", label: "Waiting for input", terminal: false, waits_for_input: true },
+          { key: "completed", label: "Completed", terminal: true, waits_for_input: false },
+          { key: "failed", label: "Failed", terminal: true, waits_for_input: false },
+        ],
+        transitions: [
+          { from_state: "running", to_state: "waiting_for_input", label: "Ask PM clarification" },
+          { from_state: "waiting_for_input", to_state: "running", label: "Resume from answer" },
+          { from_state: "running", to_state: "completed", label: "Fan out child work" },
+          { from_state: "running", to_state: "failed", label: "Persist operation failure" },
+        ],
+      },
       operations: [
         {
           operation_type: "jira_child_fanout",

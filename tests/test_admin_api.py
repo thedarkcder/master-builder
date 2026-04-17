@@ -1449,7 +1449,9 @@ class AdminApiTests(AdminApiTestHarness):
         self.assertEqual(detail_body["orchestration_backend"], "temporal")
         self.assertEqual(detail_body["engine_config"]["temporal"]["workflow_name"], "DevelopmentTeamRunWorkflow")
         self.assertIn("manual_retry_enabled", detail_body["operations"][0]["retry_policy_config"])
-        self.assertIn("fresh", detail_body["execution_modes"])
+        self.assertEqual(detail_body["lifecycle"]["state_path_kind"], "run")
+        self.assertIn("fresh", detail_body["lifecycle"]["execution_modes"])
+        self.assertIn("Retry failed operation", detail_body["lifecycle"]["conditional_paths"])
         self.assertEqual(detail_body["recent_executions"][0]["workflow_id"], "workflow-read-1")
         self.assertEqual(detail_body["recent_executions"][0]["waiting_on"], "human_input")
 

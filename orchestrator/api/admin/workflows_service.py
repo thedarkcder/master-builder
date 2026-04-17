@@ -16,6 +16,9 @@ from orchestrator.api.schemas import (
     WorkflowOperationRead,
     WorkflowStatePathEntryRead,
     WorkflowTypeDetailRead,
+    WorkflowTypeLifecycleRead,
+    WorkflowTypeLifecycleStateRead,
+    WorkflowTypeLifecycleTransitionRead,
     WorkflowTypeOperationRead,
     WorkflowTypeOperationRetryConfigRead,
     WorkflowTypeRead,
@@ -237,6 +240,41 @@ def _workflow_type_capabilities_read(*, workflow_type: WorkflowType) -> dict[str
     return dict(raw)
 
 
+def _workflow_type_lifecycle_read(*, workflow_type: WorkflowType) -> WorkflowTypeLifecycleRead:
+    raw = workflow_type.lifecycle_json if isinstance(workflow_type.lifecycle_json, dict) else {}
+    states = raw.get("states") if isinstance(raw.get("states"), list) else []
+    transitions = raw.get("transitions") if isinstance(raw.get("transitions"), list) else []
+    return WorkflowTypeLifecycleRead(
+        state_path_kind=str(raw.get("state_path_kind") or "operation").strip().lower() or "operation",
+        execution_modes=[str(value).strip() for value in raw.get("execution_modes", []) if str(value).strip()],
+        conditional_paths=[str(value).strip() for value in raw.get("conditional_paths", []) if str(value).strip()],
+        states=[
+            WorkflowTypeLifecycleStateRead(
+                key=str(state.get("key") or "").strip(),
+                label=str(state.get("label") or "").strip(),
+                terminal=bool(state.get("terminal")),
+                waits_for_input=bool(state.get("waits_for_input")),
+            )
+            for state in states
+            if isinstance(state, dict) and str(state.get("key") or "").strip() and str(state.get("label") or "").strip()
+        ],
+        transitions=[
+            WorkflowTypeLifecycleTransitionRead(
+                **{
+                    "from": str(transition.get("from") or "").strip(),
+                    "to_state": str(transition.get("to_state") or transition.get("to") or "").strip(),
+                    "label": str(transition.get("label") or "").strip(),
+                }
+            )
+            for transition in transitions
+            if isinstance(transition, dict)
+            and str(transition.get("from") or "").strip()
+            and str(transition.get("to_state") or transition.get("to") or "").strip()
+            and str(transition.get("label") or "").strip()
+        ],
+    )
+
+
 def _workflow_type_retry_policy_config_read(*, raw_config: dict | None) -> WorkflowTypeOperationRetryConfigRead:
     raw = raw_config if isinstance(raw_config, dict) else {}
     return WorkflowTypeOperationRetryConfigRead(
@@ -254,7 +292,7 @@ def _workflow_type_retry_policy_config_read(*, raw_config: dict | None) -> Workf
 
 
 def _workflow_uses_run_state_path(*, workflow_type: WorkflowTypeRead) -> bool:
-    return str(workflow_type.capabilities.get("state_path_kind") or "").strip().lower() == "run"
+    return str(workflow_type.lifecycle.state_path_kind or "").strip().lower() == "run"
 
 
 def _workflow_supports_child_issue_links(*, workflow_type: WorkflowTypeRead) -> bool:
@@ -373,6 +411,7 @@ def _workflow_operation_reads(
             orchestration_backend=workflow_type.orchestration_backend,
             engine_config=_workflow_type_engine_config_read(workflow_type=workflow_type),
             capabilities=_workflow_type_capabilities_read(workflow_type=workflow_type),
+            lifecycle=_workflow_type_lifecycle_read(workflow_type=workflow_type),
             operations=type_reads,
         ),
         operation_reads,
@@ -639,17 +678,6 @@ def _workflow_execution_preview(*, session, workflow: WorkflowExecution) -> Work
     )
 
 
-def _workflow_type_conditional_paths(*, workflow_type: WorkflowTypeRead) -> list[str]:
-    paths: list[str] = []
-    if any(definition.operation_type == "human_input_resume" for definition in workflow_type.operations):
-        paths.append("Human input resume")
-    if any(str(definition.retry_policy or "").strip() for definition in workflow_type.operations):
-        paths.append("Retry failed operation")
-    if not paths:
-        paths.append("Linear execution")
-    return paths
-
-
 def _workflow_type_detail(
     *,
     session,
@@ -675,6 +703,7 @@ def _workflow_type_detail(
         orchestration_backend=workflow_type.orchestration_backend,
         engine_config=_workflow_type_engine_config_read(workflow_type=workflow_type),
         capabilities=_workflow_type_capabilities_read(workflow_type=workflow_type),
+        lifecycle=_workflow_type_lifecycle_read(workflow_type=workflow_type),
         operations=definition_reads,
     )
     execution_query = (
@@ -704,9 +733,8 @@ def _workflow_type_detail(
         orchestration_backend=type_read.orchestration_backend,
         engine_config=type_read.engine_config,
         capabilities=type_read.capabilities,
+        lifecycle=type_read.lifecycle,
         operations=type_read.operations,
-        execution_modes=list(ATTEMPT_ENTRY_MODES),
-        conditional_paths=_workflow_type_conditional_paths(workflow_type=type_read),
         execution_count=int(session.execute(count_query).scalar_one()),
         latest_execution_at=session.execute(latest_execution_query).scalar_one(),
         recent_executions=recent_executions,
