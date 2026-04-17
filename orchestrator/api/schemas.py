@@ -1121,6 +1121,32 @@ class AlertEvaluationRead(BaseModel):
     alerts: list[AlertRead] = Field(default_factory=list)
 
 
+class AdminNotificationRead(BaseModel):
+    notification_id: str
+    tenant_id: str | None = None
+    project_id: str | None = None
+    scope_type: str
+    scope_id: str | None = None
+    source: str
+    kind: str
+    severity: str
+    title: str
+    detail: str
+    action_label: str | None = None
+    action_path: str | None = None
+    fingerprint: str
+    status: str
+    context: dict[str, object] = Field(default_factory=dict)
+    first_emitted_at: datetime
+    last_emitted_at: datetime
+    acknowledged_at: datetime | None = None
+    resolved_at: datetime | None = None
+
+
+class AdminNotificationListRead(BaseModel):
+    notifications: list[AdminNotificationRead] = Field(default_factory=list)
+
+
 class TenantIntegrationHealthRead(BaseModel):
     jira_connected: bool
     github_connected: bool

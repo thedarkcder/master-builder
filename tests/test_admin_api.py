@@ -20,6 +20,7 @@ from orchestrator.core.secrets import encrypt_value
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import (
+    AdminNotification,
     DecisionCase,
     DiscordCommandSyncRuntimeState,
     KnowledgeAsset,
@@ -49,6 +50,7 @@ from orchestrator.storage.models import (
     WorkerRuntimeState,
 )
 from orchestrator.tools.github_app import InstallationRepository
+from orchestrator.tools.jira_oauth_models import JiraOAuthError
 from tests.test_support.admin_api_harness import AdminApiTestHarness
 from tests.workflow_test_support import add_workflow_attempt
 
@@ -141,6 +143,113 @@ class AdminApiTests(AdminApiTestHarness):
         )
         self.assertEqual(repo_bootstrap.status_code, 200)
         self.assertEqual(repo_bootstrap.json(), [])
+
+    def test_list_jira_projects_requires_reauth_emits_notification(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        with patch(
+            "orchestrator.api.admin.integration_dependencies.refresh_jira_connection_tokens",
+            side_effect=JiraOAuthError(
+                'Jira OAuth request failed (403): {"error":"unauthorized_client","error_description":"refresh_token is invalid"}'
+            ),
+        ):
+            response = self.client.get(
+                "/api/admin/jira/connections/conn-1/projects",
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertEqual(response.json()["detail"], "Jira connection requires reauthentication.")
+
+        notifications_response = self.client.get(
+            "/api/admin/tenants/tenant-a/notifications",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(notifications_response.status_code, 200, notifications_response.text)
+        notifications = notifications_response.json()["notifications"]
+        self.assertEqual(len(notifications), 1)
+        self.assertEqual(notifications[0]["kind"], "reauth_required")
+        self.assertEqual(notifications[0]["scope_type"], "jira_connection")
+        self.assertEqual(notifications[0]["scope_id"], "conn-1")
+        self.assertEqual(notifications[0]["status"], "open")
+
+    def test_list_jira_projects_success_resolves_reauth_notification(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            now = datetime.now(timezone.utc)
+            session.add(
+                AdminNotification(
+                    notification_id="notify-jira-reauth",
+                    tenant_id=None,
+                    project_id=None,
+                    scope_type="jira_connection",
+                    scope_id="conn-1",
+                    source="jira_oauth",
+                    kind="reauth_required",
+                    severity="HIGH",
+                    title="Jira connection needs reauthentication",
+                    detail="Reconnect Jira.",
+                    action_label="Reconnect Jira",
+                    action_path=None,
+                    fingerprint="jira_connection:reauth_required:conn-1",
+                    status="open",
+                    context_json={"connection_id": "conn-1"},
+                    first_emitted_at=now,
+                    last_emitted_at=now,
+                    acknowledged_at=None,
+                    resolved_at=None,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.commit()
+
+        class _FakeJiraClient:
+            def list_projects(self, *, access_token: str, cloud_id: str):  # noqa: ANN001
+                return [SimpleNamespace(key="TP", name="Tenant Platform")]
+
+        with (
+            patch("orchestrator.api.admin.integration_dependencies.refresh_jira_connection_tokens", return_value="access-token"),
+            patch("orchestrator.api.admin.integration_dependencies.jira_oauth_client", return_value=_FakeJiraClient()),
+        ):
+            response = self.client.get(
+                "/api/admin/jira/connections/conn-1/projects",
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json(), [{"key": "TP", "name": "Tenant Platform"}])
+
+        open_notifications = self.client.get(
+            "/api/admin/tenants/tenant-a/notifications",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(open_notifications.status_code, 200, open_notifications.text)
+        self.assertEqual(open_notifications.json()["notifications"], [])
+
+        resolved_notifications = self.client.get(
+            "/api/admin/tenants/tenant-a/notifications?status=resolved",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(resolved_notifications.status_code, 200, resolved_notifications.text)
+        self.assertEqual(len(resolved_notifications.json()["notifications"]), 1)
+        self.assertEqual(resolved_notifications.json()["notifications"][0]["status"], "resolved")
 
     def test_create_tenant_auto_provisions_jira_webhook_when_jira_is_configured(self) -> None:
         payload = self._tenant_payload()
@@ -3054,7 +3163,7 @@ class AdminApiTests(AdminApiTestHarness):
 
         self.assertEqual(callback_response.status_code, 302)
         self.assertIn(
-            "/tenants/tenant-a/settings/jira?jira_oauth=success&jira_connection_id=",
+            "/tenant-a/settings/jira?jira_oauth=success&jira_connection_id=",
             callback_response.headers.get("location", ""),
         )
         self.assertIn("jira_webhook=ok", callback_response.headers.get("location", ""))
