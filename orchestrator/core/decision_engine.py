@@ -32,22 +32,26 @@ from orchestrator.core.decision_reply_service import (
     unresolved_question_ids_for_cycle,
 )
 from orchestrator.core.decision_planner import plan_decision_questions
-from orchestrator.core.decision_reducer import (
-    coerce_clear_decision as coerce_clear_decision_reducer,
-    reduce_planner_result as reduce_planner_result_reducer,
-)
 from orchestrator.core.decision_state_repository import (
     decision_gate_closed_cycle_id as decision_gate_closed_cycle_id_state,
     decision_gate_closed_permanently as decision_gate_closed_permanently_state,
     existing_case_for_issue as existing_case_for_issue_state,
     persist_decision_state as persist_decision_state_repo,
 )
-from orchestrator.core.decision_state_reducer import (
-    DecisionStateReducerInput,
+from orchestrator.core.decision_state_machine import (
+    DecisionEvent as DecisionLifecycleEvent,
+    DecisionState,
     DecisionStateTransition,
+    coerce_clear_decision_from_case,
+    decision_classification_for_precheck,
+    decision_missing_slots_for_precheck,
     decision_from_snapshot as decision_from_snapshot_state,
+    ingress_decision_from_precheck,
+    ingress_policy_error_decision,
     is_question_driven_state,
-    reduce_decision_state_transition,
+    reduce_decision_planner_result,
+    resolve_execution_gate_state,
+    resolve_decision_state_transition,
 )
 from orchestrator.core.decision_effect_service import publish_decision_effects as publish_decision_effects_repo
 from orchestrator.core.decision_types import (
@@ -59,9 +63,6 @@ from orchestrator.core.decision_types import (
     IngressDecision,
     PrecheckOutcome,
     WorkerDecision,
-    blocking_reason_for_precheck,
-    guidance_for_precheck_block_reason,
-    resolve_execution_gate_state,
     tenant_ready_label,
 )
 from orchestrator.core.knowledge_base import SlotResolution, resolve_missing_slots_from_knowledge
@@ -70,7 +71,6 @@ from orchestrator.core.pre_run_check import (
     PreRunCheckResult,
     evaluate_pre_run_check,
 )
-from orchestrator.core.precheck_decision import precheck_classification, precheck_missing_slots
 from orchestrator.core.runtime_invocation import invoke_runtime_json
 from orchestrator.core.codex_runtime import CodexRuntimeError, build_codex_runtime
 from orchestrator.storage.models import (
@@ -103,13 +103,9 @@ def _terminally_closed_gate_decision(
         issue_labels=issue_labels,
         ready_label=ready_label,
     )
-    block_reason = blocking_reason_for_precheck(pre_check)
-    return IngressDecision(
+    return ingress_decision_from_precheck(
         source=source,
         pre_check=pre_check,
-        block_reason=block_reason,
-        guidance=guidance_for_precheck_block_reason(block_reason=block_reason),
-        policy_error=None,
         label_actions=derive_label_actions(pre_check),
     )
 
@@ -139,25 +135,15 @@ def evaluate_ingress_precheck(
             ready_label=ready_label,
         )
     except Exception as exc:  # noqa: BLE001
-        return IngressDecision(
+        return ingress_policy_error_decision(
             source=source,
-            pre_check=None,
-            block_reason=PrecheckOutcome.POLICY_EVAL_FAILED.value,
-            guidance=guidance_for_precheck_block_reason(
-                block_reason=PrecheckOutcome.POLICY_EVAL_FAILED.value,
-            ),
             policy_error=str(exc),
-            label_actions=(),
         )
 
     actions = derive_label_actions(pre_check)
-    block_reason = blocking_reason_for_precheck(pre_check)
-    return IngressDecision(
+    return ingress_decision_from_precheck(
         source=source,
         pre_check=pre_check,
-        block_reason=block_reason,
-        guidance=guidance_for_precheck_block_reason(block_reason=block_reason),
-        policy_error=None,
         label_actions=actions,
     )
 
@@ -259,7 +245,7 @@ def _handle_open_cycle_blocked_transition(
         cycle_id=existing_cycle.cycle_id,
     )
     if planner_result is not None:
-        reduced = reduce_planner_result_reducer(
+        reduced = reduce_decision_planner_result(
             decision=decision,
             planner_result=planner_result,
         )
@@ -474,7 +460,7 @@ def _handle_transition_result_or_none(
             and isinstance(existing_case.metadata_json.get("result_snapshot"), dict)
             else {}
         )
-        decision = coerce_clear_decision_reducer(
+        decision = coerce_clear_decision_from_case(
             decision=decision_from_snapshot_state(
                 snapshot=snapshot,
                 source=event.source,
@@ -569,8 +555,8 @@ def evaluate_decision_event(
         )
         existing_cycle.unresolved_question_ids_json = list(unresolved_question_ids)
         existing_cycle.updated_at = occurred_at
-    transition = reduce_decision_state_transition(
-        input_state=DecisionStateReducerInput(
+    transition = resolve_decision_state_transition(
+        state=DecisionState(
             has_case=existing_case is not None,
             has_open_cycle=existing_cycle is not None,
             unresolved_question_count=len(unresolved_question_ids),
@@ -580,7 +566,8 @@ def evaluate_decision_event(
             ),
             case_issue_fingerprint=str(getattr(existing_case, "issue_fingerprint", "") or "").strip(),
             current_issue_fingerprint=current_issue_fingerprint,
-        )
+        ),
+        event=DecisionLifecycleEvent.EVALUATE_INGRESS,
     )
 
     transition_result = _handle_transition_result_or_none(
@@ -619,7 +606,7 @@ def evaluate_decision_event(
     decision = initial.decision
     issue_labels = initial.issue_labels
     issue_description = event.issue_description
-    missing_slots = precheck_missing_slots(decision.pre_check) if decision.pre_check is not None else []
+    missing_slots = decision_missing_slots_for_precheck(decision.pre_check) if decision.pre_check is not None else []
     persisted_slot_answers = slot_resolutions_from_case_resolution(case=existing_case)
     auto_resolved_answers: dict[str, SlotResolution] = {}
     accepted_question_ids = (
@@ -675,10 +662,10 @@ def evaluate_decision_event(
             )
             decision = reevaluated.decision
             issue_labels = reevaluated.issue_labels
-            missing_slots = precheck_missing_slots(decision.pre_check) if decision.pre_check is not None else []
+            missing_slots = decision_missing_slots_for_precheck(decision.pre_check) if decision.pre_check is not None else []
 
     classification = (
-        precheck_classification(decision.pre_check)
+        decision_classification_for_precheck(decision.pre_check)
         if decision.pre_check is not None
         else DecisionClassification.CLEAR
     )
@@ -699,7 +686,7 @@ def evaluate_decision_event(
             cycle=existing_cycle,
         )
         if planner_result is not None:
-            reduced = reduce_planner_result_reducer(
+            reduced = reduce_decision_planner_result(
                 decision=decision,
                 planner_result=planner_result,
             )
@@ -755,11 +742,9 @@ def evaluate_decision_event(
             cycle=cycle,
             classification=classification.value,
         )
-        decision = IngressDecision(
+        decision = ingress_decision_from_precheck(
             source=decision.source,
             pre_check=pre_check_with_cycle,
-            block_reason=decision.block_reason,
-            guidance=decision.guidance,
             policy_error=decision.policy_error,
             label_actions=decision.label_actions,
         )

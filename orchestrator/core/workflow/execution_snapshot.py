@@ -13,6 +13,7 @@ from orchestrator.core.workflow.trigger_context import (
     decode_trigger_context,
     require_github_pr_remediation_context,
 )
+from orchestrator.core.worker.stage_events import WorkerStageUpdate
 from orchestrator.core.workflow.checkpoint_codec import (
     decode_dev_result_payload,
     decode_pm_plan_payload,
@@ -149,7 +150,7 @@ class ExecutionSnapshot:
                 "requeue_reason": self.workflow.requeue_reason,
             },
             "events": {
-                "stage_updates": [dict(item) for item in self.events.stage_updates if isinstance(item, dict)],
+                "stage_updates": _normalize_stage_update_payloads(self.events.stage_updates),
                 "live_stage_updates": [dict(item) for item in self.events.live_stage_updates if isinstance(item, dict)],
                 "stage_trace": [dict(item) for item in self.events.stage_trace if isinstance(item, dict)],
                 "workstream_trace": [dict(item) for item in self.events.workstream_trace if isinstance(item, dict)],
@@ -188,7 +189,7 @@ class ExecutionSnapshot:
         self,
         *,
         workflow_result: WorkflowResult,
-        stage_updates: list[dict[str, str]],
+        stage_updates: list[WorkerStageUpdate | dict[str, str]],
     ) -> None:
         self.workflow = SnapshotWorkflow(
             outcome=workflow_result.outcome,
@@ -202,7 +203,7 @@ class ExecutionSnapshot:
             ),
             requeue_reason=workflow_result.requeue_reason,
         )
-        self.events.stage_updates = [dict(item) for item in stage_updates if isinstance(item, dict)]
+        self.events.stage_updates = _normalize_stage_update_payloads(stage_updates)
         self.events.stage_trace = [dict(item) for item in workflow_result.orchestration_stage_trace if isinstance(item, dict)]
         self.events.workstream_trace = [dict(item) for item in workflow_result.orchestration_workstream_trace if isinstance(item, dict)]
 
@@ -229,6 +230,18 @@ class ExecutionSnapshot:
         if record is None or not isinstance(record.artifact, dict):
             return None
         return decode_review_result_payload(record.artifact)
+
+
+def _normalize_stage_update_payloads(
+    stage_updates: list[WorkerStageUpdate | dict[str, str]],
+) -> list[dict[str, Any]]:
+    payloads: list[dict[str, Any]] = []
+    for item in stage_updates:
+        normalized = item if isinstance(item, WorkerStageUpdate) else WorkerStageUpdate.load(item)
+        if normalized is None:
+            continue
+        payloads.append(normalized.to_payload())
+    return payloads
 
 
 def load_trigger_context_from_plan(plan: object | None) -> dict[str, Any] | None:

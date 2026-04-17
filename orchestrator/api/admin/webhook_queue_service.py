@@ -102,11 +102,11 @@ def list_webhook_queue_jobs(
             tenant_id=row.tenant_id,
             project_id=row.project_id,
             subject_key=row.subject_key,
+            related_run_id=_normalized_string((row.context_json or {}).get("related_run_id")),
             dedupe_key=row.dedupe_key,
             request_id=row.request_id,
             event_type=row.event_type,
             status=row.status,
-            owner_id=row.owner_id,
             lease_expires_at=row.lease_expires_at,
             available_at=row.available_at,
             attempt_count=int(row.attempt_count or 0),
@@ -125,4 +125,3 @@ def list_webhook_queue_jobs(
         offset=offset,
         summary=summary,
     )
-

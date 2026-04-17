@@ -1,2 +1,0 @@
-# Regex allowlist for intentional compatibility shim references from `check_compat_shims.py`.
-# Keep this file small and remove entries once migrations are complete.

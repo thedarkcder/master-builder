@@ -12,17 +12,17 @@ from orchestrator.api.schemas import DiscordCommandRequest, DiscordCommandRespon
 from orchestrator.core.runtime_invocation import AgentInvocationContext
 from orchestrator.core.codex_runtime import CodexRuntimeError
 from orchestrator.core.communications.command_pipeline import CommandScope
-from orchestrator.core.communications.enqueue_reason_contract import (
-    format_enqueue_conflict_detail,
+from orchestrator.core.communications.enqueue_conflict_presentation import (
+    present_discord_enqueue_conflict,
 )
 from orchestrator.core.communications.decision_clarification_presentation import (
     build_decision_clarification_presentation,
+    build_runtime_precheck_message,
     load_cycle_question_feedback,
-    render_decision_gate_feedback_message,
-    render_decision_gate_remaining_questions_message,
+    present_discord_decision_clarification,
 )
 from orchestrator.core.communications.execution_admission_format import (
-    format_discord_admission_conflict_detail,
+    present_discord_admission_conflict,
 )
 from orchestrator.core.decision_engine import DecisionEventInput, DecisionSource
 from orchestrator.core.decision_clarification_port import DecisionClarificationPort
@@ -36,7 +36,6 @@ from orchestrator.core.followup_context_service import (
     close_followup_contexts,
 )
 from orchestrator.core.pre_run_check import evaluate_pre_run_check
-from orchestrator.core.precheck_decision import build_precheck_message
 from orchestrator.core.project_policy import resolve_effective_policy
 from orchestrator.core.run_gate_service import enqueue_issue_run_with_precheck
 from orchestrator.core.runs import cancel_run
@@ -102,9 +101,10 @@ def _queue_run_from_issue_context(
     )
     admission = resolve_execution_admission(decision_result=decision_result)
     if admission.blocked:
+        conflict = present_discord_admission_conflict(admission=admission)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=format_discord_admission_conflict_detail(admission=admission),
+            detail=conflict.detail,
         )
     enqueue_result = enqueue_issue_run_with_precheck(
         session,
@@ -123,13 +123,14 @@ def _queue_run_from_issue_context(
         ).get("max_concurrent_runs"),
     )
     if not enqueue_result.enqueued:
+        conflict = present_discord_enqueue_conflict(
+            prefix=conflict_prefix,
+            reason=enqueue_result.reason,
+            enqueue_run_obj=enqueue_result.run,
+        )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=format_enqueue_conflict_detail(
-                prefix=conflict_prefix,
-                enqueue_reason=str(enqueue_result.reason),
-                enqueue_run_obj=enqueue_result.run,
-            ),
+            detail=conflict.detail,
         )
     return DiscordCommandResponse(
         ok=True,
@@ -462,25 +463,10 @@ def dispatch_run_control_command(
             ),
         )
         if clarification_presentation.recheck_required:
-            if (
-                clarification_presentation.requires_decision_gate_feedback
-                and clarification_presentation.question_feedback
-            ):
-                message = render_decision_gate_feedback_message(
-                    issue_key=issue_key,
-                    reason=clarification_presentation.decision_gate_reason or "clarification required",
-                    question_feedback=clarification_presentation.question_feedback,
-                )
-                generated_questions = list(clarification_presentation.questions)
-            elif clarification_presentation.requires_decision_gate_feedback:
-                message = render_decision_gate_remaining_questions_message(
-                    issue_key=issue_key,
-                    reason=clarification_presentation.decision_gate_reason or "clarification required",
-                    questions=clarification_presentation.decision_gate_questions,
-                )
-                generated_questions = list(clarification_presentation.questions)
-            else:
-                message, generated_questions = build_precheck_message(
+            clarification_response = present_discord_decision_clarification(
+                issue_key=issue_key,
+                presentation=clarification_presentation,
+                precheck_message_builder=lambda: build_runtime_precheck_message(
                     runtime=runtime,
                     invocation_context=AgentInvocationContext(
                         channel="discord",
@@ -492,27 +478,22 @@ def dispatch_run_control_command(
                         issue_key=issue_key,
                     ),
                     issue_key=issue_key,
-                    classification=clarification_presentation.mode.value,
+                    classification=clarification_presentation.mode,
                     decision_gate_reason=clarification_presentation.decision_gate_reason or "",
                     decision_gate_questions=list(clarification_presentation.decision_gate_questions),
                     gtd_missing_criteria=list(clarification_presentation.gtd_missing_criteria),
                     gtd_questions=list(clarification_presentation.gtd_questions),
                     missing_slots=list(clarification_presentation.missing_slots),
-                )
+                ),
+            )
             return DiscordCommandResponse(
                 ok=True,
                 command=command_name,
-                message=message,
+                message=clarification_response.message,
                 data={
                     "issue_key": issue_key,
                     "recheck_required": True,
-                    "classification": clarification_presentation.mode.value,
-                    "decision_gate_reason": clarification_presentation.decision_gate_reason,
-                    "gtd_missing_criteria": list(clarification_presentation.gtd_missing_criteria),
-                    "questions": generated_questions or list(clarification_presentation.questions),
-                    "question_feedback": list(clarification_presentation.question_feedback),
-                    "missing_slots": list(clarification_presentation.missing_slots),
-                    "auto_resolved_slots": list(clarification_presentation.auto_resolved_slots),
+                    **clarification_response.response_fields,
                     "knowledge_mode": None,
                 },
             )

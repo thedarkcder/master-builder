@@ -17,10 +17,10 @@ from orchestrator.core.config import get_settings
 from orchestrator.core.codex_runtime import CodexRuntime, CodexRuntimeError
 from orchestrator.core.decision_engine import DecisionEngineResult
 from orchestrator.core.decision_gate import DecisionGateResult
+from orchestrator.core.decision_state_machine import resolve_execution_gate_state
 from orchestrator.core.decision_types import (
     DecisionClassification,
     IngressDecision,
-    resolve_execution_gate_state,
 )
 from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.pre_run_check import PreRunCheckResult
@@ -519,7 +519,7 @@ class DiscordCommandProductionPathTests(SqliteTemplateDbTestCase):
             project = session.get(Project, "route25-default")
             assert tenant is not None
             assert project is not None
-            tenant.policy_config = {**dict(tenant.policy_config or {}), "codex_model": "gpt-5.3-codex-spark"}
+            tenant.policy_config = {**dict(tenant.policy_config or {}), "codex_model": "gpt-5.4-mini"}
             project.policy_overrides = {**dict(project.policy_overrides or {}), "codex_model": "gpt-5.4"}
             session.commit()
 
@@ -551,7 +551,7 @@ class DiscordCommandProductionPathTests(SqliteTemplateDbTestCase):
             project = session.get(Project, "route25-default")
             assert tenant is not None
             assert project is not None
-            tenant.policy_config = {**dict(tenant.policy_config or {}), "codex_model": "gpt-5.3-codex-spark"}
+            tenant.policy_config = {**dict(tenant.policy_config or {}), "codex_model": "gpt-5.4-mini"}
             project.policy_overrides = {**dict(project.policy_overrides or {}), "codex_model": "gpt-5.4"}
             session.commit()
 
@@ -659,7 +659,7 @@ class DiscordCommandProductionPathTests(SqliteTemplateDbTestCase):
         runtime, queue = self._seed_runtime(
             [
                 CodexRuntimeError(
-                    "Codex CLI command failed (exit=1): You've hit your usage limit for GPT-5.3-Codex-Spark. Switch to another model now, or try again later."
+                    "Codex CLI command failed (exit=1): You've hit your usage limit for GPT-5.4 Mini. Switch to another model now, or try again later."
                 ),
             ]
         )
@@ -669,7 +669,7 @@ class DiscordCommandProductionPathTests(SqliteTemplateDbTestCase):
 
         self.assertEqual(response.status_code, 503)
         self.assertIn("usage limit", response.json()["detail"].lower())
-        self.assertIn("gpt-5.3-codex-spark", response.json()["detail"].lower())
+        self.assertIn("gpt-5.4 mini", response.json()["detail"].lower())
         self.assertEqual(queue.calls, 1)
 
     def test_issues_seed_returns_controlled_error_for_incomplete_jira_context(self) -> None:

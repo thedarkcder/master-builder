@@ -5,7 +5,6 @@ from orchestrator.core.worker_capabilities import (
     parse_worker_capabilities_strict,
     parse_worker_capability_labels,
     required_worker_capability_for_run,
-    worker_label_for_capability,
 )
 
 def test_parse_worker_capabilities_defaults_and_requires_canonical_values() -> None:

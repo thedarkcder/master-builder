@@ -234,6 +234,12 @@ export function TenantProjectDetailsPage() {
   const [webhookSummary, setWebhookSummary] = useState<WebhookQueueSummaryRecord | null>(null);
   const [webhookBusy, setWebhookBusy] = useState(false);
   const [webhookStatusLine, setWebhookStatusLine] = useState("");
+  const [webhookQueryFilter, setWebhookQueryFilter] = useState("");
+  const [webhookStatusFilter, setWebhookStatusFilter] = useState<"all" | string>("all");
+  const [webhookTransportFilter, setWebhookTransportFilter] = useState<"all" | string>("all");
+  const [webhookTotal, setWebhookTotal] = useState(0);
+  const [webhookPage, setWebhookPage] = useState(1);
+  const [webhookPageSize, setWebhookPageSize] = useState<25 | 50 | 100>(25);
   const [activeSettingsSection, setActiveSettingsSection] = useState<SettingsSection>("general");
   const [runIssueFilter, setRunIssueFilter] = useState("");
   const [runStatusFilter, setRunStatusFilter] = useState<RunStatus | "all">("all");
@@ -270,6 +276,14 @@ export function TenantProjectDetailsPage() {
   const visibleTabs = useMemo(
     () => (allowProjectManagement ? TABS : TABS.filter((tab) => tab.id === "overview" || tab.id === "runs")),
     [allowProjectManagement],
+  );
+  const webhookStatusOptions = useMemo(
+    () => Array.from(new Set(webhookJobs.map((job) => job.status).filter(Boolean))).sort(),
+    [webhookJobs],
+  );
+  const webhookTransportOptions = useMemo(
+    () => Array.from(new Set(webhookJobs.map((job) => job.transport).filter(Boolean))).sort(),
+    [webhookJobs],
   );
 
   async function loadOptions() {
@@ -352,15 +366,20 @@ export function TenantProjectDetailsPage() {
       const payload = await listWebhookQueueJobs(credentials, {
         tenantId: params.tenantId,
         projectId: params.projectId,
-        limit: 50,
-        offset: 0,
+        status: webhookStatusFilter === "all" ? undefined : webhookStatusFilter,
+        transport: webhookTransportFilter === "all" ? undefined : webhookTransportFilter,
+        subjectKey: webhookQueryFilter.trim() || undefined,
+        limit: webhookPageSize,
+        offset: (webhookPage - 1) * webhookPageSize,
       });
       setWebhookJobs(payload.items);
       setWebhookSummary(payload.summary);
+      setWebhookTotal(payload.total);
       setWebhookStatusLine("");
     } catch (error) {
       setWebhookJobs([]);
       setWebhookSummary(null);
+      setWebhookTotal(0);
       setWebhookStatusLine(`Webhook queue is unavailable: ${(error as Error).message}`);
     } finally {
       setWebhookBusy(false);
@@ -395,7 +414,19 @@ export function TenantProjectDetailsPage() {
 
   useEffect(() => {
     if (ready && credentials && project && activeTab === "webhooks") void loadWebhookJobs();
-  }, [activeTab, ready, credentials, project, params.tenantId, params.projectId]);
+  }, [
+    activeTab,
+    ready,
+    credentials,
+    project,
+    params.tenantId,
+    params.projectId,
+    webhookPage,
+    webhookPageSize,
+    webhookQueryFilter,
+    webhookStatusFilter,
+    webhookTransportFilter,
+  ]);
 
   useEffect(() => {
     if (activeTab !== "settings") {
@@ -1623,9 +1654,115 @@ export function TenantProjectDetailsPage() {
               </Button>
             </div>
 
+            <div className="flex flex-col gap-3 border-b px-5 py-3 sm:flex-row sm:items-end">
+              <div className="min-w-0 flex-1">
+                <label className="mb-1 block text-xs font-medium text-muted-foreground" htmlFor="webhook-filter-query">
+                  Issue / run / error
+                </label>
+                <Input
+                  id="webhook-filter-query"
+                  value={webhookQueryFilter}
+                  onChange={(event) => {
+                    setWebhookQueryFilter(event.target.value);
+                    setWebhookPage(1);
+                  }}
+                  placeholder="Filter by issue key, run id, or error"
+                  className="h-9"
+                />
+              </div>
+              <div className="w-full sm:w-40">
+                <label className="mb-1 block text-xs font-medium text-muted-foreground" htmlFor="webhook-filter-status">
+                  Status
+                </label>
+                <select
+                  id="webhook-filter-status"
+                  value={webhookStatusFilter}
+                  onChange={(event) => {
+                    setWebhookStatusFilter(event.target.value);
+                    setWebhookPage(1);
+                  }}
+                  className="h-9 w-full rounded-md border bg-background px-3 text-sm"
+                >
+                  <option value="all">All statuses</option>
+                  {webhookStatusOptions.map((status) => (
+                    <option key={status} value={status}>
+                      {status}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="w-full sm:w-44">
+                <label className="mb-1 block text-xs font-medium text-muted-foreground" htmlFor="webhook-filter-transport">
+                  Transport
+                </label>
+                <select
+                  id="webhook-filter-transport"
+                  value={webhookTransportFilter}
+                  onChange={(event) => {
+                    setWebhookTransportFilter(event.target.value);
+                    setWebhookPage(1);
+                  }}
+                  className="h-9 w-full rounded-md border bg-background px-3 text-sm"
+                >
+                  <option value="all">All transports</option>
+                  {webhookTransportOptions.map((transport) => (
+                    <option key={transport} value={transport}>
+                      {transport}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="w-full sm:w-28">
+                <label className="mb-1 block text-xs font-medium text-muted-foreground" htmlFor="webhook-page-size">
+                  Page size
+                </label>
+                <select
+                  id="webhook-page-size"
+                  value={String(webhookPageSize)}
+                  onChange={(event) => {
+                    const nextValue = Number(event.target.value);
+                    if (nextValue === 25 || nextValue === 50 || nextValue === 100) {
+                      setWebhookPageSize(nextValue);
+                      setWebhookPage(1);
+                    }
+                  }}
+                  className="h-9 w-full rounded-md border bg-background px-3 text-sm"
+                >
+                  <option value="25">25</option>
+                  <option value="50">50</option>
+                  <option value="100">100</option>
+                </select>
+              </div>
+              <div className="flex items-center justify-between gap-3 sm:pb-1">
+                <span className="text-xs text-muted-foreground">
+                  {webhookJobs.length} of {webhookTotal}
+                </span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 px-2 text-xs"
+                  onClick={() => {
+                    setWebhookQueryFilter("");
+                    setWebhookStatusFilter("all");
+                    setWebhookTransportFilter("all");
+                    setWebhookPage(1);
+                  }}
+                  disabled={
+                    webhookQueryFilter.length === 0 &&
+                    webhookStatusFilter === "all" &&
+                    webhookTransportFilter === "all"
+                  }
+                >
+                  Clear
+                </Button>
+              </div>
+            </div>
+
             {webhookJobs.length === 0 ? (
               <div className="px-5 py-12 text-center text-sm text-muted-foreground">
-                No webhook jobs found for this project.
+                {webhookTotal === 0
+                  ? "No webhook jobs found for this project."
+                  : "No webhook jobs match the current page."}
               </div>
             ) : (
               <Table>
@@ -1634,7 +1771,8 @@ export function TenantProjectDetailsPage() {
                     <TableHead className="pl-5">Status</TableHead>
                     <TableHead>Transport</TableHead>
                     <TableHead>Subject</TableHead>
-                    <TableHead>Owner</TableHead>
+                    <TableHead>Arrived</TableHead>
+                    <TableHead>Run</TableHead>
                     <TableHead>Attempts</TableHead>
                     <TableHead>Last Error</TableHead>
                   </TableRow>
@@ -1649,8 +1787,24 @@ export function TenantProjectDetailsPage() {
                       <TableCell className="max-w-[280px] truncate font-mono text-xs" title={job.subject_key}>
                         {job.subject_key}
                       </TableCell>
-                      <TableCell className="max-w-[220px] truncate font-mono text-xs" title={job.owner_id ?? ""}>
-                        {job.owner_id ?? "—"}
+                      <TableCell className="text-xs text-muted-foreground">
+                        {formatTimestamp(job.created_at, "—")}
+                      </TableCell>
+                      <TableCell className="font-mono text-xs">
+                        {job.related_run_id ? (
+                          <Link
+                            href={buildRunDetailPath({
+                              tenantId: params.tenantId,
+                              projectId: params.projectId,
+                              runId: job.related_run_id,
+                            })}
+                            className="text-primary underline-offset-4 hover:underline"
+                          >
+                            {job.related_run_id}
+                          </Link>
+                        ) : (
+                          "—"
+                        )}
                       </TableCell>
                       <TableCell className="text-xs">{job.attempt_count}</TableCell>
                       <TableCell className="max-w-[300px] truncate text-xs text-muted-foreground" title={job.last_error ?? ""}>
@@ -1661,6 +1815,32 @@ export function TenantProjectDetailsPage() {
                 </TableBody>
               </Table>
             )}
+
+            <div className="flex items-center justify-between border-t px-5 py-3">
+              <span className="text-xs text-muted-foreground">
+                Page {webhookPage}
+              </span>
+              <div className="flex items-center gap-1">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 text-xs"
+                  onClick={() => setWebhookPage((prev) => Math.max(1, prev - 1))}
+                  disabled={webhookBusy || webhookPage <= 1}
+                >
+                  Prev
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 text-xs"
+                  onClick={() => setWebhookPage((prev) => prev + 1)}
+                  disabled={webhookBusy || webhookPage * webhookPageSize >= webhookTotal}
+                >
+                  Next
+                </Button>
+              </div>
+            </div>
           </div>
         </div>
       ) : null}

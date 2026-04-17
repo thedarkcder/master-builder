@@ -1,6 +1,5 @@
 import json
 import os
-import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -208,11 +207,6 @@ class WorkerWorkflowTests(SqliteTemplateDbTestCase):
             return_value=SimpleNamespace(stale=False, message=None),
         )
         self.freshness_patcher.start()
-        self.jira_oauth_patcher = patch(
-            "orchestrator.core.worker.execution_service.tenant_jira_oauth_context",
-            side_effect=self._tenant_jira_oauth_context_stub,
-        )
-        self.jira_oauth_patcher.start()
         self._seed_checked_out_repo()
 
     def tearDown(self) -> None:
@@ -227,33 +221,9 @@ class WorkerWorkflowTests(SqliteTemplateDbTestCase):
         os.environ.pop("ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR", None)
         os.environ.pop("ORCHESTRATOR_WORKER_WORKSPACE_KEY", None)
         os.environ.pop("ORCHESTRATOR_WORKER_CAPABILITIES", None)
-        self.jira_oauth_patcher.stop()
         get_settings.cache_clear()
         reset_db_engine_cache()
         reset_agent_observability_for_tests()
-
-    def _tenant_jira_oauth_context_stub(self, *, session, tenant, settings):  # noqa: ANN001
-        _ = session, tenant, settings
-
-        class _Client:
-            def __init__(self, issue_details: dict[str, dict[str, object]]) -> None:
-                self.issue_details = issue_details
-
-            def get_issue_detail(self, *, access_token: str, cloud_id: str, issue_id_or_key: str):  # noqa: ARG002
-                detail = self.issue_details.get(issue_id_or_key, {})
-                labels = detail["labels"] if "labels" in detail else ["agent:ready"]
-                return SimpleNamespace(
-                    key=issue_id_or_key,
-                    summary=str(detail.get("summary") or f"Implement {issue_id_or_key}"),
-                    description=str(detail.get("description") or ""),
-                    labels=list(labels),
-                )
-
-        return SimpleNamespace(
-            client=_Client(self._jira_issue_details),
-            connection=SimpleNamespace(cloud_id="cloud-1"),
-            access_token="access-token",
-        )
 
     def _queue_run(
         self,

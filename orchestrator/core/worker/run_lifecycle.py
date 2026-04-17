@@ -14,6 +14,7 @@ from orchestrator.core.workflow.checkpoints import (
 )
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.core.workflow.execution_snapshot import SnapshotWorkflow
+from orchestrator.core.worker.stage_events import WorkerStageUpdate
 from orchestrator.core.workflow.runner import WorkflowResult, WorkflowStageCheckpoint
 from orchestrator.core.worker.run_disposition import resolve_run_disposition
 from orchestrator.storage.models import Project, Run, WorkflowExecution
@@ -280,11 +281,23 @@ def fail_project_repository_setup(session: Session, *, run: Run, error: str) -> 
     )
 
 
+def _normalize_stage_updates(
+    stage_updates: list[WorkerStageUpdate | dict[str, str]],
+) -> list[dict[str, str]]:
+    payloads: list[dict[str, str]] = []
+    for item in stage_updates:
+        normalized = item if isinstance(item, WorkerStageUpdate) else WorkerStageUpdate.load(item)
+        if normalized is None:
+            continue
+        payloads.append(normalized.to_payload())
+    return payloads
+
+
 def finalize_cancelled_run(
     session: Session,
     *,
     run: Run,
-    stage_updates: list[dict[str, str]],
+    stage_updates: list[WorkerStageUpdate | dict[str, str]],
     expected_worker_service_instance_id: str | None = None,
     expected_claim_id: str | None = None,
 ) -> Run:
@@ -311,7 +324,7 @@ def finalize_cancelled_run(
         requeue_target=None,
         requeue_reason=None,
     )
-    snapshot.events.stage_updates = [dict(item) for item in stage_updates if isinstance(item, dict)]
+    snapshot.events.stage_updates = _normalize_stage_updates(stage_updates)
     run.plan = snapshot.dump()
     if run.finished_at is None:
         run.finished_at = datetime.now(timezone.utc)
@@ -336,7 +349,7 @@ def finalize_workflow_result(
     *,
     run: Run,
     workflow_result: WorkflowResult,
-    stage_updates: list[dict[str, str]],
+    stage_updates: list[WorkerStageUpdate | dict[str, str]],
     execution_context: dict[str, str] | None = None,
     expected_worker_service_instance_id: str | None = None,
     expected_claim_id: str | None = None,
@@ -390,7 +403,7 @@ def requeue_workflow_result_for_capability(
     *,
     run: Run,
     workflow_result: WorkflowResult,
-    stage_updates: list[dict[str, str]],
+    stage_updates: list[WorkerStageUpdate | dict[str, str]],
     required_worker_capability: str,
     required_worker_label: str,
     execution_context: dict[str, str] | None = None,
@@ -453,7 +466,7 @@ def requeue_workflow_result_for_stale_snapshot(
     *,
     run: Run,
     workflow_result: WorkflowResult,
-    stage_updates: list[dict[str, str]],
+    stage_updates: list[WorkerStageUpdate | dict[str, str]],
     error: str,
     execution_context: dict[str, str] | None = None,
     expected_worker_service_instance_id: str | None = None,
@@ -546,7 +559,7 @@ def requeue_run_for_repo_setup(
     snapshot.workflow.outcome = "requeue"
     snapshot.workflow.requeue_target = None
     snapshot.workflow.requeue_reason = error
-    snapshot.events.stage_updates = [dict(item) for item in stage_updates if isinstance(item, dict)]
+    snapshot.events.stage_updates = _normalize_stage_updates(stage_updates)
     run.plan = snapshot.dump()
     run.pr_url = None
     run.status = "queued"

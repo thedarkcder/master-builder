@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from orchestrator.core.communications.decision_clarification_presentation import (
-    ClarificationMode,
     build_decision_clarification_presentation,
+    build_decision_clarification_response_fields,
+    build_runtime_precheck_message,
+    present_discord_decision_clarification,
     render_decision_gate_feedback_message,
     render_decision_gate_remaining_questions_message,
 )
+from orchestrator.core.codex_runtime import CodexRuntimeError
+from orchestrator.core.runtime_invocation import AgentInvocationContext
+from orchestrator.core.decision_types import DecisionClassification
 
 
 def _decision_result(
@@ -50,7 +56,7 @@ def test_build_decision_clarification_presentation_prefers_feedback_questions_fo
         ),
     )
     assert presentation.recheck_required is True
-    assert presentation.mode is ClarificationMode.DECISION_GATE
+    assert presentation.mode is DecisionClassification.DECISION_GATE
     assert presentation.classification == "decision_gate"
     assert presentation.questions == ("What is the owner?",)
 
@@ -65,7 +71,7 @@ def test_build_decision_clarification_presentation_uses_gtd_questions_when_no_fe
         ),
     )
     assert presentation.recheck_required is True
-    assert presentation.mode is ClarificationMode.GTD
+    assert presentation.mode is DecisionClassification.GTD
     assert presentation.classification == "gtd"
     assert presentation.decision_gate_reason is None
     assert presentation.questions == ("Which dependencies or risks may impact delivery?",)
@@ -97,3 +103,123 @@ def test_render_decision_gate_remaining_questions_message_lists_questions() -> N
     assert "Need details." in message
     assert "- What is the fallback?" in message
     assert "- How do we test?" in message
+
+
+def test_build_decision_clarification_response_fields_serializes_typed_presentation() -> None:
+    presentation = build_decision_clarification_presentation(
+        decision_result=_decision_result(
+            classification="gtd",
+            decision_gate_reason="Decision Gate not required.",
+            gtd_missing_criteria=("Dependencies and risks identified",),
+            gtd_questions=("Which dependencies or risks may impact delivery?",),
+            missing_slots=("dependencies",),
+            auto_resolved_slots=("objective",),
+        ),
+    )
+
+    response_fields = build_decision_clarification_response_fields(
+        presentation=presentation,
+    )
+
+    assert response_fields == {
+        "classification": "gtd",
+        "decision_gate_reason": None,
+        "gtd_missing_criteria": ["Dependencies and risks identified"],
+        "questions": ["Which dependencies or risks may impact delivery?"],
+        "question_feedback": [],
+        "missing_slots": ["dependencies"],
+        "auto_resolved_slots": ["objective"],
+    }
+
+
+def test_present_discord_decision_clarification_prefers_feedback_rendering() -> None:
+    presentation = build_decision_clarification_presentation(
+        decision_result=_decision_result(
+            classification="decision_gate",
+            decision_gate_reason="Need owner decision.",
+            decision_gate_questions=("Who owns rollout?",),
+        ),
+        question_feedback=(
+            {
+                "question_id": "dg_1",
+                "question_text": "Who owns rollout?",
+                "note": "Owner role not specified",
+                "status": "open",
+            },
+        ),
+    )
+
+    result = present_discord_decision_clarification(
+        issue_key="GP-1",
+        presentation=presentation,
+        precheck_message_builder=lambda: ("fallback message", ["fallback question"]),
+    )
+
+    assert "Need owner decision." in result.message
+    assert "Missing detail: Owner role not specified" in result.message
+    assert result.response_fields["classification"] == "decision_gate"
+    assert result.response_fields["questions"] == ["Who owns rollout?"]
+
+
+def test_build_runtime_precheck_message_raises_when_runtime_payload_is_invalid() -> None:
+    runtime = SimpleNamespace()
+    with patch(
+        "orchestrator.core.communications.decision_clarification_presentation.invoke_runtime_json",
+        return_value={"message": "Need clarification", "questions": [], "classification": "invalid"},
+    ):
+        try:
+            build_runtime_precheck_message(
+                runtime=runtime,
+                invocation_context=AgentInvocationContext(
+                    channel="discord",
+                    tenant_id="tenant-1",
+                    project_id="project-1",
+                    command="reply",
+                    stage="precheck_message",
+                    working_dir=".",
+                    issue_key="GP-1",
+                ),
+                issue_key="GP-1",
+                classification=DecisionClassification.GTD,
+                decision_gate_reason="",
+                decision_gate_questions=[],
+                gtd_missing_criteria=["dependencies_and_risks"],
+                gtd_questions=["Which dependencies or risks may impact delivery?"],
+                missing_slots=["dependencies_and_risks"],
+            )
+        except RuntimeError as exc:
+            assert "invalid classification" in str(exc)
+        else:
+            raise AssertionError("invalid runtime payload should raise")
+
+
+def test_build_runtime_precheck_message_raises_runtime_errors_without_local_fallback() -> None:
+    runtime = SimpleNamespace()
+    with patch(
+        "orchestrator.core.communications.decision_clarification_presentation.invoke_runtime_json",
+        side_effect=CodexRuntimeError("runtime failed"),
+    ):
+        try:
+            build_runtime_precheck_message(
+                runtime=runtime,
+                invocation_context=AgentInvocationContext(
+                    channel="discord",
+                    tenant_id="tenant-1",
+                    project_id="project-1",
+                    command="reply",
+                    stage="precheck_message",
+                    working_dir=".",
+                    issue_key="GP-1",
+                ),
+                issue_key="GP-1",
+                classification=DecisionClassification.GTD,
+                decision_gate_reason="",
+                decision_gate_questions=[],
+                gtd_missing_criteria=["dependencies_and_risks"],
+                gtd_questions=["Which dependencies or risks may impact delivery?"],
+                missing_slots=["dependencies_and_risks"],
+            )
+        except CodexRuntimeError as exc:
+            assert "runtime failed" in str(exc)
+        else:
+            raise AssertionError("runtime errors should propagate")

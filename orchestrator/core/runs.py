@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from orchestrator.core.decision_types import PrecheckOutcome
 from orchestrator.core.config import get_settings
+from orchestrator.core.run_enqueue_types import EnqueueFailureReason
 from orchestrator.core.runtime_requirements import resolve_required_runtime_kinds_for_workflow
 from orchestrator.core.worker_capability_normalization import parse_worker_capability
 from orchestrator.core.workflow.execution_snapshot import (
@@ -60,7 +61,7 @@ class RunStateTransitionError(ValueError):
 @dataclass(frozen=True)
 class EnqueueRunResult:
     enqueued: bool
-    reason: str | None
+    reason: EnqueueFailureReason | None
     run: Run
 
 
@@ -367,7 +368,11 @@ def enqueue_run(
                 raise RunStateTransitionError(
                     "Webhook delivery references a missing run; DB integrity is violated"
                 )
-            return EnqueueRunResult(enqueued=False, reason="duplicate_delivery", run=run)
+            return EnqueueRunResult(
+                enqueued=False,
+                reason=EnqueueFailureReason.DUPLICATE_DELIVERY,
+                run=run,
+            )
 
     bootstrap_workflow_id = str(bootstrap.workflow_id or "").strip() if bootstrap is not None else ""
     if bootstrap_workflow_id:
@@ -389,7 +394,11 @@ def enqueue_run(
             raise RunStateTransitionError(
                 f"Workflow {active_workflow.workflow_id} is active but has no attempt rows"
             )
-        return EnqueueRunResult(enqueued=False, reason="run_already_active", run=active_run)
+        return EnqueueRunResult(
+            enqueued=False,
+            reason=EnqueueFailureReason.RUN_ALREADY_ACTIVE,
+            run=active_run,
+        )
 
     normalized_limit = _coerce_positive_limit(max_concurrent_runs)
     if normalized_limit is not None:
@@ -400,7 +409,7 @@ def enqueue_run(
                 raise RunStateTransitionError("Concurrency limit reached but no active run was found")
             return EnqueueRunResult(
                 enqueued=False,
-                reason="tenant_concurrency_limit_reached",
+                reason=EnqueueFailureReason.TENANT_CONCURRENCY_LIMIT_REACHED,
                 run=active_run,
             )
 
@@ -525,7 +534,11 @@ def enqueue_run(
                     raise RunStateTransitionError(
                         "Webhook delivery references a missing run after retry"
                     )
-                return EnqueueRunResult(enqueued=False, reason="duplicate_delivery", run=deduped_run)
+                return EnqueueRunResult(
+                    enqueued=False,
+                    reason=EnqueueFailureReason.DUPLICATE_DELIVERY,
+                    run=deduped_run,
+                )
         active_workflow = _active_workflow_for_issue(
             session,
             tenant_id=tenant_id,
@@ -538,7 +551,11 @@ def enqueue_run(
                 raise RunStateTransitionError(
                     f"Workflow {active_workflow.workflow_id} is active but has no attempt rows"
                 )
-            return EnqueueRunResult(enqueued=False, reason="run_already_active", run=active_run)
+            return EnqueueRunResult(
+                enqueued=False,
+                reason=EnqueueFailureReason.RUN_ALREADY_ACTIVE,
+                run=active_run,
+            )
         if normalized_limit is not None:
             active_count = _active_run_count_for_tenant(session, tenant_id=tenant_id)
             if active_count >= normalized_limit:
@@ -547,7 +564,7 @@ def enqueue_run(
                     raise RunStateTransitionError("Concurrency limit reached but no active run was found")
                 return EnqueueRunResult(
                     enqueued=False,
-                    reason="tenant_concurrency_limit_reached",
+                    reason=EnqueueFailureReason.TENANT_CONCURRENCY_LIMIT_REACHED,
                     run=active_run,
                 )
         raise RunStateTransitionError("Failed to enqueue run due to unknown integrity conflict")
@@ -597,7 +614,11 @@ def _enqueue_attempt_for_workflow(
         active_run = _run_for_workflow(session, workflow)
         if active_run is None:
             raise RunStateTransitionError(f"Workflow {workflow_id} is active but has no attempt rows")
-        return EnqueueRunResult(enqueued=False, reason="run_already_active", run=active_run)
+        return EnqueueRunResult(
+            enqueued=False,
+            reason=EnqueueFailureReason.RUN_ALREADY_ACTIVE,
+            run=active_run,
+        )
     if is_workflow_terminal(workflow.status):
         raise RunStateTransitionError(
             f"Workflow {workflow_id} is terminal; create a new workflow execution instead of reusing it"

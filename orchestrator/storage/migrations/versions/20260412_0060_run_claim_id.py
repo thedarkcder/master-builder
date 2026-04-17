@@ -23,7 +23,6 @@ def upgrade() -> None:
     inspector = inspect(bind)
     existing_columns = {column.get("name") for column in inspector.get_columns("runs")}
     existing_indexes = {index.get("name") for index in inspector.get_indexes("runs")}
-
     with op.batch_alter_table("runs") as batch_op:
         if "claim_id" not in existing_columns:
             batch_op.add_column(sa.Column("claim_id", sa.String(length=64), nullable=True))

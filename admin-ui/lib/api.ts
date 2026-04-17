@@ -494,6 +494,7 @@ export type PlatformServiceStatusRecord = {
   summary: string;
   updated_at: string | null;
   capabilities: string[];
+  runtime_dependencies?: Record<string, PlatformRuntimeDependencyRecord>;
   instances?: PlatformServiceInstanceRecord[];
 };
 
@@ -502,6 +503,7 @@ export type PlatformRuntimeDependencyRecord = {
   summary?: string;
   remediation_text?: string | null;
   remediation_expires_at?: string | null;
+  login_service_instance_id?: string | null;
 };
 
 export type WorkerRuntimeAuthRequestRecord = {
@@ -540,11 +542,11 @@ export type WebhookQueueJobRecord = {
   tenant_id: string | null;
   project_id: string | null;
   subject_key: string;
+  related_run_id: string | null;
   dedupe_key: string | null;
   request_id: string;
   event_type: string | null;
   status: "pending" | "processing" | "failed" | "done" | string;
-  owner_id: string | null;
   lease_expires_at: string | null;
   available_at: string;
   attempt_count: number;

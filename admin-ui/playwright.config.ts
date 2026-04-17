@@ -1,7 +1,23 @@
 import { defineConfig, devices } from "@playwright/test";
 
-const PLAYWRIGHT_APP_PORT = process.env.PLAYWRIGHT_APP_PORT ?? "4101";
-const PLAYWRIGHT_BASE_URL = process.env.PLAYWRIGHT_BASE_URL ?? `http://localhost:${PLAYWRIGHT_APP_PORT}`;
+function defaultCiPlaywrightPort(): string {
+  const runId = Number.parseInt(process.env.GITHUB_RUN_ID ?? "", 10);
+  if (Number.isFinite(runId) && runId > 0) {
+    return String(4101 + (runId % 1000));
+  }
+  return "4101";
+}
+
+if (!process.env.PLAYWRIGHT_APP_PORT) {
+  process.env.PLAYWRIGHT_APP_PORT = process.env.CI ? defaultCiPlaywrightPort() : "4101";
+}
+
+if (!process.env.PLAYWRIGHT_BASE_URL) {
+  process.env.PLAYWRIGHT_BASE_URL = `http://localhost:${process.env.PLAYWRIGHT_APP_PORT}`;
+}
+
+const PLAYWRIGHT_APP_PORT = process.env.PLAYWRIGHT_APP_PORT;
+const PLAYWRIGHT_BASE_URL = process.env.PLAYWRIGHT_BASE_URL;
 const PLAYWRIGHT_RUN_LIVE = process.env.PLAYWRIGHT_RUN_LIVE === "1";
 
 export default defineConfig({
@@ -23,6 +39,7 @@ export default defineConfig({
     timeout: 120_000,
     reuseExistingServer: !process.env.CI,
     env: {
+      AUTH_TRUST_HOST: "true",
       NEXT_TELEMETRY_DISABLED: "1",
       NEXT_DIST_DIR: ".next-playwright",
     },
