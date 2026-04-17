@@ -449,6 +449,7 @@ def enqueue_run(
     run_id = str(uuid4())
     workflow = WorkflowExecution(
         workflow_id=workflow_id,
+        workflow_type_key="issue_execution",
         tenant_id=tenant_id,
         project_id=project_id,
         issue_key=issue_key,

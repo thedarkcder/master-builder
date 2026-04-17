@@ -7,9 +7,22 @@ from fastapi import HTTPException, status
 from sqlalchemy import desc, or_, select
 from sqlalchemy.exc import IntegrityError
 
-from orchestrator.api.admin.schema_mappers import workflow_blocker_to_schema, workflow_operation_to_schema
+from orchestrator.api.admin.schema_mappers import (
+    workflow_blocker_to_schema,
+    workflow_operation_to_schema,
+)
+from orchestrator.api.schemas import (
+    WorkflowActionRead,
+    WorkflowLinkRead,
+    WorkflowOperationRead,
+    WorkflowStatePathEntryRead,
+    WorkflowTypeOperationRead,
+    WorkflowTypeRead,
+)
 from orchestrator.core.config import get_settings
+from orchestrator.core.jira_links import tenant_jira_issue_url
 from orchestrator.core.runtime_requirements import resolve_required_runtime_kinds_for_workflow
+from orchestrator.core.workflow_type_catalog import get_workflow_type, list_workflow_type_operations
 from orchestrator.core.worker_capabilities import infer_required_worker_capability
 from orchestrator.core.runs import (
     RunStateTransitionError,
@@ -23,9 +36,11 @@ from orchestrator.core.workflow.transitions import ATTEMPT_ENTRY_MODES, attempt_
 from orchestrator.storage.models import (
     DecisionCase,
     DecisionEvent,
+    FollowupContext,
     Project,
     Run,
     RunHumanInputRequest,
+    Tenant,
     WorkflowBlocker,
     WorkflowCheckpoint,
     WorkflowExecution,
@@ -81,17 +96,48 @@ def _latest_checkpoint_for_kind(*, session, workflow_id: str, checkpoint_kind: s
     ).scalar_one_or_none()
 
 
-def _pending_input_request_id(*, session, workflow_id: str) -> str | None:  # noqa: ANN001
-    row = session.execute(
-        select(RunHumanInputRequest.request_id)
+def _pending_input_request(*, session, workflow_id: str) -> RunHumanInputRequest | None:  # noqa: ANN001
+    return session.execute(
+        select(RunHumanInputRequest)
         .where(
             RunHumanInputRequest.workflow_id == workflow_id,
             RunHumanInputRequest.status == "pending",
         )
         .order_by(desc(RunHumanInputRequest.created_at))
         .limit(1)
-    ).first()
-    return str(row[0]) if row else None
+    ).scalar_one_or_none()
+
+
+def _workflow_checkpoint_kinds(*, session, workflow_id: str) -> list[str]:  # noqa: ANN001
+    checkpoint_kinds = session.execute(
+        select(WorkflowCheckpoint.checkpoint_kind)
+        .where(WorkflowCheckpoint.workflow_id == workflow_id)
+        .order_by(desc(WorkflowCheckpoint.created_at))
+    ).scalars().all()
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for kind in checkpoint_kinds:
+        normalized = str(kind or "").strip().lower()
+        if normalized and normalized not in seen:
+            ordered.append(normalized)
+            seen.add(normalized)
+    return ordered
+
+
+def _active_followup_contexts(*, session, tenant_id: str, issue_key: str) -> list[FollowupContext]:  # noqa: ANN001
+    normalized_tenant_id = str(tenant_id or "").strip()
+    normalized_issue_key = str(issue_key or "").strip().upper()
+    if not normalized_tenant_id or not normalized_issue_key:
+        return []
+    return session.execute(
+        select(FollowupContext)
+        .where(
+            FollowupContext.tenant_id == normalized_tenant_id,
+            FollowupContext.issue_key == normalized_issue_key,
+            FollowupContext.status == "active",
+        )
+        .order_by(desc(FollowupContext.updated_at))
+    ).scalars().all()
 
 
 def _workflow_runs(*, session, workflow_id: str) -> list[Run]:  # noqa: ANN001
@@ -140,29 +186,355 @@ def _latest_run_for_workflow(*, session, workflow_id: str) -> Run | None:  # noq
     ).scalar_one_or_none()
 
 
-def _workflow_schema(*, session, workflow, workflow_to_schema_fn, run_to_schema_fn):  # noqa: ANN001
-    latest_checkpoint = (
-        session.get(WorkflowCheckpoint, workflow.latest_checkpoint_id)
-        if workflow.latest_checkpoint_id
-        else None
-    )
-    operation_attempts = _workflow_operation_attempts_by_operation(session=session, workflow_id=workflow.workflow_id)
-    return workflow_to_schema_fn(
-        workflow,
-        runs=[run_to_schema_fn(run) for run in _workflow_runs(session=session, workflow_id=workflow.workflow_id)],
-        pending_input_request_id=_pending_input_request_id(session=session, workflow_id=workflow.workflow_id),
-        latest_checkpoint_kind=latest_checkpoint.checkpoint_kind if latest_checkpoint is not None else None,
-        operations=[
+def _operation_status_by_type(
+    *,
+    operations: list[WorkflowOperation],
+) -> dict[str, WorkflowOperation]:
+    return {
+        str(operation.operation_type or "").strip(): operation
+        for operation in operations
+        if str(operation.operation_type or "").strip()
+    }
+
+
+def _workflow_operation_reads(
+    *,
+    session,
+    workflow: WorkflowExecution,
+    operations: list[WorkflowOperation],
+    operation_attempts: dict[str, list[WorkflowOperationAttempt]],
+) -> tuple[WorkflowTypeRead, list[WorkflowOperationRead]]:
+    workflow_type = get_workflow_type(session, workflow_type_key=workflow.workflow_type_key)
+    definitions = list_workflow_type_operations(session, workflow_type_key=workflow_type.workflow_type_key)
+    status_by_type = _operation_status_by_type(operations=operations)
+
+    def _default_operation_status(definition_operation_type: str) -> str:
+        if workflow.workflow_type_key == "issue_execution" and definition_operation_type == "run_attempt_execution":
+            return str(workflow.status or "").strip() or "pending"
+        return "pending"
+
+    type_reads = [
+        WorkflowTypeOperationRead(
+            operation_type=definition.operation_type,
+            label=definition.label,
+            retry_policy=definition.retry_policy,
+            description=definition.description,
+            required=bool(definition.required),
+                status=(
+                    status_by_type[definition.operation_type].status
+                    if definition.operation_type in status_by_type
+                    else _default_operation_status(definition.operation_type)
+                ),
+            )
+            for definition in definitions
+        ]
+
+    operation_reads: list[WorkflowOperationRead] = []
+    defined_operation_types = {definition.operation_type for definition in definitions}
+    for definition in definitions:
+        current = status_by_type.get(definition.operation_type)
+        operation_reads.append(
+            workflow_operation_to_schema(
+                current,
+                operation_id=(
+                    current.operation_id
+                    if current is not None
+                    else f"{workflow.workflow_id}:{definition.operation_type}"
+                ),
+                operation_type=definition.operation_type,
+                status=(
+                    current.status
+                    if current is not None
+                    else _default_operation_status(definition.operation_type)
+                ),
+                label=definition.label,
+                retry_policy=definition.retry_policy,
+                description=definition.description,
+                required=bool(definition.required),
+                definition_only=current is None,
+                attempts=(operation_attempts.get(current.operation_id, []) if current is not None else []),
+            )
+        )
+
+    for operation in operations:
+        operation_type = str(operation.operation_type or "").strip()
+        if not operation_type or operation_type in defined_operation_types:
+            continue
+        operation_reads.append(
             workflow_operation_to_schema(
                 operation,
+                operation_id=operation.operation_id,
+                operation_type=operation_type,
+                status=operation.status,
+                label=operation_type.replace("_", " ").title(),
+                retry_policy=None,
+                description=operation.summary,
+                required=True,
+                definition_only=False,
                 attempts=operation_attempts.get(operation.operation_id, []),
             )
-            for operation in _workflow_operations(session=session, workflow_id=workflow.workflow_id)
-        ],
-        blockers=[
-            workflow_blocker_to_schema(blocker)
-            for blocker in _workflow_blockers(session=session, workflow_id=workflow.workflow_id)
-        ],
+        )
+
+    return (
+        WorkflowTypeRead(
+            key=workflow_type.workflow_type_key,
+            label=workflow_type.label,
+            description=workflow_type.description,
+            operations=type_reads,
+        ),
+        operation_reads,
+    )
+
+
+def _run_stage_path(*, latest_run: Run | None) -> list[WorkflowStatePathEntryRead]:
+    if latest_run is None or not isinstance(latest_run.plan, dict):
+        return []
+    snapshot = ExecutionSnapshot.require(latest_run.plan, allow_empty=True)
+    stages = snapshot.dump().get("stages", {})
+    ordered_entries: list[WorkflowStatePathEntryRead] = []
+    label_map = {
+        "pm": "PM",
+        "dev": "Dev",
+        "test": "Test",
+        "review": "Review",
+    }
+    for key in ("pm", "dev", "test", "review"):
+        payload = stages.get(key, {})
+        if not isinstance(payload, dict):
+            continue
+        status = str(payload.get("status") or "").strip().lower()
+        if not status:
+            continue
+        ordered_entries.append(
+            WorkflowStatePathEntryRead(
+                key=key,
+                label=label_map.get(key, key.replace("_", " ").title()),
+                status=status,
+                recorded_at=payload.get("completed_at"),
+                detail=str(payload.get("summary") or "").strip() or None,
+            )
+        )
+    return ordered_entries
+
+
+def _operation_path(
+    *,
+    workflow_type: WorkflowTypeRead,
+    operations: list[WorkflowOperation],
+) -> list[WorkflowStatePathEntryRead]:
+    status_by_type = _operation_status_by_type(operations=operations)
+    entries: list[WorkflowStatePathEntryRead] = []
+    for definition in workflow_type.operations:
+        current = status_by_type.get(definition.operation_type)
+        status = str(current.status if current is not None else ("pending" if definition.required else "not_started")).strip()
+        entries.append(
+            WorkflowStatePathEntryRead(
+                key=definition.operation_type,
+                label=definition.label,
+                status=status,
+                recorded_at=(current.finished_at or current.started_at or current.created_at) if current is not None else None,
+                detail=(current.summary if current is not None else definition.description),
+            )
+        )
+    return entries
+
+
+def _step_buckets(*, state_path: list[WorkflowStatePathEntryRead]) -> tuple[list[str], list[str], list[str], list[str]]:
+    completed: list[str] = []
+    failed: list[str] = []
+    pending: list[str] = []
+    retrying: list[str] = []
+    for entry in state_path:
+        normalized = str(entry.status or "").strip().lower()
+        if normalized in {"completed", "succeeded"}:
+            completed.append(entry.label)
+        elif normalized in {"failed", "blocked"}:
+            failed.append(entry.label)
+        elif normalized in {"retrying"}:
+            retrying.append(entry.label)
+        elif normalized in {"running", "queued", "waiting_for_input", "pending", "not_started"}:
+            pending.append(entry.label)
+    return completed, failed, pending, retrying
+
+
+def _waiting_on(
+    *,
+    pending_request: RunHumanInputRequest | None,
+    blockers: list[WorkflowBlocker],
+    operations: list[WorkflowOperation],
+) -> str | None:
+    if pending_request is not None:
+        return "human_input"
+    if any(str(operation.status or "").strip().lower() == "retrying" for operation in operations):
+        return "retry_backoff"
+    if any(str(blocker.status or "").strip().lower() == "open" for blocker in blockers):
+        return "operator_remediation"
+    return None
+
+
+def _next_step(
+    *,
+    waiting_on: str | None,
+    state_path: list[WorkflowStatePathEntryRead],
+    workflow: WorkflowExecution,
+) -> str | None:
+    if waiting_on == "human_input":
+        return "Await human input"
+    if waiting_on == "retry_backoff":
+        return "Retry failed operation"
+    if waiting_on == "operator_remediation":
+        return "Resolve blocker"
+    if str(workflow.status or "").strip().lower() in {"completed", "succeeded"}:
+        return "Completed"
+    for entry in state_path:
+        normalized = str(entry.status or "").strip().lower()
+        if normalized in {"pending", "not_started", "queued", "running"}:
+            return entry.label
+    return None
+
+
+def _branch_sets(*, runs: list[Run]) -> tuple[list[str], list[str]]:
+    taken = sorted(
+        {
+            str(run.entry_mode or "").strip()
+            for run in runs
+            if str(run.entry_mode or "").strip()
+        }
+    )
+    available = [mode for mode in ATTEMPT_ENTRY_MODES]
+    return taken, available
+
+
+def _available_actions(
+    *,
+    workflow: WorkflowExecution,
+    workflow_runs: list[Run],
+) -> list[WorkflowActionRead]:
+    actions: list[WorkflowActionRead] = []
+    for mode in ATTEMPT_ENTRY_MODES:
+        policy = attempt_creation_policy(workflow_status=workflow.status, mode=mode)
+        if not policy.allowed:
+            continue
+        checkpoint_kind = None
+        detail = None
+        if mode in {"restart", "resume"}:
+            latest_run = workflow_runs[-1] if workflow_runs else None
+            checkpoint_kind = "pm" if latest_run and str(latest_run.entry_stage or "").strip().lower() == "pm" else "execution"
+            detail = "Resume from the latest compatible checkpoint." if mode == "resume" else "Create a new execution from the latest checkpoint."
+        else:
+            detail = "Start a fresh execution from the workflow issue context."
+        actions.append(
+            WorkflowActionRead(
+                action_key=f"workflow:{mode}",
+                label=f"{mode.replace('_', ' ').title()} execution",
+                mode=mode,
+                checkpoint_kind=checkpoint_kind,
+                detail=detail,
+            )
+        )
+    return actions
+
+
+def _workflow_links(
+    *,
+    session,
+    workflow: WorkflowExecution,
+    tenant: Tenant | None,
+    followup_contexts: list[FollowupContext],
+    workflow_runs: list[Run],
+) -> list[WorkflowLinkRead]:  # noqa: ANN001
+    links: list[WorkflowLinkRead] = []
+    jira_url = tenant_jira_issue_url(session=session, tenant=tenant, issue_key=workflow.issue_key) if tenant is not None else None
+    if jira_url:
+        links.append(
+            WorkflowLinkRead(
+                kind="jira_issue",
+                label=f"Jira issue {workflow.issue_key}",
+                ref=workflow.issue_key,
+                url=jira_url,
+                status=workflow.status,
+            )
+        )
+    if workflow.pr_url:
+        links.append(
+            WorkflowLinkRead(
+                kind="pull_request",
+                label="Pull request",
+                ref=workflow.pr_url,
+                url=workflow.pr_url,
+            )
+        )
+    for run in workflow_runs:
+        links.append(
+            WorkflowLinkRead(
+                kind="run",
+                label=f"Run {run.run_id}",
+                ref=run.run_id,
+                url=None,
+                status=run.status,
+            )
+        )
+    for followup in followup_contexts:
+        channel_ref = str(followup.thread_channel_id or followup.root_message_id or "").strip()
+        if not channel_ref:
+            continue
+        links.append(
+            WorkflowLinkRead(
+                kind="followup",
+                label="Follow-up thread",
+                ref=channel_ref,
+                status=followup.status,
+            )
+        )
+    return links
+
+
+def _workflow_schema(*, session, workflow, workflow_to_schema_fn, run_to_schema_fn):  # noqa: ANN001
+    latest_checkpoint = session.get(WorkflowCheckpoint, workflow.latest_checkpoint_id) if workflow.latest_checkpoint_id else None
+    workflow_runs = _workflow_runs(session=session, workflow_id=workflow.workflow_id)
+    pending_request = _pending_input_request(session=session, workflow_id=workflow.workflow_id)
+    operations = _workflow_operations(session=session, workflow_id=workflow.workflow_id)
+    blockers = _workflow_blockers(session=session, workflow_id=workflow.workflow_id)
+    operation_attempts = _workflow_operation_attempts_by_operation(session=session, workflow_id=workflow.workflow_id)
+    workflow_type, operation_reads = _workflow_operation_reads(
+        session=session,
+        workflow=workflow,
+        operations=operations,
+        operation_attempts=operation_attempts,
+    )
+    latest_run = workflow_runs[-1] if workflow_runs else None
+    state_path = _run_stage_path(latest_run=latest_run) if workflow.workflow_type_key == "issue_execution" else _operation_path(workflow_type=workflow_type, operations=operations)
+    completed_steps, failed_steps, pending_steps, retrying_steps = _step_buckets(state_path=state_path)
+    waiting_on = _waiting_on(pending_request=pending_request, blockers=blockers, operations=operations)
+    tenant = session.get(Tenant, workflow.tenant_id)
+    followup_contexts = _active_followup_contexts(session=session, tenant_id=workflow.tenant_id, issue_key=workflow.issue_key)
+    conditional_branches_taken, conditional_branches_available = _branch_sets(runs=workflow_runs)
+    return workflow_to_schema_fn(
+        workflow,
+        runs=[run_to_schema_fn(run) for run in workflow_runs],
+        pending_input_request_id=(pending_request.request_id if pending_request is not None else None),
+        latest_checkpoint_kind=latest_checkpoint.checkpoint_kind if latest_checkpoint is not None else None,
+        workflow_type=workflow_type,
+        current_state=str(workflow.status or "").strip() or "unknown",
+        waiting_on=waiting_on,
+        next_step=_next_step(waiting_on=waiting_on, state_path=state_path, workflow=workflow),
+        state_path=state_path,
+        completed_steps=completed_steps,
+        failed_steps=failed_steps,
+        pending_steps=pending_steps,
+        retrying_steps=retrying_steps,
+        conditional_branches_taken=conditional_branches_taken,
+        conditional_branches_available=conditional_branches_available,
+        available_actions=_available_actions(workflow=workflow, workflow_runs=workflow_runs),
+        links=_workflow_links(
+            session=session,
+            workflow=workflow,
+            tenant=tenant,
+            followup_contexts=followup_contexts,
+            workflow_runs=workflow_runs,
+        ),
+        operations=operation_reads,
+        blockers=[workflow_blocker_to_schema(blocker) for blocker in blockers],
     )
 
 
@@ -438,6 +810,7 @@ def create_workflow_attempt(
     if not same_workflow:
         next_workflow = WorkflowExecution(
             workflow_id=str(uuid4()),
+            workflow_type_key=workflow.workflow_type_key,
             tenant_id=workflow.tenant_id,
             project_id=project.project_id,
             issue_key=workflow.issue_key,

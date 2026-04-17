@@ -18,6 +18,7 @@ import {
   SwitchCamera,
   User,
   Users,
+  Workflow,
   X,
   Zap
 } from "lucide-react";
@@ -488,6 +489,12 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
           label: "Pipeline",
           icon: Activity,
           matchPrefix: `${tenantBaseRoute}/runs`
+        },
+        {
+          href: `${tenantBaseRoute}/workflows`,
+          label: "Executions",
+          icon: Workflow,
+          matchPrefix: `${tenantBaseRoute}/workflows`
         },
         {
           href: analyticsHref ?? `${tenantBaseRoute}/analytics/token-overview`,

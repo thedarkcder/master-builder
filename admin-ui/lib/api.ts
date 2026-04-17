@@ -678,8 +678,13 @@ export type WorkflowRecord = {
   repo_url: string | null;
   branch: string | null;
   pr_url: string | null;
+  orchestration_backend: string;
   dedupe_scope: string;
   status: string;
+  workflow_type: WorkflowTypeRecord;
+  current_state: string;
+  waiting_on: string | null;
+  next_step: string | null;
   active_run_id: string | null;
   latest_checkpoint_id: string | null;
   source_workflow_id: string | null;
@@ -687,10 +692,100 @@ export type WorkflowRecord = {
   blocked_reason: string | null;
   pending_input_request_id: string | null;
   latest_checkpoint_kind: string | null;
+  state_path: WorkflowStatePathEntryRecord[];
+  completed_steps: string[];
+  failed_steps: string[];
+  pending_steps: string[];
+  retrying_steps: string[];
+  conditional_branches_taken: string[];
+  conditional_branches_available: string[];
+  available_actions: WorkflowActionRecord[];
+  links: WorkflowLinkRecord[];
+  operations: WorkflowOperationRecord[];
+  blockers: WorkflowBlockerRecord[];
   runs: RunRecord[];
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
+};
+
+export type WorkflowTypeOperationRecord = {
+  operation_type: string;
+  label: string;
+  retry_policy: string;
+  description: string | null;
+  required: boolean;
+  status: string | null;
+};
+
+export type WorkflowTypeRecord = {
+  key: string;
+  label: string;
+  description: string | null;
+  operations: WorkflowTypeOperationRecord[];
+};
+
+export type WorkflowStatePathEntryRecord = {
+  key: string;
+  label: string;
+  status: string;
+  recorded_at: string | null;
+  detail: string | null;
+};
+
+export type WorkflowActionRecord = {
+  action_key: string;
+  label: string;
+  mode: string;
+  checkpoint_kind: string | null;
+  detail: string | null;
+};
+
+export type WorkflowLinkRecord = {
+  kind: string;
+  label: string;
+  ref: string | null;
+  url: string | null;
+  status: string | null;
+};
+
+export type WorkflowOperationAttemptRecord = {
+  attempt_id: string;
+  attempt_number: number;
+  status: string;
+  error_category: string | null;
+  error_message: string | null;
+  retryable: boolean;
+  next_retry_at: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+};
+
+export type WorkflowOperationRecord = {
+  operation_id: string;
+  run_id: string | null;
+  operation_type: string;
+  status: string;
+  label?: string | null;
+  retry_policy?: string | null;
+  description?: string | null;
+  required?: boolean;
+  definition_only?: boolean;
+  target_system: string | null;
+  target_ref: string | null;
+  summary: string | null;
+  blocker_id: string | null;
+  attempts: WorkflowOperationAttemptRecord[];
+};
+
+export type WorkflowBlockerRecord = {
+  blocker_id: string;
+  operation_id: string | null;
+  category: string;
+  message: string;
+  status: string;
+  created_at: string;
+  resolved_at: string | null;
 };
 
 export type WorkflowAttemptCreatePayload = {
@@ -2364,6 +2459,40 @@ export function getRun(credentials: Credentials, runId: string): Promise<RunReco
 
 export function getWorkflow(credentials: Credentials, workflowId: string): Promise<WorkflowRecord> {
   return request<WorkflowRecord>(credentials, `/api/admin/workflows/${encodeURIComponent(workflowId)}`);
+}
+
+export function listWorkflows(
+  credentials: Credentials,
+  params: {
+    tenantId?: string;
+    projectId?: string;
+    status?: string;
+    issue?: string;
+    limit?: number;
+    offset?: number;
+  } = {},
+): Promise<WorkflowRecord[]> {
+  const query = new URLSearchParams();
+  if (params.tenantId) {
+    query.set("tenant_id", params.tenantId);
+  }
+  if (params.projectId) {
+    query.set("project_id", params.projectId);
+  }
+  if (params.status) {
+    query.set("status", params.status);
+  }
+  if (params.issue) {
+    query.set("issue", params.issue);
+  }
+  if (typeof params.limit === "number") {
+    query.set("limit", String(params.limit));
+  }
+  if (typeof params.offset === "number") {
+    query.set("offset", String(params.offset));
+  }
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return request<WorkflowRecord[]>(credentials, `/api/admin/workflows${suffix}`);
 }
 
 export function createWorkflowAttempt(

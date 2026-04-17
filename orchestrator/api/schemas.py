@@ -1036,11 +1036,56 @@ class WorkflowOperationRead(BaseModel):
     run_id: str | None = None
     operation_type: str
     status: str
+    label: str | None = None
+    retry_policy: str | None = None
+    description: str | None = None
+    required: bool = True
+    definition_only: bool = False
     target_system: str | None = None
     target_ref: str | None = None
     summary: str | None = None
     blocker_id: str | None = None
     attempts: list[WorkflowOperationAttemptRead] = Field(default_factory=list)
+
+
+class WorkflowTypeOperationRead(BaseModel):
+    operation_type: str
+    label: str
+    retry_policy: str
+    description: str | None = None
+    required: bool = True
+    status: str | None = None
+
+
+class WorkflowTypeRead(BaseModel):
+    key: str
+    label: str
+    description: str | None = None
+    operations: list[WorkflowTypeOperationRead] = Field(default_factory=list)
+
+
+class WorkflowStatePathEntryRead(BaseModel):
+    key: str
+    label: str
+    status: str
+    recorded_at: datetime | None = None
+    detail: str | None = None
+
+
+class WorkflowActionRead(BaseModel):
+    action_key: str
+    label: str
+    mode: str
+    checkpoint_kind: str | None = None
+    detail: str | None = None
+
+
+class WorkflowLinkRead(BaseModel):
+    kind: str
+    label: str
+    ref: str | None = None
+    url: str | None = None
+    status: str | None = None
 
 
 class WorkflowRead(BaseModel):
@@ -1055,6 +1100,10 @@ class WorkflowRead(BaseModel):
     orchestration_backend: str = "legacy"
     dedupe_scope: str
     status: str
+    workflow_type: WorkflowTypeRead
+    current_state: str
+    waiting_on: str | None = None
+    next_step: str | None = None
     active_run_id: str | None = None
     latest_checkpoint_id: str | None = None
     source_workflow_id: str | None = None
@@ -1062,6 +1111,15 @@ class WorkflowRead(BaseModel):
     blocked_reason: str | None = None
     pending_input_request_id: str | None = None
     latest_checkpoint_kind: str | None = None
+    state_path: list[WorkflowStatePathEntryRead] = Field(default_factory=list)
+    completed_steps: list[str] = Field(default_factory=list)
+    failed_steps: list[str] = Field(default_factory=list)
+    pending_steps: list[str] = Field(default_factory=list)
+    retrying_steps: list[str] = Field(default_factory=list)
+    conditional_branches_taken: list[str] = Field(default_factory=list)
+    conditional_branches_available: list[str] = Field(default_factory=list)
+    available_actions: list[WorkflowActionRead] = Field(default_factory=list)
+    links: list[WorkflowLinkRead] = Field(default_factory=list)
     operations: list[WorkflowOperationRead] = Field(default_factory=list)
     blockers: list[WorkflowBlockerRead] = Field(default_factory=list)
     runs: list[RunRead] = Field(default_factory=list)
