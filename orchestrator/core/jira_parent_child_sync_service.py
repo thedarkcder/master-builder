@@ -163,7 +163,6 @@ class ParentFeatureWorkflowAdvanceHandler:
         settings,  # noqa: ANN001
         workflow_type,
         request: WorkflowAdvanceRequest,
-        lifecycle,
     ) -> WorkflowAdvanceResult:
         context = JiraParentChildSyncContext(
             request_id=str(request.payload.get("request_id") or "").strip() or f"workflow-advance:{request.issue_key}",
@@ -213,12 +212,12 @@ class ParentFeatureWorkflowAdvanceHandler:
             context=context,
             session=session,
             settings=settings,
-            lifecycle=lifecycle,
         )
         return WorkflowAdvanceResult(
             handled=result.handled,
             reason=result.reason,
             extra=dict(result.extra or {}),
+            mutations=tuple(result.mutations or ()),
         )
 
 

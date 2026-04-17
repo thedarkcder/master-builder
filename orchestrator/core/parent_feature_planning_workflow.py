@@ -7,16 +7,10 @@ from typing import Any, Callable
 from sqlalchemy.orm import Session
 
 from orchestrator.core.specialist_planning import PLANNING_STATE_COMPLETED
+from orchestrator.core.workflow_runtime import WorkflowAdvanceMutationCollector, WorkflowAdvanceResult
 from orchestrator.core.workflow_execution_projection import classify_external_workflow_failure
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True)
-class ParentFeaturePlanningWorkflowResult:
-    handled: bool
-    reason: str | None = None
-    extra: dict[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -42,17 +36,17 @@ class ParentFeaturePlanningWorkflow:
         context,
         session: Session,
         settings,  # noqa: ANN001
-        lifecycle,
-    ) -> ParentFeaturePlanningWorkflowResult:
+    ) -> WorkflowAdvanceResult:
+        lifecycle = WorkflowAdvanceMutationCollector()
         normalized_labels = {str(label).strip().casefold() for label in context.issue_labels or []}
         if context.webhook_event not in {"issue_created", "issue_updated"} or "pm-parent" not in normalized_labels:
-            return ParentFeaturePlanningWorkflowResult(handled=False)
+            return lifecycle.build_result(handled=False)
         routed_from_backlog = bool(context.payload.get("_mb_pm_parent_routed_from_backlog"))
         if context.webhook_event == "issue_created" or routed_from_backlog:
             return self._handle_issue_created(context=context, session=session, settings=settings, lifecycle=lifecycle)
         return self._handle_issue_updated(context=context, session=session, settings=settings, lifecycle=lifecycle)
 
-    def _handle_issue_created(self, *, context, session: Session, settings, lifecycle) -> ParentFeaturePlanningWorkflowResult:  # noqa: ANN001
+    def _handle_issue_created(self, *, context, session: Session, settings, lifecycle) -> WorkflowAdvanceResult:  # noqa: ANN001
         issue_gateway = self._deps.issue_gateway
         brief_planner = self._deps.brief_planner
         child_sync_gateway = self._deps.child_sync_gateway
@@ -133,7 +127,7 @@ class ParentFeaturePlanningWorkflow:
                 issue_key=context.issue_key,
                 body=f"Parent feature was created in backlog, but engineering child planning failed. Error: {exc}",
             )
-            return ParentFeaturePlanningWorkflowResult(
+            return lifecycle.build_result(
                 handled=True,
                 reason="pm_parent_issue_created_seed_failed",
                 extra={"webhook_event": context.webhook_event},
@@ -185,7 +179,7 @@ class ParentFeaturePlanningWorkflow:
                 issue_key=child_key,
                 body=f"Created or refreshed from parent feature {context.issue_key} during backlog planning.",
             )
-        return ParentFeaturePlanningWorkflowResult(
+        return lifecycle.build_result(
             handled=True,
             reason="pm_parent_issue_created_seed_completed",
             extra={
@@ -196,7 +190,7 @@ class ParentFeaturePlanningWorkflow:
             },
         )
 
-    def _handle_issue_updated(self, *, context, session: Session, settings, lifecycle) -> ParentFeaturePlanningWorkflowResult:  # noqa: ANN001
+    def _handle_issue_updated(self, *, context, session: Session, settings, lifecycle) -> WorkflowAdvanceResult:  # noqa: ANN001
         issue_gateway = self._deps.issue_gateway
         brief_planner = self._deps.brief_planner
         child_sync_gateway = self._deps.child_sync_gateway
@@ -216,7 +210,7 @@ class ParentFeaturePlanningWorkflow:
                     target_status=board_entry_target_status,
                     lifecycle=lifecycle,
                 )
-            return ParentFeaturePlanningWorkflowResult(
+            return lifecycle.build_result(
                 handled=True,
                 reason="pm_parent_non_material_change",
                 extra={"changed_fields": [], "webhook_event": context.webhook_event},
@@ -273,7 +267,7 @@ class ParentFeaturePlanningWorkflow:
 
         if not child_details:
             lifecycle.mark_completed_if_ready()
-            return ParentFeaturePlanningWorkflowResult(
+            return lifecycle.build_result(
                 handled=True,
                 reason="pm_parent_no_children",
                 extra={"changed_fields": material_changed_fields, "webhook_event": context.webhook_event},
@@ -315,7 +309,7 @@ class ParentFeaturePlanningWorkflow:
                     issue_key=detail.key,
                     body=f"Blocked because parent feature {context.issue_key} changed and refresh failed.",
                 )
-            return ParentFeaturePlanningWorkflowResult(
+            return lifecycle.build_result(
                 handled=True,
                 reason="pm_parent_sync_failed",
                 extra={
@@ -361,7 +355,7 @@ class ParentFeaturePlanningWorkflow:
                     issue_key=detail.key,
                     body=f"Still blocked because parent feature {context.issue_key} needs clarification before refresh can complete.",
                 )
-            return ParentFeaturePlanningWorkflowResult(
+            return lifecycle.build_result(
                 handled=True,
                 reason="pm_parent_sync_blocked",
                 extra={
@@ -393,7 +387,7 @@ class ParentFeaturePlanningWorkflow:
                 issue_key=child_key,
                 body=f"Refreshed from parent feature {context.issue_key} after Jira product update.",
             )
-        return ParentFeaturePlanningWorkflowResult(
+        return lifecycle.build_result(
             handled=True,
             reason="pm_parent_sync_completed",
             extra={
@@ -412,7 +406,7 @@ class ParentFeaturePlanningWorkflow:
         session: Session,
         target_status: str,
         lifecycle,
-    ) -> ParentFeaturePlanningWorkflowResult:
+    ) -> WorkflowAdvanceResult:
         issue_gateway = self._deps.issue_gateway
         parent_detail = issue_gateway.load_parent_detail(context.issue_key)
         lifecycle.ensure_issue_execution(
@@ -431,7 +425,7 @@ class ParentFeaturePlanningWorkflow:
                 issue_key=context.issue_key,
                 body="Parent feature moved onto the board, but there are no engineering child tickets to promote.",
             )
-            return ParentFeaturePlanningWorkflowResult(
+            return lifecycle.build_result(
                 handled=True,
                 reason="pm_parent_board_entry_no_children",
                 extra={"target_status": target_status, "webhook_event": context.webhook_event},
@@ -497,7 +491,7 @@ class ParentFeaturePlanningWorkflow:
                 failed_children=failed_children,
             ),
         )
-        return ParentFeaturePlanningWorkflowResult(
+        return lifecycle.build_result(
             handled=True,
             reason="pm_parent_board_entry_fanout_completed" if not failed_children else "pm_parent_board_entry_fanout_partial",
             extra={
@@ -523,7 +517,7 @@ class ParentFeaturePlanningWorkflow:
         reason: str,
         waiting_operation_type: str,
         extra: dict[str, object] | None = None,
-    ) -> ParentFeaturePlanningWorkflowResult:
+    ) -> WorkflowAdvanceResult:
         _ = (session, settings, body_prefix)
         issue_gateway = self._deps.issue_gateway
         issue_gateway.update_issue_sync_label(
@@ -558,7 +552,7 @@ class ParentFeaturePlanningWorkflow:
         )
         payload = dict(extra or {})
         payload.update({"questions": questions, "webhook_event": context.webhook_event})
-        return ParentFeaturePlanningWorkflowResult(
+        return lifecycle.build_result(
             handled=True,
             reason=reason,
             extra=payload,

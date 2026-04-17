@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import sentinel
 
 from orchestrator.core.workflow_engine import WorkflowEngineState
-from orchestrator.core.workflow_runtime import WorkflowAdvanceRequest, build_workflow_runtime
+from orchestrator.core.workflow_runtime import WorkflowAdvanceRequest, WorkflowAdvanceResult, build_workflow_runtime
 
 
 class FakeEngine:
@@ -97,7 +97,7 @@ def test_workflow_runtime_delegates_advance_to_handler_resolved_from_workflow_ty
     class _Handler:
         def advance(self, **kwargs):
             calls.append(("advance", kwargs))
-            return sentinel.advance_result
+            return WorkflowAdvanceResult(handled=True, reason="ok")
 
     monkeypatch.setattr(
         "orchestrator.core.workflow_runtime.get_workflow_type_by_handler_key",
@@ -113,7 +113,9 @@ def test_workflow_runtime_delegates_advance_to_handler_resolved_from_workflow_ty
         resolve_advance_handler_fn=lambda handler_key: (_Handler() if handler_key == "jira_parent_feature" else None),
     )
 
-    assert runtime.advance(request=request) is sentinel.advance_result
+    result = runtime.advance(request=request)
+    assert result.handled is True
+    assert result.reason == "ok"
     assert len(calls) == 1
     assert calls[0][0] == "advance"
     kwargs = calls[0][1]
@@ -121,6 +123,4 @@ def test_workflow_runtime_delegates_advance_to_handler_resolved_from_workflow_ty
     assert kwargs["settings"] is settings
     assert kwargs["workflow_type"] is workflow_type
     assert kwargs["request"] is request
-    lifecycle = kwargs["lifecycle"]
-    assert hasattr(lifecycle, "ensure_issue_execution")
-    assert hasattr(lifecycle, "mark_operation_completed")
+    assert "lifecycle" not in kwargs
