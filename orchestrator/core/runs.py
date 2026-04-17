@@ -18,6 +18,12 @@ from orchestrator.core.workflow.execution_snapshot import (
     ExecutionSnapshot,
     load_parsed_trigger_context_from_plan,
 )
+from orchestrator.core.workflow_run_state import (
+    project_workflow_for_new_run_attempt,
+    project_workflow_for_run_started,
+    project_workflow_for_run_terminal,
+    project_workflow_for_cancelled_attempt,
+)
 from orchestrator.core.workflow.trigger_context import GithubPrRemediationTriggerContext
 from orchestrator.core.workflow.transitions import ACTIVE_WORKFLOW_STATUSES as WORKFLOW_ACTIVE_STATUSES, is_workflow_terminal
 from orchestrator.storage.models import Run, WebhookDelivery, WorkflowExecution
@@ -681,13 +687,13 @@ def _enqueue_attempt_for_workflow(
     )
     workflow_type = get_workflow_type(session, workflow_type_key=workflow.workflow_type_key)
     orchestration_backend = str(workflow_type.orchestration_backend).strip().lower()
-    workflow.status = RUN_STATUS_QUEUED
-    workflow.orchestration_backend = orchestration_backend
-    workflow.last_error = None
-    workflow.active_run_id = run.run_id
-    workflow.latest_checkpoint_id = bootstrap.entry_checkpoint_id or workflow.latest_checkpoint_id
-    workflow.updated_at = now
-    workflow.finished_at = None
+    project_workflow_for_new_run_attempt(
+        workflow,
+        run=run,
+        latest_checkpoint_id=bootstrap.entry_checkpoint_id or workflow.latest_checkpoint_id,
+        orchestration_backend=orchestration_backend,
+        now=now,
+    )
     session.add(run)
     notify_run_enqueued(
         session,
@@ -721,10 +727,7 @@ def mark_run_running(session: Session, *, run_id: str) -> Run:
     run.dispatch_claimed_at = None
     run.started_at = now
     run.last_heartbeat_at = now
-    workflow.status = RUN_STATUS_RUNNING
-    workflow.started_at = workflow.started_at or now
-    workflow.updated_at = now
-    workflow.active_run_id = run.run_id
+    project_workflow_for_run_started(workflow, run=run, now=now)
     session.commit()
     session.refresh(run)
     return run
@@ -770,17 +773,7 @@ def mark_run_terminal(
     run.finished_at = now
     run.last_heartbeat_at = None
     run.worker_service_instance_id = None
-    workflow.last_error = last_error
-    workflow.updated_at = now
-    workflow.active_run_id = run.run_id
-    if terminal_status == RUN_STATUS_BLOCKED:
-        workflow.status = RUN_STATUS_FAILED
-        workflow.finished_at = now
-    else:
-        workflow.status = terminal_status
-        workflow.finished_at = now
-        if terminal_status != RUN_STATUS_FAILED:
-            workflow.last_error = None
+    project_workflow_for_run_terminal(workflow, run=run, now=now)
     session.commit()
     session.refresh(run)
     return run
@@ -809,10 +802,7 @@ def cancel_run(
     run.finished_at = now
     run.last_heartbeat_at = None
     run.worker_service_instance_id = None
-    workflow.status = RUN_STATUS_CANCELLED
-    workflow.last_error = run.last_error
-    workflow.finished_at = now
-    workflow.updated_at = now
+    project_workflow_for_run_terminal(workflow, run=run, now=now)
     session.commit()
     session.refresh(run)
     return run
@@ -872,13 +862,13 @@ def cancel_queued_issue_runs(
         workflow = session.get(WorkflowExecution, run.workflow_id)
         if workflow is None:
             continue
-        workflow.last_error = cancellation_reason
-        workflow.updated_at = now
-        if workflow.active_run_id == run.run_id:
-            workflow.active_run_id = None
-        if workflow_active_counts.get(run.workflow_id, 0) == 0:
-            workflow.status = RUN_STATUS_CANCELLED
-            workflow.finished_at = now
+        project_workflow_for_cancelled_attempt(
+            workflow,
+            run=run,
+            cancellation_reason=cancellation_reason,
+            remaining_active_runs=workflow_active_counts.get(run.workflow_id, 0),
+            now=now,
+        )
 
     session.commit()
     for run in queued_runs:
