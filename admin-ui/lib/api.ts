@@ -738,6 +738,23 @@ export type WorkflowTypeRecord = {
       human_input_resume_timeout_seconds: number;
     } | null;
   };
+  capabilities: Record<string, unknown>;
+  lifecycle: {
+    state_path_kind: string;
+    execution_modes: string[];
+    conditional_paths: string[];
+    states: Array<{
+      key: string;
+      label: string;
+      terminal: boolean;
+      waits_for_input: boolean;
+    }>;
+    transitions: Array<{
+      from_state: string;
+      to_state: string;
+      label: string;
+    }>;
+  };
   operations: WorkflowTypeOperationRecord[];
 };
 
@@ -775,9 +792,24 @@ export type WorkflowTypeDetailRecord = {
       human_input_resume_timeout_seconds: number;
     } | null;
   };
+  capabilities: Record<string, unknown>;
+  lifecycle: {
+    state_path_kind: string;
+    execution_modes: string[];
+    conditional_paths: string[];
+    states: Array<{
+      key: string;
+      label: string;
+      terminal: boolean;
+      waits_for_input: boolean;
+    }>;
+    transitions: Array<{
+      from_state: string;
+      to_state: string;
+      label: string;
+    }>;
+  };
   operations: WorkflowTypeOperationRecord[];
-  execution_modes: string[];
-  conditional_paths: string[];
   execution_count: number;
   latest_execution_at: string | null;
   recent_executions: WorkflowExecutionPreviewRecord[];

@@ -364,15 +364,51 @@ export default function TenantWorkflowTypeDetailPage() {
               </div>
               <div className="space-y-4 px-5 py-4">
                 <div>
+                  <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">State path kind</p>
+                  <p className="mt-2 text-sm text-muted-foreground">{workflowType.lifecycle.state_path_kind || "—"}</p>
+                </div>
+                <div>
                   <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Execution modes</p>
-                  <p className="mt-2 text-sm text-muted-foreground">{workflowType.execution_modes.join(", ") || "—"}</p>
+                  <p className="mt-2 text-sm text-muted-foreground">{workflowType.lifecycle.execution_modes.join(", ") || "—"}</p>
                 </div>
                 <div>
                   <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Conditional paths</p>
                   <div className="mt-2 space-y-2">
-                    {workflowType.conditional_paths.map((path) => (
+                    {workflowType.lifecycle.conditional_paths.map((path) => (
                       <div key={path} className="rounded-xl border bg-muted/20 px-3 py-2 text-sm text-muted-foreground">
                         {path}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">States</p>
+                  <div className="mt-2 space-y-2">
+                    {workflowType.lifecycle.states.map((state) => (
+                      <div key={state.key} className="rounded-xl border bg-muted/20 px-3 py-2 text-sm text-muted-foreground">
+                        <div className="flex items-center justify-between gap-3">
+                          <span>{state.label}</span>
+                          <span className="text-xs uppercase tracking-[0.14em] text-muted-foreground">{state.key}</span>
+                        </div>
+                        <div className="mt-1 text-xs text-muted-foreground">
+                          {[state.terminal ? "Terminal" : "Non-terminal", state.waits_for_input ? "waits for input" : "no input wait"].join(" • ")}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Transitions</p>
+                  <div className="mt-2 space-y-2">
+                    {workflowType.lifecycle.transitions.map((transition) => (
+                      <div
+                        key={`${transition.from_state}:${transition.to_state}:${transition.label}`}
+                        className="rounded-xl border bg-muted/20 px-3 py-2 text-sm text-muted-foreground"
+                      >
+                        <div>{transition.label}</div>
+                        <div className="mt-1 text-xs text-muted-foreground">
+                          {transition.from_state} → {transition.to_state}
+                        </div>
                       </div>
                     ))}
                   </div>

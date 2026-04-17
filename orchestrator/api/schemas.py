@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator, model_serializer, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_serializer, model_validator
 
 from orchestrator.core.agent_execution_profiles import (
     normalize_execution_profile_routing,
@@ -1090,6 +1090,29 @@ class WorkflowTypeEngineConfigUpdate(BaseModel):
     temporal: WorkflowTypeTemporalConfigUpdate | None = None
 
 
+class WorkflowTypeLifecycleStateRead(BaseModel):
+    key: str
+    label: str
+    terminal: bool = False
+    waits_for_input: bool = False
+
+
+class WorkflowTypeLifecycleTransitionRead(BaseModel):
+    from_state: str = Field(alias="from")
+    to_state: str
+    label: str
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class WorkflowTypeLifecycleRead(BaseModel):
+    state_path_kind: str = "operation"
+    execution_modes: list[str] = Field(default_factory=list)
+    conditional_paths: list[str] = Field(default_factory=list)
+    states: list[WorkflowTypeLifecycleStateRead] = Field(default_factory=list)
+    transitions: list[WorkflowTypeLifecycleTransitionRead] = Field(default_factory=list)
+
+
 class WorkflowTypeRead(BaseModel):
     key: str
     label: str
@@ -1097,6 +1120,7 @@ class WorkflowTypeRead(BaseModel):
     orchestration_backend: Literal["legacy", "temporal", "database"]
     engine_config: WorkflowTypeEngineConfigRead = Field(default_factory=WorkflowTypeEngineConfigRead)
     capabilities: dict[str, object] = Field(default_factory=dict)
+    lifecycle: WorkflowTypeLifecycleRead = Field(default_factory=WorkflowTypeLifecycleRead)
     operations: list[WorkflowTypeOperationRead] = Field(default_factory=list)
 
 
@@ -1128,9 +1152,8 @@ class WorkflowTypeDetailRead(BaseModel):
     orchestration_backend: Literal["legacy", "temporal", "database"]
     engine_config: WorkflowTypeEngineConfigRead = Field(default_factory=WorkflowTypeEngineConfigRead)
     capabilities: dict[str, object] = Field(default_factory=dict)
+    lifecycle: WorkflowTypeLifecycleRead = Field(default_factory=WorkflowTypeLifecycleRead)
     operations: list[WorkflowTypeOperationRead] = Field(default_factory=list)
-    execution_modes: list[str] = Field(default_factory=list)
-    conditional_paths: list[str] = Field(default_factory=list)
     execution_count: int = 0
     latest_execution_at: datetime | None = None
     recent_executions: list[WorkflowExecutionPreviewRead] = Field(default_factory=list)

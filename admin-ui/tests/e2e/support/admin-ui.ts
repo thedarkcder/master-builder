@@ -443,6 +443,28 @@ export function makeWorkflow(overrides: Partial<WorkflowRecord> = {}): WorkflowR
           human_input_resume_timeout_seconds: 7200,
         },
       },
+      capabilities: {
+        state_path_kind: "run",
+      },
+      lifecycle: {
+        state_path_kind: "run",
+        execution_modes: ["fresh", "restart", "resume"],
+        conditional_paths: ["Human input resume", "Retry failed operation"],
+        states: [
+          { key: "queued", label: "Queued", terminal: false, waits_for_input: false },
+          { key: "running", label: "Running", terminal: false, waits_for_input: false },
+          { key: "waiting_for_input", label: "Waiting for input", terminal: false, waits_for_input: true },
+          { key: "completed", label: "Completed", terminal: true, waits_for_input: false },
+          { key: "failed", label: "Failed", terminal: true, waits_for_input: false },
+        ],
+        transitions: [
+          { from_state: "queued", to_state: "running", label: "Dispatch execution" },
+          { from_state: "running", to_state: "waiting_for_input", label: "Request human input" },
+          { from_state: "waiting_for_input", to_state: "running", label: "Resume from answer" },
+          { from_state: "running", to_state: "completed", label: "Complete run" },
+          { from_state: "running", to_state: "failed", label: "Fail execution" },
+        ],
+      },
     },
     current_state: baselineRun.status,
     waiting_on: null,
@@ -893,9 +915,9 @@ export async function mockTenantWorkflowApis(
   };
   const workflowTypeDetail = {
     ...workflowTypeSummary,
+    capabilities: primaryWorkflow.workflow_type.capabilities,
+    lifecycle: primaryWorkflow.workflow_type.lifecycle,
     operations: primaryWorkflow.workflow_type.operations,
-    execution_modes: ["fresh", "restart", "resume"],
-    conditional_paths: ["Retry failed operation"],
     recent_executions: options.workflows.map((workflow) => ({
       workflow_id: workflow.workflow_id,
       issue_key: workflow.issue_key,
