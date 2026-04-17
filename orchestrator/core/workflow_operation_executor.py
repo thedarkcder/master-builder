@@ -5,10 +5,14 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable
 
-from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from orchestrator.core.config import Settings
+from orchestrator.core.workflow_execution_status import (
+    mark_workflow_failed,
+    mark_workflow_running,
+    recompute_workflow_status,
+)
 from orchestrator.core.jira_parent_child_sync_service import (
     PLANNING_STATE_COMPLETED,
     _ParentBriefPlanner,
@@ -54,46 +58,6 @@ class _OperationExecutionContext:
     operation: WorkflowOperation
     tenant: Tenant
     project: Project
-
-def _recompute_workflow_status(*, session: Session, workflow: WorkflowExecution) -> None:
-    now = _now()
-    definitions = list_workflow_type_operations(session, workflow_type_key=workflow.workflow_type_key)
-    operations = session.execute(
-        select(WorkflowOperation).where(WorkflowOperation.workflow_id == workflow.workflow_id)
-    ).scalars().all()
-    status_by_type = {
-        str(operation.operation_type or "").strip(): str(operation.status or "").strip().lower()
-        for operation in operations
-        if str(operation.operation_type or "").strip()
-    }
-    summaries_by_type = {
-        str(operation.operation_type or "").strip(): str(operation.summary or "").strip()
-        for operation in operations
-        if str(operation.operation_type or "").strip()
-    }
-    required_defs = [definition for definition in definitions if bool(definition.required)]
-
-    for definition in required_defs:
-        normalized_status = status_by_type.get(definition.operation_type, "pending")
-        if normalized_status == "failed":
-            workflow.status = "failed"
-            workflow.last_error = summaries_by_type.get(definition.operation_type) or workflow.last_error
-            workflow.finished_at = now
-            workflow.updated_at = now
-            return
-
-    if required_defs and all(status_by_type.get(definition.operation_type) == "completed" for definition in required_defs):
-        workflow.status = "completed"
-        workflow.last_error = None
-        workflow.finished_at = now
-        workflow.updated_at = now
-        return
-
-    workflow.status = "running"
-    workflow.last_error = None
-    workflow.finished_at = None
-    workflow.updated_at = now
-
 
 def _classify_operation_failure(*, error: Exception) -> tuple[str, bool]:
     message = str(error or "").strip()
@@ -155,10 +119,7 @@ def _execute_jira_parent_update(
     parent_detail = jira_adapter.get_issue_detail(issue_id_or_key=context.workflow.issue_key)
 
     attempt = start_workflow_operation_attempt(context.session, operation=context.operation)
-    context.workflow.status = "running"
-    context.workflow.last_error = None
-    context.workflow.finished_at = None
-    context.workflow.updated_at = _now()
+    mark_workflow_running(workflow=context.workflow, now=_now())
 
     try:
         _rewrite_parent_issue_from_brief(
@@ -186,10 +147,7 @@ def _execute_jira_parent_update(
             message=str(exc),
             retryable=retryable,
         )
-        context.workflow.status = "failed"
-        context.workflow.last_error = str(exc)
-        context.workflow.finished_at = _now()
-        context.workflow.updated_at = _now()
+        mark_workflow_failed(workflow=context.workflow, message=str(exc), now=_now())
         return WorkflowOperationHandle(
             operation_id=context.operation.operation_id,
             workflow_id=context.workflow.workflow_id,
@@ -203,7 +161,7 @@ def _execute_jira_parent_update(
         attempt=attempt,
         summary="Parent Jira issue synced from the confirmed brief.",
     )
-    _recompute_workflow_status(session=context.session, workflow=context.workflow)
+    recompute_workflow_status(session=context.session, workflow=context.workflow, now=_now())
     return WorkflowOperationHandle(
         operation_id=context.operation.operation_id,
         workflow_id=context.workflow.workflow_id,
@@ -260,10 +218,7 @@ def _execute_jira_child_fanout(
     )
 
     attempt = start_workflow_operation_attempt(context.session, operation=context.operation)
-    context.workflow.status = "running"
-    context.workflow.last_error = None
-    context.workflow.finished_at = None
-    context.workflow.updated_at = _now()
+    mark_workflow_running(workflow=context.workflow, now=_now())
 
     try:
         planning_result, planning_package = planner.plan_backlog_parent(
@@ -294,10 +249,7 @@ def _execute_jira_child_fanout(
             message=str(exc),
             retryable=retryable,
         )
-        context.workflow.status = "failed"
-        context.workflow.last_error = str(exc)
-        context.workflow.finished_at = _now()
-        context.workflow.updated_at = _now()
+        mark_workflow_failed(workflow=context.workflow, message=str(exc), now=_now())
         return WorkflowOperationHandle(
             operation_id=context.operation.operation_id,
             workflow_id=context.workflow.workflow_id,
@@ -318,10 +270,7 @@ def _execute_jira_child_fanout(
             message=message,
             retryable=False,
         )
-        context.workflow.status = "failed"
-        context.workflow.last_error = message
-        context.workflow.finished_at = _now()
-        context.workflow.updated_at = _now()
+        mark_workflow_failed(workflow=context.workflow, message=message, now=_now())
         return WorkflowOperationHandle(
             operation_id=context.operation.operation_id,
             workflow_id=context.workflow.workflow_id,
@@ -335,7 +284,7 @@ def _execute_jira_child_fanout(
         attempt=attempt,
         summary="Engineering child fanout completed from the confirmed parent brief.",
     )
-    _recompute_workflow_status(session=context.session, workflow=context.workflow)
+    recompute_workflow_status(session=context.session, workflow=context.workflow, now=_now())
     return WorkflowOperationHandle(
         operation_id=context.operation.operation_id,
         workflow_id=context.workflow.workflow_id,

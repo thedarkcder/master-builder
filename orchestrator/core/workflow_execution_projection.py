@@ -7,8 +7,13 @@ import json
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
+from orchestrator.core.workflow_execution_status import (
+    mark_workflow_failed,
+    mark_workflow_running,
+    mark_workflow_waiting_for_input,
+    recompute_workflow_status,
+)
 from orchestrator.core.workflow_operation_service import (
-    OPERATION_STATUS_COMPLETED,
     OPERATION_STATUS_WAITING_FOR_INPUT,
     complete_workflow_operation,
     fail_workflow_operation,
@@ -97,11 +102,7 @@ class WorkflowExecutionProjection:
         return operation
 
     def mark_running(self) -> None:
-        self.workflow.status = "running"
-        self.workflow.last_error = None
-        self.workflow.started_at = self.workflow.started_at or _now()
-        self.workflow.finished_at = None
-        self.workflow.updated_at = _now()
+        mark_workflow_running(workflow=self.workflow, now=_now())
 
     def mark_waiting_for_input(self, *, operation_type: str, summary: str) -> None:
         operation = self._operation(operation_type)
@@ -117,10 +118,7 @@ class WorkflowExecutionProjection:
         attempt.retryable = False
         attempt.next_retry_at = None
         attempt.finished_at = now
-        self.workflow.status = "waiting_for_input"
-        self.workflow.last_error = None
-        self.workflow.finished_at = None
-        self.workflow.updated_at = now
+        mark_workflow_waiting_for_input(workflow=self.workflow, now=now)
 
     def mark_operation_completed(self, *, operation_type: str, summary: str) -> None:
         operation = self._operation(operation_type)
@@ -151,31 +149,10 @@ class WorkflowExecutionProjection:
             message=message,
             retryable=retryable,
         )
-        now = _now()
-        self.workflow.status = "failed"
-        self.workflow.last_error = message
-        self.workflow.finished_at = now
-        self.workflow.updated_at = now
+        mark_workflow_failed(workflow=self.workflow, message=message, now=_now())
 
     def mark_completed_if_ready(self) -> None:
-        now = _now()
-        operations = self.session.execute(
-            select(WorkflowOperation).where(WorkflowOperation.workflow_id == self.workflow.workflow_id)
-        ).scalars().all()
-        status_by_type = {str(operation.operation_type or "").strip(): str(operation.status or "").strip().lower() for operation in operations}
-        required_definitions = [
-            definition
-            for definition in list_workflow_type_operations(self.session, workflow_type_key=self.workflow.workflow_type_key)
-            if bool(definition.required)
-        ]
-        if required_definitions and all(
-            status_by_type.get(definition.operation_type) == OPERATION_STATUS_COMPLETED
-            for definition in required_definitions
-        ):
-            self.workflow.status = "completed"
-            self.workflow.last_error = None
-            self.workflow.finished_at = now
-            self.workflow.updated_at = now
+        recompute_workflow_status(session=self.session, workflow=self.workflow, now=_now())
 
 
 def ensure_issue_workflow_execution(
