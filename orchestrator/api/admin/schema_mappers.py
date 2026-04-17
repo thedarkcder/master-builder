@@ -7,7 +7,6 @@ from orchestrator.api.schemas import (
     ProjectRead,
     RunRead,
     TenantRead,
-    WorkflowBlockerRead,
     WorkflowActionRead,
     WorkflowLinkRead,
     WorkflowOperationAttemptRead,
@@ -24,7 +23,6 @@ from orchestrator.storage.models import (
     ProjectInstallRequest,
     Run,
     Tenant,
-    WorkflowBlocker,
     WorkflowExecution,
     WorkflowOperation,
     WorkflowOperationAttempt,
@@ -92,18 +90,6 @@ def workflow_operation_attempt_to_schema(attempt: WorkflowOperationAttempt) -> W
     )
 
 
-def workflow_blocker_to_schema(blocker: WorkflowBlocker) -> WorkflowBlockerRead:
-    return WorkflowBlockerRead(
-        blocker_id=blocker.blocker_id,
-        operation_id=blocker.operation_id,
-        category=blocker.category,
-        message=blocker.message,
-        status=blocker.status,
-        created_at=blocker.created_at,
-        resolved_at=blocker.resolved_at,
-    )
-
-
 def workflow_operation_to_schema(
     operation: WorkflowOperation | None,
     *,
@@ -130,7 +116,6 @@ def workflow_operation_to_schema(
         target_system=(operation.target_system if operation is not None else None),
         target_ref=(operation.target_ref if operation is not None else None),
         summary=(operation.summary if operation is not None else description),
-        blocker_id=(operation.blocker_id if operation is not None else None),
         attempts=[workflow_operation_attempt_to_schema(attempt) for attempt in attempts],
     )
 
@@ -155,7 +140,6 @@ def workflow_to_schema(
     available_actions: list[WorkflowActionRead] | None = None,
     links: list[WorkflowLinkRead] | None = None,
     operations: list[WorkflowOperationRead] | None = None,
-    blockers: list[WorkflowBlockerRead] | None = None,
 ) -> WorkflowRead:
     return WorkflowRead(
         workflow_id=workflow.workflow_id,
@@ -177,7 +161,7 @@ def workflow_to_schema(
         latest_checkpoint_id=workflow.latest_checkpoint_id,
         source_workflow_id=workflow.source_workflow_id,
         source_run_id=workflow.source_run_id,
-        blocked_reason=workflow.blocked_reason,
+        failure_reason=workflow.last_error,
         pending_input_request_id=pending_input_request_id,
         latest_checkpoint_kind=latest_checkpoint_kind,
         state_path=list(state_path or []),
@@ -190,7 +174,6 @@ def workflow_to_schema(
         available_actions=list(available_actions or []),
         links=list(links or []),
         operations=list(operations or []),
-        blockers=list(blockers or []),
         runs=runs,
         created_at=workflow.created_at,
         started_at=workflow.started_at,

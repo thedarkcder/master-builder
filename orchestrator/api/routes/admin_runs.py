@@ -25,11 +25,26 @@ from orchestrator.api.admin.schema_mappers import run_to_schema, workflow_to_sch
 from orchestrator.api.admin.workflows_service import (
     create_workflow_attempt as create_workflow_attempt_impl,
     get_workflow as get_workflow_impl,
+    get_workflow_type_detail as get_workflow_type_detail_impl,
     list_workflows as list_workflows_impl,
+    list_workflow_types as list_workflow_types_impl,
+    retry_workflow_operation as retry_workflow_operation_impl,
 )
 from orchestrator.api.dependencies import get_session
-from orchestrator.api.schemas import RunEventRead, RunLogEventRead, RunRead, WorkflowAttemptCreateRequest, WorkflowRead
+from orchestrator.api.schemas import (
+    RunEventRead,
+    RunLogEventRead,
+    RunRead,
+    WorkflowAttemptCreateRequest,
+    WorkflowRead,
+    WorkflowTypeDetailRead,
+    WorkflowTypeSummaryRead,
+)
+from orchestrator.api.discord.ingress.seed_runtime import seed_issues_with_runtime
+from orchestrator.api.discord.seed.issue_service import list_child_issue_previews_for_parent
+from orchestrator.api.jira_oauth.connection_service import tenant_jira_oauth_context
 from orchestrator.core.config import get_settings
+from orchestrator.core.agent_runtime_resolver import build_runtime_for_selector
 from orchestrator.core.jira_links import tenant_jira_issue_url
 from orchestrator.core.security import (
     AuthenticatedPrincipal,
@@ -138,6 +153,46 @@ def list_workflows(
     )
 
 
+@router.get("/workflow-types", response_model=list[WorkflowTypeSummaryRead])
+def list_workflow_types(
+    tenant_id: str | None = Query(default=None),
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> list[WorkflowTypeSummaryRead]:
+    if not principal.is_platform_super_admin:
+        if not tenant_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="tenant_id is required for tenant-scoped workflow type listing",
+            )
+        require_tenant_workspace_access(principal=principal, tenant_id=tenant_id)
+    return list_workflow_types_impl(
+        session=session,
+        tenant_id=tenant_id,
+    )
+
+
+@router.get("/workflow-types/{workflow_type_key}", response_model=WorkflowTypeDetailRead)
+def get_workflow_type_detail(
+    workflow_type_key: str,
+    tenant_id: str | None = Query(default=None),
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> WorkflowTypeDetailRead:
+    if not principal.is_platform_super_admin:
+        if not tenant_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="tenant_id is required for tenant-scoped workflow type detail",
+            )
+        require_tenant_workspace_access(principal=principal, tenant_id=tenant_id)
+    return get_workflow_type_detail_impl(
+        session=session,
+        workflow_type_key=workflow_type_key,
+        tenant_id=tenant_id,
+    )
+
+
 @router.get("/workflows/{workflow_id}", response_model=WorkflowRead)
 def get_workflow(
     workflow_id: str,
@@ -154,6 +209,8 @@ def get_workflow(
         workflow_id=workflow_id,
         workflow_to_schema_fn=workflow_to_schema,
         run_to_schema_fn=run_to_schema,
+        tenant_jira_oauth_context_fn=tenant_jira_oauth_context,
+        list_child_issue_previews_for_parent_fn=list_child_issue_previews_for_parent,
     )
 
 
@@ -171,6 +228,26 @@ def create_workflow_attempt(
         checkpoint_kind=payload.checkpoint_kind,
         tenant_model=Tenant,
         run_to_schema_fn=run_to_schema,
+    )
+
+
+@router.post("/workflows/{workflow_id}/operations/{operation_id}/retry", response_model=WorkflowRead)
+def retry_workflow_operation(
+    workflow_id: str,
+    operation_id: str,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> WorkflowRead:
+    return retry_workflow_operation_impl(
+        session=session,
+        workflow_id=workflow_id,
+        operation_id=operation_id,
+        workflow_to_schema_fn=workflow_to_schema,
+        run_to_schema_fn=run_to_schema,
+        tenant_jira_oauth_context_fn=tenant_jira_oauth_context,
+        list_child_issue_previews_for_parent_fn=list_child_issue_previews_for_parent,
+        build_runtime_for_selector_fn=build_runtime_for_selector,
+        seed_issues_with_runtime_fn=seed_issues_with_runtime,
     )
 
 

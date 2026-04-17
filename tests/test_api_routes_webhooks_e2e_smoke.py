@@ -305,7 +305,6 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                     latest_checkpoint_id="checkpoint-e2e",
                     source_workflow_id=None,
                     source_run_id=None,
-                    blocked_reason=None,
                     created_at=now,
                     started_at=None,
                     finished_at=None,

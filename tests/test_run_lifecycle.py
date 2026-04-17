@@ -9,6 +9,7 @@ from orchestrator.core.runs import (
     RUN_DEDUPE_SCOPE_ISSUE_EXECUTION,
     RUN_DEDUPE_SCOPE_PR_REMEDIATION,
     RUN_STATUS_BLOCKED,
+    RUN_STATUS_FAILED,
     RUN_STATUS_SUCCEEDED,
     RunBootstrap,
     RunStateTransitionError,
@@ -228,7 +229,7 @@ class RunLifecycleTests(unittest.TestCase):
             self.assertEqual(workflow.active_run_id, enqueue.run.run_id)
             self.assertIsNotNone(workflow.finished_at)
 
-    def test_failure_path_marks_blocked_without_finishing_workflow(self) -> None:
+    def test_failure_path_marks_failed_workflow_and_persists_error(self) -> None:
         with self.session_factory() as session:
             enqueue = enqueue_run(
                 session,
@@ -251,9 +252,9 @@ class RunLifecycleTests(unittest.TestCase):
 
             workflow = self._get_workflow(session, issue_key="TP-904")
             assert workflow is not None
-            self.assertEqual(workflow.status, RUN_STATUS_BLOCKED)
-            self.assertEqual(workflow.blocked_reason, "jira label mutation failed")
-            self.assertIsNone(workflow.finished_at)
+            self.assertEqual(workflow.status, RUN_STATUS_FAILED)
+            self.assertEqual(workflow.last_error, "jira label mutation failed")
+            self.assertIsNotNone(workflow.finished_at)
 
     def test_invalid_state_transition_is_rejected(self) -> None:
         with self.session_factory() as session:
@@ -398,7 +399,6 @@ class RunLifecycleTests(unittest.TestCase):
                 latest_checkpoint_id=None,
                 source_workflow_id=None,
                 source_run_id=None,
-                blocked_reason=None,
                 created_at=now,
                 started_at=now,
                 finished_at=None,

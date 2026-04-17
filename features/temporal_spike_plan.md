@@ -12,7 +12,7 @@
   stabilizes the platform around:
 
   - one canonical RunExecutionWorkflow
-  - one shared Operation / Attempt / Blocker / Projection model
+  - one shared Operation / Attempt / Projection model
   - one orchestration adapter boundary so Temporal is infrastructure, not the
     business model
 
@@ -44,7 +44,7 @@
   - signal_external_event(workflow_id, event_type, correlation_key, payload)
   - query_workflow_state(workflow_id)
   - cancel_workflow(workflow_id, reason)
-  - resume_blocked_operation(workflow_id, operation_id)
+  - retry_workflow_operation(workflow_id, operation_id)
 
   Rules:
 
@@ -68,8 +68,6 @@
         discord_projection, automation_dispatch
   - OperationAttempt
       - one try against an external or internal system
-  - Blocker
-      - non-success terminal reason requiring code, operator, or user action
   - Projection
       - user/admin-visible outputs such as notifications, Jira comments, Discord
         posts, pills, and status banners
@@ -78,7 +76,7 @@
 
   - a workflow is not complete until all required operations are either:
       - completed, or
-      - in a durable blocked/failed state with an explicit blocker
+      - in a durable failed state or waiting-for-input state with explicit retry/failure metadata
   - retry semantics are based on operation policy, not webhook delivery
   - external writes are idempotent by operation key and effect fingerprint
 
@@ -96,7 +94,7 @@
   - the canonical business schema
   - the only audit trail
   - the only query/read model
-  - the only place where blockers and retries are visible
+  - the only place where failure and retry metadata are visible
 
   ## Implementation Plan
 
@@ -128,11 +126,10 @@
   - operation lifecycle tables:
       - workflow_operations
       - workflow_operation_attempts
-      - workflow_blockers
       - optional workflow_effect_projections if projection tracking needs a separate
         table
   - projection model updates so admin notifications, run detail, and issue states can
-    reflect blocked operations
+    reflect failed operations and waiting-for-input states
 
   Behavior:
 
@@ -148,7 +145,7 @@
       - operation status
       - blocker
       - notification
-  - existing admin screens can show blocked state from app tables without Temporal
+  - existing admin screens can show failed state from app tables without Temporal
 
   ### Phase 2: Temporal-backed RunExecutionWorkflow
 
@@ -209,18 +206,17 @@
   Policy model:
 
   - transient failures: retry with bounded backoff
-  - permanent content/config failures: mark blocked, emit notification, stop retrying
-  - human-remediable failures: remain blocked until state changes or operator action
-    occurs
+  - permanent content/config failures: mark failed, emit notification, stop retrying
+  - human-in-the-loop cases: transition to waiting_for_input until a reply arrives
 
   Example target behavior for MAB-215 class failures:
 
   - PM brief completes
   - jira_child_fanout operation runs
   - Jira returns CONTENT_LIMIT_EXCEEDED
-  - workflow becomes fanout_blocked
-  - operation is blocked
-  - blocker category is jira_content_limit
+  - workflow becomes failed
+  - operation is failed
+  - failure category is content_limit
   - notification opens with concrete remediation
   - no vague comment-only state
 
@@ -228,7 +224,7 @@
 
   - every required side effect after run/PM progression is represented as an
     operation
-  - one failed Jira operation produces a durable blocker and visible notification
+  - one failed Jira operation produces a durable failure record and visible notification
   - replaying the same inbound event does not create duplicate outward writes
   - operator can see current operation state and last attempt reason in admin
     surfaces
@@ -291,7 +287,7 @@
   - signal_external_event(...)
   - query_workflow_state(...)
   - cancel_workflow(...)
-  - resume_blocked_operation(...)
+  - retry_workflow_operation(...)
 
   Implementation notes:
 
@@ -307,7 +303,6 @@
       - pending
       - running
       - waiting_for_input
-      - blocked
       - completed
       - failed
       - cancelled
@@ -315,11 +310,10 @@
       - pending
       - running
       - retrying
-      - blocked
       - failed
       - completed
 
-  ### Blocker categories
+  ### Failure categories
 
   Initial categories:
 
@@ -347,17 +341,17 @@
       - signal
       - query
       - cancel
-      - resume blocked operation
+      - retry workflow operation
   - operation lifecycle tests:
       - pending to completed
       - retryable failure to retrying
-      - permanent failure to blocked
+      - permanent failure to failed
   ### Temporal integration tests
   - run starts once for a given workflow ID
   - worker restart during waiting_for_input preserves state
   - duplicate input signal resumes exactly once
   - activity retries do not duplicate Jira/Discord side effects
-  - blocked operation is visible in app read models
+  - failed operation is visible in app read models
 
   ### End-to-end scenarios
 
@@ -394,5 +388,3 @@
     answer: None of the above
     note: temporal is a implementation. the legacy will move to an implementation. then
           we can also have a db back implenation if we like
-
-

@@ -10,7 +10,6 @@ from temporalio import activity
 from orchestrator.core.config import get_settings
 from orchestrator.core.run_human_input_service import _resume_workflow_from_human_input_answer_legacy
 from orchestrator.core.workflow_operation_service import (
-    block_workflow_operation,
     complete_workflow_operation,
     fail_workflow_operation,
     start_workflow_operation_attempt,
@@ -111,12 +110,13 @@ def execute_claimed_run_activity(payload: DevelopmentTeamRunWorkflowInput) -> De
             return _result_for_run(session=session, workflow_id=workflow.workflow_id, run=processed)
         except Exception as exc:  # noqa: BLE001
             logger.exception("temporal_run_execute_failed workflow_id=%s run_id=%s", workflow.workflow_id, run.run_id)
-            block_workflow_operation(
+            fail_workflow_operation(
                 session,
                 operation=operation,
                 attempt=attempt,
                 category="run_execution_failed",
                 message=str(exc),
+                retryable=False,
             )
             session.commit()
             raise

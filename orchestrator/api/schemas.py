@@ -1021,16 +1021,6 @@ class WorkflowOperationAttemptRead(BaseModel):
     finished_at: datetime | None = None
 
 
-class WorkflowBlockerRead(BaseModel):
-    blocker_id: str
-    operation_id: str | None = None
-    category: str
-    message: str
-    status: str
-    created_at: datetime
-    resolved_at: datetime | None = None
-
-
 class WorkflowOperationRead(BaseModel):
     operation_id: str
     run_id: str | None = None
@@ -1044,7 +1034,6 @@ class WorkflowOperationRead(BaseModel):
     target_system: str | None = None
     target_ref: str | None = None
     summary: str | None = None
-    blocker_id: str | None = None
     attempts: list[WorkflowOperationAttemptRead] = Field(default_factory=list)
 
 
@@ -1062,6 +1051,39 @@ class WorkflowTypeRead(BaseModel):
     label: str
     description: str | None = None
     operations: list[WorkflowTypeOperationRead] = Field(default_factory=list)
+
+
+class WorkflowExecutionPreviewRead(BaseModel):
+    workflow_id: str
+    issue_key: str
+    issue_summary: str | None = None
+    status: str
+    waiting_on: str | None = None
+    next_step: str | None = None
+    failure_reason: str | None = None
+    created_at: datetime
+    finished_at: datetime | None = None
+
+
+class WorkflowTypeSummaryRead(BaseModel):
+    key: str
+    label: str
+    description: str | None = None
+    operation_count: int = 0
+    execution_count: int = 0
+    latest_execution_at: datetime | None = None
+
+
+class WorkflowTypeDetailRead(BaseModel):
+    key: str
+    label: str
+    description: str | None = None
+    operations: list[WorkflowTypeOperationRead] = Field(default_factory=list)
+    execution_modes: list[str] = Field(default_factory=list)
+    conditional_paths: list[str] = Field(default_factory=list)
+    execution_count: int = 0
+    latest_execution_at: datetime | None = None
+    recent_executions: list[WorkflowExecutionPreviewRead] = Field(default_factory=list)
 
 
 class WorkflowStatePathEntryRead(BaseModel):
@@ -1108,7 +1130,7 @@ class WorkflowRead(BaseModel):
     latest_checkpoint_id: str | None = None
     source_workflow_id: str | None = None
     source_run_id: str | None = None
-    blocked_reason: str | None = None
+    failure_reason: str | None = None
     pending_input_request_id: str | None = None
     latest_checkpoint_kind: str | None = None
     state_path: list[WorkflowStatePathEntryRead] = Field(default_factory=list)
@@ -1121,7 +1143,6 @@ class WorkflowRead(BaseModel):
     available_actions: list[WorkflowActionRead] = Field(default_factory=list)
     links: list[WorkflowLinkRead] = Field(default_factory=list)
     operations: list[WorkflowOperationRead] = Field(default_factory=list)
-    blockers: list[WorkflowBlockerRead] = Field(default_factory=list)
     runs: list[RunRead] = Field(default_factory=list)
     created_at: datetime
     started_at: datetime | None

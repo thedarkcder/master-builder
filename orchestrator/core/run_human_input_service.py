@@ -221,7 +221,7 @@ def create_human_input_request(
     workflow.status = RUN_STATUS_WAITING_FOR_INPUT
     workflow.active_run_id = run.run_id
     workflow.latest_checkpoint_id = checkpoint.checkpoint_id
-    workflow.blocked_reason = None
+    workflow.last_error = None
     workflow.updated_at = now
     session.add(request)
     try:
@@ -364,9 +364,9 @@ def _expire_human_input_request(*, session: Session, request: RunHumanInputReque
         run.finished_at = run.finished_at or now
     workflow = session.get(WorkflowExecution, request.workflow_id)
     if workflow is not None and workflow.status == RUN_STATUS_WAITING_FOR_INPUT:
-        workflow.status = RUN_STATUS_BLOCKED
-        workflow.blocked_reason = "human_input_expired"
+        workflow.status = "failed"
         workflow.last_error = "human_input_expired"
+        workflow.finished_at = now
         workflow.updated_at = now
     close_followup_contexts(
         session=session,

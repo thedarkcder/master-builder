@@ -7,6 +7,8 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from orchestrator.core.config import Settings
 from orchestrator.storage.models import Run, RunHumanInputRequest, WorkflowExecution
+from orchestrator.core.workflow_operation_service import WorkflowOperationHandle
+from orchestrator.storage.models import WorkflowOperation
 
 
 @dataclass(frozen=True)
@@ -48,4 +50,15 @@ class WorkflowEngine(Protocol):
         *,
         workflow: WorkflowExecution,
     ) -> WorkflowEngineState:
+        ...
+
+    def retry_workflow_operation(
+        self,
+        *,
+        session: Session,
+        settings: Settings,
+        session_factory: sessionmaker[Session],
+        workflow: WorkflowExecution,
+        operation: WorkflowOperation,
+    ) -> WorkflowOperationHandle:
         ...

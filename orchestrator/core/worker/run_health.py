@@ -144,7 +144,6 @@ def recover_stale_running_runs(
             workflow.last_error = message
             workflow.finished_at = recovered_at
             workflow.updated_at = recovered_at
-            workflow.blocked_reason = None
         record_run_log_event(
             session=session,
             tenant_id=row.tenant_id,

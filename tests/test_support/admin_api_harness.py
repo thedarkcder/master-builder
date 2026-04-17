@@ -223,7 +223,7 @@ class AdminApiTestHarness(SqliteTemplateApiTestCase):
                 checkpoint_stage=checkpoint_stage or ("pm" if checkpoint_kind == "pm" else "test"),
                 checkpoint_payload={"checkpoint": checkpoint_kind, "run_id": run_id},
                 checkpoint_session_id="checkpoint-session" if checkpoint_kind == "pm" else None,
-                blocked_reason="human_input_expired" if workflow_status == "blocked" else None,
+                failure_reason="human_input_expired" if workflow_status == "failed" else None,
                 last_error=None if workflow_status != "failed" and run_status not in {"failed", "blocked"} else "run failed",
                 plan=(
                     ExecutionSnapshot.empty(trigger_context={"source": "test"}).dump()
