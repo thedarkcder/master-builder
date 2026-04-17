@@ -405,6 +405,9 @@ class JiraParentClarificationFlowTests(JiraWebhookHarness):
                     labels=["engineering-child", "parent-tp-955b", "sync-blocked"],
                 )
 
+            def replace_issue_labels(self, **kwargs):  # noqa: ANN003
+                return kwargs.get("labels", [])
+
         oauth_context = SimpleNamespace(
             client=_FakeClient(),
             access_token="tok",
