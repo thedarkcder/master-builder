@@ -67,8 +67,6 @@ services:
       ORCHESTRATOR_DISCORD_OAUTH_CLIENT_SECRET: ${ORCHESTRATOR_DISCORD_OAUTH_CLIENT_SECRET:-}
       ORCHESTRATOR_DISCORD_OAUTH_REDIRECT_URL: ${ORCHESTRATOR_DISCORD_OAUTH_REDIRECT_URL:-}
       ORCHESTRATOR_CODEX_SANDBOX_MODE: ${ORCHESTRATOR_CODEX_SANDBOX_MODE:-danger-full-access}
-      ORCHESTRATOR_CODEX_MODEL: ${ORCHESTRATOR_CODEX_MODEL:-gpt-5-codex}
-      ORCHESTRATOR_CODEX_TIMEOUT_SECONDS: ${ORCHESTRATOR_CODEX_TIMEOUT_SECONDS:-0}
       ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET: ${ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET:?Set ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET}
       ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET: ${ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET:?Set ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET}
       ORCHESTRATOR_EMAIL_DELIVERY_PROVIDER: ${ORCHESTRATOR_EMAIL_DELIVERY_PROVIDER:-smtp}
@@ -111,8 +109,6 @@ services:
       - /bin/sh
       - -ceu
       - |
-        mkdir -p /root/.codex
-        cp -a /app/.codex/. /root/.codex/
         if [ -f /app/AGENTS.md ]; then cp /app/AGENTS.md /root/AGENTS.md; fi
         python -m orchestrator migrate
         uvicorn orchestrator.api.main:app --host 0.0.0.0 --port 4000 --workers "${ORCHESTRATOR_API_WORKERS:-4}"
@@ -145,8 +141,6 @@ services:
       ORCHESTRATOR_PUBLIC_API_BASE_URL: ${ORCHESTRATOR_PUBLIC_API_BASE_URL:-http://localhost:4000}
       ORCHESTRATOR_ADMIN_UI_BASE_URL: ${ORCHESTRATOR_ADMIN_UI_BASE_URL:-http://localhost:4100}
       ORCHESTRATOR_CODEX_SANDBOX_MODE: ${ORCHESTRATOR_CODEX_SANDBOX_MODE:-danger-full-access}
-      ORCHESTRATOR_CODEX_MODEL: ${ORCHESTRATOR_CODEX_MODEL:-gpt-5-codex}
-      ORCHESTRATOR_CODEX_TIMEOUT_SECONDS: ${ORCHESTRATOR_CODEX_TIMEOUT_SECONDS:-0}
       ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET: ${ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET:?Set ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET}
       ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET: ${ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET:?Set ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET}
       ORCHESTRATOR_SECRETS_ENCRYPTION_KEY: ${ORCHESTRATOR_SECRETS_ENCRYPTION_KEY:?Set ORCHESTRATOR_SECRETS_ENCRYPTION_KEY}
@@ -161,8 +155,6 @@ services:
       - /bin/sh
       - -ceu
       - |
-        mkdir -p /root/.codex
-        cp -a /app/.codex/. /root/.codex/
         if [ -f /app/AGENTS.md ]; then cp /app/AGENTS.md /root/AGENTS.md; fi
         python -m orchestrator migrate
         HF_HUB_OFFLINE=0 python -m orchestrator knowledge-prewarm
@@ -197,8 +189,6 @@ services:
       ORCHESTRATOR_PUBLIC_API_BASE_URL: ${ORCHESTRATOR_PUBLIC_API_BASE_URL:-http://localhost:4000}
       ORCHESTRATOR_ADMIN_UI_BASE_URL: ${ORCHESTRATOR_ADMIN_UI_BASE_URL:-http://localhost:4100}
       ORCHESTRATOR_CODEX_SANDBOX_MODE: ${ORCHESTRATOR_CODEX_SANDBOX_MODE:-danger-full-access}
-      ORCHESTRATOR_CODEX_MODEL: ${ORCHESTRATOR_CODEX_MODEL:-gpt-5-codex}
-      ORCHESTRATOR_CODEX_TIMEOUT_SECONDS: ${ORCHESTRATOR_CODEX_TIMEOUT_SECONDS:-0}
       ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET: ${ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET:?Set ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET}
       ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET: ${ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET:?Set ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET}
       ORCHESTRATOR_EMAIL_DELIVERY_PROVIDER: ${ORCHESTRATOR_EMAIL_DELIVERY_PROVIDER:-smtp}
@@ -225,8 +215,6 @@ services:
       - /bin/sh
       - -ceu
       - |
-        mkdir -p /root/.codex
-        cp -a /app/.codex/. /root/.codex/
         if [ -f /app/AGENTS.md ]; then cp /app/AGENTS.md /root/AGENTS.md; fi
         python -m orchestrator migrate
         HF_HUB_OFFLINE=0 python -m orchestrator voice-prewarm
@@ -263,8 +251,6 @@ services:
       ORCHESTRATOR_PUBLIC_API_BASE_URL: ${ORCHESTRATOR_PUBLIC_API_BASE_URL:-http://localhost:4000}
       ORCHESTRATOR_ADMIN_UI_BASE_URL: ${ORCHESTRATOR_ADMIN_UI_BASE_URL:-http://localhost:4100}
       ORCHESTRATOR_CODEX_SANDBOX_MODE: ${ORCHESTRATOR_CODEX_SANDBOX_MODE:-danger-full-access}
-      ORCHESTRATOR_CODEX_MODEL: ${ORCHESTRATOR_CODEX_MODEL:-gpt-5-codex}
-      ORCHESTRATOR_CODEX_TIMEOUT_SECONDS: ${ORCHESTRATOR_CODEX_TIMEOUT_SECONDS:-0}
       ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET: ${ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET:?Set ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET}
       ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET: ${ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET:?Set ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET}
       ORCHESTRATOR_SECRETS_ENCRYPTION_KEY: ${ORCHESTRATOR_SECRETS_ENCRYPTION_KEY:?Set ORCHESTRATOR_SECRETS_ENCRYPTION_KEY}
@@ -277,8 +263,6 @@ services:
       - /bin/sh
       - -ceu
       - |
-        mkdir -p /root/.codex
-        cp -a /app/.codex/. /root/.codex/
         if [ -f /app/AGENTS.md ]; then cp /app/AGENTS.md /root/AGENTS.md; fi
         python -m orchestrator migrate
         python -m orchestrator project-automation
@@ -314,8 +298,6 @@ services:
       - /bin/sh
       - -ceu
       - |
-        mkdir -p /root/.codex
-        cp -a /app/.codex/. /root/.codex/
         if [ -f /app/AGENTS.md ]; then cp /app/AGENTS.md /root/AGENTS.md; fi
         python -m orchestrator migrate
         HF_HUB_OFFLINE=0 python -m orchestrator voice-prewarm
@@ -357,8 +339,6 @@ services:
       - /bin/sh
       - -ceu
       - |
-        mkdir -p /root/.codex
-        cp -a /app/.codex/. /root/.codex/
         if [ -f /app/AGENTS.md ]; then cp /app/AGENTS.md /root/AGENTS.md; fi
         python -m orchestrator migrate
         HF_HUB_OFFLINE=0 python -m orchestrator voice-prewarm
@@ -401,8 +381,6 @@ services:
       - /bin/sh
       - -ceu
       - |
-        mkdir -p /root/.codex
-        cp -a /app/.codex/. /root/.codex/
         if [ -f /app/AGENTS.md ]; then cp /app/AGENTS.md /root/AGENTS.md; fi
         python -m orchestrator migrate
         HF_HUB_OFFLINE=0 python -m orchestrator knowledge-prewarm

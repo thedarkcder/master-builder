@@ -563,7 +563,7 @@ class CodexInvocationTests(unittest.TestCase):
             patch("orchestrator.core.runtime_invocation._get_log_writer", return_value=self._Writer()),
             patch(
                 "orchestrator.core.runtime_invocation._resolve_knowledge_policy_for_context",
-                return_value=("proj-1", True, "aggressive", "gpt-5.4-mini", "high", True),
+                return_value=("proj-1", True, "aggressive", "high", True),
             ),
             patch("orchestrator.core.runtime_invocation.create_session_factory"),
             patch("orchestrator.core.runtime_invocation.build_knowledge_prompt_context", return_value=SimpleNamespace(text="", citations=[])),
@@ -576,7 +576,7 @@ class CodexInvocationTests(unittest.TestCase):
             )
 
         self.assertEqual(payload, {"ok": True})
-        self.assertEqual(captured["model_override"], "gpt-5.4-mini")
+        self.assertEqual(captured["model_override"], "")
         self.assertEqual(captured["reasoning_effort"], "high")
 
     def test_invoke_runtime_json_uses_best_effort_knowledge_lookup_for_worker_execution(self) -> None:
@@ -598,7 +598,7 @@ class CodexInvocationTests(unittest.TestCase):
             patch("orchestrator.core.runtime_invocation._get_log_writer", return_value=self._Writer()),
             patch(
                 "orchestrator.core.runtime_invocation._resolve_knowledge_policy_for_context",
-                return_value=("proj-1", True, "aggressive", "gpt-5.4", "medium", False),
+                return_value=("proj-1", True, "aggressive", "medium", False),
             ),
             patch("orchestrator.core.runtime_invocation.create_session_factory"),
             patch(
@@ -642,7 +642,7 @@ class CodexInvocationTests(unittest.TestCase):
             patch("orchestrator.core.runtime_invocation._get_log_writer", return_value=self._Writer()),
             patch(
                 "orchestrator.core.runtime_invocation._resolve_knowledge_policy_for_context",
-                return_value=("proj-1", True, "aggressive", "gpt-5.4-mini", "high", True),
+                return_value=("proj-1", True, "aggressive", "high", True),
             ),
             patch("orchestrator.core.runtime_invocation.create_session_factory"),
             patch(
@@ -682,7 +682,7 @@ class CodexInvocationTests(unittest.TestCase):
             patch("orchestrator.core.runtime_invocation._get_log_writer", return_value=self._Writer()),
             patch(
                 "orchestrator.core.runtime_invocation._resolve_knowledge_policy_for_context",
-                return_value=("proj-1", False, "aggressive", "gpt-5.4-mini", "high", True),
+                return_value=("proj-1", False, "aggressive", "high", True),
             ) as resolve_policy_mock,
             patch("orchestrator.core.runtime_invocation.get_settings") as settings_mock,
         ):
@@ -706,7 +706,7 @@ class CodexInvocationTests(unittest.TestCase):
 
         self.assertEqual(payload, {"ok": True})
         resolve_policy_mock.assert_called_once_with(context=context)
-        self.assertEqual(captured["model_override"], "gpt-5.4-mini")
+        self.assertEqual(captured["model_override"], "")
         self.assertEqual(captured["reasoning_effort"], "high")
 
     def test_invoke_runtime_json_prefers_http_runtime_profile_model_over_policy_model(self) -> None:
@@ -734,7 +734,7 @@ class CodexInvocationTests(unittest.TestCase):
             patch("orchestrator.core.runtime_invocation._get_log_writer", return_value=self._Writer()),
             patch(
                 "orchestrator.core.runtime_invocation._resolve_knowledge_policy_for_context",
-                return_value=("proj-1", True, "aggressive", "gpt-5.4", "high", True),
+                return_value=("proj-1", True, "aggressive", "high", True),
             ),
             patch("orchestrator.core.runtime_invocation.create_session_factory"),
             patch("orchestrator.core.runtime_invocation.build_knowledge_prompt_context", return_value=SimpleNamespace(text="", citations=[])),

@@ -64,6 +64,12 @@ def build_parent_feature_description(
         _bullet_list([user_value.strip() or "User value was not provided"]),
         _heading("Recommendation"),
         _bullet_list([recommendation.strip() or "Recommendation was not provided"]),
+        _heading("PM Status"),
+        _bullet_list([pm_status.strip() if isinstance(pm_status, str) and pm_status.strip() else "PM status was not provided"]),
+        _heading("Planning State"),
+        _bullet_list(
+            [planning_state.strip() if isinstance(planning_state, str) and planning_state.strip() else "Planning state was not provided"]
+        ),
         _heading("Architecture Context"),
         _bullet_list(
             architecture_summary
@@ -95,13 +101,6 @@ def build_parent_feature_description(
         _bullet_list(dependencies_and_risks if dependencies_and_risks else ["No explicit dependencies or risks were provided"]),
         _heading("Open Questions"),
         _bullet_list(open_questions if open_questions else ["No open questions remain"]),
-        _heading("PM Handoff"),
-        _bullet_list(
-            [
-                f"PM status: {pm_status.strip()}" if isinstance(pm_status, str) and pm_status.strip() else "PM status was not provided",
-                f"Planning state: {planning_state.strip()}" if isinstance(planning_state, str) and planning_state.strip() else "Planning state was not provided",
-            ]
-        ),
         _heading("Good To Do Checklist"),
         _bullet_list(
             [
@@ -113,8 +112,6 @@ def build_parent_feature_description(
                 "[ ] Dependencies and risks are identified",
             ]
         ),
-        _heading("Sync Status"),
-        _bullet_list([f"Parent revision: {parent_revision}", f"Children sync status: {sync_status}"]),
         _heading("Notes / Links"),
         _bullet_list(["Owned by Product Management", "Reported via Discord PM flow"]),
         ]

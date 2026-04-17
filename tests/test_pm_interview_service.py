@@ -90,15 +90,12 @@ class PMInterviewServiceTests(unittest.TestCase):
                         "slot_values": {
                             "objective": "Share the app with friends",
                             "user_value": "Help users invite friends without friction",
-                            "target_user": "New users",
-                            "primary_journey": "From onboarding",
                             "acceptance_criteria": [
                                 "Users can copy or send a share link",
                                 "The link opens the right store page if the app is not installed",
                             ],
                             "scope_in": ["Share link", "Invite link copy"],
                             "scope_out": ["Rewards", "Referral tracking"],
-                            "ui_references": ["Onboarding screen"],
                             "constraints": ["iOS and Android"],
                             "risks": ["Spam and abuse"],
                             "success_outcomes": ["More invites sent"],
@@ -129,6 +126,21 @@ class PMInterviewServiceTests(unittest.TestCase):
         self.assertIn("Profile entry point", assessment.brief.scope_in)
         self.assertIn("Platform policy", assessment.brief.risks)
 
+    def test_assess_pm_interview_brief_treats_pm_completed_as_authoritative(self) -> None:
+        assessment = assess_pm_interview_brief(
+            brief={
+                "objective": "Unify tenant auth redesign",
+                "user_value": "Users get a predictable sign-in flow",
+                "recommendation": "Treat this as a parent contract redesign.",
+            },
+            status_hint=PM_INTERVIEW_STATUS_PM_COMPLETED,
+        )
+
+        self.assertEqual(assessment.status, PM_INTERVIEW_STATUS_PM_COMPLETED)
+        self.assertTrue(assessment.ready_to_write)
+        self.assertIn("acceptance_criteria", assessment.missing_slots)
+        self.assertIsNone(assessment.next_question)
+
     def test_pm_interview_case_round_trips_and_resolves_by_explicit_identity(self) -> None:
         with self.session_factory() as session:
             case = upsert_pm_interview_case(
@@ -150,12 +162,9 @@ class PMInterviewServiceTests(unittest.TestCase):
                         "metadata": {
                             "slot_values": {
                                 "user_value": "Users can bring in friends easily",
-                                "target_user": "New users",
-                                "primary_journey": "From profile",
                                 "acceptance_criteria": ["Users can send a share link"],
                                 "scope_in": ["Share link"],
                                 "scope_out": ["Rewards"],
-                                "ui_references": ["Profile page"],
                                 "constraints": ["iOS"],
                                 "risks": ["Abuse"],
                                 "success_outcomes": ["More invites"],
@@ -370,12 +379,10 @@ class PMInterviewServiceTests(unittest.TestCase):
                     "brief": {
                         "objective": "Refactor the orchestration stack",
                         "user_value": "Runtime behavior is easier to reason about and verify",
-                        "target_user": "Platform engineers",
                         "primary_journey": "Plan and execute orchestration changes from Jira parents",
                         "acceptance_criteria": ["One canonical decision state machine exists"],
                         "scope_in": ["Decision state machine refactor"],
                         "scope_out": ["Unrelated UI redesign"],
-                        "ui_references": ["Current runtime architecture doc"],
                         "constraints": ["Keep the runtime-agnostic contract stable"],
                         "risks": ["Planning drift across runtimes"],
                         "success_outcomes": ["Parent planning produces stable child tickets"],
@@ -422,12 +429,10 @@ class PMInterviewServiceTests(unittest.TestCase):
                 "brief": {
                     "objective": "Normalized objective",
                     "user_value": "Clear business outcome",
-                    "target_user": "Operators",
                     "primary_journey": "Create parent and review subtasks",
                     "acceptance_criteria": ["Parent planning creates child tickets"],
                     "scope_in": ["Parent normalization"],
                     "scope_out": ["Runtime migration"],
-                    "ui_references": ["Current Jira parent workflow"],
                     "constraints": ["Keep planning reviewable in Jira and Discord"],
                     "risks": ["Parent planning can drift without clear product answers"],
                     "success_outcomes": ["Consistent parent structure"],
@@ -488,8 +493,8 @@ class PMInterviewServiceTests(unittest.TestCase):
                 request_text="create a share feature",
                 brief={"objective": "Share the app with friends"},
                 evidence=[],
-                missing_slots=["user_value", "target_user"],
-                next_question=select_next_pm_interview_question(missing_slots=["user_value", "target_user"]),
+                missing_slots=["user_value", "acceptance_criteria"],
+                next_question=select_next_pm_interview_question(missing_slots=["user_value", "acceptance_criteria"]),
                 project_keys=["TP"],
                 issues=[],
                 status_counts={},
@@ -500,7 +505,7 @@ class PMInterviewServiceTests(unittest.TestCase):
 
         self.assertEqual(payload["message"], "What user group?")
         self.assertEqual(payload["status"], PM_INTERVIEW_STATUS_QUESTION_PENDING)
-        self.assertEqual(payload["missing_slots"], ["user_value", "target_user"])
+        self.assertEqual(payload["missing_slots"], ["user_value", "acceptance_criteria"])
         self.assertIn("discord/pm_interview_system.j2", captured)
         user_kwargs = captured["discord/pm_interview_user.j2"]
         self.assertIn("next_question_examples_json", user_kwargs)

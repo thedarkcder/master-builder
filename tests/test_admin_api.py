@@ -11,6 +11,7 @@ from sqlalchemy import select
 from orchestrator.api.main import create_app
 from orchestrator.api.admin.tenant_crud import purge_expired_archived_tenants
 from orchestrator.api.admin.project_normalization import resolve_project_discord_channel_name
+from orchestrator.core.admin_notifications import AdminNotificationScope, notification_fingerprint_for
 from orchestrator.core.config import get_settings
 from orchestrator.core.agent_observability import (
     record_agent_lifecycle_event,
@@ -20,6 +21,7 @@ from orchestrator.core.secrets import encrypt_value
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import (
+    AdminNotification,
     DecisionCase,
     DiscordCommandSyncRuntimeState,
     KnowledgeAsset,
@@ -49,6 +51,7 @@ from orchestrator.storage.models import (
     WorkerRuntimeState,
 )
 from orchestrator.tools.github_app import InstallationRepository
+from orchestrator.tools.jira_oauth_models import JiraOAuthError
 from tests.test_support.admin_api_harness import AdminApiTestHarness
 from tests.workflow_test_support import add_workflow_attempt
 
@@ -141,6 +144,117 @@ class AdminApiTests(AdminApiTestHarness):
         )
         self.assertEqual(repo_bootstrap.status_code, 200)
         self.assertEqual(repo_bootstrap.json(), [])
+
+    def test_list_jira_projects_requires_reauth_emits_notification(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        with patch(
+            "orchestrator.api.admin.integration_dependencies.refresh_jira_connection_tokens",
+            side_effect=JiraOAuthError(
+                'Jira OAuth request failed (403): {"error":"unauthorized_client","error_description":"refresh_token is invalid"}'
+            ),
+        ):
+            response = self.client.get(
+                "/api/admin/jira/connections/conn-1/projects",
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertEqual(response.json()["detail"], "Jira connection requires reauthentication.")
+
+        notifications_response = self.client.get(
+            "/api/admin/tenants/tenant-a/notifications",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(notifications_response.status_code, 200, notifications_response.text)
+        notifications = notifications_response.json()["notifications"]
+        self.assertEqual(len(notifications), 1)
+        self.assertEqual(notifications[0]["kind"], "reauth_required")
+        self.assertEqual(notifications[0]["scope_type"], "jira_connection")
+        self.assertEqual(notifications[0]["scope_id"], "conn-1")
+        self.assertEqual(notifications[0]["status"], "open")
+
+    def test_list_jira_projects_success_resolves_reauth_notification(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            now = datetime.now(timezone.utc)
+            session.add(
+                AdminNotification(
+                    notification_id="notify-jira-reauth",
+                    tenant_id=None,
+                    project_id=None,
+                    scope_type="jira_connection",
+                    scope_id="conn-1",
+                    source="jira_oauth",
+                    kind="reauth_required",
+                    severity="HIGH",
+                    title="Jira connection needs reauthentication",
+                    detail="Reconnect Jira.",
+                    action_label="Reconnect Jira",
+                    action_path=None,
+                    fingerprint=notification_fingerprint_for(
+                        scope=AdminNotificationScope(scope_type="jira_connection", scope_id="conn-1"),
+                        kind="reauth_required",
+                        dedupe_key="reauth_required",
+                    ),
+                    status="open",
+                    context_json={"connection_id": "conn-1"},
+                    first_emitted_at=now,
+                    last_emitted_at=now,
+                    acknowledged_at=None,
+                    resolved_at=None,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.commit()
+
+        class _FakeJiraClient:
+            def list_projects(self, *, access_token: str, cloud_id: str):  # noqa: ANN001
+                return [SimpleNamespace(key="TP", name="Tenant Platform")]
+
+        with (
+            patch("orchestrator.api.admin.integration_dependencies.refresh_jira_connection_tokens", return_value="access-token"),
+            patch("orchestrator.api.admin.integration_dependencies.jira_oauth_client", return_value=_FakeJiraClient()),
+        ):
+            response = self.client.get(
+                "/api/admin/jira/connections/conn-1/projects",
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json(), [{"key": "TP", "name": "Tenant Platform"}])
+
+        open_notifications = self.client.get(
+            "/api/admin/tenants/tenant-a/notifications",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(open_notifications.status_code, 200, open_notifications.text)
+        self.assertEqual(open_notifications.json()["notifications"], [])
+
+        resolved_notifications = self.client.get(
+            "/api/admin/tenants/tenant-a/notifications?status=resolved",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(resolved_notifications.status_code, 200, resolved_notifications.text)
+        self.assertEqual(len(resolved_notifications.json()["notifications"]), 1)
+        self.assertEqual(resolved_notifications.json()["notifications"][0]["status"], "resolved")
 
     def test_create_tenant_auto_provisions_jira_webhook_when_jira_is_configured(self) -> None:
         payload = self._tenant_payload()
@@ -3054,7 +3168,7 @@ class AdminApiTests(AdminApiTestHarness):
 
         self.assertEqual(callback_response.status_code, 302)
         self.assertIn(
-            "/tenants/tenant-a/settings/jira?jira_oauth=success&jira_connection_id=",
+            "/tenant-a/settings/jira?jira_oauth=success&jira_connection_id=",
             callback_response.headers.get("location", ""),
         )
         self.assertIn("jira_webhook=ok", callback_response.headers.get("location", ""))
@@ -4695,11 +4809,85 @@ class AdminApiTests(AdminApiTestHarness):
         self.assertEqual(instance["status"], "degraded")
         self.assertEqual(instance["runtime_dependencies"]["codex_cli"]["remediation_text"], "Open this link")
         self.assertEqual(
+            instance["runtime_dependencies"]["codex_cli"]["login_service_instance_id"],
+            "worker-macos-local:runs",
+        )
+        self.assertEqual(
             instance["runtime_dependencies"]["codex_cli"]["remediation_expires_at"],
             remediation_expires_at.isoformat(),
         )
         self.assertNotIn("remediation_text", instance)
         self.assertNotIn("remediation_expires_at", instance)
+
+    def test_admin_platform_status_does_not_hide_linux_runtime_login_behind_ready_macos_worker(self) -> None:
+        session_factory = create_session_factory(self.database_url)
+        now = datetime.now(timezone.utc)
+        remediation_expires_at = now + timedelta(minutes=15)
+        with session_factory() as session:
+            session.add(
+                WorkerRuntimeState(
+                    service_instance_id="worker-macos-local:runs",
+                    agent_id="worker-macos-local",
+                    worker_mode="runs",
+                    capabilities_json=["macos"],
+                    runtime_dependencies_json={
+                        "codex_cli": {
+                            "state": "ready",
+                            "summary": "Codex CLI is authenticated and ready.",
+                        }
+                    },
+                    state="idle",
+                    started_at=now,
+                    last_heartbeat_at=now,
+                    updated_at=now,
+                )
+            )
+            session.add(
+                WorkerRuntimeState(
+                    service_instance_id="worker-linux-local:runs",
+                    agent_id="worker-linux-local",
+                    worker_mode="runs",
+                    capabilities_json=["linux"],
+                    runtime_dependencies_json={
+                        "codex_cli": {
+                            "state": "degraded",
+                            "summary": "Codex CLI is not authenticated on this worker.",
+                            "remediation_text": "Open Docker login",
+                            "remediation_expires_at": remediation_expires_at.isoformat(),
+                        }
+                    },
+                    state="degraded",
+                    started_at=now,
+                    last_heartbeat_at=now,
+                    updated_at=now,
+                )
+            )
+            session.commit()
+
+        response = self.client.get("/api/admin/status", auth=("admin", "secret"))
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        worker_service = next(service for service in payload["services"] if service["service_id"] == "workers")
+        self.assertEqual(worker_service["status"], "degraded")
+        self.assertEqual(worker_service["runtime_dependencies"]["codex_cli"]["state"], "degraded")
+        self.assertEqual(
+            worker_service["runtime_dependencies"]["codex_cli"]["login_service_instance_id"],
+            "worker-linux-local:runs",
+        )
+        self.assertIn("authentication differs across worker instances", worker_service["runtime_dependencies"]["codex_cli"]["summary"])
+        macos_instance = next(item for item in worker_service["instances"] if item["instance_id"] == "worker-macos-local:runs")
+        self.assertEqual(macos_instance["runtime_dependencies"]["codex_cli"]["state"], "ready")
+        self.assertEqual(
+            macos_instance["runtime_dependencies"]["codex_cli"]["login_service_instance_id"],
+            "worker-macos-local:runs",
+        )
+        linux_instance = next(item for item in worker_service["instances"] if item["instance_id"] == "worker-linux-local:runs")
+        self.assertEqual(linux_instance["runtime_dependencies"]["codex_cli"]["state"], "degraded")
+        self.assertEqual(
+            linux_instance["runtime_dependencies"]["codex_cli"]["login_service_instance_id"],
+            "worker-linux-local:runs",
+        )
 
     def test_start_worker_runtime_login_session_creates_pending_request(self) -> None:
         session_factory = create_session_factory(self.database_url)

@@ -27,7 +27,6 @@ def _settings(database_url: str) -> Settings:
         knowledge_jira_sync_poll_seconds=30,
         knowledge_jira_sync_max_issues=200,
         knowledge_jira_sync_invalid_token_backoff_seconds=21600,
-        codex_model="gpt-5.4",
         codex_reasoning_effort="medium",
     )
 

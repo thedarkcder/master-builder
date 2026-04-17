@@ -339,7 +339,7 @@ class KnowledgeJiraSyncRuntime:
             effective_policy = resolve_effective_policy(
                 tenant_policy=dict(tenant.policy_config or {}),
                 project_overrides=dict(project.policy_overrides or {}),
-                default_codex_model=getattr(self._settings, "codex_model", None),
+                default_codex_model=None,
                 default_codex_reasoning_effort=getattr(self._settings, "codex_reasoning_effort", None),
             )
             if not bool(effective_policy.get("knowledge_base_enabled", True)):

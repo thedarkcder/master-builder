@@ -456,6 +456,10 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 path="/api/admin/tenants/example/health",
                 auth=admin,
             ),
+            ("GET", "/api/admin/tenants/{tenant_id}/notifications"): RouteScenario(
+                path="/api/admin/tenants/example/notifications",
+                auth=admin,
+            ),
             ("GET", "/api/admin/tenants/{tenant_id}/delivery-summary"): RouteScenario(
                 path="/api/admin/tenants/example/delivery-summary",
                 auth=admin,

@@ -603,6 +603,7 @@ class WorkerTests(unittest.TestCase):
             sentry_release=None,
             agent_id="worker-test",
             codex_cli_command="codex",
+            runtime_home="/tmp/master-builder-test-runtime-home",
         )
         listener = MagicMock()
         wait_calls = {"count": 0}
@@ -696,6 +697,7 @@ class WorkerTests(unittest.TestCase):
             sentry_release=None,
             agent_id="worker-test",
             codex_cli_command="codex",
+            runtime_home="/tmp/master-builder-test-runtime-home",
         )
         listener = MagicMock()
         wait_calls = {"count": 0}
@@ -815,6 +817,7 @@ class WorkerTests(unittest.TestCase):
             sentry_release=None,
             agent_id="worker-test",
             codex_cli_command="codex",
+            runtime_home="/tmp/master-builder-test-runtime-home",
             worker_poll_interval_seconds=5,
         )
         listener = MagicMock()
@@ -933,6 +936,7 @@ class WorkerTests(unittest.TestCase):
             sentry_release=None,
             agent_id="worker-test",
             codex_cli_command="codex",
+            runtime_home="/tmp/master-builder-test-runtime-home",
             worker_poll_interval_seconds=5,
         )
         listener = MagicMock()
@@ -1995,6 +1999,7 @@ class WorkerRuntimeRegistryTests(unittest.TestCase):
             worker_capabilities="linux",
             worker_runtime_kinds="codex_cli",
             codex_cli_command="codex",
+            runtime_home="/tmp/master-builder-test-runtime-home",
         )
         service_instance_id = "worker-linux-local:runs"
 
@@ -2068,6 +2073,7 @@ class WorkerRuntimeRegistryTests(unittest.TestCase):
             worker_capabilities="linux",
             worker_runtime_kinds="codex_cli",
             codex_cli_command="codex",
+            runtime_home="/tmp/master-builder-test-runtime-home",
         )
         service_instance_id = "worker-linux-local:runs"
 
@@ -2185,6 +2191,7 @@ class WorkerRuntimeRegistryTests(unittest.TestCase):
         settings = SimpleNamespace(
             worker_runtime_kinds="codex_cli",
             codex_cli_command="codex",
+            runtime_home="/tmp/master-builder-test-runtime-home",
             worker_runtime_auth_remediation_ttl_seconds=900,
         )
         service_instance_id = "worker-linux-local:runs"
@@ -2291,6 +2298,7 @@ class WorkerRuntimeRegistryTests(unittest.TestCase):
         settings = SimpleNamespace(
             worker_runtime_kinds="codex_cli",
             codex_cli_command="codex",
+            runtime_home="/tmp/master-builder-test-runtime-home",
             worker_runtime_auth_remediation_ttl_seconds=900,
         )
         service_instance_id = "worker-linux-local:runs"
@@ -2378,6 +2386,7 @@ class WorkerRuntimeRegistryTests(unittest.TestCase):
             worker_capabilities="linux",
             worker_runtime_kinds="codex_cli",
             codex_cli_command="codex",
+            runtime_home="/tmp/master-builder-test-runtime-home",
         )
         service_instance_id = "worker-linux-local:runs"
 
@@ -2419,6 +2428,7 @@ class WorkerRuntimeRegistryTests(unittest.TestCase):
             worker_capabilities="linux",
             worker_runtime_kinds="codex_cli",
             codex_cli_command="codex",
+            runtime_home="/tmp/master-builder-test-runtime-home",
         )
         service_instance_id = "worker-linux-local:runs"
 

@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from orchestrator.api.admin.agent_activity_service import list_agent_activity as list_agent_activity_impl
 from orchestrator.api.admin.alert_policy_service import evaluate_alerts as evaluate_alerts_impl
+from orchestrator.api.admin.notifications_service import list_tenant_notifications as list_tenant_notifications_impl
 from orchestrator.api.admin.observability_service import (
     platform_observability as platform_observability_impl,
     project_observability as project_observability_impl,
@@ -24,6 +25,7 @@ from orchestrator.api.dependencies import get_session
 from orchestrator.api.schemas import (
     AgentActivityRead,
     AlertEvaluationRead,
+    AdminNotificationListRead,
     KnowledgeJiraSyncRuntimeRead,
     PlatformStatusRead,
     PlatformObservabilityRead,
@@ -91,6 +93,20 @@ def evaluate_alerts(
         session=session,
         tenant_id=tenant_id,
         cooldown_seconds=cooldown_seconds,
+    )
+
+
+@router.get("/tenants/{tenant_id}/notifications", response_model=AdminNotificationListRead)
+def list_tenant_notifications(
+    tenant_id: str,
+    status_filter: str | None = Query(default="open", alias="status"),
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> AdminNotificationListRead:
+    return list_tenant_notifications_impl(
+        session=session,
+        tenant_id=tenant_id,
+        status_filter=status_filter,
     )
 
 

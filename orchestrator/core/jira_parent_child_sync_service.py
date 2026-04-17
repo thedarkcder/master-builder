@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 import logging
 import re
 from dataclasses import dataclass
@@ -7,6 +6,7 @@ from dataclasses import field
 from datetime import datetime, timezone
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestrator.api.discord.seed.description import build_parent_feature_description
@@ -30,13 +30,25 @@ from orchestrator.core.parent_feature_brief_store import (
     resolve_parent_feature_brief,
     resolve_parent_feature_case,
 )
+from orchestrator.core.clarification_projection_service import (
+    ClarificationProjectionSpec,
+    clarification_question_reason,
+    clarification_question_text,
+    has_matching_active_clarification_state,
+    resolve_active_clarification_context,
+    upsert_clarification_projection,
+)
 from orchestrator.core.pm_interview_service import (
+    PM_INTERVIEW_PARENT_BRIEF_CHANNEL_ID,
     PM_INTERVIEW_SOURCE_KIND_PARENT_BRIEF_SNAPSHOT,
     PM_INTERVIEW_STATUS_PM_COMPLETED,
     PM_INTERVIEW_STATUS_QUESTION_PENDING,
+    format_pm_interview_question,
+    mark_pm_interview_case_completed,
     normalize_parent_feature_brief_with_runtime,
     upsert_pm_interview_case,
 )
+from orchestrator.core.pm_interview_followup_service import continue_pm_interview_from_followup
 from orchestrator.core.platform_secret_service import (
     PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF,
     resolve_platform_secret_ref,
@@ -45,7 +57,8 @@ from orchestrator.core.parent_feature_planning_workflow import (
     ParentFeaturePlanningWorkflow,
     ParentFeaturePlanningWorkflowDeps,
 )
-from orchestrator.storage.models import Project
+from orchestrator.core.webhook_job_errors import RetryableWebhookJobError
+from orchestrator.storage.models import FollowupContext, Project
 from orchestrator.tools.discord_api import DiscordApiClient, DiscordApiError
 from orchestrator.tools.jira_oauth import JiraIssueDetail
 
@@ -73,6 +86,26 @@ _PARENT_SYNC_MATERIAL_FIELDS = {
     "open question",
 }
 _ISSUE_KEY_PATTERN = re.compile(r"([A-Z][A-Z0-9_]+-\d+)")
+_PM_INTERVIEW_JIRA_TRANSPORT = "jira_issue_comment"
+_PM_INTERVIEW_JIRA_REPLY_SCOPE = "issue_comment_stream_from_root"
+
+
+def _pm_interview_jira_followup_request_id(*, parent_issue_key: str) -> str:
+    return f"pm-interview-jira:{str(parent_issue_key or '').strip().upper()}"
+
+
+def _normalize_comment_id(value: object) -> str | None:
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    if isinstance(value, int):
+        return str(value)
+    return None
+
+
+def _extract_created_comment_id(comment: dict[str, Any] | None) -> str | None:
+    if not isinstance(comment, dict):
+        return None
+    return _normalize_comment_id(comment.get("id"))
 
 @dataclass(frozen=True)
 class JiraParentChildSyncContext:
@@ -105,6 +138,7 @@ class _JiraParentIssueGateway:
         tenant_jira_oauth_context_fn,
         list_child_issue_previews_for_parent_fn,
         post_jira_comment_fn,
+        create_jira_comment_fn,
     ) -> None:
         self._session = session
         self._settings = settings
@@ -112,6 +146,7 @@ class _JiraParentIssueGateway:
         self._tenant_jira_oauth_context_fn = tenant_jira_oauth_context_fn
         self._list_child_issue_previews_for_parent_fn = list_child_issue_previews_for_parent_fn
         self._post_jira_comment_fn = post_jira_comment_fn
+        self._create_jira_comment_fn = create_jira_comment_fn
         self._oauth = None
 
     def _oauth_context(self):
@@ -146,7 +181,7 @@ class _JiraParentIssueGateway:
         brief_payload: dict[str, object],
         sync_status: str,
         planning_state: str | None,
-        open_questions: list[str] | None,
+        open_questions: list[object] | None,
     ) -> None:
         _rewrite_parent_issue_from_brief(
             oauth=self._oauth_context(),
@@ -164,7 +199,7 @@ class _JiraParentIssueGateway:
             target_label=target_label,
         )
 
-    def post_parent_brief_questions(self, *, parent_issue_key: str, questions: list[str]) -> bool:
+    def post_parent_brief_questions(self, *, parent_issue_key: str, questions: list[object]) -> bool:
         return _post_parent_brief_questions_to_discord(
             session=self._session,
             settings=self._settings,
@@ -172,6 +207,40 @@ class _JiraParentIssueGateway:
             project_id=self._context.project_id,
             parent_issue_key=parent_issue_key,
             questions=questions,
+        )
+
+    def post_parent_brief_questions_jira(
+        self,
+        *,
+        parent_issue_key: str,
+        questions: list[object],
+    ) -> tuple[dict[str, Any] | None, str | None]:
+        created_comment, error = _post_parent_brief_questions_to_jira(
+            session=self._session,
+            tenant=self._context.tenant,
+            project_id=self._context.project_id,
+            issue_key=parent_issue_key,
+            payload=dict(self._context.payload or {}),
+            questions=questions,
+            settings=self._settings,
+            create_jira_comment_fn=self._create_jira_comment_fn,
+        )
+        return created_comment, error
+
+    def has_matching_active_pm_clarification_state(
+        self,
+        *,
+        parent_issue_key: str,
+        questions: list[object],
+    ) -> bool:
+        return has_matching_active_clarification_state(
+            session=self._session,
+            tenant_id=self._context.tenant_id,
+            issue_key=parent_issue_key,
+            context_type=FOLLOWUP_CONTEXT_PM_INTERVIEW,
+            questions=questions,
+            transport=_PM_INTERVIEW_JIRA_TRANSPORT,
+            reply_scope=_PM_INTERVIEW_JIRA_REPLY_SCOPE,
         )
 
     def post_sync_note(self, *, issue_key: str, body: str) -> None:
@@ -538,6 +607,235 @@ def _sync_note(*, body: str) -> str:
     return f"{_SYSTEM_COMMENT_MARKER} {body}".strip()
 
 
+def _extract_jira_issue_mention_target(*, payload: dict[str, Any]) -> tuple[str | None, str | None]:
+    issue = payload.get("issue") if isinstance(payload, dict) else None
+    fields = issue.get("fields") if isinstance(issue, dict) and isinstance(issue.get("fields"), dict) else {}
+    for field_name in ("reporter", "assignee"):
+        actor = fields.get(field_name)
+        if not isinstance(actor, dict):
+            continue
+        account_id = str(actor.get("accountId") or "").strip() or None
+        display_name = str(actor.get("displayName") or "").strip() or None
+        if account_id:
+            return account_id, display_name
+    return None, None
+
+
+def _question_text(value: object) -> str:
+    return clarification_question_text(value)
+
+
+def _question_why_it_matters(value: object) -> str | None:
+    return clarification_question_reason(value)
+
+
+def _build_jira_question_list_items(*, questions: list[object]) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for raw_question in questions:
+        question_text = _question_text(raw_question)
+        if not question_text:
+            continue
+        list_item_content: list[dict[str, Any]] = [
+            {
+                "type": "paragraph",
+                "content": [{"type": "text", "text": question_text}],
+            }
+        ]
+        why_it_matters = _question_why_it_matters(raw_question)
+        if why_it_matters:
+            list_item_content.append(
+                {
+                    "type": "paragraph",
+                    "content": [{"type": "text", "text": f"Why it matters: {why_it_matters}"}],
+                }
+            )
+        items.append({"type": "listItem", "content": list_item_content})
+    return items
+
+
+def _jira_question_comment_adf(
+    *,
+    issue_key: str,
+    questions: list[object],
+    mention_account_id: str | None,
+    mention_display_name: str | None,
+    intro_text: str | None = None,
+) -> dict[str, Any]:
+    intro_content: list[dict[str, Any]] = [
+        {
+            "type": "text",
+            "text": f"{_SYSTEM_COMMENT_MARKER} ",
+        }
+    ]
+    if mention_account_id:
+        intro_content.append(
+            {
+                "type": "mention",
+                "attrs": {
+                    "id": mention_account_id,
+                    "text": f"@{mention_display_name or 'reporter'}",
+                },
+            }
+        )
+        intro_content.append({"type": "text", "text": " "})
+    intro_content.append(
+        {
+            "type": "text",
+            "text": intro_text
+            or (
+                f"Master Builder needs product clarification on {issue_key} before PM planning can continue. "
+                "Please reply on this Jira issue with answers to the questions below."
+            ),
+        }
+    )
+    question_items = _build_jira_question_list_items(questions=questions)
+    content: list[dict[str, Any]] = [
+        {"type": "paragraph", "content": intro_content},
+        {"type": "orderedList", "content": question_items},
+    ]
+    return {"type": "doc", "version": 1, "content": content}
+
+
+def _post_parent_brief_questions_to_jira(
+    *,
+    session: Session,
+    tenant,
+    project_id: str | None,
+    issue_key: str,
+    payload: dict[str, Any],
+    questions: list[object],
+    settings,  # noqa: ANN001
+    create_jira_comment_fn,
+) -> tuple[dict[str, Any] | None, str | None]:  # noqa: ANN001
+    mention_account_id, mention_display_name = _extract_jira_issue_mention_target(payload=payload)
+    comment = _jira_question_comment_adf(
+        issue_key=issue_key,
+        questions=questions,
+        mention_account_id=mention_account_id,
+        mention_display_name=mention_display_name,
+    )
+    created_comment, error = create_jira_comment_fn(
+        session=session,
+        tenant=tenant,
+        issue_key=issue_key,
+        comment=comment,
+        settings=settings,
+    )
+    if error is None:
+        _persist_parent_brief_jira_followup(
+            session=session,
+            tenant=tenant,
+            project_id=project_id,
+            parent_issue_key=issue_key,
+            questions=questions,
+            posted_comment_id=_extract_created_comment_id(created_comment),
+        )
+    return created_comment, error
+
+
+def _post_engineering_clarification_questions_to_jira(
+    *,
+    session: Session,
+    tenant,
+    issue_key: str,
+    payload: dict[str, Any],
+    questions: list[object],
+    settings,  # noqa: ANN001
+    create_jira_comment_fn,
+) -> tuple[dict[str, Any] | None, str | None]:  # noqa: ANN001
+    mention_account_id, mention_display_name = _extract_jira_issue_mention_target(payload=payload)
+    comment = _jira_question_comment_adf(
+        issue_key=issue_key,
+        questions=questions,
+        mention_account_id=mention_account_id,
+        mention_display_name=mention_display_name,
+        intro_text=(
+            f"Engineering child tickets need product clarification on {issue_key} before engineering can resume. "
+            "Please reply on this Jira issue with answers to the questions below."
+        ),
+    )
+    return create_jira_comment_fn(
+        session=session,
+        tenant=tenant,
+        issue_key=issue_key,
+        comment=comment,
+        settings=settings,
+    )
+
+
+def _persist_parent_brief_jira_followup(
+    *,
+    session: Session,
+    tenant,
+    project_id: str | None,
+    parent_issue_key: str,
+    questions: list[object],
+    posted_comment_id: str | None,
+) -> None:
+    parent_case = resolve_parent_feature_case(
+        session=session,
+        tenant_id=str(getattr(tenant, "tenant_id", "") or ""),
+        parent_issue_key=parent_issue_key,
+    )
+    existing_request_id = str(getattr(parent_case, "request_id", "") or "").strip() or None
+    existing_source_kind = str(getattr(parent_case, "source_kind", "") or "").strip()
+    pm_request_id = (
+        existing_request_id
+        if existing_request_id and existing_source_kind != PM_INTERVIEW_SOURCE_KIND_PARENT_BRIEF_SNAPSHOT
+        else f"pm-parent-interview:{parent_issue_key}"
+    )
+    owner_user_id = str(getattr(parent_case, "owner_user_id", "") or "").strip() or None
+    root_message_id = str(getattr(parent_case, "root_message_id", "") or "").strip() or posted_comment_id or None
+    interview_case = upsert_pm_interview_case(
+        session=session,
+        tenant_id=str(getattr(tenant, "tenant_id", "") or ""),
+        project_id=project_id,
+        request_id=pm_request_id,
+        source_kind="jira_parent",
+        channel_id=str(getattr(parent_case, "channel_id", "") or "").strip() or PM_INTERVIEW_PARENT_BRIEF_CHANNEL_ID,
+        thread_channel_id=str(getattr(parent_case, "thread_channel_id", "") or "").strip() or None,
+        root_message_id=root_message_id,
+        owner_user_id=owner_user_id,
+        parent_issue_key=parent_issue_key,
+        source_text=str(getattr(parent_case, "source_text", "") or "") or f"Parent issue {parent_issue_key} requires PM clarification.",
+        status=PM_INTERVIEW_STATUS_QUESTION_PENDING,
+        brief=resolve_parent_feature_brief(
+            session=session,
+            tenant_id=str(getattr(tenant, "tenant_id", "") or ""),
+            parent_issue_key=parent_issue_key,
+            include_incomplete=True,
+        ),
+        notes={
+            "source": "jira_parent_brief_normalization",
+            "normalization_questions": list(questions),
+        },
+    )
+    upsert_clarification_projection(
+        session=session,
+        spec=ClarificationProjectionSpec(
+            tenant_id=str(getattr(tenant, "tenant_id", "") or ""),
+            project_id=project_id,
+            context_type=FOLLOWUP_CONTEXT_PM_INTERVIEW,
+            issue_key=parent_issue_key,
+            request_id=_pm_interview_jira_followup_request_id(parent_issue_key=parent_issue_key),
+            channel_id=parent_issue_key,
+            thread_channel_id=None,
+            root_message_id=posted_comment_id,
+            owner_user_id=owner_user_id or None,
+            origin_command="pm",
+            transport=_PM_INTERVIEW_JIRA_TRANSPORT,
+            reply_scope=_PM_INTERVIEW_JIRA_REPLY_SCOPE,
+            questions=questions,
+            metadata={
+                "parent_issue_key": parent_issue_key,
+                "questions": [item for item in questions if _question_text(item)],
+                "source": "jira_parent_brief_normalization",
+                "pm_request_id": str(getattr(interview_case, "request_id", "") or "").strip() or pm_request_id,
+            },
+        ),
+    )
+
+
 def _post_sync_note(
     *,
     session: Session,
@@ -574,6 +872,30 @@ def _engineering_decision_note(
     if rationale.strip():
         lines.append(f"- Rationale: {rationale.strip()}")
     return "\n".join(lines)
+
+
+def _active_issue_followup_contexts(
+    *,
+    session: Session,
+    tenant_id: str,
+    issue_key: str,
+    context_type: str,
+) -> list[FollowupContext]:
+    normalized_tenant_id = str(tenant_id or "").strip()
+    normalized_issue_key = str(issue_key or "").strip().upper()
+    normalized_context_type = str(context_type or "").strip()
+    if not normalized_tenant_id or not normalized_issue_key or not normalized_context_type:
+        return []
+    return session.execute(
+        select(FollowupContext)
+        .where(
+            FollowupContext.tenant_id == normalized_tenant_id,
+            FollowupContext.issue_key == normalized_issue_key,
+            FollowupContext.context_type == normalized_context_type,
+            FollowupContext.status == "active",
+        )
+        .order_by(FollowupContext.updated_at.desc())
+    ).scalars().all()
 
 
 def _load_child_details(
@@ -678,7 +1000,7 @@ def _resolve_parent_product_brief(
     parent_detail: JiraIssueDetail,
     build_runtime_for_selector_fn,
     refresh: bool = False,
-) -> tuple[dict[str, object], list[str]]:
+) -> tuple[dict[str, object], list[object]]:
     canonical_brief = None if refresh else resolve_parent_feature_brief(
         session=session,
         tenant_id=tenant_id,
@@ -711,7 +1033,7 @@ def _resolve_parent_product_brief(
         ),
     )
     brief_payload = dict(normalization.get("brief") or {})
-    open_questions = [str(value).strip() for value in normalization.get("open_questions", []) if str(value).strip()]
+    open_questions = [value for value in normalization.get("open_questions", []) if _question_text(value)]
     persist_parent_feature_brief_snapshot(
         session=session,
         tenant_id=tenant_id,
@@ -737,12 +1059,13 @@ def _rewrite_parent_issue_from_brief(
     planning_state: str | None = None,
     architecture_summary: list[str] | None = None,
     architecture_diagram: str | None = None,
-    open_questions: list[str] | None = None,
+    open_questions: list[object] | None = None,
 ) -> None:
+    labels = list(parent_detail.labels or [])
     normalized_open_questions = [
-        str(value).strip()
+        _question_text(value)
         for value in (open_questions if open_questions is not None else brief_payload.get("open_questions", []))
-        if str(value).strip()
+        if _question_text(value)
     ]
     description = build_parent_feature_description(
         objective=str(brief_payload.get("objective") or "").strip(),
@@ -793,18 +1116,20 @@ def _rewrite_parent_issue_from_brief(
         architecture_summary=architecture_summary,
         architecture_diagram=architecture_diagram,
     )
+    if str(parent_detail.description or "") == description and labels == list(parent_detail.labels or []):
+        return
     oauth.client.update_issue_fields(
         access_token=oauth.access_token,
         cloud_id=oauth.connection.cloud_id,
         issue_id_or_key=parent_detail.key,
         summary=parent_detail.summary,
         description=description,
-        labels=list(parent_detail.labels or []),
+        labels=labels,
     )
 
 
-def _format_parent_brief_questions_for_discord(*, parent_issue_key: str, questions: list[str]) -> str:
-    question_lines = "\n".join(f"- {value}" for value in questions if value.strip())
+def _format_parent_brief_questions_for_discord(*, parent_issue_key: str, questions: list[object]) -> str:
+    question_lines = "\n".join(f"- {_question_text(value)}" for value in questions if _question_text(value))
     return (
         f"Decision needed for `{parent_issue_key}` before I can finish backlog planning.\n"
         "Please reply in this thread with the missing product behavior:\n"
@@ -819,7 +1144,7 @@ def _post_parent_brief_questions_to_discord(
     tenant,
     project_id: str | None,
     parent_issue_key: str,
-    questions: list[str],
+    questions: list[object],
 ) -> bool:
     if not questions:
         return False
@@ -930,23 +1255,26 @@ def _post_parent_brief_questions_to_discord(
             "normalization_questions": list(questions),
         },
     )
-    upsert_followup_context(
+    upsert_clarification_projection(
         session=session,
-        tenant_id=str(getattr(tenant, "tenant_id", "") or ""),
-        project_id=project_id,
-        context_type=FOLLOWUP_CONTEXT_PM_INTERVIEW,
-        channel_id=root_channel_id,
-        thread_channel_id=thread_channel_id if thread_channel_id != root_channel_id else None,
-        root_message_id=str(getattr(interview_case, "root_message_id", "") or "").strip() or None,
-        owner_user_id=owner_user_id or None,
-        origin_command="pm",
-        issue_key=parent_issue_key,
-        request_id=str(getattr(interview_case, "request_id", "") or "").strip() or None,
-        metadata={
-            "parent_issue_key": parent_issue_key,
-            "questions": list(questions),
-            "source": "jira_parent_brief_normalization",
-        },
+        spec=ClarificationProjectionSpec(
+            tenant_id=str(getattr(tenant, "tenant_id", "") or ""),
+            project_id=project_id,
+            context_type=FOLLOWUP_CONTEXT_PM_INTERVIEW,
+            issue_key=parent_issue_key,
+            request_id=str(getattr(interview_case, "request_id", "") or "").strip() or None,
+            channel_id=root_channel_id,
+            thread_channel_id=thread_channel_id if thread_channel_id != root_channel_id else None,
+            root_message_id=str(getattr(interview_case, "root_message_id", "") or "").strip() or None,
+            owner_user_id=owner_user_id or None,
+            origin_command="pm",
+            questions=questions,
+            metadata={
+                "parent_issue_key": parent_issue_key,
+                "questions": list(questions),
+                "source": "jira_parent_brief_normalization",
+            },
+        ),
     )
     if project is not None:
         tenant.updated_at = datetime.now(timezone.utc)
@@ -984,6 +1312,7 @@ def handle_parent_feature_sync(
     build_runtime_for_selector_fn,
     seed_issues_with_runtime_fn,
     post_jira_comment_fn,
+    create_jira_comment_fn,
 ) -> JiraParentChildSyncResult:  # noqa: ANN001
     issue_gateway = _JiraParentIssueGateway(
         session=session,
@@ -992,6 +1321,7 @@ def handle_parent_feature_sync(
         tenant_jira_oauth_context_fn=tenant_jira_oauth_context_fn,
         list_child_issue_previews_for_parent_fn=list_child_issue_previews_for_parent_fn,
         post_jira_comment_fn=post_jira_comment_fn,
+        create_jira_comment_fn=create_jira_comment_fn,
     )
     brief_planner = _ParentBriefPlanner(
         session=session,
@@ -1155,62 +1485,71 @@ def handle_engineering_clarification_command(
             "requested_at": datetime.now(timezone.utc).isoformat(),
         }
     )
+    clarification_questions = [
+        {"question": str(item.get("stakeholder_question") or "").strip()}
+        for item in question_entries
+        if str(item.get("stakeholder_question") or "").strip()
+    ]
     affected_child_keys = {
         *[str(value).strip().upper() for value in metadata.get("affected_child_keys", []) if str(value).strip()],
         child_detail.key.upper(),
     }
-    merged_metadata = {
-        **metadata,
-        "parent_issue_key": parent_issue_key,
-        "project_id": context.project_id,
-        "project_key": _project_key_for_issue(parent_issue_key),
-        "affected_child_keys": sorted(affected_child_keys),
-        "questions": question_entries,
-        "parent_updated": False,
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-    }
-    upsert_followup_context(
+    projection = upsert_clarification_projection(
         session=session,
-        tenant_id=context.tenant_id,
-        project_id=context.project_id,
-        context_type=FOLLOWUP_CONTEXT_ENGINEERING_CLARIFICATION,
-        origin_command="clarify",
-        issue_key=parent_issue_key,
-        request_id=f"engineering-clarification:{parent_issue_key}",
-        metadata=merged_metadata,
+        spec=ClarificationProjectionSpec(
+            tenant_id=context.tenant_id,
+            project_id=context.project_id,
+            context_type=FOLLOWUP_CONTEXT_ENGINEERING_CLARIFICATION,
+            issue_key=parent_issue_key,
+            request_id=f"engineering-clarification:{parent_issue_key}",
+            origin_command="clarify",
+            questions=clarification_questions,
+            metadata={
+                **metadata,
+                "parent_issue_key": parent_issue_key,
+                "project_id": context.project_id,
+                "project_key": _project_key_for_issue(parent_issue_key),
+                "affected_child_keys": sorted(affected_child_keys),
+                "questions": question_entries,
+                "parent_updated": False,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            },
+        ),
     )
     session.commit()
-    _post_sync_note(
-        session=session,
-        tenant=context.tenant,
-        issue_key=parent_issue_key,
-        settings=settings,
-        body=(
-            f"Engineering needs a product clarification for child {child_detail.key}. "
-            f"Reply on this parent issue with the decision: {stakeholder_question}"
-        ),
-        post_jira_comment_fn=post_jira_comment_fn,
-    )
-    posted_to_discord = _post_parent_brief_questions_to_discord(
-        session=session,
-        settings=settings,
-        tenant=context.tenant,
-        project_id=context.project_id,
-        parent_issue_key=parent_issue_key,
-        questions=[stakeholder_question],
-    )
-    if not posted_to_discord:
+    posted_to_discord = True
+    if not projection.already_projected:
         _post_sync_note(
             session=session,
             tenant=context.tenant,
             issue_key=parent_issue_key,
             settings=settings,
             body=(
-                "Discord PM follow-up could not be created for this clarification. "
-                "Continue the decision on the parent Jira issue for now."
+                f"Engineering needs a product clarification for child {child_detail.key}. "
+                f"Reply on this parent issue with the decision: {stakeholder_question}"
             ),
             post_jira_comment_fn=post_jira_comment_fn,
         )
+        posted_to_discord = _post_parent_brief_questions_to_discord(
+            session=session,
+            settings=settings,
+            tenant=context.tenant,
+            project_id=context.project_id,
+            parent_issue_key=parent_issue_key,
+            questions=[stakeholder_question],
+        )
+        if not posted_to_discord:
+            _post_sync_note(
+                session=session,
+                tenant=context.tenant,
+                issue_key=parent_issue_key,
+                settings=settings,
+                body=(
+                    "Discord PM follow-up could not be created for this clarification. "
+                    "Continue the decision on the parent Jira issue for now."
+                ),
+                post_jira_comment_fn=post_jira_comment_fn,
+            )
     _post_sync_note(
         session=session,
         tenant=context.tenant,
@@ -1246,6 +1585,7 @@ def handle_engineering_clarification_reply(
     tenant_jira_oauth_context_fn,
     seed_issues_with_runtime_fn,
     post_jira_comment_fn,
+    create_jira_comment_fn,
     extract_jira_comment_text_fn,
 ) -> JiraParentChildSyncResult:  # noqa: ANN001
     if context.comment_command is not None:
@@ -1338,32 +1678,47 @@ def handle_engineering_clarification_reply(
         )
 
     if bool(seed_data.get("requires_input")):
+        questions = [value for value in seed_data.get("questions", []) if _question_text(value)]
         _mark_issues_sync_blocked(oauth=oauth, issue_keys=[context.issue_key, *affected_child_keys])
         metadata["parent_updated"] = bool(seed_data.get("updated_parent") or seed_data.get("created_parent"))
         metadata["updated_at"] = datetime.now(timezone.utc).isoformat()
-        upsert_followup_context(
+        projection = upsert_clarification_projection(
             session=session,
-            tenant_id=context.tenant_id,
-            project_id=context.project_id,
-            context_type=FOLLOWUP_CONTEXT_ENGINEERING_CLARIFICATION,
-            origin_command="clarify",
-            issue_key=context.issue_key,
-            request_id=f"engineering-clarification:{context.issue_key}",
-            metadata=metadata,
-        )
-        session.commit()
-        questions = [str(value).strip() for value in seed_data.get("questions", []) if str(value).strip()]
-        _post_sync_note(
-            session=session,
-            tenant=context.tenant,
-            issue_key=context.issue_key,
-            settings=settings,
-            body=(
-                "Clarification reply was recorded, but more product detail is still required before engineering can resume. "
-                f"{' '.join(questions)}"
+            spec=ClarificationProjectionSpec(
+                tenant_id=context.tenant_id,
+                project_id=context.project_id,
+                context_type=FOLLOWUP_CONTEXT_ENGINEERING_CLARIFICATION,
+                issue_key=context.issue_key,
+                request_id=f"engineering-clarification:{context.issue_key}",
+                origin_command="clarify",
+                questions=questions,
+                metadata=metadata,
             ),
-            post_jira_comment_fn=post_jira_comment_fn,
         )
+        metadata = dict(projection.metadata)
+        if not projection.already_projected:
+            created_comment, error = _post_engineering_clarification_questions_to_jira(
+                session=session,
+                tenant=context.tenant,
+                issue_key=context.issue_key,
+                payload=dict(context.payload or {}),
+                questions=questions,
+                settings=settings,
+                create_jira_comment_fn=create_jira_comment_fn,
+            )
+            if error is None:
+                metadata["jira_comment_id"] = _extract_created_comment_id(created_comment)
+                upsert_followup_context(
+                    session=session,
+                    tenant_id=context.tenant_id,
+                    project_id=context.project_id,
+                    context_type=FOLLOWUP_CONTEXT_ENGINEERING_CLARIFICATION,
+                    origin_command="clarify",
+                    issue_key=context.issue_key,
+                    request_id=f"engineering-clarification:{context.issue_key}",
+                    metadata=metadata,
+                )
+        session.commit()
         return JiraParentChildSyncResult(
             handled=True,
             reason="engineering_clarification_still_open",
@@ -1409,6 +1764,313 @@ def handle_engineering_clarification_reply(
         reason="engineering_clarification_resolved",
         extra={
             "parent_issue_key": context.issue_key,
+            "updated_children": changed_children,
+            "parent_revision": seed_data.get("parent_revision"),
+            "children_sync_status": seed_data.get("children_sync_status"),
+            "webhook_event": context.webhook_event,
+        },
+    )
+
+
+def handle_pm_interview_reply(
+    *,
+    context: JiraParentChildSyncContext,
+    session: Session,
+    settings,  # noqa: ANN001
+    tenant_jira_oauth_context_fn,
+    build_runtime_for_selector_fn,
+    seed_issues_with_runtime_fn,
+    post_jira_comment_fn,
+    create_jira_comment_fn,
+    extract_jira_comment_text_fn,
+    extract_jira_comment_id_fn,
+) -> JiraParentChildSyncResult:  # noqa: ANN001
+    if context.comment_command is not None:
+        return JiraParentChildSyncResult(handled=False)
+    if not context.project_id or context.webhook_event not in {"comment_created", "comment_updated"}:
+        return JiraParentChildSyncResult(handled=False)
+
+    comment_body = str(extract_jira_comment_text_fn(context.payload) or "").strip()
+    if not comment_body or is_system_generated_comment(text=comment_body):
+        return JiraParentChildSyncResult(handled=False)
+
+    jira_followup = resolve_active_clarification_context(
+        session=session,
+        tenant_id=context.tenant_id,
+        issue_key=context.issue_key,
+        context_type=FOLLOWUP_CONTEXT_PM_INTERVIEW,
+        transport=_PM_INTERVIEW_JIRA_TRANSPORT,
+        reply_scope=_PM_INTERVIEW_JIRA_REPLY_SCOPE,
+    )
+    pm_request_id = None
+    if jira_followup is not None:
+        metadata = dict(getattr(jira_followup, "metadata_json", {}) or {})
+        pm_request_id = str(metadata.get("pm_request_id") or "").strip() or None
+    if not pm_request_id:
+        legacy_case = resolve_parent_feature_case(
+            session=session,
+            tenant_id=context.tenant_id,
+            parent_issue_key=context.issue_key,
+        )
+        if legacy_case is None or str(getattr(legacy_case, "status", "") or "").strip() != PM_INTERVIEW_STATUS_QUESTION_PENDING:
+            return JiraParentChildSyncResult(handled=False)
+        pm_request_id = str(getattr(legacy_case, "request_id", "") or "").strip() or None
+    if not pm_request_id:
+        return JiraParentChildSyncResult(handled=False)
+
+    runtime = build_runtime_for_selector_fn(
+        session=session,
+        settings=settings,
+        tenant_id=context.tenant_id,
+        project_id=context.project_id,
+        selector="discord.pm_answer",
+        agent_role="pm",
+        agent_name="pm_primary",
+    )
+    comment_id = extract_jira_comment_id_fn(context.payload)
+    project_key = _project_key_for_issue(context.issue_key)
+    try:
+        followup_result = continue_pm_interview_from_followup(
+            session=session,
+            runtime=runtime,
+            tenant_id=context.tenant_id,
+            project_id=context.project_id,
+            request_id=pm_request_id,
+            reply_text=comment_body,
+            source_transport="jira_comment",
+            source_ref=comment_id or context.delivery_id,
+            actor_ref=str(context.payload.get("comment", {}).get("author", {}).get("accountId") or "").strip() or None,
+            invocation_context=AgentInvocationContext(
+                channel="jira",
+                tenant_id=context.tenant_id,
+                project_id=context.project_id,
+                command="pm",
+                stage="interview",
+                working_dir=".",
+                issue_key=context.issue_key,
+            ),
+            project_keys=[project_key],
+            issues=[],
+            status_counts={},
+            settings=settings,
+        )
+    except CodexRuntimeError as exc:
+        logger.warning(
+            "jira_pm_interview_reply_retryable_failure request_id=%s tenant_id=%s issue_key=%s error=%s",
+            context.request_id,
+            context.tenant_id,
+            context.issue_key,
+            exc,
+        )
+        raise RetryableWebhookJobError(str(exc), retry_after_seconds=30) from exc
+    except Exception as exc:  # noqa: BLE001
+        logger.exception(
+            "jira_pm_interview_reply_failed request_id=%s tenant_id=%s issue_key=%s error=%s",
+            context.request_id,
+            context.tenant_id,
+            context.issue_key,
+            exc,
+        )
+        return JiraParentChildSyncResult(
+            handled=True,
+            reason="pm_interview_reply_failed",
+            extra={"error": str(exc), "webhook_event": context.webhook_event},
+        )
+
+    oauth = tenant_jira_oauth_context_fn(session=session, tenant=context.tenant, settings=settings)
+    parent_detail = oauth.client.get_issue_detail(
+        access_token=oauth.access_token,
+        cloud_id=oauth.connection.cloud_id,
+        issue_id_or_key=context.issue_key,
+    )
+    brief_payload = followup_result.assessment.brief.to_payload()
+    next_questions: list[object] = []
+    if followup_result.assessment.next_question is not None:
+        next_questions.append(format_pm_interview_question(followup_result.assessment.next_question))
+    if not next_questions:
+        next_questions = [str(value).strip() for value in brief_payload.get("open_questions", []) if str(value).strip()]
+
+    if not followup_result.assessment.ready_to_write:
+        _update_issue_sync_label(
+            oauth=oauth,
+            issue_detail=parent_detail,
+            target_label="sync-blocked",
+        )
+        error = None
+        if not has_matching_active_clarification_state(
+            session=session,
+            tenant_id=context.tenant_id,
+            issue_key=context.issue_key,
+            context_type=FOLLOWUP_CONTEXT_PM_INTERVIEW,
+            questions=next_questions,
+            transport=_PM_INTERVIEW_JIRA_TRANSPORT,
+            reply_scope=_PM_INTERVIEW_JIRA_REPLY_SCOPE,
+        ):
+            _post_parent_brief_questions_to_discord(
+                session=session,
+                settings=settings,
+                tenant=context.tenant,
+                project_id=context.project_id,
+                parent_issue_key=context.issue_key,
+                questions=next_questions,
+            )
+            _created_comment, error = _post_parent_brief_questions_to_jira(
+                session=session,
+                tenant=context.tenant,
+                project_id=context.project_id,
+                issue_key=context.issue_key,
+                payload=dict(context.payload or {}),
+                questions=next_questions,
+                settings=settings,
+                create_jira_comment_fn=create_jira_comment_fn,
+            )
+        session.commit()
+        return JiraParentChildSyncResult(
+            handled=True,
+            reason="pm_interview_still_open",
+            extra={
+                "questions": next_questions,
+                "comment_posted": error is None,
+                "webhook_event": context.webhook_event,
+            },
+        )
+
+    persist_parent_feature_brief_snapshot(
+        session=session,
+        tenant_id=context.tenant_id,
+        project_id=context.project_id,
+        parent_issue_key=context.issue_key,
+        source_text=parent_detail.description or comment_body,
+        brief=brief_payload,
+        notes={"source": "jira_pm_interview_reply"},
+        status=PM_INTERVIEW_STATUS_PM_COMPLETED,
+    )
+    _rewrite_parent_issue_from_brief(
+        oauth=oauth,
+        parent_detail=parent_detail,
+        brief_payload=brief_payload,
+        sync_status="children_syncing",
+        planning_state="brief_normalized",
+        open_questions=[],
+    )
+    planner = _ParentBriefPlanner(
+        session=session,
+        settings=settings,
+        context=context,
+        build_runtime_for_selector_fn=build_runtime_for_selector_fn,
+    )
+    child_sync_gateway = _ParentChildSyncGateway(
+        session=session,
+        context=context,
+        seed_issues_with_runtime_fn=seed_issues_with_runtime_fn,
+    )
+    try:
+        planning_result, planning_package = planner.plan_backlog_parent(
+            parent_detail=parent_detail,
+            product_brief=brief_payload,
+            project_key=project_key,
+        )
+        seed_data = child_sync_gateway.seed_parent_backlog_children(
+            parent_detail=parent_detail,
+            project_key=project_key,
+            planning_package=planning_package,
+            planning_state=planning_result.planning_state,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception(
+            "jira_pm_interview_followup_seed_failed request_id=%s tenant_id=%s issue_key=%s error=%s",
+            context.request_id,
+            context.tenant_id,
+            context.issue_key,
+            exc,
+        )
+        _update_issue_sync_label(
+            oauth=oauth,
+            issue_detail=parent_detail,
+            target_label="sync-blocked",
+        )
+        _post_sync_note(
+            session=session,
+            tenant=context.tenant,
+            issue_key=context.issue_key,
+            settings=settings,
+            body=f"PM clarification was recorded, but backlog planning failed: {exc}",
+            post_jira_comment_fn=post_jira_comment_fn,
+        )
+        session.commit()
+        return JiraParentChildSyncResult(
+            handled=True,
+            reason="pm_interview_followup_seed_failed",
+            extra={"error": str(exc), "webhook_event": context.webhook_event},
+        )
+
+    if planning_result.planning_state != PLANNING_STATE_COMPLETED or bool(seed_data.get("requires_input")):
+        _update_issue_sync_label(
+            oauth=oauth,
+            issue_detail=parent_detail,
+            target_label="sync-blocked",
+        )
+        _post_sync_note(
+            session=session,
+            tenant=context.tenant,
+            issue_key=context.issue_key,
+            settings=settings,
+            body=(
+                "PM clarification was recorded, but backlog planning could not complete from the confirmed brief. "
+                "Internal follow-up is required before engineering child tickets can be refreshed."
+            ),
+            post_jira_comment_fn=post_jira_comment_fn,
+        )
+        session.commit()
+        return JiraParentChildSyncResult(
+            handled=True,
+            reason="pm_interview_followup_planning_blocked",
+            extra={
+                "parent_revision": seed_data.get("parent_revision"),
+                "children_sync_status": seed_data.get("children_sync_status"),
+                "webhook_event": context.webhook_event,
+            },
+        )
+
+    mark_pm_interview_case_completed(
+        session=session,
+        tenant_id=context.tenant_id,
+        request_id=pm_request_id,
+        parent_issue_key=context.issue_key,
+        notes={"source": "jira_pm_interview_reply"},
+    )
+    close_followup_contexts(
+        session=session,
+        tenant_id=context.tenant_id,
+        context_type=FOLLOWUP_CONTEXT_PM_INTERVIEW,
+        issue_key=context.issue_key,
+    )
+    updated_children, created_children, changed_children = child_sync_gateway.combined_child_updates(seed_data=seed_data)
+    _post_sync_note(
+        session=session,
+        tenant=context.tenant,
+        issue_key=context.issue_key,
+        settings=settings,
+        body=(
+            "Product clarification was applied and backlog planning is current again. "
+            f"{child_sync_gateway.sync_completion_note(updated_children=updated_children, created_children=created_children)}"
+        ),
+        post_jira_comment_fn=post_jira_comment_fn,
+    )
+    for child_key in changed_children:
+        _post_sync_note(
+            session=session,
+            tenant=context.tenant,
+            issue_key=child_key,
+            settings=settings,
+            body=f"Updated from parent feature {context.issue_key} after PM clarification.",
+            post_jira_comment_fn=post_jira_comment_fn,
+        )
+    session.commit()
+    return JiraParentChildSyncResult(
+        handled=True,
+        reason="pm_interview_followup_resolved",
+        extra={
             "updated_children": changed_children,
             "parent_revision": seed_data.get("parent_revision"),
             "children_sync_status": seed_data.get("children_sync_status"),

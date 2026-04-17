@@ -585,8 +585,10 @@ def test_seed_issues_blocks_children_until_planning_completes_and_keeps_parent_p
     assert data["created_children"] == []
     assert len(created) == 1
     parent_description = _adf_text(created[0].description)
-    assert "PM status: pm_completed" in parent_description
-    assert "Planning state: planning_drafting" in parent_description
+    assert "PM Status" in parent_description
+    assert "pm_completed" in parent_description
+    assert "Planning State" in parent_description
+    assert "planning_drafting" in parent_description
     assert "Architecture Context" in parent_description
     assert "Architectural boundaries should stay modular." in parent_description
     assert "Parent[Parent brief] --> Planner[Planning runtime]" in parent_description
