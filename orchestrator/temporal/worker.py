@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+
 from orchestrator.core.config import get_settings
 from orchestrator.temporal.client import connect_temporal_client, temporal_task_queue
 
@@ -23,5 +25,6 @@ async def run_temporal_worker() -> None:
         task_queue=temporal_task_queue(settings),
         workflows=[DevelopmentTeamRunWorkflow],
         activities=[execute_claimed_run_activity, resume_human_input_activity],
+        activity_executor=ThreadPoolExecutor(max_workers=4),
     )
     await worker.run()

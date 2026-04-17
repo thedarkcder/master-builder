@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 from sqlalchemy import select
+from temporalio import activity
 
 from orchestrator.core.config import get_settings
 from orchestrator.core.run_human_input_service import _resume_workflow_from_human_input_answer_legacy
@@ -59,6 +60,7 @@ def _result_for_run(*, session, workflow_id: str, run: Run, claim_id: str | None
     )
 
 
+@activity.defn(name="execute_claimed_run_activity")
 def execute_claimed_run_activity(payload: DevelopmentTeamRunWorkflowInput) -> DevelopmentTeamRunActivityResult:
     settings = get_settings()
     session_factory = create_session_factory()
@@ -120,6 +122,7 @@ def execute_claimed_run_activity(payload: DevelopmentTeamRunWorkflowInput) -> De
             raise
 
 
+@activity.defn(name="resume_human_input_activity")
 def resume_human_input_activity(payload: HumanInputResumeInput) -> DevelopmentTeamRunActivityResult:
     settings = get_settings()
     session_factory = create_session_factory()
