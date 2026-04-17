@@ -39,6 +39,7 @@ from orchestrator.core.decision_state_machine import (
 from orchestrator.core.jira_issue_intake_routing import classify_jira_issue_intake_with_runtime
 from orchestrator.core.observability import reset_log_context, set_log_context
 from orchestrator.core.runtime_invocation import AgentInvocationContext
+from orchestrator.core.webhook_job_errors import RetryableWebhookJobError
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import Tenant
 from orchestrator.storage.run_queue_events import notify_webhook_job_enqueued
@@ -94,39 +95,66 @@ def _maybe_apply_runtime_issue_intake_routing(
         project_id=context.project.project_id if context.project is not None else None,
         selector="workflow.jira_issue_intake_routing",
     )
-    routing = classify_jira_issue_intake_with_runtime(
-        runtime=runtime,
-        issue_key=context.issue_key,
-        issue_summary=str(context.issue_summary or "").strip(),
-        issue_description=str(context.issue_description or "").strip(),
-        issue_status=context.issue_status,
-        issue_labels=context.issue_labels,
-        webhook_event=context.webhook_event,
-        invocation_context=AgentInvocationContext(
-            channel="jira_webhook",
-            tenant_id=context.tenant_id,
-            project_id=context.project.project_id if context.project is not None else None,
-            command="jira_webhook",
-            stage="jira_issue_intake_routing",
-            working_dir=".",
+    try:
+        routing = classify_jira_issue_intake_with_runtime(
+            runtime=runtime,
             issue_key=context.issue_key,
-            issue_description_chars=len(str(context.issue_description or "")),
-        ),
-    )
+            issue_summary=str(context.issue_summary or "").strip(),
+            issue_description=str(context.issue_description or "").strip(),
+            issue_status=context.issue_status,
+            issue_labels=context.issue_labels,
+            webhook_event=context.webhook_event,
+            invocation_context=AgentInvocationContext(
+                channel="jira_webhook",
+                tenant_id=context.tenant_id,
+                project_id=context.project.project_id if context.project is not None else None,
+                command="jira_webhook",
+                stage="jira_issue_intake_routing",
+                working_dir=".",
+                issue_key=context.issue_key,
+                issue_description_chars=len(str(context.issue_description or "")),
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception(
+            "jira_issue_intake_routing_retryable_classification_failure request_id=%s tenant_id=%s issue_key=%s error=%s",
+            context.request_id,
+            context.tenant_id,
+            context.issue_key,
+            exc,
+        )
+        raise RetryableWebhookJobError(
+            "Jira issue intake routing classification failed",
+            retry_after_seconds=45,
+        ) from exc
     target_label = _route_label_for_issue_intake(routing["route"])
     if not target_label or target_label in normalized_labels:
         return None
-    oauth = tenant_jira_oauth_context(
-        session=session,
-        tenant=context.tenant,
-        settings=settings,
-    )
-    oauth.client.add_issue_labels(
-        access_token=oauth.access_token,
-        cloud_id=oauth.connection.cloud_id,
-        issue_id_or_key=context.issue_key,
-        labels=[target_label],
-    )
+    try:
+        oauth = tenant_jira_oauth_context(
+            session=session,
+            tenant=context.tenant,
+            settings=settings,
+        )
+        oauth.client.add_issue_labels(
+            access_token=oauth.access_token,
+            cloud_id=oauth.connection.cloud_id,
+            issue_id_or_key=context.issue_key,
+            labels=[target_label],
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception(
+            "jira_issue_intake_routing_retryable_label_failure request_id=%s tenant_id=%s issue_key=%s target_label=%s error=%s",
+            context.request_id,
+            context.tenant_id,
+            context.issue_key,
+            target_label,
+            exc,
+        )
+        raise RetryableWebhookJobError(
+            "Jira issue intake routing label update failed",
+            retry_after_seconds=45,
+        ) from exc
     context.issue_labels.append(target_label)
     if target_label == _PM_PARENT_LABEL and normalized_event == "issue_updated":
         context.payload["_mb_pm_parent_routed_from_backlog"] = True
