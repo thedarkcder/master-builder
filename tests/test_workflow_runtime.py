@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import sentinel
 
 from orchestrator.core.workflow_engine import WorkflowEngineState
-from orchestrator.core.workflow_runtime import WorkflowAdvanceRequest, WorkflowAdvanceResult, build_workflow_runtime
+from orchestrator.core.workflow_runtime import WorkflowAdvanceOutcome, WorkflowAdvanceRequest, build_workflow_runtime
 
 
 class FakeEngine:
@@ -119,7 +119,7 @@ def test_workflow_runtime_delegates_advance_to_handler_resolved_from_workflow_ty
     class _Handler:
         def advance(self, **kwargs):
             calls.append(("advance", kwargs))
-            return WorkflowAdvanceResult(handled=True, reason="ok")
+            return WorkflowAdvanceOutcome(handled=True, reason="ok")
 
     monkeypatch.setattr(
         "orchestrator.core.workflow_runtime.get_workflow_type_by_handler_key",
