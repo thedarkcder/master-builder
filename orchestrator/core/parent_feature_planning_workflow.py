@@ -114,28 +114,23 @@ class ParentFeaturePlanningWorkflow:
         updated_children, created_children, changed_children = child_sync_gateway.combined_child_updates(seed_data=seed_data)
         if planning_result.planning_state != PLANNING_STATE_COMPLETED or bool(seed_data.get("requires_input")):
             questions = list(planning_result.open_behavior_questions) or [
-                str(value).strip() for value in seed_data.get("questions", []) if str(value).strip()
+                value
+                for value in seed_data.get("questions", [])
+                if str(value).strip()
             ]
-            question_block = " ".join(questions) if questions else "More product detail is required."
-            issue_gateway.update_issue_sync_label(
-                issue_detail=parent_detail,
-                target_label="sync-blocked",
-            )
-            issue_gateway.post_sync_note(
-                issue_key=context.issue_key,
-                body=(
-                    "Parent feature was created in backlog, but engineering child planning is blocked pending clarification. "
-                    f"{question_block}"
+            return self._block_parent_brief(
+                context=context,
+                session=session,
+                settings=settings,
+                parent_detail=parent_detail,
+                questions=questions,
+                body_prefix=(
+                    "Parent feature was created in backlog, but engineering child planning is blocked pending clarification."
                 ),
-            )
-            return ParentFeaturePlanningWorkflowResult(
-                handled=True,
                 reason="pm_parent_issue_created_seed_blocked",
                 extra={
-                    "questions": questions,
                     "parent_revision": seed_data.get("parent_revision"),
                     "children_sync_status": seed_data.get("children_sync_status"),
-                    "webhook_event": context.webhook_event,
                 },
             )
 
@@ -267,12 +262,19 @@ class ParentFeaturePlanningWorkflow:
         if bool(seed_data.get("requires_input")):
             blocked_issue_keys = [context.issue_key, *[detail.key for detail in child_details]]
             issue_gateway.mark_issues_sync_blocked(issue_keys=blocked_issue_keys)
-            questions = [str(value).strip() for value in seed_data.get("questions", []) if str(value).strip()]
-            question_block = " ".join(questions) if questions else "More product detail is required."
-            issue_gateway.post_sync_note(
-                issue_key=context.issue_key,
-                body=f"Parent feature changed but child sync is blocked pending clarification. {question_block}",
-            )
+            questions = [value for value in seed_data.get("questions", []) if str(value).strip()]
+            if not issue_gateway.has_matching_active_pm_clarification_state(
+                parent_issue_key=context.issue_key,
+                questions=questions,
+            ):
+                issue_gateway.post_parent_brief_questions(
+                    parent_issue_key=context.issue_key,
+                    questions=questions,
+                )
+                issue_gateway.post_parent_brief_questions_jira(
+                    parent_issue_key=context.issue_key,
+                    questions=questions,
+                )
             for detail in child_details:
                 issue_gateway.post_sync_note(
                     issue_key=detail.key,
@@ -402,14 +404,18 @@ class ParentFeaturePlanningWorkflow:
             issue_detail=parent_detail,
             target_label="sync-blocked",
         )
-        issue_gateway.post_parent_brief_questions(
+        if not issue_gateway.has_matching_active_pm_clarification_state(
             parent_issue_key=parent_detail.key,
             questions=questions,
-        )
-        issue_gateway.post_parent_brief_questions_jira(
-            parent_issue_key=parent_detail.key,
-            questions=questions,
-        )
+        ):
+            issue_gateway.post_parent_brief_questions(
+                parent_issue_key=parent_detail.key,
+                questions=questions,
+            )
+            issue_gateway.post_parent_brief_questions_jira(
+                parent_issue_key=parent_detail.key,
+                questions=questions,
+            )
         payload = dict(extra or {})
         payload.update({"questions": questions, "webhook_event": context.webhook_event})
         return ParentFeaturePlanningWorkflowResult(
