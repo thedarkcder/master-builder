@@ -17,16 +17,16 @@ from orchestrator.core.workflow_attempt_factory import (
     build_run_attempt,
     build_workflow_execution_for_attempt,
 )
+from orchestrator.core.workflow_execution_lifecycle import (
+    apply_execution_for_cancelled_attempt,
+    apply_execution_for_new_attempt,
+    apply_execution_for_run_started,
+    apply_execution_for_run_terminal,
+)
 from orchestrator.core.workflow_type_catalog import get_workflow_type
 from orchestrator.core.workflow.execution_snapshot import (
     ExecutionSnapshot,
     load_parsed_trigger_context_from_plan,
-)
-from orchestrator.core.workflow_run_state import (
-    project_workflow_for_new_run_attempt,
-    project_workflow_for_run_started,
-    project_workflow_for_run_terminal,
-    project_workflow_for_cancelled_attempt,
 )
 from orchestrator.core.workflow.trigger_context import GithubPrRemediationTriggerContext
 from orchestrator.core.workflow.transitions import ACTIVE_WORKFLOW_STATUSES as WORKFLOW_ACTIVE_STATUSES, is_workflow_terminal
@@ -674,8 +674,8 @@ def _enqueue_attempt_for_workflow(
     )
     workflow_type = get_workflow_type(session, workflow_type_key=workflow.workflow_type_key)
     orchestration_backend = str(workflow_type.orchestration_backend).strip().lower()
-    project_workflow_for_new_run_attempt(
-        workflow,
+    apply_execution_for_new_attempt(
+        session=session,
         run=run,
         latest_checkpoint_id=bootstrap.entry_checkpoint_id or workflow.latest_checkpoint_id,
         orchestration_backend=orchestration_backend,
@@ -705,16 +705,17 @@ def mark_run_running(session: Session, *, run_id: str) -> Run:
         return run
     if run.status not in {RUN_STATUS_QUEUED, RUN_STATUS_DISPATCHING}:
         raise RunStateTransitionError(f"Cannot move run {run_id} to running from status {run.status}")
-    workflow = session.get(WorkflowExecution, run.workflow_id)
-    if workflow is None:
-        raise RunStateTransitionError(f"Workflow not found for run {run_id}")
     now = _now()
     run.status = RUN_STATUS_RUNNING
     run.claim_id = None
     run.dispatch_claimed_at = None
     run.started_at = now
     run.last_heartbeat_at = now
-    project_workflow_for_run_started(workflow, run=run, now=now)
+    apply_execution_for_run_started(
+        session=session,
+        run=run,
+        now=now,
+    )
     session.commit()
     session.refresh(run)
     return run
@@ -748,9 +749,6 @@ def mark_run_terminal(
         raise RunStateTransitionError(
             f"Cannot move run {run_id} to terminal status from {run.status}"
         )
-    workflow = session.get(WorkflowExecution, run.workflow_id)
-    if workflow is None:
-        raise RunStateTransitionError(f"Workflow not found for run {run_id}")
     now = _now()
     run.status = terminal_status
     run.last_error = last_error
@@ -760,7 +758,11 @@ def mark_run_terminal(
     run.finished_at = now
     run.last_heartbeat_at = None
     run.worker_service_instance_id = None
-    project_workflow_for_run_terminal(workflow, run=run, now=now)
+    apply_execution_for_run_terminal(
+        session=session,
+        run=run,
+        now=now,
+    )
     session.commit()
     session.refresh(run)
     return run
@@ -777,9 +779,6 @@ def cancel_run(
         raise RunStateTransitionError(f"Run not found: {run_id}")
     if run.status in TERMINAL_RUN_STATUSES:
         raise RunStateTransitionError(f"Cannot cancel run {run_id} from terminal status {run.status}")
-    workflow = session.get(WorkflowExecution, run.workflow_id)
-    if workflow is None:
-        raise RunStateTransitionError(f"Workflow not found for run {run_id}")
     now = _now()
     run.status = RUN_STATUS_CANCELLED
     run.last_error = f"Cancelled by {cancelled_by}"
@@ -789,7 +788,11 @@ def cancel_run(
     run.finished_at = now
     run.last_heartbeat_at = None
     run.worker_service_instance_id = None
-    project_workflow_for_run_terminal(workflow, run=run, now=now)
+    apply_execution_for_run_terminal(
+        session=session,
+        run=run,
+        now=now,
+    )
     session.commit()
     session.refresh(run)
     return run
@@ -846,11 +849,8 @@ def cancel_queued_issue_runs(
         run.last_heartbeat_at = None
         run.worker_service_instance_id = None
         workflow_active_counts[run.workflow_id] = max(0, workflow_active_counts.get(run.workflow_id, 0) - 1)
-        workflow = session.get(WorkflowExecution, run.workflow_id)
-        if workflow is None:
-            continue
-        project_workflow_for_cancelled_attempt(
-            workflow,
+        apply_execution_for_cancelled_attempt(
+            session=session,
             run=run,
             cancellation_reason=cancellation_reason,
             remaining_active_runs=workflow_active_counts.get(run.workflow_id, 0),

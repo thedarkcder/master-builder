@@ -14,11 +14,11 @@ from orchestrator.core.followup_context_service import (
     close_followup_contexts,
     upsert_followup_context,
 )
-from orchestrator.core.workflow_runtime import build_workflow_runtime
-from orchestrator.core.workflow_run_state import (
-    project_workflow_for_run_terminal,
-    project_workflow_for_waiting_input,
+from orchestrator.core.workflow_execution_lifecycle import (
+    apply_execution_for_run_terminal,
+    apply_execution_for_waiting_input,
 )
+from orchestrator.core.workflow_runtime import build_workflow_runtime
 from orchestrator.core.discord.notifications import send_tenant_discord_message
 from orchestrator.core.run_enqueue_types import EnqueueFailureReason
 from orchestrator.core.runs import (
@@ -217,9 +217,10 @@ def create_human_input_request(
     run.dispatch_claimed_at = None
     run.last_heartbeat_at = None
     run.worker_service_instance_id = None
-    project_workflow_for_waiting_input(
-        workflow,
+    apply_execution_for_waiting_input(
+        session=session,
         run=run,
+        workflow=workflow,
         latest_checkpoint_id=checkpoint.checkpoint_id,
         now=now,
     )
@@ -364,9 +365,10 @@ def _expire_human_input_request(*, session: Session, request: RunHumanInputReque
         run.finished_at = run.finished_at or now
     workflow = session.get(WorkflowExecution, request.workflow_id)
     if workflow is not None and workflow.status == RUN_STATUS_WAITING_FOR_INPUT:
-        project_workflow_for_run_terminal(
-            workflow,
+        apply_execution_for_run_terminal(
+            session=session,
             run=run,
+            workflow=workflow,
             now=now,
         )
     close_followup_contexts(
