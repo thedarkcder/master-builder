@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 from collections.abc import Sequence
 from datetime import datetime, timezone
@@ -21,6 +22,7 @@ from orchestrator.core.runs import (
     resolve_precheck_outcome_for_enqueue,
 )
 from orchestrator.core.voice.prewarm import prewarm_voice_dependencies
+from orchestrator.temporal.worker import run_temporal_worker
 from orchestrator.storage.database_support import ensure_postgres_database_url
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.migrations import run_migrations
@@ -46,6 +48,7 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("worker-webhooks", help="Run background webhook worker loop")
     subparsers.add_parser("worker-child-runs", help="Run one child issue-execution job")
     subparsers.add_parser("worker-child-webhooks", help="Run one child webhook job")
+    subparsers.add_parser("temporal-worker", help="Run Temporal workflow worker loop")
     subparsers.add_parser("discord-gateway", help="Run Discord gateway leader loop")
     subparsers.add_parser("discord-live-voice", help="Run Discord live voice leader loop")
     subparsers.add_parser("knowledge-jira-sync", help="Run Jira knowledge sync leader loop")
@@ -287,6 +290,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "worker-child-webhooks":
         return int(run_worker_child_once(mode="webhooks"))
+
+    if args.command == "temporal-worker":
+        asyncio.run(run_temporal_worker())
+        return 0
 
     if args.command == "discord-gateway":
         run_discord_gateway()

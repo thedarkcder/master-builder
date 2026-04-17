@@ -68,7 +68,7 @@ from orchestrator.storage.run_queue_events import (
     is_postgres_database_url,
     postgres_dsn_from_database_url,
 )
-from orchestrator.storage.models import Project, Run, Tenant, WebhookJob, WorkerRuntimeState
+from orchestrator.storage.models import Project, Run, Tenant, WebhookJob, WorkerRuntimeState, WorkflowExecution
 
 try:
     import psycopg
@@ -89,6 +89,7 @@ WORKER_STARTUP_DB_RETRY_MAX_DELAY_SECONDS = 8.0
 _VALID_POST_CHILD_RUN_STATUSES = {
     "queued",
     "ownership_lost",
+    "temporal_handoff",
     RUN_STATUS_RUNNING,
     RUN_STATUS_WAITING_FOR_INPUT,
     RUN_STATUS_BLOCKED,
@@ -635,6 +636,12 @@ def _reconcile_claimed_run_after_child_exit(
             return None
         status = str(getattr(run, "status", "") or "").strip().lower()
         if status == RUN_STATUS_DISPATCHING:
+            workflow = session.get(WorkflowExecution, str(getattr(run, "workflow_id", "") or "").strip())
+            if (
+                workflow is not None
+                and str(getattr(workflow, "orchestration_backend", "") or "").strip().lower() == "temporal"
+            ):
+                return "temporal_handoff"
             current_claim_id = str(getattr(run, "claim_id", "") or "").strip()
             expected_claim_id = str(claim_id or "").strip()
             if current_claim_id and current_claim_id != expected_claim_id:

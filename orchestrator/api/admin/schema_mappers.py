@@ -7,11 +7,24 @@ from orchestrator.api.schemas import (
     ProjectRead,
     RunRead,
     TenantRead,
+    WorkflowBlockerRead,
+    WorkflowOperationAttemptRead,
+    WorkflowOperationRead,
     WorkflowRead,
 )
 from orchestrator.core.config import get_settings
 from orchestrator.core.project_policy import resolve_effective_policy
-from orchestrator.storage.models import Project, ProjectInstall, ProjectInstallRequest, Run, Tenant, WorkflowExecution
+from orchestrator.storage.models import (
+    Project,
+    ProjectInstall,
+    ProjectInstallRequest,
+    Run,
+    Tenant,
+    WorkflowBlocker,
+    WorkflowExecution,
+    WorkflowOperation,
+    WorkflowOperationAttempt,
+)
 
 
 def tenant_to_schema(tenant: Tenant) -> TenantRead:
@@ -61,7 +74,59 @@ def run_to_schema(run: Run) -> RunRead:
     )
 
 
-def workflow_to_schema(workflow: WorkflowExecution, *, runs: list[RunRead], pending_input_request_id: str | None, latest_checkpoint_kind: str | None) -> WorkflowRead:
+def workflow_operation_attempt_to_schema(attempt: WorkflowOperationAttempt) -> WorkflowOperationAttemptRead:
+    return WorkflowOperationAttemptRead(
+        attempt_id=attempt.attempt_id,
+        attempt_number=attempt.attempt_number,
+        status=attempt.status,
+        error_category=attempt.error_category,
+        error_message=attempt.error_message,
+        retryable=attempt.retryable,
+        next_retry_at=attempt.next_retry_at,
+        started_at=attempt.started_at,
+        finished_at=attempt.finished_at,
+    )
+
+
+def workflow_blocker_to_schema(blocker: WorkflowBlocker) -> WorkflowBlockerRead:
+    return WorkflowBlockerRead(
+        blocker_id=blocker.blocker_id,
+        operation_id=blocker.operation_id,
+        category=blocker.category,
+        message=blocker.message,
+        status=blocker.status,
+        created_at=blocker.created_at,
+        resolved_at=blocker.resolved_at,
+    )
+
+
+def workflow_operation_to_schema(
+    operation: WorkflowOperation,
+    *,
+    attempts: list[WorkflowOperationAttempt],
+) -> WorkflowOperationRead:
+    return WorkflowOperationRead(
+        operation_id=operation.operation_id,
+        run_id=operation.run_id,
+        operation_type=operation.operation_type,
+        status=operation.status,
+        target_system=operation.target_system,
+        target_ref=operation.target_ref,
+        summary=operation.summary,
+        blocker_id=operation.blocker_id,
+        attempts=[workflow_operation_attempt_to_schema(attempt) for attempt in attempts],
+    )
+
+
+def workflow_to_schema(
+    workflow: WorkflowExecution,
+    *,
+    runs: list[RunRead],
+    pending_input_request_id: str | None,
+    latest_checkpoint_kind: str | None,
+    operations: list[WorkflowOperationRead] | None = None,
+    blockers: list[WorkflowBlockerRead] | None = None,
+) -> WorkflowRead:
     return WorkflowRead(
         workflow_id=workflow.workflow_id,
         tenant_id=workflow.tenant_id,
@@ -71,6 +136,7 @@ def workflow_to_schema(workflow: WorkflowExecution, *, runs: list[RunRead], pend
         repo_url=workflow.repo_url,
         branch=workflow.branch,
         pr_url=workflow.pr_url,
+        orchestration_backend=str(workflow.orchestration_backend or "").strip() or "legacy",
         dedupe_scope=workflow.dedupe_scope,
         status=workflow.status,
         active_run_id=workflow.active_run_id,
@@ -80,6 +146,8 @@ def workflow_to_schema(workflow: WorkflowExecution, *, runs: list[RunRead], pend
         blocked_reason=workflow.blocked_reason,
         pending_input_request_id=pending_input_request_id,
         latest_checkpoint_kind=latest_checkpoint_kind,
+        operations=list(operations or []),
+        blockers=list(blockers or []),
         runs=runs,
         created_at=workflow.created_at,
         started_at=workflow.started_at,

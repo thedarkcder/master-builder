@@ -1009,6 +1009,40 @@ class RunRead(BaseModel):
     finished_at: datetime | None
 
 
+class WorkflowOperationAttemptRead(BaseModel):
+    attempt_id: str
+    attempt_number: int
+    status: str
+    error_category: str | None = None
+    error_message: str | None = None
+    retryable: bool = False
+    next_retry_at: datetime | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+
+class WorkflowBlockerRead(BaseModel):
+    blocker_id: str
+    operation_id: str | None = None
+    category: str
+    message: str
+    status: str
+    created_at: datetime
+    resolved_at: datetime | None = None
+
+
+class WorkflowOperationRead(BaseModel):
+    operation_id: str
+    run_id: str | None = None
+    operation_type: str
+    status: str
+    target_system: str | None = None
+    target_ref: str | None = None
+    summary: str | None = None
+    blocker_id: str | None = None
+    attempts: list[WorkflowOperationAttemptRead] = Field(default_factory=list)
+
+
 class WorkflowRead(BaseModel):
     workflow_id: str
     tenant_id: str
@@ -1018,6 +1052,7 @@ class WorkflowRead(BaseModel):
     repo_url: str | None = None
     branch: str | None = None
     pr_url: str | None = None
+    orchestration_backend: str = "legacy"
     dedupe_scope: str
     status: str
     active_run_id: str | None = None
@@ -1027,6 +1062,8 @@ class WorkflowRead(BaseModel):
     blocked_reason: str | None = None
     pending_input_request_id: str | None = None
     latest_checkpoint_kind: str | None = None
+    operations: list[WorkflowOperationRead] = Field(default_factory=list)
+    blockers: list[WorkflowBlockerRead] = Field(default_factory=list)
     runs: list[RunRead] = Field(default_factory=list)
     created_at: datetime
     started_at: datetime | None

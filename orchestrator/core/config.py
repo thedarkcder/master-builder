@@ -106,6 +106,10 @@ class Settings(BaseSettings):
     project_automation_poll_seconds: int = 30
     project_automation_interval_seconds: int = 30
     workflow_orchestrated_run_timeout_minutes: int = 90
+    orchestration_backend: Literal["legacy", "temporal"] = "legacy"
+    temporal_target_host: str = "127.0.0.1:7233"
+    temporal_namespace: str = "default"
+    temporal_task_queue: str = "master-builder"
     run_events_initial_limit: int = 100
     run_logs_initial_limit: int = 200
     project_repo_checkout_base_dir: str = "/tmp/master-builder-project-repos"

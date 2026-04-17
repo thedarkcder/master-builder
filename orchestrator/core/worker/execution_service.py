@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from types import SimpleNamespace
 
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import sessionmaker
@@ -11,6 +10,10 @@ from orchestrator.core.config import Settings, get_settings
 from orchestrator.core.agent_observability import record_agent_lifecycle_event
 from orchestrator.core.discord.notifications import send_tenant_discord_message
 from orchestrator.core.jira_links import tenant_jira_issue_url
+from orchestrator.core.workflow_engine_factory import (
+    build_workflow_engine,
+    create_session_factory_for_engine,
+)
 from orchestrator.core.worker.webhook_job_service import process_next_webhook_job
 from orchestrator.core.worker.jira_stage_service import send_stage_update_to_jira as _send_stage_update_to_jira
 from orchestrator.core.worker.jira_stage_service import transition_issue_status as _transition_issue_status
@@ -54,7 +57,7 @@ from orchestrator.core.worker.workflow_request_service import (
 )
 from orchestrator.core.workflow.runner import WorkflowRequest, WorkflowRunner
 from orchestrator.api.admin.route_helpers import ensure_project_repository_checkout
-from orchestrator.storage.models import Project, Run, Tenant
+from orchestrator.storage.models import Project, Run, Tenant, WorkflowExecution
 from orchestrator.tools.project_repo_checkout import check_run_snapshot_freshness
 from orchestrator.tools.project_repo_checkout import cleanup_run_workspaces
 
@@ -148,18 +151,35 @@ def process_claimed_run_with_dependencies(
         raise RuntimeError(
             f"Claimed run handoff failed: tenant {claimed_run.tenant_id} missing for run {claimed_run.run_id}"
         )
-    result = _process_claimed_run_impl(
-        session=session,
-        runner=runner,
+    workflow = session.get(WorkflowExecution, claimed_run.workflow_id)
+    if workflow is None:
+        raise RuntimeError(
+            f"Claimed run handoff failed: workflow {claimed_run.workflow_id} missing for run {claimed_run.run_id}"
+        )
+    engine = build_workflow_engine(
         settings=settings,
-        selection=SimpleNamespace(run=claimed_run, tenant=tenant, terminal_run=None),
-        send_discord_message_fn=send_discord_message_fn,
-        **_runtime_process_kwargs(session=session, settings=settings),
+        workflow=workflow,
+        process_claimed_run_fn=_process_claimed_run_impl,
+        build_runner_fn=lambda *, session: runner,
+        runtime_kwargs_fn=build_run_process_kwargs,
+    )
+    result = engine.start_workflow(
+        session=session,
+        settings=settings,
+        session_factory=create_session_factory_for_engine(session=session, settings=settings),
+        workflow=workflow,
+        run=claimed_run,
+        claim_id=expected_claim_id,
     )
     return result
 
 
-def _runtime_process_kwargs(*, session: Session, settings: Settings) -> dict[str, object]:
+def build_run_process_kwargs(
+    *,
+    session: Session,
+    settings: Settings,
+    worker_service_instance_id: str | None = None,
+) -> dict[str, object]:
     def _emit_agent_event(
         *,
         event_type: str,
@@ -219,7 +239,8 @@ def _runtime_process_kwargs(*, session: Session, settings: Settings) -> dict[str
         transition_issue_status_fn=_transition_issue_status,
         emit_agent_event_fn=_emit_agent_event,
         resolve_agent_id_fn=lambda: settings.agent_id,
-        resolve_worker_service_instance_id_fn=lambda: worker_service_instance_id_for_mode(
+        resolve_worker_service_instance_id_fn=lambda: str(worker_service_instance_id or "").strip()
+        or worker_service_instance_id_for_mode(
             settings=settings,
             mode="runs",
         ),
@@ -246,5 +267,5 @@ def process_next_queued_run_with_dependencies(
         claim_next_queued_run_fn=claim_next_queued_run,
         send_discord_message_fn=send_discord_message_fn,
         run_status_queued=RUN_STATUS_QUEUED,
-        **_runtime_process_kwargs(session=session, settings=settings),
+        **build_run_process_kwargs(session=session, settings=settings),
     )
