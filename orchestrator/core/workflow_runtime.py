@@ -47,6 +47,7 @@ class WorkflowAdvanceResult:
     handled: bool
     reason: str | None = None
     extra: dict[str, object] = field(default_factory=dict)
+    mutations: tuple["WorkflowLifecycleMutation", ...] = ()
 
 
 @dataclass(frozen=True)
@@ -83,33 +84,10 @@ class WorkflowAdvanceLifecycle(Protocol):
 
 
 @dataclass
-class RuntimeWorkflowAdvanceLifecycle:
-    session: Session
-    workflow_type: Any
-    tenant_id: str
-    project_id: str | None
-    issue_key: str
-    issue_summary: str | None = None
-    issue_description: object | None = None
+class WorkflowAdvanceMutationCollector:
     _mutations: list[WorkflowLifecycleMutation] = field(default_factory=list)
-    _projection: Any | None = None
-
-    def _ensure_projection(self):
-        if self._projection is None:
-            self._projection = ensure_issue_workflow_execution(
-                session=self.session,
-                workflow_type=self.workflow_type,
-                tenant_id=self.tenant_id,
-                project_id=self.project_id,
-                issue_key=self.issue_key,
-                issue_summary=self.issue_summary,
-                issue_description=self.issue_description,
-            )
-        return self._projection
 
     def ensure_issue_execution(self, *, issue_summary: str | None, issue_description: object | None) -> None:
-        self.issue_summary = issue_summary
-        self.issue_description = issue_description
         self._mutations.append(
             WorkflowLifecycleMutation(
                 kind="ensure_issue_execution",
@@ -168,30 +146,71 @@ class RuntimeWorkflowAdvanceLifecycle:
     def mark_completed_if_ready(self) -> None:
         self._mutations.append(WorkflowLifecycleMutation(kind="mark_completed_if_ready"))
 
-    def apply(self) -> None:
-        if not self._mutations:
-            return
-        projection = None
-        for mutation in self._mutations:
-            if mutation.kind == "ensure_issue_execution":
-                self.issue_summary = mutation.payload.get("issue_summary")
-                self.issue_description = mutation.payload.get("issue_description")
-                projection = self._ensure_projection()
-                continue
-            if projection is None:
-                projection = self._ensure_projection()
-            if mutation.kind == "mark_running":
-                projection.mark_running()
-            elif mutation.kind == "mark_operation_completed":
-                projection.mark_operation_completed(**mutation.payload)
-            elif mutation.kind == "mark_operation_failed":
-                projection.mark_operation_failed(**mutation.payload)
-            elif mutation.kind == "mark_waiting_for_input":
-                projection.mark_waiting_for_input(**mutation.payload)
-            elif mutation.kind == "mark_completed_if_ready":
-                projection.mark_completed_if_ready()
-            else:  # pragma: no cover - defensive against invalid mutation kinds
-                raise RuntimeError(f"Unsupported workflow lifecycle mutation kind: {mutation.kind}")
+    def build_result(
+        self,
+        *,
+        handled: bool,
+        reason: str | None = None,
+        extra: dict[str, object] | None = None,
+    ) -> WorkflowAdvanceResult:
+        return WorkflowAdvanceResult(
+            handled=handled,
+            reason=reason,
+            extra=dict(extra or {}),
+            mutations=tuple(self._mutations),
+        )
+
+
+def apply_workflow_lifecycle_mutations(
+    *,
+    session: Session,
+    workflow_type: Any,
+    tenant_id: str,
+    project_id: str | None,
+    issue_key: str,
+    mutations: tuple[WorkflowLifecycleMutation, ...],
+) -> None:
+    if not mutations:
+        return
+    projection = None
+    issue_summary = None
+    issue_description = None
+    for mutation in mutations:
+        if mutation.kind == "ensure_issue_execution":
+            issue_summary = mutation.payload.get("issue_summary")
+            issue_description = mutation.payload.get("issue_description")
+            projection = ensure_issue_workflow_execution(
+                session=session,
+                workflow_type=workflow_type,
+                tenant_id=tenant_id,
+                project_id=project_id,
+                issue_key=issue_key,
+                issue_summary=issue_summary,
+                issue_description=issue_description,
+            )
+            continue
+        if projection is None:
+            projection = ensure_issue_workflow_execution(
+                session=session,
+                workflow_type=workflow_type,
+                tenant_id=tenant_id,
+                project_id=project_id,
+                issue_key=issue_key,
+                issue_summary=issue_summary,
+                issue_description=issue_description,
+            )
+        if mutation.kind == "mark_running":
+            projection.mark_running()
+        elif mutation.kind == "mark_operation_completed":
+            projection.mark_operation_completed(**mutation.payload)
+        elif mutation.kind == "mark_operation_failed":
+            projection.mark_operation_failed(**mutation.payload)
+        elif mutation.kind == "mark_waiting_for_input":
+            projection.mark_waiting_for_input(**mutation.payload)
+        elif mutation.kind == "mark_completed_if_ready":
+            projection.mark_completed_if_ready()
+        else:  # pragma: no cover - defensive against invalid mutation kinds
+            raise RuntimeError(f"Unsupported workflow lifecycle mutation kind: {mutation.kind}")
 
 
 class WorkflowAdvanceHandler(Protocol):
@@ -202,7 +221,6 @@ class WorkflowAdvanceHandler(Protocol):
         settings: Settings,
         workflow_type,
         request: WorkflowAdvanceRequest,
-        lifecycle: WorkflowAdvanceLifecycle,
     ) -> WorkflowAdvanceResult:
         ...
 
@@ -241,21 +259,20 @@ class WorkflowRuntime:
             handler_key=request.workflow_handler_key,
         )
         handler = self._deps.resolve_advance_handler_fn(str(workflow_type.handler_key or "").strip())
-        lifecycle = RuntimeWorkflowAdvanceLifecycle(
-            session=self._session,
-            workflow_type=workflow_type,
-            tenant_id=request.tenant_id,
-            project_id=request.project_id,
-            issue_key=request.issue_key,
-        )
         result = handler.advance(
             session=self._session,
             settings=self._settings,
             workflow_type=workflow_type,
             request=request,
-            lifecycle=lifecycle,
         )
-        lifecycle.apply()
+        apply_workflow_lifecycle_mutations(
+            session=self._session,
+            workflow_type=workflow_type,
+            tenant_id=request.tenant_id,
+            project_id=request.project_id,
+            issue_key=request.issue_key,
+            mutations=result.mutations,
+        )
         return result
 
     def start_execution(
