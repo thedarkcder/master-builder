@@ -114,14 +114,13 @@ def test_workflow_runtime_delegates_advance_to_handler_resolved_from_workflow_ty
     )
 
     assert runtime.advance(request=request) is sentinel.advance_result
-    assert calls == [
-        (
-            "advance",
-            {
-                "session": session,
-                "settings": settings,
-                "workflow_type": workflow_type,
-                "request": request,
-            },
-        )
-    ]
+    assert len(calls) == 1
+    assert calls[0][0] == "advance"
+    kwargs = calls[0][1]
+    assert kwargs["session"] is session
+    assert kwargs["settings"] is settings
+    assert kwargs["workflow_type"] is workflow_type
+    assert kwargs["request"] is request
+    lifecycle = kwargs["lifecycle"]
+    assert hasattr(lifecycle, "ensure_issue_execution")
+    assert hasattr(lifecycle, "mark_operation_completed")

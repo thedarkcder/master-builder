@@ -11,6 +11,7 @@ from orchestrator.core.workflow_engine_factory import (
     build_workflow_engine,
     create_session_factory_for_engine,
 )
+from orchestrator.core.workflow_execution_projection import ensure_issue_workflow_execution
 from orchestrator.core.workflow_operation_service import WorkflowOperationHandle
 from orchestrator.core.workflow_type_catalog import get_workflow_type_by_handler_key
 from orchestrator.storage.models import Run, RunHumanInputRequest, WorkflowExecution, WorkflowOperation
@@ -48,6 +49,92 @@ class WorkflowAdvanceResult:
     extra: dict[str, object] = field(default_factory=dict)
 
 
+class WorkflowAdvanceLifecycle(Protocol):
+    def ensure_issue_execution(self, *, issue_summary: str | None, issue_description: object | None) -> None:
+        ...
+
+    def mark_running(self) -> None:
+        ...
+
+    def mark_operation_completed(self, *, operation_type: str, summary: str) -> None:
+        ...
+
+    def mark_operation_failed(
+        self,
+        *,
+        operation_type: str,
+        category: str,
+        message: str,
+        retryable: bool,
+    ) -> None:
+        ...
+
+    def mark_waiting_for_input(self, *, operation_type: str, summary: str) -> None:
+        ...
+
+    def mark_completed_if_ready(self) -> None:
+        ...
+
+
+@dataclass
+class RuntimeWorkflowAdvanceLifecycle:
+    session: Session
+    workflow_type: Any
+    tenant_id: str
+    project_id: str | None
+    issue_key: str
+    _projection: Any | None = None
+
+    def _ensure_projection(self, *, issue_summary: str | None = None, issue_description: object | None = None):
+        if self._projection is None:
+            self._projection = ensure_issue_workflow_execution(
+                session=self.session,
+                workflow_type=self.workflow_type,
+                tenant_id=self.tenant_id,
+                project_id=self.project_id,
+                issue_key=self.issue_key,
+                issue_summary=issue_summary,
+                issue_description=issue_description,
+            )
+        return self._projection
+
+    def ensure_issue_execution(self, *, issue_summary: str | None, issue_description: object | None) -> None:
+        self._ensure_projection(issue_summary=issue_summary, issue_description=issue_description)
+
+    def mark_running(self) -> None:
+        self._ensure_projection().mark_running()
+
+    def mark_operation_completed(self, *, operation_type: str, summary: str) -> None:
+        self._ensure_projection().mark_operation_completed(
+            operation_type=operation_type,
+            summary=summary,
+        )
+
+    def mark_operation_failed(
+        self,
+        *,
+        operation_type: str,
+        category: str,
+        message: str,
+        retryable: bool,
+    ) -> None:
+        self._ensure_projection().mark_operation_failed(
+            operation_type=operation_type,
+            category=category,
+            message=message,
+            retryable=retryable,
+        )
+
+    def mark_waiting_for_input(self, *, operation_type: str, summary: str) -> None:
+        self._ensure_projection().mark_waiting_for_input(
+            operation_type=operation_type,
+            summary=summary,
+        )
+
+    def mark_completed_if_ready(self) -> None:
+        self._ensure_projection().mark_completed_if_ready()
+
+
 class WorkflowAdvanceHandler(Protocol):
     def advance(
         self,
@@ -56,6 +143,7 @@ class WorkflowAdvanceHandler(Protocol):
         settings: Settings,
         workflow_type,
         request: WorkflowAdvanceRequest,
+        lifecycle: WorkflowAdvanceLifecycle,
     ) -> WorkflowAdvanceResult:
         ...
 
@@ -94,11 +182,19 @@ class WorkflowRuntime:
             handler_key=request.workflow_handler_key,
         )
         handler = self._deps.resolve_advance_handler_fn(str(workflow_type.handler_key or "").strip())
+        lifecycle = RuntimeWorkflowAdvanceLifecycle(
+            session=self._session,
+            workflow_type=workflow_type,
+            tenant_id=request.tenant_id,
+            project_id=request.project_id,
+            issue_key=request.issue_key,
+        )
         return handler.advance(
             session=self._session,
             settings=self._settings,
             workflow_type=workflow_type,
             request=request,
+            lifecycle=lifecycle,
         )
 
     def start_execution(

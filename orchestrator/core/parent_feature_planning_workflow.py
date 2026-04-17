@@ -7,10 +7,7 @@ from typing import Any, Callable
 from sqlalchemy.orm import Session
 
 from orchestrator.core.specialist_planning import PLANNING_STATE_COMPLETED
-from orchestrator.core.workflow_execution_projection import (
-    classify_external_workflow_failure,
-    ensure_issue_workflow_execution,
-)
+from orchestrator.core.workflow_execution_projection import classify_external_workflow_failure
 
 logger = logging.getLogger(__name__)
 
@@ -45,26 +42,22 @@ class ParentFeaturePlanningWorkflow:
         context,
         session: Session,
         settings,  # noqa: ANN001
+        lifecycle,
     ) -> ParentFeaturePlanningWorkflowResult:
         normalized_labels = {str(label).strip().casefold() for label in context.issue_labels or []}
         if context.webhook_event not in {"issue_created", "issue_updated"} or "pm-parent" not in normalized_labels:
             return ParentFeaturePlanningWorkflowResult(handled=False)
         routed_from_backlog = bool(context.payload.get("_mb_pm_parent_routed_from_backlog"))
         if context.webhook_event == "issue_created" or routed_from_backlog:
-            return self._handle_issue_created(context=context, session=session, settings=settings)
-        return self._handle_issue_updated(context=context, session=session, settings=settings)
+            return self._handle_issue_created(context=context, session=session, settings=settings, lifecycle=lifecycle)
+        return self._handle_issue_updated(context=context, session=session, settings=settings, lifecycle=lifecycle)
 
-    def _handle_issue_created(self, *, context, session: Session, settings) -> ParentFeaturePlanningWorkflowResult:  # noqa: ANN001
+    def _handle_issue_created(self, *, context, session: Session, settings, lifecycle) -> ParentFeaturePlanningWorkflowResult:  # noqa: ANN001
         issue_gateway = self._deps.issue_gateway
         brief_planner = self._deps.brief_planner
         child_sync_gateway = self._deps.child_sync_gateway
         parent_detail = issue_gateway.load_parent_detail(context.issue_key)
-        workflow_projection = ensure_issue_workflow_execution(
-            session=session,
-            workflow_type=self._deps.workflow_type,
-            tenant_id=context.tenant_id,
-            project_id=context.project_id,
-            issue_key=parent_detail.key,
+        lifecycle.ensure_issue_execution(
             issue_summary=parent_detail.summary,
             issue_description=parent_detail.description,
         )
@@ -81,7 +74,7 @@ class ParentFeaturePlanningWorkflow:
             open_questions=normalization_questions or None,
         )
         if normalization_questions:
-            workflow_projection.mark_operation_completed(
+            lifecycle.mark_operation_completed(
                 operation_type="jira_parent_update",
                 summary="Parent Jira issue synced with the latest normalized brief draft.",
             )
@@ -90,17 +83,17 @@ class ParentFeaturePlanningWorkflow:
                 session=session,
                 settings=settings,
                 parent_detail=parent_detail,
-                workflow_projection=workflow_projection,
+                lifecycle=lifecycle,
                 questions=normalization_questions,
                 body_prefix="Parent feature was created in backlog, but brief normalization is blocked pending clarification.",
                 reason="pm_parent_issue_created_brief_blocked",
                 waiting_operation_type="brief_normalization",
             )
-        workflow_projection.mark_operation_completed(
+        lifecycle.mark_operation_completed(
             operation_type="brief_normalization",
             summary="Parent brief normalized from the Jira source issue.",
         )
-        workflow_projection.mark_operation_completed(
+        lifecycle.mark_operation_completed(
             operation_type="jira_parent_update",
             summary="Parent Jira issue synced with the normalized brief.",
         )
@@ -126,7 +119,7 @@ class ParentFeaturePlanningWorkflow:
                 exc,
             )
             category, retryable = classify_external_workflow_failure(error=exc)
-            workflow_projection.mark_operation_failed(
+            lifecycle.mark_operation_failed(
                 operation_type="jira_child_fanout",
                 category=category,
                 message=str(exc),
@@ -158,7 +151,7 @@ class ParentFeaturePlanningWorkflow:
                 session=session,
                 settings=settings,
                 parent_detail=parent_detail,
-                workflow_projection=workflow_projection,
+                lifecycle=lifecycle,
                 questions=questions,
                 body_prefix=(
                     "Parent feature was created in backlog, but engineering child planning is blocked pending clarification."
@@ -170,15 +163,15 @@ class ParentFeaturePlanningWorkflow:
                     "children_sync_status": seed_data.get("children_sync_status"),
                 },
             )
-        workflow_projection.mark_operation_completed(
+        lifecycle.mark_operation_completed(
             operation_type="backlog_planning",
             summary="Backlog planning completed from the normalized parent brief.",
         )
-        workflow_projection.mark_operation_completed(
+        lifecycle.mark_operation_completed(
             operation_type="jira_child_fanout",
             summary="Engineering child tickets were created or refreshed from the parent planning package.",
         )
-        workflow_projection.mark_completed_if_ready()
+        lifecycle.mark_completed_if_ready()
 
         issue_gateway.post_sync_note(
             issue_key=context.issue_key,
@@ -203,7 +196,7 @@ class ParentFeaturePlanningWorkflow:
             },
         )
 
-    def _handle_issue_updated(self, *, context, session: Session, settings) -> ParentFeaturePlanningWorkflowResult:  # noqa: ANN001
+    def _handle_issue_updated(self, *, context, session: Session, settings, lifecycle) -> ParentFeaturePlanningWorkflowResult:  # noqa: ANN001
         issue_gateway = self._deps.issue_gateway
         brief_planner = self._deps.brief_planner
         child_sync_gateway = self._deps.child_sync_gateway
@@ -221,6 +214,7 @@ class ParentFeaturePlanningWorkflow:
                     context=context,
                     session=session,
                     target_status=board_entry_target_status,
+                    lifecycle=lifecycle,
                 )
             return ParentFeaturePlanningWorkflowResult(
                 handled=True,
@@ -229,12 +223,7 @@ class ParentFeaturePlanningWorkflow:
             )
 
         parent_detail = issue_gateway.load_parent_detail(context.issue_key)
-        workflow_projection = ensure_issue_workflow_execution(
-            session=session,
-            workflow_type=self._deps.workflow_type,
-            tenant_id=context.tenant_id,
-            project_id=context.project_id,
-            issue_key=parent_detail.key,
+        lifecycle.ensure_issue_execution(
             issue_summary=parent_detail.summary,
             issue_description=parent_detail.description,
         )
@@ -255,7 +244,7 @@ class ParentFeaturePlanningWorkflow:
             open_questions=normalization_questions or None,
         )
         if normalization_questions:
-            workflow_projection.mark_operation_completed(
+            lifecycle.mark_operation_completed(
                 operation_type="jira_parent_update",
                 summary="Parent Jira issue synced with the latest normalized brief draft.",
             )
@@ -266,24 +255,24 @@ class ParentFeaturePlanningWorkflow:
                 session=session,
                 settings=settings,
                 parent_detail=parent_detail,
-                workflow_projection=workflow_projection,
+                lifecycle=lifecycle,
                 questions=normalization_questions,
                 body_prefix="Parent feature changed but brief normalization is blocked pending clarification.",
                 reason="pm_parent_sync_brief_blocked",
                 waiting_operation_type="brief_normalization",
                 extra={"changed_fields": material_changed_fields},
             )
-        workflow_projection.mark_operation_completed(
+        lifecycle.mark_operation_completed(
             operation_type="brief_normalization",
             summary="Parent brief normalized from the Jira source issue.",
         )
-        workflow_projection.mark_operation_completed(
+        lifecycle.mark_operation_completed(
             operation_type="jira_parent_update",
             summary="Parent Jira issue synced with the normalized brief.",
         )
 
         if not child_details:
-            workflow_projection.mark_completed_if_ready()
+            lifecycle.mark_completed_if_ready()
             return ParentFeaturePlanningWorkflowResult(
                 handled=True,
                 reason="pm_parent_no_children",
@@ -306,7 +295,7 @@ class ParentFeaturePlanningWorkflow:
                 exc,
             )
             category, retryable = classify_external_workflow_failure(error=exc)
-            workflow_projection.mark_operation_failed(
+            lifecycle.mark_operation_failed(
                 operation_type="jira_child_fanout",
                 category=category,
                 message=str(exc),
@@ -341,7 +330,7 @@ class ParentFeaturePlanningWorkflow:
             blocked_issue_keys = [context.issue_key, *[detail.key for detail in child_details]]
             issue_gateway.mark_issues_sync_blocked(issue_keys=blocked_issue_keys)
             questions = [value for value in seed_data.get("questions", []) if str(value).strip()]
-            workflow_projection.mark_waiting_for_input(
+            lifecycle.mark_waiting_for_input(
                 operation_type="backlog_planning",
                 summary="Parent planning is waiting for product clarification before child refresh can complete.",
             )
@@ -358,12 +347,12 @@ class ParentFeaturePlanningWorkflow:
                     questions=questions,
                 )
                 if posted_to_discord:
-                    workflow_projection.mark_operation_completed(
+                    lifecycle.mark_operation_completed(
                         operation_type="discord_followup_projection",
                         summary="Posted PM clarification follow-up to Discord.",
                     )
                 if error is None and created_comment is not None:
-                    workflow_projection.mark_operation_completed(
+                    lifecycle.mark_operation_completed(
                         operation_type="jira_comment_projection",
                         summary="Posted PM clarification questions to Jira.",
                     )
@@ -382,15 +371,15 @@ class ParentFeaturePlanningWorkflow:
                     "webhook_event": context.webhook_event,
                 },
             )
-        workflow_projection.mark_operation_completed(
+        lifecycle.mark_operation_completed(
             operation_type="backlog_planning",
             summary="Backlog planning completed from the normalized parent brief.",
         )
-        workflow_projection.mark_operation_completed(
+        lifecycle.mark_operation_completed(
             operation_type="jira_child_fanout",
             summary="Engineering child tickets were refreshed from the parent planning package.",
         )
-        workflow_projection.mark_completed_if_ready()
+        lifecycle.mark_completed_if_ready()
 
         issue_gateway.post_sync_note(
             issue_key=context.issue_key,
@@ -422,26 +411,22 @@ class ParentFeaturePlanningWorkflow:
         context,
         session: Session,
         target_status: str,
+        lifecycle,
     ) -> ParentFeaturePlanningWorkflowResult:
         issue_gateway = self._deps.issue_gateway
         parent_detail = issue_gateway.load_parent_detail(context.issue_key)
-        workflow_projection = ensure_issue_workflow_execution(
-            session=session,
-            workflow_type=self._deps.workflow_type,
-            tenant_id=context.tenant_id,
-            project_id=context.project_id,
-            issue_key=parent_detail.key,
+        lifecycle.ensure_issue_execution(
             issue_summary=parent_detail.summary,
             issue_description=parent_detail.description,
         )
         project_key = self._deps.project_key_for_issue_fn(context.issue_key)
         child_details = issue_gateway.load_child_details(project_key=project_key, parent_issue_key=context.issue_key)
         if not child_details:
-            workflow_projection.mark_operation_completed(
+            lifecycle.mark_operation_completed(
                 operation_type="jira_child_promotion",
                 summary=f"No engineering child tickets required promotion to {target_status}.",
             )
-            workflow_projection.mark_completed_if_ready()
+            lifecycle.mark_completed_if_ready()
             issue_gateway.post_sync_note(
                 issue_key=context.issue_key,
                 body="Parent feature moved onto the board, but there are no engineering child tickets to promote.",
@@ -481,7 +466,7 @@ class ParentFeaturePlanningWorkflow:
             promoted_children.append(child_detail.key)
 
         if failed_children:
-            workflow_projection.mark_operation_failed(
+            lifecycle.mark_operation_failed(
                 operation_type="jira_child_promotion",
                 category="external_failure",
                 message=(
@@ -491,7 +476,7 @@ class ParentFeaturePlanningWorkflow:
                 retryable=True,
             )
         else:
-            workflow_projection.mark_operation_completed(
+            lifecycle.mark_operation_completed(
                 operation_type="jira_child_promotion",
                 summary=(
                     f"Promoted engineering child tickets to {target_status}: "
@@ -500,7 +485,7 @@ class ParentFeaturePlanningWorkflow:
                     else f"No engineering child tickets required promotion to {target_status}."
                 ),
             )
-            workflow_projection.mark_completed_if_ready()
+            lifecycle.mark_completed_if_ready()
 
         issue_gateway.post_sync_note(
             issue_key=context.issue_key,
@@ -532,7 +517,7 @@ class ParentFeaturePlanningWorkflow:
         session: Session,
         settings,  # noqa: ANN001
         parent_detail,
-        workflow_projection,
+        lifecycle,
         questions: list[object],
         body_prefix: str,
         reason: str,
@@ -558,16 +543,16 @@ class ParentFeaturePlanningWorkflow:
                 questions=questions,
             )
             if posted_to_discord:
-                workflow_projection.mark_operation_completed(
+                lifecycle.mark_operation_completed(
                     operation_type="discord_followup_projection",
                     summary="Posted PM clarification follow-up to Discord.",
                 )
             if error is None and created_comment is not None:
-                workflow_projection.mark_operation_completed(
+                lifecycle.mark_operation_completed(
                     operation_type="jira_comment_projection",
                     summary="Posted PM clarification questions to Jira.",
                 )
-        workflow_projection.mark_waiting_for_input(
+        lifecycle.mark_waiting_for_input(
             operation_type=waiting_operation_type,
             summary="Parent planning is waiting for product clarification.",
         )
