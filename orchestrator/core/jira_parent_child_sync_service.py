@@ -393,6 +393,28 @@ class _JiraParentIssueGateway:
         )
 
 
+def _jira_adapter(*, integration_adapter_provider, session: Session, tenant, settings):  # noqa: ANN001
+    return integration_adapter_provider.jira(
+        session=session,
+        tenant=tenant,
+        settings=settings,
+    )
+
+
+def _jira_oauth_context(*, integration_adapter_provider, session: Session, tenant, settings):  # noqa: ANN001
+    jira = _jira_adapter(
+        integration_adapter_provider=integration_adapter_provider,
+        session=session,
+        tenant=tenant,
+        settings=settings,
+    )
+    return SimpleNamespace(
+        client=jira.client,
+        access_token=jira.access_token,
+        connection=SimpleNamespace(cloud_id=jira.cloud_id, site_url=jira.site_url),
+    )
+
+
 class _ParentBriefPlanner:
     def __init__(
         self,
@@ -1455,7 +1477,7 @@ def handle_engineering_clarification_command(
     context: JiraParentChildSyncContext,
     session: Session,
     settings,  # noqa: ANN001
-    tenant_jira_oauth_context_fn,
+    integration_adapter_provider,
     build_runtime_for_selector_fn,
     classify_engineering_clarification_with_codex_fn,
     post_jira_comment_fn,
@@ -1465,12 +1487,19 @@ def handle_engineering_clarification_command(
     question = str(context.comment_command_argument or "").strip()
     if not question:
         return JiraParentChildSyncResult(handled=True, reason="invalid_comment_command")
-    oauth = tenant_jira_oauth_context_fn(session=session, tenant=context.tenant, settings=settings)
-    child_detail = oauth.client.get_issue_detail(
-        access_token=oauth.access_token,
-        cloud_id=oauth.connection.cloud_id,
-        issue_id_or_key=context.issue_key,
+    jira = _jira_adapter(
+        integration_adapter_provider=integration_adapter_provider,
+        session=session,
+        tenant=context.tenant,
+        settings=settings,
     )
+    oauth = _jira_oauth_context(
+        integration_adapter_provider=integration_adapter_provider,
+        session=session,
+        tenant=context.tenant,
+        settings=settings,
+    )
+    child_detail = jira.get_issue_detail(issue_id_or_key=context.issue_key)
     child_labels = {str(label).strip().casefold() for label in child_detail.labels}
     if "engineering-child" not in child_labels:
         return JiraParentChildSyncResult(
@@ -1485,11 +1514,7 @@ def handle_engineering_clarification_command(
             reason="engineering_child_parent_missing",
             extra={"webhook_event": context.webhook_event},
         )
-    parent_detail = oauth.client.get_issue_detail(
-        access_token=oauth.access_token,
-        cloud_id=oauth.connection.cloud_id,
-        issue_id_or_key=parent_issue_key,
-    )
+    parent_detail = jira.get_issue_detail(issue_id_or_key=parent_issue_key)
     runtime = build_runtime_for_selector_fn(
         session=session,
         settings=settings,
@@ -1674,7 +1699,7 @@ def handle_engineering_clarification_reply(
     context: JiraParentChildSyncContext,
     session: Session,
     settings,  # noqa: ANN001
-    tenant_jira_oauth_context_fn,
+    integration_adapter_provider,
     seed_issues_with_runtime_fn,
     post_jira_comment_fn,
     create_jira_comment_fn,
@@ -1714,18 +1739,21 @@ def handle_engineering_clarification_reply(
             extra={"webhook_event": context.webhook_event},
         )
 
-    oauth = tenant_jira_oauth_context_fn(session=session, tenant=context.tenant, settings=settings)
-    parent_detail = oauth.client.get_issue_detail(
-        access_token=oauth.access_token,
-        cloud_id=oauth.connection.cloud_id,
-        issue_id_or_key=context.issue_key,
+    jira = _jira_adapter(
+        integration_adapter_provider=integration_adapter_provider,
+        session=session,
+        tenant=context.tenant,
+        settings=settings,
     )
+    oauth = _jira_oauth_context(
+        integration_adapter_provider=integration_adapter_provider,
+        session=session,
+        tenant=context.tenant,
+        settings=settings,
+    )
+    parent_detail = jira.get_issue_detail(issue_id_or_key=context.issue_key)
     child_details = [
-        oauth.client.get_issue_detail(
-            access_token=oauth.access_token,
-            cloud_id=oauth.connection.cloud_id,
-            issue_id_or_key=child_key,
-        )
+        jira.get_issue_detail(issue_id_or_key=child_key)
         for child_key in affected_child_keys
     ]
     prompt_markdown = _build_clarification_followup_prompt(
@@ -1869,7 +1897,7 @@ def handle_pm_interview_reply(
     context: JiraParentChildSyncContext,
     session: Session,
     settings,  # noqa: ANN001
-    tenant_jira_oauth_context_fn,
+    integration_adapter_provider,
     build_runtime_for_selector_fn,
     seed_issues_with_runtime_fn,
     post_jira_comment_fn,
@@ -1969,12 +1997,18 @@ def handle_pm_interview_reply(
             extra={"error": str(exc), "webhook_event": context.webhook_event},
         )
 
-    oauth = tenant_jira_oauth_context_fn(session=session, tenant=context.tenant, settings=settings)
-    parent_detail = oauth.client.get_issue_detail(
-        access_token=oauth.access_token,
-        cloud_id=oauth.connection.cloud_id,
-        issue_id_or_key=context.issue_key,
+    oauth = _jira_oauth_context(
+        integration_adapter_provider=integration_adapter_provider,
+        session=session,
+        tenant=context.tenant,
+        settings=settings,
     )
+    parent_detail = _jira_adapter(
+        integration_adapter_provider=integration_adapter_provider,
+        session=session,
+        tenant=context.tenant,
+        settings=settings,
+    ).get_issue_detail(issue_id_or_key=context.issue_key)
     existing_workflow = resolve_latest_issue_workflow(
         session=session,
         tenant_id=context.tenant_id,
