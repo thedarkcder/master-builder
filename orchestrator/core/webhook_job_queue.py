@@ -382,6 +382,55 @@ def _finalize_job_ids(
     return tuple(refreshed)
 
 
+def requeue_webhook_job_ids(
+    session: Session,
+    *,
+    job_ids: tuple[str, ...],
+    owner_id: str,
+    error: str,
+    retry_after_seconds: int = 30,
+    now: datetime | None = None,
+) -> tuple[WebhookJob, ...]:
+    if not job_ids:
+        return ()
+    timestamp = now or _now()
+    available_at = timestamp + timedelta(seconds=max(int(retry_after_seconds), 0))
+    refreshed: list[WebhookJob] = []
+    for job_id in job_ids:
+        persisted = session.get(WebhookJob, job_id)
+        if persisted is None:
+            continue
+        if persisted.owner_id != owner_id:
+            raise RuntimeError(
+                f"Webhook job '{persisted.job_id}' is owned by '{persisted.owner_id}', expected '{owner_id}'."
+            )
+        persisted.status = WEBHOOK_JOB_STATUS_PENDING
+        persisted.owner_id = None
+        persisted.lease_expires_at = None
+        persisted.last_error = error
+        persisted.available_at = available_at
+        persisted.updated_at = timestamp
+        persisted.completed_at = None
+        refreshed.append(persisted)
+    session.flush()
+    subject_keys = {
+        job.subject_key
+        for job in refreshed
+        if str(job.subject_key or "").strip()
+    }
+    for subject_key in subject_keys:
+        _release_subject_claim(
+            session,
+            subject_key=subject_key,
+            owner_id=owner_id,
+            now=timestamp,
+        )
+    session.commit()
+    for job in refreshed:
+        session.refresh(job)
+    return tuple(refreshed)
+
+
 def mark_webhook_job_ids_done(
     session: Session,
     *,

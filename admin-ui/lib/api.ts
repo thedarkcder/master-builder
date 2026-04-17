@@ -109,6 +109,32 @@ export type JiraProjectRecord = {
   name: string;
 };
 
+export type AdminNotificationRecord = {
+  notification_id: string;
+  tenant_id: string | null;
+  project_id: string | null;
+  scope_type: string;
+  scope_id: string | null;
+  source: string;
+  kind: string;
+  severity: string;
+  title: string;
+  detail: string;
+  action_label: string | null;
+  action_path: string | null;
+  fingerprint: string;
+  status: string;
+  context: Record<string, unknown>;
+  first_emitted_at: string;
+  last_emitted_at: string;
+  acknowledged_at: string | null;
+  resolved_at: string | null;
+};
+
+export type AdminNotificationListRecord = {
+  notifications: AdminNotificationRecord[];
+};
+
 export type ProjectPolicyOverrides = Partial<
   Pick<
     PolicyConfig,
@@ -1598,6 +1624,18 @@ export function listTenants(credentials: Credentials): Promise<TenantRecord[]> {
 
 export function getTenant(credentials: Credentials, tenantId: string): Promise<TenantRecord> {
   return request<TenantRecord>(credentials, `/api/admin/tenants/${encodeURIComponent(tenantId)}`);
+}
+
+export function listTenantNotifications(
+  credentials: Credentials,
+  tenantId: string,
+  status = "open"
+): Promise<AdminNotificationListRecord> {
+  const query = new URLSearchParams({ status });
+  return request<AdminNotificationListRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/notifications?${query.toString()}`
+  );
 }
 
 export function listCodexModels(

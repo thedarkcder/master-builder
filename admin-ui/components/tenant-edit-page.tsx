@@ -9,15 +9,18 @@ import { useAuth } from "@/components/auth-provider";
 import { ProjectsManager } from "@/components/projects-manager";
 import { TenantForm } from "@/components/tenant-form";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
+  type AdminNotificationRecord,
   archiveTenant,
   disconnectJira,
   listCodexModels,
   getTenant,
   getJiraWebhookDiagnostics,
   listJiraProjects,
+  listTenantNotifications,
   listProjects,
   listGitHubRepositories,
   previewReadyGate,
@@ -43,6 +46,7 @@ import {
   type ProjectUpdatePayload
 } from "@/lib/api";
 import { canAccessPlatformAdmin, getTenantArchiveConfirmationRoute, getTenantSettingsRoute } from "@/lib/auth-routing";
+import { formatTimestamp } from "@/lib/datetime";
 import { recordToFormValues } from "@/lib/tenant-form";
 import { cn } from "@/lib/utils";
 
@@ -71,6 +75,7 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
   const [statusLine, setStatusLine] = useState("");
   const [readyPreview, setReadyPreview] = useState<ReadyGatePreviewRecord | null>(null);
   const [jiraWebhook, setJiraWebhook] = useState<JiraWebhookDiagnosticsRecord | null>(null);
+  const [notifications, setNotifications] = useState<AdminNotificationRecord[]>([]);
   const [jiraWebhookBusy, setJiraWebhookBusy] = useState(false);
   const [githubRepositories, setGithubRepositories] = useState<GitHubRepositoryRecord[]>([]);
   const [codexModels, setCodexModels] = useState<{ id: string; label: string; description?: string | null }[]>([]);
@@ -108,6 +113,19 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
       setJiraWebhook(diagnostics);
     } catch (error) {
       setStatusLine(`Failed to load Jira webhook diagnostics: ${(error as Error).message}`);
+    }
+  }
+
+  async function loadNotifications() {
+    if (!credentials) {
+      setNotifications([]);
+      return;
+    }
+    try {
+      const payload = await listTenantNotifications(credentials, params.tenantId);
+      setNotifications(payload.notifications);
+    } catch (error) {
+      setStatusLine(`Failed to load notifications: ${(error as Error).message}`);
     }
   }
 
@@ -167,9 +185,10 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
       setDiscordInviteExpirySeconds(String(payload.discord?.onboarding_invite_expires_in_seconds ?? 86400));
       setDiscordInviteMaxUses(String(payload.discord?.onboarding_invite_max_uses ?? 1));
       if (isPlatformAdmin && (section === "jira" || section === "notifications")) {
-        await loadJiraWebhookDiagnostics();
+        await Promise.all([loadJiraWebhookDiagnostics(), loadNotifications()]);
       } else {
         setJiraWebhook(null);
+        setNotifications([]);
       }
       const loadedProjects = await listProjects(credentials, params.tenantId);
       setProjects(loadedProjects);
@@ -408,12 +427,15 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
     try {
       await loadGitHubRepositories({ silent: true });
       if (tenant?.jira.connection_id) {
-        const availableProjects = await listJiraProjects(credentials, tenant.jira.connection_id);
-        setJiraProjects(availableProjects);
+      const availableProjects = await listJiraProjects(credentials, tenant.jira.connection_id);
+      setJiraProjects(availableProjects);
       }
       setStatusLine("Project option sources refreshed.");
     } catch (error) {
       setStatusLine(`Unable to refresh project options: ${(error as Error).message}`);
+      if (tenant?.jira.connection_id) {
+        await loadNotifications();
+      }
     } finally {
       setProjectsBusy(false);
     }
@@ -512,6 +534,27 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
               ? `No webhook delivery within ${jiraWebhook.recent_delivery_window_minutes} minutes.`
               : "Webhook diagnostics are loading."
           };
+  const jiraReauthNotification =
+    notifications.find(
+      (notification) =>
+        notification.kind === "reauth_required" &&
+        notification.scope_type === "jira_connection" &&
+        notification.scope_id === tenant.jira.connection_id
+    ) ?? null;
+
+  function notificationBadgeVariant(notification: AdminNotificationRecord): "destructive" | "warning" | "info" | "outline" {
+    const severity = notification.severity.toUpperCase();
+    if (severity === "CRITICAL" || severity === "HIGH") {
+      return "destructive";
+    }
+    if (severity === "MEDIUM" || severity === "WARNING") {
+      return "warning";
+    }
+    if (notification.status === "resolved") {
+      return "outline";
+    }
+    return "info";
+  }
 
   return (
     <div className="space-y-6">
@@ -578,12 +621,23 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
       {section === "jira" ? (
         <div className="overflow-hidden rounded-2xl border bg-background">
           <div className="px-6 pt-6">
-            <h2 className="text-base font-semibold">Jira Integration</h2>
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="text-base font-semibold">Jira Integration</h2>
+              {jiraReauthNotification ? (
+                <Badge variant={notificationBadgeVariant(jiraReauthNotification)}>Reauth required</Badge>
+              ) : null}
+            </div>
           </div>
           <div className="space-y-3 p-6 text-sm">
             <p>
               <strong>Status:</strong> {jiraConnected ? "Connected" : "Not connected"}
             </p>
+            {jiraReauthNotification ? (
+              <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">
+                <p className="font-medium">{jiraReauthNotification.title}</p>
+                <p className="mt-1 text-red-800">{jiraReauthNotification.detail}</p>
+              </div>
+            ) : null}
             <p>
               <strong>Connection ID:</strong> {tenant.jira.connection_id || "-"}
             </p>
@@ -607,7 +661,7 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
                 {jiraWebhook?.managed_webhook_ids.length ? jiraWebhook.managed_webhook_ids.join(", ") : "-"}
               </p>
               <p>
-                <strong>Last received:</strong> {jiraWebhook?.last_received_at ?? "-"}
+                <strong>Last received:</strong> {formatTimestamp(jiraWebhook?.last_received_at, "-")}
               </p>
               <p>
                 <strong>Last issue key:</strong> {jiraWebhook?.last_issue_key ?? "-"}
@@ -954,16 +1008,42 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
                 <span>Action</span>
               </div>
               <ul className="divide-y">
-                <li className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3 px-3 py-3">
-                  <div className="space-y-0.5">
-                    <p className="font-medium">Jira Webhook Delivery</p>
-                    <p className="text-xs text-muted-foreground">{jiraWebhookStatus.detail}</p>
-                  </div>
-                  <span className="rounded-full border px-2 py-0.5 text-xs">{jiraWebhookStatus.label}</span>
-                  <Button asChild size="sm" variant="outline">
-                    <Link href={getTenantSettingsRoute(tenant.tenant_id, "jira")}>Review</Link>
-                  </Button>
-                </li>
+                {notifications.length ? (
+                  notifications.map((notification) => (
+                    <li
+                      key={notification.notification_id}
+                      className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3 px-3 py-3"
+                    >
+                      <div className="space-y-0.5">
+                        <p className="font-medium">{notification.title}</p>
+                        <p className="text-xs text-muted-foreground">{notification.detail}</p>
+                      </div>
+                      <Badge variant={notificationBadgeVariant(notification)}>{notification.status}</Badge>
+                      {notification.kind === "reauth_required" ? (
+                        <Button size="sm" variant="outline" onClick={() => void connectJira()}>
+                          Reconnect Jira
+                        </Button>
+                      ) : (
+                        <Button asChild size="sm" variant="outline">
+                          <Link href={getTenantSettingsRoute(tenant.tenant_id, "jira")}>Review</Link>
+                        </Button>
+                      )}
+                    </li>
+                  ))
+                ) : (
+                  <li className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3 px-3 py-3">
+                    <div className="space-y-0.5">
+                      <p className="font-medium">Jira Webhook Delivery</p>
+                      <p className="text-xs text-muted-foreground">{jiraWebhookStatus.detail}</p>
+                    </div>
+                    <Badge variant={jiraWebhookStatus.label === "error" ? "destructive" : jiraWebhookStatus.label === "warning" ? "warning" : "outline"}>
+                      {jiraWebhookStatus.label}
+                    </Badge>
+                    <Button asChild size="sm" variant="outline">
+                      <Link href={getTenantSettingsRoute(tenant.tenant_id, "jira")}>Review</Link>
+                    </Button>
+                  </li>
+                )}
               </ul>
             </div>
           </div>

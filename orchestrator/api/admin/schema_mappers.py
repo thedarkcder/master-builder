@@ -100,7 +100,7 @@ def project_to_schema(project: Project, *, tenant_policy: dict) -> ProjectRead:
         effective_policy=resolve_effective_policy(
             tenant_policy=tenant_policy,
             project_overrides=project.policy_overrides,
-            default_codex_model=settings.codex_model,
+            default_codex_model=None,
             default_codex_reasoning_effort=settings.codex_reasoning_effort,
         ),
         environment=project.environment,

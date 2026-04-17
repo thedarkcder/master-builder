@@ -153,6 +153,18 @@ def extract_jira_comment_author_account_id(payload: dict) -> str | None:
     return None
 
 
+def extract_jira_comment_id(payload: dict) -> str | None:
+    comment = payload.get("comment")
+    if not isinstance(comment, dict):
+        return None
+    comment_id = comment.get("id")
+    if isinstance(comment_id, str) and comment_id.strip():
+        return comment_id.strip()
+    if isinstance(comment_id, int):
+        return str(comment_id)
+    return None
+
+
 def extract_status_transition(payload: dict) -> tuple[str | None, str | None]:
     changelog = payload.get("changelog")
     if not isinstance(changelog, dict):

@@ -2,15 +2,13 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from urllib.parse import quote_plus
 
-from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from orchestrator.api.jira_oauth.connection_service import tenant_jira_oauth_context
 from orchestrator.api.webhooks.jira_admission_flow import (
     evaluate_precheck_decision_with_labels,
 )
+from orchestrator.api.webhooks.jira_board_location import resolve_project_issue_board_location
 from orchestrator.api.webhooks.jira_webhook_types import JiraWebhookContext, jira_webhook_response
 from orchestrator.core.communications import DiscordTenantNotificationAction, TransportAction
 from orchestrator.core.communications.execution_admission_format import present_jira_admission
@@ -25,8 +23,6 @@ from orchestrator.core.decision_state_machine import (
     ExecutionAdmissionReason,
     build_execution_admission_block,
 )
-from orchestrator.tools.jira_oauth import JiraOAuthError
-from orchestrator.tools.jira_oauth_http import JiraOAuthHttpClient
 
 logger = logging.getLogger(__name__)
 
@@ -58,70 +54,6 @@ def stage_handle_backlog_followup_issue_created(
         reason="backlog_followup_issue_created",
         webhook_event=context.webhook_event,
     )
-
-
-def _issues_payload_contains_issue(*, payload: object, issue_key: str) -> bool:
-    if not isinstance(payload, dict):
-        return False
-    issues = payload.get("issues")
-    if not isinstance(issues, list):
-        return False
-    normalized_issue_key = issue_key.strip().upper()
-    for issue in issues:
-        if not isinstance(issue, dict):
-            continue
-        candidate_key = str(issue.get("key") or "").strip().upper()
-        if candidate_key == normalized_issue_key:
-            return True
-    return False
-
-
-def _fetch_issue_board_location(
-    *,
-    context: JiraWebhookContext,
-    session: Session,
-    settings,  # noqa: ANN001
-    board_id: int,
-) -> tuple[str, str | None]:
-    try:
-        oauth_context = tenant_jira_oauth_context(
-            session=session,
-            tenant=context.tenant,
-            settings=settings,
-        )
-    except HTTPException as exc:
-        return "error", str(exc.detail)
-    issue_jql = quote_plus(f'key = "{context.issue_key}"')
-    base_url = f"https://api.atlassian.com/ex/jira/{oauth_context.connection.cloud_id}/rest/agile/1.0"
-    backlog_url = f"{base_url}/board/{board_id}/backlog?jql={issue_jql}&maxResults=1"
-    board_url = f"{base_url}/board/{board_id}/issue?jql={issue_jql}&maxResults=1"
-    http_client = JiraOAuthHttpClient()
-    backlog_error_detail: str | None = None
-    try:
-        backlog_payload = http_client.get_json(
-            url=backlog_url,
-            access_token=oauth_context.access_token,
-        )
-        if _issues_payload_contains_issue(payload=backlog_payload, issue_key=context.issue_key):
-            return "backlog", None
-    except (JiraOAuthError, ValueError) as exc:
-        backlog_error_detail = f"backlog lookup failed: {exc}"
-    try:
-        board_payload = http_client.get_json(
-            url=board_url,
-            access_token=oauth_context.access_token,
-        )
-        if _issues_payload_contains_issue(payload=board_payload, issue_key=context.issue_key):
-            return "board", None
-    except (JiraOAuthError, ValueError) as exc:
-        board_error_detail = f"board lookup failed: {exc}"
-        if backlog_error_detail:
-            return "error", f"{backlog_error_detail}; {board_error_detail}"
-        return "error", board_error_detail
-    if backlog_error_detail:
-        return "not_on_board", backlog_error_detail
-    return "not_on_board", None
-
 
 def stage_handle_run_board_gate(
     *,
@@ -159,11 +91,10 @@ def stage_handle_run_board_gate(
                 **admission_presentation.response_fields,
             )
         )
-    location, detail = _fetch_issue_board_location(
+    location, detail = resolve_project_issue_board_location(
         context=context,
         session=session,
         settings=settings,
-        board_id=board_id,
     )
     if location == "board":
         return None

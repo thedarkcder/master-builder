@@ -6,7 +6,9 @@ from orchestrator.api.discord.ingress.seed_runtime import seed_issues_with_runti
 from orchestrator.api.discord.seed.issue_service import list_child_issue_previews_for_parent
 from orchestrator.api.jira_oauth.connection_service import tenant_jira_oauth_context
 from orchestrator.api.webhooks.contracts import (
+    create_jira_comment,
     extract_changed_fields,
+    extract_jira_comment_id,
     extract_jira_comment_text,
     extract_status_transition,
     post_jira_comment,
@@ -19,6 +21,7 @@ from orchestrator.core.jira_parent_child_sync_service import (
     JiraParentChildSyncResult,
     handle_engineering_clarification_command as handle_engineering_clarification_command_service,
     handle_engineering_clarification_reply as handle_engineering_clarification_reply_service,
+    handle_pm_interview_reply as handle_pm_interview_reply_service,
     handle_parent_feature_sync as handle_parent_feature_sync_service,
     is_system_generated_comment as is_system_generated_comment_service,
 )
@@ -74,6 +77,7 @@ def handle_parent_feature_sync(
         build_runtime_for_selector_fn=build_runtime_for_selector,
         seed_issues_with_runtime_fn=seed_issues_with_runtime,
         post_jira_comment_fn=post_jira_comment,
+        create_jira_comment_fn=create_jira_comment,
     )
     return _webhook_response_from_result(context=context, result=result)
 
@@ -109,6 +113,28 @@ def handle_engineering_clarification_reply(
         tenant_jira_oauth_context_fn=tenant_jira_oauth_context,
         seed_issues_with_runtime_fn=seed_issues_with_runtime,
         post_jira_comment_fn=post_jira_comment,
+        create_jira_comment_fn=create_jira_comment,
         extract_jira_comment_text_fn=extract_jira_comment_text,
+    )
+    return _webhook_response_from_result(context=context, result=result)
+
+
+def handle_pm_interview_reply(
+    *,
+    context: JiraWebhookContext,
+    session: Session,
+    settings,  # noqa: ANN001
+) -> dict | None:
+    result = handle_pm_interview_reply_service(
+        context=_build_service_context(context=context),
+        session=session,
+        settings=settings,
+        tenant_jira_oauth_context_fn=tenant_jira_oauth_context,
+        build_runtime_for_selector_fn=build_runtime_for_selector,
+        seed_issues_with_runtime_fn=seed_issues_with_runtime,
+        post_jira_comment_fn=post_jira_comment,
+        create_jira_comment_fn=create_jira_comment,
+        extract_jira_comment_text_fn=extract_jira_comment_text,
+        extract_jira_comment_id_fn=extract_jira_comment_id,
     )
     return _webhook_response_from_result(context=context, result=result)

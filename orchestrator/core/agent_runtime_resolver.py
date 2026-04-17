@@ -24,7 +24,6 @@ from orchestrator.core.platform_settings_service import (
     SETTING_KEY_AGENT_RUNTIME_ROUTING,
     platform_settings_service,
 )
-from orchestrator.core.project_policy import resolve_effective_policy
 from orchestrator.storage.models import Project, Tenant
 
 
@@ -44,19 +43,11 @@ def _resolve_agent_execution_profiles(
     platform_profiles = normalize_execution_profiles(platform_profiles)
     tenant_profiles = normalize_execution_profiles((tenant_policy or {}).get("execution_profiles"))
     project_profiles = normalize_execution_profiles((project_overrides or {}).get("execution_profiles"))
-    effective_policy = resolve_effective_policy(
-        tenant_policy=tenant_policy or {},
-        project_overrides=project_overrides or {},
-        default_codex_model=settings.codex_model,
-        default_codex_reasoning_effort=settings.codex_reasoning_effort,
-    )
     default_profiles = default_execution_profiles(
         default_codex_cli_command=settings.codex_cli_command,
-        default_codex_model=settings.codex_model,
         default_codex_reasoning_effort=settings.codex_reasoning_effort,
         default_codex_supported_models=getattr(settings, "codex_supported_models", None),
         default_chat_cli_command=settings.chat_cli_command,
-        default_chat_model=settings.chat_model,
         default_chat_reasoning_effort=settings.chat_reasoning_effort,
         default_claude_cli_command=getattr(settings, "claude_cli_command", ""),
     )
@@ -73,28 +64,6 @@ def _resolve_agent_execution_profiles(
     platform_selector_routing = normalize_execution_profile_routing(platform_selector_routing)
     merged_routing = dict(routing)
     merged_routing.update(platform_selector_routing or {})
-    # Respect explicit effective-policy overrides when no profile explicitly pins those values.
-    effective_model = str(effective_policy.get("codex_model") or settings.codex_model).strip() or settings.codex_model
-    effective_effort = (
-        str(effective_policy.get("codex_reasoning_effort") or settings.codex_reasoning_effort).strip().lower()
-        or settings.codex_reasoning_effort
-    )
-    engineering_profile_explicit = any(
-        "engineering_execution" in source for source in (platform_profiles, tenant_profiles, project_profiles)
-    )
-    engineering_profile = dict(profiles.get("engineering_execution") or {})
-    if engineering_profile and not engineering_profile_explicit:
-        engineering_profile["model"] = effective_model
-        engineering_profile["reasoning_effort"] = effective_effort
-        profiles["engineering_execution"] = engineering_profile
-    general_profile_explicit = any(
-        "general_planning" in source for source in (platform_profiles, tenant_profiles, project_profiles)
-    )
-    general_profile = dict(profiles.get("general_planning") or {})
-    if general_profile and not general_profile_explicit:
-        general_profile["model"] = effective_model
-        general_profile["reasoning_effort"] = effective_effort
-        profiles["general_planning"] = general_profile
     merged_platform_role_routing = merge_agent_routing(
         default_routing=default_agent_role_routing(),
         configured_routing=normalize_agent_routing(platform_role_routing),

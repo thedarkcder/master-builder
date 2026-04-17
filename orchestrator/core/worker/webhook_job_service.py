@@ -41,6 +41,7 @@ from orchestrator.core.project_automation_execution_service import (
     mark_project_automation_execution_success,
     prepare_project_automation_execution,
 )
+from orchestrator.core.webhook_job_errors import RetryableWebhookJobError
 from orchestrator.core.webhook_job_queue import (
     WEBHOOK_TRANSPORT_DISCORD_COMMAND,
     WEBHOOK_TRANSPORT_DISCORD_INTERACTION,
@@ -53,6 +54,7 @@ from orchestrator.core.webhook_job_queue import (
     mark_webhook_job_ids_failed,
     mark_webhook_jobs_done,
     mark_webhook_jobs_failed,
+    requeue_webhook_job_ids,
 )
 from orchestrator.core.config import Settings
 from orchestrator.storage.models import Project, Tenant
@@ -550,6 +552,31 @@ def process_next_webhook_job(
             error=str(exc.detail),
         )
         return failed_jobs[0] if failed_jobs else None
+    except RetryableWebhookJobError as exc:
+        _rollback_job_session(
+            session,
+            job_transport=job_transport,
+            job_tenant_id=job_tenant_id,
+            job_subject_key=job_subject_key,
+            job_id=job_id,
+        )
+        logger.warning(
+            "webhook_job_requeued transport=%s tenant_id=%s subject_key=%s job_id=%s retry_after_seconds=%s error=%s",
+            job_transport,
+            job_tenant_id,
+            job_subject_key,
+            job_id,
+            exc.retry_after_seconds,
+            str(exc),
+        )
+        requeued_jobs = requeue_webhook_job_ids(
+            session,
+            job_ids=failed_job_ids,
+            owner_id=owner_id,
+            error=str(exc),
+            retry_after_seconds=exc.retry_after_seconds,
+        )
+        return requeued_jobs[0] if requeued_jobs else None
     except Exception as exc:  # noqa: BLE001
         _rollback_job_session(
             session,
