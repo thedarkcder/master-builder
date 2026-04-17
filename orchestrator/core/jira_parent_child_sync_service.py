@@ -62,14 +62,8 @@ from orchestrator.core.workflow_runtime import (
     WorkflowAdvanceOutcome,
     WorkflowAdvanceRequest,
     WorkflowTransitionPlan,
-    WorkflowTransitionPlanner,
     apply_workflow_transition_plan,
 )
-from orchestrator.core.workflow_execution_projection import (
-    classify_external_workflow_failure,
-    resolve_latest_issue_workflow,
-)
-from orchestrator.core.workflow_type_catalog import get_workflow_type, get_workflow_type_by_handler_key
 from orchestrator.core.webhook_job_errors import RetryableWebhookJobError
 from orchestrator.storage.models import FollowupContext, Project
 from orchestrator.tools.discord_api import DiscordApiClient, DiscordApiError
@@ -1930,6 +1924,7 @@ def handle_pm_interview_reply(
     session: Session,
     settings,  # noqa: ANN001
     integration_router,
+    build_workflow_runtime_fn,
     build_runtime_for_selector_fn,
     seed_issues_with_runtime_fn,
     post_jira_comment_fn,
@@ -2029,292 +2024,83 @@ def handle_pm_interview_reply(
             extra={"error": str(exc), "webhook_event": context.webhook_event},
         )
 
-    oauth = _jira_oauth_context(
-        integration_router=integration_router,
-        session=session,
-        tenant=context.tenant,
-        settings=settings,
-    )
     parent_detail = _jira_adapter(
         integration_router=integration_router,
         session=session,
         tenant=context.tenant,
         settings=settings,
     ).get_issue_detail(issue_id_or_key=context.issue_key)
-    existing_workflow = resolve_latest_issue_workflow(
-        session=session,
-        tenant_id=context.tenant_id,
-        issue_key=parent_detail.key,
-    )
-    workflow_type = (
-        get_workflow_type(session, workflow_type_key=existing_workflow.workflow_type_key)
-        if existing_workflow is not None
-        else get_workflow_type_by_handler_key(session, handler_key="jira_parent_feature")
-    )
-    lifecycle = WorkflowTransitionPlanner()
-    lifecycle.ensure_issue_execution(
-        issue_summary=parent_detail.summary,
-        issue_description=parent_detail.description,
-    )
     brief_payload = followup_result.assessment.brief.to_payload()
     next_questions: list[object] = []
     if followup_result.assessment.next_question is not None:
         next_questions.append(format_pm_interview_question(followup_result.assessment.next_question))
     if not next_questions:
         next_questions = [str(value).strip() for value in brief_payload.get("open_questions", []) if str(value).strip()]
-
-    if not followup_result.assessment.ready_to_write:
-        _update_issue_sync_label(
-            oauth=oauth,
-            issue_detail=parent_detail,
-            target_label="sync-blocked",
-        )
-        lifecycle.mark_waiting_for_input(
-            operation_type="brief_normalization",
-            summary="Parent brief still needs product clarification before planning can continue.",
-        )
-        error = None
-        if not has_matching_active_clarification_state(
+    if bool(followup_result.assessment.ready_to_write):
+        persist_parent_feature_brief_snapshot(
             session=session,
             tenant_id=context.tenant_id,
-            issue_key=context.issue_key,
+            project_id=context.project_id,
+            parent_issue_key=context.issue_key,
+            source_text=parent_detail.description or comment_body,
+            brief=brief_payload,
+            notes={"source": "jira_pm_interview_reply"},
+            status=PM_INTERVIEW_STATUS_PM_COMPLETED,
+        )
+        mark_pm_interview_case_completed(
+            session=session,
+            tenant_id=context.tenant_id,
+            request_id=pm_request_id,
+            parent_issue_key=context.issue_key,
+            notes={"source": "jira_pm_interview_reply"},
+        )
+        close_followup_contexts(
+            session=session,
+            tenant_id=context.tenant_id,
             context_type=FOLLOWUP_CONTEXT_PM_INTERVIEW,
-            questions=next_questions,
-            transport=_PM_INTERVIEW_JIRA_TRANSPORT,
-            reply_scope=_PM_INTERVIEW_JIRA_REPLY_SCOPE,
-        ):
-            _post_parent_brief_questions_to_discord(
-                session=session,
-                settings=settings,
-                tenant=context.tenant,
-                project_id=context.project_id,
-                parent_issue_key=context.issue_key,
-                questions=next_questions,
-            )
-            _created_comment, error = _post_parent_brief_questions_to_jira(
-                session=session,
-                tenant=context.tenant,
-                project_id=context.project_id,
-                issue_key=context.issue_key,
-                payload=dict(context.payload or {}),
-                questions=next_questions,
-                settings=settings,
-                create_jira_comment_fn=create_jira_comment_fn,
-            )
-        advance_result = lifecycle.build_outcome(
-            handled=True,
-            reason="pm_interview_still_open",
-            extra={
-                "questions": next_questions,
-                "comment_posted": error is None,
-                "webhook_event": context.webhook_event,
-            },
+            issue_key=context.issue_key,
         )
-        jira_result = _jira_sync_result_from_advance_result(
-            session=session,
-            workflow_type=workflow_type,
-            tenant_id=context.tenant_id,
-            project_id=context.project_id,
-            issue_key=parent_detail.key,
-            result=advance_result,
-        )
-        session.commit()
-        return jira_result
-
-    persist_parent_feature_brief_snapshot(
-        session=session,
-        tenant_id=context.tenant_id,
-        project_id=context.project_id,
-        parent_issue_key=context.issue_key,
-        source_text=parent_detail.description or comment_body,
-        brief=brief_payload,
-        notes={"source": "jira_pm_interview_reply"},
-        status=PM_INTERVIEW_STATUS_PM_COMPLETED,
-    )
-    _rewrite_parent_issue_from_brief(
-        oauth=oauth,
-        parent_detail=parent_detail,
-        brief_payload=brief_payload,
-        sync_status="children_syncing",
-        planning_state="brief_normalized",
-        open_questions=[],
-    )
-    lifecycle.mark_operation_completed(
-        operation_type="brief_normalization",
-        summary="Parent brief normalized from PM clarification answers.",
-    )
-    lifecycle.mark_operation_completed(
-        operation_type="jira_parent_update",
-        summary="Parent Jira issue synced with the confirmed brief.",
-    )
-    planner = _ParentBriefPlanner(
+    runtime = build_workflow_runtime_fn(
         session=session,
         settings=settings,
-        context=context,
-        build_runtime_for_selector_fn=build_runtime_for_selector_fn,
-    )
-    child_sync_gateway = _ParentChildSyncGateway(
-        session=session,
-        context=context,
-        seed_issues_with_runtime_fn=seed_issues_with_runtime_fn,
-    )
-    try:
-        planning_result, planning_package = planner.plan_backlog_parent(
-            parent_detail=parent_detail,
-            product_brief=brief_payload,
-            project_key=project_key,
-        )
-        seed_data = child_sync_gateway.seed_parent_backlog_children(
-            parent_detail=parent_detail,
-            project_key=project_key,
-            planning_package=planning_package,
-            planning_state=planning_result.planning_state,
-        )
-    except Exception as exc:  # noqa: BLE001
-        logger.exception(
-            "jira_pm_interview_followup_seed_failed request_id=%s tenant_id=%s issue_key=%s error=%s",
-            context.request_id,
-            context.tenant_id,
-            context.issue_key,
-            exc,
-        )
-        category, retryable = classify_external_workflow_failure(error=exc)
-        lifecycle.mark_operation_failed(
-            operation_type="jira_child_fanout",
-            category=category,
-            message=str(exc),
-            retryable=retryable,
-        )
-        _update_issue_sync_label(
-            oauth=oauth,
-            issue_detail=parent_detail,
-            target_label="sync-blocked",
-        )
-        _post_sync_note(
-            session=session,
-            tenant=context.tenant,
-            issue_key=context.issue_key,
-            settings=settings,
-            body=f"PM clarification was recorded, but backlog planning failed: {exc}",
+        process_claimed_run_fn=None,
+        build_runner_fn=None,
+        runtime_kwargs_fn=None,
+        resolve_advance_handler_fn=build_workflow_advance_handler_resolver(
+            integration_router=integration_router,
+            extract_changed_fields_fn=lambda *args, **kwargs: [],
+            extract_status_transition_fn=lambda *args, **kwargs: (None, None),
+            build_runtime_for_selector_fn=build_runtime_for_selector_fn,
+            seed_issues_with_runtime_fn=seed_issues_with_runtime_fn,
             post_jira_comment_fn=post_jira_comment_fn,
-        )
-        advance_result = lifecycle.build_outcome(
-            handled=True,
-            reason="pm_interview_followup_seed_failed",
-            extra={"error": str(exc), "webhook_event": context.webhook_event},
-        )
-        jira_result = _jira_sync_result_from_advance_result(
-            session=session,
-            workflow_type=workflow_type,
-            tenant_id=context.tenant_id,
-            project_id=context.project_id,
-            issue_key=parent_detail.key,
-            result=advance_result,
-        )
-        session.commit()
-        return jira_result
-
-    if planning_result.planning_state != PLANNING_STATE_COMPLETED or bool(seed_data.get("requires_input")):
-        lifecycle.mark_waiting_for_input(
-            operation_type="backlog_planning",
-            summary="Backlog planning still needs clarification before child fanout can complete.",
-        )
-        _update_issue_sync_label(
-            oauth=oauth,
-            issue_detail=parent_detail,
-            target_label="sync-blocked",
-        )
-        _post_sync_note(
-            session=session,
-            tenant=context.tenant,
-            issue_key=context.issue_key,
-            settings=settings,
-            body=(
-                "PM clarification was recorded, but backlog planning could not complete from the confirmed brief. "
-                "Internal follow-up is required before engineering child tickets can be refreshed."
-            ),
-            post_jira_comment_fn=post_jira_comment_fn,
-        )
-        advance_result = lifecycle.build_outcome(
-            handled=True,
-            reason="pm_interview_followup_planning_blocked",
-            extra={
-                "parent_revision": seed_data.get("parent_revision"),
-                "children_sync_status": seed_data.get("children_sync_status"),
-                "webhook_event": context.webhook_event,
-            },
-        )
-        jira_result = _jira_sync_result_from_advance_result(
-            session=session,
-            workflow_type=workflow_type,
-            tenant_id=context.tenant_id,
-            project_id=context.project_id,
-            issue_key=parent_detail.key,
-            result=advance_result,
-        )
-        session.commit()
-        return jira_result
-
-    mark_pm_interview_case_completed(
-        session=session,
-        tenant_id=context.tenant_id,
-        request_id=pm_request_id,
-        parent_issue_key=context.issue_key,
-        notes={"source": "jira_pm_interview_reply"},
-    )
-    close_followup_contexts(
-        session=session,
-        tenant_id=context.tenant_id,
-        context_type=FOLLOWUP_CONTEXT_PM_INTERVIEW,
-        issue_key=context.issue_key,
-    )
-    lifecycle.mark_operation_completed(
-        operation_type="backlog_planning",
-        summary="Backlog planning completed from the confirmed parent brief.",
-    )
-    lifecycle.mark_operation_completed(
-        operation_type="jira_child_fanout",
-        summary="Engineering child tickets were created or refreshed from the confirmed brief.",
-    )
-    lifecycle.mark_completed_if_ready()
-    updated_children, created_children, changed_children = child_sync_gateway.combined_child_updates(seed_data=seed_data)
-    _post_sync_note(
-        session=session,
-        tenant=context.tenant,
-        issue_key=context.issue_key,
-        settings=settings,
-        body=(
-            "Product clarification was applied and backlog planning is current again. "
-            f"{child_sync_gateway.sync_completion_note(updated_children=updated_children, created_children=created_children)}"
+            create_jira_comment_fn=create_jira_comment_fn,
         ),
-        post_jira_comment_fn=post_jira_comment_fn,
     )
-    for child_key in changed_children:
-        _post_sync_note(
-            session=session,
+    advance_result = runtime.advance(
+        request=WorkflowAdvanceRequest(
+            workflow_handler_key="jira_parent_feature",
+            tenant_id=context.tenant_id,
             tenant=context.tenant,
-            issue_key=child_key,
-            settings=settings,
-            body=f"Updated from parent feature {context.issue_key} after PM clarification.",
-            post_jira_comment_fn=post_jira_comment_fn,
+            project_id=context.project_id,
+            issue_key=context.issue_key,
+            issue_labels=tuple(parent_detail.labels or []),
+            payload={
+                **dict(context.payload or {}),
+                "request_id": context.request_id,
+                "_mb_pm_interview_followup": True,
+                "brief_payload": brief_payload,
+                "next_questions": next_questions,
+                "ready_to_write": bool(followup_result.assessment.ready_to_write),
+            },
+            webhook_event=context.webhook_event,
+            comment_command=context.comment_command,
+            comment_command_argument=context.comment_command_argument,
         )
-    advance_result = lifecycle.build_outcome(
-        handled=True,
-        reason="pm_interview_followup_resolved",
-        extra={
-            "updated_children": changed_children,
-            "parent_revision": seed_data.get("parent_revision"),
-            "children_sync_status": seed_data.get("children_sync_status"),
-            "webhook_event": context.webhook_event,
-        },
-    )
-    jira_result = _jira_sync_result_from_advance_result(
-        session=session,
-        workflow_type=workflow_type,
-        tenant_id=context.tenant_id,
-        project_id=context.project_id,
-        issue_key=parent_detail.key,
-        result=advance_result,
     )
     session.commit()
-    return jira_result
+    return JiraParentChildSyncResult(
+        handled=advance_result.handled,
+        reason=advance_result.reason,
+        extra=dict(advance_result.extra or {}),
+        transition_plan=advance_result.transition_plan,
+    )
