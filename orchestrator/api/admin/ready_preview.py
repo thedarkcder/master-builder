@@ -3,12 +3,7 @@ from __future__ import annotations
 from fastapi import HTTPException, status
 
 from orchestrator.api.schemas import ReadyGatePreviewRead, ReadyIssuePreviewRead
-from orchestrator.core.decision_types import (
-    JiraConfigKey,
-    tenant_jira_config_text,
-    tenant_jira_project_keys,
-    tenant_jira_ready_statuses,
-)
+from orchestrator.core.tenant_operational_health_service import tenant_integration_snapshot
 from orchestrator.storage.models import JiraOAuthConnection, Tenant
 from orchestrator.tools.jira_oauth import JiraOAuthError
 
@@ -27,11 +22,12 @@ def preview_tenant_ready_gate(
     if tenant is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
 
-    project_keys = list(tenant_jira_project_keys(tenant))
+    integration = tenant_integration_snapshot(tenant=tenant)
+    project_keys = list(integration.jira_project_keys)
     if not project_keys:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing Jira project_keys")
 
-    ready_statuses = list(tenant_jira_ready_statuses(tenant))
+    ready_statuses = list(integration.jira_ready_statuses)
     if not ready_statuses:
         ready_statuses = ["Ready for Agent"]
 
@@ -41,7 +37,7 @@ def preview_tenant_ready_gate(
     if not ready_jql:
         ready_jql = default_ready_jql_fn(project_keys=project_keys, ready_statuses=ready_statuses)
 
-    connection_id = tenant_jira_config_text(tenant=tenant, key=JiraConfigKey.CONNECTION_ID)
+    connection_id = integration.jira_connection_id
     if not connection_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Jira OAuth connection is not linked")
     connection = session.get(JiraOAuthConnection, connection_id)
