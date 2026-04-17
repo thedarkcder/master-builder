@@ -26,7 +26,6 @@ from orchestrator.core.runs import (
     RUN_STATUS_BLOCKED,
     RUN_STATUS_WAITING_FOR_INPUT,
     RunBootstrap,
-    enqueue_attempt_for_workflow_uncommitted,
     resolve_required_worker_capability_from_plan,
     resolve_precheck_outcome_from_plan,
 )
@@ -504,8 +503,14 @@ def _resume_workflow_from_human_input_answer_legacy(
     checkpoint_plan_snapshot.context.execution_context["human_input_request_id"] = request.request_id
     checkpoint_plan = checkpoint_plan_snapshot.dump()
 
-    enqueue_result = enqueue_attempt_for_workflow_uncommitted(
-        session,
+    runtime = build_workflow_runtime(
+        session=session,
+        settings=settings,
+        process_claimed_run_fn=None,
+        build_runner_fn=None,
+        runtime_kwargs_fn=None,
+    )
+    enqueue_result = runtime.create_attempt(
         workflow_id=request.workflow_id,
         bootstrap=RunBootstrap(
             workflow_id=request.workflow_id,
@@ -519,6 +524,7 @@ def _resume_workflow_from_human_input_answer_legacy(
             precheck_outcome=persisted_precheck_outcome,
             required_worker_capability=persisted_required_worker_capability,
         ),
+        commit=False,
     )
     if not enqueue_result.enqueued:
         if enqueue_result.reason is EnqueueFailureReason.RUN_ALREADY_ACTIVE:
