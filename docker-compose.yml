@@ -60,7 +60,7 @@ services:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "tctl --address 127.0.0.1:7233 namespace list >/dev/null 2>&1 || exit 1"]
+      test: ["CMD-SHELL", "IP=$$(hostname -i | awk '{print $$1}'); nc -z \"$$IP\" 7233 || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 20
