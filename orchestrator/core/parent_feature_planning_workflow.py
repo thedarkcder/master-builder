@@ -73,7 +73,6 @@ class ParentFeaturePlanningWorkflow:
                 settings=settings,
                 parent_detail=parent_detail,
                 questions=normalization_questions,
-                body_prefix="Parent feature was created in backlog, but brief normalization is blocked pending clarification.",
                 reason="pm_parent_issue_created_brief_blocked",
             )
 
@@ -124,9 +123,6 @@ class ParentFeaturePlanningWorkflow:
                 settings=settings,
                 parent_detail=parent_detail,
                 questions=questions,
-                body_prefix=(
-                    "Parent feature was created in backlog, but engineering child planning is blocked pending clarification."
-                ),
                 reason="pm_parent_issue_created_seed_blocked",
                 extra={
                     "parent_revision": seed_data.get("parent_revision"),
@@ -207,7 +203,6 @@ class ParentFeaturePlanningWorkflow:
                 settings=settings,
                 parent_detail=parent_detail,
                 questions=normalization_questions,
-                body_prefix="Parent feature changed but brief normalization is blocked pending clarification.",
                 reason="pm_parent_sync_brief_blocked",
                 extra={"changed_fields": material_changed_fields},
             )
@@ -394,11 +389,10 @@ class ParentFeaturePlanningWorkflow:
         settings,  # noqa: ANN001
         parent_detail,
         questions: list[object],
-        body_prefix: str,
         reason: str,
         extra: dict[str, object] | None = None,
     ) -> ParentFeaturePlanningWorkflowResult:
-        _ = (session, settings, body_prefix)
+        _ = (session, settings)
         issue_gateway = self._deps.issue_gateway
         issue_gateway.update_issue_sync_label(
             issue_detail=parent_detail,
