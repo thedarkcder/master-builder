@@ -38,6 +38,13 @@ class ParentFeaturePlanningWorkflow:
         settings,  # noqa: ANN001
     ) -> WorkflowAdvanceOutcome:
         lifecycle = WorkflowTransitionPlanner()
+        if bool(context.payload.get("_mb_pm_interview_followup")):
+            return self._handle_pm_interview_followup(
+                context=context,
+                session=session,
+                settings=settings,
+                lifecycle=lifecycle,
+            )
         normalized_labels = {str(label).strip().casefold() for label in context.issue_labels or []}
         if context.webhook_event not in {"issue_created", "issue_updated"} or "pm-parent" not in normalized_labels:
             return lifecycle.build_outcome(handled=False)
@@ -556,4 +563,184 @@ class ParentFeaturePlanningWorkflow:
             handled=True,
             reason=reason,
             extra=payload,
+        )
+
+    def _handle_pm_interview_followup(
+        self,
+        *,
+        context,
+        session: Session,
+        settings,  # noqa: ANN001
+        lifecycle,
+    ) -> WorkflowAdvanceOutcome:
+        issue_gateway = self._deps.issue_gateway
+        brief_planner = self._deps.brief_planner
+        child_sync_gateway = self._deps.child_sync_gateway
+        parent_detail = issue_gateway.load_parent_detail(context.issue_key)
+        lifecycle.ensure_issue_execution(
+            issue_summary=parent_detail.summary,
+            issue_description=parent_detail.description,
+        )
+        project_key = self._deps.project_key_for_issue_fn(context.issue_key)
+        brief_payload = dict(context.payload.get("brief_payload") or {})
+        next_questions = [value for value in context.payload.get("next_questions", []) if str(value).strip()]
+        ready_to_write = bool(context.payload.get("ready_to_write"))
+
+        if not ready_to_write:
+            issue_gateway.update_issue_sync_label(
+                issue_detail=parent_detail,
+                target_label="sync-blocked",
+            )
+            lifecycle.mark_waiting_for_input(
+                operation_type="brief_normalization",
+                summary="Parent brief still needs product clarification before planning can continue.",
+            )
+            comment_posted = None
+            if not issue_gateway.has_matching_active_pm_clarification_state(
+                parent_issue_key=context.issue_key,
+                questions=next_questions,
+            ):
+                posted_to_discord = issue_gateway.post_parent_brief_questions(
+                    parent_issue_key=context.issue_key,
+                    questions=next_questions,
+                )
+                created_comment, error = issue_gateway.post_parent_brief_questions_jira(
+                    parent_issue_key=context.issue_key,
+                    questions=next_questions,
+                )
+                if posted_to_discord:
+                    lifecycle.mark_operation_completed(
+                        operation_type="discord_followup_projection",
+                        summary="Posted PM clarification follow-up to Discord.",
+                    )
+                if error is None and created_comment is not None:
+                    lifecycle.mark_operation_completed(
+                        operation_type="jira_comment_projection",
+                        summary="Posted PM clarification questions to Jira.",
+                    )
+                comment_posted = error is None
+            return lifecycle.build_outcome(
+                handled=True,
+                reason="pm_interview_still_open",
+                extra={
+                    "questions": next_questions,
+                    "comment_posted": comment_posted,
+                    "webhook_event": context.webhook_event,
+                },
+            )
+
+        issue_gateway.rewrite_parent_issue_from_brief(
+            parent_detail=parent_detail,
+            brief_payload=brief_payload,
+            sync_status="children_syncing",
+            planning_state="brief_normalized",
+            open_questions=None,
+        )
+        lifecycle.mark_operation_completed(
+            operation_type="brief_normalization",
+            summary="Parent brief normalized from PM clarification answers.",
+        )
+        lifecycle.mark_operation_completed(
+            operation_type="jira_parent_update",
+            summary="Parent Jira issue synced with the confirmed brief.",
+        )
+
+        planning_result, planning_package = brief_planner.plan_backlog_parent(
+            parent_detail=parent_detail,
+            product_brief=brief_payload,
+            project_key=project_key,
+        )
+        try:
+            seed_data = child_sync_gateway.seed_parent_backlog_children(
+                parent_detail=parent_detail,
+                project_key=project_key,
+                planning_package=planning_package,
+                planning_state=planning_result.planning_state,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception(
+                "jira_pm_interview_followup_seed_failed request_id=%s tenant_id=%s issue_key=%s error=%s",
+                context.request_id,
+                context.tenant_id,
+                context.issue_key,
+                exc,
+            )
+            category, retryable = classify_external_workflow_failure(error=exc)
+            lifecycle.mark_operation_failed(
+                operation_type="jira_child_fanout",
+                category=category,
+                message=str(exc),
+                retryable=retryable,
+            )
+            issue_gateway.update_issue_sync_label(
+                issue_detail=parent_detail,
+                target_label="sync-blocked",
+            )
+            issue_gateway.post_sync_note(
+                issue_key=context.issue_key,
+                body=f"PM clarification was recorded, but backlog planning failed: {exc}",
+            )
+            return lifecycle.build_outcome(
+                handled=True,
+                reason="pm_interview_followup_seed_failed",
+                extra={"error": str(exc), "webhook_event": context.webhook_event},
+            )
+
+        if planning_result.planning_state != PLANNING_STATE_COMPLETED or bool(seed_data.get("requires_input")):
+            lifecycle.mark_waiting_for_input(
+                operation_type="backlog_planning",
+                summary="Backlog planning still needs clarification before child fanout can complete.",
+            )
+            issue_gateway.update_issue_sync_label(
+                issue_detail=parent_detail,
+                target_label="sync-blocked",
+            )
+            issue_gateway.post_sync_note(
+                issue_key=context.issue_key,
+                body=(
+                    "PM clarification was recorded, but backlog planning could not complete from the confirmed brief. "
+                    "Internal follow-up is required before engineering child tickets can be refreshed."
+                ),
+            )
+            return lifecycle.build_outcome(
+                handled=True,
+                reason="pm_interview_followup_planning_blocked",
+                extra={
+                    "parent_revision": seed_data.get("parent_revision"),
+                    "children_sync_status": seed_data.get("children_sync_status"),
+                    "webhook_event": context.webhook_event,
+                },
+            )
+
+        lifecycle.mark_operation_completed(
+            operation_type="backlog_planning",
+            summary="Backlog planning completed from the confirmed parent brief.",
+        )
+        lifecycle.mark_operation_completed(
+            operation_type="jira_child_fanout",
+            summary="Engineering child tickets were created or refreshed from the confirmed brief.",
+        )
+        lifecycle.mark_completed_if_ready()
+        updated_children, created_children, changed_children = child_sync_gateway.combined_child_updates(seed_data=seed_data)
+        issue_gateway.post_sync_note(
+            issue_key=context.issue_key,
+            body=(
+                "Product clarification was applied and backlog planning is current again. "
+                f"{child_sync_gateway.sync_completion_note(updated_children=updated_children, created_children=created_children)}"
+            ),
+        )
+        for child_key in changed_children:
+            issue_gateway.post_sync_note(
+                issue_key=child_key,
+                body=f"Updated from parent feature {context.issue_key} after PM clarification.",
+            )
+        return lifecycle.build_outcome(
+            handled=True,
+            reason="pm_interview_followup_resolved",
+            extra={
+                "updated_children": changed_children,
+                "parent_revision": seed_data.get("parent_revision"),
+                "children_sync_status": seed_data.get("children_sync_status"),
+                "webhook_event": context.webhook_event,
+            },
         )

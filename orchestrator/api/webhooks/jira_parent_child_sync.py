@@ -147,6 +147,7 @@ def handle_pm_interview_reply(
         session=session,
         settings=settings,
         integration_router=_build_workflow_integration_router(),
+        build_workflow_runtime_fn=build_workflow_runtime,
         build_runtime_for_selector_fn=build_runtime_for_selector,
         seed_issues_with_runtime_fn=seed_issues_with_runtime,
         post_jira_comment_fn=post_jira_comment,
