@@ -27,6 +27,10 @@ from orchestrator.api.schemas import (
     WorkflowTypeTemporalConfigRead,
 )
 from orchestrator.core.config import get_settings
+from orchestrator.core.workflow_attempt_factory import (
+    build_run_attempt,
+    build_workflow_execution_for_attempt,
+)
 from orchestrator.core.workflow_runtime import build_workflow_runtime
 from orchestrator.core.workflow_run_state import (
     project_workflow_for_new_run_attempt,
@@ -1134,7 +1138,7 @@ def create_workflow_attempt(
     next_workflow = workflow
     orchestration_backend = str(workflow.orchestration_backend).strip().lower()
     if not same_workflow:
-        next_workflow = WorkflowExecution(
+        next_workflow = build_workflow_execution_for_attempt(
             workflow_id=str(uuid4()),
             workflow_type_key=workflow.workflow_type_key,
             tenant_id=workflow.tenant_id,
@@ -1148,14 +1152,14 @@ def create_workflow_attempt(
             orchestration_backend=orchestration_backend,
             dedupe_scope=workflow.dedupe_scope,
             status="queued",
-            last_error=None,
-            active_run_id=None,
             latest_checkpoint_id=selected_checkpoint.checkpoint_id if selected_checkpoint is not None else None,
             source_workflow_id=workflow.workflow_id,
-            source_run_id=(source_run.run_id if normalized_mode == "fresh" and source_run is not None else selected_checkpoint.run_id),
+            source_run_id=(
+                source_run.run_id
+                if normalized_mode == "fresh" and source_run is not None
+                else selected_checkpoint.run_id
+            ),
             created_at=now,
-            started_at=None,
-            finished_at=None,
             updated_at=now,
         )
         session.add(next_workflow)
@@ -1197,7 +1201,7 @@ def create_workflow_attempt(
     )
     next_workflow.pr_url = next_run_pr_url
 
-    next_run = Run(
+    next_run = build_run_attempt(
         run_id=str(uuid4()),
         workflow_id=next_workflow.workflow_id,
         tenant_id=next_workflow.tenant_id,
@@ -1209,23 +1213,21 @@ def create_workflow_attempt(
         branch=next_workflow.branch,
         pr_url=next_run_pr_url,
         attempt_number=1 if not same_workflow else _next_attempt_number(session=session, workflow_id=workflow.workflow_id),
-        parent_run_id=(source_run.run_id if normalized_mode == "fresh" and source_run is not None else selected_checkpoint.run_id if selected_checkpoint is not None else None),
+        parent_run_id=(
+            source_run.run_id
+            if normalized_mode == "fresh" and source_run is not None
+            else selected_checkpoint.run_id if selected_checkpoint is not None else None
+        ),
         entry_mode=normalized_mode,
         entry_stage="orchestrated" if normalized_mode == "fresh" else selected_checkpoint.stage,
         entry_checkpoint_id=None if normalized_mode == "fresh" else selected_checkpoint.checkpoint_id,
         dedupe_scope=next_workflow.dedupe_scope,
+        plan=next_run_plan,
         status="queued",
-        last_error=None,
         pre_check_outcome=next_run_precheck_outcome,
         required_worker_capability=next_run_required_worker_capability,
         required_runtime_kinds_json=next_run_required_runtime_kinds,
-        plan=next_run_plan,
         created_at=now,
-        dispatch_claimed_at=None,
-        started_at=None,
-        last_heartbeat_at=None,
-        worker_service_instance_id=None,
-        finished_at=None,
     )
     _require_ready_for_queue(
         source="admin_workflow_attempt",
