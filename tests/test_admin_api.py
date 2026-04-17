@@ -2786,7 +2786,7 @@ class AdminApiTests(AdminApiTestHarness):
             follow_redirects=False,
         )
         self.assertEqual(callback_response.status_code, 302)
-        self.assertIn("/tenants/tenant-a/settings/github?github_install=success", callback_response.headers.get("location", ""))
+        self.assertIn("/tenant-a/settings/github?github_install=success", callback_response.headers.get("location", ""))
 
         tenant_response = self.client.get("/api/admin/tenants/tenant-a", auth=("admin", "secret"))
         self.assertEqual(tenant_response.status_code, 200)
