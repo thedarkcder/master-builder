@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
+from orchestrator.core.workflow_execution_status import mark_workflow_failed
 from orchestrator.core.workflow_run_state import (
     project_workflow_for_cancelled_attempt,
     project_workflow_for_dispatch_claim,
@@ -150,10 +151,6 @@ def apply_execution_failure(
     message: str,
     now: datetime | None = None,
 ) -> WorkflowExecution:
-    timestamp = now or _now()
-    workflow.status = "failed"
-    workflow.last_error = message
-    workflow.finished_at = timestamp
-    workflow.updated_at = timestamp
+    mark_workflow_failed(workflow=workflow, message=message, now=now or _now())
     workflow.active_run_id = None
     return workflow
