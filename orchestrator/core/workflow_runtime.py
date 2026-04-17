@@ -49,6 +49,12 @@ class WorkflowAdvanceResult:
     extra: dict[str, object] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class WorkflowLifecycleMutation:
+    kind: str
+    payload: dict[str, Any] = field(default_factory=dict)
+
+
 class WorkflowAdvanceLifecycle(Protocol):
     def ensure_issue_execution(self, *, issue_summary: str | None, issue_description: object | None) -> None:
         ...
@@ -83,9 +89,12 @@ class RuntimeWorkflowAdvanceLifecycle:
     tenant_id: str
     project_id: str | None
     issue_key: str
+    issue_summary: str | None = None
+    issue_description: object | None = None
+    _mutations: list[WorkflowLifecycleMutation] = field(default_factory=list)
     _projection: Any | None = None
 
-    def _ensure_projection(self, *, issue_summary: str | None = None, issue_description: object | None = None):
+    def _ensure_projection(self):
         if self._projection is None:
             self._projection = ensure_issue_workflow_execution(
                 session=self.session,
@@ -93,21 +102,36 @@ class RuntimeWorkflowAdvanceLifecycle:
                 tenant_id=self.tenant_id,
                 project_id=self.project_id,
                 issue_key=self.issue_key,
-                issue_summary=issue_summary,
-                issue_description=issue_description,
+                issue_summary=self.issue_summary,
+                issue_description=self.issue_description,
             )
         return self._projection
 
     def ensure_issue_execution(self, *, issue_summary: str | None, issue_description: object | None) -> None:
-        self._ensure_projection(issue_summary=issue_summary, issue_description=issue_description)
+        self.issue_summary = issue_summary
+        self.issue_description = issue_description
+        self._mutations.append(
+            WorkflowLifecycleMutation(
+                kind="ensure_issue_execution",
+                payload={
+                    "issue_summary": issue_summary,
+                    "issue_description": issue_description,
+                },
+            )
+        )
 
     def mark_running(self) -> None:
-        self._ensure_projection().mark_running()
+        self._mutations.append(WorkflowLifecycleMutation(kind="mark_running"))
 
     def mark_operation_completed(self, *, operation_type: str, summary: str) -> None:
-        self._ensure_projection().mark_operation_completed(
-            operation_type=operation_type,
-            summary=summary,
+        self._mutations.append(
+            WorkflowLifecycleMutation(
+                kind="mark_operation_completed",
+                payload={
+                    "operation_type": operation_type,
+                    "summary": summary,
+                },
+            )
         )
 
     def mark_operation_failed(
@@ -118,21 +142,56 @@ class RuntimeWorkflowAdvanceLifecycle:
         message: str,
         retryable: bool,
     ) -> None:
-        self._ensure_projection().mark_operation_failed(
-            operation_type=operation_type,
-            category=category,
-            message=message,
-            retryable=retryable,
+        self._mutations.append(
+            WorkflowLifecycleMutation(
+                kind="mark_operation_failed",
+                payload={
+                    "operation_type": operation_type,
+                    "category": category,
+                    "message": message,
+                    "retryable": retryable,
+                },
+            )
         )
 
     def mark_waiting_for_input(self, *, operation_type: str, summary: str) -> None:
-        self._ensure_projection().mark_waiting_for_input(
-            operation_type=operation_type,
-            summary=summary,
+        self._mutations.append(
+            WorkflowLifecycleMutation(
+                kind="mark_waiting_for_input",
+                payload={
+                    "operation_type": operation_type,
+                    "summary": summary,
+                },
+            )
         )
 
     def mark_completed_if_ready(self) -> None:
-        self._ensure_projection().mark_completed_if_ready()
+        self._mutations.append(WorkflowLifecycleMutation(kind="mark_completed_if_ready"))
+
+    def apply(self) -> None:
+        if not self._mutations:
+            return
+        projection = None
+        for mutation in self._mutations:
+            if mutation.kind == "ensure_issue_execution":
+                self.issue_summary = mutation.payload.get("issue_summary")
+                self.issue_description = mutation.payload.get("issue_description")
+                projection = self._ensure_projection()
+                continue
+            if projection is None:
+                projection = self._ensure_projection()
+            if mutation.kind == "mark_running":
+                projection.mark_running()
+            elif mutation.kind == "mark_operation_completed":
+                projection.mark_operation_completed(**mutation.payload)
+            elif mutation.kind == "mark_operation_failed":
+                projection.mark_operation_failed(**mutation.payload)
+            elif mutation.kind == "mark_waiting_for_input":
+                projection.mark_waiting_for_input(**mutation.payload)
+            elif mutation.kind == "mark_completed_if_ready":
+                projection.mark_completed_if_ready()
+            else:  # pragma: no cover - defensive against invalid mutation kinds
+                raise RuntimeError(f"Unsupported workflow lifecycle mutation kind: {mutation.kind}")
 
 
 class WorkflowAdvanceHandler(Protocol):
@@ -189,13 +248,15 @@ class WorkflowRuntime:
             project_id=request.project_id,
             issue_key=request.issue_key,
         )
-        return handler.advance(
+        result = handler.advance(
             session=self._session,
             settings=self._settings,
             workflow_type=workflow_type,
             request=request,
             lifecycle=lifecycle,
         )
+        lifecycle.apply()
+        return result
 
     def start_execution(
         self,
