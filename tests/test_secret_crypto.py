@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from cryptography.fernet import Fernet
 
+from orchestrator.core.config import Settings
 from orchestrator.core.secret_crypto import (
     SecretCryptoError,
     SecretCryptoService,
@@ -30,6 +32,10 @@ class _FakeWrappedKeyProvider:
 
 
 class SecretCryptoTests(unittest.TestCase):
+    def test_settings_default_vault_transit_key_name_is_stable(self) -> None:
+        settings = Settings()
+        self.assertEqual(settings.vault_transit_key, "master-builder")
+
     def test_provider_backed_round_trip(self) -> None:
         service = SecretCryptoService(provider=_FakeWrappedKeyProvider())
         payload = service.encrypt(plaintext="hello")
@@ -73,7 +79,7 @@ class SecretCryptoTests(unittest.TestCase):
             gcp_kms_key_name="",
         )
         service = SecretCryptoService(provider=_FakeWrappedKeyProvider())
-        with unittest.mock.patch("orchestrator.core.secret_crypto.secret_crypto_service", return_value=service):
+        with patch("orchestrator.core.secret_crypto.secret_crypto_service", return_value=service):
             ciphertext = encrypt_secret_value(
                 plaintext="hello",
                 settings=settings,

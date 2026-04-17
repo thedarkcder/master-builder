@@ -47,7 +47,7 @@ class Settings(BaseSettings):
     vault_addr: str = ""
     vault_token: str = ""
     vault_namespace: str = ""
-    vault_transit_key: str = ""
+    vault_transit_key: str = "master-builder"
     aws_kms_region: str = ""
     aws_kms_key_id: str = ""
     gcp_kms_key_name: str = ""
