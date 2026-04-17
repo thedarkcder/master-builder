@@ -75,6 +75,7 @@ def add_run_with_workflow(
     session,
     run: Run,
     *,
+    workflow_type_key: str = "issue_execution",
     workflow_status: str | None = None,
     orchestration_backend: str = "legacy",
     latest_checkpoint: WorkflowCheckpoint | None = None,
@@ -95,6 +96,7 @@ def add_run_with_workflow(
     active_run_id = run.run_id if effective_workflow_status in {"queued", "dispatching", "running", "waiting_for_input"} else None
     workflow = WorkflowExecution(
         workflow_id=run.workflow_id,
+        workflow_type_key=workflow_type_key,
         tenant_id=run.tenant_id,
         project_id=run.project_id,
         issue_key=run.issue_key,
@@ -127,6 +129,7 @@ def add_run_with_workflow(
 def add_workflow_attempt(
     session,
     *,
+    workflow_type_key: str = "issue_execution",
     workflow_id: str | None = None,
     run_id: str,
     tenant_id: str,
@@ -180,6 +183,7 @@ def add_workflow_attempt(
     )
     workflow = WorkflowExecution(
         workflow_id=normalized_workflow_id,
+        workflow_type_key=workflow_type_key,
         tenant_id=tenant_id,
         project_id=project_id,
         issue_key=issue_key,

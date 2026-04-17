@@ -382,6 +382,7 @@ class RunLifecycleTests(unittest.TestCase):
         with self.session_factory() as session:
             workflow = WorkflowExecution(
                 workflow_id="workflow-non-ready",
+                workflow_type_key="issue_execution",
                 tenant_id="tenant-runs",
                 project_id=None,
                 issue_key="TP-913",

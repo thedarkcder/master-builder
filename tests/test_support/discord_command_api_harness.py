@@ -149,6 +149,7 @@ class DiscordCommandApiTestHarness(SqliteTemplateApiTestCase):
             session.add(
                 WorkflowExecution(
                     workflow_id=workflow_id,
+                    workflow_type_key="issue_execution",
                     tenant_id=self.tenant_id,
                     project_id=resolved_project_id,
                     issue_key=issue_key,

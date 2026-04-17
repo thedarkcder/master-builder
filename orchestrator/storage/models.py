@@ -450,6 +450,12 @@ class WorkflowExecution(Base):
     )
 
     workflow_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workflow_type_key: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("workflow_types.workflow_type_key", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
     tenant_id: Mapped[str] = mapped_column(
         String(128),
         ForeignKey("tenants.tenant_id", ondelete="CASCADE"),
@@ -510,6 +516,40 @@ class WorkflowCheckpoint(Base):
     stage: Mapped[str | None] = mapped_column(String(32), nullable=True)
     payload_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     codex_session_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class WorkflowType(Base):
+    __tablename__ = "workflow_types"
+
+    workflow_type_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    label: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class WorkflowTypeOperation(Base):
+    __tablename__ = "workflow_type_operations"
+    __table_args__ = (
+        Index("ix_workflow_type_operations_workflow_type_key", "workflow_type_key"),
+        UniqueConstraint("workflow_type_key", "operation_type", name="uq_workflow_type_operations_key_type"),
+        UniqueConstraint("workflow_type_key", "sort_order", name="uq_workflow_type_operations_key_order"),
+    )
+
+    operation_definition_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workflow_type_key: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("workflow_types.workflow_type_key", ondelete="CASCADE"),
+        nullable=False,
+    )
+    operation_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    label: Mapped[str] = mapped_column(String(255), nullable=False)
+    retry_policy: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 

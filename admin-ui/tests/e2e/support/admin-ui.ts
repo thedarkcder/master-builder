@@ -409,8 +409,27 @@ export function makeWorkflow(overrides: Partial<WorkflowRecord> = {}): WorkflowR
     repo_url: baselineRun.repo_url,
     branch: baselineRun.branch,
     pr_url: baselineRun.pr_url,
+    orchestration_backend: "legacy",
     dedupe_scope: "issue_execution",
     status: baselineRun.status,
+    workflow_type: {
+      key: "issue_execution",
+      label: "Issue Execution",
+      description: "Central development-team execution workflow.",
+      operations: [
+        {
+          operation_type: "run_attempt_execution",
+          label: "Execute run attempt",
+          retry_policy: "Retry transient worker or dispatch failures. Block if the run cannot be resumed automatically.",
+          description: "Dispatch the current run attempt through the central execution engine.",
+          required: true,
+          status: baselineRun.status,
+        },
+      ],
+    },
+    current_state: baselineRun.status,
+    waiting_on: null,
+    next_step: null,
     active_run_id: baselineRun.run_id,
     latest_checkpoint_id: baselineRun.entry_checkpoint_id,
     source_workflow_id: null,
@@ -418,6 +437,34 @@ export function makeWorkflow(overrides: Partial<WorkflowRecord> = {}): WorkflowR
     blocked_reason: null,
     pending_input_request_id: null,
     latest_checkpoint_kind: "execution",
+    state_path: [],
+    completed_steps: [],
+    failed_steps: [],
+    pending_steps: [],
+    retrying_steps: [],
+    conditional_branches_taken: ["fresh"],
+    conditional_branches_available: ["fresh", "restart", "resume"],
+    available_actions: [],
+    links: [],
+    operations: [
+      {
+        operation_id: `${baselineRun.workflow_id}:run_attempt_execution`,
+        run_id: baselineRun.run_id,
+        operation_type: "run_attempt_execution",
+        status: baselineRun.status,
+        label: "Execute run attempt",
+        retry_policy: "Retry transient worker or dispatch failures. Block if the run cannot be resumed automatically.",
+        description: "Dispatch the current run attempt through the central execution engine.",
+        required: true,
+        definition_only: false,
+        target_system: null,
+        target_ref: null,
+        summary: null,
+        blocker_id: null,
+        attempts: [],
+      },
+    ],
+    blockers: [],
     runs: [baselineRun],
     created_at: baselineRun.created_at,
     started_at: baselineRun.started_at,
@@ -797,6 +844,136 @@ export async function mockRunDetailApis(
         options.onCreateAttempt?.(payload);
         await fulfillJson(route, nextRun);
       },
+    },
+  ]);
+}
+
+export async function mockTenantWorkflowApis(
+  page: Page,
+  options: {
+    tenant?: TenantRecord;
+    projects?: ProjectRecord[];
+    workflows: WorkflowRecord[];
+    nextAttemptResponse?: RunRecord;
+    onCreateAttempt?: (payload: WorkflowAttemptCreatePayload) => void;
+  },
+): Promise<void> {
+  const tenantId = options.workflows[0]?.tenant_id ?? options.tenant?.tenant_id ?? "route25";
+  const tenant = options.tenant ?? makeTenant({ tenant_id: tenantId });
+  const projects =
+    options.projects ??
+    [makeProject({ tenant_id: tenantId, project_id: options.workflows[0]?.project_id ?? "route25-default" })];
+  const primaryWorkflow = options.workflows[0] ?? makeWorkflow({ tenant_id: tenantId });
+  const nextRun =
+    options.nextAttemptResponse ??
+    makeRun({
+      run_id: "workflow-retry-run-1",
+      workflow_id: `${primaryWorkflow.workflow_id}-retry`,
+      tenant_id: tenantId,
+      project_id: primaryWorkflow.project_id,
+      issue_key: primaryWorkflow.issue_key,
+      issue_summary: primaryWorkflow.issue_summary ?? primaryWorkflow.issue_key,
+      created_at: "2026-04-17T12:40:00Z",
+      started_at: null,
+      finished_at: null,
+      status: "queued",
+      pr_url: null,
+      plan: makeExecutionSnapshotPlan({
+        execution_context: { pre_check_outcome: "ready_for_agent" },
+      }),
+    });
+
+  await installBffApiMocks(page, [
+    {
+      method: "GET",
+      pathname: "/api/bff/api/app/auth/me",
+      handler: (route) => fulfillJson(route, makePlatformAdminPrincipal()),
+    },
+    {
+      method: "GET",
+      pathname: `/api/bff/api/admin/tenants/${encodeURIComponent(tenantId)}`,
+      handler: (route) => fulfillJson(route, tenant),
+    },
+    {
+      method: "GET",
+      pathname: `/api/bff/api/admin/tenants/${encodeURIComponent(tenantId)}/projects`,
+      handler: (route) => fulfillJson(route, projects),
+    },
+    {
+      method: "GET",
+      pathname: /^\/api\/bff\/api\/admin\/workflows(?:\?.*)?$/,
+      handler: (route) => fulfillJson(route, options.workflows),
+    },
+    {
+      method: "GET",
+      pathname: /^\/api\/bff\/api\/admin\/workflows\/[^/]+$/,
+      handler: (route, url) => {
+        const workflowId = decodeURIComponent(url.pathname.split("/").at(-1) ?? "");
+        if (workflowId === nextRun.workflow_id) {
+          return fulfillJson(route, {
+            ...primaryWorkflow,
+            workflow_id: nextRun.workflow_id,
+            status: nextRun.status,
+            active_run_id: nextRun.run_id,
+            latest_checkpoint_kind: null,
+            blocked_reason: null,
+            operations: [],
+            blockers: [],
+            runs: [nextRun],
+            created_at: nextRun.created_at,
+            started_at: nextRun.started_at,
+            finished_at: nextRun.finished_at,
+          } satisfies WorkflowRecord);
+        }
+        const match = options.workflows.find((workflow) => workflow.workflow_id === workflowId);
+        if (match) {
+          return fulfillJson(route, match);
+        }
+        return route.fulfill({
+          status: 404,
+          contentType: "application/json",
+          body: JSON.stringify({ detail: `Unknown workflow ${workflowId}` }),
+        });
+      },
+    },
+    {
+      method: "POST",
+      pathname: /^\/api\/bff\/api\/admin\/workflows\/[^/]+\/attempts$/,
+      handler: async (route) => {
+        const payload = JSON.parse(route.request().postData() ?? "{}") as WorkflowAttemptCreatePayload;
+        options.onCreateAttempt?.(payload);
+        await fulfillJson(route, nextRun);
+      },
+    },
+    {
+      method: "GET",
+      pathname: /^\/api\/bff\/api\/admin\/runs\/[^/]+$/,
+      handler: (route, url) => {
+        const runId = decodeURIComponent(url.pathname.split("/").at(-1) ?? "");
+        if (runId === nextRun.run_id) {
+          return fulfillJson(route, nextRun);
+        }
+        return route.fulfill({
+          status: 404,
+          contentType: "application/json",
+          body: JSON.stringify({ detail: `Unknown run ${runId}` }),
+        });
+      },
+    },
+    {
+      method: "GET",
+      pathname: /^\/api\/bff\/api\/admin\/runs\/[^/]+\/events$/,
+      handler: (route) => fulfillJson(route, []),
+    },
+    {
+      method: "GET",
+      pathname: /^\/api\/bff\/api\/admin\/runs\/[^/]+\/logs$/,
+      handler: (route) => fulfillJson(route, []),
+    },
+    {
+      method: "GET",
+      pathname: new RegExp(`^/api/bff/api/admin/tenants/${encodeURIComponent(tenantId)}/runs/[^/]+/token-timeline$`),
+      handler: (route) => fulfillJson(route, makeTokenTimeline(nextRun)),
     },
   ]);
 }

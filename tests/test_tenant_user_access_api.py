@@ -205,6 +205,7 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
             session.add(
                 WorkflowExecution(
                     workflow_id="workflow-tenant-user-visible-run",
+                    workflow_type_key="issue_execution",
                     tenant_id=tenant_id,
                     project_id=f"{tenant_id}-default",
                     issue_key="TP-101",
@@ -351,6 +352,7 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
             session.add(
                 WorkflowExecution(
                     workflow_id="tenant-user-visible-workflow",
+                    workflow_type_key="issue_execution",
                     tenant_id=tenant_id,
                     project_id=f"{tenant_id}-default",
                     issue_key="TP-111",

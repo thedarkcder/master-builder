@@ -289,6 +289,7 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
             session.add(
                 WorkflowExecution(
                     workflow_id="workflow-e2e",
+                    workflow_type_key="issue_execution",
                     tenant_id="route25",
                     project_id="route25-default",
                     issue_key="TP-1",
