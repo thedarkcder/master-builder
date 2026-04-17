@@ -571,7 +571,7 @@ def _workflow_links(
     project: Project | None,
     followup_contexts: list[FollowupContext],
     workflow_runs: list[Run],
-    integration_adapter_provider=None,
+    integration_router=None,
 ) -> list[WorkflowLinkRead]:  # noqa: ANN001
     links: list[WorkflowLinkRead] = []
     jira_url = tenant_jira_issue_url(session=session, tenant=tenant, issue_key=workflow.issue_key) if tenant is not None else None
@@ -589,11 +589,11 @@ def _workflow_links(
         tenant is not None
         and project is not None
         and _workflow_supports_child_issue_links(workflow_type=workflow_type)
-        and integration_adapter_provider is not None
+        and integration_router is not None
         and str(project.jira_project_key or "").strip()
     ):
         try:
-            jira_adapter = integration_adapter_provider.jira(
+            jira_adapter = integration_router.jira(
                 session=session,
                 tenant=tenant,
                 settings=get_settings(),
@@ -747,7 +747,7 @@ def _workflow_schema(
     workflow,
     workflow_to_schema_fn,
     run_to_schema_fn,
-    integration_adapter_provider=None,
+    integration_router=None,
 ):  # noqa: ANN001
     latest_checkpoint = session.get(WorkflowCheckpoint, workflow.latest_checkpoint_id) if workflow.latest_checkpoint_id else None
     workflow_runs = _workflow_runs(session=session, workflow_id=workflow.workflow_id)
@@ -797,7 +797,7 @@ def _workflow_schema(
             project=project,
             followup_contexts=followup_contexts,
             workflow_runs=workflow_runs,
-            integration_adapter_provider=integration_adapter_provider,
+            integration_router=integration_router,
         ),
         operations=operation_reads,
     )
@@ -1080,7 +1080,7 @@ def get_workflow(
     workflow_id: str,
     workflow_to_schema_fn,
     run_to_schema_fn,
-    integration_adapter_provider=None,
+    integration_router=None,
 ):  # noqa: ANN001
     workflow = session.get(WorkflowExecution, workflow_id)
     if workflow is None:
@@ -1090,7 +1090,7 @@ def get_workflow(
         workflow=workflow,
         workflow_to_schema_fn=workflow_to_schema_fn,
         run_to_schema_fn=run_to_schema_fn,
-        integration_adapter_provider=integration_adapter_provider,
+        integration_router=integration_router,
     )
 
 
@@ -1282,7 +1282,7 @@ def retry_workflow_operation(
     operation_id: str,
     workflow_to_schema_fn,
     run_to_schema_fn,
-    integration_adapter_provider,
+    integration_router,
     build_runtime_for_selector_fn,
     seed_issues_with_runtime_fn,
 ):  # noqa: ANN001
@@ -1316,7 +1316,7 @@ def retry_workflow_operation(
         runtime_kwargs_fn=build_run_process_kwargs,
         retry_workflow_operation_fn=lambda **kwargs: execute_workflow_operation_retry(
             **kwargs,
-            integration_adapter_provider=integration_adapter_provider,
+            integration_router=integration_router,
             build_runtime_for_selector_fn=build_runtime_for_selector_fn,
             seed_issues_with_runtime_fn=seed_issues_with_runtime_fn,
         ),
@@ -1331,5 +1331,5 @@ def retry_workflow_operation(
         workflow=workflow,
         workflow_to_schema_fn=workflow_to_schema_fn,
         run_to_schema_fn=run_to_schema_fn,
-        integration_adapter_provider=integration_adapter_provider,
+        integration_router=integration_router,
     )

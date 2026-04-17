@@ -46,7 +46,7 @@ from orchestrator.api.discord.ingress.seed_runtime import seed_issues_with_runti
 from orchestrator.core.config import get_settings
 from orchestrator.core.agent_runtime_resolver import build_runtime_for_selector
 from orchestrator.core.jira_links import tenant_jira_issue_url
-from orchestrator.core.workflow_integration_provider import WorkflowIntegrationAdapterProvider
+from orchestrator.core.workflow_integration_router import WorkflowIntegrationRouter
 from orchestrator.core.security import (
     AuthenticatedPrincipal,
     require_admin,
@@ -56,7 +56,7 @@ from orchestrator.core.security import (
 from orchestrator.storage.models import Run, Tenant, WorkflowExecution
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
-workflow_integration_adapter_provider = WorkflowIntegrationAdapterProvider()
+workflow_integration_router = WorkflowIntegrationRouter()
 
 try:
     import psycopg
@@ -226,7 +226,7 @@ def get_workflow(
         workflow_id=workflow_id,
         workflow_to_schema_fn=workflow_to_schema,
         run_to_schema_fn=run_to_schema,
-        integration_adapter_provider=workflow_integration_adapter_provider,
+        integration_router=workflow_integration_router,
     )
 
 
@@ -260,7 +260,7 @@ def retry_workflow_operation(
         operation_id=operation_id,
         workflow_to_schema_fn=workflow_to_schema,
         run_to_schema_fn=run_to_schema,
-        integration_adapter_provider=workflow_integration_adapter_provider,
+        integration_router=workflow_integration_router,
         build_runtime_for_selector_fn=build_runtime_for_selector,
         seed_issues_with_runtime_fn=seed_issues_with_runtime,
     )

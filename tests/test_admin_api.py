@@ -1561,7 +1561,7 @@ class AdminApiTests(AdminApiTestHarness):
             ]
         )
         with patch.object(
-            __import__("orchestrator.api.routes.admin_runs", fromlist=["workflow_integration_adapter_provider"]).workflow_integration_adapter_provider,
+            __import__("orchestrator.api.routes.admin_runs", fromlist=["workflow_integration_router"]).workflow_integration_router,
             "jira",
             return_value=fake_jira_adapter,
         ):
@@ -1703,7 +1703,7 @@ class AdminApiTests(AdminApiTestHarness):
                 side_effect=lambda **kwargs: _FakeRuntime(kwargs["session"]),
             ),
             patch.object(
-                __import__("orchestrator.api.routes.admin_runs", fromlist=["workflow_integration_adapter_provider"]).workflow_integration_adapter_provider,
+                __import__("orchestrator.api.routes.admin_runs", fromlist=["workflow_integration_router"]).workflow_integration_router,
                 "jira",
                 return_value=fake_jira_adapter,
             ),

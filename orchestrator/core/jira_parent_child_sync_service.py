@@ -140,7 +140,7 @@ class ParentFeatureWorkflowAdvanceHandler:
     def __init__(
         self,
         *,
-        integration_adapter_provider,
+        integration_router,
         extract_changed_fields_fn,
         extract_status_transition_fn,
         build_runtime_for_selector_fn,
@@ -148,7 +148,7 @@ class ParentFeatureWorkflowAdvanceHandler:
         post_jira_comment_fn,
         create_jira_comment_fn,
     ) -> None:
-        self._integration_adapter_provider = integration_adapter_provider
+        self._integration_router = integration_router
         self._extract_changed_fields_fn = extract_changed_fields_fn
         self._extract_status_transition_fn = extract_status_transition_fn
         self._build_runtime_for_selector_fn = build_runtime_for_selector_fn
@@ -180,7 +180,7 @@ class ParentFeatureWorkflowAdvanceHandler:
             session=session,
             settings=settings,
             context=context,
-            integration_adapter_provider=self._integration_adapter_provider,
+            integration_router=self._integration_router,
             post_jira_comment_fn=self._post_jira_comment_fn,
             create_jira_comment_fn=self._create_jira_comment_fn,
         )
@@ -222,7 +222,7 @@ class ParentFeatureWorkflowAdvanceHandler:
 
 def build_workflow_advance_handler_resolver(
     *,
-    integration_adapter_provider,
+    integration_router,
     extract_changed_fields_fn,
     extract_status_transition_fn,
     build_runtime_for_selector_fn,
@@ -232,7 +232,7 @@ def build_workflow_advance_handler_resolver(
 ):
     handlers = {
         "jira_parent_feature": ParentFeatureWorkflowAdvanceHandler(
-            integration_adapter_provider=integration_adapter_provider,
+            integration_router=integration_router,
             extract_changed_fields_fn=extract_changed_fields_fn,
             extract_status_transition_fn=extract_status_transition_fn,
             build_runtime_for_selector_fn=build_runtime_for_selector_fn,
@@ -259,21 +259,21 @@ class _JiraParentIssueGateway:
         session: Session,
         settings,  # noqa: ANN001
         context: JiraParentChildSyncContext,
-        integration_adapter_provider,
+        integration_router,
         post_jira_comment_fn,
         create_jira_comment_fn,
     ) -> None:
         self._session = session
         self._settings = settings
         self._context = context
-        self._integration_adapter_provider = integration_adapter_provider
+        self._integration_router = integration_router
         self._post_jira_comment_fn = post_jira_comment_fn
         self._create_jira_comment_fn = create_jira_comment_fn
         self._jira_adapter = None
 
     def _jira(self):
         if self._jira_adapter is None:
-            self._jira_adapter = self._integration_adapter_provider.jira(
+            self._jira_adapter = self._integration_router.jira(
                 session=self._session,
                 tenant=self._context.tenant,
                 settings=self._settings,
@@ -393,17 +393,17 @@ class _JiraParentIssueGateway:
         )
 
 
-def _jira_adapter(*, integration_adapter_provider, session: Session, tenant, settings):  # noqa: ANN001
-    return integration_adapter_provider.jira(
+def _jira_adapter(*, integration_router, session: Session, tenant, settings):  # noqa: ANN001
+    return integration_router.jira(
         session=session,
         tenant=tenant,
         settings=settings,
     )
 
 
-def _jira_oauth_context(*, integration_adapter_provider, session: Session, tenant, settings):  # noqa: ANN001
+def _jira_oauth_context(*, integration_router, session: Session, tenant, settings):  # noqa: ANN001
     jira = _jira_adapter(
-        integration_adapter_provider=integration_adapter_provider,
+        integration_router=integration_router,
         session=session,
         tenant=tenant,
         settings=settings,
@@ -1426,7 +1426,7 @@ def handle_parent_feature_sync(
     context: JiraParentChildSyncContext,
     session: Session,
     settings,  # noqa: ANN001
-    integration_adapter_provider,
+    integration_router,
     extract_changed_fields_fn,
     extract_status_transition_fn,
     build_workflow_runtime_fn,
@@ -1442,7 +1442,7 @@ def handle_parent_feature_sync(
         build_runner_fn=None,
         runtime_kwargs_fn=None,
         resolve_advance_handler_fn=build_workflow_advance_handler_resolver(
-            integration_adapter_provider=integration_adapter_provider,
+            integration_router=integration_router,
             extract_changed_fields_fn=extract_changed_fields_fn,
             extract_status_transition_fn=extract_status_transition_fn,
             build_runtime_for_selector_fn=build_runtime_for_selector_fn,
@@ -1477,7 +1477,7 @@ def handle_engineering_clarification_command(
     context: JiraParentChildSyncContext,
     session: Session,
     settings,  # noqa: ANN001
-    integration_adapter_provider,
+    integration_router,
     build_runtime_for_selector_fn,
     classify_engineering_clarification_with_codex_fn,
     post_jira_comment_fn,
@@ -1488,13 +1488,13 @@ def handle_engineering_clarification_command(
     if not question:
         return JiraParentChildSyncResult(handled=True, reason="invalid_comment_command")
     jira = _jira_adapter(
-        integration_adapter_provider=integration_adapter_provider,
+        integration_router=integration_router,
         session=session,
         tenant=context.tenant,
         settings=settings,
     )
     oauth = _jira_oauth_context(
-        integration_adapter_provider=integration_adapter_provider,
+        integration_router=integration_router,
         session=session,
         tenant=context.tenant,
         settings=settings,
@@ -1699,7 +1699,7 @@ def handle_engineering_clarification_reply(
     context: JiraParentChildSyncContext,
     session: Session,
     settings,  # noqa: ANN001
-    integration_adapter_provider,
+    integration_router,
     seed_issues_with_runtime_fn,
     post_jira_comment_fn,
     create_jira_comment_fn,
@@ -1740,13 +1740,13 @@ def handle_engineering_clarification_reply(
         )
 
     jira = _jira_adapter(
-        integration_adapter_provider=integration_adapter_provider,
+        integration_router=integration_router,
         session=session,
         tenant=context.tenant,
         settings=settings,
     )
     oauth = _jira_oauth_context(
-        integration_adapter_provider=integration_adapter_provider,
+        integration_router=integration_router,
         session=session,
         tenant=context.tenant,
         settings=settings,
@@ -1897,7 +1897,7 @@ def handle_pm_interview_reply(
     context: JiraParentChildSyncContext,
     session: Session,
     settings,  # noqa: ANN001
-    integration_adapter_provider,
+    integration_router,
     build_runtime_for_selector_fn,
     seed_issues_with_runtime_fn,
     post_jira_comment_fn,
@@ -1998,13 +1998,13 @@ def handle_pm_interview_reply(
         )
 
     oauth = _jira_oauth_context(
-        integration_adapter_provider=integration_adapter_provider,
+        integration_router=integration_router,
         session=session,
         tenant=context.tenant,
         settings=settings,
     )
     parent_detail = _jira_adapter(
-        integration_adapter_provider=integration_adapter_provider,
+        integration_router=integration_router,
         session=session,
         tenant=context.tenant,
         settings=settings,
