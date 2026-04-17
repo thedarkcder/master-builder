@@ -7,17 +7,13 @@ from uuid import uuid4
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from orchestrator.storage.models import WorkflowBlocker, WorkflowOperation, WorkflowOperationAttempt
+from orchestrator.storage.models import WorkflowOperation, WorkflowOperationAttempt
 
 OPERATION_STATUS_PENDING = "pending"
 OPERATION_STATUS_RUNNING = "running"
 OPERATION_STATUS_RETRYING = "retrying"
-OPERATION_STATUS_BLOCKED = "blocked"
 OPERATION_STATUS_FAILED = "failed"
 OPERATION_STATUS_COMPLETED = "completed"
-
-BLOCKER_STATUS_OPEN = "open"
-BLOCKER_STATUS_RESOLVED = "resolved"
 
 
 def _now() -> datetime:
@@ -68,7 +64,6 @@ def upsert_workflow_operation(
         target_system=target_system,
         target_ref=target_ref,
         summary=summary,
-        blocker_id=None,
         created_at=now,
         started_at=None,
         finished_at=None,
@@ -126,49 +121,8 @@ def complete_workflow_operation(
     operation.summary = summary or operation.summary
     operation.finished_at = now
     operation.updated_at = now
-    if operation.blocker_id:
-        blocker = session.get(WorkflowBlocker, operation.blocker_id)
-        if blocker is not None and blocker.status == BLOCKER_STATUS_OPEN:
-            blocker.status = BLOCKER_STATUS_RESOLVED
-            blocker.resolved_at = now
-            blocker.updated_at = now
     attempt.status = OPERATION_STATUS_COMPLETED
     attempt.finished_at = now
-
-
-def block_workflow_operation(
-    session: Session,
-    *,
-    operation: WorkflowOperation,
-    attempt: WorkflowOperationAttempt,
-    category: str,
-    message: str,
-) -> WorkflowBlocker:
-    now = _now()
-    blocker = WorkflowBlocker(
-        blocker_id=uuid4().hex,
-        workflow_id=operation.workflow_id,
-        operation_id=operation.operation_id,
-        category=category,
-        message=message,
-        status=BLOCKER_STATUS_OPEN,
-        created_at=now,
-        resolved_at=None,
-        updated_at=now,
-    )
-    session.add(blocker)
-    session.flush()
-    operation.status = OPERATION_STATUS_BLOCKED
-    operation.blocker_id = blocker.blocker_id
-    operation.summary = message
-    operation.finished_at = now
-    operation.updated_at = now
-    attempt.status = OPERATION_STATUS_BLOCKED
-    attempt.error_category = category
-    attempt.error_message = message
-    attempt.retryable = False
-    attempt.finished_at = now
-    return blocker
 
 
 def fail_workflow_operation(
@@ -182,11 +136,12 @@ def fail_workflow_operation(
     next_retry_at: datetime | None = None,
 ) -> None:
     now = _now()
-    operation.status = OPERATION_STATUS_RETRYING if retryable else OPERATION_STATUS_FAILED
+    scheduled_for_retry = retryable and next_retry_at is not None
+    operation.status = OPERATION_STATUS_RETRYING if scheduled_for_retry else OPERATION_STATUS_FAILED
     operation.summary = message
-    operation.finished_at = None if retryable else now
+    operation.finished_at = None if scheduled_for_retry else now
     operation.updated_at = now
-    attempt.status = OPERATION_STATUS_RETRYING if retryable else OPERATION_STATUS_FAILED
+    attempt.status = OPERATION_STATUS_RETRYING if scheduled_for_retry else OPERATION_STATUS_FAILED
     attempt.error_category = category
     attempt.error_message = message
     attempt.retryable = retryable

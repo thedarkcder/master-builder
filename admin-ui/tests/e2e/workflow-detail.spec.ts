@@ -7,7 +7,7 @@ import {
   seedAdminSession,
 } from "./support/admin-ui";
 
-test("shows blocked standalone workflows and retries them into a fresh run", async ({ page }) => {
+test("shows workflow definitions and retries a failed execution operation", async ({ page }) => {
   await seedAdminSession(page);
 
   const workflow = makeWorkflow({
@@ -18,7 +18,7 @@ test("shows blocked standalone workflows and retries them into a fresh run", asy
     issue_summary: "Identity and authorization v1 contract",
     orchestration_backend: "temporal",
     dedupe_scope: "parent_planning",
-    status: "blocked",
+    status: "failed",
     workflow_type: {
       key: "legacy-parent-planning",
       label: "Parent Planning",
@@ -27,16 +27,16 @@ test("shows blocked standalone workflows and retries them into a fresh run", asy
         {
           operation_type: "jira_child_fanout",
           label: "Fan out engineering child tickets",
-          retry_policy: "Retry transient Jira failures. Block on permanent Jira validation errors such as content limits.",
+          retry_policy: "Retry transient Jira failures. Fail on permanent Jira validation errors such as content limits.",
           description: "Create or refresh engineering child tickets.",
           required: true,
           status: "failed",
         },
       ],
     },
-    current_state: "blocked",
-    waiting_on: "operator_remediation",
-    next_step: "Resolve blocker",
+    current_state: "failed",
+    waiting_on: null,
+    next_step: "Retry failed operation",
     active_run_id: null,
     latest_checkpoint_id: null,
     latest_checkpoint_kind: null,
@@ -56,8 +56,8 @@ test("shows blocked standalone workflows and retries them into a fresh run", asy
     conditional_branches_taken: [],
     conditional_branches_available: [],
     available_actions: [],
-    links: [{ kind: "jira_issue", label: "Jira issue MAB-215", ref: "MAB-215", url: "https://jira.example.test/browse/MAB-215", status: "blocked" }],
-    blocked_reason:
+    links: [{ kind: "jira_issue", label: "Jira issue MAB-215", ref: "MAB-215", url: "https://jira.example.test/browse/MAB-215", status: "failed" }],
+    failure_reason:
       'Failed to seed Jira issues: Jira API request failed (400): {"errorMessages":["CONTENT_LIMIT_EXCEEDED"],"errors":{}}',
     operations: [
       {
@@ -69,7 +69,6 @@ test("shows blocked standalone workflows and retries them into a fresh run", asy
         target_ref: "MAB-215",
         summary:
           'Failed to seed Jira issues: Jira API request failed (400): {"errorMessages":["CONTENT_LIMIT_EXCEEDED"],"errors":{}}',
-        blocker_id: "blocker-content-limit",
         attempts: [
           {
             attempt_id: "attempt-1",
@@ -86,72 +85,95 @@ test("shows blocked standalone workflows and retries them into a fresh run", asy
         ],
       },
     ],
-    blockers: [
-      {
-        blocker_id: "blocker-content-limit",
-        operation_id: "operation-jira-child-fanout",
-        category: "content_limit",
-        message:
-          'Failed to seed Jira issues: Jira API request failed (400): {"errorMessages":["CONTENT_LIMIT_EXCEEDED"],"errors":{}}',
-        status: "open",
-        created_at: "2026-04-17T12:22:11Z",
-        resolved_at: null,
-      },
-    ],
     runs: [],
     created_at: "2026-04-17T12:22:11Z",
     started_at: "2026-04-17T12:22:11Z",
     finished_at: null,
   });
 
-  const nextRun = makeRun({
-    run_id: "retry-run-215",
-    workflow_id: "legacy-parent-planning:MAB-215-retry",
-    tenant_id: "route25",
-    project_id: "route25-default",
-    issue_key: "MAB-215",
-    issue_summary: "Identity and authorization v1 contract",
-    created_at: "2026-04-17T12:40:00Z",
-    started_at: null,
-    finished_at: null,
-    status: "queued",
-    pr_url: null,
-  });
+  const retriedWorkflow = {
+    ...workflow,
+    status: "running",
+    current_state: "running",
+    waiting_on: null,
+    next_step: "Create or refresh engineering child tickets.",
+    failure_reason: null,
+    failed_steps: [],
+    pending_steps: ["Fan out engineering child tickets"],
+    operations: [
+      {
+        ...workflow.operations[0],
+        status: "running",
+        attempts: [
+          ...workflow.operations[0].attempts,
+          {
+            attempt_id: "attempt-2",
+            attempt_number: 2,
+            status: "running",
+            error_category: null,
+            error_message: null,
+            retryable: false,
+            next_retry_at: null,
+            started_at: "2026-04-17T12:40:00Z",
+            finished_at: null,
+          },
+        ],
+      },
+    ],
+    links: [
+      ...workflow.links,
+      {
+        kind: "child_issue",
+        label: "Create tenant assurance boundary",
+        ref: "MAB-300",
+        url: "https://jira.example.test/browse/MAB-300",
+        status: "To Do",
+      },
+    ],
+  };
 
-  let retryPayload: { mode: string } | null = null;
+  let retriedOperation: { workflowId: string; operationId: string } | null = null;
   await mockTenantWorkflowApis(page, {
     workflows: [workflow],
-    nextAttemptResponse: nextRun,
-    onCreateAttempt: (payload) => {
-      retryPayload = payload;
+    retriedWorkflowResponse: retriedWorkflow,
+    onRetryOperation: (payload) => {
+      retriedOperation = payload;
     },
   });
 
   await page.goto("/route25/workflows");
 
-  await expect(page.getByRole("columnheader", { name: "Execution" })).toBeVisible();
-  await expect(page.getByRole("columnheader", { name: "Workflow type" })).toBeVisible();
-  await expect(page.getByText("MAB-215")).toBeVisible();
   await expect(page.getByText("Parent Planning")).toBeVisible();
-  await expect(page.getByText("CONTENT_LIMIT_EXCEEDED")).toBeVisible();
+  await expect(page.getByText("Create or refresh engineering child tickets.")).toBeVisible();
+  await expect(page.getByRole("link", { name: "Parent Planning" })).toBeVisible();
+
+  await page.getByRole("link", { name: "Parent Planning" }).click();
+
+  await expect(page).toHaveURL(/\/route25\/workflows\/legacy-parent-planning$/);
+  await expect(page.getByText("Execution modes")).toBeVisible();
+  await expect(page.getByText("fresh, restart, resume")).toBeVisible();
+  await expect(page.getByText("Recent executions")).toBeVisible();
   await expect(page.getByRole("link", { name: "Identity and authorization v1 contract" })).toBeVisible();
 
   await page.getByRole("link", { name: "Identity and authorization v1 contract" }).click();
 
-  await expect(page).toHaveURL(/\/route25\/workflows\/legacy-parent-planning%3AMAB-215$/);
+  await expect(page).toHaveURL(/\/route25\/executions\/legacy-parent-planning%3AMAB-215$/);
   await expect(page.getByText("Workflow type")).toBeVisible();
   await expect(page.getByText("Parent Planning")).toBeVisible();
   await expect(page.getByText("Fan out engineering child tickets")).toBeVisible();
   await expect(page.getByText("Execution path")).toBeVisible();
-  await expect(page.getByText("Resolve blocker")).toBeVisible();
+  await expect(page.getByText("Retry failed operation")).toBeVisible();
   await expect(page.getByText("content_limit")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Retry execution" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Retry operation" })).toBeEnabled();
 
-  await Promise.all([
-    page.waitForURL(/\/route25\/runs\/retry-run-215$/, { timeout: 15000 }),
-    page.getByRole("button", { name: "Retry execution" }).click(),
-  ]);
+  await page.getByRole("button", { name: "Retry operation" }).click();
 
-  expect(retryPayload).toEqual({ mode: "fresh" });
-  await expect(page.getByText("retry-run-215")).toBeVisible();
+  expect(retriedOperation).toEqual({
+    workflowId: "legacy-parent-planning:MAB-215",
+    operationId: "operation-jira-child-fanout",
+  });
+  await expect(page.getByText("Retried Fan out engineering child tickets.")).toBeVisible();
+  await expect(page.getByText("Create tenant assurance boundary")).toBeVisible();
+  await expect(page.getByText("MAB-300")).toBeVisible();
+  await expect(page.getByText("Attempt 2")).toBeVisible();
 });

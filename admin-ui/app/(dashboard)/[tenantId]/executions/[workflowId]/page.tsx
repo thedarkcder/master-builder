@@ -9,7 +9,13 @@ import { useAuth } from "@/components/auth-provider";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { createWorkflowAttempt, getWorkflow, type WorkflowBlockerRecord, type WorkflowOperationRecord, type WorkflowRecord } from "@/lib/api";
+import {
+  createWorkflowAttempt,
+  getWorkflow,
+  retryWorkflowOperation,
+  type WorkflowOperationRecord,
+  type WorkflowRecord,
+} from "@/lib/api";
 import { formatTimestamp } from "@/lib/datetime";
 import { cn } from "@/lib/utils";
 
@@ -21,15 +27,11 @@ function latestAttempt(operation: WorkflowOperationRecord) {
   })[0] ?? null;
 }
 
-function blockerForOperation(blockers: WorkflowBlockerRecord[], operation: WorkflowOperationRecord): WorkflowBlockerRecord | null {
-  return blockers.find((blocker) => blocker.operation_id === operation.operation_id && blocker.status === "open") ?? null;
-}
-
 function joinItems(values: string[]): string {
   return values.length ? values.join(", ") : "—";
 }
 
-export default function TenantWorkflowDetailPage() {
+export default function TenantExecutionDetailPage() {
   const params = useParams<{ tenantId: string; workflowId: string }>();
   const router = useRouter();
   const { credentials, ready } = useAuth();
@@ -39,6 +41,7 @@ export default function TenantWorkflowDetailPage() {
   const [workflow, setWorkflow] = useState<WorkflowRecord | null>(null);
   const [loading, setLoading] = useState(false);
   const [retrying, setRetrying] = useState(false);
+  const [retryingOperationId, setRetryingOperationId] = useState<string | null>(null);
   const [statusLine, setStatusLine] = useState("");
 
   const loadWorkflow = useCallback(async () => {
@@ -81,11 +84,27 @@ export default function TenantWorkflowDetailPage() {
     }
   }
 
+  async function handleRetryOperation(operation: WorkflowOperationRecord) {
+    if (!credentials || !workflow || operation.definition_only) {
+      return;
+    }
+    setRetryingOperationId(operation.operation_id);
+    try {
+      const refreshedWorkflow = await retryWorkflowOperation(credentials, workflow.workflow_id, operation.operation_id);
+      setWorkflow(refreshedWorkflow);
+      setStatusLine(`Retried ${operation.label?.trim() || operation.operation_type}.`);
+    } catch (error) {
+      setStatusLine(`Failed to retry operation: ${(error as Error).message}`);
+    } finally {
+      setRetryingOperationId(null);
+    }
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-3">
         <Button variant="ghost" size="sm" asChild className="h-8">
-          <Link href={`/${encodeURIComponent(tenantId)}/workflows`}>
+          <Link href={`/${encodeURIComponent(tenantId)}/executions`}>
             <ArrowLeft className="mr-1.5 h-3.5 w-3.5" />
             Back to executions
           </Link>
@@ -130,13 +149,16 @@ export default function TenantWorkflowDetailPage() {
                 <StatusBadge status={workflow.current_state} />
               </div>
               <p className="mt-2 text-xs text-muted-foreground">
-                {workflow.waiting_on ? `Waiting on ${workflow.waiting_on.replace(/_/g, " ")}.` : workflow.blocked_reason?.trim() || "No execution-level blocker recorded."}
+                {workflow.waiting_on ? `Waiting on ${workflow.waiting_on.replace(/_/g, " ")}.` : workflow.failure_reason?.trim() || "No execution-level failure recorded."}
               </p>
             </div>
             <div className="rounded-2xl border bg-background p-4">
               <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Next step</p>
               <p className="mt-2 text-sm font-semibold">{workflow.next_step?.trim() || "—"}</p>
-              <p className="mt-1 text-xs text-muted-foreground">{workflow.blockers.length} blocker{workflow.blockers.length === 1 ? "" : "s"} open</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {(workflow.operations ?? []).filter((operation) => operation.status === "failed").length} failed operation
+                {(workflow.operations ?? []).filter((operation) => operation.status === "failed").length === 1 ? "" : "s"}
+              </p>
             </div>
             <div className="rounded-2xl border bg-background p-4">
               <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Created</p>
@@ -226,12 +248,12 @@ export default function TenantWorkflowDetailPage() {
                   <TableHead>Latest attempt</TableHead>
                   <TableHead>Retryable</TableHead>
                   <TableHead>Failure / policy</TableHead>
+                  <TableHead className="text-right">Action</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {workflow.operations.map((operation) => {
                   const attempt = latestAttempt(operation);
-                  const blocker = blockerForOperation(workflow.blockers, operation);
                   return (
                     <TableRow key={operation.operation_id}>
                       <TableCell className="font-medium">
@@ -261,12 +283,24 @@ export default function TenantWorkflowDetailPage() {
                       <TableCell className="max-w-[440px] text-sm text-muted-foreground">
                         <div className="space-y-1">
                           <p className="line-clamp-3">
-                            {blocker?.message?.trim() || attempt?.error_message?.trim() || operation.summary?.trim() || operation.description?.trim() || "—"}
+                            {attempt?.error_message?.trim() || operation.summary?.trim() || operation.description?.trim() || "—"}
                           </p>
                           <p className="text-xs text-muted-foreground">
                             {operation.retry_policy?.trim() || "No retry policy recorded."}
                           </p>
                         </div>
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-8"
+                          onClick={() => void handleRetryOperation(operation)}
+                          disabled={!attempt?.retryable || operation.definition_only || retryingOperationId === operation.operation_id}
+                        >
+                          <RefreshCw className={cn("mr-1.5 h-3.5 w-3.5", retryingOperationId === operation.operation_id && "animate-spin")} />
+                          Retry operation
+                        </Button>
                       </TableCell>
                     </TableRow>
                   );
@@ -275,30 +309,7 @@ export default function TenantWorkflowDetailPage() {
             </Table>
           </div>
 
-          <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
-            <div className="overflow-hidden rounded-2xl border bg-background">
-              <div className="border-b px-5 py-3">
-                <h2 className="text-sm font-semibold">Blockers</h2>
-              </div>
-              <div className="space-y-3 px-5 py-4">
-                {workflow.blockers.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">No blockers recorded.</p>
-                ) : (
-                  workflow.blockers.map((blocker) => (
-                    <div key={blocker.blocker_id} className="rounded-xl border bg-muted/20 p-4">
-                      <div className="flex items-center gap-2">
-                        <StatusBadge status={blocker.status} />
-                        <span className="text-xs uppercase tracking-wide text-muted-foreground">{blocker.category}</span>
-                      </div>
-                      <p className="mt-2 text-sm">{blocker.message}</p>
-                      <p className="mt-2 text-xs text-muted-foreground">Opened {formatTimestamp(blocker.created_at)}</p>
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
-
-            <div className="overflow-hidden rounded-2xl border bg-background">
+          <div className="overflow-hidden rounded-2xl border bg-background">
               <div className="border-b px-5 py-3">
                 <h2 className="text-sm font-semibold">Links</h2>
               </div>
@@ -328,7 +339,6 @@ export default function TenantWorkflowDetailPage() {
                   ))
                 )}
               </div>
-            </div>
           </div>
         </>
       ) : (

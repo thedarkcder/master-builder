@@ -492,9 +492,15 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
         },
         {
           href: `${tenantBaseRoute}/workflows`,
-          label: "Executions",
+          label: "Workflows",
           icon: Workflow,
           matchPrefix: `${tenantBaseRoute}/workflows`
+        },
+        {
+          href: `${tenantBaseRoute}/executions`,
+          label: "Executions",
+          icon: Activity,
+          matchPrefix: `${tenantBaseRoute}/executions`
         },
         {
           href: analyticsHref ?? `${tenantBaseRoute}/analytics/token-overview`,

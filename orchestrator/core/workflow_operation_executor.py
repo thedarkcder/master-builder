@@ -1,0 +1,300 @@
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Any, Callable
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session, sessionmaker
+
+from orchestrator.core.config import Settings
+from orchestrator.core.jira_parent_child_sync_service import (
+    PLANNING_STATE_COMPLETED,
+    _ParentBriefPlanner,
+    _ParentChildSyncGateway,
+    JiraParentChildSyncContext,
+)
+from orchestrator.core.parent_feature_brief_store import resolve_parent_feature_brief
+from orchestrator.core.workflow_operation_service import (
+    WorkflowOperationHandle,
+    complete_workflow_operation,
+    fail_workflow_operation,
+    start_workflow_operation_attempt,
+)
+from orchestrator.core.workflow_type_catalog import list_workflow_type_operations
+from orchestrator.storage.models import Project, Tenant, WorkflowExecution, WorkflowOperation
+
+logger = logging.getLogger(__name__)
+
+
+class WorkflowOperationExecutionError(RuntimeError):
+    """Base error for workflow operation execution."""
+
+
+class UnsupportedWorkflowOperationError(WorkflowOperationExecutionError):
+    """Raised when no executor exists for the selected operation type."""
+
+
+class InvalidWorkflowOperationError(WorkflowOperationExecutionError):
+    """Raised when workflow-operation data is incomplete or invalid."""
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+@dataclass(frozen=True)
+class _OperationExecutionContext:
+    session: Session
+    settings: Settings
+    session_factory: sessionmaker[Session]
+    workflow: WorkflowExecution
+    operation: WorkflowOperation
+    tenant: Tenant
+    project: Project
+
+def _recompute_workflow_status(*, session: Session, workflow: WorkflowExecution) -> None:
+    now = _now()
+    definitions = list_workflow_type_operations(session, workflow_type_key=workflow.workflow_type_key)
+    operations = session.execute(
+        select(WorkflowOperation).where(WorkflowOperation.workflow_id == workflow.workflow_id)
+    ).scalars().all()
+    status_by_type = {
+        str(operation.operation_type or "").strip(): str(operation.status or "").strip().lower()
+        for operation in operations
+        if str(operation.operation_type or "").strip()
+    }
+    summaries_by_type = {
+        str(operation.operation_type or "").strip(): str(operation.summary or "").strip()
+        for operation in operations
+        if str(operation.operation_type or "").strip()
+    }
+    required_defs = [definition for definition in definitions if bool(definition.required)]
+
+    for definition in required_defs:
+        normalized_status = status_by_type.get(definition.operation_type, "pending")
+        if normalized_status == "failed":
+            workflow.status = "failed"
+            workflow.last_error = summaries_by_type.get(definition.operation_type) or workflow.last_error
+            workflow.finished_at = now
+            workflow.updated_at = now
+            return
+
+    if required_defs and all(status_by_type.get(definition.operation_type) == "completed" for definition in required_defs):
+        workflow.status = "completed"
+        workflow.last_error = None
+        workflow.finished_at = now
+        workflow.updated_at = now
+        return
+
+    workflow.status = "running"
+    workflow.last_error = None
+    workflow.finished_at = None
+    workflow.updated_at = now
+
+
+def _classify_operation_failure(*, error: Exception) -> tuple[str, bool]:
+    message = str(error or "").strip()
+    lowered = message.lower()
+    if "CONTENT_LIMIT_EXCEEDED" in message:
+        return "content_limit", True
+    if "429" in message or "rate limit" in lowered:
+        return "rate_limited", True
+    if "502" in message or "503" in message or "504" in message or "timed out" in lowered:
+        return "transient_external_failure", True
+    return "external_failure", False
+
+
+def _execute_jira_child_fanout(
+    *,
+    context: _OperationExecutionContext,
+    tenant_jira_oauth_context_fn,
+    build_runtime_for_selector_fn,
+    seed_issues_with_runtime_fn,
+) -> WorkflowOperationHandle:
+    brief = resolve_parent_feature_brief(
+        session=context.session,
+        tenant_id=context.tenant.tenant_id,
+        parent_issue_key=context.workflow.issue_key,
+    )
+    if brief is None:
+        raise InvalidWorkflowOperationError(
+            f"No confirmed parent brief snapshot is available for {context.workflow.issue_key}"
+        )
+
+    oauth = tenant_jira_oauth_context_fn(
+        session=context.session,
+        tenant=context.tenant,
+        settings=context.settings,
+    )
+    parent_detail = oauth.client.get_issue_detail(
+        access_token=oauth.access_token,
+        cloud_id=oauth.connection.cloud_id,
+        issue_id_or_key=context.workflow.issue_key,
+    )
+    sync_context = JiraParentChildSyncContext(
+        request_id=f"workflow-operation:{context.operation.operation_id}",
+        tenant_id=context.tenant.tenant_id,
+        tenant=context.tenant,
+        project_id=context.project.project_id,
+        issue_key=context.workflow.issue_key,
+        issue_labels=list(parent_detail.labels or []),
+        payload={},
+        webhook_event="admin_operation_retry",
+        comment_command=None,
+        comment_command_argument=None,
+    )
+    planner = _ParentBriefPlanner(
+        session=context.session,
+        settings=context.settings,
+        context=sync_context,
+        build_runtime_for_selector_fn=build_runtime_for_selector_fn,
+    )
+    child_sync_gateway = _ParentChildSyncGateway(
+        session=context.session,
+        context=sync_context,
+        seed_issues_with_runtime_fn=seed_issues_with_runtime_fn,
+    )
+
+    attempt = start_workflow_operation_attempt(context.session, operation=context.operation)
+    context.workflow.status = "running"
+    context.workflow.last_error = None
+    context.workflow.finished_at = None
+    context.workflow.updated_at = _now()
+
+    try:
+        planning_result, planning_package = planner.plan_backlog_parent(
+            parent_detail=parent_detail,
+            product_brief=brief.to_payload(),
+            project_key=context.project.jira_project_key,
+        )
+        seed_data = child_sync_gateway.seed_parent_backlog_children(
+            parent_detail=parent_detail,
+            project_key=context.project.jira_project_key,
+            planning_package=planning_package,
+            planning_state=planning_result.planning_state,
+        )
+    except Exception as exc:  # noqa: BLE001
+        category, retryable = _classify_operation_failure(error=exc)
+        logger.exception(
+            "workflow_operation_execution_failed workflow_id=%s operation_id=%s operation_type=%s error=%s",
+            context.workflow.workflow_id,
+            context.operation.operation_id,
+            context.operation.operation_type,
+            exc,
+        )
+        fail_workflow_operation(
+            context.session,
+            operation=context.operation,
+            attempt=attempt,
+            category=category,
+            message=str(exc),
+            retryable=retryable,
+        )
+        context.workflow.status = "failed"
+        context.workflow.last_error = str(exc)
+        context.workflow.finished_at = _now()
+        context.workflow.updated_at = _now()
+        return WorkflowOperationHandle(
+            operation_id=context.operation.operation_id,
+            workflow_id=context.workflow.workflow_id,
+            operation_type=context.operation.operation_type,
+            status=context.operation.status,
+        )
+
+    if planning_result.planning_state != PLANNING_STATE_COMPLETED or bool(seed_data.get("requires_input")):
+        message = (
+            "Backlog planning could not complete from the confirmed brief after retry. "
+            "Additional input is required before engineering child tickets can be refreshed."
+        )
+        fail_workflow_operation(
+            context.session,
+            operation=context.operation,
+            attempt=attempt,
+            category="missing_input",
+            message=message,
+            retryable=False,
+        )
+        context.workflow.status = "failed"
+        context.workflow.last_error = message
+        context.workflow.finished_at = _now()
+        context.workflow.updated_at = _now()
+        return WorkflowOperationHandle(
+            operation_id=context.operation.operation_id,
+            workflow_id=context.workflow.workflow_id,
+            operation_type=context.operation.operation_type,
+            status=context.operation.status,
+        )
+
+    complete_workflow_operation(
+        context.session,
+        operation=context.operation,
+        attempt=attempt,
+        summary="Engineering child fanout completed from the confirmed parent brief.",
+    )
+    _recompute_workflow_status(session=context.session, workflow=context.workflow)
+    return WorkflowOperationHandle(
+        operation_id=context.operation.operation_id,
+        workflow_id=context.workflow.workflow_id,
+        operation_type=context.operation.operation_type,
+        status=context.operation.status,
+    )
+
+
+def execute_workflow_operation_retry(
+    *,
+    session: Session,
+    settings: Settings,
+    session_factory: sessionmaker[Session],
+    workflow: WorkflowExecution,
+    operation: WorkflowOperation,
+    tenant_jira_oauth_context_fn: Callable[..., Any],
+    build_runtime_for_selector_fn: Callable[..., Any],
+    seed_issues_with_runtime_fn: Callable[..., Any],
+) -> WorkflowOperationHandle:
+    definitions = list_workflow_type_operations(session, workflow_type_key=workflow.workflow_type_key)
+    definition_operation_types = {
+        str(definition.operation_type or "").strip()
+        for definition in definitions
+        if str(definition.operation_type or "").strip()
+    }
+    if operation.operation_type not in definition_operation_types:
+        raise InvalidWorkflowOperationError(
+            f"Operation {operation.operation_type} is not defined for workflow type {workflow.workflow_type_key}"
+        )
+
+    tenant = session.get(Tenant, workflow.tenant_id)
+    if tenant is None:
+        raise InvalidWorkflowOperationError(f"Tenant {workflow.tenant_id} was not found")
+    if not workflow.project_id:
+        raise InvalidWorkflowOperationError("Workflow is not bound to a project")
+    project = session.get(Project, workflow.project_id)
+    if project is None:
+        raise InvalidWorkflowOperationError(f"Project {workflow.project_id} was not found")
+    if not str(project.jira_project_key or "").strip():
+        raise InvalidWorkflowOperationError("Project Jira key is required for Jira workflow operations")
+
+    executors: dict[str, Callable[..., WorkflowOperationHandle]] = {
+        "jira_child_fanout": _execute_jira_child_fanout,
+    }
+    executor = executors.get(operation.operation_type)
+    if executor is None:
+        raise UnsupportedWorkflowOperationError(
+            f"No workflow operation executor is registered for {operation.operation_type}"
+        )
+
+    return executor(
+        context=_OperationExecutionContext(
+            session=session,
+            settings=settings,
+            session_factory=session_factory,
+            workflow=workflow,
+            operation=operation,
+            tenant=tenant,
+            project=project,
+        ),
+        tenant_jira_oauth_context_fn=tenant_jira_oauth_context_fn,
+        build_runtime_for_selector_fn=build_runtime_for_selector_fn,
+        seed_issues_with_runtime_fn=seed_issues_with_runtime_fn,
+    )

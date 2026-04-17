@@ -7,7 +7,8 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from orchestrator.core.config import Settings
 from orchestrator.core.workflow_engine import WorkflowEngineState
-from orchestrator.storage.models import Run, RunHumanInputRequest, WorkflowExecution
+from orchestrator.core.workflow_operation_service import WorkflowOperationHandle
+from orchestrator.storage.models import Run, RunHumanInputRequest, WorkflowExecution, WorkflowOperation
 from orchestrator.temporal.client import connect_temporal_client, temporal_task_queue
 from orchestrator.temporal.payloads import (
     DevelopmentTeamRunWorkflowInput,
@@ -51,10 +52,11 @@ def _run_sync(awaitable):  # noqa: ANN001, ANN201
 class TemporalWorkflowEngine:
     backend = "temporal"
 
-    def __init__(self, *, process_claimed_run_fn, build_runner_fn, runtime_kwargs_fn):
+    def __init__(self, *, process_claimed_run_fn, build_runner_fn, runtime_kwargs_fn, retry_workflow_operation_fn=None):
         self._process_claimed_run_fn = process_claimed_run_fn
         self._build_runner_fn = build_runner_fn
         self._runtime_kwargs_fn = runtime_kwargs_fn
+        self._retry_workflow_operation_fn = retry_workflow_operation_fn
 
     def start_workflow(
         self,
@@ -136,4 +138,23 @@ class TemporalWorkflowEngine:
             backend=self.backend,
             status=workflow.status,
             active_run_id=workflow.active_run_id,
+        )
+
+    def retry_workflow_operation(
+        self,
+        *,
+        session: Session,
+        settings: Settings,
+        session_factory: sessionmaker[Session],
+        workflow: WorkflowExecution,
+        operation: WorkflowOperation,
+    ) -> WorkflowOperationHandle:
+        if self._retry_workflow_operation_fn is None:
+            raise RuntimeError("Workflow operation retry is not configured for this workflow engine invocation")
+        return self._retry_workflow_operation_fn(
+            session=session,
+            settings=settings,
+            session_factory=session_factory,
+            workflow=workflow,
+            operation=operation,
         )

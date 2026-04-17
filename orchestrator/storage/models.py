@@ -444,8 +444,8 @@ class WorkflowExecution(Base):
             "issue_key",
             "dedupe_scope",
             unique=True,
-            postgresql_where=text("status IN ('queued', 'running', 'waiting_for_input', 'blocked')"),
-            sqlite_where=text("status IN ('queued', 'running', 'waiting_for_input', 'blocked')"),
+            postgresql_where=text("status IN ('queued', 'running', 'waiting_for_input')"),
+            sqlite_where=text("status IN ('queued', 'running', 'waiting_for_input')"),
         ),
     )
 
@@ -484,7 +484,6 @@ class WorkflowExecution(Base):
         nullable=True,
     )
     source_run_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    blocked_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -708,11 +707,6 @@ class WorkflowOperation(Base):
     target_system: Mapped[str | None] = mapped_column(String(64), nullable=True)
     target_ref: Mapped[str | None] = mapped_column(String(255), nullable=True)
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
-    blocker_id: Mapped[str | None] = mapped_column(
-        String(64),
-        ForeignKey("workflow_blockers.blocker_id", ondelete="SET NULL"),
-        nullable=True,
-    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -742,33 +736,6 @@ class WorkflowOperationAttempt(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-
-
-class WorkflowBlocker(Base):
-    __tablename__ = "workflow_blockers"
-    __table_args__ = (
-        Index("ix_workflow_blockers_workflow_id", "workflow_id"),
-        Index("ix_workflow_blockers_status", "status"),
-    )
-
-    blocker_id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    workflow_id: Mapped[str] = mapped_column(
-        String(64),
-        ForeignKey("workflow_executions.workflow_id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    operation_id: Mapped[str | None] = mapped_column(
-        String(64),
-        ForeignKey("workflow_operations.operation_id", ondelete="SET NULL"),
-        nullable=True,
-    )
-    category: Mapped[str] = mapped_column(String(64), nullable=False)
-    message: Mapped[str] = mapped_column(Text, nullable=False)
-    status: Mapped[str] = mapped_column(String(32), nullable=False, default="open")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-
 
 class PMInterviewCase(Base):
     __tablename__ = "pm_interview_cases"

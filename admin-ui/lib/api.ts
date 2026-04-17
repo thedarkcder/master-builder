@@ -689,7 +689,7 @@ export type WorkflowRecord = {
   latest_checkpoint_id: string | null;
   source_workflow_id: string | null;
   source_run_id: string | null;
-  blocked_reason: string | null;
+  failure_reason: string | null;
   pending_input_request_id: string | null;
   latest_checkpoint_kind: string | null;
   state_path: WorkflowStatePathEntryRecord[];
@@ -702,7 +702,6 @@ export type WorkflowRecord = {
   available_actions: WorkflowActionRecord[];
   links: WorkflowLinkRecord[];
   operations: WorkflowOperationRecord[];
-  blockers: WorkflowBlockerRecord[];
   runs: RunRecord[];
   created_at: string;
   started_at: string | null;
@@ -723,6 +722,39 @@ export type WorkflowTypeRecord = {
   label: string;
   description: string | null;
   operations: WorkflowTypeOperationRecord[];
+};
+
+export type WorkflowExecutionPreviewRecord = {
+  workflow_id: string;
+  issue_key: string;
+  issue_summary: string | null;
+  status: string;
+  waiting_on: string | null;
+  next_step: string | null;
+  failure_reason: string | null;
+  created_at: string;
+  finished_at: string | null;
+};
+
+export type WorkflowTypeSummaryRecord = {
+  key: string;
+  label: string;
+  description: string | null;
+  operation_count: number;
+  execution_count: number;
+  latest_execution_at: string | null;
+};
+
+export type WorkflowTypeDetailRecord = {
+  key: string;
+  label: string;
+  description: string | null;
+  operations: WorkflowTypeOperationRecord[];
+  execution_modes: string[];
+  conditional_paths: string[];
+  execution_count: number;
+  latest_execution_at: string | null;
+  recent_executions: WorkflowExecutionPreviewRecord[];
 };
 
 export type WorkflowStatePathEntryRecord = {
@@ -774,18 +806,7 @@ export type WorkflowOperationRecord = {
   target_system: string | null;
   target_ref: string | null;
   summary: string | null;
-  blocker_id: string | null;
   attempts: WorkflowOperationAttemptRecord[];
-};
-
-export type WorkflowBlockerRecord = {
-  blocker_id: string;
-  operation_id: string | null;
-  category: string;
-  message: string;
-  status: string;
-  created_at: string;
-  resolved_at: string | null;
 };
 
 export type WorkflowAttemptCreatePayload = {
@@ -2461,6 +2482,38 @@ export function getWorkflow(credentials: Credentials, workflowId: string): Promi
   return request<WorkflowRecord>(credentials, `/api/admin/workflows/${encodeURIComponent(workflowId)}`);
 }
 
+export function listWorkflowTypes(
+  credentials: Credentials,
+  params: {
+    tenantId?: string;
+  } = {},
+): Promise<WorkflowTypeSummaryRecord[]> {
+  const query = new URLSearchParams();
+  if (params.tenantId) {
+    query.set("tenant_id", params.tenantId);
+  }
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return request<WorkflowTypeSummaryRecord[]>(credentials, `/api/admin/workflow-types${suffix}`);
+}
+
+export function getWorkflowType(
+  credentials: Credentials,
+  workflowTypeKey: string,
+  params: {
+    tenantId?: string;
+  } = {},
+): Promise<WorkflowTypeDetailRecord> {
+  const query = new URLSearchParams();
+  if (params.tenantId) {
+    query.set("tenant_id", params.tenantId);
+  }
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return request<WorkflowTypeDetailRecord>(
+    credentials,
+    `/api/admin/workflow-types/${encodeURIComponent(workflowTypeKey)}${suffix}`,
+  );
+}
+
 export function listWorkflows(
   credentials: Credentials,
   params: {
@@ -2504,6 +2557,20 @@ export function createWorkflowAttempt(
     method: "POST",
     body: JSON.stringify(payload)
   });
+}
+
+export function retryWorkflowOperation(
+  credentials: Credentials,
+  workflowId: string,
+  operationId: string
+): Promise<WorkflowRecord> {
+  return request<WorkflowRecord>(
+    credentials,
+    `/api/admin/workflows/${encodeURIComponent(workflowId)}/operations/${encodeURIComponent(operationId)}/retry`,
+    {
+      method: "POST",
+    }
+  );
 }
 
 export function cancelRun(credentials: Credentials, runId: string): Promise<RunRecord> {

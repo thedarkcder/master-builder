@@ -420,7 +420,7 @@ export function makeWorkflow(overrides: Partial<WorkflowRecord> = {}): WorkflowR
         {
           operation_type: "run_attempt_execution",
           label: "Execute run attempt",
-          retry_policy: "Retry transient worker or dispatch failures. Block if the run cannot be resumed automatically.",
+          retry_policy: "Retry transient worker or dispatch failures. Fail when the run cannot be resumed automatically.",
           description: "Dispatch the current run attempt through the central execution engine.",
           required: true,
           status: baselineRun.status,
@@ -434,7 +434,7 @@ export function makeWorkflow(overrides: Partial<WorkflowRecord> = {}): WorkflowR
     latest_checkpoint_id: baselineRun.entry_checkpoint_id,
     source_workflow_id: null,
     source_run_id: null,
-    blocked_reason: null,
+    failure_reason: null,
     pending_input_request_id: null,
     latest_checkpoint_kind: "execution",
     state_path: [],
@@ -453,18 +453,16 @@ export function makeWorkflow(overrides: Partial<WorkflowRecord> = {}): WorkflowR
         operation_type: "run_attempt_execution",
         status: baselineRun.status,
         label: "Execute run attempt",
-        retry_policy: "Retry transient worker or dispatch failures. Block if the run cannot be resumed automatically.",
+        retry_policy: "Retry transient worker or dispatch failures. Fail when the run cannot be resumed automatically.",
         description: "Dispatch the current run attempt through the central execution engine.",
         required: true,
         definition_only: false,
         target_system: null,
         target_ref: null,
         summary: null,
-        blocker_id: null,
         attempts: [],
       },
     ],
-    blockers: [],
     runs: [baselineRun],
     created_at: baselineRun.created_at,
     started_at: baselineRun.started_at,
@@ -856,6 +854,8 @@ export async function mockTenantWorkflowApis(
     workflows: WorkflowRecord[];
     nextAttemptResponse?: RunRecord;
     onCreateAttempt?: (payload: WorkflowAttemptCreatePayload) => void;
+    onRetryOperation?: (payload: { workflowId: string; operationId: string }) => void;
+    retriedWorkflowResponse?: WorkflowRecord;
   },
 ): Promise<void> {
   const tenantId = options.workflows[0]?.tenant_id ?? options.tenant?.tenant_id ?? "route25";
@@ -864,6 +864,31 @@ export async function mockTenantWorkflowApis(
     options.projects ??
     [makeProject({ tenant_id: tenantId, project_id: options.workflows[0]?.project_id ?? "route25-default" })];
   const primaryWorkflow = options.workflows[0] ?? makeWorkflow({ tenant_id: tenantId });
+  const workflowTypeSummary = {
+    key: primaryWorkflow.workflow_type.key,
+    label: primaryWorkflow.workflow_type.label,
+    description: primaryWorkflow.workflow_type.description,
+    operation_count: primaryWorkflow.workflow_type.operations.length,
+    execution_count: options.workflows.length,
+    latest_execution_at: options.workflows[0]?.created_at ?? primaryWorkflow.created_at,
+  };
+  const workflowTypeDetail = {
+    ...workflowTypeSummary,
+    operations: primaryWorkflow.workflow_type.operations,
+    execution_modes: ["fresh", "restart", "resume"],
+    conditional_paths: ["Retry failed operation"],
+    recent_executions: options.workflows.map((workflow) => ({
+      workflow_id: workflow.workflow_id,
+      issue_key: workflow.issue_key,
+      issue_summary: workflow.issue_summary,
+      status: workflow.status,
+      waiting_on: workflow.waiting_on,
+      next_step: workflow.next_step,
+      failure_reason: workflow.failure_reason,
+      created_at: workflow.created_at,
+      finished_at: workflow.finished_at,
+    })),
+  };
   const nextRun =
     options.nextAttemptResponse ??
     makeRun({
@@ -901,6 +926,16 @@ export async function mockTenantWorkflowApis(
     },
     {
       method: "GET",
+      pathname: /^\/api\/bff\/api\/admin\/workflow-types(?:\?.*)?$/,
+      handler: (route) => fulfillJson(route, [workflowTypeSummary]),
+    },
+    {
+      method: "GET",
+      pathname: /^\/api\/bff\/api\/admin\/workflow-types\/[^/]+(?:\?.*)?$/,
+      handler: (route) => fulfillJson(route, workflowTypeDetail),
+    },
+    {
+      method: "GET",
       pathname: /^\/api\/bff\/api\/admin\/workflows(?:\?.*)?$/,
       handler: (route) => fulfillJson(route, options.workflows),
     },
@@ -909,6 +944,9 @@ export async function mockTenantWorkflowApis(
       pathname: /^\/api\/bff\/api\/admin\/workflows\/[^/]+$/,
       handler: (route, url) => {
         const workflowId = decodeURIComponent(url.pathname.split("/").at(-1) ?? "");
+        if (options.retriedWorkflowResponse && workflowId === options.retriedWorkflowResponse.workflow_id) {
+          return fulfillJson(route, options.retriedWorkflowResponse);
+        }
         if (workflowId === nextRun.workflow_id) {
           return fulfillJson(route, {
             ...primaryWorkflow,
@@ -916,9 +954,8 @@ export async function mockTenantWorkflowApis(
             status: nextRun.status,
             active_run_id: nextRun.run_id,
             latest_checkpoint_kind: null,
-            blocked_reason: null,
+            failure_reason: null,
             operations: [],
-            blockers: [],
             runs: [nextRun],
             created_at: nextRun.created_at,
             started_at: nextRun.started_at,
@@ -934,6 +971,17 @@ export async function mockTenantWorkflowApis(
           contentType: "application/json",
           body: JSON.stringify({ detail: `Unknown workflow ${workflowId}` }),
         });
+      },
+    },
+    {
+      method: "POST",
+      pathname: /^\/api\/bff\/api\/admin\/workflows\/[^/]+\/operations\/[^/]+\/retry$/,
+      handler: async (route, url) => {
+        const segments = url.pathname.split("/");
+        const workflowId = decodeURIComponent(segments.at(-4) ?? "");
+        const operationId = decodeURIComponent(segments.at(-2) ?? "");
+        options.onRetryOperation?.({ workflowId, operationId });
+        await fulfillJson(route, options.retriedWorkflowResponse ?? primaryWorkflow);
       },
     },
     {

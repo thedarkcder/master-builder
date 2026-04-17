@@ -392,7 +392,6 @@ def finalize_workflow_result(
         workflow.active_run_id = run.run_id
         workflow.finished_at = run.finished_at
         workflow.updated_at = run.finished_at or datetime.now(timezone.utc)
-        workflow.blocked_reason = None
     session.commit()
     session.refresh(run)
     return run

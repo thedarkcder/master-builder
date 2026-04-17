@@ -81,7 +81,7 @@ def add_run_with_workflow(
     latest_checkpoint: WorkflowCheckpoint | None = None,
     source_workflow_id: str | None = None,
     source_run_id: str | None = None,
-    blocked_reason: str | None = None,
+    failure_reason: str | None = None,
 ) -> WorkflowExecution:
     if not run.workflow_id:
         run.workflow_id = f"workflow-{run.run_id}"
@@ -108,12 +108,11 @@ def add_run_with_workflow(
         orchestration_backend=orchestration_backend,
         dedupe_scope=run.dedupe_scope,
         status=effective_workflow_status,
-        last_error=run.last_error,
+        last_error=failure_reason if failure_reason is not None else run.last_error,
         active_run_id=active_run_id,
         latest_checkpoint_id=latest_checkpoint.checkpoint_id if latest_checkpoint is not None else None,
         source_workflow_id=source_workflow_id,
         source_run_id=source_run_id,
-        blocked_reason=blocked_reason if blocked_reason is not None else (run.last_error if effective_workflow_status == "blocked" else None),
         created_at=timestamp,
         started_at=run.started_at,
         finished_at=run.finished_at if effective_workflow_status in {"succeeded", "failed", "cancelled"} else None,
@@ -153,7 +152,7 @@ def add_workflow_attempt(
     checkpoint_stage: str | None = None,
     checkpoint_payload: dict | None = None,
     checkpoint_session_id: str | None = None,
-    blocked_reason: str | None = None,
+    failure_reason: str | None = None,
     last_error: str | None = None,
     pre_check_outcome: str | None = None,
     required_worker_capability: str | None = None,
@@ -175,7 +174,7 @@ def add_workflow_attempt(
     normalized_workflow_id = workflow_id or f"workflow-{run_id}"
     workflow_started = started_at if started_at is not None else (timestamp if workflow_status not in {"queued", "dispatching"} else None)
     workflow_finished = finished_at if finished_at is not None else (
-        timestamp if workflow_status in {"succeeded", "failed", "cancelled"} else None
+        timestamp if workflow_status in {"succeeded", "failed", "cancelled", "blocked"} else None
     )
     run_started = started_at if started_at is not None else (timestamp if run_status not in {"queued", "dispatching"} else None)
     run_finished = finished_at if finished_at is not None else (
@@ -194,13 +193,12 @@ def add_workflow_attempt(
         pr_url=pr_url,
         orchestration_backend=orchestration_backend,
         dedupe_scope=dedupe_scope,
-        status=workflow_status,
+        status="failed" if workflow_status == "blocked" else workflow_status,
         last_error=last_error,
-        active_run_id=run_id if workflow_status in {"queued", "dispatching", "running", "waiting_for_input", "blocked"} else None,
+        active_run_id=run_id if workflow_status in {"queued", "dispatching", "running", "waiting_for_input"} else None,
         latest_checkpoint_id=entry_checkpoint_id,
         source_workflow_id=source_workflow_id,
         source_run_id=source_run_id,
-        blocked_reason=blocked_reason,
         created_at=created_at or timestamp,
         started_at=workflow_started,
         finished_at=workflow_finished,

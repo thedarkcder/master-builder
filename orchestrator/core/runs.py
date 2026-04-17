@@ -466,7 +466,6 @@ def enqueue_run(
         latest_checkpoint_id=bootstrap.entry_checkpoint_id if bootstrap is not None else None,
         source_workflow_id=None,
         source_run_id=bootstrap.parent_run_id if bootstrap is not None else None,
-        blocked_reason=None,
         created_at=now,
         started_at=None,
         finished_at=None,
@@ -770,12 +769,13 @@ def mark_run_terminal(
     workflow.updated_at = now
     workflow.active_run_id = run.run_id
     if terminal_status == RUN_STATUS_BLOCKED:
-        workflow.status = RUN_STATUS_BLOCKED
-        workflow.blocked_reason = last_error
+        workflow.status = RUN_STATUS_FAILED
+        workflow.finished_at = now
     else:
         workflow.status = terminal_status
         workflow.finished_at = now
-        workflow.blocked_reason = None
+        if terminal_status != RUN_STATUS_FAILED:
+            workflow.last_error = None
     session.commit()
     session.refresh(run)
     return run

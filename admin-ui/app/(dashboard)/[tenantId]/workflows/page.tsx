@@ -8,98 +8,54 @@ import { RefreshCw, SlidersHorizontal, X } from "lucide-react";
 import { useAuth } from "@/components/auth-provider";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { StatusBadge } from "@/components/ui/status-badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatTimestamp } from "@/lib/datetime";
-import { listWorkflows, type WorkflowRecord } from "@/lib/api";
+import { listWorkflowTypes, type WorkflowTypeSummaryRecord } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
-const WORKFLOW_STATUS_OPTIONS = ["queued", "running", "waiting_for_input", "blocked", "completed", "failed", "cancelled"] as const;
-
-function statusBorderClass(status: string): string {
-  const normalized = String(status || "").trim().toLowerCase();
-  if (normalized === "completed") return "border-l-success";
-  if (normalized === "failed" || normalized === "blocked") return "border-l-destructive";
-  if (normalized === "running" || normalized === "waiting_for_input") return "border-l-warning";
-  if (normalized === "queued") return "border-l-info";
-  return "border-l-border";
-}
-
-function summarizeFailure(workflow: WorkflowRecord): string {
-  const blockerMessage = workflow.blockers.find((blocker) => blocker.status === "open")?.message?.trim();
-  if (blockerMessage) {
-    return blockerMessage;
-  }
-  if (workflow.blocked_reason?.trim()) {
-    return workflow.blocked_reason.trim();
-  }
-  const latestAttempt = workflow.operations.flatMap((operation) => operation.attempts).sort((left, right) => {
-    const leftTime = new Date(left.finished_at ?? left.started_at ?? 0).getTime();
-    const rightTime = new Date(right.finished_at ?? right.started_at ?? 0).getTime();
-    return rightTime - leftTime;
-  })[0];
-  return latestAttempt?.error_message?.trim() || "—";
-}
-
-function retryableState(workflow: WorkflowRecord): string {
-  const retryableAttempts = workflow.operations.flatMap((operation) => operation.attempts).filter((attempt) => attempt.retryable);
-  if (retryableAttempts.length === 0) {
-    return "No";
-  }
-  return retryableAttempts.some((attempt) => attempt.status === "retrying") ? "Retrying" : "Yes";
-}
-
-function nextStateLabel(workflow: WorkflowRecord): string {
-  if (workflow.waiting_on === "human_input") {
-    return "Waiting on human input";
-  }
-  return workflow.next_step?.trim() || "—";
-}
-
-export default function TenantWorkflowsPage() {
+export default function TenantWorkflowTypesPage() {
   const params = useParams<{ tenantId: string }>();
   const { credentials, ready } = useAuth();
   const tenantId = decodeURIComponent(params.tenantId);
 
-  const [workflows, setWorkflows] = useState<WorkflowRecord[]>([]);
+  const [workflowTypes, setWorkflowTypes] = useState<WorkflowTypeSummaryRecord[]>([]);
   const [loading, setLoading] = useState(false);
   const [statusLine, setStatusLine] = useState("");
-  const [issueFilter, setIssueFilter] = useState("");
-  const [statusFilter, setStatusFilter] = useState<string>("all");
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState<25 | 50 | 100>(25);
+  const [search, setSearch] = useState("");
 
-  const loadWorkflows = useCallback(async () => {
+  const loadWorkflowTypes = useCallback(async () => {
     if (!credentials) return;
     setLoading(true);
     try {
-      const payload = await listWorkflows(credentials, {
-        tenantId,
-        issue: issueFilter || undefined,
-        status: statusFilter === "all" ? undefined : statusFilter,
-        limit: pageSize,
-        offset: (page - 1) * pageSize,
-      });
-      setWorkflows(payload);
+      const payload = await listWorkflowTypes(credentials, { tenantId });
+      setWorkflowTypes(payload);
       setStatusLine("");
     } catch (error) {
-      setStatusLine(`Failed to load executions: ${(error as Error).message}`);
+      setStatusLine(`Failed to load workflows: ${(error as Error).message}`);
     } finally {
       setLoading(false);
     }
-  }, [credentials, issueFilter, page, pageSize, statusFilter, tenantId]);
+  }, [credentials, tenantId]);
 
   useEffect(() => {
-    if (ready && credentials) void loadWorkflows();
-  }, [ready, credentials, loadWorkflows]);
+    if (ready && credentials) void loadWorkflowTypes();
+  }, [ready, credentials, loadWorkflowTypes]);
 
-  const hasFilters = useMemo(() => issueFilter.trim().length > 0 || statusFilter !== "all", [issueFilter, statusFilter]);
+  const filteredWorkflowTypes = useMemo(() => {
+    const needle = search.trim().toLowerCase();
+    if (!needle) {
+      return workflowTypes;
+    }
+    return workflowTypes.filter((workflowType) => {
+      return (
+        workflowType.label.toLowerCase().includes(needle)
+        || workflowType.key.toLowerCase().includes(needle)
+        || String(workflowType.description || "").toLowerCase().includes(needle)
+      );
+    });
+  }, [search, workflowTypes]);
 
-  function clearFilters() {
-    setIssueFilter("");
-    setStatusFilter("all");
-    setPage(1);
-  }
+  const hasFilter = search.trim().length > 0;
 
   return (
     <div className="space-y-4">
@@ -113,53 +69,23 @@ export default function TenantWorkflowsPage() {
               </div>
 
               <Input
-                className="h-8 w-40 text-sm"
-                value={issueFilter}
-                onChange={(event) => {
-                  setIssueFilter(event.target.value);
-                  setPage(1);
-                }}
-                placeholder="Issue / summary"
+                className="h-8 w-48 text-sm"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="Workflow type"
               />
-              <select
-                className="h-8 w-36 rounded-md border border-input bg-background px-2 text-sm"
-                value={statusFilter}
-                onChange={(event) => {
-                  setStatusFilter(event.target.value);
-                  setPage(1);
-                }}
-              >
-                <option value="all">Status: Any</option>
-                {WORKFLOW_STATUS_OPTIONS.map((status) => (
-                  <option key={status} value={status}>
-                    {status}
-                  </option>
-                ))}
-              </select>
 
               <div className="ml-auto flex shrink-0 items-center gap-1.5">
-                {hasFilters ? (
-                  <Button variant="ghost" size="sm" className="h-8 text-xs text-muted-foreground" onClick={clearFilters}>
+                {hasFilter ? (
+                  <Button variant="ghost" size="sm" className="h-8 text-xs text-muted-foreground" onClick={() => setSearch("")}>
                     <X className="mr-1 h-3 w-3" />
                     Clear
                   </Button>
                 ) : null}
-                <Button variant="outline" size="sm" className="h-8" onClick={() => void loadWorkflows()} disabled={loading}>
+                <Button variant="outline" size="sm" className="h-8" onClick={() => void loadWorkflowTypes()} disabled={loading}>
                   <RefreshCw className={cn("mr-1.5 h-3.5 w-3.5", loading && "animate-spin")} />
                   Refresh
                 </Button>
-                <select
-                  className="h-8 rounded-md border border-input bg-background px-2 text-xs"
-                  value={String(pageSize)}
-                  onChange={(event) => {
-                    setPageSize(Number(event.target.value) as 25 | 50 | 100);
-                    setPage(1);
-                  }}
-                >
-                  <option value="25">25 / page</option>
-                  <option value="50">50 / page</option>
-                  <option value="100">100 / page</option>
-                </select>
               </div>
             </div>
           </div>
@@ -169,86 +95,45 @@ export default function TenantWorkflowsPage() {
           <div className="border-t px-5 py-3 text-sm text-muted-foreground">{statusLine}</div>
         ) : null}
 
-        {workflows.length === 0 && !loading ? (
+        {filteredWorkflowTypes.length === 0 && !loading ? (
           <div className="border-t px-5 py-12 text-center text-sm text-muted-foreground">
-            No executions found for the current filters.
+            No workflows found for the current filters.
           </div>
         ) : (
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Execution</TableHead>
-                <TableHead>Workflow type</TableHead>
-                <TableHead>Issue</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Failure</TableHead>
-                <TableHead>Retryable</TableHead>
-                <TableHead>Created</TableHead>
+                <TableHead>Workflow</TableHead>
+                <TableHead>Operations</TableHead>
+                <TableHead>Executions</TableHead>
+                <TableHead>Latest execution</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody className={cn(loading && "pointer-events-none opacity-50 transition-opacity")}>
-              {workflows.map((workflow) => (
-                <TableRow key={workflow.workflow_id} className={cn("border-l-2", statusBorderClass(workflow.status))}>
+              {filteredWorkflowTypes.map((workflowType) => (
+                <TableRow key={workflowType.key}>
                   <TableCell className="font-medium">
                     <Link
                       className="text-primary hover:underline"
-                      href={`/${encodeURIComponent(tenantId)}/workflows/${encodeURIComponent(workflow.workflow_id)}`}
+                      href={`/${encodeURIComponent(tenantId)}/workflows/${encodeURIComponent(workflowType.key)}`}
                     >
-                      {workflow.issue_summary?.trim() || workflow.issue_key || workflow.workflow_id}
+                      {workflowType.label}
                     </Link>
-                    <p className="text-xs text-muted-foreground">{workflow.workflow_id}</p>
+                    <p className="text-xs text-muted-foreground">{workflowType.key}</p>
+                    {workflowType.description ? (
+                      <p className="mt-1 max-w-[640px] text-sm text-muted-foreground">{workflowType.description}</p>
+                    ) : null}
                   </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">
-                    <div className="space-y-1">
-                      <p>{workflow.workflow_type.label}</p>
-                      <p className="text-xs text-muted-foreground">{workflow.workflow_type.key}</p>
-                    </div>
-                  </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">{workflow.issue_key}</TableCell>
-                  <TableCell>
-                    <div className="space-y-1">
-                      <StatusBadge status={workflow.current_state} />
-                      {workflow.waiting_on ? (
-                        <p className="text-xs text-muted-foreground">{workflow.waiting_on.replace(/_/g, " ")}</p>
-                      ) : null}
-                    </div>
-                  </TableCell>
-                  <TableCell className="max-w-[420px] text-sm text-muted-foreground">
-                    <div className="space-y-1">
-                      <p className="line-clamp-3">{summarizeFailure(workflow)}</p>
-                      <p className="text-xs text-muted-foreground">Next: {nextStateLabel(workflow)}</p>
-                    </div>
-                  </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">{retryableState(workflow)}</TableCell>
+                  <TableCell className="text-sm text-muted-foreground">{workflowType.operation_count}</TableCell>
+                  <TableCell className="text-sm text-muted-foreground">{workflowType.execution_count}</TableCell>
                   <TableCell className="whitespace-nowrap text-sm text-muted-foreground">
-                    {formatTimestamp(workflow.created_at)}
+                    {workflowType.latest_execution_at ? formatTimestamp(workflowType.latest_execution_at) : "—"}
                   </TableCell>
                 </TableRow>
               ))}
             </TableBody>
           </Table>
         )}
-
-        <div className="flex items-center justify-between gap-2 border-t px-5 py-3 text-sm text-muted-foreground">
-          <span>
-            {workflows.length} execution{workflows.length === 1 ? "" : "s"}
-          </span>
-          <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" className="h-8" disabled={loading || page <= 1} onClick={() => setPage((value) => value - 1)}>
-              Previous
-            </Button>
-            <span>Page {page}</span>
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-8"
-              disabled={loading || workflows.length < pageSize}
-              onClick={() => setPage((value) => value + 1)}
-            >
-              Next
-            </Button>
-          </div>
-        </div>
       </div>
     </div>
   );

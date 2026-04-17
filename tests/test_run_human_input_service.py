@@ -32,8 +32,8 @@ def test_create_human_input_request_snapshots_checkpoint_and_moves_run_to_waitin
         status="running",
         active_run_id="run-1",
         latest_checkpoint_id=None,
-        blocked_reason=None,
         updated_at=None,
+        last_error=None,
     )
     workflow_query = MagicMock()
     workflow_query.scalars.return_value.one_or_none.return_value = workflow
@@ -95,8 +95,8 @@ def test_create_human_input_request_renders_structured_questions_in_discord_mess
         status="running",
         active_run_id="run-1",
         latest_checkpoint_id=None,
-        blocked_reason=None,
         updated_at=None,
+        last_error=None,
     )
     workflow_query = MagicMock()
     workflow_query.scalars.return_value.one_or_none.return_value = workflow
@@ -449,8 +449,8 @@ def test_create_human_input_request_commits_before_dispatching_discord_message()
         status="running",
         active_run_id="run-1",
         latest_checkpoint_id=None,
-        blocked_reason=None,
         updated_at=None,
+        last_error=None,
     )
     checkpoint = SimpleNamespace(checkpoint_id="checkpoint-1")
     send_result = SimpleNamespace(

@@ -142,7 +142,6 @@ class DiscordCommandReplyHarness(SqliteTemplateApiTestCase):
                     latest_checkpoint_id=None,
                     source_workflow_id=None,
                     source_run_id=None,
-                    blocked_reason=None,
                     created_at=now,
                     started_at=now if status == "running" else None,
                     finished_at=None if status in {"queued", "running"} else now,
