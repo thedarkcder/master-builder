@@ -194,6 +194,98 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
         seed_mock.assert_not_called()
         run_flow_mock.assert_called_once()
 
+    def test_webhook_requeues_when_intake_routing_classification_fails(self) -> None:
+        payload = self._jira_issue_payload(issue_key="TP-992B", labels=[], status_name="Backlog")
+        payload["webhookEvent"] = "jira:issue_created"
+
+        class _FakeClient:
+            def get_issue_detail(self, **kwargs):
+                return JiraIssueDetail(
+                    key="TP-992B",
+                    summary="Runtime routing reset",
+                    status="Backlog",
+                    description="Need runtime classification before deciding PM-parent handling.",
+                    labels=[],
+                )
+
+        oauth_context = SimpleNamespace(
+            client=_FakeClient(),
+            access_token="tok",
+            connection=SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
+        )
+        with (
+            patch("orchestrator.core.worker.webhook_job_service.tenant_jira_oauth_context", return_value=oauth_context),
+            patch(
+                "orchestrator.api.webhooks.jira_application.classify_jira_issue_intake_with_runtime",
+                side_effect=RuntimeError("runtime returned invalid json"),
+            ),
+            patch("orchestrator.api.webhooks.jira_application.plan_jira_run_flow") as run_flow_mock,
+        ):
+            response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+            processed = self._process_one_webhook_job()
+
+        self._assert_jira_issue_event_queued(response, issue_key="TP-992B")
+        self.assertIsNotNone(processed)
+        assert processed is not None
+        self.assertEqual(processed.status, "pending")
+        run_flow_mock.assert_not_called()
+
+        with self.session_factory() as session:
+            persisted = session.get(type(processed), processed.job_id)
+            self.assertIsNotNone(persisted)
+            assert persisted is not None
+            self.assertEqual(persisted.status, "pending")
+            self.assertEqual(persisted.attempt_count, 1)
+            self.assertEqual(persisted.last_error, "Jira issue intake routing classification failed")
+
+    def test_webhook_requeues_when_intake_routing_label_update_fails(self) -> None:
+        payload = self._jira_issue_payload(issue_key="TP-992C", labels=[], status_name="Backlog")
+        payload["webhookEvent"] = "jira:issue_created"
+
+        class _FailingClient:
+            def get_issue_detail(self, **kwargs):
+                return JiraIssueDetail(
+                    key="TP-992C",
+                    summary="Runtime routing reset",
+                    status="Backlog",
+                    description="Need runtime classification before deciding PM-parent handling.",
+                    labels=[],
+                )
+
+            def add_issue_labels(self, **kwargs):
+                raise RuntimeError("jira temporarily unavailable")
+
+        oauth_context = SimpleNamespace(
+            client=_FailingClient(),
+            access_token="tok",
+            connection=SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
+        )
+        with (
+            patch("orchestrator.core.worker.webhook_job_service.tenant_jira_oauth_context", return_value=oauth_context),
+            patch(
+                "orchestrator.api.webhooks.jira_application.classify_jira_issue_intake_with_runtime",
+                return_value={"route": "pm_parent", "reason": "Needs PM breakdown", "confidence": "high"},
+            ),
+            patch("orchestrator.api.webhooks.jira_application.tenant_jira_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.webhooks.jira_application.plan_jira_run_flow") as run_flow_mock,
+        ):
+            response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+            processed = self._process_one_webhook_job()
+
+        self._assert_jira_issue_event_queued(response, issue_key="TP-992C")
+        self.assertIsNotNone(processed)
+        assert processed is not None
+        self.assertEqual(processed.status, "pending")
+        run_flow_mock.assert_not_called()
+
+        with self.session_factory() as session:
+            persisted = session.get(type(processed), processed.job_id)
+            self.assertIsNotNone(persisted)
+            assert persisted is not None
+            self.assertEqual(persisted.status, "pending")
+            self.assertEqual(persisted.attempt_count, 1)
+            self.assertEqual(persisted.last_error, "Jira issue intake routing label update failed")
+
     def test_webhook_unlabeled_todo_issue_in_backlog_auto_routes_pm_parent(self) -> None:
         payload = self._jira_issue_payload(issue_key="TP-992A", labels=[], status_name="To Do")
         payload["webhookEvent"] = "jira:issue_updated"
