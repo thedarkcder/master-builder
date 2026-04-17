@@ -28,6 +28,10 @@ from orchestrator.api.schemas import (
 )
 from orchestrator.core.config import get_settings
 from orchestrator.core.workflow_runtime import build_workflow_runtime
+from orchestrator.core.workflow_run_state import (
+    project_workflow_for_new_run_attempt,
+    reconcile_workflow_with_active_run,
+)
 from orchestrator.core.workflow_operation_executor import (
     execute_workflow_operation_retry,
     supports_workflow_operation_retry,
@@ -78,28 +82,11 @@ def _reconcile_workflow_status_with_active_attempt(*, session, workflow) -> None
     active_run = session.get(Run, active_run_id)
     if active_run is None:
         return
-    run_status = str(getattr(active_run, "status", "") or "").strip().lower()
-    if run_status in {"queued", "dispatching", "running"}:
-        return
-
-    now = _now()
-    workflow.updated_at = now
-    workflow.last_error = active_run.last_error
-    if run_status == "waiting_for_input":
-        workflow.status = "waiting_for_input"
-        workflow.finished_at = None
-        workflow.last_error = None
-        return
-    if run_status == "blocked":
-        workflow.status = "failed"
-        workflow.finished_at = active_run.finished_at or now
-        workflow.last_error = active_run.last_error
-        return
-    if run_status in {"succeeded", "failed", "cancelled"}:
-        workflow.status = run_status
-        workflow.finished_at = active_run.finished_at or now
-        if run_status != "failed":
-            workflow.last_error = None
+    reconcile_workflow_with_active_run(
+        workflow,
+        active_run=active_run,
+        now=_now(),
+    )
 
 
 def _latest_checkpoint_for_kind(*, session, workflow_id: str, checkpoint_kind: str) -> WorkflowCheckpoint | None:  # noqa: ANN001
@@ -1174,11 +1161,7 @@ def create_workflow_attempt(
         session.add(next_workflow)
     else:
         _cancel_open_input_requests(session=session, workflow_id=workflow.workflow_id)
-        next_workflow.status = "queued"
-        next_workflow.last_error = None
-        next_workflow.finished_at = None
         next_workflow.latest_checkpoint_id = selected_checkpoint.checkpoint_id if selected_checkpoint is not None else None
-        next_workflow.updated_at = now
 
     try:
         next_run_plan = (
@@ -1250,7 +1233,13 @@ def create_workflow_attempt(
         precheck_outcome=next_run.pre_check_outcome,
     )
     session.add(next_run)
-    next_workflow.active_run_id = next_run.run_id
+    project_workflow_for_new_run_attempt(
+        next_workflow,
+        run=next_run,
+        latest_checkpoint_id=next_workflow.latest_checkpoint_id,
+        orchestration_backend=orchestration_backend if not same_workflow else None,
+        now=now,
+    )
     notify_run_enqueued(
         session,
         tenant_id=next_workflow.tenant_id,

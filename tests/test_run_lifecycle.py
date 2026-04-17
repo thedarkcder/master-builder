@@ -392,6 +392,7 @@ class RunLifecycleTests(unittest.TestCase):
                 repo_url=None,
                 branch=None,
                 pr_url=None,
+                orchestration_backend="temporal",
                 dedupe_scope=RUN_DEDUPE_SCOPE_ISSUE_EXECUTION,
                 status="waiting_for_input",
                 last_error=None,

@@ -8,6 +8,12 @@ from sqlalchemy.orm import Session
 
 from orchestrator.core.project_routing import find_active_project_for_issue_key
 from orchestrator.core.runs import mark_run_terminal
+from orchestrator.core.workflow_run_state import (
+    project_workflow_for_dispatch_claim,
+    project_workflow_for_new_run_attempt,
+    project_workflow_for_run_started,
+    project_workflow_for_run_terminal,
+)
 from orchestrator.core.workflow.checkpoints import (
     checkpoint_kind_for_stage,
     upsert_workflow_checkpoint,
@@ -54,10 +60,7 @@ def start_run(
         run.worker_service_instance_id = str(worker_service_instance_id or "").strip() or None
         workflow = _workflow_for_run(session, run=run)
         if workflow is not None:
-            workflow.status = RUN_STATUS_RUNNING
-            workflow.started_at = workflow.started_at or started_at
-            workflow.active_run_id = run.run_id
-            workflow.updated_at = started_at
+            project_workflow_for_run_started(workflow, run=run, now=started_at)
         session.commit()
         session.refresh(run)
         return run
@@ -87,10 +90,7 @@ def start_run(
     run.worker_service_instance_id = str(worker_service_instance_id or "").strip() or None
     workflow = _workflow_for_run(session, run=run)
     if workflow is not None:
-        workflow.status = RUN_STATUS_RUNNING
-        workflow.started_at = workflow.started_at or started_at
-        workflow.active_run_id = run.run_id
-        workflow.updated_at = started_at
+        project_workflow_for_run_started(workflow, run=run, now=started_at)
     session.commit()
     session.refresh(run)
     return run
@@ -131,8 +131,7 @@ def claim_run_for_dispatch(
     run.worker_service_instance_id = normalized_owner
     workflow = _workflow_for_run(session, run=run)
     if workflow is not None:
-        workflow.active_run_id = run.run_id
-        workflow.updated_at = claimed_at
+        project_workflow_for_dispatch_claim(workflow, run=run, now=claimed_at)
     session.commit()
     session.refresh(run)
     return run
@@ -334,11 +333,11 @@ def finalize_cancelled_run(
     run.worker_service_instance_id = None
     workflow = _workflow_for_run(session, run=run)
     if workflow is not None:
-        workflow.status = run.status
-        workflow.last_error = run.last_error
-        workflow.active_run_id = run.run_id
-        workflow.finished_at = run.finished_at
-        workflow.updated_at = run.finished_at or datetime.now(timezone.utc)
+        project_workflow_for_run_terminal(
+            workflow,
+            run=run,
+            now=run.finished_at or datetime.now(timezone.utc),
+        )
     session.commit()
     session.refresh(run)
     return run
@@ -387,11 +386,11 @@ def finalize_workflow_result(
 
     workflow = _workflow_for_run(session, run=run)
     if workflow is not None:
-        workflow.status = run.status
-        workflow.last_error = run.last_error
-        workflow.active_run_id = run.run_id
-        workflow.finished_at = run.finished_at
-        workflow.updated_at = run.finished_at or datetime.now(timezone.utc)
+        project_workflow_for_run_terminal(
+            workflow,
+            run=run,
+            now=run.finished_at or datetime.now(timezone.utc),
+        )
     session.commit()
     session.refresh(run)
     return run
@@ -443,11 +442,12 @@ def requeue_workflow_result_for_capability(
     run.worker_service_instance_id = None
     workflow = _workflow_for_run(session, run=run)
     if workflow is not None:
-        workflow.status = "queued"
-        workflow.last_error = None
-        workflow.finished_at = None
-        workflow.active_run_id = run.run_id
-        workflow.updated_at = datetime.now(timezone.utc)
+        project_workflow_for_new_run_attempt(
+            workflow,
+            run=run,
+            latest_checkpoint_id=workflow.latest_checkpoint_id,
+            now=datetime.now(timezone.utc),
+        )
     notify_run_enqueued(
         session,
         tenant_id=run.tenant_id,
@@ -507,11 +507,12 @@ def requeue_workflow_result_for_stale_snapshot(
     run.worker_service_instance_id = None
     workflow = _workflow_for_run(session, run=run)
     if workflow is not None:
-        workflow.status = "queued"
-        workflow.last_error = None
-        workflow.finished_at = None
-        workflow.active_run_id = run.run_id
-        workflow.updated_at = datetime.now(timezone.utc)
+        project_workflow_for_new_run_attempt(
+            workflow,
+            run=run,
+            latest_checkpoint_id=workflow.latest_checkpoint_id,
+            now=datetime.now(timezone.utc),
+        )
     notify_run_enqueued(
         session,
         tenant_id=run.tenant_id,
@@ -571,11 +572,12 @@ def requeue_run_for_repo_setup(
     run.worker_service_instance_id = None
     workflow = _workflow_for_run(session, run=run)
     if workflow is not None:
-        workflow.status = "queued"
-        workflow.last_error = None
-        workflow.finished_at = None
-        workflow.active_run_id = run.run_id
-        workflow.updated_at = datetime.now(timezone.utc)
+        project_workflow_for_new_run_attempt(
+            workflow,
+            run=run,
+            latest_checkpoint_id=workflow.latest_checkpoint_id,
+            now=datetime.now(timezone.utc),
+        )
     notify_run_enqueued(
         session,
         tenant_id=run.tenant_id,
