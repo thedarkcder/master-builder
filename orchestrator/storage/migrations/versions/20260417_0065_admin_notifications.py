@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy import inspect
 
 
 revision = "20260417_0065"
@@ -17,53 +18,70 @@ branch_labels = None
 depends_on = None
 
 
+def _has_table(table_name: str) -> bool:
+    bind = op.get_bind()
+    inspector = inspect(bind)
+    return bool(inspector.has_table(table_name))
+
+
+def _has_index(table_name: str, index_name: str) -> bool:
+    bind = op.get_bind()
+    inspector = inspect(bind)
+    return any(index.get("name") == index_name for index in inspector.get_indexes(table_name))
+
+
 def upgrade() -> None:
-    op.create_table(
-        "admin_notifications",
-        sa.Column("notification_id", sa.String(length=64), nullable=False),
-        sa.Column("tenant_id", sa.String(length=255), nullable=True),
-        sa.Column("project_id", sa.String(length=255), nullable=True),
-        sa.Column("scope_type", sa.String(length=64), nullable=False),
-        sa.Column("scope_id", sa.String(length=255), nullable=True),
-        sa.Column("source", sa.String(length=64), nullable=False),
-        sa.Column("kind", sa.String(length=64), nullable=False),
-        sa.Column("severity", sa.String(length=32), nullable=False),
-        sa.Column("title", sa.Text(), nullable=False),
-        sa.Column("detail", sa.Text(), nullable=False),
-        sa.Column("action_label", sa.String(length=255), nullable=True),
-        sa.Column("action_path", sa.Text(), nullable=True),
-        sa.Column("fingerprint", sa.String(length=255), nullable=False),
-        sa.Column("status", sa.String(length=32), nullable=False),
-        sa.Column("context_json", sa.JSON(), nullable=False),
-        sa.Column("first_emitted_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("last_emitted_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("acknowledged_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("resolved_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
-        sa.PrimaryKeyConstraint("notification_id"),
-        sa.UniqueConstraint("fingerprint", name="uq_admin_notifications_fingerprint"),
-    )
-    op.create_index(
-        "ix_admin_notifications_status_last_emitted_at",
-        "admin_notifications",
-        ["status", "last_emitted_at"],
-    )
-    op.create_index(
-        "ix_admin_notifications_scope_type_scope_id",
-        "admin_notifications",
-        ["scope_type", "scope_id"],
-    )
-    op.create_index(
-        "ix_admin_notifications_tenant_id_status",
-        "admin_notifications",
-        ["tenant_id", "status"],
-    )
-    op.create_index(
-        "ix_admin_notifications_kind_status",
-        "admin_notifications",
-        ["kind", "status"],
-    )
+    if not _has_table("admin_notifications"):
+        op.create_table(
+            "admin_notifications",
+            sa.Column("notification_id", sa.String(length=64), nullable=False),
+            sa.Column("tenant_id", sa.String(length=255), nullable=True),
+            sa.Column("project_id", sa.String(length=255), nullable=True),
+            sa.Column("scope_type", sa.String(length=64), nullable=False),
+            sa.Column("scope_id", sa.String(length=255), nullable=True),
+            sa.Column("source", sa.String(length=64), nullable=False),
+            sa.Column("kind", sa.String(length=64), nullable=False),
+            sa.Column("severity", sa.String(length=32), nullable=False),
+            sa.Column("title", sa.Text(), nullable=False),
+            sa.Column("detail", sa.Text(), nullable=False),
+            sa.Column("action_label", sa.String(length=255), nullable=True),
+            sa.Column("action_path", sa.Text(), nullable=True),
+            sa.Column("fingerprint", sa.String(length=255), nullable=False),
+            sa.Column("status", sa.String(length=32), nullable=False),
+            sa.Column("context_json", sa.JSON(), nullable=False),
+            sa.Column("first_emitted_at", sa.DateTime(timezone=True), nullable=False),
+            sa.Column("last_emitted_at", sa.DateTime(timezone=True), nullable=False),
+            sa.Column("acknowledged_at", sa.DateTime(timezone=True), nullable=True),
+            sa.Column("resolved_at", sa.DateTime(timezone=True), nullable=True),
+            sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+            sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
+            sa.PrimaryKeyConstraint("notification_id"),
+            sa.UniqueConstraint("fingerprint", name="uq_admin_notifications_fingerprint"),
+        )
+    if not _has_index("admin_notifications", "ix_admin_notifications_status_last_emitted_at"):
+        op.create_index(
+            "ix_admin_notifications_status_last_emitted_at",
+            "admin_notifications",
+            ["status", "last_emitted_at"],
+        )
+    if not _has_index("admin_notifications", "ix_admin_notifications_scope_type_scope_id"):
+        op.create_index(
+            "ix_admin_notifications_scope_type_scope_id",
+            "admin_notifications",
+            ["scope_type", "scope_id"],
+        )
+    if not _has_index("admin_notifications", "ix_admin_notifications_tenant_id_status"):
+        op.create_index(
+            "ix_admin_notifications_tenant_id_status",
+            "admin_notifications",
+            ["tenant_id", "status"],
+        )
+    if not _has_index("admin_notifications", "ix_admin_notifications_kind_status"):
+        op.create_index(
+            "ix_admin_notifications_kind_status",
+            "admin_notifications",
+            ["kind", "status"],
+        )
 
 
 def downgrade() -> None:
