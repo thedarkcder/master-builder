@@ -90,6 +90,17 @@ def plan_jira_comment_flow(
             removed_history_entries=removed_history_entries,
         )
 
+    pm_interview_reply_response = jira_webhook_comment_flow.stage_handle_comment_pm_interview_reply(
+        context=context,
+        session=session,
+        settings=settings,
+    )
+    if pm_interview_reply_response is not None:
+        return JiraCommentPlan(
+            content=pm_interview_reply_response,
+            removed_history_entries=removed_history_entries,
+        )
+
     comment_reply_response = jira_webhook_comment_flow.stage_handle_comment_decision_reply(
         context=context,
         session=session,

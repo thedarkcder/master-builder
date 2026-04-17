@@ -148,7 +148,7 @@ def handle_jira_connect_callback(
     if state.return_to == "edit" and state.tenant_id:
         webhook_query = f"&jira_webhook={quote(auto_provision_state, safe='')}"
         return (
-            f"{settings.admin_ui_base_url.rstrip('/')}/tenants/{quote(state.tenant_id, safe='')}/settings/jira"
+            f"{settings.admin_ui_base_url.rstrip('/')}/{quote(state.tenant_id, safe='')}/settings/jira"
             f"?jira_oauth=success&jira_connection_id={quote(connection.connection_id, safe='')}{webhook_query}"
         )
     return (

@@ -7,6 +7,7 @@ from tempfile import TemporaryDirectory
 
 from sqlalchemy.exc import PendingRollbackError
 
+from orchestrator.core.webhook_job_errors import RetryableWebhookJobError
 from orchestrator.core.webhook_job_queue import (
     WEBHOOK_TRANSPORT_DISCORD_COMMAND,
     WEBHOOK_TRANSPORT_GITHUB,
@@ -403,3 +404,31 @@ class WorkerWebhookJobServiceTests(unittest.TestCase):
         self.assertEqual(processed, "failed-job")
         session.rollback.assert_called_once()
         mark_failed.assert_called_once()
+
+    def test_process_next_webhook_job_requeues_retryable_failures(self) -> None:
+        with self.session_factory() as session:
+            enqueued = enqueue_webhook_job(session, request=self._request()).job
+            session.commit()
+
+        with self.session_factory() as session:
+            with patch(
+                "orchestrator.core.worker.webhook_job_service._process_jira_subject_jobs",
+                side_effect=RetryableWebhookJobError("runtime temporarily unavailable", retry_after_seconds=45),
+            ):
+                processed = process_next_webhook_job(
+                    session=session,
+                    settings=self._settings(),
+                    owner_id="worker-1",
+                )
+
+            self.assertIsNotNone(processed)
+            assert processed is not None
+            persisted = session.get(WebhookJob, enqueued.job_id)
+            self.assertIsNotNone(persisted)
+            assert persisted is not None
+            self.assertEqual(processed.status, "pending")
+            self.assertEqual(persisted.status, "pending")
+            self.assertEqual(persisted.attempt_count, 1)
+            self.assertEqual(persisted.last_error, "runtime temporarily unavailable")
+            self.assertIsNone(persisted.owner_id)
+            self.assertGreater(persisted.available_at, persisted.updated_at)

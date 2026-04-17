@@ -4,6 +4,30 @@ from fastapi import HTTPException, status
 from fastapi.responses import JSONResponse
 
 from orchestrator.api.schemas import JiraProjectRead
+from orchestrator.core.admin_notifications import (
+    ADMIN_NOTIFICATION_KIND_JIRA_CONNECTION_REAUTH_REQUIRED,
+    AdminNotificationDraft,
+    AdminNotificationScope,
+    emit_admin_notification,
+    resolve_admin_notification_state,
+)
+from orchestrator.tools.jira_oauth_models import JiraOAuthAuthRequiredError, JiraOAuthError, JiraOAuthHttpError
+
+
+def _is_jira_reauth_required(exc: Exception) -> bool:
+    if isinstance(exc, JiraOAuthAuthRequiredError):
+        return True
+    if isinstance(exc, JiraOAuthHttpError):
+        return exc.status_code in {401, 403}
+    if isinstance(exc, JiraOAuthError):
+        message = str(exc).lower()
+        return (
+            "refresh_token is invalid" in message
+            or "unauthorized_client" in message
+            or "(401)" in message
+            or "(403)" in message
+        )
+    return False
 
 
 def list_jira_projects_for_connection(
@@ -19,13 +43,51 @@ def list_jira_projects_for_connection(
     if connection is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Jira connection not found")
 
-    access_token = refresh_jira_connection_tokens_fn(
-        session,
-        connection=connection,
-        settings=settings,
+    notification_scope = AdminNotificationScope(
+        scope_type="jira_connection",
+        scope_id=connection.connection_id,
     )
+    try:
+        access_token = refresh_jira_connection_tokens_fn(
+            session,
+            connection=connection,
+            settings=settings,
+        )
+    except (ValueError, JiraOAuthError) as exc:
+        if _is_jira_reauth_required(exc):
+            emit_admin_notification(
+                session=session,
+                notification=AdminNotificationDraft(
+                    scope=notification_scope,
+                    source="jira_oauth",
+                    kind=ADMIN_NOTIFICATION_KIND_JIRA_CONNECTION_REAUTH_REQUIRED,
+                    detail=(
+                        "Stored Jira credentials are no longer valid. Reconnect Jira from tenant settings to "
+                        "restore project loading, issue sync, and webhook administration."
+                    ),
+                    dedupe_key="reauth_required",
+                    context={
+                        "connection_id": connection.connection_id,
+                        "site_url": connection.site_url,
+                        "failure_category": "invalid_refresh_token",
+                    },
+                ),
+            )
+            session.commit()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Jira connection requires reauthentication.",
+            ) from exc
+        raise
     client = jira_oauth_client_fn(session=session, settings=settings)
     projects = client.list_projects(access_token=access_token, cloud_id=connection.cloud_id)
+    resolve_admin_notification_state(
+        session=session,
+        scope=notification_scope,
+        kind=ADMIN_NOTIFICATION_KIND_JIRA_CONNECTION_REAUTH_REQUIRED,
+        dedupe_key="reauth_required",
+    )
+    session.commit()
     return [JiraProjectRead(key=project.key, name=project.name) for project in projects]
 
 

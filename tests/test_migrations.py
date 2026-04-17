@@ -50,7 +50,7 @@ class MigrationTests(unittest.TestCase):
 
         duplicates = {revision_id: count for revision_id, count in Counter(revision_ids).items() if count > 1}
         self.assertEqual(duplicates, {})
-        self.assertEqual(script.get_heads(), ["20260414_0065"])
+        self.assertEqual(script.get_heads(), ["20260417_0066"])
 
     def test_jira_feature_migrations_chain_after_staging_worker_head(self) -> None:
         """Branch-specific migrations chained after staging merge head (20260328_0045)."""
@@ -142,6 +142,14 @@ class MigrationTests(unittest.TestCase):
                 'revision = "20260414_0065"',
                 'down_revision = "20260413_0064"',
             ),
+            "20260417_0065_admin_notifications.py": (
+                'revision = "20260417_0065"',
+                'down_revision = "20260413_0064"',
+            ),
+            "20260417_0066_merge_secret_crypto_and_admin_notifications_heads.py": (
+                'revision = "20260417_0066"',
+                'down_revision = ("20260414_0065", "20260417_0065")',
+            ),
         }
 
         for filename, expected_lines in expected_chain.items():
@@ -207,7 +215,7 @@ class MigrationTests(unittest.TestCase):
             self.assertIn("tenant_user_discord_identities", inspector.get_table_names())
             with engine.begin() as connection:
                 versions = connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
-            self.assertEqual(versions, ["20260414_0065"])
+            self.assertEqual(versions, ["20260417_0066"])
 
     def test_run_migrations_repairs_legacy_stream_only_0039_head(self) -> None:
         with TemporaryDirectory() as tmp_dir:
@@ -251,7 +259,7 @@ class MigrationTests(unittest.TestCase):
             self.assertIn("tenant_user_discord_identities", inspector.get_table_names())
             with engine.begin() as connection:
                 versions = connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
-            self.assertEqual(versions, ["20260414_0065"])
+            self.assertEqual(versions, ["20260417_0066"])
 
     def test_run_migrations_repairs_stamp_when_schema_0045_but_version_0044(self) -> None:
         with TemporaryDirectory() as tmp_dir:
@@ -265,7 +273,7 @@ class MigrationTests(unittest.TestCase):
 
             with engine.begin() as connection:
                 versions = connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
-            self.assertEqual(versions, ["20260414_0065"])
+            self.assertEqual(versions, ["20260417_0066"])
 
     def test_run_migrations_disables_alembic_logger_reconfiguration(self) -> None:
         fake_config = MagicMock()
@@ -580,7 +588,7 @@ class MigrationTests(unittest.TestCase):
             with engine.begin() as connection:
                 current_revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
 
-            self.assertEqual(current_revision, "20260414_0065")
+            self.assertEqual(current_revision, "20260417_0066")
 
     def test_run_migrations_rejects_sqlite_without_test_opt_in(self) -> None:
         previous = os.environ.get("ORCHESTRATOR_ALLOW_SQLITE_FOR_TESTS")
