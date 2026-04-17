@@ -58,13 +58,17 @@ from orchestrator.core.parent_feature_planning_workflow import (
     ParentFeaturePlanningWorkflow,
     ParentFeaturePlanningWorkflowDeps,
 )
-from orchestrator.core.workflow_runtime import WorkflowAdvanceRequest, WorkflowAdvanceResult
+from orchestrator.core.workflow_runtime import (
+    WorkflowAdvanceMutationCollector,
+    WorkflowAdvanceRequest,
+    WorkflowAdvanceResult,
+    apply_workflow_lifecycle_mutations,
+)
 from orchestrator.core.workflow_execution_projection import (
     classify_external_workflow_failure,
-    ensure_issue_workflow_execution,
     resolve_latest_issue_workflow,
 )
-from orchestrator.core.workflow_type_catalog import get_workflow_type
+from orchestrator.core.workflow_type_catalog import get_workflow_type, get_workflow_type_by_handler_key
 from orchestrator.core.webhook_job_errors import RetryableWebhookJobError
 from orchestrator.storage.models import FollowupContext, Project
 from orchestrator.tools.discord_api import DiscordApiClient, DiscordApiError
@@ -134,6 +138,33 @@ class JiraParentChildSyncResult:
     handled: bool
     reason: str | None = None
     extra: dict[str, object] = field(default_factory=dict)
+    mutations: tuple[object, ...] = ()
+
+
+def _jira_sync_result_from_advance_result(
+    *,
+    session: Session,
+    workflow_type,
+    tenant_id: str,
+    project_id: str | None,
+    issue_key: str,
+    result: WorkflowAdvanceResult,
+) -> JiraParentChildSyncResult:
+    if result.mutations:
+        apply_workflow_lifecycle_mutations(
+            session=session,
+            workflow_type=workflow_type,
+            tenant_id=tenant_id,
+            project_id=project_id,
+            issue_key=issue_key,
+            mutations=result.mutations,
+        )
+    return JiraParentChildSyncResult(
+        handled=result.handled,
+        reason=result.reason,
+        extra=dict(result.extra or {}),
+        mutations=tuple(result.mutations or ()),
+    )
 
 
 class ParentFeatureWorkflowAdvanceHandler:
@@ -213,12 +244,7 @@ class ParentFeatureWorkflowAdvanceHandler:
             session=session,
             settings=settings,
         )
-        return WorkflowAdvanceResult(
-            handled=result.handled,
-            reason=result.reason,
-            extra=dict(result.extra or {}),
-            mutations=tuple(result.mutations or ()),
-        )
+        return result
 
 
 def build_workflow_advance_handler_resolver(
@@ -615,11 +641,15 @@ def _update_issue_sync_label(
     issue_detail: JiraIssueDetail,
     target_label: str,
 ) -> None:
+    next_labels = _normalize_sync_labels(issue_detail.labels, target_label=target_label)
+    current_labels = [str(label or "").strip() for label in issue_detail.labels if str(label or "").strip()]
+    if {label.casefold() for label in current_labels} == {label.casefold() for label in next_labels}:
+        return
     oauth.client.replace_issue_labels(
         access_token=oauth.access_token,
         cloud_id=oauth.connection.cloud_id,
         issue_id_or_key=issue_detail.key,
-        labels=_normalize_sync_labels(issue_detail.labels, target_label=target_label),
+        labels=next_labels,
     )
 
 
@@ -2015,15 +2045,13 @@ def handle_pm_interview_reply(
         tenant_id=context.tenant_id,
         issue_key=parent_detail.key,
     )
-    if existing_workflow is None:
-        raise RuntimeError(f"No workflow execution exists for parent issue {parent_detail.key}")
-    workflow_type = get_workflow_type(session, workflow_type_key=existing_workflow.workflow_type_key)
-    workflow_projection = ensure_issue_workflow_execution(
-        session=session,
-        workflow_type=workflow_type,
-        tenant_id=context.tenant_id,
-        project_id=context.project_id,
-        issue_key=parent_detail.key,
+    workflow_type = (
+        get_workflow_type(session, workflow_type_key=existing_workflow.workflow_type_key)
+        if existing_workflow is not None
+        else get_workflow_type_by_handler_key(session, handler_key="jira_parent_feature")
+    )
+    lifecycle = WorkflowAdvanceMutationCollector()
+    lifecycle.ensure_issue_execution(
         issue_summary=parent_detail.summary,
         issue_description=parent_detail.description,
     )
@@ -2040,7 +2068,7 @@ def handle_pm_interview_reply(
             issue_detail=parent_detail,
             target_label="sync-blocked",
         )
-        workflow_projection.mark_waiting_for_input(
+        lifecycle.mark_waiting_for_input(
             operation_type="brief_normalization",
             summary="Parent brief still needs product clarification before planning can continue.",
         )
@@ -2072,8 +2100,7 @@ def handle_pm_interview_reply(
                 settings=settings,
                 create_jira_comment_fn=create_jira_comment_fn,
             )
-        session.commit()
-        return JiraParentChildSyncResult(
+        advance_result = lifecycle.build_result(
             handled=True,
             reason="pm_interview_still_open",
             extra={
@@ -2082,6 +2109,16 @@ def handle_pm_interview_reply(
                 "webhook_event": context.webhook_event,
             },
         )
+        jira_result = _jira_sync_result_from_advance_result(
+            session=session,
+            workflow_type=workflow_type,
+            tenant_id=context.tenant_id,
+            project_id=context.project_id,
+            issue_key=parent_detail.key,
+            result=advance_result,
+        )
+        session.commit()
+        return jira_result
 
     persist_parent_feature_brief_snapshot(
         session=session,
@@ -2101,11 +2138,11 @@ def handle_pm_interview_reply(
         planning_state="brief_normalized",
         open_questions=[],
     )
-    workflow_projection.mark_operation_completed(
+    lifecycle.mark_operation_completed(
         operation_type="brief_normalization",
         summary="Parent brief normalized from PM clarification answers.",
     )
-    workflow_projection.mark_operation_completed(
+    lifecycle.mark_operation_completed(
         operation_type="jira_parent_update",
         summary="Parent Jira issue synced with the confirmed brief.",
     )
@@ -2141,7 +2178,7 @@ def handle_pm_interview_reply(
             exc,
         )
         category, retryable = classify_external_workflow_failure(error=exc)
-        workflow_projection.mark_operation_failed(
+        lifecycle.mark_operation_failed(
             operation_type="jira_child_fanout",
             category=category,
             message=str(exc),
@@ -2160,15 +2197,24 @@ def handle_pm_interview_reply(
             body=f"PM clarification was recorded, but backlog planning failed: {exc}",
             post_jira_comment_fn=post_jira_comment_fn,
         )
-        session.commit()
-        return JiraParentChildSyncResult(
+        advance_result = lifecycle.build_result(
             handled=True,
             reason="pm_interview_followup_seed_failed",
             extra={"error": str(exc), "webhook_event": context.webhook_event},
         )
+        jira_result = _jira_sync_result_from_advance_result(
+            session=session,
+            workflow_type=workflow_type,
+            tenant_id=context.tenant_id,
+            project_id=context.project_id,
+            issue_key=parent_detail.key,
+            result=advance_result,
+        )
+        session.commit()
+        return jira_result
 
     if planning_result.planning_state != PLANNING_STATE_COMPLETED or bool(seed_data.get("requires_input")):
-        workflow_projection.mark_waiting_for_input(
+        lifecycle.mark_waiting_for_input(
             operation_type="backlog_planning",
             summary="Backlog planning still needs clarification before child fanout can complete.",
         )
@@ -2188,8 +2234,7 @@ def handle_pm_interview_reply(
             ),
             post_jira_comment_fn=post_jira_comment_fn,
         )
-        session.commit()
-        return JiraParentChildSyncResult(
+        advance_result = lifecycle.build_result(
             handled=True,
             reason="pm_interview_followup_planning_blocked",
             extra={
@@ -2198,6 +2243,16 @@ def handle_pm_interview_reply(
                 "webhook_event": context.webhook_event,
             },
         )
+        jira_result = _jira_sync_result_from_advance_result(
+            session=session,
+            workflow_type=workflow_type,
+            tenant_id=context.tenant_id,
+            project_id=context.project_id,
+            issue_key=parent_detail.key,
+            result=advance_result,
+        )
+        session.commit()
+        return jira_result
 
     mark_pm_interview_case_completed(
         session=session,
@@ -2212,15 +2267,15 @@ def handle_pm_interview_reply(
         context_type=FOLLOWUP_CONTEXT_PM_INTERVIEW,
         issue_key=context.issue_key,
     )
-    workflow_projection.mark_operation_completed(
+    lifecycle.mark_operation_completed(
         operation_type="backlog_planning",
         summary="Backlog planning completed from the confirmed parent brief.",
     )
-    workflow_projection.mark_operation_completed(
+    lifecycle.mark_operation_completed(
         operation_type="jira_child_fanout",
         summary="Engineering child tickets were created or refreshed from the confirmed brief.",
     )
-    workflow_projection.mark_completed_if_ready()
+    lifecycle.mark_completed_if_ready()
     updated_children, created_children, changed_children = child_sync_gateway.combined_child_updates(seed_data=seed_data)
     _post_sync_note(
         session=session,
@@ -2242,8 +2297,7 @@ def handle_pm_interview_reply(
             body=f"Updated from parent feature {context.issue_key} after PM clarification.",
             post_jira_comment_fn=post_jira_comment_fn,
         )
-    session.commit()
-    return JiraParentChildSyncResult(
+    advance_result = lifecycle.build_result(
         handled=True,
         reason="pm_interview_followup_resolved",
         extra={
@@ -2253,3 +2307,13 @@ def handle_pm_interview_reply(
             "webhook_event": context.webhook_event,
         },
     )
+    jira_result = _jira_sync_result_from_advance_result(
+        session=session,
+        workflow_type=workflow_type,
+        tenant_id=context.tenant_id,
+        project_id=context.project_id,
+        issue_key=parent_detail.key,
+        result=advance_result,
+    )
+    session.commit()
+    return jira_result
