@@ -14,9 +14,9 @@ from orchestrator.api.webhooks.jira_admission_flow import (
     build_jira_enqueue_skipped_notification_action,
     plan_jira_run_flow,
 )
+from orchestrator.api.webhooks.jira_board_location import resolve_project_issue_board_location
 from orchestrator.api.webhooks.jira_event_classifier import evaluate_jira_trigger_state
 from orchestrator.api.webhooks.jira_parent_child_sync import handle_parent_feature_sync
-from orchestrator.api.webhooks.jira_webhook_board_gate import resolve_project_issue_board_location
 from orchestrator.api.webhooks.jira_webhook_types import (
     JiraWebhookContext,
     JiraWebhookContextSnapshot,
