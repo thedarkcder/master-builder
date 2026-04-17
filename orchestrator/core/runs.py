@@ -13,6 +13,10 @@ from orchestrator.core.config import get_settings
 from orchestrator.core.run_enqueue_types import EnqueueFailureReason
 from orchestrator.core.runtime_requirements import resolve_required_runtime_kinds_for_workflow
 from orchestrator.core.worker_capability_normalization import parse_worker_capability
+from orchestrator.core.workflow_attempt_factory import (
+    build_run_attempt,
+    build_workflow_execution_for_attempt,
+)
 from orchestrator.core.workflow_type_catalog import get_workflow_type
 from orchestrator.core.workflow.execution_snapshot import (
     ExecutionSnapshot,
@@ -456,7 +460,7 @@ def enqueue_run(
     orchestration_backend = str(workflow_type.orchestration_backend).strip().lower()
     workflow_id = str(uuid4())
     run_id = str(uuid4())
-    workflow = WorkflowExecution(
+    workflow = build_workflow_execution_for_attempt(
         workflow_id=workflow_id,
         workflow_type_key="issue_execution",
         tenant_id=tenant_id,
@@ -470,17 +474,14 @@ def enqueue_run(
         orchestration_backend=orchestration_backend,
         dedupe_scope=normalized_dedupe_scope,
         status=RUN_STATUS_QUEUED,
-        last_error=None,
         active_run_id=run_id,
         latest_checkpoint_id=bootstrap.entry_checkpoint_id if bootstrap is not None else None,
         source_workflow_id=None,
         source_run_id=bootstrap.parent_run_id if bootstrap is not None else None,
         created_at=now,
-        started_at=None,
-        finished_at=None,
         updated_at=now,
     )
-    run = Run(
+    run = build_run_attempt(
         run_id=run_id,
         workflow_id=workflow_id,
         tenant_id=tenant_id,
@@ -499,17 +500,10 @@ def enqueue_run(
         dedupe_scope=normalized_dedupe_scope,
         plan=initial_plan,
         status=RUN_STATUS_QUEUED,
-        last_error=None,
         pre_check_outcome=normalized_precheck_outcome,
         required_worker_capability=normalized_required_worker_capability,
         required_runtime_kinds_json=normalized_required_runtime_kinds,
-        claim_id=None,
         created_at=now,
-        dispatch_claimed_at=None,
-        started_at=None,
-        last_heartbeat_at=None,
-        worker_service_instance_id=None,
-        finished_at=None,
     )
     session.add(workflow)
     session.add(run)
@@ -654,7 +648,7 @@ def _enqueue_attempt_for_workflow(
         bootstrap=bootstrap,
     )
     now = _now()
-    run = Run(
+    run = build_run_attempt(
         run_id=str(uuid4()),
         workflow_id=workflow.workflow_id,
         tenant_id=workflow.tenant_id,
@@ -673,17 +667,10 @@ def _enqueue_attempt_for_workflow(
         dedupe_scope=workflow.dedupe_scope,
         plan=dict(bootstrap.plan) if isinstance(bootstrap.plan, dict) else None,
         status=RUN_STATUS_QUEUED,
-        last_error=None,
         pre_check_outcome=normalized_precheck_outcome,
         required_worker_capability=normalized_required_worker_capability,
         required_runtime_kinds_json=normalized_required_runtime_kinds,
-        claim_id=None,
         created_at=now,
-        dispatch_claimed_at=None,
-        started_at=None,
-        last_heartbeat_at=None,
-        worker_service_instance_id=None,
-        finished_at=None,
     )
     workflow_type = get_workflow_type(session, workflow_type_key=workflow.workflow_type_key)
     orchestration_backend = str(workflow_type.orchestration_backend).strip().lower()
