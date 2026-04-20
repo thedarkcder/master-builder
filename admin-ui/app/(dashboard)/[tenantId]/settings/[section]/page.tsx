@@ -11,6 +11,7 @@ const ALLOWED = [
   "discord",
   "health",
   "config",
+  "observability",
   "notifications",
   "danger",
 ] as const;

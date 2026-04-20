@@ -40,6 +40,7 @@ from orchestrator.api.schemas import (
     WorkerRuntimeAuthRequestRead,
 )
 from orchestrator.core.knowledge_jira_sync_runtime import get_knowledge_jira_sync_runtime_status
+from orchestrator.core.observability_policy import normalize_tenant_observability_policy
 from orchestrator.core.config import get_settings
 from orchestrator.core.security import (
     AuthenticatedPrincipal,
@@ -47,6 +48,7 @@ from orchestrator.core.security import (
     require_authenticated_principal,
     require_tenant_workspace_access,
 )
+from orchestrator.storage.models import Tenant
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -260,6 +262,15 @@ def export_audit_events(
 ) -> StreamingResponse:
     if not principal.is_platform_super_admin:
         require_tenant_workspace_access(principal=principal, tenant_id=payload.tenant_id)
+    tenant = session.get(Tenant, payload.tenant_id)
+    if tenant is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+    observability_policy = normalize_tenant_observability_policy(tenant.policy_config)
+    if not observability_policy.audit_export_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Audit export is disabled for this tenant",
+        )
     filename_parts = ["audit-events", payload.tenant_id]
     if payload.execution_id:
         filename_parts.append(payload.execution_id)
