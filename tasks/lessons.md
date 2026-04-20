@@ -238,4 +238,6 @@
 - 2026-04-20: When a workflow distinguishes core steps from supporting steps, encode that distinction in the flow model and render supporting steps as branches off the main path. Do not place supporting steps inline as if they are mandatory path progression.
 - 2026-04-20: Do not expose workflow retry controls for internal failure categories unless the product has a stable user-facing failure taxonomy. Keep workflow settings limited to stable policy controls users can actually understand and own.
 - 2026-04-20: When the product already has a top-level tab pattern, do not invent card-local tabs for the same concept. Use the platform’s main page tab chrome so navigation stays consistent.
+- 2026-04-20: When the user wants linked artifacts as quick actions, do not leave them as a large body section. Put them in a compact top-level context menu near the page controls.
 - 2026-04-20: In greenfield refactors, remove the wrong structure instead of adding another abstraction around it. If a field or contract should not exist, delete it from the model and schema rather than hiding it behind more mapping code.
+- 2026-04-20: Do not use internal workflow lineage keys as user-facing route identifiers. Persist a separate public execution ID and route the UI/API on that identifier end to end.

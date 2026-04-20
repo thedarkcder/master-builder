@@ -61,7 +61,132 @@ class MigrationTests(unittest.TestCase):
 
         duplicates = {revision_id: count for revision_id, count in Counter(revision_ids).items() if count > 1}
         self.assertEqual(duplicates, {})
-        self.assertEqual(script.get_heads(), ["20260420_0080"])
+        self.assertEqual(script.get_heads(), ["20260420_0081"])
+
+    def test_workflow_execution_public_id_migration_backfills_unique_execution_ids(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            database_url = f"sqlite:///{Path(tmpdir) / 'workflow-execution-id.sqlite'}"
+            engine = create_engine(database_url)
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE workflow_executions (
+                            workflow_id VARCHAR PRIMARY KEY,
+                            workflow_type_key VARCHAR NOT NULL,
+                            tenant_id VARCHAR NOT NULL,
+                            issue_key VARCHAR NOT NULL,
+                            orchestration_backend VARCHAR NOT NULL,
+                            dedupe_scope VARCHAR NOT NULL,
+                            status VARCHAR NOT NULL
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO workflow_executions (
+                            workflow_id,
+                            workflow_type_key,
+                            tenant_id,
+                            issue_key,
+                            orchestration_backend,
+                            dedupe_scope,
+                            status
+                        ) VALUES
+                            ('workflow-1', 'issue_execution', 'tenant-a', 'TP-1', 'temporal', 'issue_execution', 'failed'),
+                            ('workflow-2', 'issue_execution', 'tenant-a', 'TP-2', 'temporal', 'issue_execution', 'queued')
+                        """
+                    )
+                )
+                connection.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"))
+                connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('20260420_0080')"))
+
+            self._alembic_upgrade(database_url, "20260420_0081")
+
+            inspector = inspect(engine)
+            columns = {column["name"]: column for column in inspector.get_columns("workflow_executions")}
+            self.assertIn("execution_id", columns)
+            self.assertFalse(columns["execution_id"]["nullable"])
+
+            indexes = {index["name"]: index for index in inspector.get_indexes("workflow_executions")}
+            self.assertIn("ix_workflow_executions_execution_id", indexes)
+            self.assertTrue(indexes["ix_workflow_executions_execution_id"]["unique"])
+
+            with engine.connect() as connection:
+                rows = connection.execute(
+                    text(
+                        """
+                        SELECT workflow_id, execution_id
+                        FROM workflow_executions
+                        ORDER BY workflow_id
+                        """
+                    )
+                ).mappings().all()
+            execution_ids = [str(row["execution_id"] or "").strip() for row in rows]
+            self.assertEqual(len(execution_ids), 2)
+            self.assertEqual(len(set(execution_ids)), 2)
+            self.assertTrue(all(execution_ids))
+
+    def test_workflow_execution_public_id_migration_replaces_ids_copied_from_workflow_keys(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            database_url = f"sqlite:///{Path(tmpdir) / 'workflow-execution-id-fix.sqlite'}"
+            engine = create_engine(database_url)
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE workflow_executions (
+                            workflow_id VARCHAR PRIMARY KEY,
+                            execution_id VARCHAR,
+                            workflow_type_key VARCHAR NOT NULL,
+                            tenant_id VARCHAR NOT NULL,
+                            issue_key VARCHAR NOT NULL,
+                            orchestration_backend VARCHAR NOT NULL,
+                            dedupe_scope VARCHAR NOT NULL,
+                            status VARCHAR NOT NULL
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO workflow_executions (
+                            workflow_id,
+                            execution_id,
+                            workflow_type_key,
+                            tenant_id,
+                            issue_key,
+                            orchestration_backend,
+                            dedupe_scope,
+                            status
+                        ) VALUES
+                            ('parent_planning:MAB-215', 'parent_planning:MAB-215', 'parent_planning', 'tenant-a', 'MAB-215', 'temporal', 'parent_planning', 'failed'),
+                            ('workflow-2', 'public-2', 'issue_execution', 'tenant-a', 'TP-2', 'temporal', 'issue_execution', 'queued')
+                        """
+                    )
+                )
+                connection.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"))
+                connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('20260420_0080')"))
+
+            self._alembic_upgrade(database_url, "20260420_0081")
+
+            with engine.connect() as connection:
+                rows = connection.execute(
+                    text(
+                        """
+                        SELECT workflow_id, execution_id
+                        FROM workflow_executions
+                        ORDER BY workflow_id
+                        """
+                    )
+                ).mappings().all()
+
+            self.assertEqual(rows[0]["workflow_id"], "parent_planning:MAB-215")
+            self.assertNotEqual(rows[0]["execution_id"], "parent_planning:MAB-215")
+            self.assertEqual(rows[1]["execution_id"], "public-2")
 
     def test_workflow_execution_backend_backfill_migration_aligns_execution_rows(self) -> None:
         with TemporaryDirectory() as tmpdir:

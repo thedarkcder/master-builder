@@ -670,6 +670,7 @@ export type RunRecord = {
 };
 
 export type WorkflowRecord = {
+  execution_id: string;
   workflow_id: string;
   tenant_id: string;
   project_id: string | null;
@@ -751,6 +752,7 @@ export type WorkflowTypeRecord = {
 };
 
 export type WorkflowExecutionPreviewRecord = {
+  execution_id: string;
   workflow_id: string;
   issue_key: string;
   issue_summary: string | null;
@@ -2527,8 +2529,8 @@ export function getRun(credentials: Credentials, runId: string): Promise<RunReco
   return request<RunRecord>(credentials, `/api/admin/runs/${encodeURIComponent(runId)}`);
 }
 
-export function getWorkflow(credentials: Credentials, workflowId: string): Promise<WorkflowRecord> {
-  return request<WorkflowRecord>(credentials, `/api/admin/workflows/${encodeURIComponent(workflowId)}`);
+export function getWorkflow(credentials: Credentials, executionId: string): Promise<WorkflowRecord> {
+  return request<WorkflowRecord>(credentials, `/api/admin/workflows/${encodeURIComponent(executionId)}`);
 }
 
 export function listWorkflowTypes(
@@ -2614,10 +2616,10 @@ export function listWorkflows(
 
 export function createWorkflowAttempt(
   credentials: Credentials,
-  workflowId: string,
+  executionId: string,
   payload: WorkflowAttemptCreatePayload
 ): Promise<RunRecord> {
-  return request<RunRecord>(credentials, `/api/admin/workflows/${encodeURIComponent(workflowId)}/attempts`, {
+  return request<RunRecord>(credentials, `/api/admin/workflows/${encodeURIComponent(executionId)}/attempts`, {
     method: "POST",
     body: JSON.stringify(payload)
   });
@@ -2625,12 +2627,12 @@ export function createWorkflowAttempt(
 
 export function retryWorkflowOperation(
   credentials: Credentials,
-  workflowId: string,
+  executionId: string,
   operationId: string
 ): Promise<WorkflowRecord> {
   return request<WorkflowRecord>(
     credentials,
-    `/api/admin/workflows/${encodeURIComponent(workflowId)}/operations/${encodeURIComponent(operationId)}/retry`,
+    `/api/admin/workflows/${encodeURIComponent(executionId)}/operations/${encodeURIComponent(operationId)}/retry`,
     {
       method: "POST",
     }

@@ -115,7 +115,7 @@ def workflow_operation_to_schema(
         definition_only=definition_only,
         target_system=(operation.target_system if operation is not None else None),
         target_ref=(operation.target_ref if operation is not None else None),
-        summary=(operation.summary if operation is not None else description),
+        summary=(operation.summary if operation is not None else None),
         can_retry=can_retry,
         retry_unavailable_reason=retry_unavailable_reason,
         attempts=[workflow_operation_attempt_to_schema(attempt) for attempt in attempts],
@@ -144,6 +144,7 @@ def workflow_to_schema(
     operations: list[WorkflowOperationRead] | None = None,
 ) -> WorkflowRead:
     return WorkflowRead(
+        execution_id=workflow.execution_id,
         workflow_id=workflow.workflow_id,
         tenant_id=workflow.tenant_id,
         project_id=workflow.project_id,

@@ -637,6 +637,7 @@ def _workflow_execution_preview(*, session, workflow: WorkflowExecution) -> Work
     )
     waiting_on = _waiting_on(pending_request=pending_request, operations=operations)
     return WorkflowExecutionPreviewRead(
+        execution_id=workflow.execution_id,
         workflow_id=workflow.workflow_id,
         issue_key=workflow.issue_key,
         issue_summary=workflow.issue_summary,
@@ -647,6 +648,17 @@ def _workflow_execution_preview(*, session, workflow: WorkflowExecution) -> Work
         created_at=workflow.created_at,
         finished_at=workflow.finished_at,
     )
+
+
+def _workflow_by_execution_id(*, session, execution_id: str) -> WorkflowExecution | None:  # noqa: ANN001
+    normalized_execution_id = str(execution_id or "").strip()
+    if not normalized_execution_id:
+        return None
+    return session.execute(
+        select(WorkflowExecution)
+        .where(WorkflowExecution.execution_id == normalized_execution_id)
+        .limit(1)
+    ).scalar_one_or_none()
 
 
 def _workflow_type_detail(
@@ -1044,12 +1056,12 @@ def list_workflows(
 def get_workflow(
     *,
     session,
-    workflow_id: str,
+    execution_id: str,
     workflow_to_schema_fn,
     run_to_schema_fn,
     integration_router=None,
 ):  # noqa: ANN001
-    workflow = session.get(WorkflowExecution, workflow_id)
+    workflow = _workflow_by_execution_id(session=session, execution_id=execution_id)
     if workflow is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow not found")
     return _workflow_schema(
@@ -1064,13 +1076,13 @@ def get_workflow(
 def create_workflow_attempt(
     *,
     session,
-    workflow_id: str,
+    execution_id: str,
     mode: str,
     checkpoint_kind: str | None,
     tenant_model,
     run_to_schema_fn,
 ):  # noqa: ANN001
-    workflow = session.get(WorkflowExecution, workflow_id)
+    workflow = _workflow_by_execution_id(session=session, execution_id=execution_id)
     if workflow is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow not found")
 
@@ -1085,11 +1097,11 @@ def create_workflow_attempt(
             detail="Workflow already has an active attempt",
         )
     selected_checkpoint = None
-    source_run = _latest_run_for_workflow(session=session, workflow_id=workflow_id)
+    source_run = _latest_run_for_workflow(session=session, workflow_id=workflow.workflow_id)
     if normalized_mode != "fresh":
         selected_checkpoint = _latest_checkpoint_for_kind(
             session=session,
-            workflow_id=workflow_id,
+            workflow_id=workflow.workflow_id,
             checkpoint_kind=str(checkpoint_kind or "").strip(),
         )
         if selected_checkpoint is None:
@@ -1249,7 +1261,7 @@ def create_workflow_attempt(
 def retry_workflow_operation(
     *,
     session,
-    workflow_id: str,
+    execution_id: str,
     operation_id: str,
     workflow_to_schema_fn,
     run_to_schema_fn,
@@ -1257,7 +1269,7 @@ def retry_workflow_operation(
     build_runtime_for_selector_fn,
     seed_issues_with_runtime_fn,
 ):  # noqa: ANN001
-    workflow = session.get(WorkflowExecution, workflow_id)
+    workflow = _workflow_by_execution_id(session=session, execution_id=execution_id)
     if workflow is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow not found")
 

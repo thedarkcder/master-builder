@@ -184,13 +184,13 @@ export default function TenantExecutionsPage() {
             </TableHeader>
             <TableBody className={cn(loading && "pointer-events-none opacity-50 transition-opacity")}>
               {workflows.map((workflow) => (
-                <TableRow key={workflow.workflow_id} className={cn("border-l-2", statusBorderClass(workflow.status))}>
+                <TableRow key={workflow.execution_id} className={cn("border-l-2", statusBorderClass(workflow.status))}>
                   <TableCell className="font-medium">
                     <Link
                       className="text-primary hover:underline"
-                      href={`/${encodeURIComponent(tenantId)}/executions/${encodeURIComponent(workflow.workflow_id)}`}
+                      href={`/${encodeURIComponent(tenantId)}/executions/${encodeURIComponent(workflow.execution_id)}`}
                     >
-                      {workflow.issue_summary?.trim() || workflow.issue_key || workflow.workflow_id}
+                      {workflow.issue_summary?.trim() || workflow.issue_key}
                     </Link>
                   </TableCell>
                   <TableCell className="text-sm text-muted-foreground">

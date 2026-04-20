@@ -1401,7 +1401,7 @@ class AdminApiTests(AdminApiTestHarness):
         self.assertEqual(list_body[0]["runs"][0]["workflow_id"], "workflow-read-1")
         self.assertNotIn("dev_session_id", list_body[0]["runs"][0])
 
-        detail_response = self.client.get("/api/admin/workflows/workflow-read-1", auth=("admin", "secret"))
+        detail_response = self.client.get("/api/admin/workflows/exec-run-read-1", auth=("admin", "secret"))
         self.assertEqual(detail_response.status_code, 200, detail_response.text)
         detail_body = detail_response.json()
         self.assertEqual(detail_body["status"], "waiting_for_input")
@@ -1487,6 +1487,7 @@ class AdminApiTests(AdminApiTestHarness):
             session.add(
                 WorkflowExecution(
                     workflow_id="parent_planning:MAB-215",
+                    execution_id="wfexec-mab-215",
                     workflow_type_key="parent_planning",
                     tenant_id="tenant-a",
                     project_id="tenant-a-default",
@@ -1527,7 +1528,7 @@ class AdminApiTests(AdminApiTestHarness):
             return_value=fake_jira_adapter,
         ):
             response = self.client.get(
-                "/api/admin/workflows/parent_planning:MAB-215",
+                "/api/admin/workflows/wfexec-mab-215",
                 auth=("admin", "secret"),
             )
 
@@ -1565,6 +1566,7 @@ class AdminApiTests(AdminApiTestHarness):
         with session_factory() as session:
             workflow = WorkflowExecution(
                 workflow_id="parent_planning:MAB-215",
+                execution_id="wfexec-mab-215",
                 workflow_type_key="parent_planning",
                 tenant_id="tenant-a",
                 project_id="tenant-a-default",
@@ -1670,7 +1672,7 @@ class AdminApiTests(AdminApiTestHarness):
             ),
         ):
             response = self.client.post(
-                "/api/admin/workflows/parent_planning:MAB-215/operations/operation-jira-child-fanout/retry",
+                "/api/admin/workflows/wfexec-mab-215/operations/operation-jira-child-fanout/retry",
                 auth=("admin", "secret"),
             )
 
@@ -1703,7 +1705,7 @@ class AdminApiTests(AdminApiTestHarness):
         )
 
         response = self.client.post(
-            "/api/admin/workflows/workflow-waiting-1/attempts",
+            "/api/admin/workflows/exec-run-waiting-1/attempts",
             json={"mode": "resume", "checkpoint_kind": "pm"},
             auth=("admin", "secret"),
         )
@@ -1746,7 +1748,7 @@ class AdminApiTests(AdminApiTestHarness):
         )
 
         response = self.client.post(
-            "/api/admin/workflows/workflow-waiting-restart-rejected-1/attempts",
+            "/api/admin/workflows/exec-run-waiting-restart-rejected-1/attempts",
             json={"mode": "restart", "checkpoint_kind": "pm"},
             auth=("admin", "secret"),
         )
@@ -1778,7 +1780,7 @@ class AdminApiTests(AdminApiTestHarness):
             session.commit()
 
         response = self.client.post(
-            "/api/admin/workflows/workflow-non-ready-checkpoint-1/attempts",
+            "/api/admin/workflows/exec-run-non-ready-checkpoint-1/attempts",
             json={"mode": "resume", "checkpoint_kind": "pm"},
             auth=("admin", "secret"),
         )
@@ -1809,7 +1811,7 @@ class AdminApiTests(AdminApiTestHarness):
             session.commit()
 
         response = self.client.post(
-            "/api/admin/workflows/workflow-invalid-checkpoint-1/attempts",
+            "/api/admin/workflows/exec-run-invalid-checkpoint-1/attempts",
             json={"mode": "resume", "checkpoint_kind": "pm"},
             auth=("admin", "secret"),
         )
@@ -1837,7 +1839,7 @@ class AdminApiTests(AdminApiTestHarness):
         )
 
         response = self.client.post(
-            "/api/admin/workflows/workflow-terminal-1/attempts",
+            "/api/admin/workflows/exec-run-terminal-1/attempts",
             json={"mode": "restart", "checkpoint_kind": "execution"},
             auth=("admin", "secret"),
         )
@@ -1877,7 +1879,7 @@ class AdminApiTests(AdminApiTestHarness):
         )
 
         detail_response = self.client.get(
-            "/api/admin/workflows/workflow-terminal-orchestrated-1",
+            "/api/admin/workflows/exec-run-terminal-orchestrated-1",
             auth=("admin", "secret"),
         )
         self.assertEqual(detail_response.status_code, 200, detail_response.text)
@@ -1888,7 +1890,7 @@ class AdminApiTests(AdminApiTestHarness):
         self.assertEqual(restart_action["checkpoint_kind"], "execution")
 
         response = self.client.post(
-            "/api/admin/workflows/workflow-terminal-orchestrated-1/attempts",
+            "/api/admin/workflows/exec-run-terminal-orchestrated-1/attempts",
             json={"mode": "restart", "checkpoint_kind": "execution"},
             auth=("admin", "secret"),
         )
@@ -1926,7 +1928,7 @@ class AdminApiTests(AdminApiTestHarness):
             session.commit()
 
         response = self.client.post(
-            "/api/admin/workflows/workflow-terminal-backend-1/attempts",
+            "/api/admin/workflows/exec-run-terminal-backend-1/attempts",
             json={"mode": "restart", "checkpoint_kind": "execution"},
             auth=("admin", "secret"),
         )
@@ -1957,7 +1959,7 @@ class AdminApiTests(AdminApiTestHarness):
         )
 
         response = self.client.post(
-            "/api/admin/workflows/workflow-stale-active-1/attempts",
+            "/api/admin/workflows/exec-run-stale-active-1/attempts",
             json={"mode": "restart", "checkpoint_kind": "execution"},
             auth=("admin", "secret"),
         )
@@ -2000,7 +2002,7 @@ class AdminApiTests(AdminApiTestHarness):
         )
 
         response = self.client.post(
-            "/api/admin/workflows/workflow-terminal-conflict-1/attempts",
+            "/api/admin/workflows/exec-run-terminal-conflict-1/attempts",
             json={"mode": "restart", "checkpoint_kind": "execution"},
             auth=("admin", "secret"),
         )
@@ -2036,7 +2038,7 @@ class AdminApiTests(AdminApiTestHarness):
             session.commit()
 
         response = self.client.post(
-            "/api/admin/workflows/workflow-terminal-fresh-1/attempts",
+            "/api/admin/workflows/exec-run-terminal-fresh-1/attempts",
             json={"mode": "fresh"},
             auth=("admin", "secret"),
         )
@@ -2099,7 +2101,7 @@ class AdminApiTests(AdminApiTestHarness):
             session.commit()
 
         response = self.client.post(
-            "/api/admin/workflows/workflow-failed-fresh-1/attempts",
+            "/api/admin/workflows/exec-run-failed-fresh-1/attempts",
             json={"mode": "fresh"},
             auth=("admin", "secret"),
         )
@@ -2170,7 +2172,7 @@ class AdminApiTests(AdminApiTestHarness):
             session.commit()
 
         response = self.client.post(
-            "/api/admin/workflows/workflow-terminal-fresh-capability/attempts",
+            "/api/admin/workflows/exec-run-terminal-fresh-capability/attempts",
             json={"mode": "fresh"},
             auth=("admin", "secret"),
         )
@@ -2215,7 +2217,7 @@ class AdminApiTests(AdminApiTestHarness):
             session.commit()
 
         response = self.client.post(
-            "/api/admin/workflows/workflow-terminal-fresh-pr-remediation/attempts",
+            "/api/admin/workflows/exec-run-terminal-fresh-pr-remediation/attempts",
             json={"mode": "fresh"},
             auth=("admin", "secret"),
         )
@@ -2264,7 +2266,7 @@ class AdminApiTests(AdminApiTestHarness):
             session.commit()
 
         response = self.client.post(
-            "/api/admin/workflows/workflow-terminal-fresh-pr-url/attempts",
+            "/api/admin/workflows/exec-run-terminal-fresh-pr-url/attempts",
             json={"mode": "fresh"},
             auth=("admin", "secret"),
         )
@@ -2298,7 +2300,7 @@ class AdminApiTests(AdminApiTestHarness):
         )
 
         response = self.client.post(
-            "/api/admin/workflows/workflow-fresh-missing-precheck-1/attempts",
+            "/api/admin/workflows/exec-run-fresh-missing-precheck-1/attempts",
             json={"mode": "fresh"},
             auth=("admin", "secret"),
         )
@@ -2323,7 +2325,7 @@ class AdminApiTests(AdminApiTestHarness):
         )
 
         response = self.client.post(
-            "/api/admin/workflows/workflow-terminal-fresh-invalid/attempts",
+            "/api/admin/workflows/exec-run-terminal-fresh-invalid/attempts",
             json={"mode": "fresh", "checkpoint_kind": "pm"},
             auth=("admin", "secret"),
         )

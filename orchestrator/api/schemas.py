@@ -1098,6 +1098,7 @@ class WorkflowTypeRead(BaseModel):
 
 
 class WorkflowExecutionPreviewRead(BaseModel):
+    execution_id: str
     workflow_id: str
     issue_key: str
     issue_summary: str | None = None
@@ -1162,6 +1163,7 @@ class WorkflowLinkRead(BaseModel):
 
 
 class WorkflowRead(BaseModel):
+    execution_id: str
     workflow_id: str
     tenant_id: str
     project_id: str | None

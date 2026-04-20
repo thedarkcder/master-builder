@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { ArrowLeft, ExternalLink, RefreshCw } from "lucide-react";
+import { ArrowLeft, ExternalLink, MoreHorizontal, RefreshCw } from "lucide-react";
 
 import { WorkflowFlowDiagram } from "@/components/workflow-flow-diagram";
 import { useAuth } from "@/components/auth-provider";
@@ -42,7 +42,7 @@ export default function TenantExecutionDetailPage() {
   const router = useRouter();
   const { credentials, ready } = useAuth();
   const tenantId = decodeURIComponent(params.tenantId);
-  const workflowId = decodeURIComponent(params.workflowId);
+  const executionId = decodeURIComponent(params.workflowId);
 
   const [workflow, setWorkflow] = useState<WorkflowRecord | null>(null);
   const [loading, setLoading] = useState(false);
@@ -51,12 +51,13 @@ export default function TenantExecutionDetailPage() {
   const [statusLine, setStatusLine] = useState("");
   const [selectedActionKey, setSelectedActionKey] = useState<string>("");
   const [activeTab, setActiveTab] = useState<"overview" | "step-recovery" | "execution-path">("overview");
+  const [linksMenuOpen, setLinksMenuOpen] = useState(false);
 
   const loadWorkflow = useCallback(async () => {
     if (!credentials) return;
     setLoading(true);
     try {
-      const payload = await getWorkflow(credentials, workflowId);
+      const payload = await getWorkflow(credentials, executionId);
       setWorkflow(payload);
       setSelectedActionKey((current) =>
         current && payload.available_actions.some((action) => action.action_key === current)
@@ -71,7 +72,7 @@ export default function TenantExecutionDetailPage() {
     } finally {
       setLoading(false);
     }
-  }, [credentials, workflowId]);
+  }, [credentials, executionId]);
 
   useEffect(() => {
     if (ready && credentials) void loadWorkflow();
@@ -95,7 +96,6 @@ export default function TenantExecutionDetailPage() {
           detail:
             attempt?.error_message?.trim()
             || operation.summary?.trim()
-            || operation.description?.trim()
             || null,
         };
       }),
@@ -112,7 +112,7 @@ export default function TenantExecutionDetailPage() {
     }
     setRetrying(true);
     try {
-      const nextRun = await createWorkflowAttempt(credentials, workflow.workflow_id, {
+      const nextRun = await createWorkflowAttempt(credentials, workflow.execution_id, {
         mode: selectedAction.mode as "fresh" | "restart" | "resume",
         checkpoint_kind: selectedAction.checkpoint_kind as "pm" | "execution" | undefined,
       });
@@ -131,7 +131,7 @@ export default function TenantExecutionDetailPage() {
     }
     setRetryingOperationId(operation.operation_id);
     try {
-      const refreshedWorkflow = await retryWorkflowOperation(credentials, workflow.workflow_id, operation.operation_id);
+      const refreshedWorkflow = await retryWorkflowOperation(credentials, workflow.execution_id, operation.operation_id);
       setWorkflow(refreshedWorkflow);
       setStatusLine(`Retried ${operation.label?.trim() || operation.operation_type}.`);
     } catch (error) {
@@ -155,6 +155,55 @@ export default function TenantExecutionDetailPage() {
             <RefreshCw className={cn("mr-1.5 h-3.5 w-3.5", loading && "animate-spin")} />
             Refresh
           </Button>
+          {workflow?.links?.length ? (
+            <div className="relative">
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8"
+                onClick={() => setLinksMenuOpen((open) => !open)}
+                aria-expanded={linksMenuOpen}
+                aria-haspopup="menu"
+              >
+                <MoreHorizontal className="mr-1.5 h-3.5 w-3.5" />
+                Links
+              </Button>
+              {linksMenuOpen ? (
+                <div className="absolute right-0 z-20 mt-2 w-80 rounded-xl border bg-background p-2 shadow-lg" role="menu">
+                  <div className="space-y-1">
+                    {workflow.links.map((link) => {
+                      const itemKey = `${link.kind}:${link.ref ?? link.url ?? link.label}`;
+                      const openHref =
+                        link.kind === "run" && link.ref
+                          ? `/${encodeURIComponent(tenantId)}/runs/${encodeURIComponent(link.ref)}`
+                          : link.url;
+                      return (
+                        <div key={itemKey} className="rounded-lg px-3 py-2 hover:bg-muted/50">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-medium">{link.label}</p>
+                              <p className="truncate text-xs text-muted-foreground">{link.ref ?? link.kind.replace(/_/g, " ")}</p>
+                            </div>
+                            {link.status ? <StatusBadge status={link.status} /> : null}
+                          </div>
+                          {openHref ? (
+                            <Link
+                              className="mt-2 inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                              href={openHref}
+                              onClick={() => setLinksMenuOpen(false)}
+                            >
+                              Open
+                              <ExternalLink className="h-3 w-3" />
+                            </Link>
+                          ) : null}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
           {workflow?.available_actions?.length ? (
             <>
               <select
@@ -190,7 +239,12 @@ export default function TenantExecutionDetailPage() {
             </div>
             <div className="rounded-2xl border bg-background p-4">
               <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Workflow type</p>
-              <p className="mt-2 text-sm font-semibold">{workflow.workflow_type.label}</p>
+              <Link
+                className="mt-2 inline-flex text-sm font-semibold text-primary hover:underline"
+                href={`/${encodeURIComponent(tenantId)}/workflows/${encodeURIComponent(workflow.workflow_type.key)}`}
+              >
+                {workflow.workflow_type.label}
+              </Link>
             </div>
             <div className="rounded-2xl border bg-background p-4">
               <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Current state</p>
@@ -339,37 +393,6 @@ export default function TenantExecutionDetailPage() {
             )}
           </div>
 
-          <div className="overflow-hidden rounded-2xl border bg-background">
-              <div className="border-b px-5 py-3">
-                <h2 className="text-sm font-semibold">Links</h2>
-              </div>
-              <div className="space-y-3 px-5 py-4">
-                {workflow.links.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">No linked artifacts recorded.</p>
-                ) : (
-                  workflow.links.map((link) => (
-                    <div key={`${link.kind}:${link.ref ?? link.url ?? link.label}`} className="rounded-xl border bg-muted/20 p-4">
-                      <div className="flex items-center justify-between gap-2">
-                        {link.status ? <StatusBadge status={link.status} /> : <span className="text-xs uppercase tracking-wide text-muted-foreground">{link.kind.replace(/_/g, " ")}</span>}
-                        {link.kind === "run" && link.ref ? (
-                          <Link className="inline-flex items-center gap-1 text-sm text-primary hover:underline" href={`/${encodeURIComponent(tenantId)}/runs/${encodeURIComponent(link.ref)}`}>
-                            Open
-                            <ExternalLink className="h-3.5 w-3.5" />
-                          </Link>
-                        ) : link.url ? (
-                          <Link className="inline-flex items-center gap-1 text-sm text-primary hover:underline" href={link.url}>
-                            Open
-                            <ExternalLink className="h-3.5 w-3.5" />
-                          </Link>
-                        ) : null}
-                      </div>
-                      <p className="mt-2 text-sm">{link.label}</p>
-                      <p className="mt-2 text-xs text-muted-foreground">{link.ref ?? "No external reference recorded."}</p>
-                    </div>
-                  ))
-                )}
-              </div>
-          </div>
         </>
       ) : (
         <div className="rounded-2xl border bg-background px-5 py-12 text-center text-sm text-muted-foreground">

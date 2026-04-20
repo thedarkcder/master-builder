@@ -205,6 +205,7 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
             session.add(
                 WorkflowExecution(
                     workflow_id="workflow-tenant-user-visible-run",
+                    execution_id="workflow-tenant-user-visible-run",
                     workflow_type_key="issue_execution",
                     tenant_id=tenant_id,
                     project_id=f"{tenant_id}-default",
@@ -214,6 +215,7 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
                     repo_url="https://github.com/example/repo",
                     branch=None,
                     pr_url=None,
+                    orchestration_backend="temporal",
                     dedupe_scope="issue_execution",
                     status="queued",
                     last_error=None,
@@ -351,6 +353,7 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
             session.add(
                 WorkflowExecution(
                     workflow_id="tenant-user-visible-workflow",
+                    execution_id="tenant-user-visible-workflow",
                     workflow_type_key="issue_execution",
                     tenant_id=tenant_id,
                     project_id=f"{tenant_id}-default",
@@ -360,6 +363,7 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
                     repo_url="https://github.com/example/repo",
                     branch="feature/workflow",
                     pr_url=None,
+                    orchestration_backend="temporal",
                     dedupe_scope="issue_execution",
                     status="waiting_for_input",
                     last_error=None,
