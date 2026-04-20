@@ -1,14 +1,16 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from orchestrator.core.guardrails import redact_sensitive_text
 from orchestrator.core.observability import current_log_context
+from orchestrator.core.observability_policy import normalize_tenant_observability_policy
 from orchestrator.core.telemetry import current_trace_context
-from orchestrator.storage.models import AuditEvent, WorkflowExecution, WorkflowOperation
+from orchestrator.storage.models import AuditEvent, Tenant, WorkflowExecution, WorkflowOperation
 
 
 def _utcnow() -> datetime:
@@ -120,3 +122,26 @@ def record_workflow_operation_audit_event(
         message=message,
         payload=payload,
     )
+
+
+def prune_audit_events(
+    *,
+    session: Session,
+    now: datetime | None = None,
+) -> int:
+    timestamp = now or _utcnow()
+    deleted = 0
+    tenant_rows = session.execute(select(Tenant.tenant_id, Tenant.policy_config)).all()
+    for tenant_id, raw_policy in tenant_rows:
+        policy = normalize_tenant_observability_policy(raw_policy if isinstance(raw_policy, dict) else None)
+        if policy.legal_hold_enabled:
+            continue
+        cutoff = timestamp - timedelta(days=policy.audit_retention_days)
+        result = session.execute(
+            delete(AuditEvent).where(
+                AuditEvent.tenant_id == str(tenant_id or "").strip(),
+                AuditEvent.recorded_at < cutoff,
+            )
+        )
+        deleted += int(result.rowcount or 0)
+    return deleted

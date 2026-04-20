@@ -278,6 +278,12 @@ export function makeTenant(overrides: Partial<TenantRecord> = {}): TenantRecord 
       knowledge_auto_answer_mode: "safe",
       codex_model: "gpt-5.4",
       codex_reasoning_effort: "medium",
+      observability: {
+        audit_retention_days: 365,
+        audit_export_enabled: true,
+        legal_hold_enabled: false,
+        legal_hold_reason: null,
+      },
     },
     discord: null,
     experience: {

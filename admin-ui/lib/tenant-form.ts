@@ -79,7 +79,13 @@ export function defaultTenantFormValues(): TenantFormValues {
       knowledge_base_enabled: true,
       knowledge_auto_answer_mode: "aggressive",
       codex_model: null,
-      codex_reasoning_effort: null
+      codex_reasoning_effort: null,
+      observability: {
+        audit_retention_days: 365,
+        audit_export_enabled: true,
+        legal_hold_enabled: false,
+        legal_hold_reason: null
+      }
     },
     discordEnabled: false,
     discord: {
@@ -107,7 +113,15 @@ export function recordToFormValues(record: TenantRecord): TenantFormValues {
     jira: record.jira,
     github: record.github,
     repos: record.repos,
-    policy: record.policy,
+    policy: {
+      ...record.policy,
+      observability: {
+        audit_retention_days: record.policy.observability?.audit_retention_days ?? 365,
+        audit_export_enabled: record.policy.observability?.audit_export_enabled ?? true,
+        legal_hold_enabled: record.policy.observability?.legal_hold_enabled ?? false,
+        legal_hold_reason: record.policy.observability?.legal_hold_reason ?? null,
+      },
+    },
     discordEnabled: Boolean(record.discord),
     discord: normalizedDiscord
   };

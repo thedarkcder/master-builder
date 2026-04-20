@@ -45,6 +45,26 @@ class ReposConfig(BaseModel):
     mapping_rules_by_component: dict[str, str] = Field(default_factory=dict)
 
 
+class ObservabilityPolicyConfig(BaseModel):
+    audit_retention_days: int = Field(default=365, ge=1, le=3650)
+    audit_export_enabled: bool = True
+    legal_hold_enabled: bool = False
+    legal_hold_reason: str | None = Field(default=None, max_length=500)
+
+    @field_validator("legal_hold_reason")
+    @classmethod
+    def normalize_legal_hold_reason(cls, value: str | None) -> str | None:
+        return str(value or "").strip() or None
+
+    @model_validator(mode="after")
+    def validate_legal_hold(self) -> "ObservabilityPolicyConfig":
+        if self.legal_hold_enabled and not self.legal_hold_reason:
+            raise ValueError("legal_hold_reason is required when legal_hold_enabled is true")
+        if not self.legal_hold_enabled:
+            self.legal_hold_reason = None
+        return self
+
+
 class PolicyConfig(BaseModel):
     allow_jira_transitions: bool = False
     allow_pr_creation: bool = True
@@ -64,6 +84,7 @@ class PolicyConfig(BaseModel):
     codex_reasoning_effort: str | None = Field(default=None, pattern="^(low|medium|high)$")
     execution_profiles: dict[str, dict[str, object]] = Field(default_factory=dict)
     execution_profile_routing: dict[str, str] = Field(default_factory=dict)
+    observability: ObservabilityPolicyConfig = Field(default_factory=ObservabilityPolicyConfig)
 
     @field_validator("allowed_commands")
     @classmethod

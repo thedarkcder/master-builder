@@ -9,6 +9,7 @@ const tabs = [
   { label: "GitHub", section: "github" },
   { label: "Discord", section: "discord" },
   { label: "Configuration", section: "config" },
+  { label: "Observability", section: "observability" },
   { label: "Health", section: "health" },
   { label: "Notifications", section: "notifications" },
   { label: "Danger", section: "danger" },

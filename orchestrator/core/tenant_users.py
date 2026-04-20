@@ -120,6 +120,12 @@ def default_tenant_configs() -> dict[str, object]:
             "knowledge_auto_answer_mode": "aggressive",
             "codex_model": None,
             "codex_reasoning_effort": None,
+            "observability": {
+                "audit_retention_days": 365,
+                "audit_export_enabled": True,
+                "legal_hold_enabled": False,
+                "legal_hold_reason": None,
+            },
         },
         "discord_config": None,
     }

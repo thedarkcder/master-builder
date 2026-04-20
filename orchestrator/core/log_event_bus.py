@@ -504,7 +504,7 @@ class RunStreamRetentionSweeper:
         self._started = False
 
     def start(self) -> None:
-        if self._started or not bool(getattr(self._settings, "log_bus_enabled", False)):
+        if self._started:
             return
         self._started = True
         self._thread.start()
@@ -520,9 +520,11 @@ class RunStreamRetentionSweeper:
         while not self._stop_event.is_set():
             try:
                 from orchestrator.core.agent_observability import prune_agent_lifecycle_events
+                from orchestrator.core.audit_events import prune_audit_events
                 from orchestrator.core.run_logs import prune_run_log_events, prune_run_stream_events
 
                 with self._session_factory() as session:
+                    prune_audit_events(session=session)
                     prune_agent_lifecycle_events(session=session)
                     prune_run_log_events(session=session)
                     prune_run_stream_events(session=session)
@@ -534,9 +536,8 @@ class RunStreamRetentionSweeper:
 
 def initialize_run_streaming() -> None:
     settings = get_settings()
-    if not bool(getattr(settings, "log_bus_enabled", False)):
-        return
-    get_run_stream_broker().start()
+    if bool(getattr(settings, "log_bus_enabled", False)):
+        get_run_stream_broker().start()
     get_run_stream_retention_sweeper().start()
 
 

@@ -194,9 +194,17 @@ Implemented in this branch:
 
 - append-only `audit_events` persistence for workflow/run/operation/runtime events
 - execution-level and operation-level admin APIs for telemetry and audit reads
-- audit export as NDJSON
+- audit export as NDJSON, now gated by tenant policy
+- tenant-level observability policy for:
+  - audit retention days
+  - audit export enablement
+  - legal hold
+- audit pruning that respects tenant retention policy and legal hold
 - execution detail right-side drawer for `Live telemetry` and `Audit history`
 - OpenTelemetry bootstrap for API, workers, Temporal worker, and runtime spans
+- deeper Temporal instrumentation at the safe seams:
+  - client outbound workflow calls
+  - worker activity execution
 - local self-hosted observability stack via Docker Compose:
   - OpenTelemetry Collector
   - Loki
@@ -207,6 +215,6 @@ Implemented in this branch:
 Deliberately deferred:
 
 - direct Loki and Tempo query proxying from the app backend
-- tenant-configurable retention and legal hold policy management
+- tenant retention/legal-hold management beyond the current settings UI and enforcement layer
 - broader platform-wide observability pages beyond execution detail
-- deeper Temporal activity/interceptor-specific instrumentation
+- replay-sensitive workflow-body instrumentation inside Temporal workflow classes

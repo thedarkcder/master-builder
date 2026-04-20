@@ -13,6 +13,7 @@ async def run_temporal_worker() -> None:
         from temporalio.worker import Worker
     except ImportError as exc:  # pragma: no cover - exercised when temporal backend is enabled
         raise RuntimeError("Temporal backend requires temporalio to be installed") from exc
+    from orchestrator.temporal.telemetry import TemporalWorkerTelemetryInterceptor
 
     from orchestrator.temporal.activities.run_execution import (
         execute_claimed_run_activity,
@@ -45,5 +46,6 @@ async def run_temporal_worker() -> None:
             retry_handler_workflow_operation_activity,
         ],
         activity_executor=ThreadPoolExecutor(max_workers=4),
+        interceptors=[TemporalWorkerTelemetryInterceptor()],
     )
     await worker.run()

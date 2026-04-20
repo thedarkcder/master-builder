@@ -429,6 +429,37 @@ class AdminApiTests(AdminApiTestHarness):
         self.assertNotIn("live_voice_enabled", update_response.json()["discord"])
         self.assertNotIn("live_voice_room_links", update_response.json()["discord"])
 
+    def test_update_tenant_persists_observability_policy(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        update_payload = self._tenant_payload()
+        update_payload["policy"]["observability"] = {
+            "audit_retention_days": 730,
+            "audit_export_enabled": False,
+            "legal_hold_enabled": True,
+            "legal_hold_reason": "Customer compliance hold",
+        }
+
+        update_response = self.client.put(
+            "/api/admin/tenants/tenant-a",
+            json=update_payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(update_response.status_code, 200, update_response.text)
+        observability = update_response.json()["policy"]["observability"]
+        self.assertEqual(observability["audit_retention_days"], 730)
+        self.assertFalse(observability["audit_export_enabled"])
+        self.assertTrue(observability["legal_hold_enabled"])
+        self.assertEqual(observability["legal_hold_reason"], "Customer compliance hold")
+
     def test_ready_preview_returns_eligible_issues(self) -> None:
         payload = self._tenant_payload()
         self._insert_jira_connection(connection_id="conn-1")
@@ -2082,6 +2113,25 @@ class AdminApiTests(AdminApiTestHarness):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["source"], "audit")
         self.assertEqual(rows[0]["event_kind"], "execution_failed")
+
+    def test_export_audit_events_rejects_disabled_tenant_policy(self) -> None:
+        payload = self._tenant_payload()
+        payload["policy"]["observability"] = {
+            "audit_retention_days": 365,
+            "audit_export_enabled": False,
+            "legal_hold_enabled": False,
+            "legal_hold_reason": None,
+        }
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201)
+
+        response = self.client.post(
+            "/api/admin/audit/export",
+            json={"tenant_id": "tenant-a"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 403, response.text)
+        self.assertEqual(response.json()["detail"], "Audit export is disabled for this tenant")
 
     def test_create_workflow_attempt_reuses_waiting_workflow(self) -> None:
         payload = self._tenant_payload()

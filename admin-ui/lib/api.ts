@@ -39,6 +39,12 @@ export type PolicyConfig = {
   knowledge_auto_answer_mode: "safe" | "balanced" | "aggressive";
   codex_model?: string | null;
   codex_reasoning_effort?: "low" | "medium" | "high" | null;
+  observability: {
+    audit_retention_days: number;
+    audit_export_enabled: boolean;
+    legal_hold_enabled: boolean;
+    legal_hold_reason?: string | null;
+  };
 };
 
 export type DiscordConfig = {

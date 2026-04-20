@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Textarea } from "@/components/ui/textarea";
 import {
   type AdminNotificationRecord,
   archiveTenant,
@@ -58,9 +59,19 @@ type TenantEditSection =
   | "discord"
   | "health"
   | "config"
+  | "observability"
   | "projects"
   | "notifications"
   | "danger";
+
+const AUDIT_RETENTION_OPTIONS = [
+  { value: 30, label: "30 days" },
+  { value: 90, label: "90 days" },
+  { value: 180, label: "180 days" },
+  { value: 365, label: "1 year" },
+  { value: 730, label: "2 years" },
+  { value: 2555, label: "7 years" },
+] as const;
 
 export function TenantEditPage({ section }: { section: TenantEditSection }) {
   const router = useRouter();
@@ -94,6 +105,10 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
   const [discordOnboardingChannelId, setDiscordOnboardingChannelId] = useState("");
   const [discordInviteExpirySeconds, setDiscordInviteExpirySeconds] = useState("86400");
   const [discordInviteMaxUses, setDiscordInviteMaxUses] = useState("1");
+  const [auditRetentionDays, setAuditRetentionDays] = useState("365");
+  const [auditExportEnabled, setAuditExportEnabled] = useState(true);
+  const [legalHoldEnabled, setLegalHoldEnabled] = useState(false);
+  const [legalHoldReason, setLegalHoldReason] = useState("");
 
   const statusClasses = useMemo(() => {
     const normalized = statusLine.toLowerCase();
@@ -184,6 +199,10 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
       setDiscordOnboardingChannelId(payload.discord?.onboarding_channel_id ?? "");
       setDiscordInviteExpirySeconds(String(payload.discord?.onboarding_invite_expires_in_seconds ?? 86400));
       setDiscordInviteMaxUses(String(payload.discord?.onboarding_invite_max_uses ?? 1));
+      setAuditRetentionDays(String(payload.policy.observability?.audit_retention_days ?? 365));
+      setAuditExportEnabled(payload.policy.observability?.audit_export_enabled ?? true);
+      setLegalHoldEnabled(payload.policy.observability?.legal_hold_enabled ?? false);
+      setLegalHoldReason(payload.policy.observability?.legal_hold_reason ?? "");
       if (isPlatformAdmin && (section === "jira" || section === "notifications")) {
         await Promise.all([loadJiraWebhookDiagnostics(), loadNotifications()]);
       } else {
@@ -314,6 +333,46 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
       setStatusLine("Discord tenant settings saved.");
     } catch (error) {
       setStatusLine(`Unable to save Discord settings: ${(error as Error).message}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function saveObservabilitySettings() {
+    if (!credentials || !tenant) {
+      return;
+    }
+    if (legalHoldEnabled && !legalHoldReason.trim()) {
+      setStatusLine("Legal hold reason is required when legal hold is enabled.");
+      return;
+    }
+    setSaving(true);
+    try {
+      const updated = await updateTenant(credentials, tenant.tenant_id, {
+        name: tenant.name,
+        is_enabled: tenant.is_enabled,
+        jira: tenant.jira,
+        github: tenant.github,
+        repos: tenant.repos,
+        policy: {
+          ...tenant.policy,
+          observability: {
+            audit_retention_days: Number(auditRetentionDays || "365") || 365,
+            audit_export_enabled: auditExportEnabled,
+            legal_hold_enabled: legalHoldEnabled,
+            legal_hold_reason: legalHoldEnabled ? legalHoldReason.trim() : null,
+          },
+        },
+        discord: tenant.discord,
+      });
+      setTenant(updated);
+      setAuditRetentionDays(String(updated.policy.observability?.audit_retention_days ?? 365));
+      setAuditExportEnabled(updated.policy.observability?.audit_export_enabled ?? true);
+      setLegalHoldEnabled(updated.policy.observability?.legal_hold_enabled ?? false);
+      setLegalHoldReason(updated.policy.observability?.legal_hold_reason ?? "");
+      setStatusLine("Observability policy saved.");
+    } catch (error) {
+      setStatusLine(`Unable to save observability policy: ${(error as Error).message}`);
     } finally {
       setSaving(false);
     }
@@ -850,6 +909,86 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
                 discord: false
               }}
             />
+          </div>
+        </div>
+      ) : null}
+
+      {section === "observability" ? (
+        <div className="overflow-hidden rounded-2xl border bg-background">
+          <div className="px-6 pt-6">
+            <h2 className="text-base font-semibold">Observability policy</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Configure tenant-level audit retention, export access, and legal hold. These settings control the durable audit plane, not live telemetry backend internals.
+            </p>
+          </div>
+          <div className="space-y-5 p-6">
+            <div className="grid gap-5 md:grid-cols-2">
+              <div className="space-y-2">
+                <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Audit retention</label>
+                <select
+                  className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                  value={auditRetentionDays}
+                  onChange={(event) => setAuditRetentionDays(event.target.value)}
+                  disabled={saving}
+                >
+                  {AUDIT_RETENTION_OPTIONS.map((option) => (
+                    <option key={option.value} value={String(option.value)}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-xs text-muted-foreground">
+                  Audit history older than this is pruned automatically unless legal hold is active.
+                </p>
+              </div>
+              <div className="space-y-3 rounded-xl border p-4 text-sm">
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 rounded border-input"
+                    checked={auditExportEnabled}
+                    onChange={(event) => setAuditExportEnabled(event.target.checked)}
+                    disabled={saving}
+                  />
+                  Allow audit export
+                </label>
+                <p className="text-xs text-muted-foreground">
+                  Controls whether tenant-scoped audit history can be exported from the admin API.
+                </p>
+              </div>
+            </div>
+
+            <div className="space-y-3 rounded-xl border p-4">
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 rounded border-input"
+                  checked={legalHoldEnabled}
+                  onChange={(event) => setLegalHoldEnabled(event.target.checked)}
+                  disabled={saving}
+                />
+                Enable legal hold
+              </label>
+              <p className="text-xs text-muted-foreground">
+                Prevents audit retention pruning for this tenant until the hold is cleared.
+              </p>
+              <div className="space-y-2">
+                <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Legal hold reason</label>
+                <Textarea
+                  value={legalHoldReason}
+                  onChange={(event) => setLegalHoldReason(event.target.value)}
+                  placeholder="Example: Customer litigation hold requested on 2026-04-20."
+                  className="min-h-[110px]"
+                  disabled={saving || !legalHoldEnabled}
+                />
+              </div>
+            </div>
+
+            <div className="flex justify-end">
+              <Button onClick={() => void saveObservabilitySettings()} disabled={saving}>
+                {saving ? "Saving..." : "Save observability policy"}
+              </Button>
+            </div>
           </div>
         </div>
       ) : null}
