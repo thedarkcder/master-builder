@@ -51,6 +51,7 @@ def seed_issues_with_runtime(
     planning_package: dict | None = None,
     workflow_id: str | None = None,
     operation_id: str | None = None,
+    attempt: int | None = None,
 ) -> tuple[str, dict]:  # noqa: ANN001
     return _seed_issues_with_runtime_impl(
         session=session,
@@ -81,6 +82,7 @@ def seed_issues_with_runtime(
         planning_package=planning_package,
         workflow_id=workflow_id,
         operation_id=operation_id,
+        attempt=attempt,
     )
 
 

@@ -38,9 +38,9 @@ def build_runtime_log_sink(
         raise ValueError("Runtime telemetry requires non-empty command")
 
     logger.info(
-        "runtime_telemetry_start",
+        "Runtime telemetry started.",
         extra={
-            "event_type": "orchestrator.core.runtime_telemetry",
+            "event_type": "runtime_log_stream_started",
             "tenant_id": normalized_tenant,
             "project_id": normalized_project,
             "metadata": {
@@ -58,10 +58,11 @@ def build_runtime_log_sink(
     )
 
     def _sink(stream: str, message: str) -> None:
+        redacted_message = redact_sensitive_text(str(message or "").strip())
         logger.info(
-            "runtime_telemetry_line",
+            redacted_message or "runtime log line",
             extra={
-                "event_type": "orchestrator.core.runtime_telemetry",
+                "event_type": "runtime_log",
                 "tenant_id": normalized_tenant,
                 "project_id": normalized_project,
                 "metadata": {
@@ -73,7 +74,7 @@ def build_runtime_log_sink(
                     "attempt": attempt,
                     "issue_key": normalized_issue_key,
                     "stream": str(stream or "").strip().lower() or "stdout",
-                    "message": redact_sensitive_text(str(message or "").strip()),
+                    "message": redacted_message,
                     "phase": "line",
                 },
             },

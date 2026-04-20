@@ -123,6 +123,8 @@ def _workflow_observability_events_from_loki(
             message = str(item[1] or "").strip()
             if not timestamp_ns or not message:
                 continue
+            event_payload = _payload_from_stream(stream)
+            event_kind = str(event_payload.get("event_kind") or stream.get("event_type") or "runtime_log").strip().lower()
             events.append(
                 workflow_observability_event_to_schema(
                     {
@@ -133,7 +135,7 @@ def _workflow_observability_events_from_loki(
                             or stream.get("severity_text")
                             or "info"
                         ).strip().lower(),
-                        "event_kind": str(stream.get("event_type") or "runtime_log").strip().lower(),
+                        "event_kind": event_kind,
                         "message": message,
                         "source_component": str(stream.get("scope_name") or stream.get("service_name") or "").strip() or None,
                         "run_id": _stream_value(stream, "metadata_run_id"),
@@ -144,7 +146,7 @@ def _workflow_observability_events_from_loki(
                         "stage": _stream_value(stream, "metadata_stage"),
                         "attempt": _int_stream_value(stream, "metadata_attempt_number"),
                         "stream": _stream_value(stream, "metadata_stream"),
-                        "payload": _payload_from_stream(stream),
+                        "payload": event_payload,
                         "recorded_at": _datetime_from_ns(timestamp_ns),
                     }
                 )

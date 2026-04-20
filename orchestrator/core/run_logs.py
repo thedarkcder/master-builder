@@ -295,6 +295,8 @@ def materialize_token_usage_from_log_message(
 class NormalizedRunLogEvent:
     tenant_id: str
     project_id: str | None
+    workflow_id: str | None
+    operation_id: str | None
     run_id: str | None
     issue_key: str | None
     agent_id: str
@@ -313,6 +315,8 @@ def _normalize_run_log_event(
     *,
     tenant_id: str,
     project_id: str | None,
+    workflow_id: str | None,
+    operation_id: str | None,
     run_id: str | None,
     issue_key: str | None,
     agent_id: str,
@@ -358,6 +362,8 @@ def _normalize_run_log_event(
     return NormalizedRunLogEvent(
         tenant_id=normalized_tenant,
         project_id=str(project_id or "").strip() or None,
+        workflow_id=str(workflow_id or "").strip() or None,
+        operation_id=str(operation_id or "").strip() or None,
         run_id=normalized_run_id,
         issue_key=str(issue_key or "").strip() or None,
         agent_id=normalized_agent,
@@ -419,6 +425,8 @@ def record_run_log_event(
     session: Session,
     tenant_id: str,
     project_id: str | None,
+    workflow_id: str | None = None,
+    operation_id: str | None = None,
     run_id: str | None,
     issue_key: str | None,
     agent_id: str,
@@ -436,6 +444,8 @@ def record_run_log_event(
     normalized_event = _normalize_run_log_event(
         tenant_id=tenant_id,
         project_id=project_id,
+        workflow_id=workflow_id,
+        operation_id=operation_id,
         run_id=run_id,
         issue_key=issue_key,
         agent_id=agent_id,
@@ -455,17 +465,17 @@ def record_run_log_event(
     stream_row = _build_run_stream_model(normalized_event)
     session.add(log_row)
     session.add(stream_row)
-    workflow_id = None
-    if normalized_event.run_id:
+    resolved_workflow_id = str(workflow_id or "").strip() or None
+    if resolved_workflow_id is None and normalized_event.run_id:
         run = session.get(Run, normalized_event.run_id)
-        workflow_id = str(getattr(run, "workflow_id", "") or "").strip() or None
+        resolved_workflow_id = str(getattr(run, "workflow_id", "") or "").strip() or None
     record_audit_event(
         session,
         tenant_id=normalized_event.tenant_id,
         project_id=normalized_event.project_id,
-        workflow_id=workflow_id,
+        workflow_id=resolved_workflow_id,
         run_id=normalized_event.run_id,
-        operation_id=None,
+        operation_id=str(operation_id or "").strip() or None,
         attempt_id=None,
         issue_key=normalized_event.issue_key,
         actor_type="agent",
@@ -501,6 +511,8 @@ def record_run_log_events_batch(
         normalized = _normalize_run_log_event(
             tenant_id=str(event.get("tenant_id") or ""),
             project_id=event.get("project_id") if isinstance(event.get("project_id"), str) else None,
+            workflow_id=event.get("workflow_id") if isinstance(event.get("workflow_id"), str) else None,
+            operation_id=event.get("operation_id") if isinstance(event.get("operation_id"), str) else None,
             run_id=event.get("run_id") if isinstance(event.get("run_id"), str) else None,
             issue_key=event.get("issue_key") if isinstance(event.get("issue_key"), str) else None,
             agent_id=str(event.get("agent_id") or ""),
@@ -526,19 +538,20 @@ def record_run_log_events_batch(
         stream_row = _build_run_stream_model(normalized_event)
         stream_rows.append(stream_row)
         session.add(stream_row)
-        workflow_id = None
+        workflow_id = normalized_event.workflow_id
         if normalized_event.run_id:
-            if normalized_event.run_id not in workflow_by_run:
+            if workflow_id is None and normalized_event.run_id not in workflow_by_run:
                 run = session.get(Run, normalized_event.run_id)
                 workflow_by_run[normalized_event.run_id] = str(getattr(run, "workflow_id", "") or "").strip() or None
-            workflow_id = workflow_by_run[normalized_event.run_id]
+            if workflow_id is None:
+                workflow_id = workflow_by_run[normalized_event.run_id]
         record_audit_event(
             session,
             tenant_id=normalized_event.tenant_id,
             project_id=normalized_event.project_id,
             workflow_id=workflow_id,
             run_id=normalized_event.run_id,
-            operation_id=None,
+            operation_id=normalized_event.operation_id,
             attempt_id=None,
             issue_key=normalized_event.issue_key,
             actor_type="agent",

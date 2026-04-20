@@ -93,6 +93,10 @@ test("shows workflow definitions and retries a failed execution operation", asyn
         operation_id: "operation-jira-child-fanout",
         run_id: null,
         operation_type: "jira_child_fanout",
+        label: "Fan out engineering child tickets",
+        description: "Create or refresh engineering child tickets.",
+        required: true,
+        definition_only: false,
         status: "failed",
         target_system: "jira",
         target_ref: "MAB-215",
@@ -199,20 +203,19 @@ test("shows workflow definitions and retries a failed execution operation", asyn
           event_id: "telemetry-event-1",
           source: "telemetry",
           level: "info",
-          event_kind: "run_log",
-          message: "Creating Jira child ticket payload.",
-          source_component: "run_logs",
+          event_kind: "stage_request",
+          message: "Submitted runtime request.",
+          source_component: "runtime_invocation",
           run_id: "run-123",
-          operation_id: null,
+          operation_id: "operation-jira-child-fanout",
           attempt_id: null,
           agent_id: "codex",
           invocation_id: "inv-1",
-          stage: "orchestrated",
+          stage: "seed",
           attempt: 1,
-          stream: "stdout",
+          stream: "system",
           payload: {
-            channel: "codex",
-            command: "codex exec",
+            user_prompt: "Create or refresh engineering child tickets from the parent brief.",
           },
           recorded_at: "2026-04-17T12:23:00Z",
         },
@@ -247,17 +250,17 @@ test("shows workflow definitions and retries a failed execution operation", asyn
   await expect(page.getByRole("button", { name: "Resume execution" })).toBeEnabled();
   await page.getByRole("button", { name: "Step details" }).click();
   await expect(page.getByRole("heading", { name: "Step details" })).toBeVisible();
-  await expect(page.locator("table").getByText("jira_child_fanout").first()).toBeVisible();
-  await page.getByRole("button", { name: "jira_child_fanout" }).click();
-  await expect(page.getByRole("heading", { name: "jira_child_fanout" })).toBeVisible();
+  await expect(page.locator("table").getByText("Fan out engineering child tickets").first()).toBeVisible();
+  await page.getByRole("button", { name: "Fan out engineering child tickets" }).click();
+  await expect(page.getByRole("heading", { name: "Fan out engineering child tickets" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Live telemetry" })).toBeVisible();
-  await expect(page.getByText("Creating Jira child ticket payload.")).toBeVisible();
+  await expect(page.getByText("Attempt 1")).toBeVisible();
   await page.getByRole("button", { name: "Audit history" }).click();
   await expect(page.getByText("attempt failed")).toBeVisible();
   await expect(
     page.getByText('Failed to seed Jira issues: Jira API request failed (400): {"errorMessages":["CONTENT_LIMIT_EXCEEDED"],"errors":{}}').last(),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Close" }).click();
+  await page.getByRole("button", { name: "Close", exact: true }).click();
   const retryStepButton = page.getByRole("button", { name: "Retry step" }).last();
   await retryStepButton.scrollIntoViewIfNeeded();
   await expect(retryStepButton).toBeEnabled();
@@ -277,5 +280,5 @@ test("shows workflow definitions and retries a failed execution operation", asyn
 
   await page.getByRole("button", { name: "Execution path" }).click();
   await expect(page.getByRole("button", { name: "Execution path" })).toBeVisible();
-  await expect(page.getByText("jira_child_fanout").first()).toBeVisible();
+  await expect(page.getByText("Fan out engineering child tickets").first()).toBeVisible();
 });
