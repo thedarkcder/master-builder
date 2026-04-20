@@ -132,42 +132,6 @@ export default function TenantWorkflowTypeDetailPage() {
     setDraft((current) => (current ? { ...current, orchestration_backend: value } : current));
   }, []);
 
-  const updateDraftTemporalField = useCallback(
-    (
-      field:
-        | "workflow_name"
-        | "task_queue"
-        | "workflow_execution_timeout_seconds"
-        | "workflow_run_timeout_seconds"
-        | "activity_start_to_close_timeout_seconds"
-        | "human_input_resume_timeout_seconds",
-      value: string,
-    ) => {
-      setDraft((current) => {
-        if (!current) return current;
-        const temporal = current.engine_config.temporal ?? {
-          workflow_name: "",
-          task_queue: "",
-          workflow_execution_timeout_seconds: 86400,
-          workflow_run_timeout_seconds: 86400,
-          activity_start_to_close_timeout_seconds: 7200,
-          human_input_resume_timeout_seconds: 7200,
-        };
-        return {
-          ...current,
-          engine_config: {
-            ...current.engine_config,
-            temporal: {
-              ...temporal,
-              [field]: field.endsWith("_seconds") ? Number.parseInt(value || "0", 10) || 0 : value,
-            },
-          },
-        };
-      });
-    },
-    [],
-  );
-
   const updateSharedRetryField = useCallback(
     (
       field:
@@ -278,7 +242,7 @@ export default function TenantWorkflowTypeDetailPage() {
               <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Execution engine</p>
               <p className="mt-2 text-sm font-semibold">{formatEngineLabel(workflowType.orchestration_backend)}</p>
               <p className="mt-1 text-xs text-muted-foreground">
-                {workflowType.orchestration_backend === "temporal" ? "Durable Temporal workflow" : "Configured in workflow catalog"}
+                Engine selection controls which runtime backs new executions of this workflow.
               </p>
             </div>
             <div className="rounded-2xl border bg-background p-4">
@@ -327,63 +291,13 @@ export default function TenantWorkflowTypeDetailPage() {
                     </select>
                   </label>
                   <div className="rounded-xl border bg-muted/20 px-3 py-2 text-sm text-muted-foreground">
+                    <p className="font-medium text-foreground">What changes here</p>
+                    <p className="mt-1">Only the engine backing future executions. Infrastructure details are managed outside this page.</p>
+                  </div>
+                  <div className="rounded-xl border bg-muted/20 px-3 py-2 text-sm text-muted-foreground md:col-span-2">
                     <p className="font-medium text-foreground">Execution modes</p>
                     <p className="mt-1">{workflowType.lifecycle.execution_modes.join(", ") || "—"}</p>
                   </div>
-                  {draft.orchestration_backend === "temporal" ? (
-                    <>
-                      <label className="space-y-1 text-sm">
-                        <span className="text-muted-foreground">Temporal workflow</span>
-                        <Input
-                          value={draft.engine_config.temporal?.workflow_name ?? ""}
-                          onChange={(event) => updateDraftTemporalField("workflow_name", event.target.value)}
-                        />
-                      </label>
-                      <label className="space-y-1 text-sm">
-                        <span className="text-muted-foreground">Task queue</span>
-                        <Input
-                          value={draft.engine_config.temporal?.task_queue ?? ""}
-                          onChange={(event) => updateDraftTemporalField("task_queue", event.target.value)}
-                        />
-                      </label>
-                      <label className="space-y-1 text-sm">
-                        <span className="text-muted-foreground">Execution timeout (seconds)</span>
-                        <Input
-                          type="number"
-                          min={1}
-                          value={String(draft.engine_config.temporal?.workflow_execution_timeout_seconds ?? 0)}
-                          onChange={(event) => updateDraftTemporalField("workflow_execution_timeout_seconds", event.target.value)}
-                        />
-                      </label>
-                      <label className="space-y-1 text-sm">
-                        <span className="text-muted-foreground">Run timeout (seconds)</span>
-                        <Input
-                          type="number"
-                          min={1}
-                          value={String(draft.engine_config.temporal?.workflow_run_timeout_seconds ?? 0)}
-                          onChange={(event) => updateDraftTemporalField("workflow_run_timeout_seconds", event.target.value)}
-                        />
-                      </label>
-                      <label className="space-y-1 text-sm">
-                        <span className="text-muted-foreground">Activity timeout (seconds)</span>
-                        <Input
-                          type="number"
-                          min={1}
-                          value={String(draft.engine_config.temporal?.activity_start_to_close_timeout_seconds ?? 0)}
-                          onChange={(event) => updateDraftTemporalField("activity_start_to_close_timeout_seconds", event.target.value)}
-                        />
-                      </label>
-                      <label className="space-y-1 text-sm">
-                        <span className="text-muted-foreground">Human input timeout (seconds)</span>
-                        <Input
-                          type="number"
-                          min={1}
-                          value={String(draft.engine_config.temporal?.human_input_resume_timeout_seconds ?? 0)}
-                          onChange={(event) => updateDraftTemporalField("human_input_resume_timeout_seconds", event.target.value)}
-                        />
-                      </label>
-                    </>
-                  ) : null}
                 </div>
               </div>
 
@@ -468,6 +382,11 @@ export default function TenantWorkflowTypeDetailPage() {
                   <div className="rounded-xl border bg-muted/20 px-3 py-2 text-sm text-muted-foreground">
                     {retryPolicySummary}
                   </div>
+                  <div className="flex justify-end">
+                    <Button onClick={() => void saveWorkflowType()} disabled={saving} size="sm">
+                      {saving ? "Saving…" : "Save workflow settings"}
+                    </Button>
+                  </div>
                 </div>
               </div>
 
@@ -476,13 +395,12 @@ export default function TenantWorkflowTypeDetailPage() {
                   <h2 className="text-sm font-semibold">Operations</h2>
                 </div>
                 <div className="border-b bg-muted/10 px-5 py-3 text-sm text-muted-foreground">
-                  Operations define what this workflow can do. They inherit the workflow retry policy above unless a future workflow version explicitly changes that contract.
+                  Operations are the steps this workflow knows how to run. They are part of the workflow contract and are shown here for reference only.
                 </div>
                 <Table>
                   <TableHeader>
                     <TableRow>
                       <TableHead>Operation</TableHead>
-                      <TableHead>Role</TableHead>
                       <TableHead>Notes</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -497,10 +415,9 @@ export default function TenantWorkflowTypeDetailPage() {
                           ) : null}
                         </TableCell>
                         <TableCell className="text-sm text-muted-foreground">
-                          {operation.required ? "Required" : "Optional"}
-                        </TableCell>
-                        <TableCell className="text-sm text-muted-foreground">
-                          {operation.status?.trim() || "Defined in workflow"}
+                          {operation.description?.trim()
+                            || operation.status?.trim()
+                            || "Defined in workflow"}
                         </TableCell>
                       </TableRow>
                     ))}
@@ -512,9 +429,12 @@ export default function TenantWorkflowTypeDetailPage() {
             <div className="space-y-4">
               <div className="overflow-hidden rounded-2xl border bg-background">
                 <div className="border-b px-5 py-3">
-                  <h2 className="text-sm font-semibold">Definition</h2>
+                  <h2 className="text-sm font-semibold">Workflow map</h2>
                 </div>
                 <div className="space-y-4 px-5 py-4">
+                  <div className="rounded-xl border bg-muted/10 px-3 py-2 text-sm text-muted-foreground">
+                    Read only. This reflects the workflow definition currently shipped by the system.
+                  </div>
                   <div>
                     <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">State path</p>
                     <p className="mt-2 text-sm text-muted-foreground">{workflowType.lifecycle.state_path_kind || "—"}</p>
@@ -557,9 +477,6 @@ export default function TenantWorkflowTypeDetailPage() {
                       )}
                     </div>
                   </div>
-                  <Button onClick={() => void saveWorkflowType()} disabled={saving} size="sm">
-                    {saving ? "Saving…" : "Save policy"}
-                  </Button>
                 </div>
               </div>
 

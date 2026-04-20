@@ -182,7 +182,7 @@ test("shows workflow definitions and retries a failed execution operation", asyn
   await page.getByRole("link", { name: "Parent Planning" }).click();
 
   await expect(page).toHaveURL(/\/route25\/workflows\/parent_planning$/);
-  await expect(page.getByText("Execution modes")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Workflow settings" })).toBeVisible();
   await expect(page.getByText("Recent executions")).toBeVisible();
   await expect(page.getByRole("link", { name: "Identity and authorization v1 contract" })).toBeVisible();
 

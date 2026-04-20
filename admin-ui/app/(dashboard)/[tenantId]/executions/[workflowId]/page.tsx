@@ -36,6 +36,14 @@ function actionSummary(action: WorkflowActionRecord): string {
   return action.detail?.trim() || `${action.mode} execution`;
 }
 
+function pathTone(status: string): string {
+  if (status === "failed") return "border-red-200 bg-red-50 text-red-900";
+  if (status === "completed") return "border-emerald-200 bg-emerald-50 text-emerald-900";
+  if (status === "waiting_for_input") return "border-amber-200 bg-amber-50 text-amber-900";
+  if (status === "running" || status === "retrying") return "border-blue-200 bg-blue-50 text-blue-900";
+  return "border-border bg-muted/20 text-foreground";
+}
+
 export default function TenantExecutionDetailPage() {
   const params = useParams<{ tenantId: string; workflowId: string }>();
   const router = useRouter();
@@ -201,22 +209,35 @@ export default function TenantExecutionDetailPage() {
               <div className="border-b px-5 py-3">
                 <h2 className="text-sm font-semibold">Execution path</h2>
               </div>
-              <div className="space-y-3 px-5 py-4">
+              <div className="overflow-x-auto px-5 py-5">
                 {workflow.state_path.length === 0 ? (
                   <p className="text-sm text-muted-foreground">No execution path has been recorded yet.</p>
                 ) : (
-                  workflow.state_path.map((entry) => (
-                    <div key={entry.key} className="rounded-xl border bg-muted/20 p-4">
-                      <div className="flex items-center justify-between gap-2">
-                        <p className="text-sm font-medium">{entry.label}</p>
-                        <StatusBadge status={entry.status} />
+                  <div className="flex min-w-max items-start gap-3 pb-1">
+                    {workflow.state_path.map((entry, index) => (
+                      <div key={entry.key} className="flex items-start gap-3">
+                        <div className={cn("w-64 rounded-2xl border p-4 shadow-sm", pathTone(entry.status))}>
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="text-sm font-semibold">{entry.label}</p>
+                            <StatusBadge status={entry.status} />
+                          </div>
+                          {entry.detail ? <p className="mt-2 text-sm opacity-80">{entry.detail}</p> : null}
+                          {entry.recorded_at ? (
+                            <p className="mt-3 text-xs opacity-70">{formatTimestamp(entry.recorded_at)}</p>
+                          ) : null}
+                        </div>
+                        {index < workflow.state_path.length - 1 ? (
+                          <div className="flex h-[72px] items-center text-muted-foreground">
+                            <div className="flex items-center gap-1">
+                              <div className="h-px w-8 bg-border" />
+                              <div className="text-lg">→</div>
+                              <div className="h-px w-8 bg-border" />
+                            </div>
+                          </div>
+                        ) : null}
                       </div>
-                      {entry.detail ? <p className="mt-2 text-sm text-muted-foreground">{entry.detail}</p> : null}
-                      {entry.recorded_at ? (
-                        <p className="mt-2 text-xs text-muted-foreground">{formatTimestamp(entry.recorded_at)}</p>
-                      ) : null}
-                    </div>
-                  ))
+                    ))}
+                  </div>
                 )}
               </div>
             </div>
