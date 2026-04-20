@@ -29,6 +29,7 @@ class ParentFeaturePlanningWorkflowDeps:
 @dataclass(frozen=True)
 class _ParentPlanningFanoutResult:
     planning_result: Any
+    planning_package: dict[str, Any]
     seed_data: dict[str, Any]
     updated_children: list[str]
     created_children: list[str]
@@ -96,10 +97,31 @@ class ParentFeaturePlanningWorkflow:
             )
         self._mark_brief_normalized(lifecycle=lifecycle, source="source issue")
         try:
-            fanout = self._plan_and_seed_children(
+            planning_result, planning_package = self._plan_children(
                 parent_detail=parent_detail,
                 product_brief=product_brief,
                 project_key=project_key,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return self._handle_fanout_failure(
+                context=context,
+                issue_gateway=issue_gateway,
+                lifecycle=lifecycle,
+                error=exc,
+                failure_reason="pm_parent_issue_created_seed_failed",
+                sync_note_body=f"Parent feature was created in backlog, but engineering child planning failed. Error: {exc}",
+            )
+        if planning_result.planning_state == PLANNING_STATE_COMPLETED:
+            self._mark_planning_completed(
+                lifecycle=lifecycle,
+                planning_summary="Backlog planning completed from the normalized parent brief.",
+            )
+        try:
+            fanout = self._seed_planned_children(
+                parent_detail=parent_detail,
+                project_key=project_key,
+                planning_result=planning_result,
+                planning_package=planning_package,
             )
         except Exception as exc:  # noqa: BLE001
             return self._handle_fanout_failure(
@@ -134,7 +156,6 @@ class ParentFeaturePlanningWorkflow:
             )
         self._mark_fanout_completed(
             lifecycle=lifecycle,
-            planning_summary="Backlog planning completed from the normalized parent brief.",
             fanout_summary="Engineering child tickets were created or refreshed from the parent planning package.",
         )
 
@@ -575,10 +596,31 @@ class ParentFeaturePlanningWorkflow:
         self._mark_brief_normalized(lifecycle=lifecycle, source="PM clarification answers")
 
         try:
-            fanout = self._plan_and_seed_children(
+            planning_result, planning_package = self._plan_children(
                 parent_detail=parent_detail,
                 product_brief=brief_payload,
                 project_key=project_key,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return self._handle_fanout_failure(
+                context=context,
+                issue_gateway=issue_gateway,
+                lifecycle=lifecycle,
+                error=exc,
+                failure_reason="pm_interview_followup_seed_failed",
+                sync_note_body=f"PM clarification was recorded, but backlog planning failed: {exc}",
+            )
+        if planning_result.planning_state == PLANNING_STATE_COMPLETED:
+            self._mark_planning_completed(
+                lifecycle=lifecycle,
+                planning_summary="Backlog planning completed from the confirmed parent brief.",
+            )
+        try:
+            fanout = self._seed_planned_children(
+                parent_detail=parent_detail,
+                project_key=project_key,
+                planning_result=planning_result,
+                planning_package=planning_package,
             )
         except Exception as exc:  # noqa: BLE001
             return self._handle_fanout_failure(
@@ -618,7 +660,6 @@ class ParentFeaturePlanningWorkflow:
 
         self._mark_fanout_completed(
             lifecycle=lifecycle,
-            planning_summary="Backlog planning completed from the confirmed parent brief.",
             fanout_summary="Engineering child tickets were created or refreshed from the confirmed brief.",
         )
         issue_gateway.post_sync_note(
@@ -677,18 +718,28 @@ class ParentFeaturePlanningWorkflow:
         )
         self._mark_parent_synced(lifecycle=lifecycle, draft=False)
 
-    def _plan_and_seed_children(
+    def _plan_children(
         self,
         *,
         parent_detail,
         product_brief: dict[str, Any],
         project_key: str,
-    ) -> _ParentPlanningFanoutResult:
+    ) -> tuple[Any, dict[str, Any]]:
         planning_result, planning_package = self._deps.brief_planner.plan_backlog_parent(
             parent_detail=parent_detail,
             product_brief=product_brief,
             project_key=project_key,
         )
+        return planning_result, planning_package
+
+    def _seed_planned_children(
+        self,
+        *,
+        parent_detail,
+        project_key: str,
+        planning_result,
+        planning_package: dict[str, Any],
+    ) -> _ParentPlanningFanoutResult:
         seed_data = self._deps.child_sync_gateway.seed_parent_backlog_children(
             parent_detail=parent_detail,
             project_key=project_key,
@@ -700,23 +751,30 @@ class ParentFeaturePlanningWorkflow:
         )
         return _ParentPlanningFanoutResult(
             planning_result=planning_result,
+            planning_package=planning_package,
             seed_data=seed_data,
             updated_children=updated_children,
             created_children=created_children,
             changed_children=changed_children,
         )
 
-    def _mark_fanout_completed(
+    def _mark_planning_completed(
         self,
         *,
         lifecycle,
         planning_summary: str,
-        fanout_summary: str,
     ) -> None:
         lifecycle.mark_operation_completed(
             operation_type="backlog_planning",
             summary=planning_summary,
         )
+
+    def _mark_fanout_completed(
+        self,
+        *,
+        lifecycle,
+        fanout_summary: str,
+    ) -> None:
         lifecycle.mark_operation_completed(
             operation_type="jira_child_fanout",
             summary=fanout_summary,
