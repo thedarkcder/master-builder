@@ -17,7 +17,7 @@ from orchestrator.temporal.payloads import (
     DevelopmentTeamRunWorkflowInput,
     HumanInputResumeInput,
 )
-from orchestrator.temporal.workflow_registry import resolve_temporal_workflow_definition
+from orchestrator.temporal.workflow_registry import resolve_temporal_binding_for_handler
 
 try:  # pragma: no cover - exercised when temporal backend is enabled
     from temporalio.exceptions import WorkflowAlreadyStartedError
@@ -89,22 +89,16 @@ def _temporal_config_for_workflow(
         raise RuntimeError(
             f"Workflow type {workflow_type.workflow_type_key} is not configured for the temporal engine"
         )
-    raw_config = workflow_type.engine_config_json if isinstance(workflow_type.engine_config_json, dict) else {}
-    temporal = raw_config.get("temporal") if isinstance(raw_config.get("temporal"), dict) else {}
-    workflow_name = str(temporal.get("workflow_name") or "").strip()
-    if not workflow_name:
-        raise RuntimeError(
-            f"Workflow type {workflow_type.workflow_type_key} is missing temporal.engine_config.workflow_name"
-        )
-    task_queue = str(temporal.get("task_queue") or "").strip()
-    if not task_queue:
-        raise RuntimeError(
-            f"Workflow type {workflow_type.workflow_type_key} is missing temporal.engine_config.task_queue"
-        )
-    workflow_defn = resolve_temporal_workflow_definition(workflow_name=workflow_name)
+    binding = resolve_temporal_binding_for_handler(handler_key=workflow_type.handler_key)
+    temporal = {
+        "workflow_execution_timeout_seconds": binding.workflow_execution_timeout_seconds,
+        "workflow_run_timeout_seconds": binding.workflow_run_timeout_seconds,
+        "activity_start_to_close_timeout_seconds": binding.activity_start_to_close_timeout_seconds,
+        "human_input_resume_timeout_seconds": binding.human_input_resume_timeout_seconds,
+    }
     return TemporalWorkflowConfig(
-        workflow_defn=workflow_defn,
-        task_queue=task_queue,
+        workflow_defn=binding.workflow_defn,
+        task_queue=binding.task_queue,
         workflow_execution_timeout_seconds=_require_positive_temporal_timeout(
             workflow_type_key=workflow_type.workflow_type_key,
             temporal=temporal,

@@ -729,16 +729,6 @@ export type WorkflowTypeRecord = {
   label: string;
   description: string | null;
   orchestration_backend: string;
-  engine_config: {
-    temporal: {
-      workflow_name: string;
-      task_queue: string;
-      workflow_execution_timeout_seconds: number;
-      workflow_run_timeout_seconds: number;
-      activity_start_to_close_timeout_seconds: number;
-      human_input_resume_timeout_seconds: number;
-    } | null;
-  };
   retry_policy: WorkflowRetryPolicyRecord;
   capabilities: Record<string, unknown>;
   lifecycle: {
@@ -786,16 +776,6 @@ export type WorkflowTypeDetailRecord = {
   label: string;
   description: string | null;
   orchestration_backend: string;
-  engine_config: {
-    temporal: {
-      workflow_name: string;
-      task_queue: string;
-      workflow_execution_timeout_seconds: number;
-      workflow_run_timeout_seconds: number;
-      activity_start_to_close_timeout_seconds: number;
-      human_input_resume_timeout_seconds: number;
-    } | null;
-  };
   retry_policy: WorkflowRetryPolicyRecord;
   capabilities: Record<string, unknown>;
   lifecycle: {
@@ -822,16 +802,6 @@ export type WorkflowTypeDetailRecord = {
 
 export type WorkflowTypeUpdatePayload = {
   orchestration_backend: string;
-  engine_config: {
-    temporal: {
-      workflow_name: string;
-      task_queue: string;
-      workflow_execution_timeout_seconds: number;
-      workflow_run_timeout_seconds: number;
-      activity_start_to_close_timeout_seconds: number;
-      human_input_resume_timeout_seconds: number;
-    } | null;
-  };
   retry_policy: WorkflowRetryPolicyRecord;
 };
 

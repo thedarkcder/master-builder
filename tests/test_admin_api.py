@@ -1448,9 +1448,6 @@ class AdminApiTests(AdminApiTestHarness):
         self.assertEqual(detail_body["key"], "issue_execution")
         self.assertEqual(detail_body["operations"][0]["operation_type"], "run_attempt_execution")
         self.assertEqual(detail_body["orchestration_backend"], "temporal")
-        self.assertEqual(detail_body["engine_config"]["temporal"]["workflow_name"], "DevelopmentTeamRunWorkflow")
-        self.assertEqual(detail_body["engine_config"]["temporal"]["workflow_execution_timeout_seconds"], 86400)
-        self.assertEqual(detail_body["engine_config"]["temporal"]["workflow_run_timeout_seconds"], 86400)
         self.assertIn("manual_retry_enabled", detail_body["retry_policy"])
         self.assertTrue(detail_body["operations"][0]["completion_required"])
         self.assertEqual(detail_body["lifecycle"]["state_path_kind"], "run")
@@ -1463,16 +1460,6 @@ class AdminApiTests(AdminApiTestHarness):
             "/api/admin/workflow-types/issue_execution",
             json={
                 "orchestration_backend": "temporal",
-                "engine_config": {
-                    "temporal": {
-                        "workflow_name": "DevelopmentTeamRunWorkflow",
-                        "task_queue": "custom-queue",
-                        "workflow_execution_timeout_seconds": 5400,
-                        "workflow_run_timeout_seconds": 2700,
-                        "activity_start_to_close_timeout_seconds": 3600,
-                        "human_input_resume_timeout_seconds": 1800,
-                    }
-                },
                 "retry_policy": {
                     "manual_retry_enabled": True,
                     "max_attempts": 7,
@@ -1485,9 +1472,7 @@ class AdminApiTests(AdminApiTestHarness):
         )
         self.assertEqual(update_response.status_code, 200, update_response.text)
         updated_body = update_response.json()
-        self.assertEqual(updated_body["engine_config"]["temporal"]["task_queue"], "custom-queue")
-        self.assertEqual(updated_body["engine_config"]["temporal"]["workflow_execution_timeout_seconds"], 5400)
-        self.assertEqual(updated_body["engine_config"]["temporal"]["workflow_run_timeout_seconds"], 2700)
+        self.assertEqual(updated_body["orchestration_backend"], "temporal")
         self.assertEqual(updated_body["retry_policy"]["max_attempts"], 7)
 
     def test_get_workflow_includes_child_issue_links_for_parent_planning(self) -> None:

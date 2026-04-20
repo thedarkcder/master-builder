@@ -5,6 +5,17 @@ from sqlalchemy.orm import Session
 
 from orchestrator.storage.models import WorkflowType, WorkflowTypeOperation
 
+
+def normalize_workflow_retry_policy_config(raw: dict | None) -> dict[str, object]:
+    config = raw if isinstance(raw, dict) else {}
+    return {
+        "manual_retry_enabled": bool(config.get("manual_retry_enabled", True)),
+        "max_attempts": max(1, int(config.get("max_attempts") or 1)),
+        "initial_interval_seconds": max(0, int(config.get("initial_interval_seconds") or 0)),
+        "max_interval_seconds": max(0, int(config.get("max_interval_seconds") or 0)),
+        "backoff_coefficient": max(1.0, float(config.get("backoff_coefficient") or 1.0)),
+    }
+
 def get_workflow_type(session: Session, *, workflow_type_key: str) -> WorkflowType:
     workflow_type = session.get(WorkflowType, str(workflow_type_key or "").strip())
     if workflow_type is None:
@@ -43,25 +54,16 @@ def update_workflow_type_configuration(
     *,
     workflow_type_key: str,
     orchestration_backend: str,
-    engine_config: dict | None,
     retry_policy: dict[str, object] | None,
 ) -> WorkflowType:
     workflow_type = get_workflow_type(session, workflow_type_key=workflow_type_key)
     workflow_type.orchestration_backend = str(orchestration_backend or "").strip().lower()
-    workflow_type.engine_config_json = dict(engine_config or {})
-    workflow_type.retry_policy_config_json = dict(retry_policy or {})
+    workflow_type.retry_policy_config_json = normalize_workflow_retry_policy_config(retry_policy)
     if workflow_type.orchestration_backend == "temporal":
-        from orchestrator.temporal.workflow_registry import resolve_temporal_workflow_definition
+        from orchestrator.temporal.workflow_registry import resolve_temporal_binding_for_handler
 
-        temporal = workflow_type.engine_config_json.get("temporal")
-        if not isinstance(temporal, dict):
-            raise ValueError("Temporal workflows require engine_config.temporal")
-        workflow_name = str(temporal.get("workflow_name") or "").strip()
         try:
-            resolve_temporal_workflow_definition(workflow_name=workflow_name)
+            resolve_temporal_binding_for_handler(handler_key=workflow_type.handler_key)
         except LookupError as exc:
             raise ValueError(str(exc)) from exc
-    else:
-        workflow_type.engine_config_json = {}
-
     return workflow_type

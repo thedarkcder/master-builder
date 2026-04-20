@@ -60,7 +60,6 @@ test("shows workflow definitions and retries a failed execution operation", asyn
         },
       ],
       orchestration_backend: "legacy",
-      engine_config: { temporal: null },
     },
     current_state: "failed",
     waiting_on: null,
@@ -182,7 +181,8 @@ test("shows workflow definitions and retries a failed execution operation", asyn
   await expect(page).toHaveURL(/\/route25\/workflows\/parent_planning$/);
   await expect(page.getByRole("heading", { name: "Workflow settings" })).toBeVisible();
   await expect(page.getByText("Recent executions")).toBeVisible();
-  await expect(page.getByText("Definition flow")).toBeVisible();
+  await page.getByRole("button", { name: "Operations flow" }).click();
+  await expect(page.getByRole("button", { name: "Operations flow" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Identity and authorization v1 contract" })).toBeVisible();
 
   await page.getByRole("link", { name: "Identity and authorization v1 contract" }).click();

@@ -538,7 +538,6 @@ class WorkflowType(Base):
     system_key: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
     handler_key: Mapped[str] = mapped_column(String(64), nullable=False)
     orchestration_backend: Mapped[str] = mapped_column(String(32), nullable=False)
-    engine_config_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     retry_policy_config_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     capabilities_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     lifecycle_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
