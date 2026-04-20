@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from sqlalchemy.orm import Session, sessionmaker
 
 from orchestrator.core.config import Settings
+from orchestrator.core.workflow_advance import execute_workflow_advance
 from orchestrator.core.workflow_engine import WorkflowEngineState
 from orchestrator.core.workflow_operation_service import WorkflowOperationHandle
 from orchestrator.storage.models import Run, RunHumanInputRequest, Tenant, WorkflowExecution, WorkflowOperation
@@ -18,6 +19,27 @@ class LegacyWorkflowEngine:
         self._build_runner_fn = build_runner_fn
         self._runtime_kwargs_fn = runtime_kwargs_fn
         self._retry_workflow_operation_fn = retry_workflow_operation_fn
+
+    def advance_workflow(
+        self,
+        *,
+        session: Session,
+        settings: Settings,
+        session_factory: sessionmaker[Session] | None,
+        workflow_type,
+        request,
+        resolve_advance_handler_fn,
+    ):
+        _ = session_factory
+        if resolve_advance_handler_fn is None:
+            raise RuntimeError("Workflow advance handler resolution is not configured")
+        return execute_workflow_advance(
+            session=session,
+            settings=settings,
+            workflow_type=workflow_type,
+            request=request,
+            resolve_advance_handler_fn=resolve_advance_handler_fn,
+        )
 
     def start_workflow(
         self,

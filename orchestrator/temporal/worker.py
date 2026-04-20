@@ -16,15 +16,25 @@ async def run_temporal_worker() -> None:
         execute_claimed_run_activity,
         resume_human_input_activity,
     )
+    from orchestrator.temporal.activities.handler_workflow import (
+        process_handler_workflow_advance_activity,
+        retry_handler_workflow_operation_activity,
+    )
     from orchestrator.temporal.workflows.development_team_run import DevelopmentTeamRunWorkflow
+    from orchestrator.temporal.workflows.handler_backed_workflow import HandlerBackedWorkflow
 
     settings = get_settings()
     client = await connect_temporal_client(settings)
     worker = Worker(
         client,
         task_queue=temporal_task_queue(settings),
-        workflows=[DevelopmentTeamRunWorkflow],
-        activities=[execute_claimed_run_activity, resume_human_input_activity],
+        workflows=[DevelopmentTeamRunWorkflow, HandlerBackedWorkflow],
+        activities=[
+            execute_claimed_run_activity,
+            resume_human_input_activity,
+            process_handler_workflow_advance_activity,
+            retry_handler_workflow_operation_activity,
+        ],
         activity_executor=ThreadPoolExecutor(max_workers=4),
     )
     await worker.run()

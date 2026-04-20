@@ -83,6 +83,7 @@ def workflow_operation_attempt_to_schema(attempt: WorkflowOperationAttempt) -> W
         status=attempt.status,
         error_category=attempt.error_category,
         error_message=attempt.error_message,
+        status_detail=attempt.status_detail,
         retryable=attempt.retryable,
         next_retry_at=attempt.next_retry_at,
         started_at=attempt.started_at,

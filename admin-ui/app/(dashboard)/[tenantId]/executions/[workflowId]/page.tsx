@@ -29,6 +29,18 @@ function latestAttempt(operation: WorkflowOperationRecord) {
   })[0] ?? null;
 }
 
+function attemptFailure(attempt: ReturnType<typeof latestAttempt>) {
+  if (!attempt) return null;
+  return ["failed", "retrying"].includes(String(attempt.status || "").trim().toLowerCase())
+    ? (attempt.error_message?.trim() || null)
+    : null;
+}
+
+function attemptStatusDetail(attempt: ReturnType<typeof latestAttempt>) {
+  if (!attempt) return null;
+  return attempt.status_detail?.trim() || null;
+}
+
 function actionSummary(action: WorkflowActionRecord): string {
   return action.detail?.trim() || `${action.mode} execution`;
 }
@@ -93,10 +105,7 @@ export default function TenantExecutionDetailPage() {
           status: operation.status,
           impact: impactLabel(operation.required),
           completionRequired: operation.required,
-          detail:
-            attempt?.error_message?.trim()
-            || operation.summary?.trim()
-            || null,
+          detail: attemptFailure(attempt) || (operation.status === "waiting_for_input" ? attemptStatusDetail(attempt) : null),
         };
       }),
     [workflow?.operations],
@@ -274,7 +283,7 @@ export default function TenantExecutionDetailPage() {
               <nav className="-mb-px flex min-w-max gap-0" aria-label="Execution detail tabs">
                 {[
                   { key: "overview", label: "Overview" },
-                  { key: "step-recovery", label: "Step recovery" },
+                  { key: "step-recovery", label: "Step details" },
                   { key: "execution-path", label: "Execution path" },
                 ].map((tab) => {
                   const selected = activeTab === tab.key;
@@ -324,7 +333,7 @@ export default function TenantExecutionDetailPage() {
             ) : activeTab === "step-recovery" ? (
               <div className="overflow-hidden rounded-2xl border bg-background">
                 <div className="border-b px-5 py-3">
-                  <h2 className="text-sm font-semibold">Step recovery</h2>
+                  <h2 className="text-sm font-semibold">Step details</h2>
                 </div>
                 <Table>
                   <TableHeader>
@@ -361,10 +370,7 @@ export default function TenantExecutionDetailPage() {
                             )}
                           </TableCell>
                           <TableCell className="max-w-[440px] text-sm text-muted-foreground">
-                            {attempt?.error_message?.trim()
-                              || operation.summary?.trim()
-                              || operation.retry_unavailable_reason?.trim()
-                              || "—"}
+                            {attemptFailure(attempt) || "—"}
                           </TableCell>
                           <TableCell className="text-right">
                             <Button

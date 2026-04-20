@@ -114,7 +114,8 @@ class WorkflowExecutionProjection:
         operation.updated_at = now
         attempt.status = OPERATION_STATUS_WAITING_FOR_INPUT
         attempt.error_category = None
-        attempt.error_message = summary
+        attempt.error_message = None
+        attempt.status_detail = summary
         attempt.retryable = False
         attempt.next_retry_at = None
         attempt.finished_at = now

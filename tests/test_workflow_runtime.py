@@ -4,12 +4,16 @@ from types import SimpleNamespace
 from unittest.mock import sentinel
 
 from orchestrator.core.workflow_engine import WorkflowEngineState
-from orchestrator.core.workflow_runtime import WorkflowAdvanceOutcome, WorkflowAdvanceRequest, build_workflow_runtime
+from orchestrator.core.workflow_runtime import WorkflowAdvanceRequest, build_workflow_runtime
 
 
 class FakeEngine:
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict]] = []
+
+    def advance_workflow(self, **kwargs):
+        self.calls.append(("advance", kwargs))
+        return sentinel.advance_result
 
     def start_workflow(self, **kwargs):
         self.calls.append(("start", kwargs))
@@ -103,7 +107,10 @@ def test_workflow_runtime_delegates_attempt_creation(monkeypatch):
 def test_workflow_runtime_delegates_advance_to_handler_resolved_from_workflow_type(monkeypatch):
     session = sentinel.session
     settings = sentinel.settings
-    workflow_type = SimpleNamespace(handler_key="jira_parent_feature")
+    workflow_type = SimpleNamespace(
+        handler_key="jira_parent_feature",
+        orchestration_backend="legacy",
+    )
     request = WorkflowAdvanceRequest(
         workflow_handler_key="jira_parent_feature",
         tenant_id="tenant-a",
@@ -114,16 +121,15 @@ def test_workflow_runtime_delegates_advance_to_handler_resolved_from_workflow_ty
         payload={"request_id": "req-1"},
         webhook_event="issue_updated",
     )
-    calls: list[tuple[str, object]] = []
-
-    class _Handler:
-        def advance(self, **kwargs):
-            calls.append(("advance", kwargs))
-            return WorkflowAdvanceOutcome(handled=True, reason="ok")
+    engine = FakeEngine()
 
     monkeypatch.setattr(
         "orchestrator.core.workflow_runtime.get_workflow_type_by_handler_key",
         lambda *args, **kwargs: workflow_type,
+    )
+    monkeypatch.setattr(
+        "orchestrator.core.workflow_runtime.build_workflow_engine",
+        lambda **kwargs: engine,
     )
 
     runtime = build_workflow_runtime(
@@ -132,17 +138,16 @@ def test_workflow_runtime_delegates_advance_to_handler_resolved_from_workflow_ty
         process_claimed_run_fn=sentinel.process_claimed_run_fn,
         build_runner_fn=sentinel.build_runner_fn,
         runtime_kwargs_fn=sentinel.runtime_kwargs_fn,
-        resolve_advance_handler_fn=lambda handler_key: (_Handler() if handler_key == "jira_parent_feature" else None),
+        resolve_advance_handler_fn=lambda handler_key: None,
     )
 
     result = runtime.advance(request=request)
-    assert result.handled is True
-    assert result.reason == "ok"
-    assert len(calls) == 1
-    assert calls[0][0] == "advance"
-    kwargs = calls[0][1]
+    assert result is sentinel.advance_result
+    assert len(engine.calls) == 1
+    assert engine.calls[0][0] == "advance"
+    kwargs = engine.calls[0][1]
     assert kwargs["session"] is session
     assert kwargs["settings"] is settings
     assert kwargs["workflow_type"] is workflow_type
     assert kwargs["request"] is request
-    assert "lifecycle" not in kwargs
+    assert kwargs["session_factory"] is None

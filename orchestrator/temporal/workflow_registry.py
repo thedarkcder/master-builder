@@ -3,12 +3,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from orchestrator.temporal.workflows.development_team_run import DevelopmentTeamRunWorkflow
+from orchestrator.temporal.workflows.handler_backed_workflow import HandlerBackedWorkflow
 
 @dataclass(frozen=True)
 class TemporalWorkflowBinding:
     handler_key: str
     workflow_name: str
     workflow_defn: object
+    execution_mode: str = "run"
     task_queue: str = "master-builder"
     workflow_execution_timeout_seconds: int = 86400
     workflow_run_timeout_seconds: int = 86400
@@ -21,6 +23,18 @@ _TEMPORAL_BINDINGS = (
         handler_key="development_team_run",
         workflow_name="DevelopmentTeamRunWorkflow",
         workflow_defn=DevelopmentTeamRunWorkflow,
+    ),
+    TemporalWorkflowBinding(
+        handler_key="jira_parent_feature",
+        workflow_name="HandlerBackedWorkflow",
+        workflow_defn=HandlerBackedWorkflow,
+        execution_mode="handler",
+    ),
+    TemporalWorkflowBinding(
+        handler_key="pr_remediation",
+        workflow_name="DevelopmentTeamRunWorkflow",
+        workflow_defn=DevelopmentTeamRunWorkflow,
+        execution_mode="run",
     ),
 )
 
