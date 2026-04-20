@@ -1045,7 +1045,6 @@ class WorkflowRetryPolicyRead(BaseModel):
     initial_interval_seconds: int = Field(default=0, ge=0)
     max_interval_seconds: int = Field(default=0, ge=0)
     backoff_coefficient: float = Field(default=1.0, ge=1.0)
-    non_retryable_error_categories: list[str] = Field(default_factory=list)
 
 
 class WorkflowRetryPolicyUpdate(BaseModel):
@@ -1054,7 +1053,6 @@ class WorkflowRetryPolicyUpdate(BaseModel):
     initial_interval_seconds: int = Field(default=0, ge=0)
     max_interval_seconds: int = Field(default=0, ge=0)
     backoff_coefficient: float = Field(default=1.0, ge=1.0)
-    non_retryable_error_categories: list[str] = Field(default_factory=list)
 
 
 class WorkflowTypeOperationRead(BaseModel):

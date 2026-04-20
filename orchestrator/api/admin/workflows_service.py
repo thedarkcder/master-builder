@@ -278,11 +278,6 @@ def _workflow_retry_policy_read(*, raw_config: dict | None) -> WorkflowRetryPoli
         initial_interval_seconds=int(raw.get("initial_interval_seconds") or 0),
         max_interval_seconds=int(raw.get("max_interval_seconds") or 0),
         backoff_coefficient=float(raw.get("backoff_coefficient") or 1.0),
-        non_retryable_error_categories=[
-            str(value).strip()
-            for value in (raw.get("non_retryable_error_categories") or [])
-            if str(value).strip()
-        ],
     )
 
 

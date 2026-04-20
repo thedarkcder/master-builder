@@ -21,14 +21,6 @@ const ENGINE_OPTIONS = [
   { value: "database", label: "Database" },
 ] as const;
 
-const KNOWN_ERROR_CATEGORIES = [
-  "authorization_failed",
-  "content_limit",
-  "contract_invalid",
-  "missing_input",
-  "transient_external_failure",
-] as const;
-
 function normalizeRetryPolicy(config: WorkflowRetryPolicyRecord): WorkflowRetryPolicyRecord {
   return {
     manual_retry_enabled: Boolean(config.manual_retry_enabled),
@@ -36,7 +28,6 @@ function normalizeRetryPolicy(config: WorkflowRetryPolicyRecord): WorkflowRetryP
     initial_interval_seconds: Math.max(0, Number(config.initial_interval_seconds || 0)),
     max_interval_seconds: Math.max(0, Number(config.max_interval_seconds || 0)),
     backoff_coefficient: Math.max(1, Number(config.backoff_coefficient || 1)),
-    non_retryable_error_categories: [...config.non_retryable_error_categories].sort(),
   };
 }
 
@@ -107,19 +98,6 @@ export default function TenantWorkflowTypeDetailPage() {
     [],
   );
 
-  const toggleNonRetryableCategory = useCallback((value: string) => {
-    setRetryPolicy((current) => {
-      if (!current) return current;
-      const selected = current.non_retryable_error_categories.includes(value);
-      return {
-        ...current,
-        non_retryable_error_categories: selected
-          ? current.non_retryable_error_categories.filter((item) => item !== value)
-          : [...current.non_retryable_error_categories, value].sort(),
-      };
-    });
-  }, []);
-
   const saveWorkflowType = useCallback(async () => {
     if (!credentials || !draft || !retryPolicy) return;
     setSaving(true);
@@ -147,6 +125,7 @@ export default function TenantWorkflowTypeDetailPage() {
         label: operation.label,
         detail: null,
         impact: impactLabel(operation.completion_required),
+        completionRequired: operation.completion_required,
       })),
     [workflowType?.operations],
   );
@@ -246,23 +225,6 @@ export default function TenantWorkflowTypeDetailPage() {
                       <Input type="number" min={1} step="0.1" value={String(retryPolicy.backoff_coefficient)} onChange={(event) => updateRetryField("backoff_coefficient", event.target.value)} />
                     </label>
                   </div>
-
-                  <div className="space-y-2">
-                    <p className="text-sm font-medium">Do not retry</p>
-                    <div className="grid gap-2 md:grid-cols-2">
-                      {KNOWN_ERROR_CATEGORIES.map((category) => (
-                        <label key={category} className="flex items-center gap-2 rounded-xl border px-3 py-2 text-sm">
-                          <input
-                            type="checkbox"
-                            checked={retryPolicy.non_retryable_error_categories.includes(category)}
-                            onChange={() => toggleNonRetryableCategory(category)}
-                          />
-                          <span>{category}</span>
-                        </label>
-                      ))}
-                    </div>
-                  </div>
-
                   <div className="flex justify-end">
                     <Button onClick={() => void saveWorkflowType()} disabled={saving} size="sm">
                       {saving ? "Saving…" : "Save"}
@@ -276,7 +238,7 @@ export default function TenantWorkflowTypeDetailPage() {
                   <h2 className="text-sm font-semibold">Definition flow</h2>
                 </div>
                 <div className="px-5 py-4">
-                  <WorkflowFlowDiagram nodes={flowNodes} emptyLabel="No steps defined." />
+                  <WorkflowFlowDiagram nodes={flowNodes} emptyLabel="No steps defined." orientation="vertical" />
                 </div>
               </div>
             </div>
