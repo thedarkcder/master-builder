@@ -114,9 +114,8 @@ def test_development_team_run_workflow_uses_configured_activity_timeouts(monkeyp
             issue_key="MAB-215",
         )
 
-    async def _fake_wait_condition(predicate, *, timeout):
+    async def _fake_wait_condition(predicate):
         assert predicate() is False
-        assert timeout == timedelta(seconds=654)
         workflow_defn._status = "completed"
 
     monkeypatch.setattr(
@@ -136,5 +135,5 @@ def test_development_team_run_workflow_uses_configured_activity_timeouts(monkeyp
     assert initial_captured["timeout"] == timedelta(seconds=321)
 
     resumed_run_id = asyncio.run(workflow_defn.resume_human_input(HumanInputResumeInput(request_id="request-123")))
-    assert resumed_run_id == "run-456"
-    assert resume_captured["timeout"] == timedelta(seconds=654)
+    assert resumed_run_id == "run-123"
+    assert "timeout" not in resume_captured

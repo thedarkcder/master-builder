@@ -1063,32 +1063,6 @@ class WorkflowTypeOperationRead(BaseModel):
     status: str | None = None
 
 
-class WorkflowTypeTemporalConfigRead(BaseModel):
-    workflow_name: str
-    task_queue: str
-    workflow_execution_timeout_seconds: int = Field(ge=1)
-    workflow_run_timeout_seconds: int = Field(ge=1)
-    activity_start_to_close_timeout_seconds: int = Field(ge=1)
-    human_input_resume_timeout_seconds: int = Field(ge=1)
-
-
-class WorkflowTypeTemporalConfigUpdate(BaseModel):
-    workflow_name: str = Field(min_length=1)
-    task_queue: str = Field(min_length=1)
-    workflow_execution_timeout_seconds: int = Field(ge=1)
-    workflow_run_timeout_seconds: int = Field(ge=1)
-    activity_start_to_close_timeout_seconds: int = Field(ge=1)
-    human_input_resume_timeout_seconds: int = Field(ge=1)
-
-
-class WorkflowTypeEngineConfigRead(BaseModel):
-    temporal: WorkflowTypeTemporalConfigRead | None = None
-
-
-class WorkflowTypeEngineConfigUpdate(BaseModel):
-    temporal: WorkflowTypeTemporalConfigUpdate | None = None
-
-
 class WorkflowTypeLifecycleStateRead(BaseModel):
     key: str
     label: str
@@ -1117,7 +1091,6 @@ class WorkflowTypeRead(BaseModel):
     label: str
     description: str | None = None
     orchestration_backend: Literal["legacy", "temporal", "database"]
-    engine_config: WorkflowTypeEngineConfigRead = Field(default_factory=WorkflowTypeEngineConfigRead)
     retry_policy: WorkflowRetryPolicyRead = Field(default_factory=WorkflowRetryPolicyRead)
     capabilities: dict[str, object] = Field(default_factory=dict)
     lifecycle: WorkflowTypeLifecycleRead = Field(default_factory=WorkflowTypeLifecycleRead)
@@ -1150,7 +1123,6 @@ class WorkflowTypeDetailRead(BaseModel):
     label: str
     description: str | None = None
     orchestration_backend: Literal["legacy", "temporal", "database"]
-    engine_config: WorkflowTypeEngineConfigRead = Field(default_factory=WorkflowTypeEngineConfigRead)
     retry_policy: WorkflowRetryPolicyRead = Field(default_factory=WorkflowRetryPolicyRead)
     capabilities: dict[str, object] = Field(default_factory=dict)
     lifecycle: WorkflowTypeLifecycleRead = Field(default_factory=WorkflowTypeLifecycleRead)
@@ -1162,18 +1134,7 @@ class WorkflowTypeDetailRead(BaseModel):
 
 class WorkflowTypeUpdateRequest(BaseModel):
     orchestration_backend: Literal["legacy", "temporal", "database"]
-    engine_config: WorkflowTypeEngineConfigUpdate = Field(default_factory=WorkflowTypeEngineConfigUpdate)
     retry_policy: WorkflowRetryPolicyUpdate = Field(default_factory=WorkflowRetryPolicyUpdate)
-
-    @model_validator(mode="after")
-    def validate_engine_contract(self) -> WorkflowTypeUpdateRequest:
-        if self.orchestration_backend == "temporal":
-            if self.engine_config.temporal is None:
-                raise ValueError("Temporal workflows require engine_config.temporal")
-            return self
-        if self.engine_config.temporal is not None:
-            raise ValueError("engine_config.temporal is only valid for temporal workflows")
-        return self
 
 
 class WorkflowStatePathEntryRead(BaseModel):

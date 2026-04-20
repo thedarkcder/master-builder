@@ -7,8 +7,6 @@ Create Date: 2026-04-17 16:10:00.000000
 
 from __future__ import annotations
 
-import json
-
 import sqlalchemy as sa
 from alembic import op
 
@@ -84,27 +82,6 @@ def upgrade() -> None:
     ).scalar_one()
     if invalid_execution_backends:
         raise RuntimeError("workflow_executions contains unsupported orchestration_backend values")
-
-    temporal_workflow_rows = bind.execute(
-        sa.text(
-            """
-            SELECT workflow_type_key, orchestration_backend, engine_config_json
-            FROM workflow_types
-            WHERE orchestration_backend = 'temporal'
-            """
-        )
-    ).mappings().all()
-    for row in temporal_workflow_rows:
-        raw_config = row["engine_config_json"]
-        if isinstance(raw_config, str):
-            raw_config = json.loads(raw_config)
-        if not isinstance(raw_config, dict):
-            raw_config = {}
-        temporal = raw_config.get("temporal") if isinstance(raw_config.get("temporal"), dict) else None
-        if temporal is None:
-            raise RuntimeError(
-                f"temporal workflow type {row['workflow_type_key']} is missing engine_config_json.temporal"
-            )
 
     undefined_operations = bind.execute(
         sa.text(

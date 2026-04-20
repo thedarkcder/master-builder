@@ -10,7 +10,6 @@ from sqlalchemy.exc import IntegrityError
 from orchestrator.api.admin.schema_mappers import workflow_operation_to_schema
 from orchestrator.api.schemas import (
     WorkflowActionRead,
-    WorkflowTypeEngineConfigRead,
     WorkflowExecutionPreviewRead,
     WorkflowLinkRead,
     WorkflowOperationRead,
@@ -24,7 +23,6 @@ from orchestrator.api.schemas import (
     WorkflowTypeRead,
     WorkflowTypeSummaryRead,
     WorkflowTypeUpdateRequest,
-    WorkflowTypeTemporalConfigRead,
 )
 from orchestrator.core.config import get_settings
 from orchestrator.core.workflow_attempt_factory import build_workflow_execution_for_attempt
@@ -208,28 +206,6 @@ def _workflow_type_operation_types(*, workflow_type: WorkflowTypeRead) -> set[st
     }
 
 
-def _workflow_type_engine_config_read(*, workflow_type: WorkflowType) -> WorkflowTypeEngineConfigRead:
-    raw = workflow_type.engine_config_json if isinstance(workflow_type.engine_config_json, dict) else {}
-    temporal = raw.get("temporal") if isinstance(raw.get("temporal"), dict) else None
-    normalized_backend = str(workflow_type.orchestration_backend or "").strip().lower()
-    if normalized_backend == "temporal" and temporal is None:
-        raise ValueError(
-            f"Workflow type {workflow_type.workflow_type_key} is missing temporal engine configuration"
-        )
-    if temporal is None:
-        return WorkflowTypeEngineConfigRead()
-    return WorkflowTypeEngineConfigRead(
-        temporal=WorkflowTypeTemporalConfigRead(
-            workflow_name=str(temporal.get("workflow_name") or "").strip(),
-            task_queue=str(temporal.get("task_queue") or "").strip(),
-            workflow_execution_timeout_seconds=int(temporal.get("workflow_execution_timeout_seconds") or 0),
-            workflow_run_timeout_seconds=int(temporal.get("workflow_run_timeout_seconds") or 0),
-            activity_start_to_close_timeout_seconds=int(temporal.get("activity_start_to_close_timeout_seconds") or 0),
-            human_input_resume_timeout_seconds=int(temporal.get("human_input_resume_timeout_seconds") or 0),
-        )
-    )
-
-
 def _workflow_type_capabilities_read(*, workflow_type: WorkflowType) -> dict[str, object]:
     raw = workflow_type.capabilities_json if isinstance(workflow_type.capabilities_json, dict) else {}
     return dict(raw)
@@ -394,7 +370,6 @@ def _workflow_operation_reads(
             label=workflow_type.label,
             description=workflow_type.description,
             orchestration_backend=workflow_type.orchestration_backend,
-            engine_config=_workflow_type_engine_config_read(workflow_type=workflow_type),
             retry_policy=workflow_retry_policy,
             capabilities=_workflow_type_capabilities_read(workflow_type=workflow_type),
             lifecycle=_workflow_type_lifecycle_read(workflow_type=workflow_type),
@@ -695,7 +670,6 @@ def _workflow_type_detail(
         label=workflow_type.label,
         description=workflow_type.description,
         orchestration_backend=workflow_type.orchestration_backend,
-        engine_config=_workflow_type_engine_config_read(workflow_type=workflow_type),
         retry_policy=_workflow_retry_policy_read(raw_config=workflow_type.retry_policy_config_json),
         capabilities=_workflow_type_capabilities_read(workflow_type=workflow_type),
         lifecycle=_workflow_type_lifecycle_read(workflow_type=workflow_type),
@@ -726,7 +700,6 @@ def _workflow_type_detail(
         label=type_read.label,
         description=type_read.description,
         orchestration_backend=type_read.orchestration_backend,
-        engine_config=type_read.engine_config,
         retry_policy=type_read.retry_policy,
         capabilities=type_read.capabilities,
         lifecycle=type_read.lifecycle,
@@ -1019,7 +992,6 @@ def update_workflow_type_detail(
             session,
             workflow_type_key=workflow_type_key,
             orchestration_backend=payload.orchestration_backend,
-            engine_config=payload.engine_config.model_dump(),
             retry_policy=payload.retry_policy.model_dump(),
         )
     except ValueError as exc:

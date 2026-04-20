@@ -47,6 +47,7 @@ export default function TenantWorkflowTypeDetailPage() {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [statusLine, setStatusLine] = useState("");
+  const [activeTab, setActiveTab] = useState<"settings" | "operations-flow" | "recent-executions">("settings");
 
   const loadWorkflowType = useCallback(async () => {
     if (!credentials) return;
@@ -104,7 +105,6 @@ export default function TenantWorkflowTypeDetailPage() {
     try {
       const payload = await updateWorkflowType(credentials, workflowTypeKey, {
         orchestration_backend: draft.orchestration_backend,
-        engine_config: draft.engine_config,
         retry_policy: normalizeRetryPolicy(retryPolicy),
       });
       setWorkflowType(payload);
@@ -174,12 +174,36 @@ export default function TenantWorkflowTypeDetailPage() {
             </div>
           </div>
 
-          <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
-            <div className="space-y-4">
+          <div className="space-y-4">
+            <div className="overflow-x-auto border-b">
+              <nav className="-mb-px flex min-w-max gap-0" aria-label="Workflow detail tabs">
+                {[
+                  { key: "settings", label: "Settings" },
+                  { key: "operations-flow", label: "Operations flow" },
+                  { key: "recent-executions", label: "Recent executions" },
+                ].map((tab) => {
+                  const selected = activeTab === tab.key;
+                  return (
+                    <button
+                      key={tab.key}
+                      type="button"
+                      onClick={() => setActiveTab(tab.key as "settings" | "operations-flow" | "recent-executions")}
+                      className={cn(
+                        "inline-flex items-center border-b-2 px-4 py-2.5 text-sm font-medium whitespace-nowrap transition-colors",
+                        selected
+                          ? "border-primary text-foreground"
+                          : "border-transparent text-muted-foreground hover:border-border hover:text-foreground",
+                      )}
+                    >
+                      {tab.label}
+                    </button>
+                  );
+                })}
+              </nav>
+            </div>
+
+            {activeTab === "settings" ? (
               <div className="overflow-hidden rounded-2xl border bg-background">
-                <div className="border-b px-5 py-3">
-                  <h2 className="text-sm font-semibold">Workflow settings</h2>
-                </div>
                 <div className="space-y-4 px-5 py-4">
                   <label className="space-y-1 text-sm">
                     <span className="text-muted-foreground">Engine</span>
@@ -232,22 +256,14 @@ export default function TenantWorkflowTypeDetailPage() {
                   </div>
                 </div>
               </div>
-
+            ) : activeTab === "operations-flow" ? (
               <div className="overflow-hidden rounded-2xl border bg-background">
-                <div className="border-b px-5 py-3">
-                  <h2 className="text-sm font-semibold">Definition flow</h2>
-                </div>
                 <div className="px-5 py-4">
                   <WorkflowFlowDiagram nodes={flowNodes} emptyLabel="No steps defined." orientation="vertical" />
                 </div>
               </div>
-            </div>
-
-            <div className="space-y-4">
+            ) : (
               <div className="overflow-hidden rounded-2xl border bg-background">
-                <div className="border-b px-5 py-3">
-                  <h2 className="text-sm font-semibold">Recent executions</h2>
-                </div>
                 {workflowType.recent_executions.length === 0 ? (
                   <div className="px-5 py-10 text-sm text-muted-foreground">No executions recorded.</div>
                 ) : (
@@ -281,8 +297,7 @@ export default function TenantWorkflowTypeDetailPage() {
                   </Table>
                 )}
               </div>
-
-            </div>
+            )}
           </div>
         </>
       ) : (

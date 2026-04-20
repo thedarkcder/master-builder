@@ -27,7 +27,6 @@ def _default_retry_policy_config() -> dict[str, object]:
         "initial_interval_seconds": 60,
         "max_interval_seconds": 900,
         "backoff_coefficient": 2.0,
-        "non_retryable_error_categories": [],
     }
 
 

@@ -61,7 +61,7 @@ class MigrationTests(unittest.TestCase):
 
         duplicates = {revision_id: count for revision_id, count in Counter(revision_ids).items() if count > 1}
         self.assertEqual(duplicates, {})
-        self.assertEqual(script.get_heads(), ["20260420_0079"])
+        self.assertEqual(script.get_heads(), ["20260420_0080"])
 
     def test_workflow_execution_backend_backfill_migration_aligns_execution_rows(self) -> None:
         with TemporaryDirectory() as tmpdir:
