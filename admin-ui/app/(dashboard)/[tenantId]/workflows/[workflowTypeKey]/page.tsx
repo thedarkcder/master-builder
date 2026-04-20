@@ -57,6 +57,8 @@ export default function TenantWorkflowTypeDetailPage() {
       field:
         | "workflow_name"
         | "task_queue"
+        | "workflow_execution_timeout_seconds"
+        | "workflow_run_timeout_seconds"
         | "activity_start_to_close_timeout_seconds"
         | "human_input_resume_timeout_seconds",
       value: string,
@@ -66,6 +68,8 @@ export default function TenantWorkflowTypeDetailPage() {
         const temporal = current.engine_config.temporal ?? {
           workflow_name: "",
           task_queue: "",
+          workflow_execution_timeout_seconds: 86400,
+          workflow_run_timeout_seconds: 86400,
           activity_start_to_close_timeout_seconds: 7200,
           human_input_resume_timeout_seconds: 7200,
         };
@@ -248,6 +252,24 @@ export default function TenantWorkflowTypeDetailPage() {
                         />
                       </label>
                       <label className="space-y-1 text-sm">
+                        <span className="text-muted-foreground">Workflow execution timeout (seconds)</span>
+                        <Input
+                          type="number"
+                          min={1}
+                          value={String(draft.engine_config.temporal?.workflow_execution_timeout_seconds ?? 0)}
+                          onChange={(event) => updateDraftTemporalField("workflow_execution_timeout_seconds", event.target.value)}
+                        />
+                      </label>
+                      <label className="space-y-1 text-sm">
+                        <span className="text-muted-foreground">Workflow run timeout (seconds)</span>
+                        <Input
+                          type="number"
+                          min={1}
+                          value={String(draft.engine_config.temporal?.workflow_run_timeout_seconds ?? 0)}
+                          onChange={(event) => updateDraftTemporalField("workflow_run_timeout_seconds", event.target.value)}
+                        />
+                      </label>
+                      <label className="space-y-1 text-sm">
                         <span className="text-muted-foreground">Activity timeout (seconds)</span>
                         <Input
                           type="number"
@@ -257,7 +279,7 @@ export default function TenantWorkflowTypeDetailPage() {
                         />
                       </label>
                       <label className="space-y-1 text-sm">
-                        <span className="text-muted-foreground">Human input resume timeout (seconds)</span>
+                        <span className="text-muted-foreground">Human input resume activity timeout (seconds)</span>
                         <Input
                           type="number"
                           min={1}

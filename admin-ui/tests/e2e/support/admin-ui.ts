@@ -439,6 +439,8 @@ export function makeWorkflow(overrides: Partial<WorkflowRecord> = {}): WorkflowR
         temporal: {
           workflow_name: "DevelopmentTeamRunWorkflow",
           task_queue: "master-builder",
+          workflow_execution_timeout_seconds: 86400,
+          workflow_run_timeout_seconds: 86400,
           activity_start_to_close_timeout_seconds: 7200,
           human_input_resume_timeout_seconds: 7200,
         },
@@ -915,6 +917,8 @@ export async function mockTenantWorkflowApis(
   };
   const workflowTypeDetail = {
     ...workflowTypeSummary,
+    orchestration_backend: primaryWorkflow.workflow_type.orchestration_backend,
+    engine_config: primaryWorkflow.workflow_type.engine_config,
     capabilities: primaryWorkflow.workflow_type.capabilities,
     lifecycle: primaryWorkflow.workflow_type.lifecycle,
     operations: primaryWorkflow.workflow_type.operations,
