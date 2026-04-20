@@ -1016,6 +1016,7 @@ class WorkflowOperationAttemptRead(BaseModel):
     status: str
     error_category: str | None = None
     error_message: str | None = None
+    status_detail: str | None = None
     retryable: bool = False
     next_retry_at: datetime | None = None
     started_at: datetime | None = None

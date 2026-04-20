@@ -99,6 +99,7 @@ def start_workflow_operation_attempt(
         status=OPERATION_STATUS_RUNNING,
         error_category=None,
         error_message=None,
+        status_detail=None,
         retryable=False,
         next_retry_at=None,
         created_at=now,
@@ -123,6 +124,7 @@ def complete_workflow_operation(
     operation.finished_at = now
     operation.updated_at = now
     attempt.status = OPERATION_STATUS_COMPLETED
+    attempt.status_detail = None
     attempt.finished_at = now
 
 
@@ -145,6 +147,7 @@ def fail_workflow_operation(
     attempt.status = OPERATION_STATUS_RETRYING if scheduled_for_retry else OPERATION_STATUS_FAILED
     attempt.error_category = category
     attempt.error_message = message
+    attempt.status_detail = None
     attempt.retryable = retryable
     attempt.next_retry_at = next_retry_at
     attempt.finished_at = now

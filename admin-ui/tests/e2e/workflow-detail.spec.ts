@@ -107,6 +107,7 @@ test("shows workflow definitions and retries a failed execution operation", asyn
             error_category: "content_limit",
             error_message:
               'Failed to seed Jira issues: Jira API request failed (400): {"errorMessages":["CONTENT_LIMIT_EXCEEDED"],"errors":{}}',
+            status_detail: null,
             retryable: true,
             next_retry_at: null,
             started_at: "2026-04-17T12:22:11Z",
@@ -144,6 +145,7 @@ test("shows workflow definitions and retries a failed execution operation", asyn
             status: "running",
             error_category: null,
             error_message: null,
+            status_detail: null,
             retryable: false,
             next_retry_at: null,
             started_at: "2026-04-17T12:40:00Z",
@@ -191,8 +193,8 @@ test("shows workflow definitions and retries a failed execution operation", asyn
   await expect(page).toHaveURL(/\/route25\/executions\/wfexec-mab-215$/);
   await expect(page.getByText("Workflow type")).toBeVisible();
   await expect(page.getByText("Parent Planning")).toBeVisible();
-  await page.getByRole("button", { name: "Step recovery" }).click();
-  await expect(page.getByRole("heading", { name: "Step recovery" })).toBeVisible();
+  await page.getByRole("button", { name: "Step details" }).click();
+  await expect(page.getByRole("heading", { name: "Step details" })).toBeVisible();
   await expect(page.locator("table").getByText("jira_child_fanout").first()).toBeVisible();
   const retryStepButton = page.getByRole("button", { name: "Retry step" }).last();
   await retryStepButton.scrollIntoViewIfNeeded();

@@ -837,6 +837,7 @@ export type WorkflowOperationAttemptRecord = {
   status: string;
   error_category: string | null;
   error_message: string | null;
+  status_detail: string | null;
   retryable: boolean;
   next_retry_at: string | null;
   started_at: string | null;
