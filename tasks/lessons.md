@@ -241,3 +241,4 @@
 - 2026-04-20: When the user wants linked artifacts as quick actions, do not leave them as a large body section. Put them in a compact top-level context menu near the page controls.
 - 2026-04-20: In greenfield refactors, remove the wrong structure instead of adding another abstraction around it. If a field or contract should not exist, delete it from the model and schema rather than hiding it behind more mapping code.
 - 2026-04-20: Do not use internal workflow lineage keys as user-facing route identifiers. Persist a separate public execution ID and route the UI/API on that identifier end to end.
+- 2026-04-20: Do not validate workflow settings against vendor-specific handler bindings in the write path. Persist generic engine policy on the workflow type; only enforce concrete runtime support where an execution actually tries to use that engine capability.

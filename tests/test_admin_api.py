@@ -1475,6 +1475,32 @@ class AdminApiTests(AdminApiTestHarness):
         self.assertEqual(updated_body["orchestration_backend"], "temporal")
         self.assertEqual(updated_body["retry_policy"]["max_attempts"], 7)
 
+    def test_update_workflow_type_allows_temporal_backend_without_handler_binding_validation(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201)
+
+        response = self.client.put(
+            "/api/admin/workflow-types/parent_planning",
+            json={
+                "orchestration_backend": "temporal",
+                "retry_policy": {
+                    "manual_retry_enabled": True,
+                    "max_attempts": 3,
+                    "initial_interval_seconds": 30,
+                    "max_interval_seconds": 300,
+                    "backoff_coefficient": 1.5,
+                },
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertEqual(body["key"], "parent_planning")
+        self.assertEqual(body["orchestration_backend"], "temporal")
+        self.assertEqual(body["retry_policy"]["max_attempts"], 3)
+
     def test_get_workflow_includes_child_issue_links_for_parent_planning(self) -> None:
         payload = self._tenant_payload()
         self._insert_jira_connection(connection_id="conn-1")

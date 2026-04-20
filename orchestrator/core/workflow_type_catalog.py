@@ -59,11 +59,4 @@ def update_workflow_type_configuration(
     workflow_type = get_workflow_type(session, workflow_type_key=workflow_type_key)
     workflow_type.orchestration_backend = str(orchestration_backend or "").strip().lower()
     workflow_type.retry_policy_config_json = normalize_workflow_retry_policy_config(retry_policy)
-    if workflow_type.orchestration_backend == "temporal":
-        from orchestrator.temporal.workflow_registry import resolve_temporal_binding_for_handler
-
-        try:
-            resolve_temporal_binding_for_handler(handler_key=workflow_type.handler_key)
-        except LookupError as exc:
-            raise ValueError(str(exc)) from exc
     return workflow_type
