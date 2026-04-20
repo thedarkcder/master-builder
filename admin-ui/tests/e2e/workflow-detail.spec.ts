@@ -83,7 +83,8 @@ test("shows workflow definitions and retries a failed execution operation", asyn
     retrying_steps: [],
     conditional_branches_taken: [],
     conditional_branches_available: [],
-    available_actions: [],
+    can_resume: true,
+    resume_unavailable_reason: null,
     links: [{ kind: "jira_issue", label: "Jira issue MAB-215", ref: "MAB-215", url: "https://jira.example.test/browse/MAB-215", status: "failed" }],
     failure_reason:
       'Failed to seed Jira issues: Jira API request failed (400): {"errorMessages":["CONTENT_LIMIT_EXCEEDED"],"errors":{}}',
@@ -167,9 +168,13 @@ test("shows workflow definitions and retries a failed execution operation", asyn
   };
 
   let retriedOperation: { workflowId: string; operationId: string } | null = null;
+  let resumedExecution = false;
   await mockTenantWorkflowApis(page, {
     workflows: [workflow],
     retriedWorkflowResponse: retriedWorkflow,
+    onResumeExecution: () => {
+      resumedExecution = true;
+    },
     onRetryOperation: (payload) => {
       retriedOperation = payload;
     },
@@ -193,6 +198,7 @@ test("shows workflow definitions and retries a failed execution operation", asyn
   await expect(page).toHaveURL(/\/example\/executions\/wfexec-mab-215$/);
   await expect(page.getByText("Workflow type")).toBeVisible();
   await expect(page.getByText("Parent Planning")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Resume execution" })).toBeEnabled();
   await page.getByRole("button", { name: "Step details" }).click();
   await expect(page.getByRole("heading", { name: "Step details" })).toBeVisible();
   await expect(page.locator("table").getByText("jira_child_fanout").first()).toBeVisible();
@@ -208,6 +214,7 @@ test("shows workflow definitions and retries a failed execution operation", asyn
   });
   await expect(page.getByText("Attempt 2")).toBeVisible();
   await expect(page.getByText("running").last()).toBeVisible();
+  expect(resumedExecution).toBe(false);
   await page.getByRole("button", { name: "Links" }).click();
   await expect(page.getByText("Create tenant assurance boundary")).toBeVisible();
   await expect(page.getByText("MAB-300")).toBeVisible();

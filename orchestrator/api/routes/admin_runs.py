@@ -29,6 +29,7 @@ from orchestrator.api.admin.workflows_service import (
     get_workflow_type_detail as get_workflow_type_detail_impl,
     list_workflows as list_workflows_impl,
     list_workflow_types as list_workflow_types_impl,
+    resume_workflow_execution as resume_workflow_execution_impl,
     retry_workflow_operation as retry_workflow_operation_impl,
     update_workflow_type_detail as update_workflow_type_detail_impl,
 )
@@ -247,6 +248,20 @@ def create_workflow_attempt(
         execution_id=execution_id,
         mode=payload.mode,
         checkpoint_kind=payload.checkpoint_kind,
+        tenant_model=Tenant,
+        run_to_schema_fn=run_to_schema,
+    )
+
+
+@router.post("/workflows/{execution_id}/resume", response_model=RunRead, status_code=status.HTTP_201_CREATED)
+def resume_workflow_execution(
+    execution_id: str,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> RunRead:
+    return resume_workflow_execution_impl(
+        session=session,
+        execution_id=execution_id,
         tenant_model=Tenant,
         run_to_schema_fn=run_to_schema,
     )

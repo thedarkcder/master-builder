@@ -1886,7 +1886,7 @@ class AdminApiTests(AdminApiTestHarness):
             self.assertEqual(workflow.source_run_id, "run-terminal-1")
             self.assertEqual(workflow.status, "queued")
 
-    def test_create_workflow_attempt_accepts_execution_action_for_orchestrated_checkpoint(self) -> None:
+    def test_resume_workflow_execution_uses_latest_orchestrated_checkpoint(self) -> None:
         payload = self._tenant_payload()
         self._insert_jira_connection(connection_id="conn-1")
         create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
@@ -1904,27 +1904,68 @@ class AdminApiTests(AdminApiTestHarness):
             checkpoint_stage="orchestrated",
         )
 
-        detail_response = self.client.get(
-            "/api/admin/workflows/exec-run-terminal-orchestrated-1",
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(detail_response.status_code, 200, detail_response.text)
-        detail_body = detail_response.json()
-        restart_action = next(
-            item for item in detail_body["available_actions"] if item["mode"] == "restart"
-        )
-        self.assertEqual(restart_action["checkpoint_kind"], "execution")
-
         response = self.client.post(
-            "/api/admin/workflows/exec-run-terminal-orchestrated-1/attempts",
-            json={"mode": "restart", "checkpoint_kind": "execution"},
+            "/api/admin/workflows/exec-run-terminal-orchestrated-1/resume",
             auth=("admin", "secret"),
         )
         self.assertEqual(response.status_code, 201, response.text)
         body = response.json()
-        self.assertEqual(body["entry_mode"], "restart")
+        self.assertEqual(body["workflow_id"], "workflow-terminal-orchestrated-1")
+        self.assertEqual(body["entry_mode"], "resume")
         self.assertEqual(body["entry_checkpoint_id"], "checkpoint-terminal-orchestrated-1")
         self.assertEqual(body["entry_stage"], "orchestrated")
+
+    def test_resume_workflow_execution_reuses_failed_execution(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201)
+
+        self._seed_workflow_attempt(
+            workflow_id="workflow-terminal-resume-1",
+            run_id="run-terminal-resume-1",
+            issue_key="TP-1001R",
+            issue_summary="Terminal workflow resume",
+            workflow_status="failed",
+            run_status="failed",
+            checkpoint_id="checkpoint-terminal-resume-1",
+            checkpoint_kind="execution",
+        )
+
+        response = self.client.post(
+            "/api/admin/workflows/exec-run-terminal-resume-1/resume",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 201, response.text)
+        body = response.json()
+        self.assertEqual(body["workflow_id"], "workflow-terminal-resume-1")
+        self.assertEqual(body["attempt_number"], 2)
+        self.assertEqual(body["entry_mode"], "resume")
+        self.assertEqual(body["entry_checkpoint_id"], "checkpoint-terminal-resume-1")
+
+    def test_resume_workflow_execution_rejects_completed_execution(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201)
+
+        self._seed_workflow_attempt(
+            workflow_id="workflow-completed-resume-rejected-1",
+            run_id="run-completed-resume-rejected-1",
+            issue_key="TP-1001S",
+            issue_summary="Completed workflow",
+            workflow_status="succeeded",
+            run_status="succeeded",
+            checkpoint_id="checkpoint-completed-resume-rejected-1",
+            checkpoint_kind="execution",
+        )
+
+        response = self.client.post(
+            "/api/admin/workflows/exec-run-completed-resume-rejected-1/resume",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertEqual(response.json()["detail"], "Completed executions cannot be restarted.")
 
     def test_create_workflow_attempt_uses_workflow_type_backend_not_stale_execution_backend(self) -> None:
         payload = self._tenant_payload()

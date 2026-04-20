@@ -474,7 +474,8 @@ export function makeWorkflow(overrides: Partial<WorkflowRecord> = {}): WorkflowR
     retrying_steps: [],
     conditional_branches_taken: ["fresh"],
     conditional_branches_available: ["fresh", "restart", "resume"],
-    available_actions: [],
+    can_resume: false,
+    resume_unavailable_reason: "Completed executions cannot be restarted.",
     links: [],
     operations: [
       {
@@ -884,7 +885,7 @@ export async function mockTenantWorkflowApis(
     projects?: ProjectRecord[];
     workflows: WorkflowRecord[];
     nextAttemptResponse?: RunRecord;
-    onCreateAttempt?: (payload: WorkflowAttemptCreatePayload) => void;
+    onResumeExecution?: () => void;
     onRetryOperation?: (payload: { workflowId: string; operationId: string }) => void;
     retriedWorkflowResponse?: WorkflowRecord;
   },
@@ -1023,10 +1024,9 @@ export async function mockTenantWorkflowApis(
     },
     {
       method: "POST",
-      pathname: /^\/api\/bff\/api\/admin\/workflows\/[^/]+\/attempts$/,
+      pathname: /^\/api\/bff\/api\/admin\/workflows\/[^/]+\/resume$/,
       handler: async (route) => {
-        const payload = JSON.parse(route.request().postData() ?? "{}") as WorkflowAttemptCreatePayload;
-        options.onCreateAttempt?.(payload);
+        options.onResumeExecution?.();
         await fulfillJson(route, nextRun);
       },
     },

@@ -11,10 +11,9 @@ import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
-  createWorkflowAttempt,
   getWorkflow,
+  resumeWorkflowExecution,
   retryWorkflowOperation,
-  type WorkflowActionRecord,
   type WorkflowOperationRecord,
   type WorkflowRecord,
 } from "@/lib/api";
@@ -41,10 +40,6 @@ function attemptStatusDetail(attempt: ReturnType<typeof latestAttempt>) {
   return attempt.status_detail?.trim() || null;
 }
 
-function actionSummary(action: WorkflowActionRecord): string {
-  return action.detail?.trim() || `${action.mode} execution`;
-}
-
 function impactLabel(required?: boolean): string {
   return required === false ? "Supporting" : "Must finish";
 }
@@ -61,7 +56,6 @@ export default function TenantExecutionDetailPage() {
   const [retrying, setRetrying] = useState(false);
   const [retryingOperationId, setRetryingOperationId] = useState<string | null>(null);
   const [statusLine, setStatusLine] = useState("");
-  const [selectedActionKey, setSelectedActionKey] = useState<string>("");
   const [activeTab, setActiveTab] = useState<"overview" | "step-recovery" | "execution-path">("overview");
   const [linksMenuOpen, setLinksMenuOpen] = useState(false);
 
@@ -71,16 +65,10 @@ export default function TenantExecutionDetailPage() {
     try {
       const payload = await getWorkflow(credentials, executionId);
       setWorkflow(payload);
-      setSelectedActionKey((current) =>
-        current && payload.available_actions.some((action) => action.action_key === current)
-          ? current
-          : (payload.available_actions[0]?.action_key ?? ""),
-      );
       setStatusLine("");
     } catch (error) {
       setStatusLine(`Failed to load execution: ${(error as Error).message}`);
       setWorkflow(null);
-      setSelectedActionKey("");
     } finally {
       setLoading(false);
     }
@@ -91,10 +79,6 @@ export default function TenantExecutionDetailPage() {
   }, [ready, credentials, loadWorkflow]);
 
   const hasRetryableAttempt = useMemo(() => (workflow?.operations ?? []).some((operation) => operation.can_retry), [workflow?.operations]);
-  const selectedAction = useMemo(
-    () => workflow?.available_actions.find((action) => action.action_key === selectedActionKey) ?? workflow?.available_actions[0] ?? null,
-    [selectedActionKey, workflow?.available_actions],
-  );
   const flowNodes = useMemo(
     () =>
       (workflow?.operations ?? []).map((operation) => {
@@ -115,20 +99,17 @@ export default function TenantExecutionDetailPage() {
     if (!credentials || !workflow) {
       return;
     }
-    if (!selectedAction) {
-      setStatusLine("No execution action is available.");
+    if (!workflow.can_resume) {
+      setStatusLine(workflow.resume_unavailable_reason?.trim() || "Execution cannot be resumed.");
       return;
     }
     setRetrying(true);
     try {
-      const nextRun = await createWorkflowAttempt(credentials, workflow.execution_id, {
-        mode: selectedAction.mode as "fresh" | "restart" | "resume",
-        checkpoint_kind: selectedAction.checkpoint_kind as "pm" | "execution" | undefined,
-      });
-      setStatusLine(`${selectedAction.label} queued as run ${nextRun.run_id}. Redirecting to run detail.`);
+      const nextRun = await resumeWorkflowExecution(credentials, workflow.execution_id);
+      setStatusLine(`Resume execution queued as run ${nextRun.run_id}. Redirecting to run detail.`);
       router.push(`/${encodeURIComponent(tenantId)}/runs/${encodeURIComponent(nextRun.run_id)}`);
     } catch (error) {
-      setStatusLine(`Failed to ${selectedAction.label.toLowerCase()}: ${(error as Error).message}`);
+      setStatusLine(`Failed to resume execution: ${(error as Error).message}`);
     } finally {
       setRetrying(false);
     }
@@ -213,24 +194,11 @@ export default function TenantExecutionDetailPage() {
               ) : null}
             </div>
           ) : null}
-          {workflow?.available_actions?.length ? (
-            <>
-              <select
-                className="h-8 rounded-md border border-input bg-background px-3 text-sm"
-                value={selectedAction?.action_key ?? ""}
-                onChange={(event) => setSelectedActionKey(event.target.value)}
-              >
-                {workflow.available_actions.map((action) => (
-                  <option key={action.action_key} value={action.action_key}>
-                    {action.label}
-                  </option>
-                ))}
-              </select>
-              <Button size="sm" className="h-8" onClick={() => void handleWorkflowAction()} disabled={!workflow || retrying || !selectedAction}>
-                <RefreshCw className={cn("mr-1.5 h-3.5 w-3.5", retrying && "animate-spin")} />
-                {selectedAction?.label ?? "Start action"}
-              </Button>
-            </>
+          {workflow ? (
+            <Button size="sm" className="h-8" onClick={() => void handleWorkflowAction()} disabled={retrying || !workflow.can_resume}>
+              <RefreshCw className={cn("mr-1.5 h-3.5 w-3.5", retrying && "animate-spin")} />
+              Resume execution
+            </Button>
           ) : null}
         </div>
       </div>
@@ -266,9 +234,11 @@ export default function TenantExecutionDetailPage() {
             </div>
             <div className="rounded-2xl border bg-background p-4">
               <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Next action</p>
-              <p className="mt-2 text-sm font-semibold">{workflow.next_step?.trim() || selectedAction?.label || "—"}</p>
+              <p className="mt-2 text-sm font-semibold">{workflow.next_step?.trim() || (workflow.can_resume ? "Resume execution" : "—")}</p>
               <p className="mt-1 text-xs text-muted-foreground">
-                {selectedAction ? actionSummary(selectedAction) : `${(workflow.operations ?? []).filter((operation) => operation.status === "failed").length} failed operation${(workflow.operations ?? []).filter((operation) => operation.status === "failed").length === 1 ? "" : "s"}`}
+                {workflow.can_resume
+                  ? "Reuse this execution and rerun from the latest resumable state."
+                  : workflow.resume_unavailable_reason?.trim() || `${(workflow.operations ?? []).filter((operation) => operation.status === "failed").length} failed operation${(workflow.operations ?? []).filter((operation) => operation.status === "failed").length === 1 ? "" : "s"}`}
               </p>
             </div>
             <div className="rounded-2xl border bg-background p-4">
@@ -326,7 +296,9 @@ export default function TenantExecutionDetailPage() {
                   </div>
                   <div>
                     <p className="font-medium">Available recovery</p>
-                    <p className="text-muted-foreground">{hasRetryableAttempt ? "Retry failed step" : selectedAction?.label || "—"}</p>
+                    <p className="text-muted-foreground">
+                      {hasRetryableAttempt ? "Retry failed step" : workflow.can_resume ? "Resume execution" : "—"}
+                    </p>
                   </div>
                 </div>
               </div>

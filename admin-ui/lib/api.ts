@@ -700,7 +700,8 @@ export type WorkflowRecord = {
   retrying_steps: string[];
   conditional_branches_taken: string[];
   conditional_branches_available: string[];
-  available_actions: WorkflowActionRecord[];
+  can_resume: boolean;
+  resume_unavailable_reason: string | null;
   links: WorkflowLinkRecord[];
   operations: WorkflowOperationRecord[];
   runs: RunRecord[];
@@ -812,14 +813,6 @@ export type WorkflowStatePathEntryRecord = {
   label: string;
   status: string;
   recorded_at: string | null;
-  detail: string | null;
-};
-
-export type WorkflowActionRecord = {
-  action_key: string;
-  label: string;
-  mode: string;
-  checkpoint_kind: string | null;
   detail: string | null;
 };
 
@@ -2623,6 +2616,15 @@ export function createWorkflowAttempt(
   return request<RunRecord>(credentials, `/api/admin/workflows/${encodeURIComponent(executionId)}/attempts`, {
     method: "POST",
     body: JSON.stringify(payload)
+  });
+}
+
+export function resumeWorkflowExecution(
+  credentials: Credentials,
+  executionId: string
+): Promise<RunRecord> {
+  return request<RunRecord>(credentials, `/api/admin/workflows/${encodeURIComponent(executionId)}/resume`, {
+    method: "POST",
   });
 }
 
