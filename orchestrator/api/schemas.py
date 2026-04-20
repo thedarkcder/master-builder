@@ -1147,14 +1147,6 @@ class WorkflowStatePathEntryRead(BaseModel):
     detail: str | None = None
 
 
-class WorkflowActionRead(BaseModel):
-    action_key: str
-    label: str
-    mode: str
-    checkpoint_kind: str | None = None
-    detail: str | None = None
-
-
 class WorkflowLinkRead(BaseModel):
     kind: str
     label: str
@@ -1194,7 +1186,8 @@ class WorkflowRead(BaseModel):
     retrying_steps: list[str] = Field(default_factory=list)
     conditional_branches_taken: list[str] = Field(default_factory=list)
     conditional_branches_available: list[str] = Field(default_factory=list)
-    available_actions: list[WorkflowActionRead] = Field(default_factory=list)
+    can_resume: bool = False
+    resume_unavailable_reason: str | None = None
     links: list[WorkflowLinkRead] = Field(default_factory=list)
     operations: list[WorkflowOperationRead] = Field(default_factory=list)
     runs: list[RunRead] = Field(default_factory=list)

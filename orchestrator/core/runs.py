@@ -623,7 +623,7 @@ def _enqueue_attempt_for_workflow(
             reason=EnqueueFailureReason.RUN_ALREADY_ACTIVE,
             run=active_run,
         )
-    if is_workflow_terminal(workflow.status):
+    if is_workflow_terminal(workflow.status) and str(bootstrap.entry_mode or "").strip().lower() != "resume":
         raise RunStateTransitionError(
             f"Workflow {workflow_id} is terminal; create a new workflow execution instead of reusing it"
         )

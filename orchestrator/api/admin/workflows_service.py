@@ -9,7 +9,6 @@ from sqlalchemy.exc import IntegrityError
 
 from orchestrator.api.admin.schema_mappers import workflow_operation_to_schema
 from orchestrator.api.schemas import (
-    WorkflowActionRead,
     WorkflowExecutionPreviewRead,
     WorkflowLinkRead,
     WorkflowOperationRead,
@@ -183,6 +182,18 @@ def _latest_run_for_workflow(*, session, workflow_id: str) -> Run | None:  # noq
         select(Run)
         .where(Run.workflow_id == workflow_id)
         .order_by(desc(Run.attempt_number))
+        .limit(1)
+    ).scalar_one_or_none()
+
+
+def _latest_resumable_checkpoint(*, session, workflow_id: str) -> WorkflowCheckpoint | None:  # noqa: ANN001
+    return session.execute(
+        select(WorkflowCheckpoint)
+        .where(
+            WorkflowCheckpoint.workflow_id == workflow_id,
+            WorkflowCheckpoint.checkpoint_kind.in_(("pm", "execution", "orchestrated")),
+        )
+        .order_by(desc(WorkflowCheckpoint.created_at))
         .limit(1)
     ).scalar_one_or_none()
 
@@ -497,40 +508,22 @@ def _branch_sets(*, runs: list[Run]) -> tuple[list[str], list[str]]:
     return taken, available
 
 
-def _available_actions(
+def _resume_execution_state(
     *,
     workflow: WorkflowExecution,
-    workflow_runs: list[Run],
     checkpoint_kinds: list[str],
-) -> list[WorkflowActionRead]:
-    actions: list[WorkflowActionRead] = []
+) -> tuple[bool, str | None]:
+    normalized_status = str(workflow.status or "").strip().lower()
+    if normalized_status == "waiting_for_input":
+        return False, "Waiting for human input."
+    if normalized_status in {"succeeded", "completed", "cancelled"}:
+        return False, "Completed executions cannot be restarted."
+    if normalized_status not in {"running", "failed"}:
+        return False, "Execution is not resumable."
     normalized_checkpoint_kinds = {str(kind or "").strip().lower() for kind in checkpoint_kinds if str(kind or "").strip()}
-    for mode in ATTEMPT_ENTRY_MODES:
-        policy = attempt_creation_policy(workflow_status=workflow.status, mode=mode)
-        if not policy.allowed:
-            continue
-        checkpoint_kind = None
-        detail = None
-        if mode in {"restart", "resume"}:
-            if "pm" in normalized_checkpoint_kinds:
-                checkpoint_kind = "pm"
-            elif normalized_checkpoint_kinds.intersection({"execution", "orchestrated"}):
-                checkpoint_kind = "execution"
-            else:
-                continue
-            detail = "Resume from the latest compatible checkpoint." if mode == "resume" else "Create a new execution from the latest checkpoint."
-        else:
-            detail = "Start a fresh execution from the workflow issue context."
-        actions.append(
-            WorkflowActionRead(
-                action_key=f"workflow:{mode}",
-                label=f"{mode.replace('_', ' ').title()} execution",
-                mode=mode,
-                checkpoint_kind=checkpoint_kind,
-                detail=detail,
-            )
-        )
-    return actions
+    if not normalized_checkpoint_kinds.intersection({"pm", "execution", "orchestrated"}):
+        return False, "No resumable execution state is available."
+    return True, None
 
 
 def _workflow_links(
@@ -754,6 +747,10 @@ def _workflow_schema(
     project = session.get(Project, workflow.project_id) if str(workflow.project_id or "").strip() else None
     followup_contexts = _active_followup_contexts(session=session, tenant_id=workflow.tenant_id, issue_key=workflow.issue_key)
     conditional_branches_taken, conditional_branches_available = _branch_sets(runs=workflow_runs)
+    can_resume, resume_unavailable_reason = _resume_execution_state(
+        workflow=workflow,
+        checkpoint_kinds=checkpoint_kinds,
+    )
     return workflow_to_schema_fn(
         workflow,
         runs=[run_to_schema_fn(run) for run in workflow_runs],
@@ -770,11 +767,8 @@ def _workflow_schema(
         retrying_steps=retrying_steps,
         conditional_branches_taken=conditional_branches_taken,
         conditional_branches_available=conditional_branches_available,
-        available_actions=_available_actions(
-            workflow=workflow,
-            workflow_runs=workflow_runs,
-            checkpoint_kinds=checkpoint_kinds,
-        ),
+        can_resume=can_resume,
+        resume_unavailable_reason=resume_unavailable_reason,
         links=_workflow_links(
             session=session,
             workflow=workflow,
@@ -1252,6 +1246,137 @@ def create_workflow_attempt(
                     "A queued or in-progress workflow already exists for this issue "
                     "and dedupe scope. Resume the active workflow instead."
                 ),
+            ) from error
+        raise
+    session.refresh(enqueue_result.run)
+    return run_to_schema_fn(enqueue_result.run)
+
+
+def resume_workflow_execution(
+    *,
+    session,
+    execution_id: str,
+    tenant_model,
+    run_to_schema_fn,
+):  # noqa: ANN001
+    workflow = _workflow_by_execution_id(session=session, execution_id=execution_id)
+    if workflow is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow not found")
+
+    _reconcile_workflow_status_with_active_attempt(session=session, workflow=workflow)
+    pending_request = _pending_input_request(session=session, workflow_id=workflow.workflow_id)
+    checkpoint_kinds = _workflow_checkpoint_kinds(session=session, workflow_id=workflow.workflow_id)
+    can_resume, resume_unavailable_reason = _resume_execution_state(
+        workflow=workflow,
+        checkpoint_kinds=checkpoint_kinds,
+    )
+    if not can_resume:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=resume_unavailable_reason or "Execution is not resumable",
+        )
+    if pending_request is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Waiting for human input.")
+
+    selected_checkpoint = _latest_resumable_checkpoint(session=session, workflow_id=workflow.workflow_id)
+    if selected_checkpoint is None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="No resumable execution state is available.")
+
+    tenant = session.get(tenant_model, workflow.tenant_id)
+    if tenant is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found for workflow")
+
+    project = _resolve_project(session=session, workflow=workflow, selected_checkpoint=selected_checkpoint)
+    if project is None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="No active project mapping found for workflow")
+    if bool(getattr(project, "is_archived", False)):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Project {project.project_id} is archived")
+
+    source_run = _latest_run_for_workflow(session=session, workflow_id=workflow.workflow_id)
+    _cancel_open_input_requests(session=session, workflow_id=workflow.workflow_id)
+    workflow.latest_checkpoint_id = selected_checkpoint.checkpoint_id
+
+    try:
+        next_run_plan = _checkpoint_resume_plan(checkpoint=selected_checkpoint)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Selected run/checkpoint has an unsupported execution snapshot shape",
+        ) from exc
+    next_run_precheck_outcome = _resolve_precheck_outcome_for_admin_attempt(
+        source_run=source_run,
+        plan=next_run_plan,
+    )
+    next_run_required_worker_capability = _resolve_required_worker_capability_for_admin_attempt(
+        session=session,
+        workflow=workflow,
+        source_run=source_run,
+        plan=next_run_plan,
+    )
+    next_run_required_runtime_kinds = resolve_required_runtime_kinds_for_workflow(
+        session=session,
+        settings=get_settings(),
+        tenant_id=workflow.tenant_id,
+        project_id=project.project_id,
+    )
+    next_run_pr_url = _resolve_pr_url_for_admin_attempt(
+        workflow=workflow,
+        source_run=source_run,
+        plan=next_run_plan,
+    )
+    workflow.pr_url = next_run_pr_url
+
+    runtime = build_workflow_runtime(
+        session=session,
+        settings=get_settings(),
+        process_claimed_run_fn=None,
+        build_runner_fn=None,
+        runtime_kwargs_fn=None,
+    )
+    try:
+        enqueue_result = runtime.create_attempt(
+            workflow_id=workflow.workflow_id,
+            bootstrap=RunBootstrap(
+                workflow_id=workflow.workflow_id,
+                parent_run_id=selected_checkpoint.run_id,
+                entry_mode="resume",
+                entry_stage=selected_checkpoint.stage,
+                entry_checkpoint_id=selected_checkpoint.checkpoint_id,
+                plan=next_run_plan,
+                branch=workflow.branch,
+                pr_url=next_run_pr_url,
+                precheck_outcome=next_run_precheck_outcome,
+                required_worker_capability=next_run_required_worker_capability,
+                required_runtime_kinds_json=next_run_required_runtime_kinds,
+            ),
+            commit=False,
+        )
+    except IntegrityError as error:
+        session.rollback()
+        if _is_active_scope_unique_violation(error):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Execution already has an active attempt.",
+            ) from error
+        raise
+    except RunStateTransitionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+    if not enqueue_result.enqueued:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Execution already has an active attempt.",
+        )
+    try:
+        session.commit()
+    except IntegrityError as error:
+        session.rollback()
+        if _is_active_scope_unique_violation(error):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Execution already has an active attempt.",
             ) from error
         raise
     session.refresh(enqueue_result.run)

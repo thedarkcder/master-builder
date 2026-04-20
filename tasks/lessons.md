@@ -189,6 +189,7 @@
 - Do not duplicate nested remediation data into flattened top-level API fields “for convenience.” Keep one authoritative payload shape and make consumers read that directly.
 - When Next.js local auth routes hang while the dev server warns about an SWC mismatch, treat it as a local dev-runtime problem first. Reset the local install/runtime and prefer a stable webpack dev server default over changing auth route code to compensate.
 - For admin workflow UX, do not surface raw engine internals just because they exist in the backend model. Product-facing workflow pages should emphasize workflow-level policy, current execution state, next action, and retryability, with constrained inputs and minimal repeated text.
+- Do not carry low-level lineage-management concepts like `fresh`, `restart`, checkpoint kinds, or action selectors into the execution detail surface. If the product rule is “resume this execution or don’t,” encode that directly in the execution API and page contract instead of exposing generic attempt machinery.
 
 2026-04-14
 
