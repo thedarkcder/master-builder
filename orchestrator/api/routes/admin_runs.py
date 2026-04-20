@@ -4,6 +4,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestrator.api.admin.codex_logs_service import (
@@ -210,36 +211,40 @@ def update_workflow_type_detail(
     )
 
 
-@router.get("/workflows/{workflow_id}", response_model=WorkflowRead)
+@router.get("/workflows/{execution_id}", response_model=WorkflowRead)
 def get_workflow(
-    workflow_id: str,
+    execution_id: str,
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> WorkflowRead:
     if not principal.is_platform_super_admin:
-        workflow = session.get(WorkflowExecution, workflow_id)
+        workflow = session.execute(
+            select(WorkflowExecution)
+            .where(WorkflowExecution.execution_id == execution_id)
+            .limit(1)
+        ).scalar_one_or_none()
         if workflow is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow not found")
         require_tenant_workspace_access(principal=principal, tenant_id=workflow.tenant_id)
     return get_workflow_impl(
         session=session,
-        workflow_id=workflow_id,
+        execution_id=execution_id,
         workflow_to_schema_fn=workflow_to_schema,
         run_to_schema_fn=run_to_schema,
         integration_router=workflow_integration_router,
     )
 
 
-@router.post("/workflows/{workflow_id}/attempts", response_model=RunRead, status_code=status.HTTP_201_CREATED)
+@router.post("/workflows/{execution_id}/attempts", response_model=RunRead, status_code=status.HTTP_201_CREATED)
 def create_workflow_attempt(
-    workflow_id: str,
+    execution_id: str,
     payload: WorkflowAttemptCreateRequest,
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> RunRead:
     return create_workflow_attempt_impl(
         session=session,
-        workflow_id=workflow_id,
+        execution_id=execution_id,
         mode=payload.mode,
         checkpoint_kind=payload.checkpoint_kind,
         tenant_model=Tenant,
@@ -247,16 +252,16 @@ def create_workflow_attempt(
     )
 
 
-@router.post("/workflows/{workflow_id}/operations/{operation_id}/retry", response_model=WorkflowRead)
+@router.post("/workflows/{execution_id}/operations/{operation_id}/retry", response_model=WorkflowRead)
 def retry_workflow_operation(
-    workflow_id: str,
+    execution_id: str,
     operation_id: str,
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> WorkflowRead:
     return retry_workflow_operation_impl(
         session=session,
-        workflow_id=workflow_id,
+        execution_id=execution_id,
         operation_id=operation_id,
         workflow_to_schema_fn=workflow_to_schema,
         run_to_schema_fn=run_to_schema,

@@ -276,11 +276,11 @@ export default function TenantWorkflowTypeDetailPage() {
                     </TableHeader>
                     <TableBody>
                       {workflowType.recent_executions.map((execution) => (
-                        <TableRow key={execution.workflow_id}>
+                        <TableRow key={execution.execution_id}>
                           <TableCell className="font-medium">
                             <Link
                               className="text-primary hover:underline"
-                              href={`/${encodeURIComponent(tenantId)}/executions/${encodeURIComponent(execution.workflow_id)}`}
+                              href={`/${encodeURIComponent(tenantId)}/executions/${encodeURIComponent(execution.execution_id)}`}
                             >
                               {execution.issue_summary?.trim() || execution.issue_key}
                             </Link>

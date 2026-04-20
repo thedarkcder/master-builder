@@ -401,6 +401,7 @@ export function makeRun(overrides: Partial<RunRecord> = {}): RunRecord {
 export function makeWorkflow(overrides: Partial<WorkflowRecord> = {}): WorkflowRecord {
   const baselineRun = makeRun();
   return {
+    execution_id: `exec-${baselineRun.workflow_id}`,
     workflow_id: baselineRun.workflow_id,
     tenant_id: baselineRun.tenant_id,
     project_id: baselineRun.project_id,
@@ -910,6 +911,7 @@ export async function mockTenantWorkflowApis(
     lifecycle: primaryWorkflow.workflow_type.lifecycle,
     operations: primaryWorkflow.workflow_type.operations,
     recent_executions: options.workflows.map((workflow) => ({
+      execution_id: workflow.execution_id,
       workflow_id: workflow.workflow_id,
       issue_key: workflow.issue_key,
       issue_summary: workflow.issue_summary,
@@ -976,13 +978,14 @@ export async function mockTenantWorkflowApis(
       method: "GET",
       pathname: /^\/api\/bff\/api\/admin\/workflows\/[^/]+$/,
       handler: (route, url) => {
-        const workflowId = decodeURIComponent(url.pathname.split("/").at(-1) ?? "");
-        if (workflowId === currentWorkflow.workflow_id) {
+        const executionId = decodeURIComponent(url.pathname.split("/").at(-1) ?? "");
+        if (executionId === currentWorkflow.execution_id) {
           return fulfillJson(route, currentWorkflow);
         }
-        if (workflowId === nextRun.workflow_id) {
+        if (executionId === `exec-${nextRun.workflow_id}`) {
           return fulfillJson(route, {
             ...primaryWorkflow,
+            execution_id: `exec-${nextRun.workflow_id}`,
             workflow_id: nextRun.workflow_id,
             status: nextRun.status,
             active_run_id: nextRun.run_id,
@@ -995,14 +998,14 @@ export async function mockTenantWorkflowApis(
             finished_at: nextRun.finished_at,
           } satisfies WorkflowRecord);
         }
-        const match = options.workflows.find((workflow) => workflow.workflow_id === workflowId);
+        const match = options.workflows.find((workflow) => workflow.execution_id === executionId);
         if (match) {
           return fulfillJson(route, match);
         }
         return route.fulfill({
           status: 404,
           contentType: "application/json",
-          body: JSON.stringify({ detail: `Unknown workflow ${workflowId}` }),
+          body: JSON.stringify({ detail: `Unknown workflow ${executionId}` }),
         });
       },
     },
@@ -1011,9 +1014,9 @@ export async function mockTenantWorkflowApis(
       pathname: /^\/api\/bff\/api\/admin\/workflows\/[^/]+\/operations\/[^/]+\/retry$/,
       handler: async (route, url) => {
         const segments = url.pathname.split("/");
-        const workflowId = decodeURIComponent(segments.at(-4) ?? "");
+        const executionId = decodeURIComponent(segments.at(-4) ?? "");
         const operationId = decodeURIComponent(segments.at(-2) ?? "");
-        options.onRetryOperation?.({ workflowId, operationId });
+        options.onRetryOperation?.({ workflowId: executionId, operationId });
         currentWorkflow = options.retriedWorkflowResponse ?? currentWorkflow;
         await fulfillJson(route, currentWorkflow);
       },

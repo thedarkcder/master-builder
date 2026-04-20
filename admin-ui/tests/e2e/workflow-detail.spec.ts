@@ -11,6 +11,7 @@ test("shows workflow definitions and retries a failed execution operation", asyn
   await seedAdminSession(page);
 
   const workflow = makeWorkflow({
+    execution_id: "wfexec-mab-215",
     workflow_id: "parent_planning:MAB-215",
     tenant_id: "route25",
     project_id: "route25-default",
@@ -187,7 +188,7 @@ test("shows workflow definitions and retries a failed execution operation", asyn
 
   await page.getByRole("link", { name: "Identity and authorization v1 contract" }).click();
 
-  await expect(page).toHaveURL(/\/route25\/executions\/parent_planning%3AMAB-215$/);
+  await expect(page).toHaveURL(/\/route25\/executions\/wfexec-mab-215$/);
   await expect(page.getByText("Workflow type")).toBeVisible();
   await expect(page.getByText("Parent Planning")).toBeVisible();
   await page.getByRole("button", { name: "Step recovery" }).click();
@@ -200,11 +201,12 @@ test("shows workflow definitions and retries a failed execution operation", asyn
   await retryStepButton.click();
 
   expect(retriedOperation).toEqual({
-    workflowId: "parent_planning:MAB-215",
+    workflowId: "wfexec-mab-215",
     operationId: "operation-jira-child-fanout",
   });
   await expect(page.getByText("Attempt 2")).toBeVisible();
   await expect(page.getByText("running").last()).toBeVisible();
+  await page.getByRole("button", { name: "Links" }).click();
   await expect(page.getByText("Create tenant assurance boundary")).toBeVisible();
   await expect(page.getByText("MAB-300")).toBeVisible();
 

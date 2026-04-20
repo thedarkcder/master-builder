@@ -1,9 +1,17 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from uuid import uuid4
 
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.storage.models import Run, RunHumanInputRequest, WorkflowCheckpoint, WorkflowExecution
+
+
+def _public_execution_id(*, run_id: str) -> str:
+    normalized_run_id = str(run_id or "").strip()
+    if normalized_run_id:
+        return f"exec-{normalized_run_id}"
+    return uuid4().hex
 
 
 def make_run(
@@ -96,6 +104,7 @@ def add_run_with_workflow(
     active_run_id = run.run_id if effective_workflow_status in {"queued", "dispatching", "running", "waiting_for_input"} else None
     workflow = WorkflowExecution(
         workflow_id=run.workflow_id,
+        execution_id=_public_execution_id(run_id=run.run_id),
         workflow_type_key=workflow_type_key,
         tenant_id=run.tenant_id,
         project_id=run.project_id,
@@ -182,6 +191,7 @@ def add_workflow_attempt(
     )
     workflow = WorkflowExecution(
         workflow_id=normalized_workflow_id,
+        execution_id=_public_execution_id(run_id=run_id),
         workflow_type_key=workflow_type_key,
         tenant_id=tenant_id,
         project_id=project_id,

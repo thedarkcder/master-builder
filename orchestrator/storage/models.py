@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from uuid import uuid4
 from sqlalchemy import (
     BigInteger,
     Boolean,
@@ -455,6 +456,13 @@ class WorkflowExecution(Base):
     )
 
     workflow_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    execution_id: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+        unique=True,
+        index=True,
+        default=lambda: uuid4().hex,
+    )
     workflow_type_key: Mapped[str] = mapped_column(
         String(64),
         ForeignKey("workflow_types.workflow_type_key", ondelete="RESTRICT"),
