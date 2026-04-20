@@ -722,7 +722,6 @@ export type WorkflowRetryPolicyRecord = {
   initial_interval_seconds: number;
   max_interval_seconds: number;
   backoff_coefficient: number;
-  non_retryable_error_categories: string[];
 };
 
 export type WorkflowTypeRecord = {

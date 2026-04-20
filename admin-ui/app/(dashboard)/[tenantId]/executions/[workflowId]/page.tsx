@@ -90,6 +90,7 @@ export default function TenantExecutionDetailPage() {
           label: operation.label?.trim() || operation.operation_type,
           status: operation.status,
           impact: impactLabel(operation.required),
+          completionRequired: operation.required,
           detail:
             attempt?.error_message?.trim()
             || operation.summary?.trim()

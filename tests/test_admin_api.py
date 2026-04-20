@@ -1479,7 +1479,6 @@ class AdminApiTests(AdminApiTestHarness):
                     "initial_interval_seconds": 45,
                     "max_interval_seconds": 2400,
                     "backoff_coefficient": 2.5,
-                    "non_retryable_error_categories": ["authorization_failed"],
                 },
             },
             auth=("admin", "secret"),

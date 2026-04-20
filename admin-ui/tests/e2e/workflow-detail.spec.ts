@@ -29,7 +29,6 @@ test("shows workflow definitions and retries a failed execution operation", asyn
         initial_interval_seconds: 60,
         max_interval_seconds: 1800,
         backoff_coefficient: 2,
-        non_retryable_error_categories: ["content_limit", "contract_invalid", "authorization_failed"],
       },
       capabilities: {
         child_issue_links: true,

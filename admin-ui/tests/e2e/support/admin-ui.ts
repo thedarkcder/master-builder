@@ -422,7 +422,6 @@ export function makeWorkflow(overrides: Partial<WorkflowRecord> = {}): WorkflowR
         initial_interval_seconds: 30,
         max_interval_seconds: 900,
         backoff_coefficient: 2,
-        non_retryable_error_categories: ["contract_invalid", "authorization_failed"],
       },
       operations: [
         {
