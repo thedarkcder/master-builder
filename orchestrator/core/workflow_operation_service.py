@@ -135,11 +135,11 @@ def fail_workflow_operation(
     attempt: WorkflowOperationAttempt,
     category: str,
     message: str,
-    retryable: bool,
     next_retry_at: datetime | None = None,
 ) -> None:
     now = _now()
-    scheduled_for_retry = retryable and next_retry_at is not None
+    retryable = True
+    scheduled_for_retry = next_retry_at is not None
     operation.status = OPERATION_STATUS_RETRYING if scheduled_for_retry else OPERATION_STATUS_FAILED
     operation.summary = message
     operation.finished_at = None if scheduled_for_retry else now

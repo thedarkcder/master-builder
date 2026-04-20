@@ -59,16 +59,16 @@ class _OperationExecutionContext:
     tenant: Tenant
     project: Project
 
-def _classify_operation_failure(*, error: Exception) -> tuple[str, bool]:
+def _classify_operation_failure(*, error: Exception) -> str:
     message = str(error or "").strip()
     lowered = message.lower()
     if "CONTENT_LIMIT_EXCEEDED" in message:
-        return "content_limit", True
+        return "content_limit"
     if "429" in message or "rate limit" in lowered:
-        return "rate_limited", True
+        return "rate_limited"
     if "502" in message or "503" in message or "504" in message or "timed out" in lowered:
-        return "transient_external_failure", True
-    return "external_failure", False
+        return "transient_external_failure"
+    return "external_failure"
 
 
 def _workflow_operation_retry_executor_reasons() -> dict[str, str]:
@@ -131,7 +131,7 @@ def _execute_jira_parent_update(
             open_questions=[],
         )
     except Exception as exc:  # noqa: BLE001
-        category, retryable = _classify_operation_failure(error=exc)
+        category = _classify_operation_failure(error=exc)
         logger.exception(
             "workflow_operation_execution_failed workflow_id=%s operation_id=%s operation_type=%s error=%s",
             context.workflow.workflow_id,
@@ -145,7 +145,6 @@ def _execute_jira_parent_update(
             attempt=attempt,
             category=category,
             message=str(exc),
-            retryable=retryable,
         )
         mark_workflow_failed(workflow=context.workflow, message=str(exc), now=_now())
         return WorkflowOperationHandle(
@@ -233,7 +232,7 @@ def _execute_jira_child_fanout(
             planning_state=planning_result.planning_state,
         )
     except Exception as exc:  # noqa: BLE001
-        category, retryable = _classify_operation_failure(error=exc)
+        category = _classify_operation_failure(error=exc)
         logger.exception(
             "workflow_operation_execution_failed workflow_id=%s operation_id=%s operation_type=%s error=%s",
             context.workflow.workflow_id,
@@ -247,7 +246,6 @@ def _execute_jira_child_fanout(
             attempt=attempt,
             category=category,
             message=str(exc),
-            retryable=retryable,
         )
         mark_workflow_failed(workflow=context.workflow, message=str(exc), now=_now())
         return WorkflowOperationHandle(
@@ -268,7 +266,6 @@ def _execute_jira_child_fanout(
             attempt=attempt,
             category="missing_input",
             message=message,
-            retryable=False,
         )
         mark_workflow_failed(workflow=context.workflow, message=message, now=_now())
         return WorkflowOperationHandle(

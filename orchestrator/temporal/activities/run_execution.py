@@ -116,7 +116,6 @@ def execute_claimed_run_activity(payload: DevelopmentTeamRunWorkflowInput) -> De
                 attempt=attempt,
                 category="run_execution_failed",
                 message=str(exc),
-                retryable=False,
             )
             session.commit()
             raise
@@ -199,7 +198,6 @@ def resume_human_input_activity(payload: HumanInputResumeInput) -> DevelopmentTe
                 attempt=attempt,
                 category="human_input_resume_failed",
                 message=str(exc),
-                retryable=False,
             )
             session.commit()
             raise

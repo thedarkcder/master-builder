@@ -491,7 +491,7 @@ export function makeWorkflow(overrides: Partial<WorkflowRecord> = {}): WorkflowR
         target_ref: null,
         summary: null,
         can_retry: false,
-        retry_unavailable_reason: "Latest attempt is not marked retryable.",
+        retry_unavailable_reason: "Latest attempt is not in a failed state.",
         attempts: [],
       },
     ],

@@ -61,7 +61,64 @@ class MigrationTests(unittest.TestCase):
 
         duplicates = {revision_id: count for revision_id, count in Counter(revision_ids).items() if count > 1}
         self.assertEqual(duplicates, {})
-        self.assertEqual(script.get_heads(), ["20260420_0081"])
+        self.assertEqual(script.get_heads(), ["20260420_0083"])
+
+    def test_failed_attempt_retryability_backfill_marks_failed_attempts_retryable(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            database_url = f"sqlite:///{Path(tmpdir) / 'workflow-attempt-retryable.sqlite'}"
+            engine = create_engine(database_url)
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE workflow_operation_attempts (
+                            attempt_id VARCHAR PRIMARY KEY,
+                            operation_id VARCHAR NOT NULL,
+                            attempt_number INTEGER NOT NULL,
+                            status VARCHAR NOT NULL,
+                            retryable BOOLEAN NOT NULL DEFAULT 0
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO workflow_operation_attempts (
+                            attempt_id,
+                            operation_id,
+                            attempt_number,
+                            status,
+                            retryable
+                        ) VALUES
+                            ('attempt-failed', 'operation-1', 1, 'failed', 0),
+                            ('attempt-retrying', 'operation-1', 2, 'retrying', 0),
+                            ('attempt-running', 'operation-1', 3, 'running', 0),
+                            ('attempt-waiting', 'operation-1', 4, 'waiting_for_input', 0)
+                        """
+                    )
+                )
+                connection.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"))
+                connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('20260420_0082')"))
+
+            self._alembic_upgrade(database_url, "20260420_0083")
+
+            with engine.connect() as connection:
+                rows = connection.execute(
+                    text(
+                        """
+                        SELECT attempt_id, retryable
+                        FROM workflow_operation_attempts
+                        ORDER BY attempt_id
+                        """
+                    )
+                ).mappings().all()
+
+            retryable_by_attempt = {row["attempt_id"]: bool(row["retryable"]) for row in rows}
+            self.assertTrue(retryable_by_attempt["attempt-failed"])
+            self.assertTrue(retryable_by_attempt["attempt-retrying"])
+            self.assertFalse(retryable_by_attempt["attempt-running"])
+            self.assertFalse(retryable_by_attempt["attempt-waiting"])
 
     def test_workflow_execution_public_id_migration_backfills_unique_execution_ids(self) -> None:
         with TemporaryDirectory() as tmpdir:

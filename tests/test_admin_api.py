@@ -1640,7 +1640,7 @@ class AdminApiTests(AdminApiTestHarness):
                     status="failed",
                     error_category="content_limit",
                     error_message='Failed to seed Jira issues: Jira API request failed (400): {"errorMessages":["CONTENT_LIMIT_EXCEEDED"],"errors":{}}',
-                    retryable=True,
+                    retryable=False,
                     next_retry_at=None,
                     created_at=now,
                     started_at=now,
