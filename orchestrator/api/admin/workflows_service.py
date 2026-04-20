@@ -1132,7 +1132,8 @@ def create_workflow_attempt(
 
     now = _now()
     next_workflow = workflow
-    orchestration_backend = str(workflow.orchestration_backend).strip().lower()
+    workflow_type = get_workflow_type(session, workflow_type_key=workflow.workflow_type_key)
+    orchestration_backend = str(workflow_type.orchestration_backend).strip().lower()
     if not same_workflow:
         next_workflow = build_workflow_execution_for_attempt(
             workflow_id=str(uuid4()),

@@ -49,6 +49,7 @@ from orchestrator.storage.models import (
     WorkflowExecution,
     WorkflowOperation,
     WorkflowOperationAttempt,
+    WorkflowType,
     WorkerRuntimeAuthRequest,
     WorkerRuntimeState,
 )
@@ -1902,6 +1903,47 @@ class AdminApiTests(AdminApiTestHarness):
             self.assertEqual(workflow.source_workflow_id, "workflow-terminal-1")
             self.assertEqual(workflow.source_run_id, "run-terminal-1")
             self.assertEqual(workflow.status, "queued")
+
+    def test_create_workflow_attempt_uses_workflow_type_backend_not_stale_execution_backend(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201)
+
+        self._seed_workflow_attempt(
+            workflow_id="workflow-terminal-backend-1",
+            run_id="run-terminal-backend-1",
+            issue_key="TP-1001A",
+            issue_summary="Terminal workflow with stale backend",
+            workflow_status="failed",
+            run_status="failed",
+            checkpoint_id="checkpoint-terminal-backend-1",
+            checkpoint_kind="execution",
+        )
+
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            workflow = session.get(WorkflowExecution, "workflow-terminal-backend-1")
+            workflow_type = session.get(WorkflowType, "issue_execution")
+            assert workflow is not None
+            assert workflow_type is not None
+            workflow.orchestration_backend = "legacy"
+            workflow_type.orchestration_backend = "temporal"
+            session.commit()
+
+        response = self.client.post(
+            "/api/admin/workflows/workflow-terminal-backend-1/attempts",
+            json={"mode": "restart", "checkpoint_kind": "execution"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 201, response.text)
+        body = response.json()
+
+        with session_factory() as session:
+            next_workflow = session.get(WorkflowExecution, body["workflow_id"])
+            self.assertIsNotNone(next_workflow)
+            assert next_workflow is not None
+            self.assertEqual(next_workflow.orchestration_backend, "temporal")
 
     def test_create_workflow_attempt_repairs_stale_active_status_before_policy_check(self) -> None:
         payload = self._tenant_payload()
