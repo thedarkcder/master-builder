@@ -1448,6 +1448,8 @@ class AdminApiTests(AdminApiTestHarness):
         self.assertEqual(detail_body["operations"][0]["operation_type"], "run_attempt_execution")
         self.assertEqual(detail_body["orchestration_backend"], "temporal")
         self.assertEqual(detail_body["engine_config"]["temporal"]["workflow_name"], "DevelopmentTeamRunWorkflow")
+        self.assertEqual(detail_body["engine_config"]["temporal"]["workflow_execution_timeout_seconds"], 86400)
+        self.assertEqual(detail_body["engine_config"]["temporal"]["workflow_run_timeout_seconds"], 86400)
         self.assertIn("manual_retry_enabled", detail_body["operations"][0]["retry_policy_config"])
         self.assertEqual(detail_body["lifecycle"]["state_path_kind"], "run")
         self.assertIn("fresh", detail_body["lifecycle"]["execution_modes"])
@@ -1463,6 +1465,8 @@ class AdminApiTests(AdminApiTestHarness):
                     "temporal": {
                         "workflow_name": "DevelopmentTeamRunWorkflow",
                         "task_queue": "custom-queue",
+                        "workflow_execution_timeout_seconds": 5400,
+                        "workflow_run_timeout_seconds": 2700,
                         "activity_start_to_close_timeout_seconds": 3600,
                         "human_input_resume_timeout_seconds": 1800,
                     }
@@ -1511,6 +1515,8 @@ class AdminApiTests(AdminApiTestHarness):
         self.assertEqual(update_response.status_code, 200, update_response.text)
         updated_body = update_response.json()
         self.assertEqual(updated_body["engine_config"]["temporal"]["task_queue"], "custom-queue")
+        self.assertEqual(updated_body["engine_config"]["temporal"]["workflow_execution_timeout_seconds"], 5400)
+        self.assertEqual(updated_body["engine_config"]["temporal"]["workflow_run_timeout_seconds"], 2700)
         updated_operation = next(item for item in updated_body["operations"] if item["operation_type"] == "run_attempt_execution")
         self.assertEqual(updated_operation["retry_policy_config"]["max_attempts"], 7)
 

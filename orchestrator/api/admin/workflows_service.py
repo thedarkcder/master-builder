@@ -214,6 +214,8 @@ def _workflow_type_engine_config_read(*, workflow_type: WorkflowType) -> Workflo
         temporal=WorkflowTypeTemporalConfigRead(
             workflow_name=str(temporal.get("workflow_name") or "").strip(),
             task_queue=str(temporal.get("task_queue") or "").strip(),
+            workflow_execution_timeout_seconds=int(temporal.get("workflow_execution_timeout_seconds") or 0),
+            workflow_run_timeout_seconds=int(temporal.get("workflow_run_timeout_seconds") or 0),
             activity_start_to_close_timeout_seconds=int(temporal.get("activity_start_to_close_timeout_seconds") or 0),
             human_input_resume_timeout_seconds=int(temporal.get("human_input_resume_timeout_seconds") or 0),
         )

@@ -28,6 +28,8 @@ class DevelopmentTeamRunWorkflow:
         self._active_run_id: str | None = None
         self._pending_request_id: str | None = None
         self._last_error: str | None = None
+        self._activity_timeout_seconds: int = 7200
+        self._resume_timeout_seconds: int = 7200
 
     def _apply_result(self, result: DevelopmentTeamRunActivityResult) -> None:
         self._workflow_id = str(result.workflow_id or "").strip() or self._workflow_id
@@ -44,7 +46,7 @@ class DevelopmentTeamRunWorkflow:
         return await workflow.execute_activity(
             execute_claimed_run_activity,
             payload,
-            start_to_close_timeout=timedelta(hours=2),
+            start_to_close_timeout=timedelta(seconds=self._activity_timeout_seconds),
         )
 
     async def _resume_from_human_input(
@@ -54,7 +56,7 @@ class DevelopmentTeamRunWorkflow:
         return await workflow.execute_activity(
             resume_human_input_activity,
             payload,
-            start_to_close_timeout=timedelta(hours=2),
+            start_to_close_timeout=timedelta(seconds=self._resume_timeout_seconds),
         )
 
     @workflow.run
@@ -62,6 +64,8 @@ class DevelopmentTeamRunWorkflow:
         self._workflow_id = str(payload.workflow_id or "").strip()
         self._issue_key = str(payload.issue_key or "").strip()
         self._active_run_id = str(payload.run_id or "").strip()
+        self._activity_timeout_seconds = max(1, int(payload.activity_start_to_close_timeout_seconds or 0))
+        self._resume_timeout_seconds = max(1, int(payload.human_input_resume_timeout_seconds or 0))
         self._status = "dispatching"
         self._apply_result(await self._execute_initial_run(payload))
         while self._status == "waiting_for_input":

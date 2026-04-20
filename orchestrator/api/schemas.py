@@ -1071,6 +1071,8 @@ class WorkflowTypeOperationRead(BaseModel):
 class WorkflowTypeTemporalConfigRead(BaseModel):
     workflow_name: str
     task_queue: str
+    workflow_execution_timeout_seconds: int = Field(ge=1)
+    workflow_run_timeout_seconds: int = Field(ge=1)
     activity_start_to_close_timeout_seconds: int = Field(ge=1)
     human_input_resume_timeout_seconds: int = Field(ge=1)
 
@@ -1078,6 +1080,8 @@ class WorkflowTypeTemporalConfigRead(BaseModel):
 class WorkflowTypeTemporalConfigUpdate(BaseModel):
     workflow_name: str = Field(min_length=1)
     task_queue: str = Field(min_length=1)
+    workflow_execution_timeout_seconds: int = Field(ge=1)
+    workflow_run_timeout_seconds: int = Field(ge=1)
     activity_start_to_close_timeout_seconds: int = Field(ge=1)
     human_input_resume_timeout_seconds: int = Field(ge=1)
 

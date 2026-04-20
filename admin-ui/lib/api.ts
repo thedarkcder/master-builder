@@ -734,6 +734,8 @@ export type WorkflowTypeRecord = {
     temporal: {
       workflow_name: string;
       task_queue: string;
+      workflow_execution_timeout_seconds: number;
+      workflow_run_timeout_seconds: number;
       activity_start_to_close_timeout_seconds: number;
       human_input_resume_timeout_seconds: number;
     } | null;
@@ -788,6 +790,8 @@ export type WorkflowTypeDetailRecord = {
     temporal: {
       workflow_name: string;
       task_queue: string;
+      workflow_execution_timeout_seconds: number;
+      workflow_run_timeout_seconds: number;
       activity_start_to_close_timeout_seconds: number;
       human_input_resume_timeout_seconds: number;
     } | null;
@@ -821,6 +825,8 @@ export type WorkflowTypeUpdatePayload = {
     temporal: {
       workflow_name: string;
       task_queue: string;
+      workflow_execution_timeout_seconds: number;
+      workflow_run_timeout_seconds: number;
       activity_start_to_close_timeout_seconds: number;
       human_input_resume_timeout_seconds: number;
     } | null;

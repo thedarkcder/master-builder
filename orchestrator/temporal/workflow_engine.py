@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from dataclasses import dataclass
+from datetime import timedelta
 
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -21,6 +23,16 @@ try:  # pragma: no cover - exercised when temporal backend is enabled
     from temporalio.exceptions import WorkflowAlreadyStartedError
 except ImportError as exc:  # pragma: no cover - exercised when temporal backend is enabled
     raise RuntimeError("Temporal backend requires temporalio to be installed") from exc
+
+
+@dataclass(frozen=True)
+class TemporalWorkflowConfig:
+    workflow_defn: object
+    task_queue: str
+    workflow_execution_timeout_seconds: int
+    workflow_run_timeout_seconds: int
+    activity_start_to_close_timeout_seconds: int
+    human_input_resume_timeout_seconds: int
 
 
 def _temporal_workflow_handle_id(*, workflow_id: str) -> str:
@@ -50,7 +62,27 @@ def _run_sync(awaitable):  # noqa: ANN001, ANN201
     return result.get("value")
 
 
-def _temporal_config_for_workflow(*, session: Session, workflow: WorkflowExecution, settings: Settings) -> tuple[object, str]:
+def _require_positive_temporal_timeout(*, workflow_type_key: str, temporal: dict, field_name: str) -> int:
+    try:
+        value = int(temporal.get(field_name) or 0)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(
+            f"Workflow type {workflow_type_key} has invalid temporal engine config field {field_name}"
+        ) from exc
+    if value < 1:
+        raise RuntimeError(
+            f"Workflow type {workflow_type_key} is missing temporal engine config field {field_name}"
+        )
+    return value
+
+
+def _temporal_config_for_workflow(
+    *,
+    session: Session,
+    workflow: WorkflowExecution,
+    settings: Settings,
+) -> TemporalWorkflowConfig:
+    del settings
     workflow_type = get_workflow_type(session, workflow_type_key=workflow.workflow_type_key)
     backend = str(workflow_type.orchestration_backend or "").strip().lower()
     if backend != "temporal":
@@ -70,7 +102,30 @@ def _temporal_config_for_workflow(*, session: Session, workflow: WorkflowExecuti
             f"Workflow type {workflow_type.workflow_type_key} is missing temporal.engine_config.task_queue"
         )
     workflow_defn = resolve_temporal_workflow_definition(workflow_name=workflow_name)
-    return workflow_defn, task_queue
+    return TemporalWorkflowConfig(
+        workflow_defn=workflow_defn,
+        task_queue=task_queue,
+        workflow_execution_timeout_seconds=_require_positive_temporal_timeout(
+            workflow_type_key=workflow_type.workflow_type_key,
+            temporal=temporal,
+            field_name="workflow_execution_timeout_seconds",
+        ),
+        workflow_run_timeout_seconds=_require_positive_temporal_timeout(
+            workflow_type_key=workflow_type.workflow_type_key,
+            temporal=temporal,
+            field_name="workflow_run_timeout_seconds",
+        ),
+        activity_start_to_close_timeout_seconds=_require_positive_temporal_timeout(
+            workflow_type_key=workflow_type.workflow_type_key,
+            temporal=temporal,
+            field_name="activity_start_to_close_timeout_seconds",
+        ),
+        human_input_resume_timeout_seconds=_require_positive_temporal_timeout(
+            workflow_type_key=workflow_type.workflow_type_key,
+            temporal=temporal,
+            field_name="human_input_resume_timeout_seconds",
+        ),
+    )
 
 
 class TemporalWorkflowEngine:
@@ -96,7 +151,7 @@ class TemporalWorkflowEngine:
 
         async def _start() -> None:
             client = await connect_temporal_client(settings)
-            workflow_defn, task_queue = _temporal_config_for_workflow(session=session, workflow=workflow, settings=settings)
+            config = _temporal_config_for_workflow(session=session, workflow=workflow, settings=settings)
             payload = DevelopmentTeamRunWorkflowInput(
                 workflow_id=workflow.workflow_id,
                 run_id=run.run_id,
@@ -104,13 +159,19 @@ class TemporalWorkflowEngine:
                 tenant_id=run.tenant_id,
                 project_id=run.project_id,
                 issue_key=run.issue_key,
+                workflow_execution_timeout_seconds=config.workflow_execution_timeout_seconds,
+                workflow_run_timeout_seconds=config.workflow_run_timeout_seconds,
+                activity_start_to_close_timeout_seconds=config.activity_start_to_close_timeout_seconds,
+                human_input_resume_timeout_seconds=config.human_input_resume_timeout_seconds,
             )
             try:
                 await client.start_workflow(
-                    workflow_defn.run,
+                    config.workflow_defn.run,
                     payload,
                     id=_temporal_workflow_handle_id(workflow_id=workflow.workflow_id),
-                    task_queue=task_queue,
+                    task_queue=config.task_queue,
+                    execution_timeout=timedelta(seconds=config.workflow_execution_timeout_seconds),
+                    run_timeout=timedelta(seconds=config.workflow_run_timeout_seconds),
                 )
             except WorkflowAlreadyStartedError:
                 return
@@ -131,13 +192,13 @@ class TemporalWorkflowEngine:
 
         async def _resume() -> str | None:
             client = await connect_temporal_client(settings)
-            workflow_defn, _ = _temporal_config_for_workflow(session=session, workflow=workflow, settings=settings)
+            config = _temporal_config_for_workflow(session=session, workflow=workflow, settings=settings)
             handle = client.get_workflow_handle_for(
-                workflow_defn,
+                config.workflow_defn,
                 _temporal_workflow_handle_id(workflow_id=workflow.workflow_id),
             )
             return await handle.execute_update(
-                workflow_defn.resume_human_input,
+                config.workflow_defn.resume_human_input,
                 HumanInputResumeInput(request_id=request.request_id),
             )
 

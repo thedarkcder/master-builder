@@ -11,6 +11,10 @@ class DevelopmentTeamRunWorkflowInput:
     tenant_id: str
     project_id: str | None
     issue_key: str
+    workflow_execution_timeout_seconds: int
+    workflow_run_timeout_seconds: int
+    activity_start_to_close_timeout_seconds: int
+    human_input_resume_timeout_seconds: int
 
 
 @dataclass(frozen=True)
