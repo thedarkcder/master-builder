@@ -711,18 +711,18 @@ export type WorkflowRecord = {
 export type WorkflowTypeOperationRecord = {
   operation_type: string;
   label: string;
-  retry_policy: string;
-  retry_policy_config: {
-    manual_retry_enabled: boolean;
-    max_attempts: number;
-    initial_interval_seconds: number;
-    max_interval_seconds: number;
-    backoff_coefficient: number;
-    non_retryable_error_categories: string[];
-  };
   description: string | null;
-  required: boolean;
+  completion_required: boolean;
   status: string | null;
+};
+
+export type WorkflowRetryPolicyRecord = {
+  manual_retry_enabled: boolean;
+  max_attempts: number;
+  initial_interval_seconds: number;
+  max_interval_seconds: number;
+  backoff_coefficient: number;
+  non_retryable_error_categories: string[];
 };
 
 export type WorkflowTypeRecord = {
@@ -740,6 +740,7 @@ export type WorkflowTypeRecord = {
       human_input_resume_timeout_seconds: number;
     } | null;
   };
+  retry_policy: WorkflowRetryPolicyRecord;
   capabilities: Record<string, unknown>;
   lifecycle: {
     state_path_kind: string;
@@ -796,6 +797,7 @@ export type WorkflowTypeDetailRecord = {
       human_input_resume_timeout_seconds: number;
     } | null;
   };
+  retry_policy: WorkflowRetryPolicyRecord;
   capabilities: Record<string, unknown>;
   lifecycle: {
     state_path_kind: string;
@@ -831,18 +833,7 @@ export type WorkflowTypeUpdatePayload = {
       human_input_resume_timeout_seconds: number;
     } | null;
   };
-  operations: Array<{
-    operation_type: string;
-    retry_policy: string;
-    retry_policy_config: {
-      manual_retry_enabled: boolean;
-      max_attempts: number;
-      initial_interval_seconds: number;
-      max_interval_seconds: number;
-      backoff_coefficient: number;
-      non_retryable_error_categories: string[];
-    };
-  }>;
+  retry_policy: WorkflowRetryPolicyRecord;
 };
 
 export type WorkflowStatePathEntryRecord = {
@@ -887,7 +878,6 @@ export type WorkflowOperationRecord = {
   operation_type: string;
   status: string;
   label?: string | null;
-  retry_policy?: string | null;
   description?: string | null;
   required?: boolean;
   definition_only?: boolean;

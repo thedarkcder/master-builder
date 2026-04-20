@@ -44,11 +44,12 @@ def update_workflow_type_configuration(
     workflow_type_key: str,
     orchestration_backend: str,
     engine_config: dict | None,
-    operation_updates: dict[str, dict[str, object]],
+    retry_policy: dict[str, object] | None,
 ) -> WorkflowType:
     workflow_type = get_workflow_type(session, workflow_type_key=workflow_type_key)
     workflow_type.orchestration_backend = str(orchestration_backend or "").strip().lower()
     workflow_type.engine_config_json = dict(engine_config or {})
+    workflow_type.retry_policy_config_json = dict(retry_policy or {})
     if workflow_type.orchestration_backend == "temporal":
         from orchestrator.temporal.workflow_registry import resolve_temporal_workflow_definition
 
@@ -63,21 +64,4 @@ def update_workflow_type_configuration(
     else:
         workflow_type.engine_config_json = {}
 
-    definitions = list_workflow_type_operations(session, workflow_type_key=workflow_type.workflow_type_key)
-    definitions_by_type = {
-        str(definition.operation_type or "").strip(): definition
-        for definition in definitions
-        if str(definition.operation_type or "").strip()
-    }
-    unknown_operations = sorted(set(operation_updates) - set(definitions_by_type))
-    if unknown_operations:
-        raise ValueError(f"Workflow type update referenced unknown operations: {', '.join(unknown_operations)}")
-
-    for operation_type, update in operation_updates.items():
-        definition = definitions_by_type[operation_type]
-        retry_policy = str(update.get("retry_policy") or "").strip()
-        if not retry_policy:
-            raise ValueError(f"Workflow type operation {operation_type} requires retry_policy")
-        definition.retry_policy = retry_policy
-        definition.retry_policy_config_json = dict(update.get("retry_policy_config") or {})
     return workflow_type

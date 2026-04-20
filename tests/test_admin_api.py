@@ -1451,7 +1451,8 @@ class AdminApiTests(AdminApiTestHarness):
         self.assertEqual(detail_body["engine_config"]["temporal"]["workflow_name"], "DevelopmentTeamRunWorkflow")
         self.assertEqual(detail_body["engine_config"]["temporal"]["workflow_execution_timeout_seconds"], 86400)
         self.assertEqual(detail_body["engine_config"]["temporal"]["workflow_run_timeout_seconds"], 86400)
-        self.assertIn("manual_retry_enabled", detail_body["operations"][0]["retry_policy_config"])
+        self.assertIn("manual_retry_enabled", detail_body["retry_policy"])
+        self.assertTrue(detail_body["operations"][0]["completion_required"])
         self.assertEqual(detail_body["lifecycle"]["state_path_kind"], "run")
         self.assertIn("fresh", detail_body["lifecycle"]["execution_modes"])
         self.assertIn("Retry failed operation", detail_body["lifecycle"]["conditional_paths"])
@@ -1472,44 +1473,14 @@ class AdminApiTests(AdminApiTestHarness):
                         "human_input_resume_timeout_seconds": 1800,
                     }
                 },
-                "operations": [
-                    {
-                        "operation_type": "run_attempt_execution",
-                        "retry_policy": "Retry transient worker failures with bounded backoff.",
-                        "retry_policy_config": {
-                            "manual_retry_enabled": True,
-                            "max_attempts": 7,
-                            "initial_interval_seconds": 45,
-                            "max_interval_seconds": 2400,
-                            "backoff_coefficient": 2.5,
-                            "non_retryable_error_categories": ["authorization_failed"],
-                        },
-                    },
-                    {
-                        "operation_type": "human_input_resume",
-                        "retry_policy": "Only retry on transient infrastructure failures.",
-                        "retry_policy_config": {
-                            "manual_retry_enabled": False,
-                            "max_attempts": 1,
-                            "initial_interval_seconds": 0,
-                            "max_interval_seconds": 0,
-                            "backoff_coefficient": 1.0,
-                            "non_retryable_error_categories": ["missing_input", "contract_invalid"],
-                        },
-                    },
-                    {
-                        "operation_type": "notification_emit",
-                        "retry_policy": "Retry notification delivery with idempotent writes.",
-                        "retry_policy_config": {
-                            "manual_retry_enabled": False,
-                            "max_attempts": 5,
-                            "initial_interval_seconds": 30,
-                            "max_interval_seconds": 900,
-                            "backoff_coefficient": 2.0,
-                            "non_retryable_error_categories": [],
-                        },
-                    },
-                ],
+                "retry_policy": {
+                    "manual_retry_enabled": True,
+                    "max_attempts": 7,
+                    "initial_interval_seconds": 45,
+                    "max_interval_seconds": 2400,
+                    "backoff_coefficient": 2.5,
+                    "non_retryable_error_categories": ["authorization_failed"],
+                },
             },
             auth=("admin", "secret"),
         )
@@ -1518,8 +1489,7 @@ class AdminApiTests(AdminApiTestHarness):
         self.assertEqual(updated_body["engine_config"]["temporal"]["task_queue"], "custom-queue")
         self.assertEqual(updated_body["engine_config"]["temporal"]["workflow_execution_timeout_seconds"], 5400)
         self.assertEqual(updated_body["engine_config"]["temporal"]["workflow_run_timeout_seconds"], 2700)
-        updated_operation = next(item for item in updated_body["operations"] if item["operation_type"] == "run_attempt_execution")
-        self.assertEqual(updated_operation["retry_policy_config"]["max_attempts"], 7)
+        self.assertEqual(updated_body["retry_policy"]["max_attempts"], 7)
 
     def test_get_workflow_includes_child_issue_links_for_parent_planning(self) -> None:
         payload = self._tenant_payload()

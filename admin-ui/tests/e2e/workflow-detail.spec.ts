@@ -23,6 +23,14 @@ test("shows workflow definitions and retries a failed execution operation", asyn
       key: "parent_planning",
       label: "Parent Planning",
       description: "Parent planning workflow",
+      retry_policy: {
+        manual_retry_enabled: true,
+        max_attempts: 4,
+        initial_interval_seconds: 60,
+        max_interval_seconds: 1800,
+        backoff_coefficient: 2,
+        non_retryable_error_categories: ["content_limit", "contract_invalid", "authorization_failed"],
+      },
       capabilities: {
         child_issue_links: true,
       },
@@ -47,17 +55,8 @@ test("shows workflow definitions and retries a failed execution operation", asyn
         {
           operation_type: "jira_child_fanout",
           label: "Fan out engineering child tickets",
-          retry_policy: "Retry transient Jira failures. Fail on permanent Jira validation errors such as content limits.",
-          retry_policy_config: {
-            manual_retry_enabled: true,
-            max_attempts: 4,
-            initial_interval_seconds: 60,
-            max_interval_seconds: 1800,
-            backoff_coefficient: 2,
-            non_retryable_error_categories: ["content_limit", "contract_invalid", "authorization_failed"],
-          },
           description: "Create or refresh engineering child tickets.",
-          required: true,
+          completion_required: true,
           status: "failed",
         },
       ],
@@ -184,6 +183,7 @@ test("shows workflow definitions and retries a failed execution operation", asyn
   await expect(page).toHaveURL(/\/route25\/workflows\/parent_planning$/);
   await expect(page.getByRole("heading", { name: "Workflow settings" })).toBeVisible();
   await expect(page.getByText("Recent executions")).toBeVisible();
+  await expect(page.getByText("Definition flow")).toBeVisible();
   await expect(page.getByRole("link", { name: "Identity and authorization v1 contract" })).toBeVisible();
 
   await page.getByRole("link", { name: "Identity and authorization v1 contract" }).click();
@@ -193,7 +193,7 @@ test("shows workflow definitions and retries a failed execution operation", asyn
   await expect(page.getByText("Parent Planning")).toBeVisible();
   await expect(page.getByText("Fan out engineering child tickets").first()).toBeVisible();
   await expect(page.getByText("Execution path")).toBeVisible();
-  await expect(page.getByText("content_limit").first()).toBeVisible();
+  await expect(page.getByText("Step recovery")).toBeVisible();
   const retryStepButton = page.getByRole("button", { name: "Retry step" }).last();
   await retryStepButton.scrollIntoViewIfNeeded();
   await expect(retryStepButton).toBeEnabled();
