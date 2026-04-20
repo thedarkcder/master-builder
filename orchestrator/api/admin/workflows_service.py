@@ -14,13 +14,13 @@ from orchestrator.api.schemas import (
     WorkflowExecutionPreviewRead,
     WorkflowLinkRead,
     WorkflowOperationRead,
+    WorkflowRetryPolicyRead,
     WorkflowStatePathEntryRead,
     WorkflowTypeDetailRead,
     WorkflowTypeLifecycleRead,
     WorkflowTypeLifecycleStateRead,
     WorkflowTypeLifecycleTransitionRead,
     WorkflowTypeOperationRead,
-    WorkflowTypeOperationRetryConfigRead,
     WorkflowTypeRead,
     WorkflowTypeSummaryRead,
     WorkflowTypeUpdateRequest,
@@ -270,9 +270,9 @@ def _workflow_type_lifecycle_read(*, workflow_type: WorkflowType) -> WorkflowTyp
     )
 
 
-def _workflow_type_retry_policy_config_read(*, raw_config: dict | None) -> WorkflowTypeOperationRetryConfigRead:
+def _workflow_retry_policy_read(*, raw_config: dict | None) -> WorkflowRetryPolicyRead:
     raw = raw_config if isinstance(raw_config, dict) else {}
-    return WorkflowTypeOperationRetryConfigRead(
+    return WorkflowRetryPolicyRead(
         manual_retry_enabled=bool(raw.get("manual_retry_enabled", True)),
         max_attempts=int(raw.get("max_attempts") or 1),
         initial_interval_seconds=int(raw.get("initial_interval_seconds") or 0),
@@ -307,7 +307,7 @@ def _workflow_operation_reads(
 
     def _operation_retry_state(
         *,
-        retry_policy_config: WorkflowTypeOperationRetryConfigRead | None,
+        retry_policy_config: WorkflowRetryPolicyRead,
         operation_type: str,
         current: WorkflowOperation | None,
     ) -> tuple[bool, str | None]:
@@ -317,8 +317,6 @@ def _workflow_operation_reads(
         latest_attempt = attempts[-1] if attempts else None
         if latest_attempt is None:
             return False, "Operation has no attempt history to retry."
-        if retry_policy_config is None:
-            return False, "Operation is not defined in its workflow type."
         if not retry_policy_config.manual_retry_enabled:
             return False, "Manual retry is disabled by the workflow type."
         if not bool(latest_attempt.retryable):
@@ -332,14 +330,13 @@ def _workflow_operation_reads(
             return str(workflow.status or "").strip() or "pending"
         return "pending"
 
+    workflow_retry_policy = _workflow_retry_policy_read(raw_config=workflow_type.retry_policy_config_json)
     type_reads = [
         WorkflowTypeOperationRead(
             operation_type=definition.operation_type,
             label=definition.label,
-            retry_policy=definition.retry_policy,
-            retry_policy_config=_workflow_type_retry_policy_config_read(raw_config=definition.retry_policy_config_json),
             description=definition.description,
-            required=bool(definition.required),
+            completion_required=bool(definition.required),
             status=(
                 status_by_type[definition.operation_type].status
                 if definition.operation_type in status_by_type
@@ -353,9 +350,8 @@ def _workflow_operation_reads(
     defined_operation_types = {definition.operation_type for definition in definitions}
     for definition in definitions:
         current = status_by_type.get(definition.operation_type)
-        retry_policy_config = _workflow_type_retry_policy_config_read(raw_config=definition.retry_policy_config_json)
         can_retry, retry_unavailable_reason = _operation_retry_state(
-            retry_policy_config=retry_policy_config,
+            retry_policy_config=workflow_retry_policy,
             operation_type=definition.operation_type,
             current=current,
         )
@@ -374,7 +370,6 @@ def _workflow_operation_reads(
                     else _default_operation_status(definition.operation_type)
                 ),
                 label=definition.label,
-                retry_policy=definition.retry_policy,
                 description=definition.description,
                 required=bool(definition.required),
                 definition_only=current is None,
@@ -405,6 +400,7 @@ def _workflow_operation_reads(
             description=workflow_type.description,
             orchestration_backend=workflow_type.orchestration_backend,
             engine_config=_workflow_type_engine_config_read(workflow_type=workflow_type),
+            retry_policy=workflow_retry_policy,
             capabilities=_workflow_type_capabilities_read(workflow_type=workflow_type),
             lifecycle=_workflow_type_lifecycle_read(workflow_type=workflow_type),
             operations=type_reads,
@@ -453,7 +449,11 @@ def _operation_path(
     entries: list[WorkflowStatePathEntryRead] = []
     for definition in workflow_type.operations:
         current = status_by_type.get(definition.operation_type)
-        status = str(current.status if current is not None else ("pending" if definition.required else "not_started")).strip()
+        status = str(
+            current.status
+            if current is not None
+            else ("pending" if definition.completion_required else "not_started")
+        ).strip()
         entries.append(
             WorkflowStatePathEntryRead(
                 key=definition.operation_type,
@@ -689,10 +689,8 @@ def _workflow_type_detail(
         WorkflowTypeOperationRead(
             operation_type=definition.operation_type,
             label=definition.label,
-            retry_policy=definition.retry_policy,
-            retry_policy_config=_workflow_type_retry_policy_config_read(raw_config=definition.retry_policy_config_json),
             description=definition.description,
-            required=bool(definition.required),
+            completion_required=bool(definition.required),
             status=None,
         )
         for definition in list_workflow_type_operations(session, workflow_type_key=workflow_type.workflow_type_key)
@@ -703,6 +701,7 @@ def _workflow_type_detail(
         description=workflow_type.description,
         orchestration_backend=workflow_type.orchestration_backend,
         engine_config=_workflow_type_engine_config_read(workflow_type=workflow_type),
+        retry_policy=_workflow_retry_policy_read(raw_config=workflow_type.retry_policy_config_json),
         capabilities=_workflow_type_capabilities_read(workflow_type=workflow_type),
         lifecycle=_workflow_type_lifecycle_read(workflow_type=workflow_type),
         operations=definition_reads,
@@ -733,6 +732,7 @@ def _workflow_type_detail(
         description=type_read.description,
         orchestration_backend=type_read.orchestration_backend,
         engine_config=type_read.engine_config,
+        retry_policy=type_read.retry_policy,
         capabilities=type_read.capabilities,
         lifecycle=type_read.lifecycle,
         operations=type_read.operations,
@@ -1025,13 +1025,7 @@ def update_workflow_type_detail(
             workflow_type_key=workflow_type_key,
             orchestration_backend=payload.orchestration_backend,
             engine_config=payload.engine_config.model_dump(),
-            operation_updates={
-                str(operation.operation_type or "").strip(): {
-                    "retry_policy": operation.retry_policy,
-                    "retry_policy_config": operation.retry_policy_config.model_dump(),
-                }
-                for operation in payload.operations
-            },
+            retry_policy=payload.retry_policy.model_dump(),
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc

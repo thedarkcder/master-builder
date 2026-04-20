@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { ArrowLeft, ExternalLink, RefreshCw } from "lucide-react";
 
+import { WorkflowFlowDiagram } from "@/components/workflow-flow-diagram";
 import { useAuth } from "@/components/auth-provider";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/ui/status-badge";
@@ -28,20 +29,12 @@ function latestAttempt(operation: WorkflowOperationRecord) {
   })[0] ?? null;
 }
 
-function joinItems(values: string[]): string {
-  return values.length ? values.join(", ") : "—";
-}
-
 function actionSummary(action: WorkflowActionRecord): string {
   return action.detail?.trim() || `${action.mode} execution`;
 }
 
-function pathTone(status: string): string {
-  if (status === "failed") return "border-red-200 bg-red-50 text-red-900";
-  if (status === "completed") return "border-emerald-200 bg-emerald-50 text-emerald-900";
-  if (status === "waiting_for_input") return "border-amber-200 bg-amber-50 text-amber-900";
-  if (status === "running" || status === "retrying") return "border-blue-200 bg-blue-50 text-blue-900";
-  return "border-border bg-muted/20 text-foreground";
+function impactLabel(required?: boolean): string {
+  return required === false ? "Supporting" : "Must finish";
 }
 
 export default function TenantExecutionDetailPage() {
@@ -87,6 +80,24 @@ export default function TenantExecutionDetailPage() {
   const selectedAction = useMemo(
     () => workflow?.available_actions.find((action) => action.action_key === selectedActionKey) ?? workflow?.available_actions[0] ?? null,
     [selectedActionKey, workflow?.available_actions],
+  );
+  const flowNodes = useMemo(
+    () =>
+      (workflow?.operations ?? []).map((operation) => {
+        const attempt = latestAttempt(operation);
+        return {
+          key: operation.operation_id,
+          label: operation.label?.trim() || operation.operation_type,
+          status: operation.status,
+          impact: impactLabel(operation.required),
+          detail:
+            attempt?.error_message?.trim()
+            || operation.summary?.trim()
+            || operation.description?.trim()
+            || null,
+        };
+      }),
+    [workflow?.operations],
   );
 
   async function handleWorkflowAction() {
@@ -209,76 +220,32 @@ export default function TenantExecutionDetailPage() {
               <div className="border-b px-5 py-3">
                 <h2 className="text-sm font-semibold">Execution path</h2>
               </div>
-              <div className="overflow-x-auto px-5 py-5">
-                {workflow.state_path.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">No execution path has been recorded yet.</p>
-                ) : (
-                  <div className="flex min-w-max items-start gap-3 pb-1">
-                    {workflow.state_path.map((entry, index) => (
-                      <div key={entry.key} className="flex items-start gap-3">
-                        <div className={cn("w-64 rounded-2xl border p-4 shadow-sm", pathTone(entry.status))}>
-                          <div className="flex items-center justify-between gap-2">
-                            <p className="text-sm font-semibold">{entry.label}</p>
-                            <StatusBadge status={entry.status} />
-                          </div>
-                          {entry.detail ? <p className="mt-2 text-sm opacity-80">{entry.detail}</p> : null}
-                          {entry.recorded_at ? (
-                            <p className="mt-3 text-xs opacity-70">{formatTimestamp(entry.recorded_at)}</p>
-                          ) : null}
-                        </div>
-                        {index < workflow.state_path.length - 1 ? (
-                          <div className="flex h-[72px] items-center text-muted-foreground">
-                            <div className="flex items-center gap-1">
-                              <div className="h-px w-8 bg-border" />
-                              <div className="text-lg">→</div>
-                              <div className="h-px w-8 bg-border" />
-                            </div>
-                          </div>
-                        ) : null}
-                      </div>
-                    ))}
-                  </div>
-                )}
+              <div className="px-5 py-4">
+                <WorkflowFlowDiagram nodes={flowNodes} emptyLabel="No execution path has been recorded yet." />
               </div>
             </div>
 
             <div className="space-y-4">
               <div className="overflow-hidden rounded-2xl border bg-background">
                 <div className="border-b px-5 py-3">
-                  <h2 className="text-sm font-semibold">Progress</h2>
+                  <h2 className="text-sm font-semibold">Execution</h2>
                 </div>
                 <div className="space-y-3 px-5 py-4 text-sm">
                   <div>
-                    <p className="font-medium">Completed</p>
-                    <p className="text-muted-foreground">{joinItems(workflow.completed_steps)}</p>
+                    <p className="font-medium">State</p>
+                    <p className="text-muted-foreground">{workflow.current_state}</p>
                   </div>
                   <div>
-                    <p className="font-medium">Failed</p>
-                    <p className="text-muted-foreground">{joinItems(workflow.failed_steps)}</p>
+                    <p className="font-medium">Waiting on</p>
+                    <p className="text-muted-foreground">{workflow.waiting_on?.replace(/_/g, " ") || "—"}</p>
                   </div>
                   <div>
-                    <p className="font-medium">Pending</p>
-                    <p className="text-muted-foreground">{joinItems(workflow.pending_steps)}</p>
+                    <p className="font-medium">Failure</p>
+                    <p className="text-muted-foreground">{workflow.failure_reason?.trim() || "—"}</p>
                   </div>
                   <div>
-                    <p className="font-medium">Retrying</p>
-                    <p className="text-muted-foreground">{joinItems(workflow.retrying_steps)}</p>
-                  </div>
-                </div>
-              </div>
-
-              <div className="overflow-hidden rounded-2xl border bg-background">
-                <div className="border-b px-5 py-3">
-                  <h2 className="text-sm font-semibold">Branches</h2>
-                </div>
-                <div className="space-y-3 px-5 py-4 text-sm">
-                  <div>
-                    <p className="font-medium">Taken</p>
-                    <p className="text-muted-foreground">{joinItems(workflow.conditional_branches_taken)}</p>
-                  </div>
-                  <div>
-                    <p className="font-medium">Available</p>
-                    <p className="text-muted-foreground">{joinItems(workflow.conditional_branches_available)}</p>
+                    <p className="font-medium">Available recovery</p>
+                    <p className="text-muted-foreground">{hasRetryableAttempt ? "Retry failed step" : selectedAction?.label || "—"}</p>
                   </div>
                 </div>
               </div>
@@ -287,20 +254,16 @@ export default function TenantExecutionDetailPage() {
 
           <div className="overflow-hidden rounded-2xl border bg-background">
             <div className="border-b px-5 py-3">
-              <h2 className="text-sm font-semibold">Operations</h2>
-            </div>
-            <div className="border-b bg-muted/10 px-5 py-3 text-sm text-muted-foreground">
-              This is the execution view of the workflow contract. Use per-operation retry only when the failed step is explicitly marked retryable.
+              <h2 className="text-sm font-semibold">Step recovery</h2>
             </div>
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Operation</TableHead>
+                  <TableHead>Step</TableHead>
                   <TableHead>Status</TableHead>
-                  <TableHead>Required</TableHead>
-                  <TableHead>Latest activity</TableHead>
-                  <TableHead>Recovery</TableHead>
-                  <TableHead>Failure / guidance</TableHead>
+                  <TableHead>Impact</TableHead>
+                  <TableHead>Latest attempt</TableHead>
+                  <TableHead>Failure</TableHead>
                   <TableHead className="text-right">Action</TableHead>
                 </TableRow>
               </TableHeader>
@@ -311,16 +274,12 @@ export default function TenantExecutionDetailPage() {
                     <TableRow key={operation.operation_id}>
                       <TableCell className="font-medium">
                         <p>{operation.label?.trim() || operation.operation_type}</p>
-                        <p className="text-xs text-muted-foreground">
-                          {operation.target_ref?.trim()
-                            || operation.description?.trim()
-                            || (operation.definition_only ? "Defined in workflow type" : operation.operation_type)}
-                        </p>
+                        <p className="text-xs text-muted-foreground">{operation.operation_type}</p>
                       </TableCell>
                       <TableCell>
                         <StatusBadge status={operation.status} />
                       </TableCell>
-                      <TableCell className="text-sm text-muted-foreground">{operation.required === false ? "Optional" : "Required"}</TableCell>
+                      <TableCell className="text-sm text-muted-foreground">{impactLabel(operation.required)}</TableCell>
                       <TableCell className="text-sm text-muted-foreground">
                         {attempt ? (
                           <div className="space-y-1">
@@ -331,22 +290,11 @@ export default function TenantExecutionDetailPage() {
                           operation.status === "pending" ? "Not started" : "—"
                         )}
                       </TableCell>
-                      <TableCell className="text-sm text-muted-foreground">
-                        {operation.can_retry ? "Retry available" : operation.retry_unavailable_reason?.trim() || "No manual retry"}
-                      </TableCell>
                       <TableCell className="max-w-[440px] text-sm text-muted-foreground">
-                        <div className="space-y-1">
-                          <p className="line-clamp-3">
-                            {attempt?.error_message?.trim()
-                              || operation.summary?.trim()
-                              || operation.retry_unavailable_reason?.trim()
-                              || operation.description?.trim()
-                              || "—"}
-                          </p>
-                          <p className="text-xs text-muted-foreground">
-                            {operation.retry_policy?.trim() || "No retry policy recorded."}
-                          </p>
-                        </div>
+                        {attempt?.error_message?.trim()
+                          || operation.summary?.trim()
+                          || operation.retry_unavailable_reason?.trim()
+                          || "—"}
                       </TableCell>
                       <TableCell className="text-right">
                         <Button

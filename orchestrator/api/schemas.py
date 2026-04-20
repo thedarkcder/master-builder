@@ -1028,7 +1028,6 @@ class WorkflowOperationRead(BaseModel):
     operation_type: str
     status: str
     label: str | None = None
-    retry_policy: str | None = None
     description: str | None = None
     required: bool = True
     definition_only: bool = False
@@ -1040,7 +1039,7 @@ class WorkflowOperationRead(BaseModel):
     attempts: list[WorkflowOperationAttemptRead] = Field(default_factory=list)
 
 
-class WorkflowTypeOperationRetryConfigRead(BaseModel):
+class WorkflowRetryPolicyRead(BaseModel):
     manual_retry_enabled: bool = True
     max_attempts: int = Field(default=1, ge=1)
     initial_interval_seconds: int = Field(default=0, ge=0)
@@ -1049,7 +1048,7 @@ class WorkflowTypeOperationRetryConfigRead(BaseModel):
     non_retryable_error_categories: list[str] = Field(default_factory=list)
 
 
-class WorkflowTypeOperationRetryConfigUpdate(BaseModel):
+class WorkflowRetryPolicyUpdate(BaseModel):
     manual_retry_enabled: bool = True
     max_attempts: int = Field(default=1, ge=1)
     initial_interval_seconds: int = Field(default=0, ge=0)
@@ -1061,10 +1060,8 @@ class WorkflowTypeOperationRetryConfigUpdate(BaseModel):
 class WorkflowTypeOperationRead(BaseModel):
     operation_type: str
     label: str
-    retry_policy: str
-    retry_policy_config: WorkflowTypeOperationRetryConfigRead = Field(default_factory=WorkflowTypeOperationRetryConfigRead)
     description: str | None = None
-    required: bool = True
+    completion_required: bool = True
     status: str | None = None
 
 
@@ -1123,6 +1120,7 @@ class WorkflowTypeRead(BaseModel):
     description: str | None = None
     orchestration_backend: Literal["legacy", "temporal", "database"]
     engine_config: WorkflowTypeEngineConfigRead = Field(default_factory=WorkflowTypeEngineConfigRead)
+    retry_policy: WorkflowRetryPolicyRead = Field(default_factory=WorkflowRetryPolicyRead)
     capabilities: dict[str, object] = Field(default_factory=dict)
     lifecycle: WorkflowTypeLifecycleRead = Field(default_factory=WorkflowTypeLifecycleRead)
     operations: list[WorkflowTypeOperationRead] = Field(default_factory=list)
@@ -1155,6 +1153,7 @@ class WorkflowTypeDetailRead(BaseModel):
     description: str | None = None
     orchestration_backend: Literal["legacy", "temporal", "database"]
     engine_config: WorkflowTypeEngineConfigRead = Field(default_factory=WorkflowTypeEngineConfigRead)
+    retry_policy: WorkflowRetryPolicyRead = Field(default_factory=WorkflowRetryPolicyRead)
     capabilities: dict[str, object] = Field(default_factory=dict)
     lifecycle: WorkflowTypeLifecycleRead = Field(default_factory=WorkflowTypeLifecycleRead)
     operations: list[WorkflowTypeOperationRead] = Field(default_factory=list)
@@ -1163,16 +1162,10 @@ class WorkflowTypeDetailRead(BaseModel):
     recent_executions: list[WorkflowExecutionPreviewRead] = Field(default_factory=list)
 
 
-class WorkflowTypeOperationConfigUpdate(BaseModel):
-    operation_type: str
-    retry_policy: str = Field(min_length=1)
-    retry_policy_config: WorkflowTypeOperationRetryConfigUpdate
-
-
 class WorkflowTypeUpdateRequest(BaseModel):
     orchestration_backend: Literal["legacy", "temporal", "database"]
     engine_config: WorkflowTypeEngineConfigUpdate = Field(default_factory=WorkflowTypeEngineConfigUpdate)
-    operations: list[WorkflowTypeOperationConfigUpdate] = Field(default_factory=list)
+    retry_policy: WorkflowRetryPolicyUpdate = Field(default_factory=WorkflowRetryPolicyUpdate)
 
     @model_validator(mode="after")
     def validate_engine_contract(self) -> WorkflowTypeUpdateRequest:
