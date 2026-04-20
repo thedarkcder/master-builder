@@ -13,6 +13,7 @@ import {
   createWorkflowAttempt,
   getWorkflow,
   retryWorkflowOperation,
+  type WorkflowActionRecord,
   type WorkflowOperationRecord,
   type WorkflowRecord,
 } from "@/lib/api";
@@ -31,6 +32,10 @@ function joinItems(values: string[]): string {
   return values.length ? values.join(", ") : "—";
 }
 
+function actionSummary(action: WorkflowActionRecord): string {
+  return action.detail?.trim() || `${action.mode} execution`;
+}
+
 export default function TenantExecutionDetailPage() {
   const params = useParams<{ tenantId: string; workflowId: string }>();
   const router = useRouter();
@@ -43,6 +48,7 @@ export default function TenantExecutionDetailPage() {
   const [retrying, setRetrying] = useState(false);
   const [retryingOperationId, setRetryingOperationId] = useState<string | null>(null);
   const [statusLine, setStatusLine] = useState("");
+  const [selectedActionKey, setSelectedActionKey] = useState<string>("");
 
   const loadWorkflow = useCallback(async () => {
     if (!credentials) return;
@@ -50,10 +56,16 @@ export default function TenantExecutionDetailPage() {
     try {
       const payload = await getWorkflow(credentials, workflowId);
       setWorkflow(payload);
+      setSelectedActionKey((current) =>
+        current && payload.available_actions.some((action) => action.action_key === current)
+          ? current
+          : (payload.available_actions[0]?.action_key ?? ""),
+      );
       setStatusLine("");
     } catch (error) {
       setStatusLine(`Failed to load execution: ${(error as Error).message}`);
       setWorkflow(null);
+      setSelectedActionKey("");
     } finally {
       setLoading(false);
     }
@@ -63,22 +75,30 @@ export default function TenantExecutionDetailPage() {
     if (ready && credentials) void loadWorkflow();
   }, [ready, credentials, loadWorkflow]);
 
-  const hasRetryableAttempt = useMemo(
-    () => (workflow?.operations ?? []).some((operation) => operation.can_retry),
-    [workflow?.operations],
+  const hasRetryableAttempt = useMemo(() => (workflow?.operations ?? []).some((operation) => operation.can_retry), [workflow?.operations]);
+  const selectedAction = useMemo(
+    () => workflow?.available_actions.find((action) => action.action_key === selectedActionKey) ?? workflow?.available_actions[0] ?? null,
+    [selectedActionKey, workflow?.available_actions],
   );
 
-  async function handleRetryFresh() {
+  async function handleWorkflowAction() {
     if (!credentials || !workflow) {
+      return;
+    }
+    if (!selectedAction) {
+      setStatusLine("No execution action is available.");
       return;
     }
     setRetrying(true);
     try {
-      const nextRun = await createWorkflowAttempt(credentials, workflow.workflow_id, { mode: "fresh" });
-      setStatusLine(`Queued retry as run ${nextRun.run_id}. Redirecting to run detail.`);
+      const nextRun = await createWorkflowAttempt(credentials, workflow.workflow_id, {
+        mode: selectedAction.mode as "fresh" | "restart" | "resume",
+        checkpoint_kind: selectedAction.checkpoint_kind as "pm" | "execution" | undefined,
+      });
+      setStatusLine(`${selectedAction.label} queued as run ${nextRun.run_id}. Redirecting to run detail.`);
       router.push(`/${encodeURIComponent(tenantId)}/runs/${encodeURIComponent(nextRun.run_id)}`);
     } catch (error) {
-      setStatusLine(`Failed to retry execution: ${(error as Error).message}`);
+      setStatusLine(`Failed to ${selectedAction.label.toLowerCase()}: ${(error as Error).message}`);
     } finally {
       setRetrying(false);
     }
@@ -114,15 +134,25 @@ export default function TenantExecutionDetailPage() {
             <RefreshCw className={cn("mr-1.5 h-3.5 w-3.5", loading && "animate-spin")} />
             Refresh
           </Button>
-          <Button
-            size="sm"
-            className="h-8"
-            onClick={() => void handleRetryFresh()}
-            disabled={!workflow || retrying || !hasRetryableAttempt}
-          >
-            <RefreshCw className={cn("mr-1.5 h-3.5 w-3.5", retrying && "animate-spin")} />
-            Retry execution
-          </Button>
+          {workflow?.available_actions?.length ? (
+            <>
+              <select
+                className="h-8 rounded-md border border-input bg-background px-3 text-sm"
+                value={selectedAction?.action_key ?? ""}
+                onChange={(event) => setSelectedActionKey(event.target.value)}
+              >
+                {workflow.available_actions.map((action) => (
+                  <option key={action.action_key} value={action.action_key}>
+                    {action.label}
+                  </option>
+                ))}
+              </select>
+              <Button size="sm" className="h-8" onClick={() => void handleWorkflowAction()} disabled={!workflow || retrying || !selectedAction}>
+                <RefreshCw className={cn("mr-1.5 h-3.5 w-3.5", retrying && "animate-spin")} />
+                {selectedAction?.label ?? "Start action"}
+              </Button>
+            </>
+          ) : null}
         </div>
       </div>
 
@@ -153,11 +183,10 @@ export default function TenantExecutionDetailPage() {
               </p>
             </div>
             <div className="rounded-2xl border bg-background p-4">
-              <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Next step</p>
-              <p className="mt-2 text-sm font-semibold">{workflow.next_step?.trim() || "—"}</p>
+              <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Next action</p>
+              <p className="mt-2 text-sm font-semibold">{workflow.next_step?.trim() || selectedAction?.label || "—"}</p>
               <p className="mt-1 text-xs text-muted-foreground">
-                {(workflow.operations ?? []).filter((operation) => operation.status === "failed").length} failed operation
-                {(workflow.operations ?? []).filter((operation) => operation.status === "failed").length === 1 ? "" : "s"}
+                {selectedAction ? actionSummary(selectedAction) : `${(workflow.operations ?? []).filter((operation) => operation.status === "failed").length} failed operation${(workflow.operations ?? []).filter((operation) => operation.status === "failed").length === 1 ? "" : "s"}`}
               </p>
             </div>
             <div className="rounded-2xl border bg-background p-4">
@@ -195,7 +224,7 @@ export default function TenantExecutionDetailPage() {
             <div className="space-y-4">
               <div className="overflow-hidden rounded-2xl border bg-background">
                 <div className="border-b px-5 py-3">
-                  <h2 className="text-sm font-semibold">Step status</h2>
+                  <h2 className="text-sm font-semibold">Progress</h2>
                 </div>
                 <div className="space-y-3 px-5 py-4 text-sm">
                   <div>
@@ -239,15 +268,18 @@ export default function TenantExecutionDetailPage() {
             <div className="border-b px-5 py-3">
               <h2 className="text-sm font-semibold">Operations</h2>
             </div>
+            <div className="border-b bg-muted/10 px-5 py-3 text-sm text-muted-foreground">
+              This is the execution view of the workflow contract. Use per-operation retry only when the failed step is explicitly marked retryable.
+            </div>
             <Table>
               <TableHeader>
                 <TableRow>
                   <TableHead>Operation</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Required</TableHead>
-                  <TableHead>Latest attempt</TableHead>
-                  <TableHead>Retryable</TableHead>
-                  <TableHead>Failure / policy</TableHead>
+                  <TableHead>Latest activity</TableHead>
+                  <TableHead>Recovery</TableHead>
+                  <TableHead>Failure / guidance</TableHead>
                   <TableHead className="text-right">Action</TableHead>
                 </TableRow>
               </TableHeader>
@@ -258,9 +290,10 @@ export default function TenantExecutionDetailPage() {
                     <TableRow key={operation.operation_id}>
                       <TableCell className="font-medium">
                         <p>{operation.label?.trim() || operation.operation_type}</p>
-                        <p className="text-xs text-muted-foreground">{operation.operation_type}</p>
                         <p className="text-xs text-muted-foreground">
-                          {operation.target_system ? `${operation.target_system}:${operation.target_ref ?? "—"}` : operation.definition_only ? "Defined in workflow type" : operation.operation_id}
+                          {operation.target_ref?.trim()
+                            || operation.description?.trim()
+                            || (operation.definition_only ? "Defined in workflow type" : operation.operation_type)}
                         </p>
                       </TableCell>
                       <TableCell>
@@ -271,14 +304,14 @@ export default function TenantExecutionDetailPage() {
                         {attempt ? (
                           <div className="space-y-1">
                             <p>Attempt {attempt.attempt_number}</p>
-                            <p>{attempt.finished_at ? formatTimestamp(attempt.finished_at) : "In progress"}</p>
+                            <p>{attempt.finished_at ? formatTimestamp(attempt.finished_at) : attempt.started_at ? "In progress" : "Waiting to start"}</p>
                           </div>
                         ) : (
-                          "—"
+                          operation.status === "pending" ? "Not started" : "—"
                         )}
                       </TableCell>
                       <TableCell className="text-sm text-muted-foreground">
-                        {operation.can_retry ? "Yes" : "No"}
+                        {operation.can_retry ? "Retry available" : operation.retry_unavailable_reason?.trim() || "No manual retry"}
                       </TableCell>
                       <TableCell className="max-w-[440px] text-sm text-muted-foreground">
                         <div className="space-y-1">
@@ -303,7 +336,7 @@ export default function TenantExecutionDetailPage() {
                           disabled={!operation.can_retry || operation.definition_only || retryingOperationId === operation.operation_id}
                         >
                           <RefreshCw className={cn("mr-1.5 h-3.5 w-3.5", retryingOperationId === operation.operation_id && "animate-spin")} />
-                          Retry operation
+                          Retry step
                         </Button>
                       </TableCell>
                     </TableRow>

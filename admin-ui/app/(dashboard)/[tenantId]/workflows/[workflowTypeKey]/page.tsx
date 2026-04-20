@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { ArrowLeft, RefreshCw } from "lucide-react";
 
@@ -10,10 +10,83 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Textarea } from "@/components/ui/textarea";
 import { formatTimestamp } from "@/lib/datetime";
 import { getWorkflowType, updateWorkflowType, type WorkflowTypeDetailRecord } from "@/lib/api";
 import { cn } from "@/lib/utils";
+
+const ENGINE_OPTIONS = [
+  { value: "legacy", label: "Legacy engine" },
+  { value: "temporal", label: "Temporal" },
+  { value: "database", label: "Database engine" },
+] as const;
+
+const KNOWN_ERROR_CATEGORIES = [
+  "authorization_failed",
+  "content_limit",
+  "contract_invalid",
+  "missing_input",
+  "transient_external_failure",
+] as const;
+
+type RetryPolicyDraft = {
+  manual_retry_enabled: boolean;
+  max_attempts: number;
+  initial_interval_seconds: number;
+  max_interval_seconds: number;
+  backoff_coefficient: number;
+  non_retryable_error_categories: string[];
+};
+
+function normalizeRetryPolicy(config: RetryPolicyDraft): RetryPolicyDraft {
+  return {
+    manual_retry_enabled: Boolean(config.manual_retry_enabled),
+    max_attempts: Math.max(1, Number(config.max_attempts || 1)),
+    initial_interval_seconds: Math.max(0, Number(config.initial_interval_seconds || 0)),
+    max_interval_seconds: Math.max(0, Number(config.max_interval_seconds || 0)),
+    backoff_coefficient: Math.max(1, Number(config.backoff_coefficient || 1)),
+    non_retryable_error_categories: [...config.non_retryable_error_categories].sort(),
+  };
+}
+
+function sameRetryPolicy(left: RetryPolicyDraft, right: RetryPolicyDraft): boolean {
+  const a = normalizeRetryPolicy(left);
+  const b = normalizeRetryPolicy(right);
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+function inferWorkflowRetryPolicy(workflowType: WorkflowTypeDetailRecord): {
+  draft: RetryPolicyDraft;
+  mixed: boolean;
+} {
+  const [firstOperation] = workflowType.operations;
+  const firstConfig = normalizeRetryPolicy(
+    firstOperation?.retry_policy_config ?? {
+      manual_retry_enabled: false,
+      max_attempts: 1,
+      initial_interval_seconds: 0,
+      max_interval_seconds: 0,
+      backoff_coefficient: 1,
+      non_retryable_error_categories: [],
+    },
+  );
+  const mixed = workflowType.operations.some(
+    (operation) => !sameRetryPolicy(firstConfig, operation.retry_policy_config),
+  );
+  return { draft: firstConfig, mixed };
+}
+
+function buildRetryPolicySummary(config: RetryPolicyDraft): string {
+  const normalized = normalizeRetryPolicy(config);
+  const retryMode = normalized.manual_retry_enabled ? "Manual retry available" : "Manual retry disabled";
+  const categories = normalized.non_retryable_error_categories.length
+    ? `Non-retryable: ${normalized.non_retryable_error_categories.join(", ")}`
+    : "No explicit non-retryable categories";
+  return `${retryMode}. Up to ${normalized.max_attempts} attempts, start at ${normalized.initial_interval_seconds}s, cap at ${normalized.max_interval_seconds}s, backoff x${normalized.backoff_coefficient}. ${categories}.`;
+}
+
+function formatEngineLabel(value: string): string {
+  return ENGINE_OPTIONS.find((option) => option.value === value)?.label ?? value;
+}
 
 export default function TenantWorkflowTypeDetailPage() {
   const params = useParams<{ tenantId: string; workflowTypeKey: string }>();
@@ -23,22 +96,29 @@ export default function TenantWorkflowTypeDetailPage() {
 
   const [workflowType, setWorkflowType] = useState<WorkflowTypeDetailRecord | null>(null);
   const [draft, setDraft] = useState<WorkflowTypeDetailRecord | null>(null);
+  const [sharedRetryPolicy, setSharedRetryPolicy] = useState<RetryPolicyDraft | null>(null);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [statusLine, setStatusLine] = useState("");
+  const [hasMixedRetryPolicies, setHasMixedRetryPolicies] = useState(false);
 
   const loadWorkflowType = useCallback(async () => {
     if (!credentials) return;
     setLoading(true);
     try {
       const payload = await getWorkflowType(credentials, workflowTypeKey, { tenantId });
+      const retryPolicy = inferWorkflowRetryPolicy(payload);
       setWorkflowType(payload);
       setDraft(payload);
+      setSharedRetryPolicy(retryPolicy.draft);
+      setHasMixedRetryPolicies(retryPolicy.mixed);
       setStatusLine("");
     } catch (error) {
       setStatusLine(`Failed to load workflow: ${(error as Error).message}`);
       setWorkflowType(null);
       setDraft(null);
+      setSharedRetryPolicy(null);
+      setHasMixedRetryPolicies(false);
     } finally {
       setLoading(false);
     }
@@ -79,10 +159,7 @@ export default function TenantWorkflowTypeDetailPage() {
             ...current.engine_config,
             temporal: {
               ...temporal,
-              [field]:
-                field.endsWith("_seconds")
-                  ? Number.parseInt(value || "0", 10) || 0
-                  : value,
+              [field]: field.endsWith("_seconds") ? Number.parseInt(value || "0", 10) || 0 : value,
             },
           },
         };
@@ -91,86 +168,84 @@ export default function TenantWorkflowTypeDetailPage() {
     [],
   );
 
-  const updateOperationField = useCallback(
-    (operationType: string, field: "retry_policy", value: string) => {
-      setDraft((current) => {
-        if (!current) return current;
-        return {
-          ...current,
-          operations: current.operations.map((operation) =>
-            operation.operation_type === operationType ? { ...operation, [field]: value } : operation,
-          ),
-        };
-      });
-    },
-    [],
-  );
-
-  const updateOperationRetryConfig = useCallback(
+  const updateSharedRetryField = useCallback(
     (
-      operationType: string,
       field:
         | "manual_retry_enabled"
         | "max_attempts"
         | "initial_interval_seconds"
         | "max_interval_seconds"
-        | "backoff_coefficient"
-        | "non_retryable_error_categories",
-      value: string | boolean,
+        | "backoff_coefficient",
+      value: boolean | string,
     ) => {
-      setDraft((current) => {
-        if (!current) return current;
-        return {
-          ...current,
-          operations: current.operations.map((operation) => {
-            if (operation.operation_type !== operationType) return operation;
-            const nextConfig = { ...operation.retry_policy_config };
-            if (field === "manual_retry_enabled" && typeof value === "boolean") {
-              nextConfig.manual_retry_enabled = value;
-            } else if (field === "non_retryable_error_categories" && typeof value === "string") {
-              nextConfig.non_retryable_error_categories = value
-                .split(",")
-                .map((item) => item.trim())
-                .filter(Boolean);
-            } else if (field === "backoff_coefficient" && typeof value === "string") {
-              nextConfig.backoff_coefficient = Number.parseFloat(value || "1") || 1;
-            } else if (field === "max_attempts" && typeof value === "string") {
-              nextConfig.max_attempts = Number.parseInt(value || "0", 10) || 0;
-            } else if (field === "initial_interval_seconds" && typeof value === "string") {
-              nextConfig.initial_interval_seconds = Number.parseInt(value || "0", 10) || 0;
-            } else if (field === "max_interval_seconds" && typeof value === "string") {
-              nextConfig.max_interval_seconds = Number.parseInt(value || "0", 10) || 0;
-            }
-            return { ...operation, retry_policy_config: nextConfig };
-          }),
-        };
+      setSharedRetryPolicy((current) => {
+        const base =
+          current ?? {
+            manual_retry_enabled: false,
+            max_attempts: 1,
+            initial_interval_seconds: 0,
+            max_interval_seconds: 0,
+            backoff_coefficient: 1,
+            non_retryable_error_categories: [],
+          };
+        if (field === "manual_retry_enabled" && typeof value === "boolean") {
+          return { ...base, manual_retry_enabled: value };
+        }
+        if (field === "backoff_coefficient" && typeof value === "string") {
+          return { ...base, backoff_coefficient: Number.parseFloat(value || "1") || 1 };
+        }
+        if (typeof value === "string") {
+          return { ...base, [field]: Number.parseInt(value || "0", 10) || 0 };
+        }
+        return base;
       });
     },
     [],
   );
 
+  const toggleNonRetryableCategory = useCallback((value: string) => {
+    setSharedRetryPolicy((current) => {
+      if (!current) return current;
+      const alreadySelected = current.non_retryable_error_categories.includes(value);
+      const nextCategories = alreadySelected
+        ? current.non_retryable_error_categories.filter((item) => item !== value)
+        : [...current.non_retryable_error_categories, value];
+      return { ...current, non_retryable_error_categories: nextCategories.sort() };
+    });
+  }, []);
+
   const saveWorkflowType = useCallback(async () => {
-    if (!credentials || !draft) return;
+    if (!credentials || !draft || !sharedRetryPolicy) return;
     setSaving(true);
     try {
+      const normalizedRetryPolicy = normalizeRetryPolicy(sharedRetryPolicy);
+      const retryPolicySummary = buildRetryPolicySummary(normalizedRetryPolicy);
       const payload = await updateWorkflowType(credentials, workflowTypeKey, {
         orchestration_backend: draft.orchestration_backend,
         engine_config: draft.engine_config,
         operations: draft.operations.map((operation) => ({
           operation_type: operation.operation_type,
-          retry_policy: operation.retry_policy,
-          retry_policy_config: operation.retry_policy_config,
+          retry_policy: retryPolicySummary,
+          retry_policy_config: normalizedRetryPolicy,
         })),
       });
+      const retryPolicy = inferWorkflowRetryPolicy(payload);
       setWorkflowType(payload);
       setDraft(payload);
-      setStatusLine("Workflow configuration saved.");
+      setSharedRetryPolicy(retryPolicy.draft);
+      setHasMixedRetryPolicies(retryPolicy.mixed);
+      setStatusLine("Workflow policy saved.");
     } catch (error) {
       setStatusLine(`Failed to save workflow: ${(error as Error).message}`);
     } finally {
       setSaving(false);
     }
-  }, [credentials, draft, workflowTypeKey]);
+  }, [credentials, draft, sharedRetryPolicy, workflowTypeKey]);
+
+  const retryPolicySummary = useMemo(
+    () => (sharedRetryPolicy ? buildRetryPolicySummary(sharedRetryPolicy) : "—"),
+    [sharedRetryPolicy],
+  );
 
   return (
     <div className="space-y-4">
@@ -191,7 +266,7 @@ export default function TenantWorkflowTypeDetailPage() {
         <p className="rounded-lg border bg-muted/40 px-4 py-2.5 text-sm text-muted-foreground">{statusLine}</p>
       ) : null}
 
-      {workflowType && draft ? (
+      {workflowType && draft && sharedRetryPolicy ? (
         <>
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
             <div className="rounded-2xl border bg-background p-4">
@@ -200,9 +275,20 @@ export default function TenantWorkflowTypeDetailPage() {
               <p className="mt-1 text-xs text-muted-foreground">{workflowType.key}</p>
             </div>
             <div className="rounded-2xl border bg-background p-4">
-              <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Operations</p>
-              <p className="mt-2 text-sm font-semibold">{workflowType.operations.length}</p>
-              <p className="mt-1 text-xs text-muted-foreground">Defined engine operations</p>
+              <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Execution engine</p>
+              <p className="mt-2 text-sm font-semibold">{formatEngineLabel(workflowType.orchestration_backend)}</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {workflowType.orchestration_backend === "temporal" ? "Durable Temporal workflow" : "Configured in workflow catalog"}
+              </p>
+            </div>
+            <div className="rounded-2xl border bg-background p-4">
+              <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Retry policy</p>
+              <p className="mt-2 text-sm font-semibold">
+                {sharedRetryPolicy.max_attempts} attempts
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {sharedRetryPolicy.manual_retry_enabled ? "Manual retry enabled" : "Manual retry disabled"}
+              </p>
             </div>
             <div className="rounded-2xl border bg-background p-4">
               <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Executions</p>
@@ -210,11 +296,6 @@ export default function TenantWorkflowTypeDetailPage() {
               <p className="mt-1 text-xs text-muted-foreground">
                 {workflowType.latest_execution_at ? `Latest ${formatTimestamp(workflowType.latest_execution_at)}` : "No executions yet"}
               </p>
-            </div>
-            <div className="rounded-2xl border bg-background p-4">
-              <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Backend</p>
-              <p className="mt-2 text-sm font-semibold">{workflowType.orchestration_backend}</p>
-              <p className="mt-1 text-xs text-muted-foreground">Workflow engine implementation</p>
             </div>
           </div>
 
@@ -228,17 +309,31 @@ export default function TenantWorkflowTypeDetailPage() {
             <div className="space-y-4">
               <div className="overflow-hidden rounded-2xl border bg-background">
                 <div className="border-b px-5 py-3">
-                  <h2 className="text-sm font-semibold">Workflow config</h2>
+                  <h2 className="text-sm font-semibold">Workflow settings</h2>
                 </div>
                 <div className="grid gap-4 px-5 py-4 md:grid-cols-2">
                   <label className="space-y-1 text-sm">
-                    <span className="text-muted-foreground">Backend</span>
-                    <Input value={draft.orchestration_backend} onChange={(event) => updateDraftBackend(event.target.value)} />
+                    <span className="text-muted-foreground">Execution engine</span>
+                    <select
+                      className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+                      value={draft.orchestration_backend}
+                      onChange={(event) => updateDraftBackend(event.target.value)}
+                    >
+                      {ENGINE_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
                   </label>
+                  <div className="rounded-xl border bg-muted/20 px-3 py-2 text-sm text-muted-foreground">
+                    <p className="font-medium text-foreground">Execution modes</p>
+                    <p className="mt-1">{workflowType.lifecycle.execution_modes.join(", ") || "—"}</p>
+                  </div>
                   {draft.orchestration_backend === "temporal" ? (
                     <>
                       <label className="space-y-1 text-sm">
-                        <span className="text-muted-foreground">Temporal workflow name</span>
+                        <span className="text-muted-foreground">Temporal workflow</span>
                         <Input
                           value={draft.engine_config.temporal?.workflow_name ?? ""}
                           onChange={(event) => updateDraftTemporalField("workflow_name", event.target.value)}
@@ -252,7 +347,7 @@ export default function TenantWorkflowTypeDetailPage() {
                         />
                       </label>
                       <label className="space-y-1 text-sm">
-                        <span className="text-muted-foreground">Workflow execution timeout (seconds)</span>
+                        <span className="text-muted-foreground">Execution timeout (seconds)</span>
                         <Input
                           type="number"
                           min={1}
@@ -261,7 +356,7 @@ export default function TenantWorkflowTypeDetailPage() {
                         />
                       </label>
                       <label className="space-y-1 text-sm">
-                        <span className="text-muted-foreground">Workflow run timeout (seconds)</span>
+                        <span className="text-muted-foreground">Run timeout (seconds)</span>
                         <Input
                           type="number"
                           min={1}
@@ -279,7 +374,7 @@ export default function TenantWorkflowTypeDetailPage() {
                         />
                       </label>
                       <label className="space-y-1 text-sm">
-                        <span className="text-muted-foreground">Human input resume activity timeout (seconds)</span>
+                        <span className="text-muted-foreground">Human input timeout (seconds)</span>
                         <Input
                           type="number"
                           min={1}
@@ -288,11 +383,91 @@ export default function TenantWorkflowTypeDetailPage() {
                         />
                       </label>
                     </>
-                  ) : (
-                    <div className="rounded-xl border bg-muted/20 px-3 py-2 text-sm text-muted-foreground md:col-span-2">
-                      This workflow type does not currently use Temporal-specific engine settings.
+                  ) : null}
+                </div>
+              </div>
+
+              <div className="overflow-hidden rounded-2xl border bg-background">
+                <div className="border-b px-5 py-3">
+                  <h2 className="text-sm font-semibold">Retry policy</h2>
+                </div>
+                <div className="space-y-4 px-5 py-4">
+                  {hasMixedRetryPolicies ? (
+                    <div className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                      Existing operation settings are mixed. Saving here will apply one workflow-wide retry policy to every operation.
                     </div>
-                  )}
+                  ) : null}
+                  <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+                    <label className="space-y-1 text-sm">
+                      <span className="text-muted-foreground">Manual retry</span>
+                      <select
+                        className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+                        value={sharedRetryPolicy.manual_retry_enabled ? "enabled" : "disabled"}
+                        onChange={(event) =>
+                          updateSharedRetryField("manual_retry_enabled", event.target.value === "enabled")
+                        }
+                      >
+                        <option value="enabled">Enabled</option>
+                        <option value="disabled">Disabled</option>
+                      </select>
+                    </label>
+                    <label className="space-y-1 text-sm">
+                      <span className="text-muted-foreground">Max attempts</span>
+                      <Input
+                        type="number"
+                        min={1}
+                        value={String(sharedRetryPolicy.max_attempts)}
+                        onChange={(event) => updateSharedRetryField("max_attempts", event.target.value)}
+                      />
+                    </label>
+                    <label className="space-y-1 text-sm">
+                      <span className="text-muted-foreground">Initial interval (seconds)</span>
+                      <Input
+                        type="number"
+                        min={0}
+                        value={String(sharedRetryPolicy.initial_interval_seconds)}
+                        onChange={(event) => updateSharedRetryField("initial_interval_seconds", event.target.value)}
+                      />
+                    </label>
+                    <label className="space-y-1 text-sm">
+                      <span className="text-muted-foreground">Max interval (seconds)</span>
+                      <Input
+                        type="number"
+                        min={0}
+                        value={String(sharedRetryPolicy.max_interval_seconds)}
+                        onChange={(event) => updateSharedRetryField("max_interval_seconds", event.target.value)}
+                      />
+                    </label>
+                    <label className="space-y-1 text-sm">
+                      <span className="text-muted-foreground">Backoff coefficient</span>
+                      <Input
+                        type="number"
+                        min={1}
+                        step="0.1"
+                        value={String(sharedRetryPolicy.backoff_coefficient)}
+                        onChange={(event) => updateSharedRetryField("backoff_coefficient", event.target.value)}
+                      />
+                    </label>
+                  </div>
+
+                  <div className="space-y-2">
+                    <p className="text-sm font-medium">Do not retry these failure categories</p>
+                    <div className="grid gap-2 md:grid-cols-2">
+                      {KNOWN_ERROR_CATEGORIES.map((category) => {
+                        const checked = sharedRetryPolicy.non_retryable_error_categories.includes(category);
+                        return (
+                          <label key={category} className="flex items-center gap-2 rounded-xl border px-3 py-2 text-sm">
+                            <input type="checkbox" checked={checked} onChange={() => toggleNonRetryableCategory(category)} />
+                            <span>{category}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border bg-muted/20 px-3 py-2 text-sm text-muted-foreground">
+                    {retryPolicySummary}
+                  </div>
                 </div>
               </div>
 
@@ -300,199 +475,139 @@ export default function TenantWorkflowTypeDetailPage() {
                 <div className="border-b px-5 py-3">
                   <h2 className="text-sm font-semibold">Operations</h2>
                 </div>
-                <div className="space-y-4 px-5 py-4">
-                  {draft.operations.map((operation) => (
-                    <div key={operation.operation_type} className="rounded-2xl border p-4">
-                      <div className="mb-3">
-                        <p className="text-sm font-semibold">{operation.label}</p>
-                        <p className="text-xs text-muted-foreground">{operation.operation_type}</p>
-                      </div>
-                      <div className="grid gap-4">
-                        <label className="space-y-1 text-sm">
-                          <span className="text-muted-foreground">Retry policy summary</span>
-                          <Textarea
-                            value={operation.retry_policy}
-                            onChange={(event) => updateOperationField(operation.operation_type, "retry_policy", event.target.value)}
-                            className="min-h-[90px]"
-                          />
-                        </label>
-                        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
-                          <label className="space-y-1 text-sm">
-                            <span className="text-muted-foreground">Max attempts</span>
-                            <Input
-                              type="number"
-                              min={1}
-                              value={String(operation.retry_policy_config.max_attempts)}
-                              onChange={(event) => updateOperationRetryConfig(operation.operation_type, "max_attempts", event.target.value)}
-                            />
-                          </label>
-                          <label className="space-y-1 text-sm">
-                            <span className="text-muted-foreground">Initial interval (seconds)</span>
-                            <Input
-                              type="number"
-                              min={0}
-                              value={String(operation.retry_policy_config.initial_interval_seconds)}
-                              onChange={(event) => updateOperationRetryConfig(operation.operation_type, "initial_interval_seconds", event.target.value)}
-                            />
-                          </label>
-                          <label className="space-y-1 text-sm">
-                            <span className="text-muted-foreground">Max interval (seconds)</span>
-                            <Input
-                              type="number"
-                              min={0}
-                              value={String(operation.retry_policy_config.max_interval_seconds)}
-                              onChange={(event) => updateOperationRetryConfig(operation.operation_type, "max_interval_seconds", event.target.value)}
-                            />
-                          </label>
-                          <label className="space-y-1 text-sm">
-                            <span className="text-muted-foreground">Backoff coefficient</span>
-                            <Input
-                              type="number"
-                              min={1}
-                              step="0.1"
-                              value={String(operation.retry_policy_config.backoff_coefficient)}
-                              onChange={(event) => updateOperationRetryConfig(operation.operation_type, "backoff_coefficient", event.target.value)}
-                            />
-                          </label>
-                          <label className="flex items-center gap-2 rounded-xl border px-3 py-2 text-sm">
-                            <input
-                              type="checkbox"
-                              checked={operation.retry_policy_config.manual_retry_enabled}
-                              onChange={(event) => updateOperationRetryConfig(operation.operation_type, "manual_retry_enabled", event.target.checked)}
-                            />
-                            Manual retry enabled
-                          </label>
-                        </div>
-                        <label className="space-y-1 text-sm">
-                          <span className="text-muted-foreground">Non-retryable failure categories</span>
-                          <Input
-                            value={operation.retry_policy_config.non_retryable_error_categories.join(", ")}
-                            onChange={(event) =>
-                              updateOperationRetryConfig(operation.operation_type, "non_retryable_error_categories", event.target.value)
-                            }
-                            placeholder="content_limit, contract_invalid"
-                          />
-                        </label>
-                      </div>
-                    </div>
-                  ))}
+                <div className="border-b bg-muted/10 px-5 py-3 text-sm text-muted-foreground">
+                  Operations define what this workflow can do. They inherit the workflow retry policy above unless a future workflow version explicitly changes that contract.
                 </div>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Operation</TableHead>
+                      <TableHead>Role</TableHead>
+                      <TableHead>Notes</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {workflowType.operations.map((operation) => (
+                      <TableRow key={operation.operation_type}>
+                        <TableCell className="font-medium">
+                          <p>{operation.label}</p>
+                          <p className="text-xs text-muted-foreground">{operation.operation_type}</p>
+                          {operation.description ? (
+                            <p className="mt-1 text-sm text-muted-foreground">{operation.description}</p>
+                          ) : null}
+                        </TableCell>
+                        <TableCell className="text-sm text-muted-foreground">
+                          {operation.required ? "Required" : "Optional"}
+                        </TableCell>
+                        <TableCell className="text-sm text-muted-foreground">
+                          {operation.status?.trim() || "Defined in workflow"}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
               </div>
             </div>
 
-            <div className="overflow-hidden rounded-2xl border bg-background">
-              <div className="border-b px-5 py-3">
-                <h2 className="text-sm font-semibold">Execution contract</h2>
-              </div>
-              <div className="space-y-4 px-5 py-4">
-                <div>
-                  <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">State path kind</p>
-                  <p className="mt-2 text-sm text-muted-foreground">{workflowType.lifecycle.state_path_kind || "—"}</p>
+            <div className="space-y-4">
+              <div className="overflow-hidden rounded-2xl border bg-background">
+                <div className="border-b px-5 py-3">
+                  <h2 className="text-sm font-semibold">Definition</h2>
                 </div>
-                <div>
-                  <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Execution modes</p>
-                  <p className="mt-2 text-sm text-muted-foreground">{workflowType.lifecycle.execution_modes.join(", ") || "—"}</p>
-                </div>
-                <div>
-                  <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Conditional paths</p>
-                  <div className="mt-2 space-y-2">
-                    {workflowType.lifecycle.conditional_paths.map((path) => (
-                      <div key={path} className="rounded-xl border bg-muted/20 px-3 py-2 text-sm text-muted-foreground">
-                        {path}
-                      </div>
-                    ))}
+                <div className="space-y-4 px-5 py-4">
+                  <div>
+                    <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">State path</p>
+                    <p className="mt-2 text-sm text-muted-foreground">{workflowType.lifecycle.state_path_kind || "—"}</p>
                   </div>
-                </div>
-                <div>
-                  <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">States</p>
-                  <div className="mt-2 space-y-2">
-                    {workflowType.lifecycle.states.map((state) => (
-                      <div key={state.key} className="rounded-xl border bg-muted/20 px-3 py-2 text-sm text-muted-foreground">
-                        <div className="flex items-center justify-between gap-3">
-                          <span>{state.label}</span>
-                          <span className="text-xs uppercase tracking-[0.14em] text-muted-foreground">{state.key}</span>
-                        </div>
-                        <div className="mt-1 text-xs text-muted-foreground">
-                          {[state.terminal ? "Terminal" : "Non-terminal", state.waits_for_input ? "waits for input" : "no input wait"].join(" • ")}
-                        </div>
-                      </div>
-                    ))}
+                  <div>
+                    <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">States</p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {workflowType.lifecycle.states.map((state) => (
+                        <StatusBadge key={state.key} status={state.label} />
+                      ))}
+                    </div>
                   </div>
-                </div>
-                <div>
-                  <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Transitions</p>
-                  <div className="mt-2 space-y-2">
-                    {workflowType.lifecycle.transitions.map((transition) => (
-                      <div
-                        key={`${transition.from_state}:${transition.to_state}:${transition.label}`}
-                        className="rounded-xl border bg-muted/20 px-3 py-2 text-sm text-muted-foreground"
-                      >
-                        <div>{transition.label}</div>
-                        <div className="mt-1 text-xs text-muted-foreground">
-                          {transition.from_state} → {transition.to_state}
+                  <div>
+                    <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Transitions</p>
+                    <div className="mt-2 space-y-2">
+                      {workflowType.lifecycle.transitions.map((transition) => (
+                        <div
+                          key={`${transition.from_state}:${transition.to_state}:${transition.label}`}
+                          className="rounded-xl border bg-muted/20 px-3 py-2 text-sm text-muted-foreground"
+                        >
+                          <div>{transition.label}</div>
+                          <div className="mt-1 text-xs text-muted-foreground">
+                            {transition.from_state} → {transition.to_state}
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      ))}
+                    </div>
                   </div>
-                </div>
-                <div className="pt-2">
+                  <div>
+                    <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Conditional paths</p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {workflowType.lifecycle.conditional_paths.length > 0 ? (
+                        workflowType.lifecycle.conditional_paths.map((path) => (
+                          <div key={path} className="rounded-full border bg-muted/20 px-3 py-1 text-xs text-muted-foreground">
+                            {path}
+                          </div>
+                        ))
+                      ) : (
+                        <p className="text-sm text-muted-foreground">No conditional paths defined.</p>
+                      )}
+                    </div>
+                  </div>
                   <Button onClick={() => void saveWorkflowType()} disabled={saving} size="sm">
-                    {saving ? "Saving…" : "Save workflow config"}
+                    {saving ? "Saving…" : "Save policy"}
                   </Button>
                 </div>
               </div>
-            </div>
-          </div>
 
-          <div className="overflow-hidden rounded-2xl border bg-background">
-            <div className="border-b px-5 py-3">
-              <h2 className="text-sm font-semibold">Recent executions</h2>
+              <div className="overflow-hidden rounded-2xl border bg-background">
+                <div className="border-b px-5 py-3">
+                  <h2 className="text-sm font-semibold">Recent executions</h2>
+                </div>
+                {workflowType.recent_executions.length === 0 ? (
+                  <div className="px-5 py-10 text-sm text-muted-foreground">No executions recorded for this workflow yet.</div>
+                ) : (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Execution</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead>Created</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {workflowType.recent_executions.map((execution) => (
+                        <TableRow key={execution.workflow_id}>
+                          <TableCell className="font-medium">
+                            <Link
+                              className="text-primary hover:underline"
+                              href={`/${encodeURIComponent(tenantId)}/executions/${encodeURIComponent(execution.workflow_id)}`}
+                            >
+                              {execution.issue_summary?.trim() || execution.issue_key}
+                            </Link>
+                            <p className="text-xs text-muted-foreground">{execution.workflow_id}</p>
+                          </TableCell>
+                          <TableCell>
+                            <div className="space-y-1">
+                              <StatusBadge status={execution.status} />
+                              {execution.waiting_on ? (
+                                <p className="text-xs text-muted-foreground">{execution.waiting_on.replace(/_/g, " ")}</p>
+                              ) : null}
+                            </div>
+                          </TableCell>
+                          <TableCell className="whitespace-nowrap text-sm text-muted-foreground">
+                            {formatTimestamp(execution.created_at)}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                )}
+              </div>
             </div>
-            {workflowType.recent_executions.length === 0 ? (
-              <div className="px-5 py-10 text-sm text-muted-foreground">No executions recorded for this workflow yet.</div>
-            ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Execution</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Failure</TableHead>
-                    <TableHead>Next</TableHead>
-                    <TableHead>Created</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {workflowType.recent_executions.map((execution) => (
-                    <TableRow key={execution.workflow_id}>
-                      <TableCell className="font-medium">
-                        <Link
-                          className="text-primary hover:underline"
-                          href={`/${encodeURIComponent(tenantId)}/executions/${encodeURIComponent(execution.workflow_id)}`}
-                        >
-                          {execution.issue_summary?.trim() || execution.issue_key}
-                        </Link>
-                        <p className="text-xs text-muted-foreground">{execution.workflow_id}</p>
-                      </TableCell>
-                      <TableCell>
-                        <div className="space-y-1">
-                          <StatusBadge status={execution.status} />
-                          {execution.waiting_on ? (
-                            <p className="text-xs text-muted-foreground">{execution.waiting_on.replace(/_/g, " ")}</p>
-                          ) : null}
-                        </div>
-                      </TableCell>
-                      <TableCell className="max-w-[420px] text-sm text-muted-foreground">
-                        {execution.failure_reason?.trim() || "—"}
-                      </TableCell>
-                      <TableCell className="text-sm text-muted-foreground">{execution.next_step?.trim() || "—"}</TableCell>
-                      <TableCell className="whitespace-nowrap text-sm text-muted-foreground">
-                        {formatTimestamp(execution.created_at)}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            )}
           </div>
         </>
       ) : (

@@ -177,15 +177,12 @@ test("shows workflow definitions and retries a failed execution operation", asyn
 
   await page.goto("/route25/workflows");
 
-  await expect(page.getByText("Parent Planning")).toBeVisible();
-  await expect(page.getByText("Create or refresh engineering child tickets.")).toBeVisible();
   await expect(page.getByRole("link", { name: "Parent Planning" })).toBeVisible();
 
   await page.getByRole("link", { name: "Parent Planning" }).click();
 
   await expect(page).toHaveURL(/\/route25\/workflows\/parent_planning$/);
   await expect(page.getByText("Execution modes")).toBeVisible();
-  await expect(page.getByText("fresh, restart, resume")).toBeVisible();
   await expect(page.getByText("Recent executions")).toBeVisible();
   await expect(page.getByRole("link", { name: "Identity and authorization v1 contract" })).toBeVisible();
 
@@ -194,20 +191,21 @@ test("shows workflow definitions and retries a failed execution operation", asyn
   await expect(page).toHaveURL(/\/route25\/executions\/parent_planning%3AMAB-215$/);
   await expect(page.getByText("Workflow type")).toBeVisible();
   await expect(page.getByText("Parent Planning")).toBeVisible();
-  await expect(page.getByText("Fan out engineering child tickets")).toBeVisible();
+  await expect(page.getByText("Fan out engineering child tickets").first()).toBeVisible();
   await expect(page.getByText("Execution path")).toBeVisible();
-  await expect(page.getByText("Retry failed operation")).toBeVisible();
-  await expect(page.getByText("content_limit")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Retry operation" })).toBeEnabled();
+  await expect(page.getByText("content_limit").first()).toBeVisible();
+  const retryStepButton = page.getByRole("button", { name: "Retry step" }).last();
+  await retryStepButton.scrollIntoViewIfNeeded();
+  await expect(retryStepButton).toBeEnabled();
 
-  await page.getByRole("button", { name: "Retry operation" }).click();
+  await retryStepButton.click();
 
   expect(retriedOperation).toEqual({
     workflowId: "parent_planning:MAB-215",
     operationId: "operation-jira-child-fanout",
   });
-  await expect(page.getByText("Retried Fan out engineering child tickets.")).toBeVisible();
+  await expect(page.getByText("Attempt 2")).toBeVisible();
+  await expect(page.getByText("running").last()).toBeVisible();
   await expect(page.getByText("Create tenant assurance boundary")).toBeVisible();
   await expect(page.getByText("MAB-300")).toBeVisible();
-  await expect(page.getByText("Attempt 2")).toBeVisible();
 });
