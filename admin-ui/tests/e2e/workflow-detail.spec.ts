@@ -179,10 +179,10 @@ test("shows workflow definitions and retries a failed execution operation", asyn
   await page.getByRole("link", { name: "Parent Planning" }).click();
 
   await expect(page).toHaveURL(/\/example\/workflows\/parent_planning$/);
-  await expect(page.getByRole("heading", { name: "Workflow settings" })).toBeVisible();
-  await expect(page.getByText("Recent executions")).toBeVisible();
-  await page.getByRole("button", { name: "Operations flow" }).click();
-  await expect(page.getByRole("button", { name: "Operations flow" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Settings" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Recent executions" })).toBeVisible();
+  await page.getByRole("button", { name: "Recent executions" }).click();
+  await expect(page.getByRole("button", { name: "Recent executions" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Identity and authorization v1 contract" })).toBeVisible();
 
   await page.getByRole("link", { name: "Identity and authorization v1 contract" }).click();
@@ -190,9 +190,8 @@ test("shows workflow definitions and retries a failed execution operation", asyn
   await expect(page).toHaveURL(/\/example\/executions\/parent_planning%3AMAB-215$/);
   await expect(page.getByText("Workflow type")).toBeVisible();
   await expect(page.getByText("Parent Planning")).toBeVisible();
-  await expect(page.getByText("Fan out engineering child tickets").first()).toBeVisible();
-  await expect(page.getByText("Execution path")).toBeVisible();
   await expect(page.getByText("Step recovery")).toBeVisible();
+  await expect(page.locator("table").getByText("jira_child_fanout").first()).toBeVisible();
   const retryStepButton = page.getByRole("button", { name: "Retry step" }).last();
   await retryStepButton.scrollIntoViewIfNeeded();
   await expect(retryStepButton).toBeEnabled();
@@ -207,4 +206,8 @@ test("shows workflow definitions and retries a failed execution operation", asyn
   await expect(page.getByText("running").last()).toBeVisible();
   await expect(page.getByText("Create tenant assurance boundary")).toBeVisible();
   await expect(page.getByText("MAB-300")).toBeVisible();
+
+  await page.getByRole("button", { name: "Execution path" }).click();
+  await expect(page.getByRole("button", { name: "Execution path" })).toBeVisible();
+  await expect(page.getByText("jira_child_fanout").first()).toBeVisible();
 });
