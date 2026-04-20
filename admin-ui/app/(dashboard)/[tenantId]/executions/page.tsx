@@ -38,11 +38,11 @@ function summarizeFailure(workflow: WorkflowRecord): string {
 }
 
 function retryableState(workflow: WorkflowRecord): string {
-  const retryableAttempts = workflow.operations.flatMap((operation) => operation.attempts).filter((attempt) => attempt.retryable);
-  if (retryableAttempts.length === 0) {
+  const retryableOperations = workflow.operations.filter((operation) => operation.can_retry);
+  if (retryableOperations.length === 0) {
     return "No";
   }
-  return retryableAttempts.some((attempt) => attempt.status === "retrying") ? "Retrying" : "Yes";
+  return retryableOperations.some((operation) => operation.status === "retrying") ? "Retrying" : "Yes";
 }
 
 function nextStateLabel(workflow: WorkflowRecord): string {

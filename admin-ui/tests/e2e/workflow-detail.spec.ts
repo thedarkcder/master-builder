@@ -137,7 +137,7 @@ test("shows workflow definitions and retries a failed execution operation", asyn
         ...workflow.operations[0],
         status: "running",
         can_retry: false,
-        retry_unavailable_reason: "Latest attempt is not marked retryable.",
+        retry_unavailable_reason: "Latest attempt is not in a failed state.",
         attempts: [
           ...workflow.operations[0].attempts,
           {

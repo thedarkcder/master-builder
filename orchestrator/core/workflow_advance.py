@@ -63,7 +63,6 @@ class WorkflowAdvanceLifecycle(Protocol):
         operation_type: str,
         category: str,
         message: str,
-        retryable: bool,
     ) -> None:
         ...
 
@@ -109,7 +108,6 @@ class WorkflowTransitionPlanner:
         operation_type: str,
         category: str,
         message: str,
-        retryable: bool,
     ) -> None:
         self._steps.append(
             WorkflowTransitionStep(
@@ -118,7 +116,6 @@ class WorkflowTransitionPlanner:
                     "operation_type": operation_type,
                     "category": category,
                     "message": message,
-                    "retryable": retryable,
                 },
             )
         )

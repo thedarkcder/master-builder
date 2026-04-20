@@ -240,12 +240,11 @@ class ParentFeaturePlanningWorkflow:
                 project_key=project_key,
             )
         except Exception as exc:  # noqa: BLE001
-            category, retryable = classify_external_workflow_failure(error=exc)
+            category = classify_external_workflow_failure(error=exc)
             lifecycle.mark_operation_failed(
                 operation_type="jira_child_fanout",
                 category=category,
                 message=str(exc),
-                retryable=retryable,
             )
             blocked_issue_keys = [context.issue_key, *[detail.key for detail in child_details]]
             issue_gateway.mark_issues_sync_blocked(issue_keys=blocked_issue_keys)
@@ -415,7 +414,6 @@ class ParentFeaturePlanningWorkflow:
                     f"Failed to promote engineering child tickets to {target_status}: "
                     f"{', '.join(failed_children)}"
                 ),
-                retryable=True,
             )
         else:
             lifecycle.mark_operation_completed(
@@ -742,12 +740,11 @@ class ParentFeaturePlanningWorkflow:
             context.issue_key,
             error,
         )
-        category, retryable = classify_external_workflow_failure(error=error)
+        category = classify_external_workflow_failure(error=error)
         lifecycle.mark_operation_failed(
             operation_type="jira_child_fanout",
             category=category,
             message=str(error),
-            retryable=retryable,
         )
         issue_gateway.update_issue_sync_label(
             issue_detail=issue_gateway.load_parent_detail(context.issue_key),

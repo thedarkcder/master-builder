@@ -301,8 +301,8 @@ def _workflow_operation_reads(
             return False, "Operation has no attempt history to retry."
         if not retry_policy_config.manual_retry_enabled:
             return False, "Manual retry is disabled by the workflow type."
-        if not bool(latest_attempt.retryable):
-            return False, "Latest attempt is not marked retryable."
+        if str(latest_attempt.status or "").strip().lower() not in {"failed", "retrying"}:
+            return False, "Latest attempt is not in a failed state."
         if not supports_workflow_operation_retry(operation_type=operation_type):
             return False, workflow_operation_retry_unavailable_reason(operation_type=operation_type)
         return True, None
@@ -1406,8 +1406,8 @@ def retry_workflow_operation(
     latest_attempt = (attempts_by_operation.get(operation.operation_id) or [None])[-1]
     if latest_attempt is None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Workflow operation has no attempt history to retry")
-    if not bool(latest_attempt.retryable):
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Workflow operation is not retryable")
+    if str(latest_attempt.status or "").strip().lower() not in {"failed", "retrying"}:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Workflow operation is not in a failed state")
     if not supports_workflow_operation_retry(operation_type=operation.operation_type):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

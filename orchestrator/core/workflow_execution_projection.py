@@ -32,16 +32,16 @@ def workflow_execution_id(*, workflow_type_key: str, issue_key: str) -> str:
     return f"{str(workflow_type_key or '').strip()}:{str(issue_key or '').strip().upper()}"
 
 
-def classify_external_workflow_failure(*, error: Exception) -> tuple[str, bool]:
+def classify_external_workflow_failure(*, error: Exception) -> str:
     message = str(error or "").strip()
     lowered = message.lower()
     if "CONTENT_LIMIT_EXCEEDED" in message:
-        return "content_limit", True
+        return "content_limit"
     if "429" in message or "rate limit" in lowered:
-        return "rate_limited", True
+        return "rate_limited"
     if "502" in message or "503" in message or "504" in message or "timed out" in lowered:
-        return "transient_external_failure", True
-    return "external_failure", False
+        return "transient_external_failure"
+    return "external_failure"
 
 
 def _target_system_for_operation(operation_type: str) -> str | None:
@@ -138,7 +138,6 @@ class WorkflowExecutionProjection:
         operation_type: str,
         category: str,
         message: str,
-        retryable: bool,
     ) -> None:
         operation = self._operation(operation_type)
         attempt = start_workflow_operation_attempt(self.session, operation=operation)
@@ -148,7 +147,6 @@ class WorkflowExecutionProjection:
             attempt=attempt,
             category=category,
             message=message,
-            retryable=retryable,
         )
         mark_workflow_failed(workflow=self.workflow, message=message, now=_now())
 
