@@ -48,6 +48,10 @@ function impactLabel(required?: boolean): string {
   return required === false ? "Supporting" : "Must finish";
 }
 
+function latestAttemptCategory(attempt: ReturnType<typeof latestAttempt>) {
+  return attempt?.error_category?.trim().toLowerCase() || null;
+}
+
 export default function TenantExecutionDetailPage() {
   const params = useParams<{ tenantId: string; workflowId: string }>();
   const router = useRouter();
@@ -89,6 +93,10 @@ export default function TenantExecutionDetailPage() {
   }, [ready, credentials, loadWorkflow]);
 
   const hasRetryableAttempt = useMemo(() => (workflow?.operations ?? []).some((operation) => operation.can_retry), [workflow?.operations]);
+  const jiraIssueLink = useMemo(
+    () => workflow?.links.find((link) => link.kind === "jira_issue" && link.url)?.url ?? null,
+    [workflow?.links],
+  );
   const selectedOperation = useMemo(
     () => workflow?.operations.find((operation) => operation.operation_id === selectedOperationId) ?? null,
     [selectedOperationId, workflow?.operations],
@@ -381,6 +389,8 @@ export default function TenantExecutionDetailPage() {
                   <TableBody>
                     {workflow.operations.map((operation) => {
                       const attempt = latestAttempt(operation);
+                      const latestCategory = latestAttemptCategory(attempt);
+                      const needsClarification = latestCategory === "missing_input" && Boolean(jiraIssueLink);
                       return (
                         <TableRow key={operation.operation_id}>
                           <TableCell className="font-medium">
@@ -404,20 +414,28 @@ export default function TenantExecutionDetailPage() {
                               operation.status === "pending" ? "Not started" : "—"
                             )}
                           </TableCell>
-                          <TableCell className="max-w-[440px] text-sm text-muted-foreground">
+                          <TableCell className="max-w-[440px] text-sm text-muted-foreground whitespace-pre-wrap">
                             {attemptFailure(attempt) || "—"}
                           </TableCell>
                           <TableCell className="text-right">
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="h-8"
-                              onClick={() => void handleRetryOperation(operation)}
-                              disabled={!operation.can_retry || operation.definition_only || retryingOperationId === operation.operation_id}
-                            >
-                              <RefreshCw className={cn("mr-1.5 h-3.5 w-3.5", retryingOperationId === operation.operation_id && "animate-spin")} />
-                              Retry step
-                            </Button>
+                            {needsClarification && jiraIssueLink ? (
+                              <Button size="sm" variant="outline" className="h-8" asChild>
+                                <a href={jiraIssueLink} target="_blank" rel="noreferrer">
+                                  Open Jira issue
+                                </a>
+                              </Button>
+                            ) : (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-8"
+                                onClick={() => void handleRetryOperation(operation)}
+                                disabled={!operation.can_retry || operation.definition_only || retryingOperationId === operation.operation_id}
+                              >
+                                <RefreshCw className={cn("mr-1.5 h-3.5 w-3.5", retryingOperationId === operation.operation_id && "animate-spin")} />
+                                Retry step
+                              </Button>
+                            )}
                           </TableCell>
                         </TableRow>
                       );

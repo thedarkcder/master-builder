@@ -51,6 +51,7 @@ export function ExecutionObservabilityDrawer({
   }
 
   const events = activeView === "telemetry" ? telemetryEvents : auditEvents;
+  const groupedEvents = groupEventsByAttempt(events);
 
   if (!mounted) {
     return null;
@@ -116,44 +117,56 @@ export function ExecutionObservabilityDrawer({
             <p className="mt-4 rounded-xl border px-4 py-3 text-sm text-muted-foreground">Loading events…</p>
           ) : null}
 
-          <div className="mt-4 space-y-3">
-            {!loading && events.length === 0 ? (
+          <div className="mt-4 space-y-4">
+            {!loading && groupedEvents.length === 0 ? (
               <p className="rounded-xl border px-4 py-6 text-sm text-muted-foreground">No events recorded for this step yet.</p>
             ) : null}
 
-            {events.map((event) => (
-              <div key={`${event.source}:${event.event_id}`} className="rounded-xl border p-4">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className={cn("rounded-full border px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide", levelTone(event.level))}>
-                      {event.level}
-                    </span>
-                    <span className="rounded-full border px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
-                      {event.event_kind.replace(/_/g, " ")}
-                    </span>
-                    {event.source_component ? (
-                      <span className="text-xs text-muted-foreground">{event.source_component}</span>
-                    ) : null}
-                  </div>
-                  <span className="text-xs text-muted-foreground" title={formatTimestamp(event.recorded_at)}>
-                    {formatTimeAgo(event.recorded_at)}
+            {groupedEvents.map((group) => (
+              <section key={group.key} className="space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <h3 className="text-sm font-semibold">{group.label}</h3>
+                  <span className="text-xs text-muted-foreground" title={formatTimestamp(group.latestRecordedAt)}>
+                    {formatTimeAgo(group.latestRecordedAt)}
                   </span>
                 </div>
-                <p className="mt-3 text-sm">{event.message}</p>
-                {(event.invocation_id || event.stage || event.stream || event.agent_id) ? (
-                  <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted-foreground">
-                    {event.agent_id ? <span>Agent: {event.agent_id}</span> : null}
-                    {event.stage ? <span>Stage: {event.stage}</span> : null}
-                    {event.stream ? <span>Stream: {event.stream}</span> : null}
-                    {event.invocation_id ? <span>Invocation: {event.invocation_id}</span> : null}
-                  </div>
-                ) : null}
-                {event.payload && Object.keys(event.payload).length ? (
-                  <pre className="mt-3 overflow-x-auto rounded-lg bg-muted/50 p-3 text-xs text-muted-foreground">
-                    {JSON.stringify(event.payload, null, 2)}
-                  </pre>
-                ) : null}
-              </div>
+                <div className="space-y-3">
+                  {group.events.map((event) => (
+                    <div key={`${event.source}:${event.event_id}`} className="rounded-xl border p-4">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className={cn("rounded-full border px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide", levelTone(event.level))}>
+                            {event.level}
+                          </span>
+                          <span className="rounded-full border px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+                            {event.event_kind.replace(/_/g, " ")}
+                          </span>
+                          {event.source_component ? (
+                            <span className="text-xs text-muted-foreground">{event.source_component}</span>
+                          ) : null}
+                        </div>
+                        <span className="text-xs text-muted-foreground" title={formatTimestamp(event.recorded_at)}>
+                          {formatTimeAgo(event.recorded_at)}
+                        </span>
+                      </div>
+                      <p className="mt-3 text-sm whitespace-pre-wrap">{event.message}</p>
+                      {(event.invocation_id || event.stage || event.stream || event.agent_id) ? (
+                        <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted-foreground">
+                          {event.agent_id ? <span>Agent: {event.agent_id}</span> : null}
+                          {event.stage ? <span>Stage: {event.stage}</span> : null}
+                          {event.stream ? <span>Stream: {event.stream}</span> : null}
+                          {event.invocation_id ? <span>Invocation: {event.invocation_id}</span> : null}
+                        </div>
+                      ) : null}
+                      {event.payload && Object.keys(event.payload).length ? (
+                        <pre className="mt-3 overflow-x-auto rounded-lg bg-muted/50 p-3 text-xs text-muted-foreground">
+                          {JSON.stringify(event.payload, null, 2)}
+                        </pre>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              </section>
             ))}
           </div>
         </div>
@@ -162,4 +175,31 @@ export function ExecutionObservabilityDrawer({
     ),
     document.body,
   );
+}
+
+function groupEventsByAttempt(events: WorkflowObservabilityEventRecord[]) {
+  const groups = new Map<string, { key: string; label: string; latestRecordedAt: string; events: WorkflowObservabilityEventRecord[] }>();
+  for (const event of events) {
+    const attemptNumber = typeof event.attempt === "number" ? event.attempt : null;
+    const groupKey = attemptNumber === null ? "attempt:unknown" : `attempt:${attemptNumber}`;
+    const existing = groups.get(groupKey);
+    if (existing) {
+      existing.events.push(event);
+      if (new Date(event.recorded_at).getTime() > new Date(existing.latestRecordedAt).getTime()) {
+        existing.latestRecordedAt = event.recorded_at;
+      }
+      continue;
+    }
+    groups.set(groupKey, {
+      key: groupKey,
+      label: attemptNumber === null ? "Attempt unknown" : `Attempt ${attemptNumber}`,
+      latestRecordedAt: event.recorded_at,
+      events: [event],
+    });
+  }
+  return [...groups.values()].sort((left, right) => {
+    const leftAttempt = Number(left.key.replace("attempt:", "")) || -1;
+    const rightAttempt = Number(right.key.replace("attempt:", "")) || -1;
+    return rightAttempt - leftAttempt;
+  });
 }

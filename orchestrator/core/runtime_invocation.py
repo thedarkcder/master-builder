@@ -12,6 +12,7 @@ from typing import Callable
 from uuid import uuid4
 
 from orchestrator.core.codex_models import normalize_codex_reasoning_effort
+from orchestrator.core.audit_events import record_audit_event
 from orchestrator.core.config import get_settings
 from orchestrator.core.guardrails import redact_sensitive_text
 from orchestrator.core.knowledge_base import KnowledgeEmbeddingAccessMode, build_knowledge_prompt_context
@@ -258,7 +259,7 @@ def _collect_context_injection_metrics(*, working_dir: str) -> dict[str, int | b
 def _resolve_knowledge_policy_for_context(
     *,
     context: AgentInvocationContext,
-) -> tuple[str | None, bool, str, str, bool]:
+) -> tuple[str | None, bool, str, str | None, str, bool]:
     settings = get_settings()
     database_url = str(getattr(settings, "database_url", "") or "").strip()
     default_reasoning_effort = str(getattr(settings, "codex_reasoning_effort", "medium") or "medium")
@@ -268,6 +269,7 @@ def _resolve_knowledge_policy_for_context(
             context.project_id,
             bool(getattr(settings, "knowledge_base_enabled_default", True)),
             str(getattr(settings, "knowledge_auto_answer_mode_default", "aggressive")),
+            str(getattr(settings, "codex_model", "") or "").strip() or None,
             default_reasoning_effort,
             False,
         )
@@ -276,6 +278,7 @@ def _resolve_knowledge_policy_for_context(
             context.project_id,
             bool(getattr(settings, "knowledge_base_enabled_default", True)),
             str(getattr(settings, "knowledge_auto_answer_mode_default", "aggressive")),
+            str(getattr(settings, "codex_model", "") or "").strip() or None,
             default_reasoning_effort,
             False,
         )
@@ -284,6 +287,7 @@ def _resolve_knowledge_policy_for_context(
     resolved_project_id = context.project_id
     knowledge_enabled = bool(getattr(settings, "knowledge_base_enabled_default", True))
     knowledge_mode = str(getattr(settings, "knowledge_auto_answer_mode_default", "aggressive"))
+    codex_model_override = str(getattr(settings, "codex_model", "") or "").strip() or None
     codex_reasoning_effort = default_reasoning_effort
     has_explicit_reasoning_override = False
     try:
@@ -294,6 +298,7 @@ def _resolve_knowledge_policy_for_context(
                     resolved_project_id,
                     knowledge_enabled,
                     knowledge_mode,
+                    codex_model_override,
                     codex_reasoning_effort,
                     has_explicit_reasoning_override,
                 )
@@ -321,6 +326,9 @@ def _resolve_knowledge_policy_for_context(
             normalized_mode = str(effective.get("knowledge_auto_answer_mode") or "").strip().lower()
             if normalized_mode in {"safe", "balanced", "aggressive"}:
                 knowledge_mode = normalized_mode
+            normalized_model = str(effective.get("codex_model") or "").strip()
+            if normalized_model:
+                codex_model_override = normalized_model
             codex_reasoning_effort = (
                 str(effective.get("codex_reasoning_effort") or codex_reasoning_effort).strip().lower()
                 or codex_reasoning_effort
@@ -336,6 +344,7 @@ def _resolve_knowledge_policy_for_context(
         resolved_project_id,
         knowledge_enabled,
         knowledge_mode,
+        codex_model_override,
         codex_reasoning_effort,
         has_explicit_reasoning_override,
     )
@@ -346,18 +355,20 @@ def _augment_prompt_with_knowledge_context(
     context: AgentInvocationContext,
     system_prompt: str,
     user_prompt: str,
-) -> tuple[str, dict[str, object], str, bool]:
+) -> tuple[str, dict[str, object], str | None, str, bool]:
     settings = get_settings()
     default_codex_reasoning_effort = str(getattr(settings, "codex_reasoning_effort", "medium") or "medium")
     database_url = str(getattr(settings, "database_url", "") or "").strip()
     tenant_id = str(context.tenant_id or "").strip()
     resolved_codex_reasoning_effort = default_codex_reasoning_effort
+    resolved_model_override = str(getattr(settings, "codex_model", "") or "").strip() or None
     has_explicit_reasoning_override = False
     if tenant_id:
         (
             _,
             _,
             _,
+            resolved_model_override,
             resolved_codex_reasoning_effort,
             has_explicit_reasoning_override,
         ) = _resolve_knowledge_policy_for_context(
@@ -367,6 +378,7 @@ def _augment_prompt_with_knowledge_context(
         return (
             user_prompt,
             {"kb_lookup_attempted": False, "kb_hits": 0, "kb_context_chars": 0},
+            resolved_model_override,
             resolved_codex_reasoning_effort,
             has_explicit_reasoning_override,
         )
@@ -374,6 +386,7 @@ def _augment_prompt_with_knowledge_context(
         return (
             user_prompt,
             {"kb_lookup_attempted": False, "kb_hits": 0, "kb_context_chars": 0},
+            resolved_model_override,
             default_codex_reasoning_effort,
             False,
         )
@@ -389,6 +402,7 @@ def _augment_prompt_with_knowledge_context(
         project_id,
         knowledge_enabled,
         knowledge_mode,
+        resolved_model_override,
         codex_reasoning_effort,
         has_explicit_reasoning_override,
     ) = _resolve_knowledge_policy_for_context(context=context)
@@ -396,6 +410,7 @@ def _augment_prompt_with_knowledge_context(
         return (
             user_prompt,
             {"kb_lookup_attempted": False, "kb_hits": 0, "kb_context_chars": 0},
+            resolved_model_override,
             codex_reasoning_effort,
             has_explicit_reasoning_override,
         )
@@ -427,6 +442,7 @@ def _augment_prompt_with_knowledge_context(
         return (
             user_prompt,
             {"kb_lookup_attempted": True, "kb_hits": 0, "kb_context_chars": 0},
+            resolved_model_override,
             codex_reasoning_effort,
             has_explicit_reasoning_override,
         )
@@ -436,6 +452,7 @@ def _augment_prompt_with_knowledge_context(
         return (
             user_prompt,
             {"kb_lookup_attempted": True, "kb_hits": 0, "kb_context_chars": 0},
+            resolved_model_override,
             codex_reasoning_effort,
             has_explicit_reasoning_override,
         )
@@ -451,7 +468,7 @@ def _augment_prompt_with_knowledge_context(
         "kb_lookup_attempted": True,
         "kb_hits": len(context_payload.citations),
         "kb_context_chars": len(context_text),
-    }, codex_reasoning_effort, has_explicit_reasoning_override
+    }, resolved_model_override, codex_reasoning_effort, has_explicit_reasoning_override
 
 
 def _emit_invocation_event(
@@ -476,6 +493,8 @@ def _emit_invocation_event(
                 session=session,
                 tenant_id=tenant_id,
                 project_id=context.project_id,
+                workflow_id=context.workflow_id,
+                operation_id=context.operation_id,
                 run_id=context.run_id,
                 issue_key=context.issue_key,
                 agent_id=settings.agent_id,
@@ -487,6 +506,29 @@ def _emit_invocation_event(
                 attempt=context.attempt,
                 stream="system",
                 message=json.dumps(event_payload, sort_keys=True),
+            )
+            record_audit_event(
+                session,
+                tenant_id=tenant_id,
+                project_id=context.project_id,
+                workflow_id=context.workflow_id,
+                run_id=context.run_id,
+                operation_id=context.operation_id,
+                attempt_id=None,
+                issue_key=context.issue_key,
+                actor_type="agent",
+                actor_id=settings.agent_id,
+                source_component="runtime_invocation",
+                event_kind=event_kind,
+                level="info",
+                message=str(payload.get("message") or "").strip() or event_kind.replace("_", " "),
+                payload={
+                    "invocation_id": str(context.invocation_id or "").strip() or None,
+                    "stage": context.stage,
+                    "attempt": context.attempt,
+                    "stream": "system",
+                    **payload,
+                },
             )
             session.commit()
     except Exception as exc:  # noqa: BLE001
@@ -865,6 +907,7 @@ def _invoke_runtime_json_once(
     (
         effective_user_prompt,
         knowledge_metrics,
+        resolved_model_override,
         resolved_reasoning_effort,
         has_explicit_reasoning_override,
     ) = _augment_prompt_with_knowledge_context(
@@ -917,7 +960,9 @@ def _invoke_runtime_json_once(
         "total_tokens": None,
     }
     runtime_model = str(getattr(runtime, "model", "") or "").strip()
-    resolved_model_override = runtime_model
+    runtime_command = str(getattr(runtime, "command", "") or "").strip().lower()
+    if runtime_command.startswith("http:") and runtime_model:
+        resolved_model_override = runtime_model
     _emit_invocation_event(
         context=invocation_context,
         event_kind="stage_invocation_started",
@@ -931,6 +976,13 @@ def _invoke_runtime_json_once(
             **context_metrics,
             **knowledge_metrics,
         },
+    )
+    _emit_runtime_request_event(
+        context=invocation_context,
+        system_prompt=system_prompt,
+        user_prompt=effective_user_prompt,
+        require_json=require_json,
+        resumed_session=bool(resume_session_id),
     )
     payload: dict | None = None
     failure_reason: str | None = None
@@ -959,6 +1011,10 @@ def _invoke_runtime_json_once(
                 usage_state=usage_state,
                 usage=usage,
             ),
+        )
+        _emit_runtime_response_event(
+            context=invocation_context,
+            payload=payload,
         )
         return payload, str(sink_state.get("codex_session_id") or "").strip() or None
     except Exception as exc:  # noqa: BLE001
@@ -1037,6 +1093,42 @@ def _build_tool_result_prompt(*, tool_result: dict[str, object], require_final_r
     )
 
 
+def _emit_runtime_request_event(
+    *,
+    context: AgentInvocationContext,
+    system_prompt: str,
+    user_prompt: str,
+    require_json: bool,
+    resumed_session: bool,
+) -> None:
+    _emit_invocation_event(
+        context=context,
+        event_kind="stage_request",
+        payload={
+            "message": "Submitted runtime request.",
+            "require_json": require_json,
+            "resumed_session": resumed_session,
+            "system_prompt": system_prompt,
+            "user_prompt": user_prompt,
+        },
+    )
+
+
+def _emit_runtime_response_event(
+    *,
+    context: AgentInvocationContext,
+    payload: dict[str, object],
+) -> None:
+    _emit_invocation_event(
+        context=context,
+        event_kind="stage_response",
+        payload={
+            "message": "Received runtime response.",
+            "response_payload": payload,
+        },
+    )
+
+
 def _capture_session_id(
     *,
     context: AgentInvocationContext,
@@ -1111,7 +1203,7 @@ def _combined_log_sink(
             and "null" in message_text
         ):
             sink_state["no_assistant_output_detected"] = True
-        _append_raw_log_line(context=context, stream=stream, message=sanitized_message)
+            _append_raw_log_line(context=context, stream=stream, message=sanitized_message)
         settings = get_settings()
         sample_every = max(1, int(getattr(settings, "codex_db_log_sampling_interval", 100)))
         persist_turn_completed_usage = bool(
@@ -1157,6 +1249,8 @@ def _persist_runtime_log_line(*, context: AgentInvocationContext, stream: str, m
             session=session,
             tenant_id=tenant_id,
             project_id=context.project_id,
+            workflow_id=context.workflow_id,
+            operation_id=context.operation_id,
             run_id=context.run_id,
             issue_key=context.issue_key,
             agent_id=settings.agent_id,
@@ -1187,6 +1281,8 @@ def _persist_runtime_log_lines(*, items: list[_QueuedLogLine]) -> None:
                 {
                     "tenant_id": tenant_id,
                     "project_id": item.context.project_id,
+                    "workflow_id": item.context.workflow_id,
+                    "operation_id": item.context.operation_id,
                     "run_id": item.context.run_id,
                     "issue_key": item.context.issue_key,
                     "agent_id": settings.agent_id,

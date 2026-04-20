@@ -11,8 +11,10 @@ from orchestrator.api.discord.seed.draft_assembly import (
     parse_parent_seed_drafts,
 )
 from orchestrator.api.discord.shared.response_format import build_issue_url_list, format_issue_markdown_list
+from orchestrator.core.audit_events import record_audit_event
 from orchestrator.core.runtime_invocation import AgentInvocationContext
-from orchestrator.storage.models import Tenant
+from orchestrator.core.workflow_operation_logging import emit_workflow_operation_log
+from orchestrator.storage.models import Tenant, WorkflowOperation
 from orchestrator.tools.jira_oauth import JiraIssueCreateInput, JiraIssuePreview, JiraOAuthError
 
 SEED_FOLLOWUP_CONTEXT_MAX_AGE = timedelta(hours=24)
@@ -185,6 +187,54 @@ def _project_available_issue_types(*, oauth: dict[str, Any], project_key: str) -
     return []
 
 
+def _record_seed_operation_event(
+    *,
+    session,
+    tenant_id: str,
+    project_id: str | None,
+    workflow_id: str | None,
+    operation_id: str | None,
+    issue_key: str | None,
+    attempt: int | None,
+    event_kind: str,
+    message: str,
+    payload: dict[str, Any] | None = None,
+) -> None:
+    normalized_tenant_id = str(tenant_id or "").strip()
+    normalized_workflow_id = str(workflow_id or "").strip() or None
+    normalized_operation_id = str(operation_id or "").strip() or None
+    if not normalized_tenant_id or not normalized_workflow_id or not normalized_operation_id:
+        return
+    operation = session.get(WorkflowOperation, normalized_operation_id)
+    if operation is None:
+        return
+    event_payload = {"attempt": attempt, **dict(payload or {})}
+    record_audit_event(
+        session,
+        tenant_id=normalized_tenant_id,
+        project_id=str(project_id or "").strip() or None,
+        workflow_id=normalized_workflow_id,
+        run_id=operation.run_id,
+        operation_id=normalized_operation_id,
+        attempt_id=None,
+        issue_key=str(issue_key or "").strip() or None,
+        actor_type="agent",
+        actor_id="system",
+        source_component="issue_seed_service",
+        event_kind=event_kind,
+        level="info",
+        message=message,
+        payload=event_payload,
+    )
+    emit_workflow_operation_log(
+        session,
+        operation=operation,
+        event_type=event_kind,
+        message=message,
+        metadata=event_payload,
+    )
+
+
 def _upsert_issue(
     *,
     oauth: dict[str, Any],
@@ -248,6 +298,7 @@ def seed_issues_with_runtime(
     planning_package: dict[str, Any] | None = None,
     workflow_id: str | None = None,
     operation_id: str | None = None,
+    attempt: int | None = None,
 ):  # noqa: ANN001
     del build_seed_issue_description_fn
     project_keys = tenant_project_keys_fn(session=session, tenant=tenant)
@@ -278,6 +329,7 @@ def seed_issues_with_runtime(
                 working_dir=codex_working_dir,
                 workflow_id=workflow_id,
                 operation_id=operation_id,
+                attempt=attempt,
             ),
         )
     except codex_runtime_error_type as exc:
@@ -339,6 +391,25 @@ def seed_issues_with_runtime(
             architecture_summary=architecture_summary,
             architecture_diagram=architecture_diagram if isinstance(architecture_diagram, str) else None,
         )
+        _record_seed_operation_event(
+            session=session,
+            tenant_id=tenant.tenant_id,
+            project_id=scoped_project_id,
+            workflow_id=workflow_id,
+            operation_id=operation_id,
+            issue_key=None,
+            attempt=attempt,
+            event_kind="jira_parent_upsert_request",
+            message="Submitting parent Jira issue upsert.",
+            payload={
+                "project_key": project_key,
+                "requested_issue_key": parent_issue.requested_issue_key,
+                "summary": parent_issue_input.summary,
+                "description": parent_issue_input.description,
+                "labels": parent_issue_input.labels,
+                "issue_type": parent_issue_input.issue_type,
+            },
+        )
         parent_issue_key, parent_created, parent_updated = _upsert_issue(
                 oauth=oauth,
                 project_key=project_key,
@@ -349,6 +420,23 @@ def seed_issues_with_runtime(
                 matched_issue_keys=matched_issue_keys,
                 select_seed_match_fn=select_seed_match_fn,
             )
+        _record_seed_operation_event(
+            session=session,
+            tenant_id=tenant.tenant_id,
+            project_id=scoped_project_id,
+            workflow_id=workflow_id,
+            operation_id=operation_id,
+            issue_key=parent_issue_key,
+            attempt=attempt,
+            event_kind="jira_parent_upsert_response",
+            message="Parent Jira issue upsert completed.",
+            payload={
+                "project_key": project_key,
+                "issue_key": parent_issue_key,
+                "created": parent_created,
+                "updated": parent_updated,
+            },
+        )
         if not parent_issue_key:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -363,6 +451,23 @@ def seed_issues_with_runtime(
                 architecture_summary=architecture_summary,
                 architecture_diagram=architecture_diagram if isinstance(architecture_diagram, str) else None,
             )
+            _record_seed_operation_event(
+                session=session,
+                tenant_id=tenant.tenant_id,
+                project_id=scoped_project_id,
+                workflow_id=workflow_id,
+                operation_id=operation_id,
+                issue_key=parent_issue_key,
+                attempt=attempt,
+                event_kind="jira_parent_update_request",
+                message="Submitting blocked-planning update for parent Jira issue.",
+                payload={
+                    "issue_key": parent_issue_key,
+                    "summary": parent_final_input.summary,
+                    "description": parent_final_input.description,
+                    "labels": parent_final_input.labels,
+                },
+            )
             oauth["client"].update_issue_fields(
                 access_token=oauth["access_token"],
                 cloud_id=oauth["cloud_id"],
@@ -370,6 +475,23 @@ def seed_issues_with_runtime(
                 summary=parent_final_input.summary,
                 description=parent_final_input.description,
                 labels=parent_final_input.labels,
+            )
+            _record_seed_operation_event(
+                session=session,
+                tenant_id=tenant.tenant_id,
+                project_id=scoped_project_id,
+                workflow_id=workflow_id,
+                operation_id=operation_id,
+                issue_key=parent_issue_key,
+                attempt=attempt,
+                event_kind="jira_parent_update_response",
+                message="Updated parent Jira issue after blocked planning.",
+                payload={
+                    "issue_key": parent_issue_key,
+                    "labels": parent_final_input.labels,
+                    "planning_state": planning_state_for_description,
+                    "children_sync_status": parent_sync_status,
+                },
             )
             parent_updated = not parent_created
             updated_issue_keys = [parent_issue_key] if parent_updated else []
@@ -445,6 +567,26 @@ def seed_issues_with_runtime(
             child_key: str | None = None
             child_created = False
             child_updated = False
+            _record_seed_operation_event(
+                session=session,
+                tenant_id=tenant.tenant_id,
+                project_id=scoped_project_id,
+                workflow_id=workflow_id,
+                operation_id=operation_id,
+                issue_key=parent_issue_key,
+                attempt=attempt,
+                event_kind="jira_child_upsert_request",
+                message=f"Submitting child Jira issue upsert for {child_issue.summary}.",
+                payload={
+                    "project_key": project_key,
+                    "parent_issue_key": parent_issue_key,
+                    "requested_issue_key": child_issue.requested_issue_key,
+                    "summary": child_input.summary,
+                    "description": child_input.description,
+                    "labels": child_input.labels,
+                    "issue_type": child_input.issue_type,
+                },
+            )
             try:
                 child_key, child_created, child_updated = _upsert_issue(
                     oauth=oauth,
@@ -486,10 +628,42 @@ def seed_issues_with_runtime(
                         inward_issue_key=child_key,
                         outward_issue_key=parent_issue_key,
                     )
+                    _record_seed_operation_event(
+                        session=session,
+                        tenant_id=tenant.tenant_id,
+                        project_id=scoped_project_id,
+                        workflow_id=workflow_id,
+                        operation_id=operation_id,
+                        issue_key=parent_issue_key,
+                        attempt=attempt,
+                        event_kind="jira_child_link_response",
+                        message=f"Linked child issue {child_key} to parent {parent_issue_key}.",
+                        payload={
+                            "child_issue_key": child_key,
+                            "parent_issue_key": parent_issue_key,
+                        },
+                    )
             if not child_key:
                 create_errors.append(f"Engineering child '{child_issue.summary}' was not matched and creation is disabled")
                 final_sync_status = "sync_blocked"
                 continue
+            _record_seed_operation_event(
+                session=session,
+                tenant_id=tenant.tenant_id,
+                project_id=scoped_project_id,
+                workflow_id=workflow_id,
+                operation_id=operation_id,
+                issue_key=child_key,
+                attempt=attempt,
+                event_kind="jira_child_upsert_response",
+                message=f"Child Jira issue upsert completed for {child_issue.summary}.",
+                payload={
+                    "issue_key": child_key,
+                    "created": child_created,
+                    "updated": child_updated,
+                    "parent_issue_key": parent_issue_key,
+                },
+            )
             stale_child_keys.append(child_key)
             if child_created:
                 created_child_keys.append(child_key)
@@ -501,6 +675,23 @@ def seed_issues_with_runtime(
             pm_status=effective_pm_status or None,
             planning_state=planning_state_for_description,
         )
+        _record_seed_operation_event(
+            session=session,
+            tenant_id=tenant.tenant_id,
+            project_id=scoped_project_id,
+            workflow_id=workflow_id,
+            operation_id=operation_id,
+            issue_key=parent_issue_key,
+            attempt=attempt,
+            event_kind="jira_parent_update_request",
+            message="Submitting final parent Jira issue update.",
+            payload={
+                "issue_key": parent_issue_key,
+                "summary": parent_final_input.summary,
+                "description": parent_final_input.description,
+                "labels": parent_final_input.labels,
+            },
+        )
         oauth["client"].update_issue_fields(
             access_token=oauth["access_token"],
             cloud_id=oauth["cloud_id"],
@@ -508,6 +699,24 @@ def seed_issues_with_runtime(
             summary=parent_final_input.summary,
             description=parent_final_input.description,
             labels=parent_final_input.labels,
+        )
+        _record_seed_operation_event(
+            session=session,
+            tenant_id=tenant.tenant_id,
+            project_id=scoped_project_id,
+            workflow_id=workflow_id,
+            operation_id=operation_id,
+            issue_key=parent_issue_key,
+            attempt=attempt,
+            event_kind="jira_parent_update_response",
+            message="Updated parent Jira issue with final sync state.",
+            payload={
+                "issue_key": parent_issue_key,
+                "labels": parent_final_input.labels,
+                "planning_state": planning_state_for_description,
+                "children_sync_status": final_sync_status,
+                "clarification_questions": clarification_questions,
+            },
         )
         if parent_created:
             parent_updated = False

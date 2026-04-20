@@ -1912,7 +1912,13 @@ class AdminApiTests(AdminApiTestHarness):
                     trace_id=None,
                     span_id=None,
                     message="Failed to seed Jira issues",
-                    payload_json={"error_category": "content_limit"},
+                    payload_json={
+                        "error_category": "content_limit",
+                        "invocation_id": "inv-123",
+                        "stage": "seed",
+                        "attempt": 3,
+                        "stream": "stderr",
+                    },
                     recorded_at=now,
                 )
             )
@@ -1927,6 +1933,10 @@ class AdminApiTests(AdminApiTestHarness):
         self.assertEqual(len(body), 1)
         self.assertEqual(body[0]["source"], "audit")
         self.assertEqual(body[0]["event_kind"], "attempt_failed")
+        self.assertEqual(body[0]["invocation_id"], "inv-123")
+        self.assertEqual(body[0]["stage"], "seed")
+        self.assertEqual(body[0]["attempt"], 3)
+        self.assertEqual(body[0]["stream"], "stderr")
 
     def test_get_workflow_operation_telemetry_events(self) -> None:
         payload = self._tenant_payload()

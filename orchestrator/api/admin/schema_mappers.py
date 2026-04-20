@@ -95,6 +95,16 @@ def workflow_operation_attempt_to_schema(attempt: WorkflowOperationAttempt) -> W
 def workflow_observability_event_to_schema(event: AuditEvent | dict) -> WorkflowObservabilityEventRead:
     if isinstance(event, dict):
         return WorkflowObservabilityEventRead(**event)
+    payload = dict(event.payload_json or {})
+    attempt: int | None = None
+    raw_attempt = payload.get("attempt")
+    if isinstance(raw_attempt, int):
+        attempt = raw_attempt
+    elif isinstance(raw_attempt, str):
+        try:
+            attempt = int(raw_attempt)
+        except ValueError:
+            attempt = None
     return WorkflowObservabilityEventRead(
         event_id=event.event_id,
         source="audit",
@@ -106,11 +116,11 @@ def workflow_observability_event_to_schema(event: AuditEvent | dict) -> Workflow
         operation_id=event.operation_id,
         attempt_id=event.attempt_id,
         agent_id=event.actor_id if event.actor_type == "agent" else None,
-        invocation_id=None,
-        stage=None,
-        attempt=None,
-        stream=None,
-        payload=dict(event.payload_json or {}),
+        invocation_id=str(payload.get("invocation_id") or "").strip() or None,
+        stage=str(payload.get("stage") or "").strip() or None,
+        attempt=attempt,
+        stream=str(payload.get("stream") or "").strip() or None,
+        payload=payload,
         recorded_at=event.recorded_at,
     )
 

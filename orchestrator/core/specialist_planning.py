@@ -35,6 +35,7 @@ class SpecialistPlanningRequest:
     working_dir: str = "."
     workflow_id: str | None = None
     operation_id: str | None = None
+    attempt: int | None = None
 
 
 @dataclass(frozen=True)
@@ -217,6 +218,7 @@ def _run_stage(
         workflow_id=request.workflow_id,
         operation_id=request.operation_id,
         issue_key=request.parent_issue_key,
+        attempt=request.attempt,
         reasoning_effort=stage.reasoning_effort,
     )
     stage_session = RuntimeStageSession.create(

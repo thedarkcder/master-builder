@@ -128,6 +128,7 @@ class JiraParentChildSyncContext:
     comment_command_argument: str | None
     workflow_id: str | None = None
     operation_id: str | None = None
+    attempt: int | None = None
 
 
 @dataclass(frozen=True)
@@ -504,6 +505,7 @@ class _ParentBriefPlanner:
                 working_dir=".",
                 workflow_id=self._context.workflow_id,
                 operation_id=self._context.operation_id,
+                attempt=self._context.attempt,
             ),
             runtime_for_selector=lambda selector: self._build_runtime_for_selector_fn(
                 session=self._session,
@@ -553,6 +555,7 @@ class _ParentChildSyncGateway:
             planning_package=planning_package,
             workflow_id=self._context.workflow_id,
             operation_id=self._context.operation_id,
+            attempt=self._context.attempt,
         )
         return seed_data
 
@@ -580,6 +583,7 @@ class _ParentChildSyncGateway:
             codex_working_dir=".",
             workflow_id=self._context.workflow_id,
             operation_id=self._context.operation_id,
+            attempt=self._context.attempt,
         )
         return seed_data
 
