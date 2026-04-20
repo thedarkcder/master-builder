@@ -1904,6 +1904,46 @@ class AdminApiTests(AdminApiTestHarness):
             self.assertEqual(workflow.source_run_id, "run-terminal-1")
             self.assertEqual(workflow.status, "queued")
 
+    def test_create_workflow_attempt_accepts_execution_action_for_orchestrated_checkpoint(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201)
+
+        self._seed_workflow_attempt(
+            workflow_id="workflow-terminal-orchestrated-1",
+            run_id="run-terminal-orchestrated-1",
+            issue_key="TP-1001O",
+            issue_summary="Terminal workflow with orchestrated checkpoint",
+            workflow_status="failed",
+            run_status="failed",
+            checkpoint_id="checkpoint-terminal-orchestrated-1",
+            checkpoint_kind="orchestrated",
+            checkpoint_stage="orchestrated",
+        )
+
+        detail_response = self.client.get(
+            "/api/admin/workflows/workflow-terminal-orchestrated-1",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(detail_response.status_code, 200, detail_response.text)
+        detail_body = detail_response.json()
+        restart_action = next(
+            item for item in detail_body["available_actions"] if item["mode"] == "restart"
+        )
+        self.assertEqual(restart_action["checkpoint_kind"], "execution")
+
+        response = self.client.post(
+            "/api/admin/workflows/workflow-terminal-orchestrated-1/attempts",
+            json={"mode": "restart", "checkpoint_kind": "execution"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 201, response.text)
+        body = response.json()
+        self.assertEqual(body["entry_mode"], "restart")
+        self.assertEqual(body["entry_checkpoint_id"], "checkpoint-terminal-orchestrated-1")
+        self.assertEqual(body["entry_stage"], "orchestrated")
+
     def test_create_workflow_attempt_uses_workflow_type_backend_not_stale_execution_backend(self) -> None:
         payload = self._tenant_payload()
         self._insert_jira_connection(connection_id="conn-1")
