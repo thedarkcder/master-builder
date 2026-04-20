@@ -49,6 +49,7 @@ from orchestrator.storage.models import (
     WorkflowExecution,
     WorkflowOperation,
     WorkflowOperationAttempt,
+    AuditEvent,
     WorkflowType,
     WorkerRuntimeAuthRequest,
     WorkerRuntimeState,
@@ -1711,6 +1712,376 @@ class AdminApiTests(AdminApiTestHarness):
         self.assertEqual(len(operation_body["attempts"]), 2)
         self.assertEqual(operation_body["attempts"][-1]["attempt_number"], 2)
         self.assertIsNone(body["failure_reason"])
+
+    def test_get_workflow_includes_operation_events(self) -> None:
+        payload = self._tenant_payload()
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201)
+
+        now = datetime.now(timezone.utc)
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            workflow = WorkflowExecution(
+                workflow_id="parent_planning:MAB-215",
+                execution_id="wfexec-mab-215",
+                workflow_type_key="parent_planning",
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                issue_key="MAB-215",
+                issue_summary="Identity and authorization v1 contract",
+                issue_description="Parent planning",
+                repo_url=None,
+                branch=None,
+                pr_url=None,
+                orchestration_backend="temporal",
+                dedupe_scope="parent_planning",
+                status="failed",
+                last_error='Failed to seed Jira issues: Jira API request failed (400): {"errorMessages":["CONTENT_LIMIT_EXCEEDED"],"errors":{}}',
+                active_run_id=None,
+                latest_checkpoint_id=None,
+                source_workflow_id=None,
+                source_run_id=None,
+                created_at=now,
+                started_at=now,
+                finished_at=None,
+                updated_at=now,
+            )
+            session.add(workflow)
+            operation = WorkflowOperation(
+                operation_id="operation-jira-child-fanout",
+                workflow_id=workflow.workflow_id,
+                run_id=None,
+                operation_type="jira_child_fanout",
+                idempotency_key="jira-child-fanout:MAB-215",
+                status="failed",
+                target_system="jira",
+                target_ref="MAB-215",
+                summary='Failed to seed Jira issues: Jira API request failed (400): {"errorMessages":["CONTENT_LIMIT_EXCEEDED"],"errors":{}}',
+                created_at=now,
+                started_at=now,
+                finished_at=now,
+                updated_at=now,
+            )
+            session.add(operation)
+            session.add(
+                WorkflowOperationAttempt(
+                    attempt_id="attempt-1",
+                    operation_id=operation.operation_id,
+                    attempt_number=1,
+                    status="failed",
+                    error_category="content_limit",
+                    error_message='Failed to seed Jira issues: Jira API request failed (400): {"errorMessages":["CONTENT_LIMIT_EXCEEDED"],"errors":{}}',
+                    retryable=True,
+                    next_retry_at=None,
+                    created_at=now,
+                    started_at=now,
+                    finished_at=now,
+                )
+            )
+            session.add(
+                AuditEvent(
+                    event_id="event-1",
+                    tenant_id="tenant-a",
+                    project_id="tenant-a-default",
+                    workflow_id=workflow.workflow_id,
+                    run_id=None,
+                    operation_id=operation.operation_id,
+                    attempt_id="attempt-1",
+                    issue_key="MAB-215",
+                    actor_type=None,
+                    actor_id=None,
+                    source_component="workflow_operation_service",
+                    level="error",
+                    event_kind="attempt_failed",
+                    message='Failed to seed Jira issues: Jira API request failed (400): {"errorMessages":["CONTENT_LIMIT_EXCEEDED"],"errors":{}}',
+                    payload_json={"error_category": "content_limit"},
+                    correlation_id=None,
+                    trace_id=None,
+                    span_id=None,
+                    recorded_at=now,
+                )
+            )
+            session.commit()
+
+        response = self.client.get("/api/admin/workflows/wfexec-mab-215", auth=("admin", "secret"))
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        operation_body = next(item for item in body["operations"] if item["operation_type"] == "jira_child_fanout")
+        self.assertEqual(len(operation_body["events"]), 1)
+        self.assertEqual(operation_body["events"][0]["event_kind"], "attempt_failed")
+        self.assertEqual(operation_body["events"][0]["level"], "error")
+
+    def test_get_workflow_operation_audit_events(self) -> None:
+        payload = self._tenant_payload()
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201)
+
+        now = datetime.now(timezone.utc)
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            workflow = WorkflowExecution(
+                workflow_id="parent_planning:MAB-215",
+                execution_id="wfexec-mab-215",
+                workflow_type_key="parent_planning",
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                issue_key="MAB-215",
+                issue_summary="Identity and authorization v1 contract",
+                issue_description="Parent planning",
+                repo_url=None,
+                branch=None,
+                pr_url=None,
+                orchestration_backend="temporal",
+                dedupe_scope="parent_planning",
+                status="failed",
+                last_error="Failed to seed Jira issues",
+                active_run_id=None,
+                latest_checkpoint_id=None,
+                source_workflow_id=None,
+                source_run_id=None,
+                created_at=now,
+                started_at=now,
+                finished_at=None,
+                updated_at=now,
+            )
+            session.add(workflow)
+            operation = WorkflowOperation(
+                operation_id="operation-jira-child-fanout",
+                workflow_id=workflow.workflow_id,
+                run_id=None,
+                operation_type="jira_child_fanout",
+                idempotency_key="jira-child-fanout:MAB-215",
+                status="failed",
+                target_system="jira",
+                target_ref="MAB-215",
+                summary="Failed to seed Jira issues",
+                created_at=now,
+                started_at=now,
+                finished_at=now,
+                updated_at=now,
+            )
+            session.add(operation)
+            session.add(
+                AuditEvent(
+                    event_id="event-1",
+                    tenant_id="tenant-a",
+                    project_id="tenant-a-default",
+                    workflow_id=workflow.workflow_id,
+                    run_id=None,
+                    operation_id=operation.operation_id,
+                    attempt_id=None,
+                    issue_key="MAB-215",
+                    actor_type=None,
+                    actor_id=None,
+                    source_component="workflow_operation_service",
+                    event_kind="attempt_failed",
+                    level="error",
+                    correlation_id=None,
+                    trace_id=None,
+                    span_id=None,
+                    message="Failed to seed Jira issues",
+                    payload_json={"error_category": "content_limit"},
+                    recorded_at=now,
+                )
+            )
+            session.commit()
+
+        response = self.client.get(
+            "/api/admin/workflows/wfexec-mab-215/operations/operation-jira-child-fanout/audit",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertEqual(len(body), 1)
+        self.assertEqual(body[0]["source"], "audit")
+        self.assertEqual(body[0]["event_kind"], "attempt_failed")
+
+    def test_get_workflow_operation_telemetry_events(self) -> None:
+        payload = self._tenant_payload()
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201)
+
+        now = datetime.now(timezone.utc)
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            workflow = WorkflowExecution(
+                workflow_id="parent_planning:MAB-215",
+                execution_id="wfexec-mab-215",
+                workflow_type_key="parent_planning",
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                issue_key="MAB-215",
+                issue_summary="Identity and authorization v1 contract",
+                issue_description="Parent planning",
+                repo_url=None,
+                branch=None,
+                pr_url=None,
+                orchestration_backend="temporal",
+                dedupe_scope="parent_planning",
+                status="running",
+                last_error=None,
+                active_run_id="run-1",
+                latest_checkpoint_id=None,
+                source_workflow_id=None,
+                source_run_id=None,
+                created_at=now,
+                started_at=now,
+                finished_at=None,
+                updated_at=now,
+            )
+            session.add(workflow)
+            session.add(
+                Run(
+                    run_id="run-1",
+                    workflow_id=workflow.workflow_id,
+                    tenant_id="tenant-a",
+                    project_id="tenant-a-default",
+                    issue_key="MAB-215",
+                    issue_summary="Identity and authorization v1 contract",
+                    issue_description="Parent planning",
+                    repo_url=None,
+                    branch=None,
+                    pr_url=None,
+                    attempt_number=1,
+                    parent_run_id=None,
+                    entry_mode="fresh",
+                    entry_stage="orchestrated",
+                    entry_checkpoint_id=None,
+                    dedupe_scope="parent_planning",
+                    status="running",
+                    last_error=None,
+                    pre_check_outcome="ready_for_agent",
+                    required_worker_capability=None,
+                    required_runtime_kinds_json=[],
+                    claim_id=None,
+                    plan={},
+                    created_at=now,
+                    dispatch_claimed_at=None,
+                    started_at=now,
+                    last_heartbeat_at=None,
+                    worker_service_instance_id=None,
+                    finished_at=None,
+                )
+            )
+            operation = WorkflowOperation(
+                operation_id="operation-jira-child-fanout",
+                workflow_id=workflow.workflow_id,
+                run_id="run-1",
+                operation_type="jira_child_fanout",
+                idempotency_key="jira-child-fanout:MAB-215",
+                status="running",
+                target_system="jira",
+                target_ref="MAB-215",
+                summary=None,
+                created_at=now,
+                started_at=now,
+                finished_at=None,
+                updated_at=now,
+            )
+            session.add(operation)
+            session.commit()
+
+            record_run_log_event(
+                session=session,
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                run_id="run-1",
+                issue_key="MAB-215",
+                agent_id="codex",
+                stage="orchestrated",
+                stream="stdout",
+                message="Creating Jira child ticket payload.",
+                attempt=1,
+                invocation_id="inv-1",
+                channel="codex",
+                command="codex exec",
+                working_dir="/tmp/workdir",
+                recorded_at=now,
+            )
+            session.commit()
+
+        response = self.client.get(
+            "/api/admin/workflows/wfexec-mab-215/operations/operation-jira-child-fanout/telemetry",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertEqual(len(body), 1)
+        self.assertEqual(body[0]["source"], "telemetry")
+        self.assertEqual(body[0]["message"], "Creating Jira child ticket payload.")
+
+    def test_export_audit_events_as_ndjson(self) -> None:
+        import json as json_module
+
+        payload = self._tenant_payload()
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201)
+
+        now = datetime.now(timezone.utc)
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            workflow = WorkflowExecution(
+                workflow_id="parent_planning:MAB-215",
+                execution_id="wfexec-mab-215",
+                workflow_type_key="parent_planning",
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                issue_key="MAB-215",
+                issue_summary="Identity and authorization v1 contract",
+                issue_description="Parent planning",
+                repo_url=None,
+                branch=None,
+                pr_url=None,
+                orchestration_backend="temporal",
+                dedupe_scope="parent_planning",
+                status="failed",
+                last_error="Failed to seed Jira issues",
+                active_run_id=None,
+                latest_checkpoint_id=None,
+                source_workflow_id=None,
+                source_run_id=None,
+                created_at=now,
+                started_at=now,
+                finished_at=None,
+                updated_at=now,
+            )
+            session.add(workflow)
+            session.add(
+                AuditEvent(
+                    event_id="event-export-1",
+                    tenant_id="tenant-a",
+                    project_id="tenant-a-default",
+                    workflow_id=workflow.workflow_id,
+                    run_id=None,
+                    operation_id=None,
+                    attempt_id=None,
+                    issue_key="MAB-215",
+                    actor_type=None,
+                    actor_id=None,
+                    source_component="workflow_runtime",
+                    event_kind="execution_failed",
+                    level="error",
+                    correlation_id="cid-1",
+                    trace_id="trace-1",
+                    span_id="span-1",
+                    message="Execution failed",
+                    payload_json={"failure": "content_limit"},
+                    recorded_at=now,
+                )
+            )
+            session.commit()
+
+        response = self.client.post(
+            "/api/admin/audit/export",
+            json={"tenant_id": "tenant-a", "execution_id": "parent_planning:MAB-215"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.headers["content-type"].split(";")[0], "application/x-ndjson")
+        rows = [json_module.loads(line) for line in response.text.splitlines() if line.strip()]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["source"], "audit")
+        self.assertEqual(rows[0]["event_kind"], "execution_failed")
 
     def test_create_workflow_attempt_reuses_waiting_workflow(self) -> None:
         payload = self._tenant_payload()

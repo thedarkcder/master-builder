@@ -115,6 +115,27 @@ test("shows workflow definitions and retries a failed execution operation", asyn
             finished_at: "2026-04-17T12:22:11Z",
           },
         ],
+        events: [
+          {
+            event_id: "audit-event-1",
+            source: "audit",
+            level: "error",
+            event_kind: "attempt_failed",
+            message:
+              'Failed to seed Jira issues: Jira API request failed (400): {"errorMessages":["CONTENT_LIMIT_EXCEEDED"],"errors":{}}',
+            source_component: "workflow_operation_service",
+            run_id: null,
+            operation_id: "operation-jira-child-fanout",
+            attempt_id: "attempt-1",
+            agent_id: null,
+            invocation_id: null,
+            stage: null,
+            attempt: null,
+            stream: null,
+            payload: { error_category: "content_limit" },
+            recorded_at: "2026-04-17T12:22:11Z",
+          },
+        ],
       },
     ],
     runs: [],
@@ -172,6 +193,31 @@ test("shows workflow definitions and retries a failed execution operation", asyn
   await mockTenantWorkflowApis(page, {
     workflows: [workflow],
     retriedWorkflowResponse: retriedWorkflow,
+    telemetryEventsByOperationId: {
+      "operation-jira-child-fanout": [
+        {
+          event_id: "telemetry-event-1",
+          source: "telemetry",
+          level: "info",
+          event_kind: "run_log",
+          message: "Creating Jira child ticket payload.",
+          source_component: "run_logs",
+          run_id: "run-123",
+          operation_id: null,
+          attempt_id: null,
+          agent_id: "codex",
+          invocation_id: "inv-1",
+          stage: "orchestrated",
+          attempt: 1,
+          stream: "stdout",
+          payload: {
+            channel: "codex",
+            command: "codex exec",
+          },
+          recorded_at: "2026-04-17T12:23:00Z",
+        },
+      ],
+    },
     onResumeExecution: () => {
       resumedExecution = true;
     },
@@ -202,6 +248,16 @@ test("shows workflow definitions and retries a failed execution operation", asyn
   await page.getByRole("button", { name: "Step details" }).click();
   await expect(page.getByRole("heading", { name: "Step details" })).toBeVisible();
   await expect(page.locator("table").getByText("jira_child_fanout").first()).toBeVisible();
+  await page.getByRole("button", { name: "jira_child_fanout" }).click();
+  await expect(page.getByRole("heading", { name: "jira_child_fanout" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Live telemetry" })).toBeVisible();
+  await expect(page.getByText("Creating Jira child ticket payload.")).toBeVisible();
+  await page.getByRole("button", { name: "Audit history" }).click();
+  await expect(page.getByText("attempt failed")).toBeVisible();
+  await expect(
+    page.getByText('Failed to seed Jira issues: Jira API request failed (400): {"errorMessages":["CONTENT_LIMIT_EXCEEDED"],"errors":{}}').last(),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Close" }).click();
   const retryStepButton = page.getByRole("button", { name: "Retry step" }).last();
   await retryStepButton.scrollIntoViewIfNeeded();
   await expect(retryStepButton).toBeEnabled();

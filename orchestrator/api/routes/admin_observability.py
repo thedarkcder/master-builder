@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
+from orchestrator.api.admin.audit_export_service import iter_audit_event_export
 from orchestrator.api.admin.agent_activity_service import list_agent_activity as list_agent_activity_impl
 from orchestrator.api.admin.alert_policy_service import evaluate_alerts as evaluate_alerts_impl
 from orchestrator.api.admin.notifications_service import list_tenant_notifications as list_tenant_notifications_impl
@@ -23,6 +25,7 @@ from orchestrator.api.admin.project_metrics_service import (
 from orchestrator.api.admin.tenant_health_service import tenant_health as tenant_health_impl
 from orchestrator.api.dependencies import get_session
 from orchestrator.api.schemas import (
+    AuditEventExportRequest,
     AgentActivityRead,
     AlertEvaluationRead,
     AdminNotificationListRead,
@@ -246,4 +249,25 @@ def project_observability(
         session=session,
         tenant_id=tenant_id,
         project_id=project_id,
+    )
+
+
+@router.post("/audit/export")
+def export_audit_events(
+    payload: AuditEventExportRequest,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> StreamingResponse:
+    if not principal.is_platform_super_admin:
+        require_tenant_workspace_access(principal=principal, tenant_id=payload.tenant_id)
+    filename_parts = ["audit-events", payload.tenant_id]
+    if payload.execution_id:
+        filename_parts.append(payload.execution_id)
+    headers = {
+        "Content-Disposition": f"attachment; filename=\"{'-'.join(filename_parts)}.ndjson\"",
+    }
+    return StreamingResponse(
+        iter_audit_event_export(session=session, request=payload),
+        media_type="application/x-ndjson",
+        headers=headers,
     )

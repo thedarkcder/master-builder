@@ -8,6 +8,7 @@ from orchestrator.api.schemas import (
     RunRead,
     TenantRead,
     WorkflowLinkRead,
+    WorkflowObservabilityEventRead,
     WorkflowOperationAttemptRead,
     WorkflowOperationRead,
     WorkflowRead,
@@ -25,6 +26,7 @@ from orchestrator.storage.models import (
     WorkflowExecution,
     WorkflowOperation,
     WorkflowOperationAttempt,
+    AuditEvent,
 )
 
 
@@ -90,6 +92,29 @@ def workflow_operation_attempt_to_schema(attempt: WorkflowOperationAttempt) -> W
     )
 
 
+def workflow_observability_event_to_schema(event: AuditEvent | dict) -> WorkflowObservabilityEventRead:
+    if isinstance(event, dict):
+        return WorkflowObservabilityEventRead(**event)
+    return WorkflowObservabilityEventRead(
+        event_id=event.event_id,
+        source="audit",
+        level=event.level,
+        event_kind=event.event_kind,
+        message=event.message,
+        source_component=event.source_component,
+        run_id=event.run_id,
+        operation_id=event.operation_id,
+        attempt_id=event.attempt_id,
+        agent_id=event.actor_id if event.actor_type == "agent" else None,
+        invocation_id=None,
+        stage=None,
+        attempt=None,
+        stream=None,
+        payload=dict(event.payload_json or {}),
+        recorded_at=event.recorded_at,
+    )
+
+
 def workflow_operation_to_schema(
     operation: WorkflowOperation | None,
     *,
@@ -101,6 +126,7 @@ def workflow_operation_to_schema(
     required: bool,
     definition_only: bool,
     attempts: list[WorkflowOperationAttempt],
+    events: list[AuditEvent | dict] | None = None,
     can_retry: bool = False,
     retry_unavailable_reason: str | None = None,
 ) -> WorkflowOperationRead:
@@ -119,6 +145,7 @@ def workflow_operation_to_schema(
         can_retry=can_retry,
         retry_unavailable_reason=retry_unavailable_reason,
         attempts=[workflow_operation_attempt_to_schema(attempt) for attempt in attempts],
+        events=[workflow_observability_event_to_schema(event) for event in list(events or [])],
     )
 
 

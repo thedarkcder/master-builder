@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { ArrowLeft, ExternalLink, MoreHorizontal, RefreshCw } from "lucide-react";
 
+import { ExecutionObservabilityDrawer } from "@/components/execution-observability-drawer";
 import { WorkflowFlowDiagram } from "@/components/workflow-flow-diagram";
 import { useAuth } from "@/components/auth-provider";
 import { Button } from "@/components/ui/button";
@@ -12,6 +13,9 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
   getWorkflow,
+  listWorkflowOperationAuditEvents,
+  listWorkflowOperationTelemetryEvents,
+  type WorkflowObservabilityEventRecord,
   resumeWorkflowExecution,
   retryWorkflowOperation,
   type WorkflowOperationRecord,
@@ -58,6 +62,12 @@ export default function TenantExecutionDetailPage() {
   const [statusLine, setStatusLine] = useState("");
   const [activeTab, setActiveTab] = useState<"overview" | "step-recovery" | "execution-path">("overview");
   const [linksMenuOpen, setLinksMenuOpen] = useState(false);
+  const [selectedOperationId, setSelectedOperationId] = useState<string | null>(null);
+  const [observabilityView, setObservabilityView] = useState<"telemetry" | "audit">("telemetry");
+  const [telemetryEvents, setTelemetryEvents] = useState<WorkflowObservabilityEventRecord[]>([]);
+  const [auditEvents, setAuditEvents] = useState<WorkflowObservabilityEventRecord[]>([]);
+  const [observabilityLoading, setObservabilityLoading] = useState(false);
+  const [observabilityError, setObservabilityError] = useState<string | null>(null);
 
   const loadWorkflow = useCallback(async () => {
     if (!credentials) return;
@@ -79,6 +89,10 @@ export default function TenantExecutionDetailPage() {
   }, [ready, credentials, loadWorkflow]);
 
   const hasRetryableAttempt = useMemo(() => (workflow?.operations ?? []).some((operation) => operation.can_retry), [workflow?.operations]);
+  const selectedOperation = useMemo(
+    () => workflow?.operations.find((operation) => operation.operation_id === selectedOperationId) ?? null,
+    [selectedOperationId, workflow?.operations],
+  );
   const flowNodes = useMemo(
     () =>
       (workflow?.operations ?? []).map((operation) => {
@@ -94,6 +108,52 @@ export default function TenantExecutionDetailPage() {
       }),
     [workflow?.operations],
   );
+
+  const loadOperationObservability = useCallback(
+    async (operation: WorkflowOperationRecord, options: { silent?: boolean } = {}) => {
+      if (!credentials || !workflow) return;
+      if (!options.silent) {
+        setObservabilityLoading(true);
+      }
+      setObservabilityError(null);
+      try {
+        const [telemetry, audit] = await Promise.all([
+          listWorkflowOperationTelemetryEvents(credentials, workflow.execution_id, operation.operation_id, { limit: 200 }),
+          listWorkflowOperationAuditEvents(credentials, workflow.execution_id, operation.operation_id, { limit: 200 }),
+        ]);
+        setTelemetryEvents(telemetry);
+        setAuditEvents(audit);
+      } catch (error) {
+        setObservabilityError(`Failed to load step observability: ${(error as Error).message}`);
+      } finally {
+        if (!options.silent) {
+          setObservabilityLoading(false);
+        }
+      }
+    },
+    [credentials, workflow],
+  );
+
+  const openOperationDrawer = useCallback(
+    async (operation: WorkflowOperationRecord) => {
+      setSelectedOperationId(operation.operation_id);
+      setObservabilityView("telemetry");
+      setTelemetryEvents([]);
+      setAuditEvents(operation.events ?? []);
+      await loadOperationObservability(operation);
+    },
+    [loadOperationObservability],
+  );
+
+  useEffect(() => {
+    if (!selectedOperation || !credentials || !workflow) {
+      return;
+    }
+    const handle = window.setInterval(() => {
+      void loadOperationObservability(selectedOperation, { silent: true });
+    }, 5000);
+    return () => window.clearInterval(handle);
+  }, [credentials, loadOperationObservability, selectedOperation, workflow]);
 
   async function handleWorkflowAction() {
     if (!credentials || !workflow) {
@@ -324,7 +384,9 @@ export default function TenantExecutionDetailPage() {
                       return (
                         <TableRow key={operation.operation_id}>
                           <TableCell className="font-medium">
-                            <p>{operation.label?.trim() || operation.operation_type}</p>
+                            <button type="button" className="text-left hover:text-primary hover:underline" onClick={() => void openOperationDrawer(operation)}>
+                              {operation.label?.trim() || operation.operation_type}
+                            </button>
                             <p className="text-xs text-muted-foreground">{operation.operation_type}</p>
                           </TableCell>
                           <TableCell>
@@ -365,12 +427,42 @@ export default function TenantExecutionDetailPage() {
             ) : (
               <div className="overflow-hidden rounded-2xl border bg-background">
                 <div className="px-5 py-4">
-                  <WorkflowFlowDiagram nodes={flowNodes} emptyLabel="No execution path has been recorded yet." orientation="vertical" />
+                  <WorkflowFlowDiagram
+                    nodes={flowNodes}
+                    emptyLabel="No execution path has been recorded yet."
+                    orientation="vertical"
+                    onNodeClick={(node) => {
+                      const operation = workflow.operations.find((candidate) => candidate.operation_id === node.key);
+                      if (operation) {
+                        void openOperationDrawer(operation);
+                      }
+                    }}
+                  />
                 </div>
               </div>
             )}
           </div>
 
+          <ExecutionObservabilityDrawer
+            open={selectedOperation !== null}
+            operationLabel={selectedOperation?.label?.trim() || selectedOperation?.operation_type || "Step"}
+            operationStatus={selectedOperation?.status || "pending"}
+            activeView={observabilityView}
+            onViewChange={setObservabilityView}
+            onRefresh={() => {
+              if (selectedOperation) {
+                void loadOperationObservability(selectedOperation);
+              }
+            }}
+            onClose={() => {
+              setSelectedOperationId(null);
+              setObservabilityError(null);
+            }}
+            telemetryEvents={telemetryEvents}
+            auditEvents={auditEvents}
+            loading={observabilityLoading}
+            error={observabilityError}
+          />
         </>
       ) : (
         <div className="rounded-2xl border bg-background px-5 py-12 text-center text-sm text-muted-foreground">

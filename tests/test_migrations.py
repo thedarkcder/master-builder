@@ -61,7 +61,87 @@ class MigrationTests(unittest.TestCase):
 
         duplicates = {revision_id: count for revision_id, count in Counter(revision_ids).items() if count > 1}
         self.assertEqual(duplicates, {})
-        self.assertEqual(script.get_heads(), ["20260420_0083"])
+        self.assertEqual(script.get_heads(), ["20260420_0084"])
+
+    def test_audit_events_migration_creates_append_only_table(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            database_url = f"sqlite:///{Path(tmpdir) / 'audit-events.sqlite'}"
+            engine = create_engine(database_url)
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE tenants (
+                            tenant_id VARCHAR PRIMARY KEY
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE projects (
+                            project_id VARCHAR PRIMARY KEY
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE workflow_executions (
+                            workflow_id VARCHAR PRIMARY KEY
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE runs (
+                            run_id VARCHAR PRIMARY KEY
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE workflow_operations (
+                            operation_id VARCHAR PRIMARY KEY
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE workflow_operation_attempts (
+                            attempt_id VARCHAR PRIMARY KEY
+                        )
+                        """
+                    )
+                )
+                connection.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"))
+                connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('20260420_0083')"))
+
+            self._alembic_upgrade(database_url, "20260420_0084")
+
+            inspector = inspect(engine)
+            columns = {column["name"] for column in inspector.get_columns("audit_events")}
+            self.assertTrue(
+                {
+                    "event_id",
+                    "tenant_id",
+                    "workflow_id",
+                    "operation_id",
+                    "event_kind",
+                    "level",
+                    "message",
+                    "payload_json",
+                    "recorded_at",
+                }.issubset(columns)
+            )
 
     def test_failed_attempt_retryability_backfill_marks_failed_attempts_retryable(self) -> None:
         with TemporaryDirectory() as tmpdir:

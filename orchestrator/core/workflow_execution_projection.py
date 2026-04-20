@@ -14,9 +14,9 @@ from orchestrator.core.workflow_execution_status import (
     recompute_workflow_status,
 )
 from orchestrator.core.workflow_operation_service import (
-    OPERATION_STATUS_WAITING_FOR_INPUT,
     complete_workflow_operation,
     fail_workflow_operation,
+    mark_workflow_operation_waiting_for_input,
     start_workflow_operation_attempt,
     upsert_workflow_operation,
 )
@@ -108,17 +108,12 @@ class WorkflowExecutionProjection:
         operation = self._operation(operation_type)
         attempt = start_workflow_operation_attempt(self.session, operation=operation)
         now = _now()
-        operation.status = OPERATION_STATUS_WAITING_FOR_INPUT
-        operation.summary = summary
-        operation.finished_at = None
-        operation.updated_at = now
-        attempt.status = OPERATION_STATUS_WAITING_FOR_INPUT
-        attempt.error_category = None
-        attempt.error_message = None
-        attempt.status_detail = summary
-        attempt.retryable = False
-        attempt.next_retry_at = None
-        attempt.finished_at = now
+        mark_workflow_operation_waiting_for_input(
+            self.session,
+            operation=operation,
+            attempt=attempt,
+            summary=summary,
+        )
         mark_workflow_waiting_for_input(workflow=self.workflow, now=now)
 
     def mark_operation_completed(self, *, operation_type: str, summary: str) -> None:

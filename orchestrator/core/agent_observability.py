@@ -8,8 +8,9 @@ import threading
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
+from orchestrator.core.audit_events import record_audit_event
 from orchestrator.core.log_event_bus import EVENT_KIND_AGENT_LIFECYCLE, register_stream_offsets
-from orchestrator.storage.models import AgentLifecycleEvent, RunStreamEvent
+from orchestrator.storage.models import AgentLifecycleEvent, Run, RunStreamEvent
 
 ALLOWED_AGENT_EVENTS = {
     "ISSUE_ASSIGNED",
@@ -118,6 +119,10 @@ def record_agent_lifecycle_event(
         return
     normalized_agent = str(agent_id or "").strip() or "unknown-agent"
     normalized_event_type = _normalize_event_type(event_type)
+    workflow_id = None
+    run = session.get(Run, normalized_run)
+    if run is not None:
+        workflow_id = run.workflow_id
 
     agent_observability_tracker.record_event(
         event_type=normalized_event_type,
@@ -140,6 +145,24 @@ def record_agent_lifecycle_event(
             event_type=normalized_event_type,
             recorded_at=timestamp,
         )
+    )
+    record_audit_event(
+        session,
+        tenant_id=normalized_tenant,
+        project_id=normalized_project,
+        workflow_id=workflow_id,
+        run_id=normalized_run,
+        operation_id=None,
+        attempt_id=None,
+        issue_key=str(issue_key or "").strip() or None,
+        actor_type="agent",
+        actor_id=normalized_agent,
+        source_component="agent_observability",
+        event_kind=normalized_event_type.lower(),
+        level="info",
+        message=f"Agent lifecycle event: {normalized_event_type}",
+        payload={"event_type": normalized_event_type},
+        recorded_at=timestamp,
     )
     stream_row = RunStreamEvent(
         event_kind=EVENT_KIND_AGENT_LIFECYCLE,

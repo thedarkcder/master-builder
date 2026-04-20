@@ -7,6 +7,7 @@ from uuid import uuid4
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from orchestrator.core.audit_events import record_workflow_operation_audit_event
 from orchestrator.storage.models import WorkflowOperation, WorkflowOperationAttempt
 
 OPERATION_STATUS_PENDING = "pending"
@@ -108,6 +109,16 @@ def start_workflow_operation_attempt(
     )
     session.add(attempt)
     session.flush()
+    record_workflow_operation_audit_event(
+        session,
+        operation=operation,
+        attempt_id=attempt.attempt_id,
+        source_component="workflow_operation_service",
+        event_kind="attempt_started",
+        level="info",
+        message=f"Started {operation.operation_type} attempt {next_attempt_number}.",
+        payload={"status": attempt.status, "attempt_number": next_attempt_number},
+    )
     return attempt
 
 
@@ -126,6 +137,16 @@ def complete_workflow_operation(
     attempt.status = OPERATION_STATUS_COMPLETED
     attempt.status_detail = None
     attempt.finished_at = now
+    record_workflow_operation_audit_event(
+        session,
+        operation=operation,
+        attempt_id=attempt.attempt_id,
+        source_component="workflow_operation_service",
+        event_kind="attempt_completed",
+        level="info",
+        message=summary or f"Completed {operation.operation_type}.",
+        payload={"status": attempt.status, "attempt_number": attempt.attempt_number},
+    )
 
 
 def fail_workflow_operation(
@@ -151,3 +172,50 @@ def fail_workflow_operation(
     attempt.retryable = retryable
     attempt.next_retry_at = next_retry_at
     attempt.finished_at = now
+    record_workflow_operation_audit_event(
+        session,
+        operation=operation,
+        attempt_id=attempt.attempt_id,
+        source_component="workflow_operation_service",
+        event_kind="attempt_retry_scheduled" if scheduled_for_retry else "attempt_failed",
+        level="warn" if scheduled_for_retry else "error",
+        message=message,
+        payload={
+            "status": attempt.status,
+            "attempt_number": attempt.attempt_number,
+            "error_category": category,
+            "retryable": retryable,
+            "next_retry_at": next_retry_at.isoformat() if next_retry_at is not None else None,
+        },
+    )
+
+
+def mark_workflow_operation_waiting_for_input(
+    session: Session,
+    *,
+    operation: WorkflowOperation,
+    attempt: WorkflowOperationAttempt,
+    summary: str,
+) -> None:
+    now = _now()
+    operation.status = OPERATION_STATUS_WAITING_FOR_INPUT
+    operation.summary = summary
+    operation.finished_at = None
+    operation.updated_at = now
+    attempt.status = OPERATION_STATUS_WAITING_FOR_INPUT
+    attempt.error_category = None
+    attempt.error_message = None
+    attempt.status_detail = summary
+    attempt.retryable = False
+    attempt.next_retry_at = None
+    attempt.finished_at = now
+    record_workflow_operation_audit_event(
+        session,
+        operation=operation,
+        attempt_id=attempt.attempt_id,
+        source_component="workflow_operation_service",
+        event_kind="waiting_for_input",
+        level="info",
+        message=summary,
+        payload={"status": attempt.status, "attempt_number": attempt.attempt_number},
+    )

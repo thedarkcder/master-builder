@@ -837,6 +837,25 @@ export type WorkflowOperationAttemptRecord = {
   finished_at: string | null;
 };
 
+export type WorkflowObservabilityEventRecord = {
+  event_id: string;
+  source: "audit" | "telemetry";
+  level: string;
+  event_kind: string;
+  message: string;
+  source_component: string | null;
+  run_id: string | null;
+  operation_id: string | null;
+  attempt_id: string | null;
+  agent_id: string | null;
+  invocation_id: string | null;
+  stage: string | null;
+  attempt: number | null;
+  stream: string | null;
+  payload: Record<string, unknown>;
+  recorded_at: string;
+};
+
 export type WorkflowOperationRecord = {
   operation_id: string;
   run_id: string | null;
@@ -852,6 +871,7 @@ export type WorkflowOperationRecord = {
   can_retry: boolean;
   retry_unavailable_reason: string | null;
   attempts: WorkflowOperationAttemptRecord[];
+  events: WorkflowObservabilityEventRecord[];
 };
 
 export type WorkflowAttemptCreatePayload = {
@@ -2683,6 +2703,49 @@ export function listRunLogs(
   return request<RunLogEventRecord[]>(
     credentials,
     `/api/admin/runs/${encodeURIComponent(runId)}/logs${suffix}`
+  );
+}
+
+function workflowObservabilityQuery(params: {
+  limit?: number;
+  beforeRecordedAt?: string;
+  beforeEventId?: string;
+} = {}): string {
+  const query = new URLSearchParams();
+  if (params.limit) {
+    query.set("limit", String(params.limit));
+  }
+  if (params.beforeRecordedAt) {
+    query.set("before_recorded_at", params.beforeRecordedAt);
+  }
+  if (params.beforeEventId) {
+    query.set("before_event_id", params.beforeEventId);
+  }
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return suffix;
+}
+
+export function listWorkflowOperationTelemetryEvents(
+  credentials: Credentials,
+  executionId: string,
+  operationId: string,
+  params: { limit?: number; beforeRecordedAt?: string; beforeEventId?: string } = {},
+): Promise<WorkflowObservabilityEventRecord[]> {
+  return request<WorkflowObservabilityEventRecord[]>(
+    credentials,
+    `/api/admin/workflows/${encodeURIComponent(executionId)}/operations/${encodeURIComponent(operationId)}/telemetry${workflowObservabilityQuery(params)}`,
+  );
+}
+
+export function listWorkflowOperationAuditEvents(
+  credentials: Credentials,
+  executionId: string,
+  operationId: string,
+  params: { limit?: number; beforeRecordedAt?: string; beforeEventId?: string } = {},
+): Promise<WorkflowObservabilityEventRecord[]> {
+  return request<WorkflowObservabilityEventRecord[]>(
+    credentials,
+    `/api/admin/workflows/${encodeURIComponent(executionId)}/operations/${encodeURIComponent(operationId)}/audit${workflowObservabilityQuery(params)}`,
   );
 }
 

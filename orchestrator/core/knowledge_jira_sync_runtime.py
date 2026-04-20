@@ -22,6 +22,7 @@ from orchestrator.core.knowledge_jira_sync_status import (
 )
 from orchestrator.core.logging import configure_logging
 from orchestrator.core.project_policy import resolve_effective_policy
+from orchestrator.core.telemetry import initialize_telemetry
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import JiraOAuthConnection, KnowledgeJiraSyncProjectState, KnowledgeSource, Project, Tenant
 from orchestrator.storage.run_queue_events import is_postgres_database_url, postgres_dsn_from_database_url
@@ -74,6 +75,7 @@ def run_knowledge_jira_sync() -> None:
         platform_version=settings.sentry_release or "dev-local",
         default_agent_id="knowledge-jira-sync",
     )
+    initialize_telemetry(settings=settings, service_name="knowledge-jira-sync")
     KnowledgeJiraSyncRuntime(settings=settings).run_forever()
 
 

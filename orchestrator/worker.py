@@ -21,6 +21,7 @@ from orchestrator.core.discord.notifications import send_tenant_discord_message
 from orchestrator.core.logging import configure_logging
 from orchestrator.core.knowledge_prewarm import prewarm_knowledge_dependencies
 from orchestrator.core.platform_metrics import platform_metrics
+from orchestrator.core.telemetry import initialize_telemetry
 from orchestrator.core.project_policy import resolve_effective_policy
 from orchestrator.core.runtime_requirements import normalize_runtime_kinds
 from orchestrator.core.runs import (
@@ -812,6 +813,10 @@ def run_worker_child_once(*, mode: str = WORKER_MODE_RUNS) -> int:
         platform_version=settings.sentry_release or "dev-local",
         default_agent_id=str(settings.agent_id or "").strip() or "worker",
     )
+    initialize_telemetry(
+        settings=settings,
+        service_name="run-worker-child" if str(mode or "").strip().lower() == WORKER_MODE_RUNS else "webhook-worker-child",
+    )
     session_factory = create_session_factory()
     ensure_execution_snapshot_startup_bootstrap(
         session_factory=session_factory,
@@ -854,6 +859,10 @@ async def run_worker(*, mode: str = WORKER_MODE_RUNS) -> None:
         environment=settings.sentry_environment,
         platform_version=settings.sentry_release or "dev-local",
         default_agent_id=str(settings.agent_id or "").strip() or "worker",
+    )
+    initialize_telemetry(
+        settings=settings,
+        service_name="run-worker" if str(mode or "").strip().lower() == WORKER_MODE_RUNS else "webhook-worker",
     )
     session_factory = create_session_factory()
     await asyncio.to_thread(

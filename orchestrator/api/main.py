@@ -48,6 +48,7 @@ from orchestrator.core.logging import configure_logging
 from orchestrator.core.platform_metrics import platform_metrics
 from orchestrator.core.observability import reset_log_context, set_log_context
 from orchestrator.core.sentry import initialize_sentry
+from orchestrator.core.telemetry import initialize_telemetry, shutdown_telemetry
 from orchestrator.core.workflow.execution_snapshot_startup import ensure_execution_snapshot_startup_bootstrap
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.database_support import ensure_postgres_database_url
@@ -91,6 +92,7 @@ def create_app() -> FastAPI:
             yield
         finally:
             shutdown_run_streaming()
+            shutdown_telemetry()
 
     app = FastAPI(title="master-builder orchestrator", lifespan=lifespan)
     app.add_middleware(
@@ -237,6 +239,7 @@ def create_app() -> FastAPI:
     app.include_router(webhook_discord_interactions_router)
     app.include_router(webhook_github_router)
     register_discord_command_executor()
+    initialize_telemetry(settings=settings, service_name="api", app=app)
 
     @app.get("/health")
     def health() -> dict[str, str]:

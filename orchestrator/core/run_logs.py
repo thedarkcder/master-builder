@@ -9,9 +9,10 @@ from uuid import uuid4
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
+from orchestrator.core.audit_events import record_audit_event
 from orchestrator.core.guardrails import redact_sensitive_text
 from orchestrator.core.log_event_bus import EVENT_KIND_CODEX_LOG, register_stream_offsets
-from orchestrator.storage.models import RunLogEvent, RunStreamEvent, RunTokenUsage
+from orchestrator.storage.models import Run, RunLogEvent, RunStreamEvent, RunTokenUsage
 
 MAX_PERSISTED_LOG_EVENTS_PER_RUN = 5000
 MAX_LOG_MESSAGE_CHARS = 2000
@@ -454,6 +455,36 @@ def record_run_log_event(
     stream_row = _build_run_stream_model(normalized_event)
     session.add(log_row)
     session.add(stream_row)
+    workflow_id = None
+    if normalized_event.run_id:
+        run = session.get(Run, normalized_event.run_id)
+        workflow_id = str(getattr(run, "workflow_id", "") or "").strip() or None
+    record_audit_event(
+        session,
+        tenant_id=normalized_event.tenant_id,
+        project_id=normalized_event.project_id,
+        workflow_id=workflow_id,
+        run_id=normalized_event.run_id,
+        operation_id=None,
+        attempt_id=None,
+        issue_key=normalized_event.issue_key,
+        actor_type="agent",
+        actor_id=normalized_event.agent_id,
+        source_component="run_logs",
+        event_kind="runtime_log",
+        level="error" if normalized_event.stream == "stderr" else "info",
+        message=normalized_event.message,
+        payload={
+            "invocation_id": normalized_event.invocation_id,
+            "channel": normalized_event.channel,
+            "command": normalized_event.command,
+            "working_dir": normalized_event.working_dir,
+            "stage": normalized_event.stage,
+            "attempt": normalized_event.attempt,
+            "stream": normalized_event.stream,
+        },
+        recorded_at=normalized_event.recorded_at,
+    )
     materialize_token_usage_from_log_message(session=session, run_log_row=normalized_event)
     session.flush()
     register_stream_offsets(session=session, rows=[stream_row])
@@ -489,11 +520,44 @@ def record_run_log_events_batch(
         return 0
 
     stream_rows: list[RunStreamEvent] = []
+    workflow_by_run: dict[str, str | None] = {}
     for normalized_event in normalized_events:
         session.add(_build_run_log_model(normalized_event))
         stream_row = _build_run_stream_model(normalized_event)
         stream_rows.append(stream_row)
         session.add(stream_row)
+        workflow_id = None
+        if normalized_event.run_id:
+            if normalized_event.run_id not in workflow_by_run:
+                run = session.get(Run, normalized_event.run_id)
+                workflow_by_run[normalized_event.run_id] = str(getattr(run, "workflow_id", "") or "").strip() or None
+            workflow_id = workflow_by_run[normalized_event.run_id]
+        record_audit_event(
+            session,
+            tenant_id=normalized_event.tenant_id,
+            project_id=normalized_event.project_id,
+            workflow_id=workflow_id,
+            run_id=normalized_event.run_id,
+            operation_id=None,
+            attempt_id=None,
+            issue_key=normalized_event.issue_key,
+            actor_type="agent",
+            actor_id=normalized_event.agent_id,
+            source_component="run_logs",
+            event_kind="runtime_log",
+            level="error" if normalized_event.stream == "stderr" else "info",
+            message=normalized_event.message,
+            payload={
+                "invocation_id": normalized_event.invocation_id,
+                "channel": normalized_event.channel,
+                "command": normalized_event.command,
+                "working_dir": normalized_event.working_dir,
+                "stage": normalized_event.stage,
+                "attempt": normalized_event.attempt,
+                "stream": normalized_event.stream,
+            },
+            recorded_at=normalized_event.recorded_at,
+        )
         materialize_token_usage_from_log_message(session=session, run_log_row=normalized_event)
     session.flush()
     register_stream_offsets(session=session, rows=stream_rows)
