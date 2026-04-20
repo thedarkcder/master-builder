@@ -25,6 +25,7 @@ from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import Project, Run, Tenant
 
 logger = logging.getLogger(__name__)
+_LIVE_INVOCATION_LOGGER = logging.getLogger("orchestrator.runtime_invocation")
 _ERROR_MARKERS = ("error", "failed", "fatal", "exception", "traceback")
 _WORKFLOW_STAGE_PM = "pm"
 _WORKFLOW_EXECUTION_STAGES = {"dev", "test", "review"}
@@ -496,6 +497,33 @@ def _emit_invocation_event(
             context.run_id,
             exc,
         )
+    message = str(payload.get("message") or "").strip() or event_kind.replace("_", " ")
+    live_metadata: dict[str, object] = {
+        "workflow_id": context.workflow_id,
+        "operation_id": context.operation_id,
+        "run_id": context.run_id,
+        "issue_key": context.issue_key,
+        "invocation_id": str(context.invocation_id or "").strip() or None,
+        "stage": context.stage,
+        "attempt": context.attempt,
+        "event_kind": event_kind,
+    }
+    for key, value in payload.items():
+        if key == "message":
+            continue
+        if value is None or isinstance(value, (str, int, float, bool)):
+            live_metadata[key] = value
+            continue
+        live_metadata[f"{key}_json"] = redact_sensitive_text(json.dumps(value, sort_keys=True, ensure_ascii=False))
+    _LIVE_INVOCATION_LOGGER.info(
+        message,
+        extra={
+            "event_type": "runtime_invocation_event",
+            "tenant_id": context.tenant_id,
+            "project_id": context.project_id,
+            "metadata": live_metadata,
+        },
+    )
 
 
 def _checkpoint_kind_for_context(*, context: AgentInvocationContext) -> str | None:
@@ -661,6 +689,7 @@ def invoke_runtime_json_with_tools(
                 stage=context.stage,
                 working_dir=context.working_dir,
                 workflow_id=context.workflow_id,
+                operation_id=context.operation_id,
                 issue_key=context.issue_key,
                 run_id=context.run_id,
                 attempt=context.attempt,
@@ -767,6 +796,16 @@ def invoke_runtime_json_with_tools(
             )
             final_response_required = True
             continue
+        _emit_invocation_event(
+            context=context,
+            event_kind="tool_request",
+            payload={
+                "message": f"Requested tool {tool_name}.",
+                "tool_name": tool_name,
+                "tool_hop": tool_hops_used,
+                "tool_args": tool_args,
+            },
+        )
 
         try:
             tool_result = execute_tool(tool_name, tool_args)
@@ -775,12 +814,34 @@ def invoke_runtime_json_with_tools(
                 "ok": True,
                 "result": tool_result,
             }
+            _emit_invocation_event(
+                context=context,
+                event_kind="tool_result",
+                payload={
+                    "message": f"Completed tool {tool_name}.",
+                    "tool_name": tool_name,
+                    "tool_hop": tool_hops_used,
+                    "ok": True,
+                    "tool_result": tool_result,
+                },
+            )
         except Exception as exc:  # noqa: BLE001
             bridge_result = {
                 "tool_name": tool_name,
                 "ok": False,
                 "error": str(exc),
             }
+            _emit_invocation_event(
+                context=context,
+                event_kind="tool_result",
+                payload={
+                    "message": f"Tool {tool_name} failed.",
+                    "tool_name": tool_name,
+                    "tool_hop": tool_hops_used,
+                    "ok": False,
+                    "error": str(exc),
+                },
+            )
 
         current_user_prompt = _build_tool_result_prompt(tool_result=bridge_result)
         final_response_required = False
@@ -834,6 +895,7 @@ def _invoke_runtime_json_once(
         stage=context.stage,
         working_dir=context.working_dir,
         workflow_id=context.workflow_id,
+        operation_id=context.operation_id,
         issue_key=context.issue_key,
         run_id=context.run_id,
         attempt=context.attempt,

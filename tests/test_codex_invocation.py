@@ -854,6 +854,119 @@ class CodexInvocationTests(unittest.TestCase):
         self.assertIn('"tool_name": "decision.read_state"', str(runtime_calls[1]["user_prompt"]))
         self.assertIn('"ok": true', str(runtime_calls[1]["user_prompt"]).lower())
 
+    def test_invoke_runtime_json_preserves_operation_id_in_runtime_log_sink(self) -> None:
+        captured: dict[str, object] = {}
+
+        class _Runtime:
+            def run_json(self, **kwargs):  # noqa: ANN003
+                on_log_line = kwargs.get("on_log_line")
+                if callable(on_log_line):
+                    on_log_line("stdout", "planning line")
+                return {"ok": True}
+
+        context = AgentInvocationContext(
+            channel="worker",
+            tenant_id="tenant-1",
+            project_id="proj-1",
+            command="workflow",
+            stage="engineering_planning",
+            working_dir=".",
+            workflow_id="parent_planning:MAB-215",
+            operation_id="operation-jira-child-fanout",
+            run_id="run-1",
+        )
+
+        def _fake_sink(**kwargs):  # noqa: ANN003
+            captured.update(kwargs)
+            return lambda _stream, _message: None
+
+        with (
+            patch("orchestrator.core.runtime_invocation._get_log_writer", return_value=self._Writer()),
+            patch("orchestrator.core.runtime_invocation.build_runtime_log_sink", side_effect=_fake_sink),
+            patch("orchestrator.core.runtime_invocation._emit_invocation_event"),
+            patch("orchestrator.core.runtime_invocation._append_raw_log_line"),
+            patch("orchestrator.core.runtime_invocation._enqueue_runtime_log_line"),
+        ):
+            payload = invoke_runtime_json(
+                runtime=_Runtime(),  # type: ignore[arg-type]
+                context=context,
+                system_prompt="system",
+                user_prompt="user",
+            )
+
+        self.assertEqual(payload, {"ok": True})
+        self.assertEqual(captured["workflow_id"], "parent_planning:MAB-215")
+        self.assertEqual(captured["operation_id"], "operation-jira-child-fanout")
+
+    def test_invoke_runtime_json_with_tools_preserves_operation_id_and_emits_tool_events(self) -> None:
+        sink_operation_ids: list[str | None] = []
+        invocation_events: list[tuple[str, str | None, dict[str, object]]] = []
+
+        class _Runtime:
+            def __init__(self) -> None:
+                self._calls = 0
+
+            def run_json(self, **kwargs):  # noqa: ANN003
+                self._calls += 1
+                if self._calls == 1:
+                    on_session_id = kwargs.get("on_session_id")
+                    if callable(on_session_id):
+                        on_session_id("tool-session-1")
+                    return {
+                        "type": "tool_request",
+                        "tool_name": "decision.read_state",
+                        "tool_args": {"issue_key": "GP-124"},
+                    }
+                return {
+                    "type": "final_response",
+                    "result": {"gate_status": "clear"},
+                }
+
+        context = AgentInvocationContext(
+            channel="system",
+            tenant_id="tenant-1",
+            project_id=None,
+            command="policy",
+            stage="decision_planner",
+            working_dir=".",
+            workflow_id="parent_planning:MAB-215",
+            operation_id="operation-jira-child-fanout",
+        )
+
+        def _fake_sink(**kwargs):  # noqa: ANN003
+            sink_operation_ids.append(kwargs.get("operation_id"))
+            return lambda _stream, _message: None
+
+        def _capture_event(*, context, event_kind: str, payload: dict[str, object]) -> None:  # noqa: ANN001
+            invocation_events.append((event_kind, context.operation_id, payload))
+
+        with (
+            patch("orchestrator.core.runtime_invocation._get_log_writer", return_value=self._Writer()),
+            patch("orchestrator.core.runtime_invocation.build_runtime_log_sink", side_effect=_fake_sink),
+            patch("orchestrator.core.runtime_invocation._emit_invocation_event", side_effect=_capture_event),
+            patch("orchestrator.core.runtime_invocation._append_raw_log_line"),
+            patch("orchestrator.core.runtime_invocation._enqueue_runtime_log_line"),
+        ):
+            payload = invoke_runtime_json_with_tools(
+                runtime=_Runtime(),  # type: ignore[arg-type]
+                context=context,
+                system_prompt="system",
+                user_prompt="user",
+                allowed_tools={"decision.read_state"},
+                execute_tool=lambda _tool_name, _tool_args: {"case": "ok"},
+            )
+
+        self.assertEqual(payload, {"gate_status": "clear"})
+        self.assertEqual(sink_operation_ids, ["operation-jira-child-fanout", "operation-jira-child-fanout"])
+        self.assertIn(
+            ("tool_request", "operation-jira-child-fanout", {"message": "Requested tool decision.read_state.", "tool_name": "decision.read_state", "tool_hop": 1, "tool_args": {"issue_key": "GP-124"}}),
+            invocation_events,
+        )
+        self.assertIn(
+            ("tool_result", "operation-jira-child-fanout", {"message": "Completed tool decision.read_state.", "tool_name": "decision.read_state", "tool_hop": 1, "ok": True, "tool_result": {"case": "ok"}}),
+            invocation_events,
+        )
+
     def test_invoke_runtime_json_with_tools_recovers_from_disallowed_tool(self) -> None:
         runtime_calls: list[dict[str, object]] = []
 
