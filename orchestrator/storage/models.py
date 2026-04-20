@@ -763,6 +763,69 @@ class WorkflowOperationAttempt(Base):
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+
+class AuditEvent(Base):
+    __tablename__ = "audit_events"
+    __table_args__ = (
+        Index("ix_audit_events_tenant_id_recorded_at", "tenant_id", "recorded_at"),
+        Index("ix_audit_events_project_id_recorded_at", "project_id", "recorded_at"),
+        Index("ix_audit_events_workflow_id_recorded_at", "workflow_id", "recorded_at"),
+        Index("ix_audit_events_run_id_recorded_at", "run_id", "recorded_at"),
+        Index("ix_audit_events_operation_id_recorded_at", "operation_id", "recorded_at"),
+        Index("ix_audit_events_event_kind", "event_kind"),
+        Index("ix_audit_events_level", "level"),
+    )
+
+    event_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey("tenants.tenant_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    project_id: Mapped[str | None] = mapped_column(
+        String(128),
+        ForeignKey("projects.project_id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    workflow_id: Mapped[str | None] = mapped_column(
+        String(64),
+        ForeignKey("workflow_executions.workflow_id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    run_id: Mapped[str | None] = mapped_column(
+        String(64),
+        ForeignKey("runs.run_id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    operation_id: Mapped[str | None] = mapped_column(
+        String(64),
+        ForeignKey("workflow_operations.operation_id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    attempt_id: Mapped[str | None] = mapped_column(
+        String(64),
+        ForeignKey("workflow_operation_attempts.attempt_id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    issue_key: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    actor_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    actor_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    source_component: Mapped[str] = mapped_column(String(128), nullable=False)
+    event_kind: Mapped[str] = mapped_column(String(64), nullable=False)
+    level: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    correlation_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    span_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    payload_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+
 class PMInterviewCase(Base):
     __tablename__ = "pm_interview_cases"
     __table_args__ = (

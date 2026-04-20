@@ -27,6 +27,8 @@ from orchestrator.api.admin.workflows_service import (
     create_workflow_attempt as create_workflow_attempt_impl,
     get_workflow as get_workflow_impl,
     get_workflow_type_detail as get_workflow_type_detail_impl,
+    list_workflow_audit_events as list_workflow_audit_events_impl,
+    list_workflow_telemetry_events as list_workflow_telemetry_events_impl,
     list_workflows as list_workflows_impl,
     list_workflow_types as list_workflow_types_impl,
     resume_workflow_execution as resume_workflow_execution_impl,
@@ -39,6 +41,7 @@ from orchestrator.api.schemas import (
     RunLogEventRead,
     RunRead,
     WorkflowAttemptCreateRequest,
+    WorkflowObservabilityEventRead,
     WorkflowRead,
     WorkflowTypeDetailRead,
     WorkflowTypeSummaryRead,
@@ -233,6 +236,118 @@ def get_workflow(
         workflow_to_schema_fn=workflow_to_schema,
         run_to_schema_fn=run_to_schema,
         integration_router=workflow_integration_router,
+    )
+
+
+@router.get("/workflows/{execution_id}/telemetry", response_model=list[WorkflowObservabilityEventRead])
+def list_workflow_telemetry_events(
+    execution_id: str,
+    limit: int = Query(default=200, ge=1, le=500),
+    before_recorded_at: datetime | None = Query(default=None),
+    before_event_id: str | None = Query(default=None),
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> list[WorkflowObservabilityEventRead]:
+    if not principal.is_platform_super_admin:
+        workflow = session.execute(
+            select(WorkflowExecution)
+            .where(WorkflowExecution.execution_id == execution_id)
+            .limit(1)
+        ).scalar_one_or_none()
+        if workflow is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow not found")
+        require_tenant_workspace_access(principal=principal, tenant_id=workflow.tenant_id)
+    return list_workflow_telemetry_events_impl(
+        session=session,
+        execution_id=execution_id,
+        limit=limit,
+        before_recorded_at=before_recorded_at,
+        before_event_id=before_event_id,
+    )
+
+
+@router.get("/workflows/{execution_id}/audit", response_model=list[WorkflowObservabilityEventRead])
+def list_workflow_audit_events(
+    execution_id: str,
+    limit: int = Query(default=200, ge=1, le=500),
+    before_recorded_at: datetime | None = Query(default=None),
+    before_event_id: str | None = Query(default=None),
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> list[WorkflowObservabilityEventRead]:
+    if not principal.is_platform_super_admin:
+        workflow = session.execute(
+            select(WorkflowExecution)
+            .where(WorkflowExecution.execution_id == execution_id)
+            .limit(1)
+        ).scalar_one_or_none()
+        if workflow is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow not found")
+        require_tenant_workspace_access(principal=principal, tenant_id=workflow.tenant_id)
+    return list_workflow_audit_events_impl(
+        session=session,
+        execution_id=execution_id,
+        limit=limit,
+        before_recorded_at=before_recorded_at,
+        before_event_id=before_event_id,
+    )
+
+
+@router.get("/workflows/{execution_id}/operations/{operation_id}/telemetry", response_model=list[WorkflowObservabilityEventRead])
+def list_workflow_operation_telemetry_events(
+    execution_id: str,
+    operation_id: str,
+    limit: int = Query(default=200, ge=1, le=500),
+    before_recorded_at: datetime | None = Query(default=None),
+    before_event_id: str | None = Query(default=None),
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> list[WorkflowObservabilityEventRead]:
+    if not principal.is_platform_super_admin:
+        workflow = session.execute(
+            select(WorkflowExecution)
+            .where(WorkflowExecution.execution_id == execution_id)
+            .limit(1)
+        ).scalar_one_or_none()
+        if workflow is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow not found")
+        require_tenant_workspace_access(principal=principal, tenant_id=workflow.tenant_id)
+    return list_workflow_telemetry_events_impl(
+        session=session,
+        execution_id=execution_id,
+        operation_id=operation_id,
+        limit=limit,
+        before_recorded_at=before_recorded_at,
+        before_event_id=before_event_id,
+    )
+
+
+@router.get("/workflows/{execution_id}/operations/{operation_id}/audit", response_model=list[WorkflowObservabilityEventRead])
+def list_workflow_operation_audit_events(
+    execution_id: str,
+    operation_id: str,
+    limit: int = Query(default=200, ge=1, le=500),
+    before_recorded_at: datetime | None = Query(default=None),
+    before_event_id: str | None = Query(default=None),
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> list[WorkflowObservabilityEventRead]:
+    if not principal.is_platform_super_admin:
+        workflow = session.execute(
+            select(WorkflowExecution)
+            .where(WorkflowExecution.execution_id == execution_id)
+            .limit(1)
+        ).scalar_one_or_none()
+        if workflow is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow not found")
+        require_tenant_workspace_access(principal=principal, tenant_id=workflow.tenant_id)
+    return list_workflow_audit_events_impl(
+        session=session,
+        execution_id=execution_id,
+        operation_id=operation_id,
+        limit=limit,
+        before_recorded_at=before_recorded_at,
+        before_event_id=before_event_id,
     )
 
 

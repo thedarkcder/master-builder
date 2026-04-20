@@ -110,6 +110,11 @@ class Settings(BaseSettings):
     temporal_target_host: str = "127.0.0.1:7233"
     temporal_namespace: str = "default"
     temporal_task_queue: str = "master-builder"
+    otel_enabled: bool = False
+    otel_service_namespace: str = "master-builder"
+    otel_exporter_otlp_endpoint: str = ""
+    otel_exporter_otlp_headers: str = ""
+    otel_traces_sample_ratio: float = 1.0
     run_events_initial_limit: int = 100
     run_logs_initial_limit: int = 200
     project_repo_checkout_base_dir: str = "/tmp/master-builder-project-repos"

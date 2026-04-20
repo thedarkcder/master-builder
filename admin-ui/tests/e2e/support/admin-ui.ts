@@ -493,6 +493,7 @@ export function makeWorkflow(overrides: Partial<WorkflowRecord> = {}): WorkflowR
         can_retry: false,
         retry_unavailable_reason: "Latest attempt is not in a failed state.",
         attempts: [],
+        events: [],
       },
     ],
     runs: [baselineRun],
@@ -888,6 +889,8 @@ export async function mockTenantWorkflowApis(
     onResumeExecution?: () => void;
     onRetryOperation?: (payload: { workflowId: string; operationId: string }) => void;
     retriedWorkflowResponse?: WorkflowRecord;
+    telemetryEventsByOperationId?: Record<string, unknown[]>;
+    auditEventsByOperationId?: Record<string, unknown[]>;
   },
 ): Promise<void> {
   const tenantId = options.workflows[0]?.tenant_id ?? options.tenant?.tenant_id ?? "example";
@@ -1028,6 +1031,23 @@ export async function mockTenantWorkflowApis(
       handler: async (route) => {
         options.onResumeExecution?.();
         await fulfillJson(route, nextRun);
+      },
+    },
+    {
+      method: "GET",
+      pathname: /^\/api\/bff\/api\/admin\/workflows\/[^/]+\/operations\/[^/]+\/telemetry(?:\?.*)?$/,
+      handler: (route, url) => {
+        const operationId = decodeURIComponent(url.pathname.split("/").at(-2) ?? "");
+        return fulfillJson(route, options.telemetryEventsByOperationId?.[operationId] ?? []);
+      },
+    },
+    {
+      method: "GET",
+      pathname: /^\/api\/bff\/api\/admin\/workflows\/[^/]+\/operations\/[^/]+\/audit(?:\?.*)?$/,
+      handler: (route, url) => {
+        const operationId = decodeURIComponent(url.pathname.split("/").at(-2) ?? "");
+        const operation = currentWorkflow.operations.find((candidate) => candidate.operation_id === operationId);
+        return fulfillJson(route, options.auditEventsByOperationId?.[operationId] ?? operation?.events ?? []);
       },
     },
     {

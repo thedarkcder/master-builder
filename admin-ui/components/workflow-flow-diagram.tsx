@@ -57,14 +57,34 @@ function FlowCard({ node }: { node: WorkflowFlowNode }) {
   );
 }
 
+function FlowCardButton({
+  node,
+  onClick,
+}: {
+  node: WorkflowFlowNode;
+  onClick: (node: WorkflowFlowNode) => void;
+}) {
+  return (
+    <button
+      type="button"
+      className="w-full text-left transition-transform hover:-translate-y-0.5"
+      onClick={() => onClick(node)}
+    >
+      <FlowCard node={node} />
+    </button>
+  );
+}
+
 export function WorkflowFlowDiagram({
   nodes,
   emptyLabel,
   orientation = "horizontal",
+  onNodeClick,
 }: {
   nodes: WorkflowFlowNode[];
   emptyLabel: string;
   orientation?: "horizontal" | "vertical";
+  onNodeClick?: (node: WorkflowFlowNode) => void;
 }) {
   if (nodes.length === 0) {
     return <p className="text-sm text-muted-foreground">{emptyLabel}</p>;
@@ -80,7 +100,7 @@ export function WorkflowFlowDiagram({
             <div key={group.main.key} className="flex flex-col gap-2">
               <div className="flex items-start gap-4">
                 <div className="min-w-0 flex-1">
-                  <FlowCard node={group.main} />
+                  {onNodeClick ? <FlowCardButton node={group.main} onClick={onNodeClick} /> : <FlowCard node={group.main} />}
                 </div>
                 {group.supporting.length ? (
                   <div className="w-72 space-y-2 pt-3">
@@ -89,7 +109,7 @@ export function WorkflowFlowDiagram({
                         <div className="h-px w-3 bg-border" />
                         <div className="h-1.5 w-1.5 rounded-full bg-border" />
                         <div className="min-w-0 flex-1">
-                          <FlowCard node={node} />
+                          {onNodeClick ? <FlowCardButton node={node} onClick={onNodeClick} /> : <FlowCard node={node} />}
                         </div>
                       </div>
                     ))}
@@ -118,7 +138,7 @@ export function WorkflowFlowDiagram({
         {groups.map((group, index) => (
           <div key={group.main.key} className="flex items-start gap-3">
             <div className="flex w-64 flex-col gap-2">
-              <FlowCard node={group.main} />
+              {onNodeClick ? <FlowCardButton node={group.main} onClick={onNodeClick} /> : <FlowCard node={group.main} />}
               {group.supporting.length ? (
                 <div className="space-y-2 pl-4">
                   {group.supporting.map((node) => (
@@ -126,7 +146,7 @@ export function WorkflowFlowDiagram({
                       <div className="h-px w-3 bg-border" />
                       <div className="h-1.5 w-1.5 rounded-full bg-border" />
                       <div className="min-w-0 flex-1">
-                        <FlowCard node={node} />
+                        {onNodeClick ? <FlowCardButton node={node} onClick={onNodeClick} /> : <FlowCard node={node} />}
                       </div>
                     </div>
                   ))}

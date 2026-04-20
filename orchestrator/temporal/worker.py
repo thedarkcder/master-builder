@@ -3,6 +3,8 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 
 from orchestrator.core.config import get_settings
+from orchestrator.core.logging import configure_logging
+from orchestrator.core.telemetry import initialize_telemetry
 from orchestrator.temporal.client import connect_temporal_client, temporal_task_queue
 
 
@@ -24,6 +26,13 @@ async def run_temporal_worker() -> None:
     from orchestrator.temporal.workflows.handler_backed_workflow import HandlerBackedWorkflow
 
     settings = get_settings()
+    configure_logging(
+        settings.log_level,
+        environment=settings.sentry_environment,
+        platform_version=settings.sentry_release or "dev-local",
+        default_agent_id="temporal-worker",
+    )
+    initialize_telemetry(settings=settings, service_name="temporal-worker")
     client = await connect_temporal_client(settings)
     worker = Worker(
         client,

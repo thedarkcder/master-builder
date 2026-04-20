@@ -19,6 +19,7 @@ from orchestrator.core.workflow_engine_factory import (
     build_workflow_engine,
     create_session_factory_for_engine,
 )
+from orchestrator.core.telemetry import telemetry_span
 from orchestrator.core.runs import (
     EnqueueRunResult,
     RunBootstrap,
@@ -78,18 +79,27 @@ class WorkflowRuntime:
         *,
         request: WorkflowAdvanceRequest,
     ) -> WorkflowAdvanceOutcome:
-        workflow_type = get_workflow_type_by_handler_key(
-            self._session,
-            handler_key=request.workflow_handler_key,
-        )
-        return self._engine(workflow=workflow_type).advance_workflow(
-            session=self._session,
-            settings=self._settings,
-            session_factory=None,
-            workflow_type=workflow_type,
-            request=request,
-            resolve_advance_handler_fn=self._deps.resolve_advance_handler_fn,
-        )
+        with telemetry_span(
+            "workflow_runtime.advance",
+            attributes={
+                "workflow.handler_key": request.workflow_handler_key,
+                "workflow.id": request.workflow_id,
+                "workflow.issue_key": request.issue_key,
+                "orchestration.backend": str(getattr(self._settings, "orchestration_backend", "") or ""),
+            },
+        ):
+            workflow_type = get_workflow_type_by_handler_key(
+                self._session,
+                handler_key=request.workflow_handler_key,
+            )
+            return self._engine(workflow=workflow_type).advance_workflow(
+                session=self._session,
+                settings=self._settings,
+                session_factory=None,
+                workflow_type=workflow_type,
+                request=request,
+                resolve_advance_handler_fn=self._deps.resolve_advance_handler_fn,
+            )
 
     def start_execution(
         self,
@@ -98,14 +108,24 @@ class WorkflowRuntime:
         run: Run,
         claim_id: str,
     ) -> Run:
-        return self._engine(workflow=workflow).start_workflow(
-            session=self._session,
-            settings=self._settings,
-            session_factory=create_session_factory_for_engine(session=self._session, settings=self._settings),
-            workflow=workflow,
-            run=run,
-            claim_id=claim_id,
-        )
+        with telemetry_span(
+            "workflow_runtime.start_execution",
+            attributes={
+                "workflow.id": workflow.workflow_id,
+                "workflow.type": workflow.workflow_type_key,
+                "run.id": run.run_id,
+                "tenant.id": workflow.tenant_id,
+                "project.id": workflow.project_id or "",
+            },
+        ):
+            return self._engine(workflow=workflow).start_workflow(
+                session=self._session,
+                settings=self._settings,
+                session_factory=create_session_factory_for_engine(session=self._session, settings=self._settings),
+                workflow=workflow,
+                run=run,
+                claim_id=claim_id,
+            )
 
     def create_attempt(
         self,
@@ -114,12 +134,22 @@ class WorkflowRuntime:
         bootstrap: RunBootstrap,
         commit: bool = True,
     ) -> EnqueueRunResult:
-        enqueue = enqueue_attempt_for_workflow if commit else enqueue_attempt_for_workflow_uncommitted
-        return enqueue(
-            self._session,
-            workflow_id=workflow_id,
-            bootstrap=bootstrap,
-        )
+        with telemetry_span(
+            "workflow_runtime.create_attempt",
+            attributes={
+                "workflow.id": workflow_id,
+                "project.id": bootstrap.project_id or "",
+                "tenant.id": bootstrap.tenant_id,
+                "run.issue_key": bootstrap.issue_key,
+                "workflow.commit_immediately": commit,
+            },
+        ):
+            enqueue = enqueue_attempt_for_workflow if commit else enqueue_attempt_for_workflow_uncommitted
+            return enqueue(
+                self._session,
+                workflow_id=workflow_id,
+                bootstrap=bootstrap,
+            )
 
     def resume_input(
         self,
@@ -127,20 +157,37 @@ class WorkflowRuntime:
         workflow: WorkflowExecution,
         request: RunHumanInputRequest,
     ) -> Run:
-        return self._engine(workflow=workflow).resume_workflow(
-            session=self._session,
-            settings=self._settings,
-            session_factory=create_session_factory_for_engine(session=self._session, settings=self._settings),
-            workflow=workflow,
-            request=request,
-        )
+        with telemetry_span(
+            "workflow_runtime.resume_input",
+            attributes={
+                "workflow.id": workflow.workflow_id,
+                "workflow.type": workflow.workflow_type_key,
+                "request.id": request.request_id,
+                "tenant.id": workflow.tenant_id,
+            },
+        ):
+            return self._engine(workflow=workflow).resume_workflow(
+                session=self._session,
+                settings=self._settings,
+                session_factory=create_session_factory_for_engine(session=self._session, settings=self._settings),
+                workflow=workflow,
+                request=request,
+            )
 
     def query_execution(
         self,
         *,
         workflow: WorkflowExecution,
     ) -> WorkflowEngineState:
-        return self._engine(workflow=workflow).query_workflow(workflow=workflow)
+        with telemetry_span(
+            "workflow_runtime.query_execution",
+            attributes={
+                "workflow.id": workflow.workflow_id,
+                "workflow.type": workflow.workflow_type_key,
+                "tenant.id": workflow.tenant_id,
+            },
+        ):
+            return self._engine(workflow=workflow).query_workflow(workflow=workflow)
 
     def retry_operation(
         self,
@@ -148,13 +195,23 @@ class WorkflowRuntime:
         workflow: WorkflowExecution,
         operation: WorkflowOperation,
     ) -> WorkflowOperationHandle:
-        return self._engine(workflow=workflow).retry_workflow_operation(
-            session=self._session,
-            settings=self._settings,
-            session_factory=create_session_factory_for_engine(session=self._session, settings=self._settings),
-            workflow=workflow,
-            operation=operation,
-        )
+        with telemetry_span(
+            "workflow_runtime.retry_operation",
+            attributes={
+                "workflow.id": workflow.workflow_id,
+                "workflow.type": workflow.workflow_type_key,
+                "operation.id": operation.operation_id,
+                "operation.type": operation.operation_type,
+                "tenant.id": workflow.tenant_id,
+            },
+        ):
+            return self._engine(workflow=workflow).retry_workflow_operation(
+                session=self._session,
+                settings=self._settings,
+                session_factory=create_session_factory_for_engine(session=self._session, settings=self._settings),
+                workflow=workflow,
+                operation=operation,
+            )
 
 
 def build_workflow_runtime(

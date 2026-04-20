@@ -7,10 +7,14 @@ from fastapi import HTTPException, status
 from sqlalchemy import desc, func, or_, select
 from sqlalchemy.exc import IntegrityError
 
-from orchestrator.api.admin.schema_mappers import workflow_operation_to_schema
+from orchestrator.api.admin.schema_mappers import (
+    workflow_observability_event_to_schema,
+    workflow_operation_to_schema,
+)
 from orchestrator.api.schemas import (
     WorkflowExecutionPreviewRead,
     WorkflowLinkRead,
+    WorkflowObservabilityEventRead,
     WorkflowOperationRead,
     WorkflowRetryPolicyRead,
     WorkflowStatePathEntryRead,
@@ -51,11 +55,14 @@ from orchestrator.core.runs import (
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.core.workflow.transitions import ATTEMPT_ENTRY_MODES, attempt_creation_policy
 from orchestrator.storage.models import (
+    AuditEvent,
+    AgentLifecycleEvent,
     DecisionCase,
     DecisionEvent,
     FollowupContext,
     Project,
     Run,
+    RunLogEvent,
     RunHumanInputRequest,
     Tenant,
     WorkflowCheckpoint,
@@ -177,6 +184,25 @@ def _workflow_operation_attempts_by_operation(*, session, workflow_id: str) -> d
     return grouped
 
 
+def _audit_events_by_operation(
+    *,
+    session,
+    workflow_id: str,
+) -> dict[str, list[AuditEvent]]:
+    rows = session.execute(
+        select(AuditEvent)
+        .where(AuditEvent.workflow_id == workflow_id, AuditEvent.operation_id.is_not(None))
+        .order_by(AuditEvent.recorded_at.asc(), AuditEvent.event_id.asc())
+    ).scalars().all()
+    grouped: dict[str, list[AuditEvent]] = {}
+    for row in rows:
+        operation_id = str(row.operation_id or "").strip()
+        if not operation_id:
+            continue
+        grouped.setdefault(operation_id, []).append(row)
+    return grouped
+
+
 def _latest_run_for_workflow(*, session, workflow_id: str) -> Run | None:  # noqa: ANN001
     return session.execute(
         select(Run)
@@ -282,6 +308,7 @@ def _workflow_operation_reads(
     workflow: WorkflowExecution,
     operations: list[WorkflowOperation],
     operation_attempts: dict[str, list[WorkflowOperationAttempt]],
+    operation_events: dict[str, list[AuditEvent]],
 ) -> tuple[WorkflowTypeRead, list[WorkflowOperationRead]]:
     workflow_type = get_workflow_type(session, workflow_type_key=workflow.workflow_type_key)
     definitions = list_workflow_type_operations(session, workflow_type_key=workflow_type.workflow_type_key)
@@ -356,6 +383,7 @@ def _workflow_operation_reads(
                 required=bool(definition.required),
                 definition_only=current is None,
                 attempts=(operation_attempts.get(current.operation_id, []) if current is not None else []),
+                events=(operation_events.get(current.operation_id, []) if current is not None else []),
                 can_retry=can_retry,
                 retry_unavailable_reason=retry_unavailable_reason,
             )
@@ -621,6 +649,7 @@ def _workflow_execution_preview(*, session, workflow: WorkflowExecution) -> Work
         workflow=workflow,
         operations=operations,
         operation_attempts=_workflow_operation_attempts_by_operation(session=session, workflow_id=workflow.workflow_id),
+        operation_events=_audit_events_by_operation(session=session, workflow_id=workflow.workflow_id),
     )
     latest_run = _latest_run_for_workflow(session=session, workflow_id=workflow.workflow_id)
     state_path = (
@@ -652,6 +681,113 @@ def _workflow_by_execution_id(*, session, execution_id: str) -> WorkflowExecutio
         .where(WorkflowExecution.execution_id == normalized_execution_id)
         .limit(1)
     ).scalar_one_or_none()
+
+
+def _workflow_operation_for_execution(
+    *,
+    session,
+    workflow: WorkflowExecution,
+    operation_id: str,
+) -> WorkflowOperation:
+    operation = session.get(WorkflowOperation, str(operation_id or "").strip())
+    if operation is None or operation.workflow_id != workflow.workflow_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow operation not found")
+    return operation
+
+
+def _cursor_filtered_events(
+    *,
+    events: list[WorkflowObservabilityEventRead],
+    before_recorded_at: datetime | None,
+    before_event_id: str | None,
+    limit: int,
+) -> list[WorkflowObservabilityEventRead]:
+    normalized_before_event_id = str(before_event_id or "").strip()
+    filtered: list[WorkflowObservabilityEventRead] = []
+    for event in events:
+        if before_recorded_at is not None:
+            if event.recorded_at > before_recorded_at:
+                continue
+            if (
+                event.recorded_at == before_recorded_at
+                and normalized_before_event_id
+                and event.event_id >= normalized_before_event_id
+            ):
+                continue
+        filtered.append(event)
+    filtered.sort(key=lambda item: (item.recorded_at, item.event_id), reverse=True)
+    return filtered[: max(1, min(limit, 500))]
+
+
+def _telemetry_events_for_runs(
+    *,
+    session,
+    run_ids: list[str],
+) -> list[WorkflowObservabilityEventRead]:
+    normalized_run_ids = [str(run_id or "").strip() for run_id in run_ids if str(run_id or "").strip()]
+    if not normalized_run_ids:
+        return []
+    log_rows = session.execute(
+        select(RunLogEvent)
+        .where(RunLogEvent.run_id.in_(normalized_run_ids))
+        .order_by(desc(RunLogEvent.recorded_at), desc(RunLogEvent.event_id))
+    ).scalars().all()
+    lifecycle_rows = session.execute(
+        select(AgentLifecycleEvent)
+        .where(AgentLifecycleEvent.run_id.in_(normalized_run_ids))
+        .order_by(desc(AgentLifecycleEvent.recorded_at), desc(AgentLifecycleEvent.event_id))
+    ).scalars().all()
+    events: list[WorkflowObservabilityEventRead] = [
+        workflow_observability_event_to_schema(
+            {
+                "event_id": row.event_id,
+                "source": "telemetry",
+                "level": "error" if str(row.stream or "").strip().lower() == "stderr" else "info",
+                "event_kind": "run_log",
+                "message": row.message,
+                "source_component": "run_logs",
+                "run_id": row.run_id,
+                "operation_id": None,
+                "attempt_id": None,
+                "agent_id": row.agent_id,
+                "invocation_id": row.invocation_id,
+                "stage": row.stage,
+                "attempt": row.attempt,
+                "stream": row.stream,
+                "payload": {
+                    "channel": row.channel,
+                    "command": row.command,
+                    "working_dir": row.working_dir,
+                },
+                "recorded_at": row.recorded_at,
+            }
+        )
+        for row in log_rows
+    ]
+    events.extend(
+        workflow_observability_event_to_schema(
+            {
+                "event_id": row.event_id,
+                "source": "telemetry",
+                "level": "info",
+                "event_kind": str(row.event_type or "").strip().lower() or "agent_lifecycle",
+                "message": f"Agent lifecycle event: {row.event_type}",
+                "source_component": "agent_lifecycle",
+                "run_id": row.run_id,
+                "operation_id": None,
+                "attempt_id": None,
+                "agent_id": row.agent_id,
+                "invocation_id": None,
+                "stage": None,
+                "attempt": None,
+                "stream": None,
+                "payload": {"event_type": row.event_type},
+                "recorded_at": row.recorded_at,
+            }
+        )
+        for row in lifecycle_rows
+    )
+    return events
 
 
 def _workflow_type_detail(
@@ -729,11 +865,13 @@ def _workflow_schema(
     pending_request = _pending_input_request(session=session, workflow_id=workflow.workflow_id)
     operations = _workflow_operations(session=session, workflow_id=workflow.workflow_id)
     operation_attempts = _workflow_operation_attempts_by_operation(session=session, workflow_id=workflow.workflow_id)
+    operation_events = _audit_events_by_operation(session=session, workflow_id=workflow.workflow_id)
     workflow_type, operation_reads = _workflow_operation_reads(
         session=session,
         workflow=workflow,
         operations=operations,
         operation_attempts=operation_attempts,
+        operation_events=operation_events,
     )
     latest_run = workflow_runs[-1] if workflow_runs else None
     state_path = (
@@ -1064,6 +1202,62 @@ def get_workflow(
         workflow_to_schema_fn=workflow_to_schema_fn,
         run_to_schema_fn=run_to_schema_fn,
         integration_router=integration_router,
+    )
+
+
+def list_workflow_audit_events(
+    *,
+    session,
+    execution_id: str,
+    operation_id: str | None = None,
+    limit: int = 200,
+    before_recorded_at: datetime | None = None,
+    before_event_id: str | None = None,
+) -> list[WorkflowObservabilityEventRead]:
+    workflow = _workflow_by_execution_id(session=session, execution_id=execution_id)
+    if workflow is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow not found")
+
+    query = (
+        select(AuditEvent)
+        .where(AuditEvent.workflow_id == workflow.workflow_id)
+        .order_by(desc(AuditEvent.recorded_at), desc(AuditEvent.event_id))
+    )
+    if operation_id is not None:
+        operation = _workflow_operation_for_execution(session=session, workflow=workflow, operation_id=operation_id)
+        query = query.where(AuditEvent.operation_id == operation.operation_id)
+    rows = session.execute(query).scalars().all()
+    return _cursor_filtered_events(
+        events=[workflow_observability_event_to_schema(row) for row in rows],
+        before_recorded_at=before_recorded_at,
+        before_event_id=before_event_id,
+        limit=limit,
+    )
+
+
+def list_workflow_telemetry_events(
+    *,
+    session,
+    execution_id: str,
+    operation_id: str | None = None,
+    limit: int = 200,
+    before_recorded_at: datetime | None = None,
+    before_event_id: str | None = None,
+) -> list[WorkflowObservabilityEventRead]:
+    workflow = _workflow_by_execution_id(session=session, execution_id=execution_id)
+    if workflow is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow not found")
+
+    if operation_id is not None:
+        operation = _workflow_operation_for_execution(session=session, workflow=workflow, operation_id=operation_id)
+        run_ids = [operation.run_id] if str(operation.run_id or "").strip() else []
+    else:
+        run_ids = [run.run_id for run in _workflow_runs(session=session, workflow_id=workflow.workflow_id)]
+    return _cursor_filtered_events(
+        events=_telemetry_events_for_runs(session=session, run_ids=run_ids),
+        before_recorded_at=before_recorded_at,
+        before_event_id=before_event_id,
+        limit=limit,
     )
 
 

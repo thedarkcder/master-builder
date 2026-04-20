@@ -1023,6 +1023,36 @@ class WorkflowOperationAttemptRead(BaseModel):
     finished_at: datetime | None = None
 
 
+class WorkflowObservabilityEventRead(BaseModel):
+    event_id: str
+    source: Literal["audit", "telemetry"]
+    level: str
+    event_kind: str
+    message: str
+    source_component: str | None = None
+    run_id: str | None = None
+    operation_id: str | None = None
+    attempt_id: str | None = None
+    agent_id: str | None = None
+    invocation_id: str | None = None
+    stage: str | None = None
+    attempt: int | None = None
+    stream: str | None = None
+    payload: dict[str, object] = Field(default_factory=dict)
+    recorded_at: datetime
+
+
+class AuditEventExportRequest(BaseModel):
+    tenant_id: str
+    project_id: str | None = None
+    execution_id: str | None = None
+    operation_id: str | None = None
+    run_id: str | None = None
+    issue_key: str | None = None
+    recorded_after: datetime | None = None
+    recorded_before: datetime | None = None
+
+
 class WorkflowOperationRead(BaseModel):
     operation_id: str
     run_id: str | None = None
@@ -1038,6 +1068,7 @@ class WorkflowOperationRead(BaseModel):
     can_retry: bool = False
     retry_unavailable_reason: str | None = None
     attempts: list[WorkflowOperationAttemptRead] = Field(default_factory=list)
+    events: list[WorkflowObservabilityEventRead] = Field(default_factory=list)
 
 
 class WorkflowRetryPolicyRead(BaseModel):

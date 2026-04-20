@@ -7,6 +7,8 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any
 
+from orchestrator.core.telemetry import current_trace_context
+
 REQUIRED_LOG_FIELDS = (
     "timestamp",
     "level",
@@ -16,6 +18,8 @@ REQUIRED_LOG_FIELDS = (
     "project_id",
     "agent_id",
     "correlation_id",
+    "trace_id",
+    "span_id",
     "event_type",
     "message",
     "metadata",
@@ -111,6 +115,7 @@ class ObservabilityJsonFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         context = current_log_context()
+        trace_context = current_trace_context()
         metadata = dict(getattr(record, "metadata", {}) or {})
         metadata.setdefault("logger", record.name)
         metadata.setdefault("module", record.module)
@@ -130,6 +135,8 @@ class ObservabilityJsonFormatter(logging.Formatter):
                 default=self._default_agent_id,
             ),
             "correlation_id": _normalize_log_field(getattr(record, "correlation_id", context["correlation_id"])),
+            "trace_id": _normalize_log_field(getattr(record, "trace_id", trace_context["trace_id"])),
+            "span_id": _normalize_log_field(getattr(record, "span_id", trace_context["span_id"])),
             "event_type": _normalize_log_field(getattr(record, "event_type", record.name), default=record.name),
             "message": record.getMessage(),
             "metadata": metadata,

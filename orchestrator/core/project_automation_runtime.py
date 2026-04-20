@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from orchestrator.core.config import Settings, get_settings
 from orchestrator.core.logging import configure_logging
 from orchestrator.core.project_automation_service import enqueue_due_project_automation_runs
+from orchestrator.core.telemetry import initialize_telemetry
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.run_queue_events import is_postgres_database_url, postgres_dsn_from_database_url
 
@@ -109,4 +110,5 @@ def run_project_automation_runtime() -> None:
         platform_version=settings.sentry_release or "dev-local",
         default_agent_id="project-automation-runtime",
     )
+    initialize_telemetry(settings=settings, service_name="project-automation")
     ProjectAutomationRuntime(settings=settings).run_forever()
