@@ -187,12 +187,10 @@ export default function TenantExecutionDetailPage() {
             <div className="rounded-2xl border bg-background p-4">
               <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Execution</p>
               <p className="mt-2 text-sm font-semibold">{workflow.issue_summary?.trim() || workflow.issue_key}</p>
-              <p className="mt-1 text-xs text-muted-foreground">{workflow.workflow_id}</p>
             </div>
             <div className="rounded-2xl border bg-background p-4">
               <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Workflow type</p>
               <p className="mt-2 text-sm font-semibold">{workflow.workflow_type.label}</p>
-              <p className="mt-1 text-xs text-muted-foreground">{workflow.workflow_type.key}</p>
             </div>
             <div className="rounded-2xl border bg-background p-4">
               <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Current state</p>

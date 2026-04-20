@@ -153,7 +153,6 @@ export default function TenantWorkflowTypeDetailPage() {
             <div className="rounded-2xl border bg-background p-4">
               <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Workflow</p>
               <p className="mt-2 text-sm font-semibold">{workflowType.label}</p>
-              <p className="mt-1 text-xs text-muted-foreground">{workflowType.key}</p>
             </div>
             <div className="rounded-2xl border bg-background p-4">
               <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Engine</p>
@@ -285,7 +284,6 @@ export default function TenantWorkflowTypeDetailPage() {
                             >
                               {execution.issue_summary?.trim() || execution.issue_key}
                             </Link>
-                            <p className="text-xs text-muted-foreground">{execution.workflow_id}</p>
                           </TableCell>
                           <TableCell>
                             <StatusBadge status={execution.status} />
