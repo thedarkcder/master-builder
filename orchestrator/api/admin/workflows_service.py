@@ -88,11 +88,19 @@ def _reconcile_workflow_status_with_active_attempt(*, session, workflow) -> None
 
 
 def _latest_checkpoint_for_kind(*, session, workflow_id: str, checkpoint_kind: str) -> WorkflowCheckpoint | None:  # noqa: ANN001
+    normalized_kind = str(checkpoint_kind or "").strip().lower()
+    compatible_kinds = (
+        ("pm",)
+        if normalized_kind == "pm"
+        else ("execution", "orchestrated")
+        if normalized_kind == "execution"
+        else (normalized_kind,)
+    )
     return session.execute(
         select(WorkflowCheckpoint)
         .where(
             WorkflowCheckpoint.workflow_id == workflow_id,
-            WorkflowCheckpoint.checkpoint_kind == checkpoint_kind,
+            WorkflowCheckpoint.checkpoint_kind.in_(compatible_kinds),
         )
         .order_by(desc(WorkflowCheckpoint.created_at))
         .limit(1)
@@ -523,8 +531,10 @@ def _available_actions(
     *,
     workflow: WorkflowExecution,
     workflow_runs: list[Run],
+    checkpoint_kinds: list[str],
 ) -> list[WorkflowActionRead]:
     actions: list[WorkflowActionRead] = []
+    normalized_checkpoint_kinds = {str(kind or "").strip().lower() for kind in checkpoint_kinds if str(kind or "").strip()}
     for mode in ATTEMPT_ENTRY_MODES:
         policy = attempt_creation_policy(workflow_status=workflow.status, mode=mode)
         if not policy.allowed:
@@ -532,8 +542,12 @@ def _available_actions(
         checkpoint_kind = None
         detail = None
         if mode in {"restart", "resume"}:
-            latest_run = workflow_runs[-1] if workflow_runs else None
-            checkpoint_kind = "pm" if latest_run and str(latest_run.entry_stage or "").strip().lower() == "pm" else "execution"
+            if "pm" in normalized_checkpoint_kinds:
+                checkpoint_kind = "pm"
+            elif normalized_checkpoint_kinds.intersection({"execution", "orchestrated"}):
+                checkpoint_kind = "execution"
+            else:
+                continue
             detail = "Resume from the latest compatible checkpoint." if mode == "resume" else "Create a new execution from the latest checkpoint."
         else:
             detail = "Start a fresh execution from the workflow issue context."
@@ -737,6 +751,7 @@ def _workflow_schema(
     integration_router=None,
 ):  # noqa: ANN001
     latest_checkpoint = session.get(WorkflowCheckpoint, workflow.latest_checkpoint_id) if workflow.latest_checkpoint_id else None
+    checkpoint_kinds = _workflow_checkpoint_kinds(session=session, workflow_id=workflow.workflow_id)
     workflow_runs = _workflow_runs(session=session, workflow_id=workflow.workflow_id)
     pending_request = _pending_input_request(session=session, workflow_id=workflow.workflow_id)
     operations = _workflow_operations(session=session, workflow_id=workflow.workflow_id)
@@ -775,7 +790,11 @@ def _workflow_schema(
         retrying_steps=retrying_steps,
         conditional_branches_taken=conditional_branches_taken,
         conditional_branches_available=conditional_branches_available,
-        available_actions=_available_actions(workflow=workflow, workflow_runs=workflow_runs),
+        available_actions=_available_actions(
+            workflow=workflow,
+            workflow_runs=workflow_runs,
+            checkpoint_kinds=checkpoint_kinds,
+        ),
         links=_workflow_links(
             session=session,
             workflow=workflow,
