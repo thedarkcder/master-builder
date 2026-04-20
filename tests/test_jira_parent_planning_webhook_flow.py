@@ -1422,6 +1422,9 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
             workflow = session.get(WorkflowExecution, "parent_planning:TP-987D")
             self.assertIsNotNone(workflow)
             assert workflow is not None
+            operations = session.execute(
+                select(WorkflowOperation).where(WorkflowOperation.workflow_id == workflow.workflow_id)
+            ).scalars().all()
             operation = session.execute(
                 select(WorkflowOperation).where(
                     WorkflowOperation.workflow_id == workflow.workflow_id,
@@ -1435,6 +1438,10 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
             ).scalars().first()
         self.assertEqual(workflow.status, "failed")
         self.assertIn("CONTENT_LIMIT_EXCEEDED", str(workflow.last_error))
+        self.assertEqual(
+            {item.operation_type: item.status for item in operations}["backlog_planning"],
+            "completed",
+        )
         self.assertEqual(operation.status, "failed")
         self.assertIn("CONTENT_LIMIT_EXCEEDED", str(operation.summary))
         self.assertIsNotNone(latest_attempt)

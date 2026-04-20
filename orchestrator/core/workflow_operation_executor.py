@@ -26,6 +26,7 @@ from orchestrator.core.workflow_operation_service import (
     complete_workflow_operation,
     fail_workflow_operation,
     start_workflow_operation_attempt,
+    upsert_workflow_operation,
 )
 from orchestrator.core.workflow_type_catalog import list_workflow_type_operations
 from orchestrator.storage.models import Project, Tenant, WorkflowExecution, WorkflowOperation
@@ -219,12 +220,54 @@ def _execute_jira_child_fanout(
     attempt = start_workflow_operation_attempt(context.session, operation=context.operation)
     mark_workflow_running(workflow=context.workflow, now=_now())
 
+    backlog_planning_operation = upsert_workflow_operation(
+        context.session,
+        workflow_id=context.workflow.workflow_id,
+        operation_type="backlog_planning",
+        idempotency_key="workflow-definition:backlog_planning",
+        target_system=None,
+        target_ref=None,
+        summary="Backlog planning completed from the confirmed parent brief.",
+    )
+
     try:
         planning_result, planning_package = planner.plan_backlog_parent(
             parent_detail=parent_detail,
             product_brief=brief.to_payload(),
             project_key=context.project.jira_project_key,
         )
+    except Exception as exc:  # noqa: BLE001
+        category = _classify_operation_failure(error=exc)
+        logger.exception(
+            "workflow_operation_execution_failed workflow_id=%s operation_id=%s operation_type=%s error=%s",
+            context.workflow.workflow_id,
+            context.operation.operation_id,
+            context.operation.operation_type,
+            exc,
+        )
+        fail_workflow_operation(
+            context.session,
+            operation=context.operation,
+            attempt=attempt,
+            category=category,
+            message=str(exc),
+        )
+        mark_workflow_failed(workflow=context.workflow, message=str(exc), now=_now())
+        return WorkflowOperationHandle(
+            operation_id=context.operation.operation_id,
+            workflow_id=context.workflow.workflow_id,
+            operation_type=context.operation.operation_type,
+            status=context.operation.status,
+        )
+    if planning_result.planning_state == PLANNING_STATE_COMPLETED and backlog_planning_operation.status != "completed":
+        planning_attempt = start_workflow_operation_attempt(context.session, operation=backlog_planning_operation)
+        complete_workflow_operation(
+            context.session,
+            operation=backlog_planning_operation,
+            attempt=planning_attempt,
+            summary="Backlog planning completed from the confirmed parent brief.",
+        )
+    try:
         seed_data = child_sync_gateway.seed_parent_backlog_children(
             parent_detail=parent_detail,
             project_key=context.project.jira_project_key,
