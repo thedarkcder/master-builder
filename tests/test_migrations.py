@@ -61,7 +61,62 @@ class MigrationTests(unittest.TestCase):
 
         duplicates = {revision_id: count for revision_id, count in Counter(revision_ids).items() if count > 1}
         self.assertEqual(duplicates, {})
-        self.assertEqual(script.get_heads(), ["20260420_0077"])
+        self.assertEqual(script.get_heads(), ["20260420_0078"])
+
+    def test_workflow_execution_backend_backfill_migration_aligns_execution_rows(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            database_url = f"sqlite:///{Path(tmpdir) / 'workflow-backfill.sqlite'}"
+            engine = create_engine(database_url)
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE workflow_types (
+                            workflow_type_key VARCHAR PRIMARY KEY,
+                            orchestration_backend VARCHAR NOT NULL
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE workflow_executions (
+                            workflow_id VARCHAR PRIMARY KEY,
+                            workflow_type_key VARCHAR NOT NULL,
+                            orchestration_backend VARCHAR NOT NULL
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        "INSERT INTO workflow_types (workflow_type_key, orchestration_backend) "
+                        "VALUES ('issue_execution', 'temporal')"
+                    )
+                )
+                connection.execute(
+                    text(
+                        "INSERT INTO workflow_executions (workflow_id, workflow_type_key, orchestration_backend) "
+                        "VALUES ('workflow-1', 'issue_execution', 'legacy')"
+                    )
+                )
+
+            module = self._load_migration_module(
+                "20260420_0078_backfill_workflow_execution_backends.py",
+                "migration_20260420_0078_backfill_workflow_execution_backends",
+            )
+
+            with engine.begin() as connection, patch.object(module.op, "get_bind", return_value=connection):
+                module.upgrade()
+
+            with engine.connect() as connection:
+                row = connection.execute(
+                    text(
+                        "SELECT orchestration_backend FROM workflow_executions WHERE workflow_id = 'workflow-1'"
+                    )
+                ).mappings().one()
+            self.assertEqual(row["orchestration_backend"], "temporal")
 
     def test_parent_planning_rename_migration_drops_discovered_workflow_foreign_keys(self) -> None:
         module = self._load_migration_module(
