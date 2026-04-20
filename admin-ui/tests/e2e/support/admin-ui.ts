@@ -952,6 +952,7 @@ export async function mockTenantWorkflowApis(
         execution_context: { pre_check_outcome: "ready_for_agent" },
       }),
     });
+  let currentWorkflow = primaryWorkflow;
 
   await installBffApiMocks(page, [
     {
@@ -989,8 +990,8 @@ export async function mockTenantWorkflowApis(
       pathname: /^\/api\/bff\/api\/admin\/workflows\/[^/]+$/,
       handler: (route, url) => {
         const workflowId = decodeURIComponent(url.pathname.split("/").at(-1) ?? "");
-        if (options.retriedWorkflowResponse && workflowId === options.retriedWorkflowResponse.workflow_id) {
-          return fulfillJson(route, options.retriedWorkflowResponse);
+        if (workflowId === currentWorkflow.workflow_id) {
+          return fulfillJson(route, currentWorkflow);
         }
         if (workflowId === nextRun.workflow_id) {
           return fulfillJson(route, {
@@ -1026,7 +1027,8 @@ export async function mockTenantWorkflowApis(
         const workflowId = decodeURIComponent(segments.at(-4) ?? "");
         const operationId = decodeURIComponent(segments.at(-2) ?? "");
         options.onRetryOperation?.({ workflowId, operationId });
-        await fulfillJson(route, options.retriedWorkflowResponse ?? primaryWorkflow);
+        currentWorkflow = options.retriedWorkflowResponse ?? currentWorkflow;
+        await fulfillJson(route, currentWorkflow);
       },
     },
     {
