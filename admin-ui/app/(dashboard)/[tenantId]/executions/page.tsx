@@ -192,13 +192,9 @@ export default function TenantExecutionsPage() {
                     >
                       {workflow.issue_summary?.trim() || workflow.issue_key || workflow.workflow_id}
                     </Link>
-                    <p className="text-xs text-muted-foreground">{workflow.workflow_id}</p>
                   </TableCell>
                   <TableCell className="text-sm text-muted-foreground">
-                    <div className="space-y-1">
-                      <p>{workflow.workflow_type.label}</p>
-                      <p className="text-xs text-muted-foreground">{workflow.workflow_type.key}</p>
-                    </div>
+                    <p>{workflow.workflow_type.label}</p>
                   </TableCell>
                   <TableCell className="text-sm text-muted-foreground">{workflow.issue_key}</TableCell>
                   <TableCell>

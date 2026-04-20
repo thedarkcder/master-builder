@@ -119,7 +119,6 @@ export default function TenantWorkflowTypesPage() {
                     >
                       {workflowType.label}
                     </Link>
-                    <p className="text-xs text-muted-foreground">{workflowType.key}</p>
                     {workflowType.description ? (
                       <p className="mt-1 max-w-[640px] text-sm text-muted-foreground">{workflowType.description}</p>
                     ) : null}
