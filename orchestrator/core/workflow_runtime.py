@@ -79,12 +79,14 @@ class WorkflowRuntime:
         *,
         request: WorkflowAdvanceRequest,
     ) -> WorkflowAdvanceOutcome:
+        request_workflow_id = str(getattr(request, "workflow_id", "") or "").strip()
+        request_issue_key = str(getattr(request, "issue_key", "") or "").strip()
         with telemetry_span(
             "workflow_runtime.advance",
             attributes={
                 "workflow.handler_key": request.workflow_handler_key,
-                "workflow.id": request.workflow_id,
-                "workflow.issue_key": request.issue_key,
+                "workflow.id": request_workflow_id,
+                "workflow.issue_key": request_issue_key,
                 "orchestration.backend": str(getattr(self._settings, "orchestration_backend", "") or ""),
             },
         ):
@@ -108,14 +110,19 @@ class WorkflowRuntime:
         run: Run,
         claim_id: str,
     ) -> Run:
+        workflow_id = str(getattr(workflow, "workflow_id", "") or "").strip()
+        workflow_type_key = str(getattr(workflow, "workflow_type_key", "") or "").strip()
+        tenant_id = str(getattr(workflow, "tenant_id", "") or "").strip()
+        project_id = str(getattr(workflow, "project_id", "") or "").strip()
+        run_id = str(getattr(run, "run_id", "") or "").strip()
         with telemetry_span(
             "workflow_runtime.start_execution",
             attributes={
-                "workflow.id": workflow.workflow_id,
-                "workflow.type": workflow.workflow_type_key,
-                "run.id": run.run_id,
-                "tenant.id": workflow.tenant_id,
-                "project.id": workflow.project_id or "",
+                "workflow.id": workflow_id,
+                "workflow.type": workflow_type_key,
+                "run.id": run_id,
+                "tenant.id": tenant_id,
+                "project.id": project_id,
             },
         ):
             return self._engine(workflow=workflow).start_workflow(
@@ -134,13 +141,16 @@ class WorkflowRuntime:
         bootstrap: RunBootstrap,
         commit: bool = True,
     ) -> EnqueueRunResult:
+        project_id = str(getattr(bootstrap, "project_id", "") or "").strip()
+        tenant_id = str(getattr(bootstrap, "tenant_id", "") or "").strip()
+        issue_key = str(getattr(bootstrap, "issue_key", "") or "").strip()
         with telemetry_span(
             "workflow_runtime.create_attempt",
             attributes={
                 "workflow.id": workflow_id,
-                "project.id": bootstrap.project_id or "",
-                "tenant.id": bootstrap.tenant_id,
-                "run.issue_key": bootstrap.issue_key,
+                "project.id": project_id,
+                "tenant.id": tenant_id,
+                "run.issue_key": issue_key,
                 "workflow.commit_immediately": commit,
             },
         ):
@@ -157,13 +167,17 @@ class WorkflowRuntime:
         workflow: WorkflowExecution,
         request: RunHumanInputRequest,
     ) -> Run:
+        workflow_id = str(getattr(workflow, "workflow_id", "") or "").strip()
+        workflow_type_key = str(getattr(workflow, "workflow_type_key", "") or "").strip()
+        tenant_id = str(getattr(workflow, "tenant_id", "") or "").strip()
+        request_id = str(getattr(request, "request_id", "") or "").strip()
         with telemetry_span(
             "workflow_runtime.resume_input",
             attributes={
-                "workflow.id": workflow.workflow_id,
-                "workflow.type": workflow.workflow_type_key,
-                "request.id": request.request_id,
-                "tenant.id": workflow.tenant_id,
+                "workflow.id": workflow_id,
+                "workflow.type": workflow_type_key,
+                "request.id": request_id,
+                "tenant.id": tenant_id,
             },
         ):
             return self._engine(workflow=workflow).resume_workflow(
@@ -179,12 +193,15 @@ class WorkflowRuntime:
         *,
         workflow: WorkflowExecution,
     ) -> WorkflowEngineState:
+        workflow_id = str(getattr(workflow, "workflow_id", "") or "").strip()
+        workflow_type_key = str(getattr(workflow, "workflow_type_key", "") or "").strip()
+        tenant_id = str(getattr(workflow, "tenant_id", "") or "").strip()
         with telemetry_span(
             "workflow_runtime.query_execution",
             attributes={
-                "workflow.id": workflow.workflow_id,
-                "workflow.type": workflow.workflow_type_key,
-                "tenant.id": workflow.tenant_id,
+                "workflow.id": workflow_id,
+                "workflow.type": workflow_type_key,
+                "tenant.id": tenant_id,
             },
         ):
             return self._engine(workflow=workflow).query_workflow(workflow=workflow)
@@ -195,14 +212,19 @@ class WorkflowRuntime:
         workflow: WorkflowExecution,
         operation: WorkflowOperation,
     ) -> WorkflowOperationHandle:
+        workflow_id = str(getattr(workflow, "workflow_id", "") or "").strip()
+        workflow_type_key = str(getattr(workflow, "workflow_type_key", "") or "").strip()
+        tenant_id = str(getattr(workflow, "tenant_id", "") or "").strip()
+        operation_id = str(getattr(operation, "operation_id", "") or "").strip()
+        operation_type = str(getattr(operation, "operation_type", "") or "").strip()
         with telemetry_span(
             "workflow_runtime.retry_operation",
             attributes={
-                "workflow.id": workflow.workflow_id,
-                "workflow.type": workflow.workflow_type_key,
-                "operation.id": operation.operation_id,
-                "operation.type": operation.operation_type,
-                "tenant.id": workflow.tenant_id,
+                "workflow.id": workflow_id,
+                "workflow.type": workflow_type_key,
+                "operation.id": operation_id,
+                "operation.type": operation_type,
+                "tenant.id": tenant_id,
             },
         ):
             return self._engine(workflow=workflow).retry_workflow_operation(

@@ -49,6 +49,8 @@ def seed_issues_with_runtime(
     codex_working_dir: str = "",
     pm_status: str | None = None,
     planning_package: dict | None = None,
+    workflow_id: str | None = None,
+    operation_id: str | None = None,
 ) -> tuple[str, dict]:  # noqa: ANN001
     return _seed_issues_with_runtime_impl(
         session=session,
@@ -77,6 +79,8 @@ def seed_issues_with_runtime(
         allow_empty_children=allow_empty_children,
         pm_status=pm_status,
         planning_package=planning_package,
+        workflow_id=workflow_id,
+        operation_id=operation_id,
     )
 
 

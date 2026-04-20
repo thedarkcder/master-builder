@@ -15,6 +15,10 @@ def build_runtime_log_sink(
     project_id: str | None,
     command: str,
     working_dir: str | None,
+    workflow_id: str | None = None,
+    operation_id: str | None = None,
+    run_id: str | None = None,
+    attempt: int | None = None,
     issue_key: str | None = None,
 ) -> Callable[[str, str], None]:
     normalized_channel = str(channel or "").strip()
@@ -22,6 +26,9 @@ def build_runtime_log_sink(
     normalized_project = str(project_id or "").strip() or None
     normalized_command = str(command or "").strip()
     normalized_working_dir = str(working_dir or "").strip() or None
+    normalized_workflow_id = str(workflow_id or "").strip() or None
+    normalized_operation_id = str(operation_id or "").strip() or None
+    normalized_run_id = str(run_id or "").strip() or None
     normalized_issue_key = str(issue_key or "").strip() or None
     if not normalized_channel:
         raise ValueError("Runtime telemetry requires non-empty channel")
@@ -39,6 +46,10 @@ def build_runtime_log_sink(
             "metadata": {
                 "channel": normalized_channel,
                 "command": normalized_command,
+                "workflow_id": normalized_workflow_id,
+                "operation_id": normalized_operation_id,
+                "run_id": normalized_run_id,
+                "attempt": attempt,
                 "issue_key": normalized_issue_key,
                 "working_dir": normalized_working_dir,
                 "phase": "start",
@@ -56,6 +67,10 @@ def build_runtime_log_sink(
                 "metadata": {
                     "channel": normalized_channel,
                     "command": normalized_command,
+                    "workflow_id": normalized_workflow_id,
+                    "operation_id": normalized_operation_id,
+                    "run_id": normalized_run_id,
+                    "attempt": attempt,
                     "issue_key": normalized_issue_key,
                     "stream": str(stream or "").strip().lower() or "stdout",
                     "message": redact_sensitive_text(str(message or "").strip()),

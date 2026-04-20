@@ -337,9 +337,12 @@ class ParentFeaturePlanningWorkflow:
                     "webhook_event": context.webhook_event,
                 },
             )
-        self._mark_fanout_completed(
+        self._mark_planning_completed(
             lifecycle=lifecycle,
             planning_summary="Backlog planning completed from the normalized parent brief.",
+        )
+        self._mark_fanout_completed(
+            lifecycle=lifecycle,
             fanout_summary="Engineering child tickets were refreshed from the parent planning package.",
         )
 

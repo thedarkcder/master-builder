@@ -246,6 +246,8 @@ def seed_issues_with_runtime(
     allow_empty_children: bool = False,
     pm_status: str | None = None,
     planning_package: dict[str, Any] | None = None,
+    workflow_id: str | None = None,
+    operation_id: str | None = None,
 ):  # noqa: ANN001
     del build_seed_issue_description_fn
     project_keys = tenant_project_keys_fn(session=session, tenant=tenant)
@@ -274,6 +276,8 @@ def seed_issues_with_runtime(
                 command="issues",
                 stage="seed",
                 working_dir=codex_working_dir,
+                workflow_id=workflow_id,
+                operation_id=operation_id,
             ),
         )
     except codex_runtime_error_type as exc:

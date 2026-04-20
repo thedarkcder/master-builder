@@ -33,6 +33,8 @@ class SpecialistPlanningRequest:
     github_context: dict[str, Any] = field(default_factory=dict)
     conversation_history: tuple[dict[str, Any], ...] = ()
     working_dir: str = "."
+    workflow_id: str | None = None
+    operation_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -212,6 +214,8 @@ def _run_stage(
         command="pm",
         stage=stage.planning_state,
         working_dir=request.working_dir,
+        workflow_id=request.workflow_id,
+        operation_id=request.operation_id,
         issue_key=request.parent_issue_key,
         reasoning_effort=stage.reasoning_effort,
     )

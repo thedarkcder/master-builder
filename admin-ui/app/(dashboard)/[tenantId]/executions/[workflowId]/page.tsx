@@ -21,7 +21,7 @@ import {
   type WorkflowOperationRecord,
   type WorkflowRecord,
 } from "@/lib/api";
-import { formatTimestamp } from "@/lib/datetime";
+import { formatTimeAgo, formatTimestamp } from "@/lib/datetime";
 import { cn } from "@/lib/utils";
 
 function latestAttempt(operation: WorkflowOperationRecord) {
@@ -137,7 +137,7 @@ export default function TenantExecutionDetailPage() {
   const openOperationDrawer = useCallback(
     async (operation: WorkflowOperationRecord) => {
       setSelectedOperationId(operation.operation_id);
-      setObservabilityView("telemetry");
+      setObservabilityView((operation.events?.length ?? 0) > 0 ? "audit" : "telemetry");
       setTelemetryEvents([]);
       setAuditEvents(operation.events ?? []);
       await loadOperationObservability(operation);
@@ -387,7 +387,6 @@ export default function TenantExecutionDetailPage() {
                             <button type="button" className="text-left hover:text-primary hover:underline" onClick={() => void openOperationDrawer(operation)}>
                               {operation.label?.trim() || operation.operation_type}
                             </button>
-                            <p className="text-xs text-muted-foreground">{operation.operation_type}</p>
                           </TableCell>
                           <TableCell>
                             <StatusBadge status={operation.status} />
@@ -397,7 +396,9 @@ export default function TenantExecutionDetailPage() {
                             {attempt ? (
                               <div className="space-y-1">
                                 <p>Attempt {attempt.attempt_number}</p>
-                                <p>{attempt.finished_at ? formatTimestamp(attempt.finished_at) : attempt.started_at ? "In progress" : "Waiting to start"}</p>
+                                <p title={attempt.finished_at ? formatTimestamp(attempt.finished_at) : undefined}>
+                                  {attempt.finished_at ? formatTimeAgo(attempt.finished_at) : attempt.started_at ? "In progress" : "Waiting to start"}
+                                </p>
                               </div>
                             ) : (
                               operation.status === "pending" ? "Not started" : "—"
@@ -446,7 +447,6 @@ export default function TenantExecutionDetailPage() {
           <ExecutionObservabilityDrawer
             open={selectedOperation !== null}
             operationLabel={selectedOperation?.label?.trim() || selectedOperation?.operation_type || "Step"}
-            operationStatus={selectedOperation?.status || "pending"}
             activeView={observabilityView}
             onViewChange={setObservabilityView}
             onRefresh={() => {
