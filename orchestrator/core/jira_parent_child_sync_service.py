@@ -126,6 +126,8 @@ class JiraParentChildSyncContext:
     webhook_event: str | None
     comment_command: str | None
     comment_command_argument: str | None
+    workflow_id: str | None = None
+    operation_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -464,6 +466,8 @@ class _ParentBriefPlanner:
             project_id=self._context.project_id,
             parent_detail=parent_detail,
             build_runtime_for_selector_fn=self._build_runtime_for_selector_fn,
+            workflow_id=self._context.workflow_id,
+            operation_id=self._context.operation_id,
             refresh=refresh,
         )
 
@@ -498,6 +502,8 @@ class _ParentBriefPlanner:
                 github_context={},
                 conversation_history=(),
                 working_dir=".",
+                workflow_id=self._context.workflow_id,
+                operation_id=self._context.operation_id,
             ),
             runtime_for_selector=lambda selector: self._build_runtime_for_selector_fn(
                 session=self._session,
@@ -545,6 +551,8 @@ class _ParentChildSyncGateway:
             scoped_project_keys=[project_key],
             codex_working_dir=".",
             planning_package=planning_package,
+            workflow_id=self._context.workflow_id,
+            operation_id=self._context.operation_id,
         )
         return seed_data
 
@@ -570,6 +578,8 @@ class _ParentChildSyncGateway:
             allow_empty_children=True,
             scoped_project_keys=[project_key],
             codex_working_dir=".",
+            workflow_id=self._context.workflow_id,
+            operation_id=self._context.operation_id,
         )
         return seed_data
 
@@ -1146,6 +1156,8 @@ def _resolve_parent_product_brief(
     project_id: str | None,
     parent_detail: JiraIssueDetail,
     build_runtime_for_selector_fn,
+    workflow_id: str | None = None,
+    operation_id: str | None = None,
     refresh: bool = False,
 ) -> tuple[dict[str, object], list[object]]:
     canonical_brief = None if refresh else resolve_parent_feature_brief(
@@ -1176,6 +1188,8 @@ def _resolve_parent_product_brief(
             command="pm",
             stage="pm_parent_brief_normalization",
             working_dir=".",
+            workflow_id=workflow_id,
+            operation_id=operation_id,
             issue_key=parent_detail.key,
         ),
     )
@@ -1567,6 +1581,8 @@ def handle_engineering_clarification_command(
                 command="clarify",
                 stage="pm-translation",
                 working_dir=".",
+                workflow_id=context.workflow_id,
+                operation_id=context.operation_id,
                 issue_key=child_detail.key,
             ),
         )
@@ -1994,6 +2010,8 @@ def handle_pm_interview_reply(
                 command="pm",
                 stage="interview",
                 working_dir=".",
+                workflow_id=context.workflow_id,
+                operation_id=context.operation_id,
                 issue_key=context.issue_key,
             ),
             project_keys=[project_key],

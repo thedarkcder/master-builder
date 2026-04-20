@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from orchestrator.api.main import create_app
+from orchestrator.api.admin.schema_mappers import workflow_observability_event_to_schema
 from orchestrator.api.admin.tenant_crud import purge_expired_archived_tenants
 from orchestrator.api.admin.project_normalization import resolve_project_discord_channel_name
 from orchestrator.core.admin_notifications import AdminNotificationScope, notification_fingerprint_for
@@ -1951,7 +1952,7 @@ class AdminApiTests(AdminApiTestHarness):
                 dedupe_scope="parent_planning",
                 status="running",
                 last_error=None,
-                active_run_id="run-1",
+                active_run_id=None,
                 latest_checkpoint_id=None,
                 source_workflow_id=None,
                 source_run_id=None,
@@ -1961,43 +1962,10 @@ class AdminApiTests(AdminApiTestHarness):
                 updated_at=now,
             )
             session.add(workflow)
-            session.add(
-                Run(
-                    run_id="run-1",
-                    workflow_id=workflow.workflow_id,
-                    tenant_id="tenant-a",
-                    project_id="tenant-a-default",
-                    issue_key="MAB-215",
-                    issue_summary="Identity and authorization v1 contract",
-                    issue_description="Parent planning",
-                    repo_url=None,
-                    branch=None,
-                    pr_url=None,
-                    attempt_number=1,
-                    parent_run_id=None,
-                    entry_mode="fresh",
-                    entry_stage="orchestrated",
-                    entry_checkpoint_id=None,
-                    dedupe_scope="parent_planning",
-                    status="running",
-                    last_error=None,
-                    pre_check_outcome="ready_for_agent",
-                    required_worker_capability=None,
-                    required_runtime_kinds_json=[],
-                    claim_id=None,
-                    plan={},
-                    created_at=now,
-                    dispatch_claimed_at=None,
-                    started_at=now,
-                    last_heartbeat_at=None,
-                    worker_service_instance_id=None,
-                    finished_at=None,
-                )
-            )
             operation = WorkflowOperation(
                 operation_id="operation-jira-child-fanout",
                 workflow_id=workflow.workflow_id,
-                run_id="run-1",
+                run_id=None,
                 operation_type="jira_child_fanout",
                 idempotency_key="jira-child-fanout:MAB-215",
                 status="running",
@@ -2012,34 +1980,43 @@ class AdminApiTests(AdminApiTestHarness):
             session.add(operation)
             session.commit()
 
-            record_run_log_event(
-                session=session,
-                tenant_id="tenant-a",
-                project_id="tenant-a-default",
-                run_id="run-1",
-                issue_key="MAB-215",
-                agent_id="codex",
-                stage="orchestrated",
-                stream="stdout",
-                message="Creating Jira child ticket payload.",
-                attempt=1,
-                invocation_id="inv-1",
-                channel="codex",
-                command="codex exec",
-                working_dir="/tmp/workdir",
-                recorded_at=now,
+        with patch(
+            "orchestrator.api.admin.workflows_service.list_live_workflow_telemetry_events",
+            return_value=[
+                workflow_observability_event_to_schema(
+                    {
+                        "event_id": "telemetry:event-1",
+                        "source": "telemetry",
+                        "level": "info",
+                        "event_kind": "workflow_operation_attempt_started",
+                        "message": "Creating Jira child ticket payload.",
+                        "source_component": "orchestrator.workflow_operation",
+                        "run_id": None,
+                        "operation_id": "operation-jira-child-fanout",
+                        "attempt_id": "attempt-1",
+                        "agent_id": None,
+                        "invocation_id": None,
+                        "stage": None,
+                        "attempt": 1,
+                        "stream": None,
+                        "payload": {"status": "running"},
+                        "recorded_at": now,
+                    }
+                )
+            ],
+        ) as list_live_events:
+            response = self.client.get(
+                "/api/admin/workflows/wfexec-mab-215/operations/operation-jira-child-fanout/telemetry",
+                auth=("admin", "secret"),
             )
-            session.commit()
 
-        response = self.client.get(
-            "/api/admin/workflows/wfexec-mab-215/operations/operation-jira-child-fanout/telemetry",
-            auth=("admin", "secret"),
-        )
         self.assertEqual(response.status_code, 200, response.text)
         body = response.json()
         self.assertEqual(len(body), 1)
         self.assertEqual(body[0]["source"], "telemetry")
         self.assertEqual(body[0]["message"], "Creating Jira child ticket payload.")
+        self.assertEqual(body[0]["operation_id"], "operation-jira-child-fanout")
+        list_live_events.assert_called_once()
 
     def test_export_audit_events_as_ndjson(self) -> None:
         import json as json_module

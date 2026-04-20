@@ -48,6 +48,7 @@ class AgentInvocationContext:
     stage: str
     working_dir: str
     workflow_id: str | None = None
+    operation_id: str | None = None
     issue_key: str | None = None
     run_id: str | None = None
     attempt: int | None = None
@@ -1016,6 +1017,10 @@ def _combined_log_sink(
         tenant_id=context.tenant_id,
         project_id=context.project_id,
         command=f"{context.command}.{context.stage}",
+        workflow_id=context.workflow_id,
+        operation_id=context.operation_id,
+        run_id=context.run_id,
+        attempt=context.attempt,
         issue_key=context.issue_key,
         working_dir=context.working_dir,
     )

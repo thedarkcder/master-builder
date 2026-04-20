@@ -26,7 +26,7 @@ import {
   type WorkflowAttemptCreatePayload,
   type TokenTimelineRecord
 } from "@/lib/api";
-import { formatTimestamp } from "@/lib/datetime";
+import { formatTimeAgo, formatTimestamp } from "@/lib/datetime";
 import { buildRunDetailPath, resolveRunRouteContext } from "@/lib/dashboard-paths";
 
 type InvocationTelemetry = {
@@ -497,19 +497,6 @@ function parseRunLogChatText(entry: RunLogEventRecord): ParsedChatEntry | null {
   return null;
 }
 
-function relativeTime(iso: string): string {
-  const ms = Date.now() - new Date(iso).getTime();
-  if (ms < 0) return "just now";
-  const sec = Math.floor(ms / 1000);
-  if (sec < 60) return `${sec}s ago`;
-  const min = Math.floor(sec / 60);
-  if (min < 60) return `${min}m ago`;
-  const hr = Math.floor(min / 60);
-  if (hr < 24) return `${hr}h ago`;
-  const d = Math.floor(hr / 24);
-  return `${d}d ago`;
-}
-
 const MAX_OUTPUT_PREVIEW = 600;
 
 const TIMELINE_ICON: Record<ChatTimelineEntry["kind"], { icon: React.ReactNode; color: string }> = {
@@ -533,7 +520,7 @@ function TimelineRow({
 }) {
   const { icon, color } = TIMELINE_ICON[entry.kind] ?? TIMELINE_ICON.message;
   const stageLbl = stageDisplayLabelFn(entry.stage);
-  const ts = relativeTime(entry.recordedAt);
+  const ts = formatTimeAgo(entry.recordedAt);
   const fullTs = formatTimestamp(entry.recordedAt);
   const attempt = entry.attempt !== null ? ` #${entry.attempt}` : "";
 
@@ -2089,7 +2076,7 @@ export default function RunDetailPage() {
                         {events.map((event, idx) => (
                           <li key={`${event.agent_id}-${event.recorded_at}-${idx}`} className="rounded-lg border bg-background p-2.5">
                             <p><span className="font-medium">{event.event_type}</span> by {event.agent_id}</p>
-                            <p className="text-muted-foreground">{formatTimestamp(event.recorded_at)}</p>
+                            <p className="text-muted-foreground" title={formatTimestamp(event.recorded_at)}>{formatTimeAgo(event.recorded_at)}</p>
                           </li>
                         ))}
                       </ul>
@@ -2126,7 +2113,7 @@ export default function RunDetailPage() {
                         {filteredLogs.map((entry, idx) => (
                           <li key={`${entry.recorded_at}-${idx}`} className="rounded-lg border bg-background p-2.5" style={{ borderLeft: `2px solid ${stageColor(entry.stage)}` }}>
                             <p className="mb-0.5 text-muted-foreground">
-                              <span className="font-medium text-foreground">{entry.agent_id}</span> · {entry.stage}{entry.attempt !== null ? ` #${entry.attempt}` : ""} [{entry.stream}] · {formatTimestamp(entry.recorded_at)}
+                              <span className="font-medium text-foreground">{entry.agent_id}</span> · {entry.stage}{entry.attempt !== null ? ` #${entry.attempt}` : ""} [{entry.stream}] · <span title={formatTimestamp(entry.recorded_at)}>{formatTimeAgo(entry.recorded_at)}</span>
                             </p>
                             <p className="whitespace-pre-wrap">{entry.message}</p>
                           </li>

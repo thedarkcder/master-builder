@@ -1,5 +1,7 @@
 2026-03-23
 
+- Do not leak internal workflow identifiers, operation types, or redundant state/view labels into product UI, even as "helpful" secondary text. If the page already provides the context, repeating it is noise; product surfaces should show human labels only and keep internal ids strictly behind interactions and routing.
+
 - After a locator failure reports multiple matches in Playwright, prefer role/table/scoped locators instead of `getByText` to avoid strictness failures.
 - When editing repository files in response to user request, use `apply_patch` for edits and do not use shell overwrite patterns like `cat > file`.
 
@@ -192,6 +194,8 @@
 - Do not carry low-level lineage-management concepts like `fresh`, `restart`, checkpoint kinds, or action selectors into the execution detail surface. If the product rule is “resume this execution or don’t,” encode that directly in the execution API and page contract instead of exposing generic attempt machinery.
 
 2026-04-14
+
+- Do not ship a step-level `Live telemetry` surface on run-derived heuristics. Operation telemetry must be emitted and queried with `workflow_id` and `operation_id`, and telemetry instrumentation must never tighten shared runtime object contracts with unsafe attribute access.
 
 - When the user says a Jira remediation ticket is already fixed, do not rely on an earlier review summary or stale PR status. Re-verify the current repo path and targeted tests first, then update the ticket state based on that live evidence.
 - When the user says business users move the parent issue to start work, do not redesign execution around manual child runs or a code-writing parent run. Keep the parent as the supervisory record and make the parent board move fan out executable child tickets automatically.

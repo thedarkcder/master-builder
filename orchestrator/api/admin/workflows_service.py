@@ -11,6 +11,7 @@ from orchestrator.api.admin.schema_mappers import (
     workflow_observability_event_to_schema,
     workflow_operation_to_schema,
 )
+from orchestrator.api.admin.live_telemetry_service import list_live_workflow_telemetry_events
 from orchestrator.api.schemas import (
     WorkflowExecutionPreviewRead,
     WorkflowLinkRead,
@@ -56,13 +57,11 @@ from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.core.workflow.transitions import ATTEMPT_ENTRY_MODES, attempt_creation_policy
 from orchestrator.storage.models import (
     AuditEvent,
-    AgentLifecycleEvent,
     DecisionCase,
     DecisionEvent,
     FollowupContext,
     Project,
     Run,
-    RunLogEvent,
     RunHumanInputRequest,
     Tenant,
     WorkflowCheckpoint,
@@ -719,77 +718,6 @@ def _cursor_filtered_events(
     return filtered[: max(1, min(limit, 500))]
 
 
-def _telemetry_events_for_runs(
-    *,
-    session,
-    run_ids: list[str],
-) -> list[WorkflowObservabilityEventRead]:
-    normalized_run_ids = [str(run_id or "").strip() for run_id in run_ids if str(run_id or "").strip()]
-    if not normalized_run_ids:
-        return []
-    log_rows = session.execute(
-        select(RunLogEvent)
-        .where(RunLogEvent.run_id.in_(normalized_run_ids))
-        .order_by(desc(RunLogEvent.recorded_at), desc(RunLogEvent.event_id))
-    ).scalars().all()
-    lifecycle_rows = session.execute(
-        select(AgentLifecycleEvent)
-        .where(AgentLifecycleEvent.run_id.in_(normalized_run_ids))
-        .order_by(desc(AgentLifecycleEvent.recorded_at), desc(AgentLifecycleEvent.event_id))
-    ).scalars().all()
-    events: list[WorkflowObservabilityEventRead] = [
-        workflow_observability_event_to_schema(
-            {
-                "event_id": row.event_id,
-                "source": "telemetry",
-                "level": "error" if str(row.stream or "").strip().lower() == "stderr" else "info",
-                "event_kind": "run_log",
-                "message": row.message,
-                "source_component": "run_logs",
-                "run_id": row.run_id,
-                "operation_id": None,
-                "attempt_id": None,
-                "agent_id": row.agent_id,
-                "invocation_id": row.invocation_id,
-                "stage": row.stage,
-                "attempt": row.attempt,
-                "stream": row.stream,
-                "payload": {
-                    "channel": row.channel,
-                    "command": row.command,
-                    "working_dir": row.working_dir,
-                },
-                "recorded_at": row.recorded_at,
-            }
-        )
-        for row in log_rows
-    ]
-    events.extend(
-        workflow_observability_event_to_schema(
-            {
-                "event_id": row.event_id,
-                "source": "telemetry",
-                "level": "info",
-                "event_kind": str(row.event_type or "").strip().lower() or "agent_lifecycle",
-                "message": f"Agent lifecycle event: {row.event_type}",
-                "source_component": "agent_lifecycle",
-                "run_id": row.run_id,
-                "operation_id": None,
-                "attempt_id": None,
-                "agent_id": row.agent_id,
-                "invocation_id": None,
-                "stage": None,
-                "attempt": None,
-                "stream": None,
-                "payload": {"event_type": row.event_type},
-                "recorded_at": row.recorded_at,
-            }
-        )
-        for row in lifecycle_rows
-    )
-    return events
-
-
 def _workflow_type_detail(
     *,
     session,
@@ -1248,13 +1176,31 @@ def list_workflow_telemetry_events(
     if workflow is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow not found")
 
+    latest_attempt_started_at: datetime | None = None
     if operation_id is not None:
         operation = _workflow_operation_for_execution(session=session, workflow=workflow, operation_id=operation_id)
-        run_ids = [operation.run_id] if str(operation.run_id or "").strip() else []
+        latest_attempt = session.execute(
+            select(WorkflowOperationAttempt)
+            .where(WorkflowOperationAttempt.operation_id == operation.operation_id)
+            .order_by(desc(WorkflowOperationAttempt.attempt_number))
+            .limit(1)
+        ).scalar_one_or_none()
+        latest_attempt_started_at = (
+            latest_attempt.started_at
+            if latest_attempt is not None and latest_attempt.started_at is not None
+            else operation.updated_at
+        )
     else:
-        run_ids = [run.run_id for run in _workflow_runs(session=session, workflow_id=workflow.workflow_id)]
+        latest_attempt_started_at = workflow.started_at or workflow.created_at
     return _cursor_filtered_events(
-        events=_telemetry_events_for_runs(session=session, run_ids=run_ids),
+        events=list_live_workflow_telemetry_events(
+            settings=get_settings(),
+            tenant_id=workflow.tenant_id,
+            workflow_id=workflow.workflow_id,
+            operation_id=(operation.operation_id if operation_id is not None else None),
+            limit=limit,
+            start_at=latest_attempt_started_at,
+        ),
         before_recorded_at=before_recorded_at,
         before_event_id=before_event_id,
         limit=limit,

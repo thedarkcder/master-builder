@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import logging
 from uuid import uuid4
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from orchestrator.core.audit_events import record_workflow_operation_audit_event
+from orchestrator.core.workflow_operation_logging import emit_workflow_operation_log
 from orchestrator.storage.models import WorkflowOperation, WorkflowOperationAttempt
 
 OPERATION_STATUS_PENDING = "pending"
@@ -119,6 +121,14 @@ def start_workflow_operation_attempt(
         message=f"Started {operation.operation_type} attempt {next_attempt_number}.",
         payload={"status": attempt.status, "attempt_number": next_attempt_number},
     )
+    emit_workflow_operation_log(
+        session,
+        operation=operation,
+        attempt=attempt,
+        event_type="workflow_operation_attempt_started",
+        message=f"Started {operation.operation_type} attempt {next_attempt_number}.",
+        metadata={"status": attempt.status},
+    )
     return attempt
 
 
@@ -146,6 +156,14 @@ def complete_workflow_operation(
         level="info",
         message=summary or f"Completed {operation.operation_type}.",
         payload={"status": attempt.status, "attempt_number": attempt.attempt_number},
+    )
+    emit_workflow_operation_log(
+        session,
+        operation=operation,
+        attempt=attempt,
+        event_type="workflow_operation_attempt_completed",
+        message=summary or f"Completed {operation.operation_type}.",
+        metadata={"status": attempt.status},
     )
 
 
@@ -188,6 +206,20 @@ def fail_workflow_operation(
             "next_retry_at": next_retry_at.isoformat() if next_retry_at is not None else None,
         },
     )
+    emit_workflow_operation_log(
+        session,
+        operation=operation,
+        attempt=attempt,
+        event_type="workflow_operation_attempt_retry_scheduled" if scheduled_for_retry else "workflow_operation_attempt_failed",
+        message=message,
+        level=logging.WARNING if scheduled_for_retry else logging.ERROR,
+        metadata={
+            "status": attempt.status,
+            "error_category": category,
+            "retryable": retryable,
+            "next_retry_at": next_retry_at.isoformat() if next_retry_at is not None else None,
+        },
+    )
 
 
 def mark_workflow_operation_waiting_for_input(
@@ -218,4 +250,12 @@ def mark_workflow_operation_waiting_for_input(
         level="info",
         message=summary,
         payload={"status": attempt.status, "attempt_number": attempt.attempt_number},
+    )
+    emit_workflow_operation_log(
+        session,
+        operation=operation,
+        attempt=attempt,
+        event_type="workflow_operation_waiting_for_input",
+        message=summary,
+        metadata={"status": attempt.status},
     )

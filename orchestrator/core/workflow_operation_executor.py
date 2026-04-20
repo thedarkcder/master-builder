@@ -198,6 +198,8 @@ def _execute_jira_child_fanout(
         tenant_id=context.tenant.tenant_id,
         tenant=context.tenant,
         project_id=context.project.project_id,
+        workflow_id=context.workflow.workflow_id,
+        operation_id=context.operation.operation_id,
         issue_key=context.workflow.issue_key,
         issue_labels=list(parent_detail.labels or []),
         payload={},
