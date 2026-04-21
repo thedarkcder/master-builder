@@ -417,13 +417,7 @@ export default function TenantExecutionDetailPage() {
                             {attemptFailure(attempt) || "—"}
                           </TableCell>
                           <TableCell className="text-right">
-                            {needsClarification && jiraIssueLink ? (
-                              <Button size="sm" variant="outline" className="h-8" asChild>
-                                <a href={jiraIssueLink} target="_blank" rel="noreferrer">
-                                  Open Jira issue
-                                </a>
-                              </Button>
-                            ) : (
+                            <div className="flex flex-col items-end gap-2">
                               <Button
                                 size="sm"
                                 variant="outline"
@@ -434,7 +428,14 @@ export default function TenantExecutionDetailPage() {
                                 <RefreshCw className={cn("mr-1.5 h-3.5 w-3.5", retryingOperationId === operation.operation_id && "animate-spin")} />
                                 Retry step
                               </Button>
-                            )}
+                              {needsClarification && jiraIssueLink ? (
+                                <Button size="sm" variant="ghost" className="h-8 px-2 text-muted-foreground" asChild>
+                                  <a href={jiraIssueLink} target="_blank" rel="noreferrer">
+                                    Open Jira issue
+                                  </a>
+                                </Button>
+                              ) : null}
+                            </div>
                           </TableCell>
                         </TableRow>
                       );

@@ -1,3 +1,7 @@
+2026-04-21
+
+- When the user asks for the best final architecture, do not preserve transitional backward-compatible fallbacks by default. Make the authoritative contract explicit and remove compatibility layers unless the user explicitly asks for a staged migration.
+
 2026-03-23
 
 - Do not leak internal workflow identifiers, operation types, or redundant state/view labels into product UI, even as "helpful" secondary text. If the page already provides the context, repeating it is noise; product surfaces should show human labels only and keep internal ids strictly behind interactions and routing.

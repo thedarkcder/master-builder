@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from tempfile import TemporaryDirectory
 import unittest
 from types import SimpleNamespace
@@ -29,9 +30,10 @@ from orchestrator.core.pm_interview_service import (
 from orchestrator.core.parent_feature_brief_store import (
     persist_parent_feature_brief_snapshot,
     resolve_parent_feature_brief,
+    resolve_parent_feature_brief_readiness,
 )
 from orchestrator.core.runtime_invocation import AgentInvocationContext
-from orchestrator.storage.models import PMInterviewCase
+from orchestrator.storage.models import FollowupContext, PMInterviewCase
 
 try:
     from tests.production_path_support import (
@@ -140,6 +142,53 @@ class PMInterviewServiceTests(unittest.TestCase):
         self.assertTrue(assessment.ready_to_write)
         self.assertIn("acceptance_criteria", assessment.missing_slots)
         self.assertIsNone(assessment.next_question)
+
+    def test_upsert_pm_interview_case_clears_resolved_open_questions(self) -> None:
+        with self.session_factory() as session:
+            upsert_pm_interview_case(
+                session=session,
+                tenant_id="example",
+                project_id="example-default",
+                request_id="pm-req-clear-open-questions",
+                source_kind="jira_parent",
+                channel_id="jira-parent-sync",
+                source_text="Identity redesign parent",
+                status=PM_INTERVIEW_STATUS_QUESTION_PENDING,
+                brief={
+                    "objective": "Tenant identity redesign",
+                    "user_value": "Admins can manage identity safely",
+                    "acceptance_criteria": ["Invitations can be sent"],
+                    "scope_in": ["Tenant identity"],
+                    "scope_out": ["SSO overhaul"],
+                    "constraints": ["90 day retention window"],
+                    "risks": ["Audit export misuse"],
+                    "success_outcomes": ["Admins can export audit logs within policy"],
+                    "open_questions": ["What audit retention window should v1 support?"],
+                },
+            )
+            session.commit()
+
+        with self.session_factory() as session:
+            updated = upsert_pm_interview_case(
+                session=session,
+                tenant_id="example",
+                project_id="example-default",
+                request_id="pm-req-clear-open-questions",
+                source_kind="jira_parent",
+                channel_id="jira-parent-sync",
+                source_text="Retention is now clear.",
+                status=PM_INTERVIEW_STATUS_READY_TO_WRITE,
+                brief={
+                    "constraints": ["12 month retention window"],
+                    "open_questions": [],
+                    "next_steps": [],
+                },
+            )
+            session.commit()
+
+            self.assertEqual(updated.status, PM_INTERVIEW_STATUS_READY_TO_WRITE)
+            self.assertEqual(updated.brief_json["open_questions"], [])
+            self.assertEqual(updated.brief_json["constraints"], ["12 month retention window"])
 
     def test_pm_interview_case_round_trips_and_resolves_by_explicit_identity(self) -> None:
         with self.session_factory() as session:
@@ -259,7 +308,7 @@ class PMInterviewServiceTests(unittest.TestCase):
             session.commit()
             self.assertEqual(abandoned.status, PM_INTERVIEW_STATUS_ABANDONED)
 
-    def test_resolve_parent_feature_brief_uses_latest_case_for_parent_issue(self) -> None:
+    def test_resolve_parent_feature_brief_uses_canonical_snapshot_only(self) -> None:
         with self.session_factory() as session:
             persist_parent_feature_brief_snapshot(
                 session=session,
@@ -300,9 +349,9 @@ class PMInterviewServiceTests(unittest.TestCase):
 
         self.assertIsNotNone(brief)
         assert brief is not None
-        self.assertEqual(brief.objective, "Canonical objective")
-        self.assertEqual(brief.user_value, "Canonical value")
-        self.assertEqual(brief.acceptance_criteria, ("Canonical acceptance",))
+        self.assertEqual(brief.objective, "Legacy objective")
+        self.assertEqual(brief.user_value, "Legacy value")
+        self.assertEqual(brief.acceptance_criteria, ())
 
     def test_persist_parent_feature_brief_snapshot_stores_parent_brief_record(self) -> None:
         with self.session_factory() as session:
@@ -330,7 +379,7 @@ class PMInterviewServiceTests(unittest.TestCase):
         self.assertEqual(stored.notes_json["source"], "jira_parent_brief_normalization")
         self.assertTrue(stored.notes_json["parent_brief_snapshot"])
 
-    def test_resolve_parent_feature_brief_excludes_incomplete_snapshots_by_default(self) -> None:
+    def test_resolve_parent_feature_brief_excludes_incomplete_snapshots_even_with_include_incomplete(self) -> None:
         with self.session_factory() as session:
             persist_parent_feature_brief_snapshot(
                 session=session,
@@ -361,9 +410,119 @@ class PMInterviewServiceTests(unittest.TestCase):
             )
 
         self.assertIsNone(completed_only)
+        self.assertIsNone(latest_any_status)
+
+    def test_resolve_parent_feature_brief_include_incomplete_returns_draft_case_only(self) -> None:
+        with self.session_factory() as session:
+            upsert_pm_interview_case(
+                session=session,
+                tenant_id="example",
+                project_id="example-default",
+                request_id="pm-req-parent-2",
+                source_kind="jira_parent",
+                channel_id="jira-parent-sync",
+                source_text="Identity redesign parent",
+                parent_issue_key="TP-503",
+                status=PM_INTERVIEW_STATUS_QUESTION_PENDING,
+                brief={
+                    "objective": "Needs clarification",
+                    "user_value": "Still incomplete",
+                    "open_questions": ["What retention window should v1 support?"],
+                },
+            )
+            session.commit()
+
+        with self.session_factory() as session:
+            completed_only = resolve_parent_feature_brief(
+                session=session,
+                tenant_id="example",
+                parent_issue_key="TP-503",
+            )
+            latest_any_status = resolve_parent_feature_brief(
+                session=session,
+                tenant_id="example",
+                parent_issue_key="TP-503",
+                include_incomplete=True,
+            )
+
+        self.assertIsNone(completed_only)
         self.assertIsNotNone(latest_any_status)
         assert latest_any_status is not None
         self.assertEqual(latest_any_status.objective, "Needs clarification")
+        self.assertEqual(latest_any_status.open_questions, ())
+
+    def test_resolve_parent_feature_brief_readiness_ignores_stale_clarification_after_canonical_snapshot(self) -> None:
+        now = datetime.now(timezone.utc)
+        with self.session_factory() as session:
+            persist_parent_feature_brief_snapshot(
+                session=session,
+                tenant_id="example",
+                project_id="example-default",
+                parent_issue_key="TP-504",
+                source_text="Canonical parent brief",
+                brief={
+                    "objective": "Canonical objective",
+                    "user_value": "Canonical value",
+                    "acceptance_criteria": ["Canonical acceptance"],
+                },
+            )
+            upsert_pm_interview_case(
+                session=session,
+                tenant_id="example",
+                project_id="example-default",
+                request_id="pm-req-parent-504",
+                source_kind="jira_parent",
+                channel_id="jira-parent-sync",
+                source_text="Still waiting on an answer",
+                parent_issue_key="TP-504",
+                status=PM_INTERVIEW_STATUS_QUESTION_PENDING,
+                brief={
+                    "objective": "Draft objective",
+                    "user_value": "Draft value",
+                },
+                current_question={"question": "What retention window should v1 support?"},
+                next_question={"question": "What retention window should v1 support?"},
+            )
+            session.add(
+                FollowupContext(
+                    context_id="ctx-pm-504",
+                    tenant_id="example",
+                    project_id="example-default",
+                    context_type="pm_interview",
+                    status="active",
+                    channel_id="TP-504",
+                    thread_channel_id=None,
+                    root_message_id="jira-question-504",
+                    owner_user_id="jira-user-504",
+                    origin_command="pm",
+                    issue_key="TP-504",
+                    request_id="pm-interview-jira:TP-504",
+                    run_id=None,
+                    metadata_json={
+                        "questions": ["What retention window should v1 support?"],
+                    },
+                    created_at=now,
+                    updated_at=now,
+                    closed_at=None,
+                )
+            )
+            session.commit()
+
+        with self.session_factory() as session:
+            readiness = resolve_parent_feature_brief_readiness(
+                session=session,
+                tenant_id="example",
+                parent_issue_key="TP-504",
+            )
+
+        self.assertTrue(readiness.ready_for_planning)
+        self.assertFalse(readiness.clarification_open)
+        self.assertEqual(readiness.clarification_questions, ())
+        self.assertTrue(readiness.has_active_followup)
+        self.assertIsNotNone(readiness.canonical_brief)
+        assert readiness.canonical_brief is not None
+        self.assertEqual(readiness.canonical_brief.objective, "Canonical objective")
+        self.assertEqual(readiness.canonical_brief.open_questions, ())
 
     def test_normalize_parent_feature_brief_with_runtime_returns_typed_brief(self) -> None:
         captured: dict[str, object] = {}

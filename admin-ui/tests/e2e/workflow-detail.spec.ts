@@ -385,3 +385,180 @@ test("shows workflow definitions and retries a failed execution operation", asyn
   await expect(page.getByRole("button", { name: "Execution path" })).toBeVisible();
   await expect(page.getByText("Fan out engineering child tickets").first()).toBeVisible();
 });
+
+test("keeps retry available for missing-input workflow failures", async ({ page }) => {
+  await seedAdminSession(page);
+
+  const workflow = makeWorkflow({
+    execution_id: "wfexec-mab-clarification",
+    workflow_id: "parent_planning:MAB-215",
+    tenant_id: "example",
+    project_id: "example-default",
+    issue_key: "MAB-215",
+    issue_summary: "Identity and authorization v1 contract",
+    orchestration_backend: "temporal",
+    dedupe_scope: "parent_planning",
+    status: "failed",
+    workflow_type: {
+      key: "parent_planning",
+      label: "Parent Planning",
+      description: "Parent planning workflow",
+      retry_policy: {
+        manual_retry_enabled: true,
+        max_attempts: 4,
+        initial_interval_seconds: 60,
+        max_interval_seconds: 1800,
+        backoff_coefficient: 2,
+      },
+      capabilities: {
+        child_issue_links: true,
+      },
+      lifecycle: {
+        state_path_kind: "operation",
+        execution_modes: ["fresh", "resume"],
+        conditional_paths: ["Human input clarification", "Retry failed operation", "Child issue fanout"],
+        states: [
+          { key: "running", label: "Running", terminal: false, waits_for_input: false },
+          { key: "waiting_for_input", label: "Waiting for input", terminal: false, waits_for_input: true },
+          { key: "completed", label: "Completed", terminal: true, waits_for_input: false },
+          { key: "failed", label: "Failed", terminal: true, waits_for_input: false },
+        ],
+        transitions: [
+          { from_state: "running", to_state: "waiting_for_input", label: "Ask PM clarification" },
+          { from_state: "waiting_for_input", to_state: "running", label: "Resume from answer" },
+          { from_state: "running", to_state: "completed", label: "Fan out child work" },
+          { from_state: "running", to_state: "failed", label: "Persist operation failure" },
+        ],
+      },
+      operations: [
+        {
+          operation_type: "jira_child_fanout",
+          label: "Fan out engineering child tickets",
+          description: "Create or refresh engineering child tickets.",
+          completion_required: true,
+          status: "failed",
+        },
+      ],
+      orchestration_backend: "legacy",
+    },
+    current_state: "failed",
+    waiting_on: "pm_clarification",
+    next_step: "Retry failed operation",
+    active_run_id: null,
+    latest_checkpoint_id: null,
+    latest_checkpoint_kind: null,
+    state_path: [
+      {
+        key: "jira_child_fanout",
+        label: "Fan out engineering child tickets",
+        status: "failed",
+        recorded_at: "2026-04-21T09:22:11Z",
+        detail: "Waiting on PM clarification answers.",
+      },
+    ],
+    completed_steps: [],
+    failed_steps: ["Fan out engineering child tickets"],
+    pending_steps: [],
+    retrying_steps: [],
+    conditional_branches_taken: [],
+    conditional_branches_available: [],
+    can_resume: true,
+    resume_unavailable_reason: null,
+    links: [{ kind: "jira_issue", label: "Jira issue MAB-215", ref: "MAB-215", url: "https://jira.example.test/browse/MAB-215", status: "failed" }],
+    failure_reason: "Answer the product clarification on Jira issue MAB-215, then retry engineering child fanout.",
+    operations: [
+      {
+        operation_id: "operation-jira-child-fanout-missing-input",
+        run_id: null,
+        operation_type: "jira_child_fanout",
+        label: "Fan out engineering child tickets",
+        description: "Create or refresh engineering child tickets.",
+        required: true,
+        definition_only: false,
+        status: "failed",
+        target_system: "jira",
+        target_ref: "MAB-215",
+        summary: "Answer the product clarification on Jira issue MAB-215, then retry engineering child fanout.",
+        can_retry: true,
+        retry_unavailable_reason: null,
+        attempts: [
+          {
+            attempt_id: "attempt-missing-input-1",
+            attempt_number: 7,
+            status: "failed",
+            error_category: "missing_input",
+            error_message:
+              "Answer the product clarification on Jira issue MAB-215, then retry engineering child fanout.\n\nQuestions to answer:\n- What invitation TTL should v1 enforce?",
+            status_detail: null,
+            retryable: true,
+            next_retry_at: null,
+            started_at: "2026-04-21T09:22:11Z",
+            finished_at: "2026-04-21T09:22:11Z",
+          },
+        ],
+      },
+    ],
+    runs: [],
+    created_at: "2026-04-21T09:22:00Z",
+    started_at: "2026-04-21T09:22:11Z",
+    finished_at: "2026-04-21T09:22:11Z",
+    updated_at: "2026-04-21T09:22:11Z",
+  });
+
+  let retriedOperation: { workflowId: string; operationId: string } | null = null;
+  mockTenantWorkflowApis(page, {
+    tenantId: "example",
+    workflows: [workflow],
+    retriedWorkflowResponse: makeWorkflow({
+      ...workflow,
+      status: "running",
+      current_state: "running",
+      failed_steps: [],
+      retrying_steps: ["Fan out engineering child tickets"],
+      operations: workflow.operations.map((operation) =>
+        operation.operation_id === "operation-jira-child-fanout-missing-input"
+          ? {
+              ...operation,
+              status: "running",
+              summary: "Retrying engineering child fanout.",
+              attempts: [
+                ...(operation.attempts ?? []),
+                {
+                  attempt_id: "attempt-missing-input-2",
+                  attempt_number: 8,
+                  status: "running",
+                  error_category: null,
+                  error_message: null,
+                  status_detail: null,
+                  retryable: true,
+                  next_retry_at: null,
+                  started_at: "2026-04-21T10:00:00Z",
+                  finished_at: null,
+                },
+              ],
+            }
+          : operation
+      ),
+      updated_at: "2026-04-21T10:00:00Z",
+    }),
+    onRetryOperation: (payload) => {
+      retriedOperation = payload;
+    },
+  });
+
+  await page.goto("/example/executions/wfexec-mab-clarification");
+
+  const retryStepButton = page.getByRole("button", { name: "Retry step" }).last();
+  await retryStepButton.scrollIntoViewIfNeeded();
+  await expect(retryStepButton).toBeEnabled();
+  await expect(page.getByRole("link", { name: "Open Jira issue" }).last()).toBeVisible();
+
+  await retryStepButton.click();
+
+  expect(retriedOperation).toEqual({
+    workflowId: "wfexec-mab-clarification",
+    operationId: "operation-jira-child-fanout-missing-input",
+  });
+  await expect(page.getByText("Attempt 8")).toBeVisible();
+  await expect(page.getByText("running").last()).toBeVisible();
+});

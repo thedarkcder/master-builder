@@ -621,6 +621,7 @@ class JiraParentClarificationFlowTests(JiraWebhookHarness):
         self.assertTrue(all(row.status == "closed" for row in followups))
         self.assertEqual(case.status, "pm_completed")
         self.assertIn("90 day retention window", str(case.brief_json))
+        self.assertEqual(case.brief_json["open_questions"], [])
 
     def test_webhook_parent_pm_reply_does_not_post_new_questions_after_pm_completion(self) -> None:
         now = datetime.now(timezone.utc)

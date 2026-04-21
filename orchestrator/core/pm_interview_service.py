@@ -281,6 +281,15 @@ def _merge_scalar_text(current: str, update: object) -> str:
     return current
 
 
+def _merge_text_list_with_explicit_clear(current: object, update: object) -> object:
+    if isinstance(update, str):
+        normalized = _normalized_text(update)
+        return normalized if normalized else current
+    if isinstance(update, (list, tuple, set)):
+        return _normalized_text_list(update)
+    return current
+
+
 def normalize_pm_interview_brief(payload: Mapping[str, Any] | PMInterviewBrief | None) -> PMInterviewBrief:
     if isinstance(payload, PMInterviewBrief):
         return payload
@@ -321,10 +330,11 @@ def merge_pm_interview_brief(
             "constraints",
             "risks",
             "success_outcomes",
-            "open_questions",
-            "next_steps",
         }:
             merged_payload[key] = _merge_text_or_list(current_value, update_value)
+            continue
+        if key in {"open_questions", "next_steps"}:
+            merged_payload[key] = _merge_text_list_with_explicit_clear(current_value, update_value)
             continue
         merged_payload[key] = update_value if update_value is not None else current_value
     return normalize_pm_interview_brief(merged_payload)
