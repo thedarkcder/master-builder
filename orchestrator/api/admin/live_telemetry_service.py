@@ -162,7 +162,15 @@ def _payload_from_stream(stream: dict[str, Any]) -> dict[str, Any]:
         if not normalized_key or normalized_key in _RESERVED_STREAM_KEYS:
             continue
         if normalized_key.startswith("metadata_"):
-            payload[normalized_key.removeprefix("metadata_")] = value
+            metadata_key = normalized_key.removeprefix("metadata_")
+            if metadata_key.endswith("_json") and isinstance(value, str):
+                payload_key = metadata_key.removesuffix("_json")
+                try:
+                    payload[payload_key] = json.loads(value)
+                except json.JSONDecodeError:
+                    payload[payload_key] = value
+                continue
+            payload[metadata_key] = value
             continue
         if normalized_key.startswith("code_"):
             payload[normalized_key] = value

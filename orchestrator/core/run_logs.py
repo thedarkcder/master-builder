@@ -297,6 +297,7 @@ class NormalizedRunLogEvent:
     project_id: str | None
     workflow_id: str | None
     operation_id: str | None
+    attempt_id: str | None
     run_id: str | None
     issue_key: str | None
     agent_id: str
@@ -317,6 +318,7 @@ def _normalize_run_log_event(
     project_id: str | None,
     workflow_id: str | None,
     operation_id: str | None,
+    attempt_id: str | None,
     run_id: str | None,
     issue_key: str | None,
     agent_id: str,
@@ -364,6 +366,7 @@ def _normalize_run_log_event(
         project_id=str(project_id or "").strip() or None,
         workflow_id=str(workflow_id or "").strip() or None,
         operation_id=str(operation_id or "").strip() or None,
+        attempt_id=str(attempt_id or "").strip() or None,
         run_id=normalized_run_id,
         issue_key=str(issue_key or "").strip() or None,
         agent_id=normalized_agent,
@@ -427,6 +430,7 @@ def record_run_log_event(
     project_id: str | None,
     workflow_id: str | None = None,
     operation_id: str | None = None,
+    attempt_id: str | None = None,
     run_id: str | None,
     issue_key: str | None,
     agent_id: str,
@@ -446,6 +450,7 @@ def record_run_log_event(
         project_id=project_id,
         workflow_id=workflow_id,
         operation_id=operation_id,
+        attempt_id=attempt_id,
         run_id=run_id,
         issue_key=issue_key,
         agent_id=agent_id,
@@ -476,7 +481,7 @@ def record_run_log_event(
         workflow_id=resolved_workflow_id,
         run_id=normalized_event.run_id,
         operation_id=str(operation_id or "").strip() or None,
-        attempt_id=None,
+        attempt_id=normalized_event.attempt_id,
         issue_key=normalized_event.issue_key,
         actor_type="agent",
         actor_id=normalized_event.agent_id,
@@ -513,6 +518,7 @@ def record_run_log_events_batch(
             project_id=event.get("project_id") if isinstance(event.get("project_id"), str) else None,
             workflow_id=event.get("workflow_id") if isinstance(event.get("workflow_id"), str) else None,
             operation_id=event.get("operation_id") if isinstance(event.get("operation_id"), str) else None,
+            attempt_id=event.get("attempt_id") if isinstance(event.get("attempt_id"), str) else None,
             run_id=event.get("run_id") if isinstance(event.get("run_id"), str) else None,
             issue_key=event.get("issue_key") if isinstance(event.get("issue_key"), str) else None,
             agent_id=str(event.get("agent_id") or ""),
@@ -552,7 +558,7 @@ def record_run_log_events_batch(
             workflow_id=workflow_id,
             run_id=normalized_event.run_id,
             operation_id=normalized_event.operation_id,
-            attempt_id=None,
+            attempt_id=normalized_event.attempt_id,
             issue_key=normalized_event.issue_key,
             actor_type="agent",
             actor_id=normalized_event.agent_id,

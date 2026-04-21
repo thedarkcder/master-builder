@@ -898,9 +898,9 @@ class CodexInvocationTests(unittest.TestCase):
         self.assertEqual(captured["workflow_id"], "parent_planning:MAB-215")
         self.assertEqual(captured["operation_id"], "operation-jira-child-fanout")
 
-    def test_invoke_runtime_json_with_tools_preserves_operation_id_and_emits_tool_events(self) -> None:
-        sink_operation_ids: list[str | None] = []
-        invocation_events: list[tuple[str, str | None, dict[str, object]]] = []
+    def test_invoke_runtime_json_with_tools_preserves_operation_attempt_context_and_emits_tool_events(self) -> None:
+        sink_contexts: list[tuple[str | None, str | None]] = []
+        invocation_events: list[tuple[str, str | None, str | None, dict[str, object]]] = []
 
         class _Runtime:
             def __init__(self) -> None:
@@ -931,14 +931,15 @@ class CodexInvocationTests(unittest.TestCase):
             working_dir=".",
             workflow_id="parent_planning:MAB-215",
             operation_id="operation-jira-child-fanout",
+            attempt_id="attempt-7",
         )
 
         def _fake_sink(**kwargs):  # noqa: ANN003
-            sink_operation_ids.append(kwargs.get("operation_id"))
+            sink_contexts.append((kwargs.get("operation_id"), kwargs.get("attempt_id")))
             return lambda _stream, _message: None
 
         def _capture_event(*, context, event_kind: str, payload: dict[str, object]) -> None:  # noqa: ANN001
-            invocation_events.append((event_kind, context.operation_id, payload))
+            invocation_events.append((event_kind, context.operation_id, context.attempt_id, payload))
 
         with (
             patch("orchestrator.core.runtime_invocation._get_log_writer", return_value=self._Writer()),
@@ -957,13 +958,29 @@ class CodexInvocationTests(unittest.TestCase):
             )
 
         self.assertEqual(payload, {"gate_status": "clear"})
-        self.assertEqual(sink_operation_ids, ["operation-jira-child-fanout", "operation-jira-child-fanout"])
+        self.assertEqual(
+            sink_contexts,
+            [
+                ("operation-jira-child-fanout", "attempt-7"),
+                ("operation-jira-child-fanout", "attempt-7"),
+            ],
+        )
         self.assertIn(
-            ("tool_request", "operation-jira-child-fanout", {"message": "Requested tool decision.read_state.", "tool_name": "decision.read_state", "tool_hop": 1, "tool_args": {"issue_key": "GP-124"}}),
+            (
+                "tool_request",
+                "operation-jira-child-fanout",
+                "attempt-7",
+                {"message": "Requested tool decision.read_state.", "tool_name": "decision.read_state", "tool_hop": 1, "tool_args": {"issue_key": "GP-124"}},
+            ),
             invocation_events,
         )
         self.assertIn(
-            ("tool_result", "operation-jira-child-fanout", {"message": "Completed tool decision.read_state.", "tool_name": "decision.read_state", "tool_hop": 1, "ok": True, "tool_result": {"case": "ok"}}),
+            (
+                "tool_result",
+                "operation-jira-child-fanout",
+                "attempt-7",
+                {"message": "Completed tool decision.read_state.", "tool_name": "decision.read_state", "tool_hop": 1, "ok": True, "tool_result": {"case": "ok"}},
+            ),
             invocation_events,
         )
 

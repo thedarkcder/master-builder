@@ -51,6 +51,7 @@ class AgentInvocationContext:
     working_dir: str
     workflow_id: str | None = None
     operation_id: str | None = None
+    attempt_id: str | None = None
     issue_key: str | None = None
     run_id: str | None = None
     attempt: int | None = None
@@ -495,6 +496,7 @@ def _emit_invocation_event(
                 project_id=context.project_id,
                 workflow_id=context.workflow_id,
                 operation_id=context.operation_id,
+                attempt_id=context.attempt_id,
                 run_id=context.run_id,
                 issue_key=context.issue_key,
                 agent_id=settings.agent_id,
@@ -514,7 +516,7 @@ def _emit_invocation_event(
                 workflow_id=context.workflow_id,
                 run_id=context.run_id,
                 operation_id=context.operation_id,
-                attempt_id=None,
+                attempt_id=context.attempt_id,
                 issue_key=context.issue_key,
                 actor_type="agent",
                 actor_id=settings.agent_id,
@@ -525,6 +527,7 @@ def _emit_invocation_event(
                 payload={
                     "invocation_id": str(context.invocation_id or "").strip() or None,
                     "stage": context.stage,
+                    "attempt_id": context.attempt_id,
                     "attempt": context.attempt,
                     "stream": "system",
                     **payload,
@@ -543,6 +546,7 @@ def _emit_invocation_event(
     live_metadata: dict[str, object] = {
         "workflow_id": context.workflow_id,
         "operation_id": context.operation_id,
+        "attempt_id": context.attempt_id,
         "run_id": context.run_id,
         "issue_key": context.issue_key,
         "invocation_id": str(context.invocation_id or "").strip() or None,
@@ -732,6 +736,7 @@ def invoke_runtime_json_with_tools(
                 working_dir=context.working_dir,
                 workflow_id=context.workflow_id,
                 operation_id=context.operation_id,
+                attempt_id=context.attempt_id,
                 issue_key=context.issue_key,
                 run_id=context.run_id,
                 attempt=context.attempt,
@@ -939,6 +944,7 @@ def _invoke_runtime_json_once(
         working_dir=context.working_dir,
         workflow_id=context.workflow_id,
         operation_id=context.operation_id,
+        attempt_id=context.attempt_id,
         issue_key=context.issue_key,
         run_id=context.run_id,
         attempt=context.attempt,
@@ -1173,6 +1179,7 @@ def _combined_log_sink(
         command=f"{context.command}.{context.stage}",
         workflow_id=context.workflow_id,
         operation_id=context.operation_id,
+        attempt_id=context.attempt_id,
         run_id=context.run_id,
         attempt=context.attempt,
         issue_key=context.issue_key,
@@ -1251,6 +1258,7 @@ def _persist_runtime_log_line(*, context: AgentInvocationContext, stream: str, m
             project_id=context.project_id,
             workflow_id=context.workflow_id,
             operation_id=context.operation_id,
+            attempt_id=context.attempt_id,
             run_id=context.run_id,
             issue_key=context.issue_key,
             agent_id=settings.agent_id,
@@ -1283,6 +1291,7 @@ def _persist_runtime_log_lines(*, items: list[_QueuedLogLine]) -> None:
                     "project_id": item.context.project_id,
                     "workflow_id": item.context.workflow_id,
                     "operation_id": item.context.operation_id,
+                    "attempt_id": item.context.attempt_id,
                     "run_id": item.context.run_id,
                     "issue_key": item.context.issue_key,
                     "agent_id": settings.agent_id,
@@ -1304,6 +1313,9 @@ def _persist_runtime_log_lines(*, items: list[_QueuedLogLine]) -> None:
                 session=session,
                 tenant_id=str(single["tenant_id"]),
                 project_id=single["project_id"] if isinstance(single["project_id"], str) else None,
+                workflow_id=single["workflow_id"] if isinstance(single["workflow_id"], str) else None,
+                operation_id=single["operation_id"] if isinstance(single["operation_id"], str) else None,
+                attempt_id=single["attempt_id"] if isinstance(single["attempt_id"], str) else None,
                 run_id=single["run_id"] if isinstance(single["run_id"], str) else None,
                 issue_key=single["issue_key"] if isinstance(single["issue_key"], str) else None,
                 agent_id=str(single["agent_id"]),

@@ -42,6 +42,7 @@ def test_list_live_workflow_telemetry_events_maps_loki_rows(monkeypatch) -> None
                         "metadata_run_id": "",
                         "metadata_status": "failed",
                         "metadata_error_category": "content_limit",
+                        "metadata_response_payload_json": '{"children":[{"key":"MAB-301","summary":"Create tenant assurance boundary"}]}',
                     },
                     "values": [
                         [
@@ -84,6 +85,7 @@ def test_list_live_workflow_telemetry_events_maps_loki_rows(monkeypatch) -> None
     assert event.source_component == "orchestrator.workflow_operation"
     assert event.payload["status"] == "failed"
     assert event.payload["error_category"] == "content_limit"
+    assert event.payload["response_payload"]["children"][0]["key"] == "MAB-301"
     assert 'service_name%3D~%22api%7Crun-worker%7Cwebhook-worker%7Ctemporal-worker%7Cproject-automation%7Cknowledge-sync%22' in str(captured["url"])
     assert "metadata_workflow_id=parent_planning%3AMAB-215" not in str(captured["url"])
     assert 'metadata_workflow_id%3D%22parent_planning%3AMAB-215%22' not in str(captured["url"])
