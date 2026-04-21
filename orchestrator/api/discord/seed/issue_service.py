@@ -196,6 +196,7 @@ def _record_seed_operation_event(
     operation_id: str | None,
     issue_key: str | None,
     attempt: int | None,
+    attempt_id: str | None,
     event_kind: str,
     message: str,
     payload: dict[str, Any] | None = None,
@@ -216,7 +217,7 @@ def _record_seed_operation_event(
         workflow_id=normalized_workflow_id,
         run_id=operation.run_id,
         operation_id=normalized_operation_id,
-        attempt_id=None,
+        attempt_id=str(attempt_id or "").strip() or None,
         issue_key=str(issue_key or "").strip() or None,
         actor_type="agent",
         actor_id="system",
@@ -231,7 +232,11 @@ def _record_seed_operation_event(
         operation=operation,
         event_type=event_kind,
         message=message,
-        metadata=event_payload,
+        metadata={
+            **event_payload,
+            "attempt_id": str(attempt_id or "").strip() or None,
+            "attempt_number": attempt,
+        },
     )
 
 
@@ -299,6 +304,7 @@ def seed_issues_with_runtime(
     workflow_id: str | None = None,
     operation_id: str | None = None,
     attempt: int | None = None,
+    attempt_id: str | None = None,
 ):  # noqa: ANN001
     del build_seed_issue_description_fn
     project_keys = tenant_project_keys_fn(session=session, tenant=tenant)
@@ -329,6 +335,7 @@ def seed_issues_with_runtime(
                 working_dir=codex_working_dir,
                 workflow_id=workflow_id,
                 operation_id=operation_id,
+                attempt_id=attempt_id,
                 attempt=attempt,
             ),
         )
@@ -399,6 +406,7 @@ def seed_issues_with_runtime(
             operation_id=operation_id,
             issue_key=None,
             attempt=attempt,
+            attempt_id=attempt_id,
             event_kind="jira_parent_upsert_request",
             message="Submitting parent Jira issue upsert.",
             payload={
@@ -428,6 +436,7 @@ def seed_issues_with_runtime(
             operation_id=operation_id,
             issue_key=parent_issue_key,
             attempt=attempt,
+            attempt_id=attempt_id,
             event_kind="jira_parent_upsert_response",
             message="Parent Jira issue upsert completed.",
             payload={
@@ -459,6 +468,7 @@ def seed_issues_with_runtime(
                 operation_id=operation_id,
                 issue_key=parent_issue_key,
                 attempt=attempt,
+                attempt_id=attempt_id,
                 event_kind="jira_parent_update_request",
                 message="Submitting blocked-planning update for parent Jira issue.",
                 payload={
@@ -484,6 +494,7 @@ def seed_issues_with_runtime(
                 operation_id=operation_id,
                 issue_key=parent_issue_key,
                 attempt=attempt,
+                attempt_id=attempt_id,
                 event_kind="jira_parent_update_response",
                 message="Updated parent Jira issue after blocked planning.",
                 payload={
@@ -575,6 +586,7 @@ def seed_issues_with_runtime(
                 operation_id=operation_id,
                 issue_key=parent_issue_key,
                 attempt=attempt,
+                attempt_id=attempt_id,
                 event_kind="jira_child_upsert_request",
                 message=f"Submitting child Jira issue upsert for {child_issue.summary}.",
                 payload={
@@ -636,6 +648,7 @@ def seed_issues_with_runtime(
                         operation_id=operation_id,
                         issue_key=parent_issue_key,
                         attempt=attempt,
+                        attempt_id=attempt_id,
                         event_kind="jira_child_link_response",
                         message=f"Linked child issue {child_key} to parent {parent_issue_key}.",
                         payload={
@@ -655,6 +668,7 @@ def seed_issues_with_runtime(
                 operation_id=operation_id,
                 issue_key=child_key,
                 attempt=attempt,
+                attempt_id=attempt_id,
                 event_kind="jira_child_upsert_response",
                 message=f"Child Jira issue upsert completed for {child_issue.summary}.",
                 payload={
@@ -683,6 +697,7 @@ def seed_issues_with_runtime(
             operation_id=operation_id,
             issue_key=parent_issue_key,
             attempt=attempt,
+            attempt_id=attempt_id,
             event_kind="jira_parent_update_request",
             message="Submitting final parent Jira issue update.",
             payload={
@@ -708,6 +723,7 @@ def seed_issues_with_runtime(
             operation_id=operation_id,
             issue_key=parent_issue_key,
             attempt=attempt,
+            attempt_id=attempt_id,
             event_kind="jira_parent_update_response",
             message="Updated parent Jira issue with final sync state.",
             payload={

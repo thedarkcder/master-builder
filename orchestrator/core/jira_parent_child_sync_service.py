@@ -129,6 +129,7 @@ class JiraParentChildSyncContext:
     workflow_id: str | None = None
     operation_id: str | None = None
     attempt: int | None = None
+    attempt_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -556,6 +557,7 @@ class _ParentChildSyncGateway:
             workflow_id=self._context.workflow_id,
             operation_id=self._context.operation_id,
             attempt=self._context.attempt,
+            attempt_id=self._context.attempt_id,
         )
         return seed_data
 
@@ -584,6 +586,7 @@ class _ParentChildSyncGateway:
             workflow_id=self._context.workflow_id,
             operation_id=self._context.operation_id,
             attempt=self._context.attempt,
+            attempt_id=self._context.attempt_id,
         )
         return seed_data
 
@@ -1587,6 +1590,7 @@ def handle_engineering_clarification_command(
                 working_dir=".",
                 workflow_id=context.workflow_id,
                 operation_id=context.operation_id,
+                attempt_id=context.attempt_id,
                 issue_key=child_detail.key,
             ),
         )
@@ -2016,6 +2020,7 @@ def handle_pm_interview_reply(
                 working_dir=".",
                 workflow_id=context.workflow_id,
                 operation_id=context.operation_id,
+                attempt_id=context.attempt_id,
                 issue_key=context.issue_key,
             ),
             project_keys=[project_key],

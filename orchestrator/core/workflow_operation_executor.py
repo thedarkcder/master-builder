@@ -210,6 +210,7 @@ def _execute_jira_child_fanout(
         workflow_id=context.workflow.workflow_id,
         operation_id=context.operation.operation_id,
         attempt=attempt.attempt_number,
+        attempt_id=attempt.attempt_id,
         issue_key=context.workflow.issue_key,
         issue_labels=list(parent_detail.labels or []),
         payload={},
