@@ -15,6 +15,7 @@ from orchestrator.core.agent_runtime_resolver import build_runtime_for_selector
 from orchestrator.core.codex_agents import plan_pm_parent_issues_with_codex, plan_seed_issues_with_codex
 from orchestrator.core.codex_runtime import CodexRuntimeError
 from orchestrator.core.config import get_settings
+from orchestrator.core.runtime_invocation import WorkflowAttemptRef
 
 ISSUE_KEY_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]+-\d+$")
 
@@ -51,8 +52,7 @@ def seed_issues_with_runtime(
     planning_package: dict | None = None,
     workflow_id: str | None = None,
     operation_id: str | None = None,
-    attempt: int | None = None,
-    attempt_id: str | None = None,
+    attempt_ref: WorkflowAttemptRef | None = None,
 ) -> tuple[str, dict]:  # noqa: ANN001
     return _seed_issues_with_runtime_impl(
         session=session,
@@ -83,8 +83,7 @@ def seed_issues_with_runtime(
         planning_package=planning_package,
         workflow_id=workflow_id,
         operation_id=operation_id,
-        attempt=attempt,
-        attempt_id=attempt_id,
+        attempt_ref=attempt_ref,
     )
 
 

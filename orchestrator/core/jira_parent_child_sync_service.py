@@ -6,7 +6,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from orchestrator.core.clarification_questions import ClarificationQuestion
-from orchestrator.core.runtime_invocation import AgentInvocationContext
+from orchestrator.core.runtime_invocation import AgentInvocationContext, WorkflowAttemptRef
 from orchestrator.core.specialist_planning import (
     PLANNING_STATE_COMPLETED,
     SpecialistPlanningRequest,
@@ -493,8 +493,10 @@ class _ParentChildSyncGateway:
             planning_package=planning_package,
             workflow_id=self._context.workflow_id,
             operation_id=self._context.operation_id,
-            attempt=self._context.attempt,
-            attempt_id=self._context.attempt_id,
+            attempt_ref=WorkflowAttemptRef(
+                number=self._context.attempt,
+                attempt_id=self._context.attempt_id,
+            ),
         )
         return seed_data
 
@@ -522,8 +524,10 @@ class _ParentChildSyncGateway:
             codex_working_dir=".",
             workflow_id=self._context.workflow_id,
             operation_id=self._context.operation_id,
-            attempt=self._context.attempt,
-            attempt_id=self._context.attempt_id,
+            attempt_ref=WorkflowAttemptRef(
+                number=self._context.attempt,
+                attempt_id=self._context.attempt_id,
+            ),
         )
         return seed_data
 

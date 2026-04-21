@@ -62,6 +62,12 @@ class AgentInvocationContext:
 
 
 @dataclass(frozen=True)
+class WorkflowAttemptRef:
+    number: int | None = None
+    attempt_id: str | None = None
+
+
+@dataclass(frozen=True)
 class _QueuedLogLine:
     context: AgentInvocationContext
     stream: str

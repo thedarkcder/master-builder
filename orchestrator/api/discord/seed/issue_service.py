@@ -12,7 +12,7 @@ from orchestrator.api.discord.seed.draft_assembly import (
 )
 from orchestrator.api.discord.shared.response_format import build_issue_url_list, format_issue_markdown_list
 from orchestrator.core.audit_events import record_audit_event
-from orchestrator.core.runtime_invocation import AgentInvocationContext
+from orchestrator.core.runtime_invocation import AgentInvocationContext, WorkflowAttemptRef
 from orchestrator.core.workflow_operation_logging import emit_workflow_operation_log
 from orchestrator.storage.models import Tenant, WorkflowOperation
 from orchestrator.tools.jira_oauth import JiraIssueCreateInput, JiraIssuePreview, JiraOAuthError
@@ -303,10 +303,11 @@ def seed_issues_with_runtime(
     planning_package: dict[str, Any] | None = None,
     workflow_id: str | None = None,
     operation_id: str | None = None,
-    attempt: int | None = None,
-    attempt_id: str | None = None,
+    attempt_ref: WorkflowAttemptRef | None = None,
 ):  # noqa: ANN001
     del build_seed_issue_description_fn
+    attempt = attempt_ref.number if attempt_ref is not None else None
+    attempt_id = attempt_ref.attempt_id if attempt_ref is not None else None
     project_keys = tenant_project_keys_fn(session=session, tenant=tenant)
     normalized_scoped_project_keys = [
         str(value).strip().upper()
