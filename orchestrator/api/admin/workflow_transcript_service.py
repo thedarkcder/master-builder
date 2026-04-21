@@ -47,12 +47,9 @@ def build_workflow_step_transcript(
 ) -> WorkflowStepTranscriptRead:
     source_events = audit_events if source == "audit" else telemetry_events
     attempt_reads = [_attempt_to_schema(attempt) for attempt in attempts]
+    attempt_reads = _merge_telemetry_attempts(attempts=attempt_reads, events=source_events) if source == "telemetry" else attempt_reads
     events_by_attempt = _events_by_attempt(events=source_events, attempts=attempt_reads)
-    rendered_attempts = (
-        [attempt for attempt in attempt_reads if attempt.attempt_id in events_by_attempt]
-        if source == "telemetry"
-        else attempt_reads
-    )
+    rendered_attempts = [attempt for attempt in attempt_reads if attempt.attempt_id in events_by_attempt] if source == "telemetry" else attempt_reads
     attempt_transcripts = [
         _attempt_transcript(
             workflow=workflow,
@@ -110,6 +107,51 @@ def _events_by_attempt(
     for event_list in grouped.values():
         event_list.sort(key=lambda item: (item.recorded_at, item.event_id))
     return grouped
+
+
+def _merge_telemetry_attempts(
+    *,
+    attempts: list[WorkflowOperationAttemptRead],
+    events: Iterable[WorkflowObservabilityEventRead],
+) -> list[WorkflowOperationAttemptRead]:
+    known_attempt_ids = {attempt.attempt_id for attempt in attempts}
+    known_attempt_numbers = {attempt.attempt_number for attempt in attempts}
+    synthetic_attempts: list[WorkflowOperationAttemptRead] = []
+    grouped_events: dict[str, list[WorkflowObservabilityEventRead]] = defaultdict(list)
+
+    for event in events:
+        attempt_id = str(event.attempt_id or "").strip()
+        if attempt_id and attempt_id not in known_attempt_ids:
+            grouped_events[attempt_id].append(event)
+            continue
+        if attempt_id:
+            continue
+        if isinstance(event.attempt, int) and event.attempt > 0 and event.attempt not in known_attempt_numbers:
+            synthetic_attempt_id = f"telemetry-attempt:{event.attempt}"
+            grouped_events[synthetic_attempt_id].append(event)
+
+    for synthetic_attempt_id, event_group in grouped_events.items():
+        event_group.sort(key=lambda item: (item.recorded_at, item.event_id))
+        first_event = event_group[0]
+        last_event = event_group[-1]
+        attempt_number = int(first_event.attempt or last_event.attempt or 0)
+        status = _status_from_telemetry_events(event_group)
+        synthetic_attempts.append(
+            WorkflowOperationAttemptRead(
+                attempt_id=synthetic_attempt_id,
+                attempt_number=attempt_number,
+                status=status,
+                error_category=_error_category_from_telemetry_events(event_group),
+                error_message=_failure_message_from_telemetry_events(event_group) if status == "failed" else None,
+                status_detail=None,
+                retryable=False,
+                next_retry_at=None,
+                started_at=first_event.recorded_at,
+                finished_at=(last_event.recorded_at if status in {"failed", "completed"} else None),
+            )
+        )
+
+    return attempts + synthetic_attempts
 
 
 def _attempt_transcript(
@@ -251,4 +293,37 @@ def _recommended_next_action(*, operation: WorkflowOperation, attempt: WorkflowO
         return first_line or None
     if str(attempt.status or "").strip().lower() == "completed":
         return f"{str(operation.operation_type or '').replace('_', ' ').strip().title()} completed."
+    return None
+
+
+def _status_from_telemetry_events(events: list[WorkflowObservabilityEventRead]) -> str:
+    for event in reversed(events):
+        event_kind = str(event.event_kind or "").strip().lower()
+        payload_status = str((event.payload or {}).get("status") or "").strip().lower()
+        if payload_status in {"failed", "completed", "running", "retrying", "waiting_for_input"}:
+            return payload_status
+        if event_kind in {"workflow_operation_attempt_failed", "attempt_failed"}:
+            return "failed"
+        if event_kind == "workflow_operation_attempt_completed":
+            return "completed"
+        if event_kind in {"workflow_operation_attempt_started", "workflow_operation_attempt_retried", "stage_invocation_started", "runtime_log_stream_started"}:
+            return "running"
+    return "running"
+
+
+def _error_category_from_telemetry_events(events: list[WorkflowObservabilityEventRead]) -> str | None:
+    for event in reversed(events):
+        payload = dict(event.payload or {})
+        category = str(payload.get("error_category") or "").strip()
+        if category:
+            return category
+    return None
+
+
+def _failure_message_from_telemetry_events(events: list[WorkflowObservabilityEventRead]) -> str | None:
+    for event in reversed(events):
+        if str(event.level or "").strip().lower() == "error":
+            message = str(event.message or "").strip()
+            if message:
+                return message
     return None
