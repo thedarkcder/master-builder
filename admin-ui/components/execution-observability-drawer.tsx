@@ -62,6 +62,7 @@ export function ExecutionObservabilityDrawer({
 
   const transcript = activeView === "telemetry" ? telemetryTranscript : auditTranscript;
   const attempts = transcript?.attempts ?? [];
+  const latestAttemptId = attempts[0]?.attempt_id ?? null;
 
   useEffect(() => {
     if (!open) {
@@ -72,11 +73,15 @@ export function ExecutionObservabilityDrawer({
       setSelectedAttemptId(null);
       return;
     }
+    if (activeView === "telemetry" && latestAttemptId && selectedAttemptId !== latestAttemptId) {
+      setSelectedAttemptId(latestAttemptId);
+      return;
+    }
     if (selectedAttemptId && attempts.some((attempt) => attempt.attempt_id === selectedAttemptId)) {
       return;
     }
-    setSelectedAttemptId(attempts[0].attempt_id);
-  }, [attempts, open, selectedAttemptId]);
+    setSelectedAttemptId(latestAttemptId);
+  }, [activeView, attempts, latestAttemptId, open, selectedAttemptId]);
 
   const selectedAttempt = useMemo(
     () => attempts.find((attempt) => attempt.attempt_id === selectedAttemptId) ?? attempts[0] ?? null,
