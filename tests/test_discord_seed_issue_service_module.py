@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 from fastapi import HTTPException
 
 from orchestrator.api.discord.seed.issue_service import seed_issues_with_runtime, seed_parent_issues_with_runtime
+from orchestrator.core.runtime_invocation import WorkflowAttemptRef
 from orchestrator.tools.jira_oauth import JiraIssueCreateResult, JiraOAuthError
 from orchestrator.tools.jira_oauth_issue_service import MAX_JIRA_ADF_DOCUMENT_BYTES, _to_adf_description
 
@@ -195,6 +196,66 @@ def test_seed_issues_creates_parent_and_engineering_child() -> None:
     assert created[0].issue_type == "Story"
     assert created[1].issue_type == "Sub-task"
     assert created[1].parent_issue_key == "GP-1"
+
+
+def test_seed_issues_passes_typed_attempt_ref_into_invocation_context() -> None:
+    tenant = SimpleNamespace(tenant_id="tenant-a")
+    captured_context = None
+
+    class _FakeClient:
+        def list_project_issue_types_for_create(self, **_kwargs):  # type: ignore[no-untyped-def]
+            return ["Epic", "Story", "Task", "Issue"]
+
+        def search_issues_by_jql(self, **_kwargs):  # type: ignore[no-untyped-def]
+            return []
+
+        def create_issue(self, **kwargs):  # type: ignore[no-untyped-def]
+            issue = kwargs["issue"]
+            return JiraIssueCreateResult(key="GP-1" if not issue.parent_issue_key else "GP-2", issue_id="1")
+
+        def update_issue_fields(self, **_kwargs):  # type: ignore[no-untyped-def]
+            return None
+
+        def add_issue_link(self, **_kwargs):  # type: ignore[no-untyped-def]
+            return {}
+
+    def _plan_seed_issues_with_runtime_fn(**kwargs):  # noqa: ANN001
+        nonlocal captured_context
+        captured_context = kwargs["invocation_context"]
+        return _seed_payload()
+
+    seed_issues_with_runtime(
+        session=MagicMock(),
+        tenant=tenant,
+        prompt_markdown="seed issues",
+        scoped_project_id="project-a",
+        force_issue_keys=None,
+        allow_create=True,
+        scoped_project_keys=["GP"],
+        codex_working_dir="/tmp",
+        tenant_project_keys_fn=lambda **_kwargs: ["GP"],
+        get_settings_fn=lambda: SimpleNamespace(),
+        build_runtime_fn=lambda **_kwargs: object(),
+        plan_seed_issues_with_runtime_fn=_plan_seed_issues_with_runtime_fn,
+        codex_runtime_error_type=RuntimeError,
+        build_seed_issue_description_fn=lambda **_kwargs: {},
+        issue_key_pattern=__import__("re").compile(r"^[A-Z]+-\d+$"),
+        tenant_jira_oauth_context_fn=lambda **_kwargs: {
+            "client": _FakeClient(),
+            "access_token": "token",
+            "connection": SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
+        },
+        select_seed_match_fn=lambda **_kwargs: None,
+        workflow_id="wf-123",
+        operation_id="op-456",
+        attempt_ref=WorkflowAttemptRef(number=7, attempt_id="attempt-789"),
+    )
+
+    assert captured_context is not None
+    assert captured_context.workflow_id == "wf-123"
+    assert captured_context.operation_id == "op-456"
+    assert captured_context.attempt == 7
+    assert captured_context.attempt_id == "attempt-789"
 
 
 def test_seed_issues_falls_back_to_linked_task_when_subtasks_unavailable() -> None:
