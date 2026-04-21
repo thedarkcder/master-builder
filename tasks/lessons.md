@@ -197,6 +197,7 @@
 
 - Do not ship a step-level `Live telemetry` surface on run-derived heuristics. Operation telemetry must be emitted and queried with `workflow_id` and `operation_id`, and telemetry instrumentation must never tighten shared runtime object contracts with unsafe attribute access.
 - Do not let telemetry work drift into UI chrome and event plumbing without re-anchoring on the operator journey. The foundation is only correct if clicking an execution step answers: what happened, on which attempt, what requests/responses occurred, what failed, and what to do next.
+- Ignore local tool state directories like `.playwright-mcp/` in the repo root as soon as they appear. Do not leave local automation cache/noise visible in `git status`.
 
 - When the user says a Jira remediation ticket is already fixed, do not rely on an earlier review summary or stale PR status. Re-verify the current repo path and targeted tests first, then update the ticket state based on that live evidence.
 - When the user says business users move the parent issue to start work, do not redesign execution around manual child runs or a code-writing parent run. Keep the parent as the supervisory record and make the parent board move fan out executable child tickets automatically.
