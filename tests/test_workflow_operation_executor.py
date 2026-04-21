@@ -4,8 +4,13 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+
 from orchestrator.core.config import Settings
-from orchestrator.core.workflow_operation_executor import execute_workflow_operation_retry
+from orchestrator.core.workflow_operation_executor import (
+    InvalidWorkflowOperationError,
+    execute_workflow_operation_retry,
+)
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import Project, Tenant, WorkflowExecution, WorkflowOperation
 from tests.test_support.db_harness import SqliteTemplateDbTestCase
@@ -119,11 +124,24 @@ class WorkflowOperationExecutorTests(SqliteTemplateDbTestCase):
                 ),
             )
             fake_router = SimpleNamespace(jira=lambda **_kwargs: fake_jira_adapter)
+            planner_result = SimpleNamespace(
+                planning_state="planning_blocked",
+                open_behavior_questions=(
+                    "What invitation TTL should v1 enforce for automatic expiry?",
+                    "What audit retention window must exports support in v1?",
+                ),
+            )
 
             with (
                 patch(
-                    "orchestrator.core.workflow_operation_executor.resolve_parent_feature_brief",
-                    return_value=SimpleNamespace(to_payload=lambda: {"objective": "Ship identity redesign"}),
+                    "orchestrator.core.workflow_operation_executor.resolve_parent_feature_brief_readiness",
+                    return_value=SimpleNamespace(
+                        canonical_brief=SimpleNamespace(to_payload=lambda: {"objective": "Ship identity redesign"}),
+                        clarification_open=False,
+                        clarification_questions=(),
+                        has_active_followup=True,
+                        ready_for_planning=True,
+                    ),
                 ),
                 patch(
                     "orchestrator.core.workflow_operation_executor.list_workflow_type_operations",
@@ -134,17 +152,8 @@ class WorkflowOperationExecutorTests(SqliteTemplateDbTestCase):
                 ),
                 patch(
                     "orchestrator.core.workflow_operation_executor._ParentBriefPlanner.plan_backlog_parent",
-                    return_value=(
-                        SimpleNamespace(
-                            planning_state="planning_blocked",
-                            open_behavior_questions=(
-                                "What invitation TTL should v1 enforce for automatic expiry?",
-                                "What audit retention window must exports support in v1?",
-                            ),
-                        ),
-                        {"planning": "package"},
-                    ),
-                ),
+                    return_value=(planner_result, {"planning": "package"}),
+                ) as planner_mock,
                 patch(
                     "orchestrator.core.workflow_operation_executor._ParentChildSyncGateway.seed_parent_backlog_children",
                     return_value={"requires_input": True, "questions": []},
@@ -185,4 +194,128 @@ class WorkflowOperationExecutorTests(SqliteTemplateDbTestCase):
             assert "What invitation TTL should v1 enforce for automatic expiry?" in (fanout_operation.summary or "")
             assert "What audit retention window must exports support in v1?" in (fanout_operation.summary or "")
             assert comment_operation.status == "completed"
+            planner_mock.assert_called_once()
             post_comment_mock.assert_called_once()
+
+    def test_jira_child_fanout_retry_blocks_on_parent_clarification_before_planning(self) -> None:
+        now = datetime.now(timezone.utc)
+        session_factory = create_session_factory(self.database_url)
+        settings = Settings(database_url=self.database_url)
+
+        with session_factory() as session:
+            tenant = Tenant(
+                tenant_id="tenant-b",
+                name="Tenant B",
+                is_enabled=True,
+                jira_config={},
+                github_config={},
+                repos_config={},
+                policy_config={},
+                discord_config={},
+                experience_config={},
+                setup_state={},
+                created_at=now,
+                updated_at=now,
+            )
+            project = Project(
+                project_id="project-b",
+                tenant_id="tenant-b",
+                name="Project B",
+                github_repository="example/project-b",
+                jira_project_key="MAB",
+                policy_overrides={},
+                environment={},
+                secret_refs={},
+                discord_config=None,
+                is_archived=False,
+                created_at=now,
+                updated_at=now,
+            )
+            workflow = WorkflowExecution(
+                workflow_id="parent_planning:MAB-216",
+                execution_id="wfexec-mab-216",
+                workflow_type_key="parent_planning",
+                tenant_id="tenant-b",
+                project_id="project-b",
+                issue_key="MAB-216",
+                issue_summary="Identity redesign",
+                issue_description="Parent planning",
+                repo_url=None,
+                branch=None,
+                pr_url=None,
+                orchestration_backend="legacy",
+                dedupe_scope="parent_planning",
+                status="failed",
+                last_error=None,
+                active_run_id=None,
+                latest_checkpoint_id=None,
+                source_workflow_id=None,
+                source_run_id=None,
+                created_at=now,
+                started_at=now,
+                finished_at=None,
+                updated_at=now,
+            )
+            fanout_operation = WorkflowOperation(
+                operation_id="operation-jira-child-fanout-b",
+                workflow_id=workflow.workflow_id,
+                run_id=None,
+                operation_type="jira_child_fanout",
+                idempotency_key="workflow-definition:jira_child_fanout",
+                status="failed",
+                target_system="jira",
+                target_ref="MAB-216",
+                summary=None,
+                created_at=now,
+                started_at=now,
+                finished_at=now,
+                updated_at=now,
+            )
+            session.add_all([tenant, project, workflow, fanout_operation])
+            session.commit()
+
+            fake_jira_adapter = SimpleNamespace(
+                get_issue_detail=lambda **_kwargs: SimpleNamespace(
+                    key="MAB-216",
+                    summary="Identity redesign",
+                    description="Parent planning",
+                    labels=["pm-parent"],
+                ),
+            )
+            fake_router = SimpleNamespace(jira=lambda **_kwargs: fake_jira_adapter)
+
+            with (
+                patch(
+                    "orchestrator.core.workflow_operation_executor.resolve_parent_feature_brief_readiness",
+                    return_value=SimpleNamespace(
+                        canonical_brief=None,
+                        clarification_open=True,
+                        clarification_questions=("What invitation TTL should v1 enforce?",),
+                        has_active_followup=True,
+                        ready_for_planning=False,
+                    ),
+                ),
+                patch(
+                    "orchestrator.core.workflow_operation_executor._ParentBriefPlanner.plan_backlog_parent",
+                ) as planner_mock,
+            ):
+                with pytest.raises(InvalidWorkflowOperationError) as excinfo:
+                    execute_workflow_operation_retry(
+                        session=session,
+                        settings=settings,
+                        session_factory=session_factory,
+                        workflow=workflow,
+                        operation=fanout_operation,
+                        integration_router=fake_router,
+                        build_runtime_for_selector_fn=lambda *_args, **_kwargs: object(),
+                        seed_issues_with_runtime_fn=lambda *_args, **_kwargs: ("seeded", {}),
+                    )
+
+            session.refresh(workflow)
+            session.refresh(fanout_operation)
+
+            assert workflow.status == "failed"
+            assert fanout_operation.status == "failed"
+            assert "Answer the product clarification on Jira issue MAB-216" in str(excinfo.value)
+            assert "What invitation TTL should v1 enforce?" in str(excinfo.value)
+            planner_mock.assert_not_called()
