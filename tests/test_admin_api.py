@@ -2028,6 +2028,112 @@ class AdminApiTests(AdminApiTestHarness):
         self.assertEqual(body[0]["operation_id"], "operation-jira-child-fanout")
         list_live_events.assert_called_once()
 
+    def test_get_workflow_operation_transcript_groups_attempts(self) -> None:
+        payload = self._tenant_payload()
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201)
+
+        now = datetime.now(timezone.utc)
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            workflow = WorkflowExecution(
+                workflow_id="parent_planning:MAB-215",
+                execution_id="wfexec-mab-215",
+                workflow_type_key="parent_planning",
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                issue_key="MAB-215",
+                issue_summary="Identity and authorization v1 contract",
+                issue_description="Parent planning",
+                repo_url=None,
+                branch=None,
+                pr_url=None,
+                orchestration_backend="temporal",
+                dedupe_scope="parent_planning",
+                status="failed",
+                last_error="Answer the product clarification on Jira issue MAB-215, then retry engineering child fanout.",
+                active_run_id=None,
+                latest_checkpoint_id=None,
+                source_workflow_id=None,
+                source_run_id=None,
+                created_at=now,
+                started_at=now,
+                finished_at=None,
+                updated_at=now,
+            )
+            session.add(workflow)
+            operation = WorkflowOperation(
+                operation_id="operation-jira-child-fanout",
+                workflow_id=workflow.workflow_id,
+                run_id=None,
+                operation_type="jira_child_fanout",
+                idempotency_key="jira-child-fanout:MAB-215",
+                status="failed",
+                target_system="jira",
+                target_ref="MAB-215",
+                summary="Failed to seed Jira issues",
+                created_at=now,
+                started_at=now,
+                finished_at=now,
+                updated_at=now,
+            )
+            attempt = WorkflowOperationAttempt(
+                attempt_id="attempt-7",
+                operation_id=operation.operation_id,
+                attempt_number=7,
+                status="failed",
+                error_category="missing_input",
+                error_message="Answer the product clarification on Jira issue MAB-215, then retry engineering child fanout.",
+                status_detail=None,
+                retryable=True,
+                next_retry_at=None,
+                created_at=now,
+                started_at=now,
+                finished_at=now,
+            )
+            session.add(operation)
+            session.add(attempt)
+            session.add(
+                AuditEvent(
+                    event_id="event-1",
+                    tenant_id="tenant-a",
+                    project_id="tenant-a-default",
+                    workflow_id=workflow.workflow_id,
+                    run_id=None,
+                    operation_id=operation.operation_id,
+                    attempt_id=attempt.attempt_id,
+                    issue_key="MAB-215",
+                    actor_type=None,
+                    actor_id=None,
+                    source_component="runtime_invocation",
+                    event_kind="stage_request",
+                    level="info",
+                    correlation_id=None,
+                    trace_id=None,
+                    span_id=None,
+                    message="Submitted runtime request.",
+                    payload_json={
+                        "attempt": 7,
+                        "system_prompt": "You are the planner.",
+                        "user_prompt": "Create or refresh engineering child tickets.",
+                    },
+                    recorded_at=now,
+                )
+            )
+            session.commit()
+
+        response = self.client.get(
+            "/api/admin/workflows/wfexec-mab-215/operations/operation-jira-child-fanout/transcript?source=audit",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertEqual(body["operation_id"], "operation-jira-child-fanout")
+        self.assertEqual(body["source"], "audit")
+        self.assertEqual(len(body["attempts"]), 1)
+        self.assertEqual(body["attempts"][0]["attempt_number"], 7)
+        self.assertEqual(body["attempts"][0]["sections"][0]["kind"], "prompts")
+
     def test_export_audit_events_as_ndjson(self) -> None:
         import json as json_module
 

@@ -13,12 +13,11 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
   getWorkflow,
-  listWorkflowOperationAuditEvents,
-  listWorkflowOperationTelemetryEvents,
-  type WorkflowObservabilityEventRecord,
+  getWorkflowOperationTranscript,
   resumeWorkflowExecution,
   retryWorkflowOperation,
   type WorkflowOperationRecord,
+  type WorkflowStepTranscriptRecord,
   type WorkflowRecord,
 } from "@/lib/api";
 import { formatTimeAgo, formatTimestamp } from "@/lib/datetime";
@@ -68,8 +67,8 @@ export default function TenantExecutionDetailPage() {
   const [linksMenuOpen, setLinksMenuOpen] = useState(false);
   const [selectedOperationId, setSelectedOperationId] = useState<string | null>(null);
   const [observabilityView, setObservabilityView] = useState<"telemetry" | "audit">("telemetry");
-  const [telemetryEvents, setTelemetryEvents] = useState<WorkflowObservabilityEventRecord[]>([]);
-  const [auditEvents, setAuditEvents] = useState<WorkflowObservabilityEventRecord[]>([]);
+  const [telemetryTranscript, setTelemetryTranscript] = useState<WorkflowStepTranscriptRecord | null>(null);
+  const [auditTranscript, setAuditTranscript] = useState<WorkflowStepTranscriptRecord | null>(null);
   const [observabilityLoading, setObservabilityLoading] = useState(false);
   const [observabilityError, setObservabilityError] = useState<string | null>(null);
 
@@ -126,11 +125,11 @@ export default function TenantExecutionDetailPage() {
       setObservabilityError(null);
       try {
         const [telemetry, audit] = await Promise.all([
-          listWorkflowOperationTelemetryEvents(credentials, workflow.execution_id, operation.operation_id, { limit: 200 }),
-          listWorkflowOperationAuditEvents(credentials, workflow.execution_id, operation.operation_id, { limit: 200 }),
+          getWorkflowOperationTranscript(credentials, workflow.execution_id, operation.operation_id, "telemetry", { limit: 500 }),
+          getWorkflowOperationTranscript(credentials, workflow.execution_id, operation.operation_id, "audit", { limit: 500 }),
         ]);
-        setTelemetryEvents(telemetry);
-        setAuditEvents(audit);
+        setTelemetryTranscript(telemetry);
+        setAuditTranscript(audit);
       } catch (error) {
         setObservabilityError(`Failed to load step observability: ${(error as Error).message}`);
       } finally {
@@ -145,9 +144,9 @@ export default function TenantExecutionDetailPage() {
   const openOperationDrawer = useCallback(
     async (operation: WorkflowOperationRecord) => {
       setSelectedOperationId(operation.operation_id);
-      setObservabilityView((operation.events?.length ?? 0) > 0 ? "audit" : "telemetry");
-      setTelemetryEvents([]);
-      setAuditEvents(operation.events ?? []);
+      setObservabilityView("telemetry");
+      setTelemetryTranscript(null);
+      setAuditTranscript(null);
       await loadOperationObservability(operation);
     },
     [loadOperationObservability],
@@ -476,8 +475,8 @@ export default function TenantExecutionDetailPage() {
               setSelectedOperationId(null);
               setObservabilityError(null);
             }}
-            telemetryEvents={telemetryEvents}
-            auditEvents={auditEvents}
+            telemetryTranscript={telemetryTranscript}
+            auditTranscript={auditTranscript}
             loading={observabilityLoading}
             error={observabilityError}
           />

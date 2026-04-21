@@ -12,12 +12,14 @@ from orchestrator.api.admin.schema_mappers import (
     workflow_operation_to_schema,
 )
 from orchestrator.api.admin.live_telemetry_service import list_live_workflow_telemetry_events
+from orchestrator.api.admin.workflow_transcript_service import build_workflow_step_transcript
 from orchestrator.api.schemas import (
     WorkflowExecutionPreviewRead,
     WorkflowLinkRead,
     WorkflowObservabilityEventRead,
     WorkflowOperationRead,
     WorkflowRetryPolicyRead,
+    WorkflowStepTranscriptRead,
     WorkflowStatePathEntryRead,
     WorkflowTypeDetailRead,
     WorkflowTypeLifecycleRead,
@@ -181,6 +183,14 @@ def _workflow_operation_attempts_by_operation(*, session, workflow_id: str) -> d
     for attempt, operation in rows:
         grouped.setdefault(operation.operation_id, []).append(attempt)
     return grouped
+
+
+def _workflow_operation_attempts(*, session, operation_id: str) -> list[WorkflowOperationAttempt]:  # noqa: ANN001
+    return session.execute(
+        select(WorkflowOperationAttempt)
+        .where(WorkflowOperationAttempt.operation_id == operation_id)
+        .order_by(desc(WorkflowOperationAttempt.attempt_number))
+    ).scalars().all()
 
 
 def _audit_events_by_operation(
@@ -1204,6 +1214,57 @@ def list_workflow_telemetry_events(
         before_recorded_at=before_recorded_at,
         before_event_id=before_event_id,
         limit=limit,
+    )
+
+
+def get_workflow_step_transcript(
+    *,
+    session,
+    execution_id: str,
+    operation_id: str,
+    source: str,
+    limit: int = 500,
+) -> WorkflowStepTranscriptRead:
+    workflow = _workflow_by_execution_id(session=session, execution_id=execution_id)
+    if workflow is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow not found")
+    operation = _workflow_operation_for_execution(session=session, workflow=workflow, operation_id=operation_id)
+    attempts = _workflow_operation_attempts(session=session, operation_id=operation.operation_id)
+    normalized_source = str(source or "").strip().lower()
+    if normalized_source not in {"audit", "telemetry"}:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Unsupported transcript source")
+
+    audit_events: list[WorkflowObservabilityEventRead] = []
+    telemetry_events: list[WorkflowObservabilityEventRead] = []
+    if normalized_source == "audit":
+        audit_query = (
+            select(AuditEvent)
+            .where(AuditEvent.workflow_id == workflow.workflow_id, AuditEvent.operation_id == operation.operation_id)
+            .order_by(desc(AuditEvent.recorded_at), desc(AuditEvent.event_id))
+            .limit(limit)
+        )
+        audit_rows = list(session.execute(audit_query).scalars().all())
+        audit_rows.reverse()
+        audit_events = [workflow_observability_event_to_schema(event) for event in audit_rows]
+    else:
+        started_candidates = [attempt.started_at for attempt in attempts if attempt.started_at is not None]
+        telemetry_start_at = min(started_candidates) if started_candidates else operation.updated_at
+        telemetry_events = list_live_workflow_telemetry_events(
+            settings=get_settings(),
+            tenant_id=workflow.tenant_id,
+            workflow_id=workflow.workflow_id,
+            operation_id=operation.operation_id,
+            limit=limit,
+            start_at=telemetry_start_at,
+        )
+    return build_workflow_step_transcript(
+        session=session,
+        workflow=workflow,
+        operation=operation,
+        attempts=attempts,
+        telemetry_events=telemetry_events,
+        audit_events=audit_events,
+        source="telemetry" if normalized_source == "telemetry" else "audit",
     )
 
 

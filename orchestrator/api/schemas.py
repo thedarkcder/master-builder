@@ -1063,6 +1063,45 @@ class WorkflowObservabilityEventRead(BaseModel):
     recorded_at: datetime
 
 
+class WorkflowTranscriptEntryRead(BaseModel):
+    entry_id: str
+    recorded_at: datetime
+    level: str
+    title: str
+    message: str
+    source_component: str | None = None
+    payload: dict[str, object] = Field(default_factory=dict)
+
+
+class WorkflowTranscriptSectionRead(BaseModel):
+    kind: Literal["summary", "runtime", "prompts", "tool_calls", "external_requests", "external_responses", "outcome"]
+    label: str
+    entries: list[WorkflowTranscriptEntryRead] = Field(default_factory=list)
+
+
+class WorkflowStepAttemptTranscriptRead(BaseModel):
+    attempt_id: str
+    attempt_number: int
+    status: str
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    duration_ms: int | None = None
+    error_category: str | None = None
+    failure_message: str | None = None
+    status_detail: str | None = None
+    recommended_next_action: str | None = None
+    sections: list[WorkflowTranscriptSectionRead] = Field(default_factory=list)
+
+
+class WorkflowStepTranscriptRead(BaseModel):
+    execution_id: str
+    operation_id: str
+    operation_label: str
+    current_status: str
+    source: Literal["audit", "telemetry"]
+    attempts: list[WorkflowStepAttemptTranscriptRead] = Field(default_factory=list)
+
+
 class AuditEventExportRequest(BaseModel):
     tenant_id: str
     project_id: str | None = None
