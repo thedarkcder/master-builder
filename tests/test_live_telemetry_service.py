@@ -90,3 +90,51 @@ def test_list_live_workflow_telemetry_events_maps_loki_rows(monkeypatch) -> None
     assert "metadata_workflow_id=parent_planning%3AMAB-215" not in str(captured["url"])
     assert 'metadata_workflow_id%3D%22parent_planning%3AMAB-215%22' not in str(captured["url"])
     assert 'metadata_operation_id%3D%22operation-jira-child-fanout%22' not in str(captured["url"])
+
+
+def test_list_live_workflow_telemetry_events_maps_metadata_attempt_when_attempt_number_missing(monkeypatch) -> None:
+    timestamp_ns = str(int(datetime(2026, 4, 20, 17, 40, 0, tzinfo=timezone.utc).timestamp() * 1_000_000_000))
+    payload = {
+        "data": {
+            "result": [
+                {
+                    "stream": {
+                        "service_name": "api",
+                        "service_namespace": "master-builder",
+                        "scope_name": "orchestrator.core.runtime_telemetry",
+                        "tenant_id": "route25",
+                        "detected_level": "info",
+                        "event_type": "runtime_log",
+                        "metadata_workflow_id": "parent_planning:MAB-215",
+                        "metadata_operation_id": "operation-jira-child-fanout",
+                        "metadata_attempt": "8",
+                    },
+                    "values": [
+                        [
+                            timestamp_ns,
+                            '{"type":"thread.started","thread_id":"019daf87-38d0-7971-a7de-24dbfef11ddc"}',
+                        ]
+                    ],
+                }
+            ]
+        }
+    }
+
+    def _fake_urlopen(request, timeout):  # noqa: ANN001
+        return _FakeResponse(payload)
+
+    monkeypatch.setattr("orchestrator.api.admin.live_telemetry_service.urllib_request.urlopen", _fake_urlopen)
+
+    events = list_live_workflow_telemetry_events(
+        settings=Settings(
+            observability_loki_query_base_url="http://loki:3100",
+            otel_service_namespace="master-builder",
+        ),
+        tenant_id="route25",
+        workflow_id="parent_planning:MAB-215",
+        operation_id="operation-jira-child-fanout",
+        limit=50,
+    )
+
+    assert len(events) == 1
+    assert events[0].attempt == 8

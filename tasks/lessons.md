@@ -260,3 +260,4 @@
 - 2026-04-20: When the user asks for per-operation logs, do not fake them from summaries or attempt records. Add a real operation-event/log model in the backend first, then render that event stream in the UI.
 - 2026-04-20: A step-level “Live telemetry” drawer is not complete if it only shows lifecycle markers. It must include the inner runtime/request-response activity for that operation, and the runtime invocation path must preserve `operation_id` across every rebuilt context so nested lines stay attached to the step.
 - 2026-04-20: Missing-input failures must tell the operator exactly what to do next. Do not persist generic “additional input required” copy when the system already knows the actual questions and the recovery action.
+- 2026-04-21: Do not synthesize live telemetry from durable attempt state. If a step has no telemetry records, the telemetry view must stay empty instead of inventing attempt outcomes or recommended actions from audit/history data.

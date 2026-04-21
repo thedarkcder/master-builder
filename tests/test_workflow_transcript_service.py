@@ -195,3 +195,77 @@ class WorkflowTranscriptServiceTests(SqliteTemplateDbTestCase):
         assert rendered_attempt.sections[1].entries[0].payload["tool_name"] == "jira.search"
         assert rendered_attempt.sections[2].entries[0].payload["summary"] == "Create tenant assurance boundary"
         assert rendered_attempt.sections[3].entries[0].message.startswith("Answer the product clarification")
+
+    def test_build_workflow_step_transcript_does_not_fallback_to_attempt_state_for_telemetry(self) -> None:
+        now = datetime(2026, 4, 21, 12, 0, 0, tzinfo=timezone.utc)
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            workflow = WorkflowExecution(
+                workflow_id="parent_planning:MAB-215",
+                execution_id="wfexec-mab-215",
+                workflow_type_key="parent_planning",
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                issue_key="MAB-215",
+                issue_summary="Identity and authorization v1 contract",
+                issue_description="Parent planning",
+                repo_url=None,
+                branch=None,
+                pr_url=None,
+                orchestration_backend="temporal",
+                dedupe_scope="parent_planning",
+                status="failed",
+                last_error="Answer the product clarification on Jira issue MAB-215, then retry engineering child fanout.",
+                active_run_id=None,
+                latest_checkpoint_id=None,
+                source_workflow_id=None,
+                source_run_id=None,
+                created_at=now,
+                started_at=now,
+                finished_at=None,
+                updated_at=now,
+            )
+            operation = WorkflowOperation(
+                operation_id="operation-jira-child-fanout",
+                workflow_id=workflow.workflow_id,
+                run_id=None,
+                operation_type="jira_child_fanout",
+                idempotency_key="jira-child-fanout:MAB-215",
+                status="failed",
+                target_system="jira",
+                target_ref="MAB-215",
+                summary="Engineering child fanout completed from the confirmed parent brief.",
+                created_at=now,
+                started_at=now,
+                finished_at=now,
+                updated_at=now,
+            )
+            attempt = WorkflowOperationAttempt(
+                attempt_id="attempt-7",
+                operation_id=operation.operation_id,
+                attempt_number=7,
+                status="failed",
+                error_category="missing_input",
+                error_message="Answer the product clarification on Jira issue MAB-215, then retry engineering child fanout.",
+                status_detail=None,
+                retryable=True,
+                next_retry_at=None,
+                created_at=now,
+                started_at=now,
+                finished_at=now,
+            )
+            session.add_all([workflow, operation, attempt])
+            session.commit()
+
+            transcript = build_workflow_step_transcript(
+                session=session,
+                workflow=workflow,
+                operation=operation,
+                attempts=[attempt],
+                telemetry_events=[],
+                audit_events=[],
+                source="telemetry",
+            )
+
+        assert transcript.source == "telemetry"
+        assert transcript.attempts == []

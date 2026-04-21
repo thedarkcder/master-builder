@@ -153,14 +153,14 @@ export default function TenantExecutionDetailPage() {
   );
 
   useEffect(() => {
-    if (!selectedOperation || !credentials || !workflow) {
+    if (!selectedOperation || !credentials || !workflow || observabilityView !== "telemetry") {
       return;
     }
     const handle = window.setInterval(() => {
       void loadOperationObservability(selectedOperation, { silent: true });
-    }, 5000);
+    }, 1500);
     return () => window.clearInterval(handle);
-  }, [credentials, loadOperationObservability, selectedOperation, workflow]);
+  }, [credentials, loadOperationObservability, observabilityView, selectedOperation, workflow]);
 
   async function handleWorkflowAction() {
     if (!credentials || !workflow) {
@@ -190,6 +190,11 @@ export default function TenantExecutionDetailPage() {
     try {
       const refreshedWorkflow = await retryWorkflowOperation(credentials, workflow.execution_id, operation.operation_id);
       setWorkflow(refreshedWorkflow);
+      if (selectedOperationId === operation.operation_id) {
+        const refreshedOperation =
+          refreshedWorkflow.operations.find((candidate) => candidate.operation_id === operation.operation_id) ?? operation;
+        void loadOperationObservability(refreshedOperation);
+      }
       setStatusLine(`Retried ${operation.label?.trim() || operation.operation_type}.`);
     } catch (error) {
       setStatusLine(`Failed to retry operation: ${(error as Error).message}`);
