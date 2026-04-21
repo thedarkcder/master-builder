@@ -26,6 +26,7 @@ from orchestrator.api.admin.schema_mappers import run_to_schema, workflow_to_sch
 from orchestrator.api.admin.workflows_service import (
     create_workflow_attempt as create_workflow_attempt_impl,
     get_workflow as get_workflow_impl,
+    get_workflow_step_transcript as get_workflow_step_transcript_impl,
     get_workflow_type_detail as get_workflow_type_detail_impl,
     list_workflow_audit_events as list_workflow_audit_events_impl,
     list_workflow_telemetry_events as list_workflow_telemetry_events_impl,
@@ -43,6 +44,7 @@ from orchestrator.api.schemas import (
     WorkflowAttemptCreateRequest,
     WorkflowObservabilityEventRead,
     WorkflowRead,
+    WorkflowStepTranscriptRead,
     WorkflowTypeDetailRead,
     WorkflowTypeSummaryRead,
     WorkflowTypeUpdateRequest,
@@ -348,6 +350,33 @@ def list_workflow_operation_audit_events(
         limit=limit,
         before_recorded_at=before_recorded_at,
         before_event_id=before_event_id,
+    )
+
+
+@router.get("/workflows/{execution_id}/operations/{operation_id}/transcript", response_model=WorkflowStepTranscriptRead)
+def get_workflow_operation_transcript(
+    execution_id: str,
+    operation_id: str,
+    source: str = Query(default="telemetry"),
+    limit: int = Query(default=500, ge=1, le=2000),
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> WorkflowStepTranscriptRead:
+    if not principal.is_platform_super_admin:
+        workflow = session.execute(
+            select(WorkflowExecution)
+            .where(WorkflowExecution.execution_id == execution_id)
+            .limit(1)
+        ).scalar_one_or_none()
+        if workflow is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow not found")
+        require_tenant_workspace_access(principal=principal, tenant_id=workflow.tenant_id)
+    return get_workflow_step_transcript_impl(
+        session=session,
+        execution_id=execution_id,
+        operation_id=operation_id,
+        source=source,
+        limit=limit,
     )
 
 

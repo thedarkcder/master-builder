@@ -897,6 +897,8 @@ export async function mockTenantWorkflowApis(
     retriedWorkflowResponse?: WorkflowRecord;
     telemetryEventsByOperationId?: Record<string, unknown[]>;
     auditEventsByOperationId?: Record<string, unknown[]>;
+    telemetryTranscriptByOperationId?: Record<string, unknown>;
+    auditTranscriptByOperationId?: Record<string, unknown>;
   },
 ): Promise<void> {
   const tenantId = options.workflows[0]?.tenant_id ?? options.tenant?.tenant_id ?? "example";
@@ -1037,6 +1039,19 @@ export async function mockTenantWorkflowApis(
       handler: async (route) => {
         options.onResumeExecution?.();
         await fulfillJson(route, nextRun);
+      },
+    },
+    {
+      method: "GET",
+      pathname: /^\/api\/bff\/api\/admin\/workflows\/[^/]+\/operations\/[^/]+\/transcript(?:\?.*)?$/,
+      handler: (route, url) => {
+        const operationId = decodeURIComponent(url.pathname.split("/").at(-2) ?? "");
+        const source = url.searchParams.get("source") ?? "telemetry";
+        const transcript =
+          source === "audit"
+            ? options.auditTranscriptByOperationId?.[operationId]
+            : options.telemetryTranscriptByOperationId?.[operationId];
+        return fulfillJson(route, transcript ?? { operation_id: operationId, current_status: "pending", source, attempts: [] });
       },
     },
     {

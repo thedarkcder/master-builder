@@ -862,6 +862,45 @@ export type WorkflowObservabilityEventRecord = {
   recorded_at: string;
 };
 
+export type WorkflowTranscriptEntryRecord = {
+  entry_id: string;
+  recorded_at: string;
+  level: string;
+  title: string;
+  message: string;
+  source_component: string | null;
+  payload: Record<string, unknown>;
+};
+
+export type WorkflowTranscriptSectionRecord = {
+  kind: "summary" | "runtime" | "prompts" | "tool_calls" | "external_requests" | "external_responses" | "outcome";
+  label: string;
+  entries: WorkflowTranscriptEntryRecord[];
+};
+
+export type WorkflowStepAttemptTranscriptRecord = {
+  attempt_id: string;
+  attempt_number: number;
+  status: string;
+  started_at: string | null;
+  finished_at: string | null;
+  duration_ms: number | null;
+  error_category: string | null;
+  failure_message: string | null;
+  status_detail: string | null;
+  recommended_next_action: string | null;
+  sections: WorkflowTranscriptSectionRecord[];
+};
+
+export type WorkflowStepTranscriptRecord = {
+  execution_id: string;
+  operation_id: string;
+  operation_label: string;
+  current_status: string;
+  source: "audit" | "telemetry";
+  attempts: WorkflowStepAttemptTranscriptRecord[];
+};
+
 export type WorkflowOperationRecord = {
   operation_id: string;
   run_id: string | null;
@@ -2752,6 +2791,24 @@ export function listWorkflowOperationAuditEvents(
   return request<WorkflowObservabilityEventRecord[]>(
     credentials,
     `/api/admin/workflows/${encodeURIComponent(executionId)}/operations/${encodeURIComponent(operationId)}/audit${workflowObservabilityQuery(params)}`,
+  );
+}
+
+export function getWorkflowOperationTranscript(
+  credentials: Credentials,
+  executionId: string,
+  operationId: string,
+  source: "telemetry" | "audit",
+  params: { limit?: number } = {},
+): Promise<WorkflowStepTranscriptRecord> {
+  const query = new URLSearchParams();
+  query.set("source", source);
+  if (params.limit) {
+    query.set("limit", String(params.limit));
+  }
+  return request<WorkflowStepTranscriptRecord>(
+    credentials,
+    `/api/admin/workflows/${encodeURIComponent(executionId)}/operations/${encodeURIComponent(operationId)}/transcript?${query.toString()}`,
   );
 }
 
