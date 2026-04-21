@@ -186,17 +186,22 @@ export default function TenantExecutionDetailPage() {
     if (!credentials || !workflow || operation.definition_only) {
       return;
     }
+    setSelectedOperationId(operation.operation_id);
+    setObservabilityView("telemetry");
+    setTelemetryTranscript(null);
+    setAuditTranscript(null);
+    setObservabilityError(null);
+    setObservabilityLoading(true);
     setRetryingOperationId(operation.operation_id);
     try {
       const refreshedWorkflow = await retryWorkflowOperation(credentials, workflow.execution_id, operation.operation_id);
       setWorkflow(refreshedWorkflow);
-      if (selectedOperationId === operation.operation_id) {
-        const refreshedOperation =
-          refreshedWorkflow.operations.find((candidate) => candidate.operation_id === operation.operation_id) ?? operation;
-        void loadOperationObservability(refreshedOperation);
-      }
+      const refreshedOperation =
+        refreshedWorkflow.operations.find((candidate) => candidate.operation_id === operation.operation_id) ?? operation;
+      await loadOperationObservability(refreshedOperation);
       setStatusLine(`Retried ${operation.label?.trim() || operation.operation_type}.`);
     } catch (error) {
+      setObservabilityLoading(false);
       setStatusLine(`Failed to retry operation: ${(error as Error).message}`);
     } finally {
       setRetryingOperationId(null);
