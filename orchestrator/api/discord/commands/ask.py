@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from orchestrator.api.schemas import DiscordCommandRequest, DiscordCommandResponse
 from orchestrator.api.discord.shared.room_history import DiscordRoomHistoryService
+from orchestrator.core.clarification_questions import ClarificationQuestionSet
 from orchestrator.core.codex_agents import (
     answer_board_question_with_runtime,
     plan_discord_ask_intent_with_codex,
@@ -741,10 +742,11 @@ def dispatch_ask_command(
                 )
                 interview_case.status = PM_INTERVIEW_STATUS_PM_COMPLETED
             elif planning_result.open_behavior_questions:
+                planning_questions = ClarificationQuestionSet.from_values(planning_result.open_behavior_questions)
                 interview_case.status = "question_pending"
                 interview_case.current_question_json = {
                     "slot_key": "planning",
-                    "question": planning_result.open_behavior_questions[0],
+                    "question": planning_questions.prompts[0],
                     "examples": [],
                 }
                 interview_case.next_question_json = dict(interview_case.current_question_json)

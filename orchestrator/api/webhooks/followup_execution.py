@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from orchestrator.api.discord.shared.errors import DiscordInteractionWebhookExpiredError
 from orchestrator.api.discord.shared.state import command_matches, parse_command_text
+from orchestrator.core.clarification_questions import ClarificationQuestionSet
 from orchestrator.core.communications import (
     DiscordAskWithThreadAction,
     DiscordInteractionFollowupAction,
@@ -202,9 +203,9 @@ async def run_discord_command_followup(
                                 followup_request_id = str(data.get("followup_request_id") or "").strip()
                                 question_values = data.get("questions")
                                 questions = (
-                                    [str(value).strip() for value in question_values if str(value).strip()]
+                                    ClarificationQuestionSet.from_values(question_values).questions
                                     if isinstance(question_values, list)
-                                    else []
+                                    else ()
                                 )
                                 if followup_request_id:
                                     try:

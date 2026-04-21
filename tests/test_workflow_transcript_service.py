@@ -386,3 +386,100 @@ class WorkflowTranscriptServiceTests(SqliteTemplateDbTestCase):
         assert transcript.attempts[0].status == "running"
         assert transcript.attempts[0].attempt_id == "telemetry-attempt:8"
         assert [section.kind for section in transcript.attempts[0].sections] == ["runtime"]
+
+    def test_build_workflow_step_transcript_prefers_persisted_attempt_when_attempt_number_matches(self) -> None:
+        now = datetime(2026, 4, 21, 12, 0, 0, tzinfo=timezone.utc)
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            workflow = WorkflowExecution(
+                workflow_id="parent_planning:MAB-215",
+                execution_id="wfexec-mab-215",
+                workflow_type_key="parent_planning",
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                issue_key="MAB-215",
+                issue_summary="Identity and authorization v1 contract",
+                issue_description="Parent planning",
+                repo_url=None,
+                branch=None,
+                pr_url=None,
+                orchestration_backend="temporal",
+                dedupe_scope="parent_planning",
+                status="running",
+                last_error=None,
+                active_run_id=None,
+                latest_checkpoint_id=None,
+                source_workflow_id=None,
+                source_run_id=None,
+                created_at=now,
+                started_at=now,
+                finished_at=None,
+                updated_at=now,
+            )
+            operation = WorkflowOperation(
+                operation_id="operation-jira-child-fanout",
+                workflow_id=workflow.workflow_id,
+                run_id=None,
+                operation_type="jira_child_fanout",
+                idempotency_key="jira-child-fanout:MAB-215",
+                status="running",
+                target_system="jira",
+                target_ref="MAB-215",
+                summary="Engineering child fanout completed from the confirmed parent brief.",
+                created_at=now,
+                started_at=now,
+                finished_at=None,
+                updated_at=now,
+            )
+            attempt = WorkflowOperationAttempt(
+                attempt_id="attempt-10",
+                operation_id=operation.operation_id,
+                attempt_number=10,
+                status="running",
+                error_category=None,
+                error_message=None,
+                status_detail=None,
+                retryable=True,
+                next_retry_at=None,
+                created_at=now,
+                started_at=now,
+                finished_at=None,
+            )
+            session.add_all([workflow, operation, attempt])
+            session.commit()
+
+            telemetry_events = [
+                WorkflowObservabilityEventRead(
+                    event_id="event-live",
+                    source="telemetry",
+                    level="info",
+                    event_kind="runtime_log",
+                    message="Live runtime line.",
+                    source_component="runtime_invocation",
+                    run_id=None,
+                    operation_id=operation.operation_id,
+                    attempt_id="live-attempt-10",
+                    agent_id=None,
+                    invocation_id=None,
+                    stage=None,
+                    attempt=10,
+                    stream="stdout",
+                    payload={},
+                    recorded_at=now,
+                )
+            ]
+
+            transcript = build_workflow_step_transcript(
+                session=session,
+                workflow=workflow,
+                operation=operation,
+                attempts=[attempt],
+                telemetry_events=telemetry_events,
+                audit_events=[],
+                source="telemetry",
+            )
+
+        assert [item.attempt_number for item in transcript.attempts] == [10]
+        assert transcript.attempts[0].attempt_id == "attempt-10"
+        assert [section.kind for section in transcript.attempts[0].sections] == ["runtime"]
+        assert transcript.attempts[0].sections[0].entries[0].message == "Live runtime line."

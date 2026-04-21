@@ -99,8 +99,10 @@ def _events_by_attempt(
     grouped: dict[str, list[WorkflowObservabilityEventRead]] = defaultdict(list)
     for event in events:
         attempt_id = str(event.attempt_id or "").strip() or None
-        if attempt_id is None and isinstance(event.attempt, int):
-            attempt_id = attempt_numbers.get(event.attempt)
+        if isinstance(event.attempt, int):
+            mapped_attempt_id = attempt_numbers.get(event.attempt)
+            if mapped_attempt_id is not None and (attempt_id is None or attempt_id not in attempt_ids):
+                attempt_id = mapped_attempt_id
         if attempt_id is None or attempt_id not in attempt_ids:
             continue
         grouped[attempt_id].append(event)
@@ -121,13 +123,16 @@ def _merge_telemetry_attempts(
 
     for event in events:
         attempt_id = str(event.attempt_id or "").strip()
+        attempt_number = int(event.attempt or 0) if isinstance(event.attempt, int) else 0
+        if attempt_number > 0 and attempt_number in known_attempt_numbers:
+            continue
         if attempt_id and attempt_id not in known_attempt_ids:
             grouped_events[attempt_id].append(event)
             continue
         if attempt_id:
             continue
-        if isinstance(event.attempt, int) and event.attempt > 0 and event.attempt not in known_attempt_numbers:
-            synthetic_attempt_id = f"telemetry-attempt:{event.attempt}"
+        if attempt_number > 0 and attempt_number not in known_attempt_numbers:
+            synthetic_attempt_id = f"telemetry-attempt:{attempt_number}"
             grouped_events[synthetic_attempt_id].append(event)
 
     for synthetic_attempt_id, event_group in grouped_events.items():

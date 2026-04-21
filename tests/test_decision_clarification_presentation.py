@@ -58,7 +58,8 @@ def test_build_decision_clarification_presentation_prefers_feedback_questions_fo
     assert presentation.recheck_required is True
     assert presentation.mode is DecisionClassification.DECISION_GATE
     assert presentation.classification == "decision_gate"
-    assert presentation.questions == ("What is the owner?",)
+    assert tuple(question.question for question in presentation.questions) == ("What is the owner?",)
+    assert presentation.questions[0].why_it_matters == "Missing ownership detail"
 
 
 def test_build_decision_clarification_presentation_uses_gtd_questions_when_no_feedback() -> None:
@@ -74,7 +75,9 @@ def test_build_decision_clarification_presentation_uses_gtd_questions_when_no_fe
     assert presentation.mode is DecisionClassification.GTD
     assert presentation.classification == "gtd"
     assert presentation.decision_gate_reason is None
-    assert presentation.questions == ("Which dependencies or risks may impact delivery?",)
+    assert tuple(question.question for question in presentation.questions) == (
+        "Which dependencies or risks may impact delivery?",
+    )
 
 
 def test_render_decision_gate_feedback_message_includes_missing_detail() -> None:

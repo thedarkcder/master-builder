@@ -81,7 +81,7 @@ class JiraParentClarificationFlowTests(JiraWebhookHarness):
                 },
             ),
             patch(
-                "orchestrator.core.jira_parent_child_sync_service.resolve_parent_feature_case",
+                "orchestrator.core.jira_parent_child_sync_publishers.resolve_parent_feature_case",
                 return_value=SimpleNamespace(
                     request_id="pm-parent-950",
                     source_kind="jira_parent",
@@ -94,8 +94,8 @@ class JiraParentClarificationFlowTests(JiraWebhookHarness):
                     notes_json={},
                 ),
             ),
-            patch("orchestrator.core.jira_parent_child_sync_service.resolve_platform_secret_ref", return_value="discord-token"),
-            patch("orchestrator.core.jira_parent_child_sync_service.DiscordApiClient") as discord_client_cls,
+            patch("orchestrator.core.jira_parent_child_sync_publishers.resolve_platform_secret_ref", return_value="discord-token"),
+            patch("orchestrator.core.jira_parent_child_sync_publishers.DiscordApiClient") as discord_client_cls,
             patch("orchestrator.api.webhooks.jira_parent_child_sync.post_jira_comment", return_value=(True, None)) as comment_mock,
         ):
             discord_client = discord_client_cls.return_value

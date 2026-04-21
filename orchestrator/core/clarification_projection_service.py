@@ -8,45 +8,21 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from orchestrator.core.clarification_questions import ClarificationQuestion, ClarificationQuestionSet
 from orchestrator.core.followup_context_service import upsert_followup_context
 from orchestrator.storage.models import FollowupContext
 
 
-def clarification_question_text(value: object) -> str:
-    if isinstance(value, str):
-        return value.strip()
-    if isinstance(value, dict):
-        for key in ("question", "stakeholder_question", "original_question"):
-            candidate = str(value.get(key) or "").strip()
-            if candidate:
-                return candidate
-    return str(value or "").strip()
+def _question_set(values: tuple[object, ...] | list[object] | None) -> ClarificationQuestionSet:
+    return ClarificationQuestionSet.from_values(values)
 
 
-def clarification_question_reason(value: object) -> str | None:
-    if not isinstance(value, dict):
-        return None
-    reason = str(value.get("why_it_matters") or value.get("reason") or "").strip()
-    return reason or None
-
-
-def normalize_clarification_questions(*, questions: list[object]) -> list[dict[str, str]]:
-    normalized: list[dict[str, str]] = []
-    for raw_question in questions:
-        question_text = clarification_question_text(raw_question)
-        if not question_text:
-            continue
-        entry = {"question": question_text}
-        reason = clarification_question_reason(raw_question)
-        if reason:
-            entry["why_it_matters"] = reason
-        normalized.append(entry)
-    return normalized
-
-
-def clarification_state_fingerprint(*, questions: list[object]) -> str:
-    normalized_questions = normalize_clarification_questions(questions=questions)
-    payload = json.dumps(normalized_questions, sort_keys=True, separators=(",", ":"))
+def clarification_state_fingerprint(*, questions: tuple[object, ...] | list[object]) -> str:
+    payload = json.dumps(
+        _question_set(questions).to_payload(),
+        sort_keys=True,
+        separators=(",", ":"),
+    )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -57,7 +33,7 @@ class ClarificationProjectionSpec:
     context_type: str
     issue_key: str
     request_id: str | None
-    questions: list[object]
+    questions: tuple[ClarificationQuestion, ...]
     metadata: dict[str, Any] = field(default_factory=dict)
     channel_id: str | None = None
     thread_channel_id: str | None = None
@@ -66,6 +42,9 @@ class ClarificationProjectionSpec:
     origin_command: str | None = None
     transport: str | None = None
     reply_scope: str | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "questions", _question_set(self.questions).questions)
 
 
 @dataclass(frozen=True)
@@ -118,7 +97,7 @@ def has_matching_active_clarification_state(
     tenant_id: str,
     issue_key: str,
     context_type: str,
-    questions: list[object],
+    questions: tuple[object, ...] | list[object],
     transport: str | None = None,
     reply_scope: str | None = None,
 ) -> bool:
@@ -130,16 +109,19 @@ def has_matching_active_clarification_state(
         transport=transport,
         reply_scope=reply_scope,
     )
+    normalized_questions = _question_set(questions)
     if followup_context is None:
         return False
     metadata = dict(getattr(followup_context, "metadata_json", {}) or {})
     existing_fingerprint = str(metadata.get("question_state_fingerprint") or "").strip()
     if not existing_fingerprint:
-        existing_questions = metadata.get("questions")
-        if not isinstance(existing_questions, list):
+        existing_questions = ClarificationQuestionSet.from_values(
+            metadata.get("questions") if isinstance(metadata.get("questions"), list) else ()
+        )
+        if not existing_questions:
             return False
-        existing_fingerprint = clarification_state_fingerprint(questions=list(existing_questions))
-    return existing_fingerprint == clarification_state_fingerprint(questions=questions)
+        existing_fingerprint = clarification_state_fingerprint(questions=existing_questions.questions)
+    return existing_fingerprint == clarification_state_fingerprint(questions=normalized_questions.questions)
 
 
 def upsert_clarification_projection(
@@ -164,14 +146,16 @@ def upsert_clarification_projection(
         metadata["reply_scope"] = spec.reply_scope
     metadata["question_state_fingerprint"] = fingerprint
     if "questions" not in metadata:
-        metadata["questions"] = list(spec.questions)
+        metadata["questions"] = ClarificationQuestionSet(questions=spec.questions).to_payload()
     already_projected = False
     existing_fingerprint = str(metadata.get("question_state_fingerprint") or "").strip()
     if existing is not None:
         if not existing_fingerprint:
-            existing_questions = metadata.get("questions")
-            if isinstance(existing_questions, list):
-                existing_fingerprint = clarification_state_fingerprint(questions=list(existing_questions))
+            existing_questions = ClarificationQuestionSet.from_values(
+                metadata.get("questions") if isinstance(metadata.get("questions"), list) else ()
+            )
+            if existing_questions:
+                existing_fingerprint = clarification_state_fingerprint(questions=existing_questions.questions)
         already_projected = existing_fingerprint == fingerprint
     followup_context = upsert_followup_context(
         session=session,
