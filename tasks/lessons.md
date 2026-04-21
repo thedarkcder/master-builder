@@ -262,3 +262,4 @@
 - 2026-04-20: Missing-input failures must tell the operator exactly what to do next. Do not persist generic “additional input required” copy when the system already knows the actual questions and the recovery action.
 - 2026-04-21: Do not synthesize live telemetry from durable attempt state. If a step has no telemetry records, the telemetry view must stay empty instead of inventing attempt outcomes or recommended actions from audit/history data.
 - 2026-04-21: In live telemetry views, do not preserve a stale selected attempt when a newer retry attempt appears. The telemetry tab should snap to the latest active attempt by default so operators see the current run, not an older historical attempt.
+- 2026-04-21: Retry actions that create a new operation attempt must open the telemetry drawer and switch to the latest attempt automatically. Do not make operators click the same step again just to watch the retry they just triggered.
