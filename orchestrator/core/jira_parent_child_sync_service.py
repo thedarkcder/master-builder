@@ -443,6 +443,7 @@ class _ParentBriefPlanner:
                 working_dir=".",
                 workflow_id=self._context.workflow_id,
                 operation_id=self._context.operation_id,
+                attempt_id=self._context.attempt_id,
                 attempt=self._context.attempt,
             ),
             runtime_for_selector=lambda selector: self._build_runtime_for_selector_fn(

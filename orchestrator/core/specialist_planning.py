@@ -36,6 +36,7 @@ class SpecialistPlanningRequest:
     working_dir: str = "."
     workflow_id: str | None = None
     operation_id: str | None = None
+    attempt_id: str | None = None
     attempt: int | None = None
 
 
@@ -232,6 +233,7 @@ def _run_stage(
         working_dir=request.working_dir,
         workflow_id=request.workflow_id,
         operation_id=request.operation_id,
+        attempt_id=request.attempt_id,
         issue_key=request.parent_issue_key,
         attempt=request.attempt,
         reasoning_effort=stage.reasoning_effort,
