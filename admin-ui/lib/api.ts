@@ -901,6 +901,11 @@ export type WorkflowStepTranscriptRecord = {
   attempts: WorkflowStepAttemptTranscriptRecord[];
 };
 
+export type WorkflowOperationRetryResponseRecord = {
+  workflow: WorkflowRecord;
+  started_attempt?: WorkflowOperationAttemptRecord | null;
+};
+
 export type WorkflowOperationRecord = {
   operation_id: string;
   run_id: string | null;
@@ -2697,8 +2702,8 @@ export function retryWorkflowOperation(
   credentials: Credentials,
   executionId: string,
   operationId: string
-): Promise<WorkflowRecord> {
-  return request<WorkflowRecord>(
+): Promise<WorkflowOperationRetryResponseRecord> {
+  return request<WorkflowOperationRetryResponseRecord>(
     credentials,
     `/api/admin/workflows/${encodeURIComponent(executionId)}/operations/${encodeURIComponent(operationId)}/retry`,
     {
@@ -2774,11 +2779,37 @@ export function listWorkflowOperationTelemetryEvents(
   credentials: Credentials,
   executionId: string,
   operationId: string,
-  params: { limit?: number; beforeRecordedAt?: string; beforeEventId?: string } = {},
+  params: { limit?: number; beforeRecordedAt?: string; beforeEventId?: string; attemptId?: string } = {},
 ): Promise<WorkflowObservabilityEventRecord[]> {
+  const query = new URLSearchParams();
+  if (params.limit) {
+    query.set("limit", String(params.limit));
+  }
+  if (params.attemptId) {
+    query.set("attempt_id", params.attemptId);
+  }
+  const suffix = query.toString() ? `?${query.toString()}` : "";
   return request<WorkflowObservabilityEventRecord[]>(
     credentials,
-    `/api/admin/workflows/${encodeURIComponent(executionId)}/operations/${encodeURIComponent(operationId)}/telemetry${workflowObservabilityQuery(params)}`,
+    `/api/admin/workflows/${encodeURIComponent(executionId)}/operations/${encodeURIComponent(operationId)}/telemetry${suffix}`,
+  );
+}
+
+export function listWorkflowOperationAttemptTelemetryEvents(
+  credentials: Credentials,
+  executionId: string,
+  operationId: string,
+  attemptId: string,
+  params: { limit?: number } = {},
+): Promise<WorkflowObservabilityEventRecord[]> {
+  const query = new URLSearchParams();
+  if (params.limit) {
+    query.set("limit", String(params.limit));
+  }
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return request<WorkflowObservabilityEventRecord[]>(
+    credentials,
+    `/api/admin/workflows/${encodeURIComponent(executionId)}/operations/${encodeURIComponent(operationId)}/attempts/${encodeURIComponent(attemptId)}/telemetry${suffix}`,
   );
 }
 
@@ -2799,16 +2830,106 @@ export function getWorkflowOperationTranscript(
   executionId: string,
   operationId: string,
   source: "telemetry" | "audit",
-  params: { limit?: number } = {},
+  params: { limit?: number; attemptId?: string } = {},
 ): Promise<WorkflowStepTranscriptRecord> {
   const query = new URLSearchParams();
   query.set("source", source);
   if (params.limit) {
     query.set("limit", String(params.limit));
   }
+  if (params.attemptId) {
+    query.set("attempt_id", params.attemptId);
+  }
   return request<WorkflowStepTranscriptRecord>(
     credentials,
     `/api/admin/workflows/${encodeURIComponent(executionId)}/operations/${encodeURIComponent(operationId)}/transcript?${query.toString()}`,
+  );
+}
+
+export async function streamWorkflowOperationTelemetryEvents(
+  credentials: Credentials,
+  executionId: string,
+  operationId: string,
+  onEvent: (event: WorkflowObservabilityEventRecord) => void,
+  options: { attemptId?: string; signal?: AbortSignal } = {},
+): Promise<void> {
+  void credentials;
+  const query = new URLSearchParams();
+  if (options.attemptId) {
+    query.set("attempt_id", options.attemptId);
+  }
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  const response = await fetch(
+    `/api/bff/api/admin/workflows/${encodeURIComponent(executionId)}/operations/${encodeURIComponent(operationId)}/telemetry/stream${suffix}`,
+    {
+      method: "GET",
+      headers: {
+        Accept: "application/x-ndjson",
+      },
+      signal: options.signal,
+    },
+  );
+  if (!response.ok || !response.body) {
+    throw new Error(`${response.status}: unable to open workflow telemetry stream`);
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      buffer += decoder.decode(value, { stream: true });
+      let newline = buffer.indexOf("\n");
+      while (newline >= 0) {
+        const line = buffer.slice(0, newline).trim();
+        buffer = buffer.slice(newline + 1);
+        if (line) {
+          try {
+            onEvent(JSON.parse(line) as WorkflowObservabilityEventRecord);
+          } catch {
+            // Ignore malformed stream lines.
+          }
+        }
+        newline = buffer.indexOf("\n");
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+export async function streamWorkflowOperationAttemptTelemetryEvents(
+  credentials: Credentials,
+  executionId: string,
+  operationId: string,
+  attemptId: string,
+  onEvent: (event: WorkflowObservabilityEventRecord) => void,
+  options: { signal?: AbortSignal } = {},
+): Promise<void> {
+  return streamWorkflowOperationTelemetryEvents(credentials, executionId, operationId, onEvent, {
+    attemptId,
+    signal: options.signal,
+  });
+}
+
+export function getWorkflowOperationAttemptAudit(
+  credentials: Credentials,
+  executionId: string,
+  operationId: string,
+  attemptId: string,
+  params: { limit?: number } = {},
+): Promise<WorkflowStepAttemptTranscriptRecord> {
+  const query = new URLSearchParams();
+  if (params.limit) {
+    query.set("limit", String(params.limit));
+  }
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return request<WorkflowStepAttemptTranscriptRecord>(
+    credentials,
+    `/api/admin/workflows/${encodeURIComponent(executionId)}/operations/${encodeURIComponent(operationId)}/attempts/${encodeURIComponent(attemptId)}/audit${suffix}`,
   );
 }
 
