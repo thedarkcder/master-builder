@@ -22,13 +22,15 @@ from orchestrator.core.workflow_integration_provider import (
 )
 from orchestrator.core.workflow_integration_router import WorkflowIntegrationRouter
 from orchestrator.core.workflow_runtime import build_workflow_runtime
-from orchestrator.core.jira_parent_child_sync_service import (
-    JiraParentChildSyncContext,
-    JiraParentChildSyncResult,
+from orchestrator.core.jira_parent_child_sync_flows import (
     handle_engineering_clarification_command as handle_engineering_clarification_command_service,
     handle_engineering_clarification_reply as handle_engineering_clarification_reply_service,
     handle_pm_interview_reply as handle_pm_interview_reply_service,
     handle_parent_feature_sync as handle_parent_feature_sync_service,
+)
+from orchestrator.core.jira_parent_child_sync_shared import (
+    JiraParentChildSyncContext,
+    JiraParentChildSyncResult,
     is_system_generated_comment as is_system_generated_comment_service,
 )
 
@@ -113,6 +115,7 @@ def handle_engineering_clarification_command(
         build_runtime_for_selector_fn=build_runtime_for_selector,
         classify_engineering_clarification_with_codex_fn=classify_engineering_clarification_with_codex,
         post_jira_comment_fn=post_jira_comment,
+        create_jira_comment_fn=create_jira_comment,
     )
     return _webhook_response_from_result(context=context, result=result)
 

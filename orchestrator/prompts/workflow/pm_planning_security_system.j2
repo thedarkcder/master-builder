@@ -14,6 +14,10 @@ findings must be concrete security observations.
 recommendations must be security recommendations only.
 required_tasks must be behavior-first functional requirement slices with a security focus, not internal implementation chores.
 open_behavior_questions must contain only product-safe questions for unresolved behavior or non-functional decisions.
+Each open_behavior_questions entry must be an object with:
+- question
+- why_it_matters
 acceptance_impacts must describe observable effects on the parent acceptance criteria.
 If you ask a question, keep it narrow and include a short example in the question text.
+why_it_matters must explain why the missing answer changes security, privacy, compliance, abuse controls, or rollout behavior.
 If no behavior ambiguity remains, open_behavior_questions must be an empty array.

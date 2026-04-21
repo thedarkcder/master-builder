@@ -6,6 +6,10 @@ from typing import Any, Callable
 
 from sqlalchemy.orm import Session
 
+from orchestrator.core.clarification_questions import ClarificationQuestion, ClarificationQuestionSet
+from orchestrator.core.parent_planning_clarification_service import (
+    ParentPlanningClarificationService,
+)
 from orchestrator.core.specialist_planning import PLANNING_STATE_COMPLETED
 from orchestrator.core.workflow_runtime import WorkflowAdvanceOutcome, WorkflowTransitionPlanner
 from orchestrator.core.workflow_execution_projection import classify_external_workflow_failure
@@ -18,6 +22,7 @@ class ParentFeaturePlanningWorkflowDeps:
     issue_gateway: Any
     brief_planner: Any
     child_sync_gateway: Any
+    clarification_service: ParentPlanningClarificationService
     workflow_type: Any
     project_key_for_issue_fn: Callable[[str], str]
     extract_changed_fields_fn: Callable[..., list[str]]
@@ -76,6 +81,7 @@ class ParentFeaturePlanningWorkflow:
             parent_detail=parent_detail,
             refresh=False,
         )
+        normalization_questions = ClarificationQuestionSet.from_values(normalization_questions).questions
         self._rewrite_parent_from_brief(
             issue_gateway=issue_gateway,
             parent_detail=parent_detail,
@@ -134,16 +140,18 @@ class ParentFeaturePlanningWorkflow:
             )
 
         if fanout.planning_result.planning_state != PLANNING_STATE_COMPLETED or bool(fanout.seed_data.get("requires_input")):
-            questions = list(fanout.planning_result.open_behavior_questions) or [
-                value for value in fanout.seed_data.get("questions", []) if str(value).strip()
-            ]
+            question_set = ClarificationQuestionSet.from_values(
+                getattr(fanout.planning_result, "open_behavior_questions", ()) or ()
+            )
+            if not question_set:
+                question_set = ClarificationQuestionSet.from_values(fanout.seed_data.get("questions", []))
             return self._block_parent_brief(
                 context=context,
                 session=session,
                 settings=settings,
                 parent_detail=parent_detail,
                 lifecycle=lifecycle,
-                questions=questions,
+                questions=question_set.questions,
                 body_prefix=(
                     "Parent feature was created in backlog, but engineering child planning is blocked pending clarification."
                 ),
@@ -221,6 +229,7 @@ class ParentFeaturePlanningWorkflow:
             parent_detail=parent_detail,
             refresh=True,
         )
+        normalization_questions = ClarificationQuestionSet.from_values(normalization_questions).questions
         self._rewrite_parent_from_brief(
             issue_gateway=issue_gateway,
             parent_detail=parent_detail,
@@ -295,7 +304,7 @@ class ParentFeaturePlanningWorkflow:
         if bool(seed_data.get("requires_input")):
             blocked_issue_keys = [context.issue_key, *[detail.key for detail in child_details]]
             issue_gateway.mark_issues_sync_blocked(issue_keys=blocked_issue_keys)
-            questions = [value for value in seed_data.get("questions", []) if str(value).strip()]
+            questions = ClarificationQuestionSet.from_values(seed_data.get("questions", [])).questions
             lifecycle.mark_waiting_for_input(
                 operation_type="backlog_planning",
                 summary="Parent planning is waiting for product clarification before child refresh can complete.",
@@ -333,7 +342,7 @@ class ParentFeaturePlanningWorkflow:
                 extra={
                     "changed_fields": material_changed_fields,
                     "stale_child_keys": [detail.key for detail in child_details],
-                    "questions": questions,
+                    "questions": ClarificationQuestionSet(questions=questions).to_payload(),
                     "webhook_event": context.webhook_event,
                 },
             )
@@ -482,46 +491,45 @@ class ParentFeaturePlanningWorkflow:
         settings,  # noqa: ANN001
         parent_detail,
         lifecycle,
-        questions: list[object],
+        questions: tuple[ClarificationQuestion, ...],
         body_prefix: str,
         reason: str,
         waiting_operation_type: str,
         extra: dict[str, object] | None = None,
     ) -> WorkflowAdvanceOutcome:
         _ = (session, settings, body_prefix)
+        question_set = ClarificationQuestionSet(questions=questions)
         issue_gateway = self._deps.issue_gateway
         issue_gateway.update_issue_sync_label(
             issue_detail=parent_detail,
             target_label="sync-blocked",
         )
-        if not issue_gateway.has_matching_active_pm_clarification_state(
-            parent_issue_key=parent_detail.key,
-            questions=questions,
-        ):
-            posted_to_discord = issue_gateway.post_parent_brief_questions(
-                parent_issue_key=parent_detail.key,
-                questions=questions,
+        publication = self._deps.clarification_service.ensure_active_clarification(
+            issue_key=parent_detail.key,
+            questions=question_set.questions,
+            publisher=issue_gateway,
+        )
+        if publication.discord_followup_created:
+            lifecycle.mark_operation_completed(
+                operation_type="discord_followup_projection",
+                summary="Posted PM clarification follow-up to Discord.",
             )
-            created_comment, error = issue_gateway.post_parent_brief_questions_jira(
-                parent_issue_key=parent_detail.key,
-                questions=questions,
+        if publication.jira_comment_created:
+            lifecycle.mark_operation_completed(
+                operation_type="jira_comment_projection",
+                summary="Posted PM clarification questions to Jira.",
             )
-            if posted_to_discord:
-                lifecycle.mark_operation_completed(
-                    operation_type="discord_followup_projection",
-                    summary="Posted PM clarification follow-up to Discord.",
-                )
-            if error is None and created_comment is not None:
-                lifecycle.mark_operation_completed(
-                    operation_type="jira_comment_projection",
-                    summary="Posted PM clarification questions to Jira.",
-                )
         lifecycle.mark_waiting_for_input(
             operation_type=waiting_operation_type,
             summary="Parent planning is waiting for product clarification.",
         )
         payload = dict(extra or {})
-        payload.update({"questions": questions, "webhook_event": context.webhook_event})
+        payload.update(
+            {
+                "questions": question_set.to_payload(),
+                "webhook_event": context.webhook_event,
+            }
+        )
         return lifecycle.build_outcome(
             handled=True,
             reason=reason,
@@ -544,7 +552,8 @@ class ParentFeaturePlanningWorkflow:
         )
         project_key = self._deps.project_key_for_issue_fn(context.issue_key)
         brief_payload = dict(context.payload.get("brief_payload") or {})
-        next_questions = [value for value in context.payload.get("next_questions", []) if str(value).strip()]
+        next_questions = ClarificationQuestionSet.from_values(context.payload.get("next_questions", [])).questions
+        next_question_set = ClarificationQuestionSet(questions=next_questions)
         ready_to_write = bool(context.payload.get("ready_to_write"))
 
         if not ready_to_write:
@@ -556,36 +565,27 @@ class ParentFeaturePlanningWorkflow:
                 operation_type="brief_normalization",
                 summary="Parent brief still needs product clarification before planning can continue.",
             )
-            comment_posted = None
-            if not issue_gateway.has_matching_active_pm_clarification_state(
-                parent_issue_key=context.issue_key,
-                questions=next_questions,
-            ):
-                posted_to_discord = issue_gateway.post_parent_brief_questions(
-                    parent_issue_key=context.issue_key,
-                    questions=next_questions,
+            publication = self._deps.clarification_service.ensure_active_clarification(
+                issue_key=context.issue_key,
+                questions=next_question_set.questions,
+                publisher=issue_gateway,
+            )
+            if publication.discord_followup_created:
+                lifecycle.mark_operation_completed(
+                    operation_type="discord_followup_projection",
+                    summary="Posted PM clarification follow-up to Discord.",
                 )
-                created_comment, error = issue_gateway.post_parent_brief_questions_jira(
-                    parent_issue_key=context.issue_key,
-                    questions=next_questions,
+            if publication.jira_comment_created:
+                lifecycle.mark_operation_completed(
+                    operation_type="jira_comment_projection",
+                    summary="Posted PM clarification questions to Jira.",
                 )
-                if posted_to_discord:
-                    lifecycle.mark_operation_completed(
-                        operation_type="discord_followup_projection",
-                        summary="Posted PM clarification follow-up to Discord.",
-                    )
-                if error is None and created_comment is not None:
-                    lifecycle.mark_operation_completed(
-                        operation_type="jira_comment_projection",
-                        summary="Posted PM clarification questions to Jira.",
-                    )
-                comment_posted = error is None
             return lifecycle.build_outcome(
                 handled=True,
                 reason="pm_interview_still_open",
                 extra={
-                    "questions": next_questions,
-                    "comment_posted": comment_posted,
+                    "questions": next_question_set.to_payload(),
+                    "comment_posted": publication.jira_comment_created,
                     "webhook_event": context.webhook_event,
                 },
             )
@@ -694,14 +694,14 @@ class ParentFeaturePlanningWorkflow:
         issue_gateway,
         parent_detail,
         brief_payload: dict[str, Any],
-        normalization_questions: list[object] | tuple[object, ...],
+        normalization_questions: tuple[ClarificationQuestion, ...],
     ) -> None:
         issue_gateway.rewrite_parent_issue_from_brief(
             parent_detail=parent_detail,
             brief_payload=brief_payload,
             sync_status="sync-blocked" if normalization_questions else "children_syncing",
             planning_state="brief_normalized",
-            open_questions=list(normalization_questions) or None,
+            open_questions=ClarificationQuestionSet(questions=normalization_questions).to_payload() or None,
         )
 
     def _mark_parent_synced(self, *, lifecycle, draft: bool) -> None:

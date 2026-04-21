@@ -174,7 +174,7 @@ class SpecialistPlanningTests(unittest.TestCase):
         self.assertTrue(result.stages[1].blocked)
         self.assertIn(
             "Is this a simple invite link or a referral system?",
-            result.open_behavior_questions[0],
+            result.open_behavior_questions[0].question,
         )
         self.assertIn("security_planning", result.block_reason or "")
         self.assertIn("Share entry point exists", result.acceptance_impacts)

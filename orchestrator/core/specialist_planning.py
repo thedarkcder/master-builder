@@ -7,6 +7,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from orchestrator.core.clarification_questions import ClarificationQuestion, ClarificationQuestionSet
 from orchestrator.core.runtime_invocation import AgentInvocationContext
 from orchestrator.core.codex_runtime import CodexRuntimeError
 from orchestrator.core.prompt_templates import render_prompt
@@ -47,7 +48,7 @@ class SpecialistPlanningStageResult:
     findings: tuple[str, ...]
     recommendations: tuple[str, ...]
     required_tasks: tuple[str, ...]
-    open_behavior_questions: tuple[str, ...]
+    open_behavior_questions: tuple[ClarificationQuestion, ...]
     acceptance_impacts: tuple[str, ...]
     mermaid_diagram: str | None = None
 
@@ -60,7 +61,7 @@ class SpecialistPlanningStageResult:
             "findings": list(self.findings),
             "recommendations": list(self.recommendations),
             "required_tasks": list(self.required_tasks),
-            "open_behavior_questions": list(self.open_behavior_questions),
+            "open_behavior_questions": [question.to_payload() for question in self.open_behavior_questions],
             "acceptance_impacts": list(self.acceptance_impacts),
         }
         if isinstance(self.mermaid_diagram, str) and self.mermaid_diagram.strip():
@@ -75,7 +76,7 @@ class SpecialistPlanningResult:
     findings: tuple[str, ...]
     recommendations: tuple[str, ...]
     required_tasks: tuple[str, ...]
-    open_behavior_questions: tuple[str, ...]
+    open_behavior_questions: tuple[ClarificationQuestion, ...]
     acceptance_impacts: tuple[str, ...]
     blocked_stage_states: tuple[str, ...]
     block_reason: str | None
@@ -89,7 +90,7 @@ class SpecialistPlanningResult:
             "findings": list(self.findings),
             "recommendations": list(self.recommendations),
             "required_tasks": list(self.required_tasks),
-            "open_behavior_questions": list(self.open_behavior_questions),
+            "open_behavior_questions": [question.to_payload() for question in self.open_behavior_questions],
             "acceptance_impacts": list(self.acceptance_impacts),
             "blocked_stage_states": list(self.blocked_stage_states),
             "block_reason": self.block_reason,
@@ -154,6 +155,12 @@ def _string_list(value: object) -> tuple[str, ...]:
     return tuple(normalized)
 
 
+def _question_list(value: object) -> tuple[ClarificationQuestion, ...]:
+    if not isinstance(value, list):
+        return ()
+    return ClarificationQuestionSet.from_values(value).questions
+
+
 def _merge_unique(*sequences: Iterable[str]) -> tuple[str, ...]:
     merged: list[str] = []
     seen: set[str] = set()
@@ -165,6 +172,14 @@ def _merge_unique(*sequences: Iterable[str]) -> tuple[str, ...]:
             seen.add(normalized)
             merged.append(normalized)
     return tuple(merged)
+
+
+def _merge_unique_questions(
+    *sequences: Iterable[ClarificationQuestion],
+) -> tuple[ClarificationQuestion, ...]:
+    return ClarificationQuestionSet.from_values(
+        question for sequence in sequences for question in sequence
+    ).questions
 
 
 def _json_dump(value: object) -> str:
@@ -244,7 +259,7 @@ def _run_stage(
     findings = _string_list(payload.get("findings"))
     recommendations = _string_list(payload.get("recommendations"))
     required_tasks = _string_list(payload.get("required_tasks"))
-    open_behavior_questions = _string_list(payload.get("open_behavior_questions"))
+    open_behavior_questions = _question_list(payload.get("open_behavior_questions"))
     acceptance_impacts = _string_list(payload.get("acceptance_impacts"))
     mermaid_diagram = None
     if isinstance(payload.get("mermaid_diagram"), str):
@@ -342,7 +357,7 @@ def run_specialist_planning_fanout(
     blocked_stage_states = tuple(
         stage_result.planning_state for stage_result in stage_results if stage_result.blocked
     )
-    open_behavior_questions = _merge_unique(
+    open_behavior_questions = _merge_unique_questions(
         *(stage_result.open_behavior_questions for stage_result in stage_results)
     )
     planning_state = (
@@ -351,7 +366,7 @@ def run_specialist_planning_fanout(
     block_reason = None
     if planning_state == PLANNING_STATE_BLOCKED:
         block_reason = "; ".join(
-            f"{stage_result.planning_state}: {stage_result.open_behavior_questions[0]}"
+            f"{stage_result.planning_state}: {stage_result.open_behavior_questions[0].question}"
             for stage_result in stage_results
             if stage_result.blocked and stage_result.open_behavior_questions
         )

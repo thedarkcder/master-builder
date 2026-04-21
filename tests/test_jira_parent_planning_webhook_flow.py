@@ -1020,7 +1020,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                 },
             ),
             patch(
-                "orchestrator.core.jira_parent_child_sync_service.resolve_parent_feature_case",
+                "orchestrator.core.jira_parent_child_sync_publishers.resolve_parent_feature_case",
                 return_value=SimpleNamespace(
                     request_id="pm-request-987",
                     channel_id="discord-channel-1",
@@ -1029,8 +1029,8 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                     owner_user_id="discord-user-1",
                 ),
             ),
-            patch("orchestrator.core.jira_parent_child_sync_service.resolve_platform_secret_ref", return_value="discord-bot-token"),
-            patch("orchestrator.core.jira_parent_child_sync_service.DiscordApiClient", return_value=discord_client),
+            patch("orchestrator.core.jira_parent_child_sync_publishers.resolve_platform_secret_ref", return_value="discord-bot-token"),
+            patch("orchestrator.core.jira_parent_child_sync_publishers.DiscordApiClient", return_value=discord_client),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.create_jira_comment", return_value=({"id": "jira-comment-987"}, None)) as create_comment_mock,
             patch("orchestrator.api.webhooks.jira_parent_child_sync.post_jira_comment", return_value=(True, None)),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.seed_issues_with_runtime") as seed_mock,
@@ -1154,7 +1154,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                 },
             ),
             patch(
-                "orchestrator.core.jira_parent_child_sync_service.resolve_parent_feature_case",
+                "orchestrator.core.jira_parent_child_sync_publishers.resolve_parent_feature_case",
                 return_value=SimpleNamespace(
                     request_id="pm-request-987A",
                     channel_id="discord-channel-1",
@@ -1163,7 +1163,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                     owner_user_id="discord-user-1",
                 ),
             ),
-            patch("orchestrator.core.jira_parent_child_sync_service.resolve_platform_secret_ref", return_value=None),
+            patch("orchestrator.core.jira_parent_child_sync_publishers.resolve_platform_secret_ref", return_value=None),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.create_jira_comment", return_value=({"id": "jira-comment-987A"}, None)) as create_comment_mock,
             patch("orchestrator.api.webhooks.jira_parent_child_sync.post_jira_comment", return_value=(True, None)),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.seed_issues_with_runtime") as seed_mock,
@@ -1300,7 +1300,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                     },
                 ),
             ) as seed_mock,
-            patch("orchestrator.core.jira_parent_child_sync_service.resolve_platform_secret_ref", return_value=None),
+            patch("orchestrator.core.jira_parent_child_sync_publishers.resolve_platform_secret_ref", return_value=None),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.create_jira_comment", return_value=({"id": "jira-comment-987C"}, None)) as create_comment_mock,
             patch("orchestrator.api.webhooks.jira_parent_child_sync.post_jira_comment", return_value=(True, None)),
             patch("orchestrator.api.webhooks.jira_application.plan_jira_run_flow") as run_flow_mock,
@@ -1550,7 +1550,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                 },
             ),
             patch(
-                "orchestrator.core.jira_parent_child_sync_service.resolve_parent_feature_case",
+                "orchestrator.core.jira_parent_child_sync_publishers.resolve_parent_feature_case",
                 return_value=SimpleNamespace(
                     request_id="pm-request-987B",
                     channel_id="discord-channel-1",
@@ -1560,7 +1560,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                     source_kind="jira_parent",
                 ),
             ),
-            patch("orchestrator.core.jira_parent_child_sync_service.resolve_platform_secret_ref", return_value=None),
+            patch("orchestrator.core.jira_parent_child_sync_publishers.resolve_platform_secret_ref", return_value=None),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.create_jira_comment", return_value=({"id": "jira-comment-987B-2"}, None)) as create_comment_mock,
             patch("orchestrator.api.webhooks.jira_parent_child_sync.post_jira_comment", return_value=(True, None)),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.seed_issues_with_runtime") as seed_mock,
@@ -1715,7 +1715,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                 },
             ),
             patch(
-                "orchestrator.core.jira_parent_child_sync_service.resolve_parent_feature_case",
+                "orchestrator.core.jira_parent_child_sync_publishers.resolve_parent_feature_case",
                 return_value=SimpleNamespace(
                     request_id="pm-request-987B2",
                     channel_id="discord-channel-1",
@@ -1874,8 +1874,8 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                     "ready_to_write": False,
                 },
             ),
-            patch("orchestrator.core.jira_parent_child_sync_service.resolve_platform_secret_ref", return_value="discord-bot-token"),
-            patch("orchestrator.core.jira_parent_child_sync_service.DiscordApiClient", return_value=discord_client),
+            patch("orchestrator.core.jira_parent_child_sync_publishers.resolve_platform_secret_ref", return_value="discord-bot-token"),
+            patch("orchestrator.core.jira_parent_child_sync_publishers.DiscordApiClient", return_value=discord_client),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.post_jira_comment", return_value=(True, None)),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.seed_issues_with_runtime") as seed_mock,
             patch("orchestrator.api.webhooks.jira_application.plan_jira_run_flow") as run_flow_mock,

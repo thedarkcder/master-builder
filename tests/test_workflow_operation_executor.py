@@ -127,21 +127,18 @@ class WorkflowOperationExecutorTests(SqliteTemplateDbTestCase):
             planner_result = SimpleNamespace(
                 planning_state="planning_blocked",
                 open_behavior_questions=(
-                    "What invitation TTL should v1 enforce for automatic expiry?",
+                    {
+                        "question": "What invitation TTL should v1 enforce for automatic expiry?",
+                        "why_it_matters": "This changes link validity and account recovery behavior.",
+                    },
                     "What audit retention window must exports support in v1?",
                 ),
             )
 
             with (
                 patch(
-                    "orchestrator.core.workflow_operation_executor.resolve_parent_feature_brief_readiness",
-                    return_value=SimpleNamespace(
-                        canonical_brief=SimpleNamespace(to_payload=lambda: {"objective": "Ship identity redesign"}),
-                        clarification_open=False,
-                        clarification_questions=(),
-                        has_active_followup=True,
-                        ready_for_planning=True,
-                    ),
+                    "orchestrator.core.workflow_operation_executor.resolve_parent_feature_brief",
+                    return_value=SimpleNamespace(to_payload=lambda: {"objective": "Ship identity redesign"}),
                 ),
                 patch(
                     "orchestrator.core.workflow_operation_executor.list_workflow_type_operations",
@@ -196,8 +193,15 @@ class WorkflowOperationExecutorTests(SqliteTemplateDbTestCase):
             assert comment_operation.status == "completed"
             planner_mock.assert_called_once()
             post_comment_mock.assert_called_once()
+            assert [question.to_payload() for question in post_comment_mock.call_args.kwargs["questions"]] == [
+                {
+                    "question": "What invitation TTL should v1 enforce for automatic expiry?",
+                    "why_it_matters": "This changes link validity and account recovery behavior.",
+                },
+                {"question": "What audit retention window must exports support in v1?"},
+            ]
 
-    def test_jira_child_fanout_retry_blocks_on_parent_clarification_before_planning(self) -> None:
+    def test_jira_child_fanout_retry_requires_confirmed_parent_brief_snapshot(self) -> None:
         now = datetime.now(timezone.utc)
         session_factory = create_session_factory(self.database_url)
         settings = Settings(database_url=self.database_url)
@@ -286,14 +290,8 @@ class WorkflowOperationExecutorTests(SqliteTemplateDbTestCase):
 
             with (
                 patch(
-                    "orchestrator.core.workflow_operation_executor.resolve_parent_feature_brief_readiness",
-                    return_value=SimpleNamespace(
-                        canonical_brief=None,
-                        clarification_open=True,
-                        clarification_questions=("What invitation TTL should v1 enforce?",),
-                        has_active_followup=True,
-                        ready_for_planning=False,
-                    ),
+                    "orchestrator.core.workflow_operation_executor.resolve_parent_feature_brief",
+                    return_value=None,
                 ),
                 patch(
                     "orchestrator.core.workflow_operation_executor._ParentBriefPlanner.plan_backlog_parent",
@@ -316,6 +314,5 @@ class WorkflowOperationExecutorTests(SqliteTemplateDbTestCase):
 
             assert workflow.status == "failed"
             assert fanout_operation.status == "failed"
-            assert "Answer the product clarification on Jira issue MAB-216" in str(excinfo.value)
-            assert "What invitation TTL should v1 enforce?" in str(excinfo.value)
+            assert "No confirmed parent brief snapshot is available for MAB-216" in str(excinfo.value)
             planner_mock.assert_not_called()

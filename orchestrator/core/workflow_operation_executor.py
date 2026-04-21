@@ -7,6 +7,7 @@ from typing import Any, Callable
 
 from sqlalchemy.orm import Session, sessionmaker
 
+from orchestrator.core.clarification_questions import ClarificationQuestion, ClarificationQuestionSet
 from orchestrator.api.webhooks.contracts import create_jira_comment
 from orchestrator.core.clarification_projection_service import (
     ClarificationProjectionSpec,
@@ -22,11 +23,17 @@ from orchestrator.core.workflow_execution_status import (
 )
 from orchestrator.core.jira_parent_child_sync_service import (
     PLANNING_STATE_COMPLETED,
-    _post_engineering_clarification_questions_to_jira,
     _ParentBriefPlanner,
     _ParentChildSyncGateway,
     _rewrite_parent_issue_from_brief,
     JiraParentChildSyncContext,
+)
+from orchestrator.core.jira_parent_child_sync_publishers import (
+    post_engineering_clarification_questions_to_jira as _post_engineering_clarification_questions_to_jira,
+)
+from orchestrator.core.parent_planning_clarification_service import (
+    ClarificationPublishEffects,
+    ParentPlanningClarificationService,
 )
 from orchestrator.core.parent_feature_brief_store import resolve_parent_feature_brief
 from orchestrator.core.workflow_operation_service import (
@@ -229,6 +236,7 @@ def _execute_jira_child_fanout(
         context=sync_context,
         seed_issues_with_runtime_fn=seed_issues_with_runtime_fn,
     )
+    clarification_service = ParentPlanningClarificationService()
 
     mark_workflow_running(workflow=context.workflow, now=_now())
 
@@ -315,13 +323,15 @@ def _execute_jira_child_fanout(
             planning_result=planning_result,
             seed_data=seed_data,
         )
-        _project_engineering_clarification_if_needed(
-            context=context,
-            settings=context.settings,
+        clarification_service.ensure_active_clarification(
+            issue_key=context.workflow.issue_key,
             questions=questions,
-            create_jira_comment_fn=create_jira_comment,
+            publisher=_WorkflowEngineeringClarificationPublisher(
+                context=context,
+                create_jira_comment_fn=create_jira_comment,
+            ),
         )
-        message = _build_missing_input_message(
+        message = clarification_service.build_missing_input_message(
             issue_key=context.workflow.issue_key,
             questions=questions,
         )
@@ -355,87 +365,100 @@ def _execute_jira_child_fanout(
     )
 
 
-def _clarification_questions_for_fanout(*, planning_result, seed_data: dict[str, Any]) -> list[str]:
-    questions = [
-        str(value).strip()
-        for value in getattr(planning_result, "open_behavior_questions", ()) or ()
-        if str(value).strip()
-    ]
-    if questions:
-        return questions
-    return [
-        str(value).strip()
-        for value in list(seed_data.get("questions", []) or [])
-        if str(value).strip()
-    ]
-
-
-def _build_missing_input_message(*, issue_key: str, questions: list[str]) -> str:
-    header = f"Answer the product clarification on Jira issue {issue_key}, then retry engineering child fanout."
-    if not questions:
-        return header
-    prompt = "\n".join(f"- {question}" for question in questions)
-    return f"{header}\n\nQuestions to answer:\n{prompt}"
-
-
-def _project_engineering_clarification_if_needed(
+def _clarification_questions_for_fanout(
     *,
-    context: _OperationExecutionContext,
-    settings: Settings,
-    questions: list[str],
-    create_jira_comment_fn,
-) -> None:
-    if not questions:
-        return
-    request_id = f"engineering-clarification:{context.workflow.issue_key}"
-    if not has_matching_active_clarification_state(
-        session=context.session,
-        tenant_id=context.tenant.tenant_id,
-        issue_key=context.workflow.issue_key,
-        context_type=FOLLOWUP_CONTEXT_ENGINEERING_CLARIFICATION,
-        questions=questions,
-    ):
+    planning_result,
+    seed_data: dict[str, Any],
+) -> tuple[ClarificationQuestion, ...]:
+    questions = ClarificationQuestionSet.from_values(
+        getattr(planning_result, "open_behavior_questions", ()) or ()
+    )
+    if questions:
+        return questions.questions
+    return ClarificationQuestionSet.from_values(list(seed_data.get("questions", []) or [])).questions
+
+
+class _WorkflowEngineeringClarificationPublisher:
+    def __init__(
+        self,
+        *,
+        context: _OperationExecutionContext,
+        create_jira_comment_fn,
+    ) -> None:
+        self._context = context
+        self._create_jira_comment_fn = create_jira_comment_fn
+
+    def has_active_clarification(
+        self,
+        *,
+        issue_key: str,
+        questions: tuple[ClarificationQuestion, ...],
+    ) -> bool:
+        return has_matching_active_clarification_state(
+            session=self._context.session,
+            tenant_id=self._context.tenant.tenant_id,
+            issue_key=issue_key,
+            context_type=FOLLOWUP_CONTEXT_ENGINEERING_CLARIFICATION,
+            questions=questions,
+        )
+
+    def publish_clarification(
+        self,
+        *,
+        issue_key: str,
+        questions: tuple[ClarificationQuestion, ...],
+    ) -> ClarificationPublishEffects:
         projection = upsert_clarification_projection(
-            session=context.session,
+            session=self._context.session,
             spec=ClarificationProjectionSpec(
-                tenant_id=context.tenant.tenant_id,
-                project_id=context.project.project_id,
+                tenant_id=self._context.tenant.tenant_id,
+                project_id=self._context.project.project_id,
                 context_type=FOLLOWUP_CONTEXT_ENGINEERING_CLARIFICATION,
-                issue_key=context.workflow.issue_key,
-                request_id=request_id,
+                issue_key=issue_key,
+                request_id=f"engineering-clarification:{issue_key}",
                 origin_command="clarify",
                 questions=questions,
-                metadata={"questions": questions, "source": "workflow_operation_retry"},
+                metadata={
+                    "questions": ClarificationQuestionSet(questions=questions).to_payload(),
+                    "source": "workflow_operation_retry",
+                },
             ),
         )
-        created_comment, error = _post_engineering_clarification_questions_to_jira(
-            session=context.session,
-            tenant=context.tenant,
-            issue_key=context.workflow.issue_key,
-            payload={},
-            questions=questions,
-            settings=settings,
-            create_jira_comment_fn=create_jira_comment_fn,
+        created_comment = None
+        error = None
+        if not bool(getattr(projection, "already_projected", False)):
+            created_comment, error = _post_engineering_clarification_questions_to_jira(
+                session=self._context.session,
+                tenant=self._context.tenant,
+                issue_key=issue_key,
+                payload={},
+                questions=questions,
+                settings=self._context.settings,
+                create_jira_comment_fn=self._create_jira_comment_fn,
+            )
+            if error is None and created_comment is not None:
+                comment_operation = upsert_workflow_operation(
+                    self._context.session,
+                    workflow_id=self._context.workflow.workflow_id,
+                    operation_type="jira_comment_projection",
+                    idempotency_key="workflow-definition:jira_comment_projection",
+                    target_system="jira",
+                    target_ref=self._context.workflow.issue_key,
+                    summary="Posted engineering clarification questions to Jira.",
+                )
+                comment_attempt = start_workflow_operation_attempt(self._context.session, operation=comment_operation)
+                complete_workflow_operation(
+                    self._context.session,
+                    operation=comment_operation,
+                    attempt=comment_attempt,
+                    summary="Posted engineering clarification questions to Jira.",
+                )
+        jira_comment_created = error is None and created_comment is not None
+        return ClarificationPublishEffects(
+            state_recorded=True,
+            jira_comment_created=jira_comment_created,
+            discord_followup_created=False,
         )
-        if error is None and created_comment is not None:
-            comment_operation = upsert_workflow_operation(
-                context.session,
-                workflow_id=context.workflow.workflow_id,
-                operation_type="jira_comment_projection",
-                idempotency_key="workflow-definition:jira_comment_projection",
-                target_system="jira",
-                target_ref=context.workflow.issue_key,
-                summary="Posted engineering clarification questions to Jira.",
-            )
-            comment_attempt = start_workflow_operation_attempt(context.session, operation=comment_operation)
-            complete_workflow_operation(
-                context.session,
-                operation=comment_operation,
-                attempt=comment_attempt,
-                summary="Posted engineering clarification questions to Jira.",
-            )
-            metadata = dict(projection.metadata)
-            metadata["jira_comment_posted"] = True
 
 
 def execute_workflow_operation_retry(

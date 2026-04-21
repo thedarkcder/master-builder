@@ -17,7 +17,11 @@ recommendations must be architecture recommendations only.
 required_tasks must be behavior-first functional requirement slices that can become engineering child tickets.
 Each required_task should describe the owned behavior outcome, not an internal code chore.
 open_behavior_questions must contain only product-safe questions for unresolved behavior or non-functional decisions.
+Each open_behavior_questions entry must be an object with:
+- question
+- why_it_matters
 acceptance_impacts must describe observable effects on the parent acceptance criteria.
 mermaid_diagram must be a valid Mermaid flowchart that captures the recommended system shape, or an empty string if the brief is too incomplete to draw safely.
 If you ask a question, keep it narrow and include a short example in the question text.
+why_it_matters must explain why the missing answer changes planning, architecture, security, validation, or release behavior.
 If no behavior ambiguity remains, open_behavior_questions must be an empty array.

@@ -6,6 +6,7 @@ from typing import Any, Callable, Iterable, Mapping
 
 from sqlalchemy.orm import Session
 
+from orchestrator.core.clarification_questions import ClarificationQuestion, ClarificationQuestionSet
 from orchestrator.core.codex_runtime import CodexRuntime
 from orchestrator.core.decision_engine import DecisionEngineResult
 from orchestrator.core.decision_reply_service import unresolved_question_feedback_for_cycle
@@ -20,10 +21,10 @@ class DecisionClarificationPresentation:
     mode: DecisionClassification
     recheck_required: bool
     decision_gate_reason: str | None
-    decision_gate_questions: tuple[str, ...]
+    decision_gate_questions: tuple[ClarificationQuestion, ...]
     gtd_missing_criteria: tuple[str, ...]
-    gtd_questions: tuple[str, ...]
-    questions: tuple[str, ...]
+    gtd_questions: tuple[ClarificationQuestion, ...]
+    questions: tuple[ClarificationQuestion, ...]
     question_feedback: tuple[dict[str, str], ...]
     missing_slots: tuple[str, ...]
     auto_resolved_slots: tuple[str, ...]
@@ -121,14 +122,9 @@ def build_decision_clarification_presentation(
 
     decision_gate = getattr(pre_check, "decision_gate", None)
     decision_gate_reason = str(getattr(decision_gate, "reason", "") or "").strip() or None
-    decision_gate_questions = tuple(
-        question
-        for question in (
-            str(question_value).strip()
-            for question_value in (getattr(decision_gate, "questions", ()) or ())
-        )
-        if question
-    )
+    decision_gate_questions = ClarificationQuestionSet.from_values(
+        getattr(decision_gate, "questions", ()) or ()
+    ).questions
     gtd_missing_criteria = tuple(
         criteria
         for criteria in (
@@ -137,27 +133,20 @@ def build_decision_clarification_presentation(
         )
         if criteria
     )
-    gtd_questions = tuple(
-        question
-        for question in (
-            str(question_value).strip()
-            for question_value in (getattr(pre_check, "gtd_clarification_questions", ()) or ())
-        )
-        if question
-    )
+    gtd_questions = ClarificationQuestionSet.from_values(
+        getattr(pre_check, "gtd_clarification_questions", ()) or ()
+    ).questions
 
     if mode in {DecisionClassification.DECISION_GATE, DecisionClassification.BOTH} and normalized_feedback:
-        questions = _dedupe(
-            tuple(
-                question_text
-                for question_text in (
-                    str(item.get("question_text") or "").strip() for item in normalized_feedback
-                )
-                if question_text
-            )
-        )
+        questions = ClarificationQuestionSet.from_values(
+            {
+                "question": str(item.get("question_text") or "").strip(),
+                "reason": str(item.get("note") or "").strip(),
+            }
+            for item in normalized_feedback
+        ).questions
     else:
-        questions = _dedupe((*decision_gate_questions, *gtd_questions))
+        questions = ClarificationQuestionSet.from_values((*decision_gate_questions, *gtd_questions)).questions
 
     return DecisionClarificationPresentation(
         mode=mode,
@@ -178,14 +167,14 @@ def build_decision_clarification_presentation(
 def build_decision_clarification_response_fields(
     *,
     presentation: DecisionClarificationPresentation,
-    questions: Iterable[str] | None = None,
+    questions: Iterable[ClarificationQuestion] | None = None,
 ) -> dict[str, object]:
-    effective_questions = _dedupe(questions or presentation.questions)
+    effective_questions = ClarificationQuestionSet.from_values(questions or presentation.questions)
     return {
         "classification": presentation.mode.value,
         "decision_gate_reason": presentation.decision_gate_reason,
         "gtd_missing_criteria": list(presentation.gtd_missing_criteria),
-        "questions": list(effective_questions),
+        "questions": list(effective_questions.prompts),
         "question_feedback": list(presentation.question_feedback),
         "missing_slots": list(presentation.missing_slots),
         "auto_resolved_slots": list(presentation.auto_resolved_slots),
@@ -204,16 +193,17 @@ def present_discord_decision_clarification(
             reason=presentation.decision_gate_reason or "clarification required",
             question_feedback=presentation.question_feedback,
         )
-        generated_questions = list(presentation.questions)
+        generated_questions = presentation.questions
     elif presentation.requires_decision_gate_feedback:
         message = render_decision_gate_remaining_questions_message(
             issue_key=issue_key,
             reason=presentation.decision_gate_reason or "clarification required",
             questions=presentation.decision_gate_questions,
         )
-        generated_questions = list(presentation.questions)
+        generated_questions = presentation.questions
     else:
         message, generated_questions = precheck_message_builder()
+        generated_questions = ClarificationQuestionSet.from_values(generated_questions).questions
     return DiscordDecisionClarificationPresentation(
         message=message,
         response_fields=build_decision_clarification_response_fields(
@@ -227,16 +217,16 @@ def render_decision_gate_remaining_questions_message(
     *,
     issue_key: str,
     reason: str,
-    questions: Iterable[str],
+    questions: Iterable[object],
 ) -> str:
     lines = [
         f"Decision Gate still needs clarification for `{issue_key}`.",
         f"Reason: {reason}",
     ]
-    normalized_questions = [str(item).strip() for item in questions if str(item).strip()]
+    normalized_questions = ClarificationQuestionSet.from_values(questions)
     if normalized_questions:
         lines.append("Please reply with:")
-        lines.extend(f"- {question}" for question in normalized_questions[:5])
+        lines.extend(normalized_questions.render_lines(limit=5))
     return "\n".join(lines)
 
 
@@ -283,15 +273,3 @@ def _normalize_question_feedback(
             }
         )
     return tuple(normalized)
-
-
-def _dedupe(items: Iterable[str]) -> tuple[str, ...]:
-    ordered: list[str] = []
-    seen: set[str] = set()
-    for value in items:
-        normalized = str(value).strip()
-        if not normalized or normalized in seen:
-            continue
-        seen.add(normalized)
-        ordered.append(normalized)
-    return tuple(ordered)

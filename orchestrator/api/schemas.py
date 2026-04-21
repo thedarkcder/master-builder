@@ -1287,6 +1287,11 @@ class WorkflowRead(BaseModel):
     finished_at: datetime | None
 
 
+class WorkflowOperationRetryRead(BaseModel):
+    workflow: WorkflowRead
+    started_attempt: WorkflowOperationAttemptRead | None = None
+
+
 class WorkflowAttemptCreateRequest(BaseModel):
     mode: str = Field(pattern="^(fresh|restart|resume)$")
     checkpoint_kind: str | None = Field(default=None, pattern="^(pm|execution)$")
