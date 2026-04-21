@@ -4,7 +4,10 @@ import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { Button } from "@/components/ui/button";
-import { type WorkflowStepAttemptTranscriptRecord, type WorkflowStepTranscriptRecord } from "@/lib/api";
+import {
+  type WorkflowOperationAttemptRecord,
+  type WorkflowStepAttemptTranscriptRecord,
+} from "@/lib/api";
 import { formatTimeAgo, formatTimestamp } from "@/lib/datetime";
 import { cn } from "@/lib/utils";
 
@@ -25,68 +28,62 @@ function statusTone(status: string): string {
   return "border-slate-300 bg-slate-50 text-slate-700";
 }
 
-function firstAction(transcript: WorkflowStepTranscriptRecord | null): string | null {
-  return transcript?.attempts[0]?.recommended_next_action?.trim() || null;
+function attemptDuration(attempt: WorkflowOperationAttemptRecord): number | null {
+  if (!attempt.started_at || !attempt.finished_at) {
+    return null;
+  }
+  return Math.max(0, new Date(attempt.finished_at).getTime() - new Date(attempt.started_at).getTime());
 }
 
 export function ExecutionObservabilityDrawer({
   open,
   operationLabel,
+  attempts,
+  selectedAttemptId,
+  onSelectAttemptId,
   activeView,
   onViewChange,
   onRefresh,
   onClose,
-  telemetryTranscript,
-  auditTranscript,
-  loading,
+  currentStatus,
+  telemetryAttempt,
+  auditAttempt,
+  waitingForNewAttempt,
+  telemetryLoading,
+  auditLoading,
   error,
 }: {
   open: boolean;
   operationLabel: string;
+  attempts: WorkflowOperationAttemptRecord[];
+  selectedAttemptId: string | null;
+  onSelectAttemptId: (attemptId: string | null) => void;
   activeView: "telemetry" | "audit";
   onViewChange: (view: "telemetry" | "audit") => void;
   onRefresh: () => void;
   onClose: () => void;
-  telemetryTranscript: WorkflowStepTranscriptRecord | null;
-  auditTranscript: WorkflowStepTranscriptRecord | null;
-  loading: boolean;
+  currentStatus: string;
+  telemetryAttempt: WorkflowStepAttemptTranscriptRecord | null;
+  auditAttempt: WorkflowStepAttemptTranscriptRecord | null;
+  waitingForNewAttempt: boolean;
+  telemetryLoading: boolean;
+  auditLoading: boolean;
   error: string | null;
 }) {
   const [mounted, setMounted] = useState(false);
-  const [selectedAttemptId, setSelectedAttemptId] = useState<string | null>(null);
 
   useEffect(() => {
     setMounted(true);
     return () => setMounted(false);
   }, []);
 
-  const transcript = activeView === "telemetry" ? telemetryTranscript : auditTranscript;
-  const attempts = transcript?.attempts ?? [];
-  const latestAttemptId = attempts[0]?.attempt_id ?? null;
-
-  useEffect(() => {
-    if (!open) {
-      setSelectedAttemptId(null);
-      return;
-    }
-    if (!attempts.length) {
-      setSelectedAttemptId(null);
-      return;
-    }
-    if (activeView === "telemetry" && latestAttemptId && selectedAttemptId !== latestAttemptId) {
-      setSelectedAttemptId(latestAttemptId);
-      return;
-    }
-    if (selectedAttemptId && attempts.some((attempt) => attempt.attempt_id === selectedAttemptId)) {
-      return;
-    }
-    setSelectedAttemptId(latestAttemptId);
-  }, [activeView, attempts, latestAttemptId, open, selectedAttemptId]);
-
-  const selectedAttempt = useMemo(
-    () => attempts.find((attempt) => attempt.attempt_id === selectedAttemptId) ?? attempts[0] ?? null,
+  const selectedPersistedAttempt = useMemo(
+    () => attempts.find((attempt) => attempt.attempt_id === selectedAttemptId) ?? null,
     [attempts, selectedAttemptId],
   );
+  const renderedAttempt = activeView === "telemetry" ? telemetryAttempt : auditAttempt;
+  const loading = activeView === "telemetry" ? telemetryLoading : auditLoading;
+  const nextAction = activeView === "audit" ? auditAttempt?.recommended_next_action?.trim() || null : null;
 
   if (!open || !mounted) {
     return null;
@@ -105,13 +102,11 @@ export function ExecutionObservabilityDrawer({
               <p className="text-sm text-muted-foreground">Execution step</p>
               <div className="flex flex-wrap items-center gap-2">
                 <h2 className="text-xl font-semibold">{operationLabel}</h2>
-                {transcript?.current_status ? (
-                  <span className={cn("rounded-full border px-2 py-0.5 text-xs font-medium", statusTone(transcript.current_status))}>
-                    {transcript.current_status.replace(/_/g, " ")}
-                  </span>
-                ) : null}
+                <span className={cn("rounded-full border px-2 py-0.5 text-xs font-medium", statusTone(currentStatus))}>
+                  {currentStatus.replace(/_/g, " ")}
+                </span>
               </div>
-              {firstAction(transcript) ? <p className="text-sm text-muted-foreground">{firstAction(transcript)}</p> : null}
+              {nextAction ? <p className="text-sm text-muted-foreground">{nextAction}</p> : null}
             </div>
             <div className="flex items-center gap-2">
               <Button variant="outline" size="sm" onClick={onRefresh} disabled={loading}>
@@ -154,16 +149,23 @@ export function ExecutionObservabilityDrawer({
           <div className="grid h-full min-h-0 grid-cols-[240px_minmax(0,1fr)]">
             <div className="min-h-0 overflow-y-auto border-r bg-muted/20 px-4 py-4">
               <div className="space-y-2">
-                {!loading && !attempts.length ? (
-                  <p className="rounded-xl border bg-background px-3 py-4 text-sm text-muted-foreground">No transcript recorded for this step yet.</p>
+                {waitingForNewAttempt ? (
+                  <p className="rounded-xl border bg-background px-3 py-4 text-sm text-muted-foreground">
+                    Waiting for the new attempt to start…
+                  </p>
+                ) : null}
+                {!attempts.length && !waitingForNewAttempt ? (
+                  <p className="rounded-xl border bg-background px-3 py-4 text-sm text-muted-foreground">
+                    No attempts recorded for this step yet.
+                  </p>
                 ) : null}
                 {attempts.map((attempt) => {
-                  const selected = selectedAttempt?.attempt_id === attempt.attempt_id;
+                  const selected = selectedAttemptId === attempt.attempt_id;
                   return (
                     <button
                       key={attempt.attempt_id}
                       type="button"
-                      onClick={() => setSelectedAttemptId(attempt.attempt_id)}
+                      onClick={() => onSelectAttemptId(attempt.attempt_id)}
                       className={cn(
                         "w-full rounded-xl border bg-background px-3 py-3 text-left transition-colors",
                         selected ? "border-primary ring-1 ring-primary/20" : "hover:border-border",
@@ -176,11 +178,8 @@ export function ExecutionObservabilityDrawer({
                         </span>
                       </div>
                       <p className="mt-1 text-xs text-muted-foreground" title={attempt.finished_at ? formatTimestamp(attempt.finished_at) : undefined}>
-                        {attempt.finished_at ? formatTimeAgo(attempt.finished_at) : attempt.started_at ? "In progress" : "Not started"}
+                        {attempt.finished_at ? formatTimeAgo(attempt.finished_at) : attempt.started_at ? "In progress" : "Waiting to start"}
                       </p>
-                      {attempt.recommended_next_action ? (
-                        <p className="mt-2 line-clamp-3 text-xs text-muted-foreground">{attempt.recommended_next_action}</p>
-                      ) : null}
                     </button>
                   );
                 })}
@@ -189,41 +188,69 @@ export function ExecutionObservabilityDrawer({
 
             <div className="min-h-0 overflow-y-auto px-6 py-4">
               {error ? <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p> : null}
-              {loading ? <p className="rounded-xl border px-4 py-3 text-sm text-muted-foreground">Loading transcript…</p> : null}
-              {!loading && selectedAttempt ? (
+              {loading ? <p className="rounded-xl border px-4 py-3 text-sm text-muted-foreground">Loading…</p> : null}
+              {!loading && !selectedPersistedAttempt && waitingForNewAttempt ? (
+                <p className="rounded-xl border px-4 py-3 text-sm text-muted-foreground">
+                  The new attempt will appear here as soon as it is persisted.
+                </p>
+              ) : null}
+              {!loading && selectedPersistedAttempt ? (
                 <div className="space-y-5">
                   <section className="rounded-xl border bg-muted/20 p-4">
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-base font-semibold">Attempt {selectedAttempt.attempt_number}</span>
-                      <span className={cn("rounded-full border px-2 py-0.5 text-xs font-medium", statusTone(selectedAttempt.status))}>
-                        {selectedAttempt.status.replace(/_/g, " ")}
+                      <span className="text-base font-semibold">Attempt {selectedPersistedAttempt.attempt_number}</span>
+                      <span className={cn("rounded-full border px-2 py-0.5 text-xs font-medium", statusTone(selectedPersistedAttempt.status))}>
+                        {selectedPersistedAttempt.status.replace(/_/g, " ")}
                       </span>
                     </div>
                     <div className="mt-3 grid gap-3 text-sm md:grid-cols-2">
                       <div>
                         <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Started</p>
-                        <p className="mt-1">{selectedAttempt.started_at ? formatTimeAgo(selectedAttempt.started_at) : "—"}</p>
+                        <p className="mt-1">
+                          {selectedPersistedAttempt.started_at ? formatTimeAgo(selectedPersistedAttempt.started_at) : "—"}
+                        </p>
                       </div>
                       <div>
                         <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Finished</p>
-                        <p className="mt-1">{selectedAttempt.finished_at ? formatTimeAgo(selectedAttempt.finished_at) : "—"}</p>
+                        <p className="mt-1">
+                          {selectedPersistedAttempt.finished_at ? formatTimeAgo(selectedPersistedAttempt.finished_at) : "—"}
+                        </p>
                       </div>
                       <div>
                         <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Duration</p>
-                        <p className="mt-1">{selectedAttempt.duration_ms !== null ? `${selectedAttempt.duration_ms} ms` : "—"}</p>
+                        <p className="mt-1">
+                          {renderedAttempt?.duration_ms ?? attemptDuration(selectedPersistedAttempt) ?? "—"}
+                          {typeof (renderedAttempt?.duration_ms ?? attemptDuration(selectedPersistedAttempt)) === "number" ? " ms" : ""}
+                        </p>
                       </div>
                       <div>
-                        <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Next action</p>
-                        <p className="mt-1">{selectedAttempt.recommended_next_action || "—"}</p>
+                        <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
+                          {activeView === "telemetry" ? "Live status" : "Next action"}
+                        </p>
+                        <p className="mt-1">
+                          {activeView === "telemetry"
+                            ? selectedPersistedAttempt.status.replace(/_/g, " ")
+                            : nextAction || "—"}
+                        </p>
                       </div>
                     </div>
                   </section>
 
-                  {selectedAttempt.sections.map((section) => (
+                  {!renderedAttempt?.sections.length ? (
+                    <p className="rounded-xl border px-4 py-3 text-sm text-muted-foreground">
+                      {activeView === "telemetry"
+                        ? "No live telemetry has been recorded for this attempt yet."
+                        : "No audit history has been recorded for this attempt yet."}
+                    </p>
+                  ) : null}
+
+                  {renderedAttempt?.sections.map((section) => (
                     <section key={section.kind} className="space-y-3">
                       <div className="flex items-center justify-between gap-2">
                         <h3 className="text-sm font-semibold">{section.label}</h3>
-                        <span className="text-xs text-muted-foreground">{section.entries.length} entr{section.entries.length === 1 ? "y" : "ies"}</span>
+                        <span className="text-xs text-muted-foreground">
+                          {section.entries.length} entr{section.entries.length === 1 ? "y" : "ies"}
+                        </span>
                       </div>
                       <div className="space-y-3">
                         {section.entries.map((entry) => (
@@ -234,9 +261,7 @@ export function ExecutionObservabilityDrawer({
                                   {entry.level}
                                 </span>
                                 <span className="text-sm font-medium">{entry.title}</span>
-                                {entry.source_component ? (
-                                  <span className="text-xs text-muted-foreground">{entry.source_component}</span>
-                                ) : null}
+                                {entry.source_component ? <span className="text-xs text-muted-foreground">{entry.source_component}</span> : null}
                               </div>
                               <span className="text-xs text-muted-foreground" title={formatTimestamp(entry.recorded_at)}>
                                 {formatTimeAgo(entry.recorded_at)}

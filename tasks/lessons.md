@@ -1,6 +1,7 @@
 2026-04-21
 
 - When the user asks for the best final architecture, do not preserve transitional backward-compatible fallbacks by default. Make the authoritative contract explicit and remove compatibility layers unless the user explicitly asks for a staged migration.
+- When the same lifecycle rule is duplicated across workflow code, retry handlers, and transport integrations, do not stop at normalizing payload shapes. Introduce one application service that owns the rule and make transports/workflows depend on that service through narrow publisher ports.
 
 2026-03-23
 
@@ -263,3 +264,5 @@
 - 2026-04-21: Do not synthesize live telemetry from durable attempt state. If a step has no telemetry records, the telemetry view must stay empty instead of inventing attempt outcomes or recommended actions from audit/history data.
 - 2026-04-21: In live telemetry views, do not preserve a stale selected attempt when a newer retry attempt appears. The telemetry tab should snap to the latest active attempt by default so operators see the current run, not an older historical attempt.
 - 2026-04-21: Retry actions that create a new operation attempt must open the telemetry drawer and switch to the latest attempt automatically. Do not make operators click the same step again just to watch the retry they just triggered.
+- 2026-04-21: Never synthesize product-visible attempt rows from telemetry. `WorkflowOperationAttempt` is the only valid attempt identity; if live telemetry arrives before the UI can target it, fix the write/selection path instead of inventing a transcript-only attempt.
+- 2026-04-21: Do not drive a step drawer from the same transcript contract for both telemetry and audit. Live telemetry must be built from real-time attempt-scoped events, while audit must be loaded separately as durable evidence for the selected persisted attempt.

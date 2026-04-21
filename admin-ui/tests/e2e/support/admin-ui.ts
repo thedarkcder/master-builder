@@ -13,6 +13,7 @@ import type {
   RunLogEventRecord,
   RunRecord,
   RunStatus,
+  WorkflowOperationRetryResponseRecord,
   WorkflowRecord,
   WorkflowAttemptCreatePayload,
   AuthenticatedPrincipalRecord,
@@ -1030,7 +1031,12 @@ export async function mockTenantWorkflowApis(
         const operationId = decodeURIComponent(segments.at(-2) ?? "");
         options.onRetryOperation?.({ workflowId: executionId, operationId });
         currentWorkflow = options.retriedWorkflowResponse ?? currentWorkflow;
-        await fulfillJson(route, currentWorkflow);
+        const retriedOperation = currentWorkflow.operations.find((candidate) => candidate.operation_id === operationId);
+        const startedAttempt = [...(retriedOperation?.attempts ?? [])].sort((left, right) => right.attempt_number - left.attempt_number)[0] ?? null;
+        await fulfillJson(route, {
+          workflow: currentWorkflow,
+          started_attempt: startedAttempt,
+        } satisfies WorkflowOperationRetryResponseRecord);
       },
     },
     {
@@ -1056,10 +1062,45 @@ export async function mockTenantWorkflowApis(
     },
     {
       method: "GET",
+      pathname: /^\/api\/bff\/api\/admin\/workflows\/[^/]+\/operations\/[^/]+\/attempts\/[^/]+\/telemetry(?:\?.*)?$/,
+      handler: (route, url) => {
+        const segments = url.pathname.split("/");
+        const operationId = decodeURIComponent(segments.at(-4) ?? "");
+        return fulfillJson(route, options.telemetryEventsByOperationId?.[operationId] ?? []);
+      },
+    },
+    {
+      method: "GET",
       pathname: /^\/api\/bff\/api\/admin\/workflows\/[^/]+\/operations\/[^/]+\/telemetry(?:\?.*)?$/,
       handler: (route, url) => {
         const operationId = decodeURIComponent(url.pathname.split("/").at(-2) ?? "");
         return fulfillJson(route, options.telemetryEventsByOperationId?.[operationId] ?? []);
+      },
+    },
+    {
+      method: "GET",
+      pathname: /^\/api\/bff\/api\/admin\/workflows\/[^/]+\/operations\/[^/]+\/telemetry\/stream(?:\?.*)?$/,
+      handler: (route) =>
+        route.fulfill({
+          status: 200,
+          contentType: "application/x-ndjson",
+          body: "",
+        }),
+    },
+    {
+      method: "GET",
+      pathname: /^\/api\/bff\/api\/admin\/workflows\/[^/]+\/operations\/[^/]+\/attempts\/[^/]+\/audit(?:\?.*)?$/,
+      handler: (route, url) => {
+        const segments = url.pathname.split("/");
+        const operationId = decodeURIComponent(segments.at(-4) ?? "");
+        const attemptId = decodeURIComponent(segments.at(-2) ?? "");
+        const configured = options.auditTranscriptByOperationId?.[operationId];
+        if (configured && typeof configured === "object" && "attempts" in (configured as Record<string, unknown>)) {
+          const transcript = configured as { attempts?: Array<Record<string, unknown>> };
+          const attempt = transcript.attempts?.find((candidate) => candidate.attempt_id === attemptId) ?? null;
+          return fulfillJson(route, attempt ?? { attempt_id: attemptId, attempt_number: 0, status: "pending", sections: [] });
+        }
+        return fulfillJson(route, configured ?? { attempt_id: attemptId, attempt_number: 0, status: "pending", sections: [] });
       },
     },
     {

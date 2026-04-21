@@ -13,14 +13,20 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
   getWorkflow,
-  getWorkflowOperationTranscript,
+  getWorkflowOperationAttemptAudit,
+  listWorkflowOperationAttemptTelemetryEvents,
+  listWorkflowOperationTelemetryEvents,
   resumeWorkflowExecution,
   retryWorkflowOperation,
+  streamWorkflowOperationTelemetryEvents,
+  type WorkflowObservabilityEventRecord,
+  type WorkflowOperationAttemptRecord,
   type WorkflowOperationRecord,
-  type WorkflowStepTranscriptRecord,
+  type WorkflowStepAttemptTranscriptRecord,
   type WorkflowRecord,
 } from "@/lib/api";
 import { formatTimeAgo, formatTimestamp } from "@/lib/datetime";
+import { buildTelemetryAttemptView } from "@/lib/workflow-observability";
 import { cn } from "@/lib/utils";
 
 function latestAttempt(operation: WorkflowOperationRecord) {
@@ -29,6 +35,27 @@ function latestAttempt(operation: WorkflowOperationRecord) {
     const rightTime = new Date(right.finished_at ?? right.started_at ?? 0).getTime();
     return rightTime - leftTime;
   })[0] ?? null;
+}
+
+function sortAttempts(attempts: WorkflowOperationAttemptRecord[]): WorkflowOperationAttemptRecord[] {
+  return [...attempts].sort((left, right) => right.attempt_number - left.attempt_number);
+}
+
+function mergeObservabilityEvents(
+  current: WorkflowObservabilityEventRecord[],
+  incoming: WorkflowObservabilityEventRecord[],
+): WorkflowObservabilityEventRecord[] {
+  const byId = new Map<string, WorkflowObservabilityEventRecord>();
+  for (const event of [...current, ...incoming]) {
+    byId.set(event.event_id, event);
+  }
+  return [...byId.values()].sort((left, right) => {
+    const timeDelta = new Date(left.recorded_at).getTime() - new Date(right.recorded_at).getTime();
+    if (timeDelta !== 0) {
+      return timeDelta;
+    }
+    return left.event_id.localeCompare(right.event_id);
+  });
 }
 
 function attemptFailure(attempt: ReturnType<typeof latestAttempt>) {
@@ -66,11 +93,16 @@ export default function TenantExecutionDetailPage() {
   const [activeTab, setActiveTab] = useState<"overview" | "step-recovery" | "execution-path">("overview");
   const [linksMenuOpen, setLinksMenuOpen] = useState(false);
   const [selectedOperationId, setSelectedOperationId] = useState<string | null>(null);
+  const [selectedAttemptId, setSelectedAttemptId] = useState<string | null>(null);
   const [observabilityView, setObservabilityView] = useState<"telemetry" | "audit">("telemetry");
-  const [telemetryTranscript, setTelemetryTranscript] = useState<WorkflowStepTranscriptRecord | null>(null);
-  const [auditTranscript, setAuditTranscript] = useState<WorkflowStepTranscriptRecord | null>(null);
-  const [observabilityLoading, setObservabilityLoading] = useState(false);
+  const [telemetryEvents, setTelemetryEvents] = useState<WorkflowObservabilityEventRecord[]>([]);
+  const [auditAttempt, setAuditAttempt] = useState<WorkflowStepAttemptTranscriptRecord | null>(null);
+  const [telemetryLoading, setTelemetryLoading] = useState(false);
+  const [auditLoading, setAuditLoading] = useState(false);
   const [observabilityError, setObservabilityError] = useState<string | null>(null);
+  const [telemetryRefreshNonce, setTelemetryRefreshNonce] = useState(0);
+  const [auditRefreshNonce, setAuditRefreshNonce] = useState(0);
+  const [awaitingNewAttemptForOperationId, setAwaitingNewAttemptForOperationId] = useState<string | null>(null);
 
   const loadWorkflow = useCallback(async () => {
     if (!credentials) return;
@@ -79,9 +111,11 @@ export default function TenantExecutionDetailPage() {
       const payload = await getWorkflow(credentials, executionId);
       setWorkflow(payload);
       setStatusLine("");
+      return payload;
     } catch (error) {
       setStatusLine(`Failed to load execution: ${(error as Error).message}`);
       setWorkflow(null);
+      return null;
     } finally {
       setLoading(false);
     }
@@ -100,6 +134,18 @@ export default function TenantExecutionDetailPage() {
     () => workflow?.operations.find((operation) => operation.operation_id === selectedOperationId) ?? null,
     [selectedOperationId, workflow?.operations],
   );
+  const selectedOperationAttempts = useMemo(
+    () => (selectedOperation ? sortAttempts(selectedOperation.attempts) : []),
+    [selectedOperation],
+  );
+  const selectedAttempt = useMemo(
+    () => selectedOperationAttempts.find((attempt) => attempt.attempt_id === selectedAttemptId) ?? null,
+    [selectedAttemptId, selectedOperationAttempts],
+  );
+  const telemetryAttemptView = useMemo(
+    () => (selectedAttempt ? buildTelemetryAttemptView(selectedAttempt, telemetryEvents) : null),
+    [selectedAttempt, telemetryEvents],
+  );
   const flowNodes = useMemo(
     () =>
       (workflow?.operations ?? []).map((operation) => {
@@ -116,51 +162,171 @@ export default function TenantExecutionDetailPage() {
     [workflow?.operations],
   );
 
-  const loadOperationObservability = useCallback(
-    async (operation: WorkflowOperationRecord, options: { silent?: boolean } = {}) => {
-      if (!credentials || !workflow) return;
-      if (!options.silent) {
-        setObservabilityLoading(true);
+  const refreshWorkflowAttemptState = useCallback(
+    async (operationId: string, attemptId: string) => {
+      if (!credentials) {
+        return;
       }
-      setObservabilityError(null);
       try {
-        const [telemetry, audit] = await Promise.all([
-          getWorkflowOperationTranscript(credentials, workflow.execution_id, operation.operation_id, "telemetry", { limit: 500 }),
-          getWorkflowOperationTranscript(credentials, workflow.execution_id, operation.operation_id, "audit", { limit: 500 }),
-        ]);
-        setTelemetryTranscript(telemetry);
-        setAuditTranscript(audit);
-      } catch (error) {
-        setObservabilityError(`Failed to load step observability: ${(error as Error).message}`);
-      } finally {
-        if (!options.silent) {
-          setObservabilityLoading(false);
+        const payload = await getWorkflow(credentials, executionId);
+        setWorkflow(payload);
+        const operation = payload.operations.find((candidate) => candidate.operation_id === operationId) ?? null;
+        if (operation?.attempts.some((attempt) => attempt.attempt_id === attemptId)) {
+          setSelectedAttemptId(attemptId);
+          setAwaitingNewAttemptForOperationId((current) => (current === operationId ? null : current));
         }
+      } catch (error) {
+        setObservabilityError(`Failed to refresh attempts: ${(error as Error).message}`);
       }
     },
-    [credentials, workflow],
+    [credentials, executionId],
   );
 
-  const openOperationDrawer = useCallback(
-    async (operation: WorkflowOperationRecord) => {
-      setSelectedOperationId(operation.operation_id);
-      setObservabilityView("telemetry");
-      setTelemetryTranscript(null);
-      setAuditTranscript(null);
-      await loadOperationObservability(operation);
-    },
-    [loadOperationObservability],
-  );
+  const openOperationDrawer = useCallback((operation: WorkflowOperationRecord) => {
+    setSelectedOperationId(operation.operation_id);
+    setSelectedAttemptId(latestAttempt(operation)?.attempt_id ?? null);
+    setAwaitingNewAttemptForOperationId(null);
+    setObservabilityView("telemetry");
+    setTelemetryEvents([]);
+    setAuditAttempt(null);
+    setObservabilityError(null);
+    setTelemetryRefreshNonce((value) => value + 1);
+    setAuditRefreshNonce((value) => value + 1);
+  }, []);
+
+  useEffect(() => {
+    if (!selectedOperation) {
+      setSelectedAttemptId(null);
+      return;
+    }
+    if (selectedAttemptId && selectedOperationAttempts.some((attempt) => attempt.attempt_id === selectedAttemptId)) {
+      return;
+    }
+    if (awaitingNewAttemptForOperationId === selectedOperation.operation_id) {
+      setSelectedAttemptId(null);
+      return;
+    }
+    setSelectedAttemptId(selectedOperationAttempts[0]?.attempt_id ?? null);
+  }, [awaitingNewAttemptForOperationId, selectedAttemptId, selectedOperation, selectedOperationAttempts]);
+
+  useEffect(() => {
+    setTelemetryEvents([]);
+    setAuditAttempt(null);
+  }, [selectedAttemptId, selectedOperationId]);
 
   useEffect(() => {
     if (!selectedOperation || !credentials || !workflow || observabilityView !== "telemetry") {
       return;
     }
-    const handle = window.setInterval(() => {
-      void loadOperationObservability(selectedOperation, { silent: true });
-    }, 1500);
-    return () => window.clearInterval(handle);
-  }, [credentials, loadOperationObservability, observabilityView, selectedOperation, workflow]);
+    let disposed = false;
+    const controller = new AbortController();
+    const operationId = selectedOperation.operation_id;
+    const activeAttemptId = selectedAttemptId;
+    setTelemetryLoading(true);
+    setObservabilityError(null);
+
+    const loadSnapshot = async () => {
+      try {
+        const snapshot = activeAttemptId
+          ? await listWorkflowOperationAttemptTelemetryEvents(
+              credentials,
+              workflow.execution_id,
+              operationId,
+              activeAttemptId,
+              { limit: 500 },
+            )
+          : await listWorkflowOperationTelemetryEvents(credentials, workflow.execution_id, operationId, { limit: 500 });
+        if (disposed) {
+          return;
+        }
+        setTelemetryEvents(snapshot);
+      } catch (error) {
+        if (!disposed) {
+          setObservabilityError(`Failed to load live telemetry: ${(error as Error).message}`);
+        }
+      } finally {
+        if (!disposed) {
+          setTelemetryLoading(false);
+        }
+      }
+    };
+
+    const handleEvent = (event: WorkflowObservabilityEventRecord) => {
+      if (disposed) {
+        return;
+      }
+      setTelemetryLoading(false);
+      setTelemetryEvents((current) => mergeObservabilityEvents(current, [event]));
+      if (
+        !activeAttemptId &&
+        awaitingNewAttemptForOperationId === operationId &&
+        event.event_kind === "workflow_operation_attempt_started" &&
+        event.attempt_id
+      ) {
+        void refreshWorkflowAttemptState(operationId, event.attempt_id);
+      }
+    };
+
+    void loadSnapshot();
+    void streamWorkflowOperationTelemetryEvents(credentials, workflow.execution_id, operationId, handleEvent, {
+      attemptId: activeAttemptId ?? undefined,
+      signal: controller.signal,
+    }).catch((error) => {
+      if (disposed || controller.signal.aborted) {
+        return;
+      }
+      setObservabilityError(`Failed to stream live telemetry: ${(error as Error).message}`);
+      setTelemetryLoading(false);
+    });
+
+    return () => {
+      disposed = true;
+      controller.abort();
+    };
+  }, [
+    awaitingNewAttemptForOperationId,
+    credentials,
+    observabilityView,
+    refreshWorkflowAttemptState,
+    selectedAttemptId,
+    selectedOperation,
+    telemetryRefreshNonce,
+    workflow,
+  ]);
+
+  useEffect(() => {
+    if (!selectedOperation || !selectedAttemptId || !credentials || !workflow || observabilityView !== "audit") {
+      return;
+    }
+    let disposed = false;
+    setAuditLoading(true);
+    setObservabilityError(null);
+    void getWorkflowOperationAttemptAudit(
+      credentials,
+      workflow.execution_id,
+      selectedOperation.operation_id,
+      selectedAttemptId,
+      { limit: 500 },
+    )
+      .then((attempt) => {
+        if (!disposed) {
+          setAuditAttempt(attempt);
+        }
+      })
+      .catch((error) => {
+        if (!disposed) {
+          setObservabilityError(`Failed to load audit history: ${(error as Error).message}`);
+        }
+      })
+      .finally(() => {
+        if (!disposed) {
+          setAuditLoading(false);
+        }
+      });
+    return () => {
+      disposed = true;
+    };
+  }, [auditRefreshNonce, credentials, observabilityView, selectedAttemptId, selectedOperation, workflow]);
 
   async function handleWorkflowAction() {
     if (!credentials || !workflow) {
@@ -187,21 +353,27 @@ export default function TenantExecutionDetailPage() {
       return;
     }
     setSelectedOperationId(operation.operation_id);
+    setSelectedAttemptId(null);
+    setAwaitingNewAttemptForOperationId(operation.operation_id);
     setObservabilityView("telemetry");
-    setTelemetryTranscript(null);
-    setAuditTranscript(null);
+    setTelemetryEvents([]);
+    setAuditAttempt(null);
     setObservabilityError(null);
-    setObservabilityLoading(true);
+    setTelemetryLoading(true);
+    setAuditLoading(false);
+    setTelemetryRefreshNonce((value) => value + 1);
     setRetryingOperationId(operation.operation_id);
     try {
-      const refreshedWorkflow = await retryWorkflowOperation(credentials, workflow.execution_id, operation.operation_id);
-      setWorkflow(refreshedWorkflow);
-      const refreshedOperation =
-        refreshedWorkflow.operations.find((candidate) => candidate.operation_id === operation.operation_id) ?? operation;
-      await loadOperationObservability(refreshedOperation);
+      const retryResult = await retryWorkflowOperation(credentials, workflow.execution_id, operation.operation_id);
+      setWorkflow(retryResult.workflow);
+      if (retryResult.started_attempt?.attempt_id) {
+        setSelectedAttemptId(retryResult.started_attempt.attempt_id);
+        setAwaitingNewAttemptForOperationId(null);
+      }
       setStatusLine(`Retried ${operation.label?.trim() || operation.operation_type}.`);
     } catch (error) {
-      setObservabilityLoading(false);
+      setTelemetryLoading(false);
+      setAwaitingNewAttemptForOperationId(null);
       setStatusLine(`Failed to retry operation: ${(error as Error).message}`);
     } finally {
       setRetryingOperationId(null);
@@ -475,20 +647,36 @@ export default function TenantExecutionDetailPage() {
           <ExecutionObservabilityDrawer
             open={selectedOperation !== null}
             operationLabel={selectedOperation?.label?.trim() || selectedOperation?.operation_type || "Step"}
+            attempts={selectedOperationAttempts}
+            selectedAttemptId={selectedAttemptId}
+            onSelectAttemptId={setSelectedAttemptId}
             activeView={observabilityView}
             onViewChange={setObservabilityView}
             onRefresh={() => {
-              if (selectedOperation) {
-                void loadOperationObservability(selectedOperation);
+              if (observabilityView === "telemetry") {
+                setTelemetryRefreshNonce((value) => value + 1);
+              } else {
+                setAuditRefreshNonce((value) => value + 1);
               }
             }}
             onClose={() => {
               setSelectedOperationId(null);
+              setSelectedAttemptId(null);
+              setAwaitingNewAttemptForOperationId(null);
+              setTelemetryEvents([]);
+              setAuditAttempt(null);
               setObservabilityError(null);
             }}
-            telemetryTranscript={telemetryTranscript}
-            auditTranscript={auditTranscript}
-            loading={observabilityLoading}
+            currentStatus={selectedOperation?.status || "unknown"}
+            telemetryAttempt={telemetryAttemptView}
+            auditAttempt={auditAttempt}
+            waitingForNewAttempt={
+              Boolean(selectedOperation) &&
+              awaitingNewAttemptForOperationId === selectedOperation?.operation_id &&
+              !selectedAttemptId
+            }
+            telemetryLoading={telemetryLoading}
+            auditLoading={auditLoading}
             error={observabilityError}
           />
         </>

@@ -11,6 +11,10 @@ from orchestrator.api.admin.codex_logs_service import (
     list_codex_log_events as list_codex_log_events_impl,
     stream_codex_events_ndjson as stream_codex_events_ndjson_impl,
 )
+from orchestrator.api.admin.workflow_live_stream_service import (
+    list_workflow_operation_live_events as list_workflow_operation_live_events_impl,
+    stream_workflow_operation_live_events_ndjson as stream_workflow_operation_live_events_ndjson_impl,
+)
 from orchestrator.api.admin.run_event_stream_service import (
     stream_run_events_ndjson as stream_run_events_ndjson_impl,
 )
@@ -26,6 +30,7 @@ from orchestrator.api.admin.schema_mappers import run_to_schema, workflow_to_sch
 from orchestrator.api.admin.workflows_service import (
     create_workflow_attempt as create_workflow_attempt_impl,
     get_workflow as get_workflow_impl,
+    get_workflow_step_audit_attempt as get_workflow_step_audit_attempt_impl,
     get_workflow_step_transcript as get_workflow_step_transcript_impl,
     get_workflow_type_detail as get_workflow_type_detail_impl,
     list_workflow_audit_events as list_workflow_audit_events_impl,
@@ -43,7 +48,9 @@ from orchestrator.api.schemas import (
     RunRead,
     WorkflowAttemptCreateRequest,
     WorkflowObservabilityEventRead,
+    WorkflowOperationRetryRead,
     WorkflowRead,
+    WorkflowStepAttemptTranscriptRead,
     WorkflowStepTranscriptRead,
     WorkflowTypeDetailRead,
     WorkflowTypeSummaryRead,
@@ -60,7 +67,7 @@ from orchestrator.core.security import (
     require_authenticated_principal,
     require_tenant_workspace_access,
 )
-from orchestrator.storage.models import Run, Tenant, WorkflowExecution
+from orchestrator.storage.models import Run, Tenant, WorkflowExecution, WorkflowOperation
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 workflow_integration_router = WorkflowIntegrationRouter()
@@ -299,28 +306,97 @@ def list_workflow_audit_events(
 def list_workflow_operation_telemetry_events(
     execution_id: str,
     operation_id: str,
+    attempt_id: str | None = Query(default=None),
     limit: int = Query(default=200, ge=1, le=500),
-    before_recorded_at: datetime | None = Query(default=None),
-    before_event_id: str | None = Query(default=None),
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> list[WorkflowObservabilityEventRead]:
+    workflow = session.execute(
+        select(WorkflowExecution)
+        .where(WorkflowExecution.execution_id == execution_id)
+        .limit(1)
+    ).scalar_one_or_none()
+    if workflow is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow not found")
     if not principal.is_platform_super_admin:
-        workflow = session.execute(
-            select(WorkflowExecution)
-            .where(WorkflowExecution.execution_id == execution_id)
-            .limit(1)
-        ).scalar_one_or_none()
-        if workflow is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow not found")
         require_tenant_workspace_access(principal=principal, tenant_id=workflow.tenant_id)
-    return list_workflow_telemetry_events_impl(
+    operation = session.get(WorkflowOperation, operation_id)
+    if operation is None or operation.workflow_id != workflow.workflow_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow operation not found")
+    return list_workflow_operation_live_events_impl(
         session=session,
+        operation=operation,
+        attempt_id=attempt_id,
+        limit=limit,
+    )
+
+
+@router.get(
+    "/workflows/{execution_id}/operations/{operation_id}/attempts/{attempt_id}/telemetry",
+    response_model=list[WorkflowObservabilityEventRead],
+)
+def list_workflow_operation_attempt_telemetry_events(
+    execution_id: str,
+    operation_id: str,
+    attempt_id: str,
+    limit: int = Query(default=200, ge=1, le=500),
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> list[WorkflowObservabilityEventRead]:
+    return list_workflow_operation_telemetry_events(
         execution_id=execution_id,
         operation_id=operation_id,
+        attempt_id=attempt_id,
         limit=limit,
-        before_recorded_at=before_recorded_at,
-        before_event_id=before_event_id,
+        principal=principal,
+        session=session,
+    )
+
+
+@router.get("/workflows/{execution_id}/operations/{operation_id}/telemetry/stream")
+def stream_workflow_operation_telemetry_events(
+    execution_id: str,
+    operation_id: str,
+    attempt_id: str | None = Query(default=None),
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+):
+    workflow = session.execute(
+        select(WorkflowExecution)
+        .where(WorkflowExecution.execution_id == execution_id)
+        .limit(1)
+    ).scalar_one_or_none()
+    if workflow is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow not found")
+    if not principal.is_platform_super_admin:
+        require_tenant_workspace_access(principal=principal, tenant_id=workflow.tenant_id)
+    operation = session.get(WorkflowOperation, operation_id)
+    if operation is None or operation.workflow_id != workflow.workflow_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow operation not found")
+    return StreamingResponse(
+        stream_workflow_operation_live_events_ndjson_impl(
+            operation=operation,
+            settings=get_settings(),
+            attempt_id=attempt_id,
+        ),
+        media_type="application/x-ndjson",
+    )
+
+
+@router.get("/workflows/{execution_id}/operations/{operation_id}/attempts/{attempt_id}/telemetry/stream")
+def stream_workflow_operation_attempt_telemetry_events(
+    execution_id: str,
+    operation_id: str,
+    attempt_id: str,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+):
+    return stream_workflow_operation_telemetry_events(
+        execution_id=execution_id,
+        operation_id=operation_id,
+        attempt_id=attempt_id,
+        principal=principal,
+        session=session,
     )
 
 
@@ -358,6 +434,7 @@ def get_workflow_operation_transcript(
     execution_id: str,
     operation_id: str,
     source: str = Query(default="telemetry"),
+    attempt_id: str | None = Query(default=None),
     limit: int = Query(default=500, ge=1, le=2000),
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
@@ -376,6 +453,37 @@ def get_workflow_operation_transcript(
         execution_id=execution_id,
         operation_id=operation_id,
         source=source,
+        attempt_id=attempt_id,
+        limit=limit,
+    )
+
+
+@router.get(
+    "/workflows/{execution_id}/operations/{operation_id}/attempts/{attempt_id}/audit",
+    response_model=WorkflowStepAttemptTranscriptRead,
+)
+def get_workflow_operation_attempt_audit(
+    execution_id: str,
+    operation_id: str,
+    attempt_id: str,
+    limit: int = Query(default=500, ge=1, le=2000),
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> WorkflowStepAttemptTranscriptRead:
+    if not principal.is_platform_super_admin:
+        workflow = session.execute(
+            select(WorkflowExecution)
+            .where(WorkflowExecution.execution_id == execution_id)
+            .limit(1)
+        ).scalar_one_or_none()
+        if workflow is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow not found")
+        require_tenant_workspace_access(principal=principal, tenant_id=workflow.tenant_id)
+    return get_workflow_step_audit_attempt_impl(
+        session=session,
+        execution_id=execution_id,
+        operation_id=operation_id,
+        attempt_id=attempt_id,
         limit=limit,
     )
 
@@ -411,13 +519,13 @@ def resume_workflow_execution(
     )
 
 
-@router.post("/workflows/{execution_id}/operations/{operation_id}/retry", response_model=WorkflowRead)
+@router.post("/workflows/{execution_id}/operations/{operation_id}/retry", response_model=WorkflowOperationRetryRead)
 def retry_workflow_operation(
     execution_id: str,
     operation_id: str,
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
-) -> WorkflowRead:
+) -> WorkflowOperationRetryRead:
     return retry_workflow_operation_impl(
         session=session,
         execution_id=execution_id,

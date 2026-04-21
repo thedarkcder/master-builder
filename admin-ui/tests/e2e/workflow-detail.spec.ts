@@ -197,84 +197,71 @@ test("shows workflow definitions and retries a failed execution operation", asyn
   await mockTenantWorkflowApis(page, {
     workflows: [workflow],
     retriedWorkflowResponse: retriedWorkflow,
-    telemetryTranscriptByOperationId: {
-      "operation-jira-child-fanout": {
-        execution_id: "wfexec-mab-215",
-        operation_id: "operation-jira-child-fanout",
-        operation_label: "Fan out engineering child tickets",
-        current_status: "failed",
-        source: "telemetry",
-        attempts: [
-          {
-            attempt_id: "attempt-1",
-            attempt_number: 1,
-            status: "failed",
-            started_at: "2026-04-17T12:22:11Z",
-            finished_at: "2026-04-17T12:23:00Z",
-            duration_ms: 49000,
-            error_category: "content_limit",
-            failure_message:
-              'Failed to seed Jira issues: Jira API request failed (400): {"errorMessages":["CONTENT_LIMIT_EXCEEDED"],"errors":{}}',
-            status_detail: null,
-            recommended_next_action: "Retry engineering child fanout after reducing Jira payload size.",
-            sections: [
-              {
-                kind: "prompts",
-                label: "Prompts",
-                entries: [
-                  {
-                    entry_id: "telemetry-stage-request",
-                    recorded_at: "2026-04-17T12:23:00Z",
-                    level: "info",
-                    title: "Runtime request",
-                    message: "Submitted runtime request.",
-                    source_component: "runtime_invocation",
-                    payload: {
-                      user_prompt: "Create or refresh engineering child tickets from the parent brief.",
-                    },
-                  },
-                ],
-              },
-              {
-                kind: "external_requests",
-                label: "External requests",
-                entries: [
-                  {
-                    entry_id: "telemetry-jira-request",
-                    recorded_at: "2026-04-17T12:23:10Z",
-                    level: "info",
-                    title: "jira child upsert request",
-                    message: "Submitting child Jira issue upsert for Create tenant assurance boundary.",
-                    source_component: "jira_seed",
-                    payload: {
-                      summary: "Create tenant assurance boundary",
-                    },
-                  },
-                ],
-              },
-              {
-                kind: "outcome",
-                label: "Outcome",
-                entries: [
-                  {
-                    entry_id: "telemetry-outcome",
-                    recorded_at: "2026-04-17T12:23:30Z",
-                    level: "error",
-                    title: "Attempt outcome",
-                    message:
-                      'Failed to seed Jira issues: Jira API request failed (400): {"errorMessages":["CONTENT_LIMIT_EXCEEDED"],"errors":{}}',
-                    source_component: "workflow_operation_attempt",
-                    payload: {
-                      status: "failed",
-                      attempt_number: 1,
-                    },
-                  },
-                ],
-              },
-            ],
+    telemetryEventsByOperationId: {
+      "operation-jira-child-fanout": [
+        {
+          event_id: "telemetry-stage-request",
+          source: "telemetry",
+          level: "info",
+          event_kind: "stage_request",
+          message: "Submitted runtime request.",
+          source_component: "runtime_invocation",
+          run_id: null,
+          operation_id: "operation-jira-child-fanout",
+          attempt_id: "attempt-1",
+          agent_id: null,
+          invocation_id: null,
+          stage: null,
+          attempt: 1,
+          stream: null,
+          payload: {
+            user_prompt: "Create or refresh engineering child tickets from the parent brief.",
           },
-        ],
-      },
+          recorded_at: "2026-04-17T12:23:00Z",
+        },
+        {
+          event_id: "telemetry-jira-request",
+          source: "telemetry",
+          level: "info",
+          event_kind: "jira_child_upsert_request",
+          message: "Submitting child Jira issue upsert for Create tenant assurance boundary.",
+          source_component: "jira_seed",
+          run_id: null,
+          operation_id: "operation-jira-child-fanout",
+          attempt_id: "attempt-1",
+          agent_id: null,
+          invocation_id: null,
+          stage: null,
+          attempt: 1,
+          stream: null,
+          payload: {
+            summary: "Create tenant assurance boundary",
+          },
+          recorded_at: "2026-04-17T12:23:10Z",
+        },
+        {
+          event_id: "telemetry-outcome",
+          source: "telemetry",
+          level: "error",
+          event_kind: "attempt_failed",
+          message:
+            'Failed to seed Jira issues: Jira API request failed (400): {"errorMessages":["CONTENT_LIMIT_EXCEEDED"],"errors":{}}',
+          source_component: "workflow_operation_attempt",
+          run_id: null,
+          operation_id: "operation-jira-child-fanout",
+          attempt_id: "attempt-1",
+          agent_id: null,
+          invocation_id: null,
+          stage: null,
+          attempt: 1,
+          stream: null,
+          payload: {
+            status: "failed",
+            attempt_number: 1,
+          },
+          recorded_at: "2026-04-17T12:23:30Z",
+        },
+      ],
     },
     auditTranscriptByOperationId: {
       "operation-jira-child-fanout": {
@@ -357,8 +344,8 @@ test("shows workflow definitions and retries a failed execution operation", asyn
   await expect(page.getByText("Attempt 1").last()).toBeVisible();
   await expect(page.getByText("Prompts")).toBeVisible();
   await expect(page.getByText("External requests")).toBeVisible();
-  await expect(page.getByText("Retry engineering child fanout after reducing Jira payload size.").first()).toBeVisible();
   await page.getByRole("button", { name: "Audit history" }).click();
+  await expect(page.getByText("Retry engineering child fanout after reducing Jira payload size.").first()).toBeVisible();
   await expect(page.getByText("Outcome")).toBeVisible();
   await expect(
     page.getByText('Failed to seed Jira issues: Jira API request failed (400): {"errorMessages":["CONTENT_LIMIT_EXCEEDED"],"errors":{}}').last(),
@@ -374,9 +361,10 @@ test("shows workflow definitions and retries a failed execution operation", asyn
     workflowId: "wfexec-mab-215",
     operationId: "operation-jira-child-fanout",
   });
-  await expect(page.getByText("Attempt 2")).toBeVisible();
+  await expect(page.getByRole("button", { name: /Attempt 2/i })).toBeVisible();
   await expect(page.getByText("running").last()).toBeVisible();
   expect(resumedExecution).toBe(false);
+  await page.getByRole("button", { name: "Close", exact: true }).click();
   await page.getByRole("button", { name: "Links" }).click();
   await expect(page.getByText("Create tenant assurance boundary")).toBeVisible();
   await expect(page.getByText("MAB-300")).toBeVisible();
@@ -481,6 +469,7 @@ test("keeps retry available for missing-input workflow failures", async ({ page 
         summary: "Answer the product clarification on Jira issue MAB-215, then retry engineering child fanout.",
         can_retry: true,
         retry_unavailable_reason: null,
+        events: [],
         attempts: [
           {
             attempt_id: "attempt-missing-input-1",
@@ -502,12 +491,10 @@ test("keeps retry available for missing-input workflow failures", async ({ page 
     created_at: "2026-04-21T09:22:00Z",
     started_at: "2026-04-21T09:22:11Z",
     finished_at: "2026-04-21T09:22:11Z",
-    updated_at: "2026-04-21T09:22:11Z",
   });
 
   let retriedOperation: { workflowId: string; operationId: string } | null = null;
   mockTenantWorkflowApis(page, {
-    tenantId: "example",
     workflows: [workflow],
     retriedWorkflowResponse: makeWorkflow({
       ...workflow,
@@ -539,7 +526,6 @@ test("keeps retry available for missing-input workflow failures", async ({ page 
             }
           : operation
       ),
-      updated_at: "2026-04-21T10:00:00Z",
     }),
     onRetryOperation: (payload) => {
       retriedOperation = payload;
@@ -547,6 +533,7 @@ test("keeps retry available for missing-input workflow failures", async ({ page 
   });
 
   await page.goto("/example/executions/wfexec-mab-clarification");
+  await page.getByRole("button", { name: "Step details" }).click();
 
   const retryStepButton = page.getByRole("button", { name: "Retry step" }).last();
   await retryStepButton.scrollIntoViewIfNeeded();
@@ -559,6 +546,6 @@ test("keeps retry available for missing-input workflow failures", async ({ page 
     workflowId: "wfexec-mab-clarification",
     operationId: "operation-jira-child-fanout-missing-input",
   });
-  await expect(page.getByText("Attempt 8")).toBeVisible();
+  await expect(page.getByRole("button", { name: /Attempt 8/i })).toBeVisible();
   await expect(page.getByText("running").last()).toBeVisible();
 });

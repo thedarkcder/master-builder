@@ -9,6 +9,7 @@ from sqlalchemy.exc import IntegrityError
 
 from orchestrator.api.admin.schema_mappers import (
     workflow_observability_event_to_schema,
+    workflow_operation_attempt_to_schema,
     workflow_operation_to_schema,
 )
 from orchestrator.api.admin.live_telemetry_service import list_live_workflow_telemetry_events
@@ -18,7 +19,9 @@ from orchestrator.api.schemas import (
     WorkflowLinkRead,
     WorkflowObservabilityEventRead,
     WorkflowOperationRead,
+    WorkflowOperationRetryRead,
     WorkflowRetryPolicyRead,
+    WorkflowStepAttemptTranscriptRead,
     WorkflowStepTranscriptRead,
     WorkflowStatePathEntryRead,
     WorkflowTypeDetailRead,
@@ -1223,6 +1226,7 @@ def get_workflow_step_transcript(
     execution_id: str,
     operation_id: str,
     source: str,
+    attempt_id: str | None = None,
     limit: int = 500,
 ) -> WorkflowStepTranscriptRead:
     workflow = _workflow_by_execution_id(session=session, execution_id=execution_id)
@@ -1233,6 +1237,11 @@ def get_workflow_step_transcript(
     normalized_source = str(source or "").strip().lower()
     if normalized_source not in {"audit", "telemetry"}:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Unsupported transcript source")
+    normalized_attempt_id = str(attempt_id or "").strip() or None
+    if normalized_attempt_id is not None:
+        attempts = [attempt for attempt in attempts if attempt.attempt_id == normalized_attempt_id]
+        if not attempts:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow operation attempt not found")
 
     audit_events: list[WorkflowObservabilityEventRead] = []
     telemetry_events: list[WorkflowObservabilityEventRead] = []
@@ -1243,6 +1252,8 @@ def get_workflow_step_transcript(
             .order_by(desc(AuditEvent.recorded_at), desc(AuditEvent.event_id))
             .limit(limit)
         )
+        if normalized_attempt_id is not None:
+            audit_query = audit_query.where(AuditEvent.attempt_id == normalized_attempt_id)
         audit_rows = list(session.execute(audit_query).scalars().all())
         audit_rows.reverse()
         audit_events = [workflow_observability_event_to_schema(event) for event in audit_rows]
@@ -1266,6 +1277,27 @@ def get_workflow_step_transcript(
         audit_events=audit_events,
         source="telemetry" if normalized_source == "telemetry" else "audit",
     )
+
+
+def get_workflow_step_audit_attempt(
+    *,
+    session,
+    execution_id: str,
+    operation_id: str,
+    attempt_id: str,
+    limit: int = 500,
+) -> WorkflowStepAttemptTranscriptRead:
+    transcript = get_workflow_step_transcript(
+        session=session,
+        execution_id=execution_id,
+        operation_id=operation_id,
+        source="audit",
+        attempt_id=attempt_id,
+        limit=limit,
+    )
+    if not transcript.attempts:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow operation attempt not found")
+    return transcript.attempts[0]
 
 
 def create_workflow_attempt(
@@ -1635,10 +1667,16 @@ def retry_workflow_operation(
         operation=operation,
     )
     session.commit()
-    return _workflow_schema(
+    refreshed_workflow = _workflow_schema(
         session=session,
         workflow=workflow,
         workflow_to_schema_fn=workflow_to_schema_fn,
         run_to_schema_fn=run_to_schema_fn,
         integration_router=integration_router,
+    )
+    refreshed_attempts = _workflow_operation_attempts(session=session, operation_id=operation.operation_id)
+    latest_attempt = refreshed_attempts[0] if refreshed_attempts else None
+    return WorkflowOperationRetryRead(
+        workflow=refreshed_workflow,
+        started_attempt=(workflow_operation_attempt_to_schema(latest_attempt) if latest_attempt is not None else None),
     )

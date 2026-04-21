@@ -5,6 +5,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from orchestrator.core.observability_stream import record_observability_stream_event
 from orchestrator.storage.models import WorkflowExecution, WorkflowOperation, WorkflowOperationAttempt
 
 _OPERATION_LOGGER = logging.getLogger("orchestrator.workflow_operation")
@@ -46,4 +47,19 @@ def emit_workflow_operation_log(
             "project_id": workflow.project_id,
             "metadata": event_metadata,
         },
+    )
+    record_observability_stream_event(
+        session,
+        tenant_id=workflow.tenant_id,
+        project_id=workflow.project_id,
+        workflow_id=workflow.workflow_id,
+        run_id=operation.run_id,
+        operation_id=operation.operation_id,
+        attempt_id=attempt.attempt_id if attempt is not None else None,
+        issue_key=workflow.issue_key,
+        event_kind=str(event_type or "").strip() or "workflow_operation",
+        level=logging.getLevelName(level).lower(),
+        source_component="workflow_operation",
+        message=str(message or "").strip(),
+        payload=event_metadata,
     )
