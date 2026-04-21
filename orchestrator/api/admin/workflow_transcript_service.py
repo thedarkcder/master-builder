@@ -48,14 +48,20 @@ def build_workflow_step_transcript(
     source_events = audit_events if source == "audit" else telemetry_events
     attempt_reads = [_attempt_to_schema(attempt) for attempt in attempts]
     events_by_attempt = _events_by_attempt(events=source_events, attempts=attempt_reads)
+    rendered_attempts = (
+        [attempt for attempt in attempt_reads if attempt.attempt_id in events_by_attempt]
+        if source == "telemetry"
+        else attempt_reads
+    )
     attempt_transcripts = [
         _attempt_transcript(
             workflow=workflow,
             operation=operation,
             attempt=attempt,
             events=events_by_attempt.get(attempt.attempt_id, []),
+            include_synthesized_outcome=(source == "audit"),
         )
-        for attempt in sorted(attempt_reads, key=lambda item: item.attempt_number, reverse=True)
+        for attempt in sorted(rendered_attempts, key=lambda item: item.attempt_number, reverse=True)
     ]
     return WorkflowStepTranscriptRead(
         execution_id=workflow.execution_id,
@@ -112,6 +118,7 @@ def _attempt_transcript(
     operation: WorkflowOperation,
     attempt: WorkflowOperationAttemptRead,
     events: list[WorkflowObservabilityEventRead],
+    include_synthesized_outcome: bool,
 ) -> WorkflowStepAttemptTranscriptRead:
     section_entries: dict[str, list[WorkflowTranscriptEntryRead]] = defaultdict(list)
     for event in events:
@@ -131,7 +138,7 @@ def _attempt_transcript(
         )
 
     outcome_entries = section_entries["outcome"]
-    if attempt.error_message or attempt.status_detail or attempt.status:
+    if include_synthesized_outcome and (attempt.error_message or attempt.status_detail or attempt.status):
         outcome_entries.append(
             WorkflowTranscriptEntryRead(
                 entry_id=f"attempt:{attempt.attempt_id}:outcome",
@@ -168,7 +175,9 @@ def _attempt_transcript(
         error_category=attempt.error_category,
         failure_message=attempt.error_message,
         status_detail=attempt.status_detail,
-        recommended_next_action=_recommended_next_action(operation=operation, attempt=attempt),
+        recommended_next_action=(
+            _recommended_next_action(operation=operation, attempt=attempt) if include_synthesized_outcome else None
+        ),
         sections=sections,
     )
 

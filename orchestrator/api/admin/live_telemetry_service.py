@@ -144,7 +144,8 @@ def _workflow_observability_events_from_loki(
                         "agent_id": _stream_value(stream, "agent_id") or _stream_value(stream, "metadata_agent_id"),
                         "invocation_id": _stream_value(stream, "metadata_invocation_id"),
                         "stage": _stream_value(stream, "metadata_stage"),
-                        "attempt": _int_stream_value(stream, "metadata_attempt_number"),
+                        "attempt": _int_stream_value(stream, "metadata_attempt_number")
+                        or _int_stream_value(stream, "metadata_attempt"),
                         "stream": _stream_value(stream, "metadata_stream"),
                         "payload": event_payload,
                         "recorded_at": _datetime_from_ns(timestamp_ns),
