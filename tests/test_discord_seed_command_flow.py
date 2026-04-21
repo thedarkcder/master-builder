@@ -160,13 +160,14 @@ class DiscordSeedCommandFlowTests(DiscordCommandApiTestHarness):
                         {
                             "summary": "Create worker retries",
                             "issue_type": "Sub-task",
-                            "behavior_slice": "Retry failed worker jobs safely.",
-                            "technical_objective": "Add bounded worker retries.",
-                            "implementation_plan": [],
-                            "technical_dependencies": [],
+                            "capability": "Worker retry safety",
+                            "delivery": "Build bounded worker retries so failed jobs can be retried safely.",
+                            "expected_outcome": "Failed worker jobs retry within controlled limits and remain observable.",
+                            "acceptance_criteria": ["Retries are bounded and observable"],
+                            "dependencies": [],
                             "risks": [],
-                            "how_to_test": [],
-                            "done_criteria": [],
+                            "how_to_test": ["Run worker retry integration test"],
+                            "done_means": ["Retries are bounded and observable"],
                             "labels": ["seeded"],
                         }
                     ],
@@ -264,13 +265,14 @@ class DiscordSeedCommandFlowTests(DiscordCommandApiTestHarness):
                         {
                             "summary": "Create worker retries",
                             "issue_type": "Sub-task",
-                            "behavior_slice": "Retry failed worker jobs safely.",
-                            "technical_objective": "Add bounded worker retries.",
-                            "implementation_plan": ["Worker retry strategy"],
-                            "technical_dependencies": [],
+                            "capability": "Worker retry safety",
+                            "delivery": "Build bounded worker retries so failed jobs can be retried safely.",
+                            "expected_outcome": "Failed worker jobs retry within controlled limits and remain observable.",
+                            "acceptance_criteria": ["Retries are bounded and observable"],
+                            "dependencies": [],
                             "risks": [],
-                            "how_to_test": [],
-                            "done_criteria": ["Retries are bounded and observable"],
+                            "how_to_test": ["Run worker retry integration test"],
+                            "done_means": ["Retries are bounded and observable"],
                             "labels": ["seeded"],
                         }
                     ],
@@ -308,10 +310,11 @@ class DiscordSeedCommandFlowTests(DiscordCommandApiTestHarness):
         content = description.get("content", [])
         self.assertIsInstance(content, list)
         self.assertEqual(content[0]["type"], "heading")
-        self.assertEqual(content[0]["content"][0]["text"], "Technical Objective")
+        self.assertEqual(content[0]["content"][0]["text"], "Capability")
         self.assertEqual(content[1]["type"], "bulletList")
         first_bullet = content[1]["content"][0]["content"][0]["content"][0]["text"]
         self.assertEqual(first_bullet, "Ship feature")
         heading_texts = [node["content"][0]["text"] for node in content if node.get("type") == "heading"]
+        self.assertIn("What to Build", heading_texts)
         self.assertIn("How to Test", heading_texts)
         self.assertIn("Synced From Parent Revision", heading_texts)

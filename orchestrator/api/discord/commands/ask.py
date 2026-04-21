@@ -713,10 +713,7 @@ def dispatch_ask_command(
                 ),
             )
             planning_state = planning_result.planning_state
-            planning_package = build_runtime_seed_planning_package(
-                result=planning_result,
-                behavior_slice=str(final_assessment.brief.objective or question).strip() or question,
-            )
+            planning_package = build_runtime_seed_planning_package(result=planning_result)
             issue_seed_message, issue_seed_data = seed_issues_with_runtime(
                 session=session,
                 tenant=tenant,

@@ -16,13 +16,14 @@ def _seed_payload(*, project_key: str = "GP", parent_issue_type: str = "Story", 
         {
             "summary": "Instrument checkout retry telemetry",
             "issue_type": "Sub-task",
-            "behavior_slice": "Track retry attempts and recovery outcomes.",
-            "technical_objective": "Emit bounded retry telemetry from checkout recovery flow.",
-            "implementation_plan": ["Add retry attempt events", "Capture terminal recovery outcome"],
-            "technical_dependencies": ["Telemetry schema review"],
+            "capability": "Checkout retry telemetry",
+            "delivery": "Build checkout retry telemetry so each retry attempt and recovery outcome is captured in the system.",
+            "expected_outcome": "Operators can see retry attempts and recovery outcomes for checkout failures.",
+            "acceptance_criteria": ["Retry attempts are recorded", "Terminal recovery outcomes are visible in telemetry"],
+            "dependencies": ["Telemetry schema review"],
             "risks": ["Event volume could be noisy"],
             "how_to_test": ["Run checkout retry integration test"],
-            "done_criteria": ["Retry metrics appear in analytics dashboard"],
+            "done_means": ["Retry metrics appear in analytics dashboard"],
             "labels": ["engineering"],
         }
     ]
@@ -31,13 +32,14 @@ def _seed_payload(*, project_key: str = "GP", parent_issue_type: str = "Story", 
             {
                 "summary": "Persist checkout recovery UI state",
                 "issue_type": "Sub-task",
-                "behavior_slice": "Keep customer context while recovery decisions change.",
-                "technical_objective": "Persist retry state across view transitions.",
-                "implementation_plan": ["Store retry state", "Restore state on render"],
-                "technical_dependencies": [],
+                "capability": "Checkout recovery UI state",
+                "delivery": "Persist checkout recovery state across view transitions so the user does not lose context during recovery.",
+                "expected_outcome": "Customers keep their recovery context while retry decisions change.",
+                "acceptance_criteria": ["Recovery state survives view transitions"],
+                "dependencies": [],
                 "risks": [],
                 "how_to_test": ["Run recovery state UI test"],
-                "done_criteria": ["State persists during retry flow"],
+                "done_means": ["State persists during retry flow"],
                 "labels": ["engineering"],
             }
         )
@@ -73,6 +75,20 @@ def _planning_package(*, planning_state: str, child_issues: list[dict] | None = 
                 "findings": ["Architectural boundaries should stay modular."],
                 "recommendations": ["Use a dedicated planning package before Jira write."],
                 "required_tasks": ["Implement shared planning package merge"],
+                "child_ticket_specs": [
+                    {
+                        "summary": "Merge planning package into Jira child draft",
+                        "capability": "Planning package handoff",
+                        "delivery": "Build the Jira child drafting path so specialist planning context is carried into each engineering child issue.",
+                        "expected_outcome": "Engineering child issues include the planning package context they need to execute.",
+                        "acceptance_criteria": ["Jira child draft includes specialist planning context"],
+                        "how_to_test": ["Assert merged planning context appears in the child description"],
+                        "done_means": ["Child ticket reflects specialist planning context"],
+                        "dependencies": ["Planning package schema"],
+                        "risks": ["Descriptions may grow too large"],
+                        "labels": ["engineering"],
+                    }
+                ],
                 "open_behavior_questions": [],
                 "acceptance_impacts": ["Parent stays PM-only until planning completes."],
                 "mermaid_diagram": "flowchart TD\n  Parent[Parent brief] --> Planner[Planning runtime]",
@@ -258,10 +274,9 @@ def test_seed_issues_passes_typed_attempt_ref_into_invocation_context() -> None:
     assert captured_context.attempt_id == "attempt-789"
 
 
-def test_seed_issues_falls_back_to_linked_task_when_subtasks_unavailable() -> None:
+def test_seed_issues_fails_when_subtasks_are_unavailable() -> None:
     tenant = SimpleNamespace(tenant_id="tenant-a")
     created: list = []
-    linked: list[tuple[str, str]] = []
 
     class _FakeClient:
         def list_project_issue_types_for_create(self, **_kwargs):  # type: ignore[no-untyped-def]
@@ -283,38 +298,38 @@ def test_seed_issues_falls_back_to_linked_task_when_subtasks_unavailable() -> No
             return None
 
         def add_issue_link(self, **kwargs):  # type: ignore[no-untyped-def]
-            linked.append((kwargs["inward_issue_key"], kwargs["outward_issue_key"]))
+            raise AssertionError("linked-task fallback should not be used")
             return {}
 
-    message, data = seed_issues_with_runtime(
-        session=MagicMock(),
-        tenant=tenant,
-        prompt_markdown="seed issues",
-        scoped_project_id="project-a",
-        force_issue_keys=None,
-        allow_create=True,
-        scoped_project_keys=["GP"],
-        codex_working_dir="/tmp",
-        tenant_project_keys_fn=lambda **_kwargs: ["GP"],
-        get_settings_fn=lambda: SimpleNamespace(),
-        build_runtime_fn=lambda **_kwargs: object(),
-        plan_seed_issues_with_runtime_fn=lambda **_kwargs: _seed_payload(),
-        codex_runtime_error_type=RuntimeError,
-        build_seed_issue_description_fn=lambda **_kwargs: {},
-        issue_key_pattern=__import__("re").compile(r"^[A-Z]+-\d+$"),
-        tenant_jira_oauth_context_fn=lambda **_kwargs: {
-            "client": _FakeClient(),
-            "access_token": "token",
-            "connection": SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
-        },
-        select_seed_match_fn=lambda **_kwargs: None,
-    )
+    with __import__("pytest").raises(HTTPException) as exc_ctx:
+        seed_issues_with_runtime(
+            session=MagicMock(),
+            tenant=tenant,
+            prompt_markdown="seed issues",
+            scoped_project_id="project-a",
+            force_issue_keys=None,
+            allow_create=True,
+            scoped_project_keys=["GP"],
+            codex_working_dir="/tmp",
+            tenant_project_keys_fn=lambda **_kwargs: ["GP"],
+            get_settings_fn=lambda: SimpleNamespace(),
+            build_runtime_fn=lambda **_kwargs: object(),
+            plan_seed_issues_with_runtime_fn=lambda **_kwargs: _seed_payload(),
+            codex_runtime_error_type=RuntimeError,
+            build_seed_issue_description_fn=lambda **_kwargs: {},
+            issue_key_pattern=__import__("re").compile(r"^[A-Z]+-\d+$"),
+            tenant_jira_oauth_context_fn=lambda **_kwargs: {
+                "client": _FakeClient(),
+                "access_token": "token",
+                "connection": SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
+            },
+            select_seed_match_fn=lambda **_kwargs: None,
+        )
 
-    assert "Issue upsert complete." in message
-    assert data["created_children"] == ["GP-11"]
+    assert exc_ctx.value.status_code == 409
+    assert "does not support subtasks" in str(exc_ctx.value.detail)
+    assert created[0].summary == "Improve checkout recovery"
     assert created[1].issue_type == "Sub-task"
-    assert created[2].issue_type == "Task"
-    assert linked == [("GP-11", "GP-10")]
 
 
 def test_seed_issues_with_incomplete_oauth_context_returns_controlled_502() -> None:
@@ -703,19 +718,16 @@ def test_seed_issues_merges_planning_package_context_into_child_ticket_descripti
             planning_state="planning_completed",
             child_issues=[
                 {
-                    "summary": "Implement checkout planner merge",
+                    "summary": "Merge planning package into Jira child draft",
                     "issue_type": "Sub-task",
-                    "behavior_slice": "Merge the specialist outputs into one child plan.",
-                    "technical_objective": "Combine specialist recommendations into the Jira child draft.",
-                    "implementation_plan": ["Load specialist outputs", "Build merged child description"],
-                    "technical_dependencies": ["Planning package schema"],
+                    "capability": "Planning package handoff",
+                    "delivery": "Build the Jira child drafting path so specialist planning context is carried into each engineering child issue.",
+                    "expected_outcome": "Engineering child issues include the planning package context they need to execute.",
+                    "acceptance_criteria": ["Jira child draft includes specialist planning context"],
+                    "dependencies": ["Planning package schema"],
                     "risks": ["Descriptions may grow too large"],
                     "how_to_test": ["Assert merged planning context appears in the child description"],
-                    "done_criteria": ["Child ticket reflects specialist planning context"],
-                    "implementation_decisions": [
-                        "Decision owner: Engineering child team.",
-                        "Approval path: child PR review and architecture review when boundaries or platform risk change.",
-                    ],
+                    "done_means": ["Child ticket reflects specialist planning context"],
                     "labels": ["engineering"],
                 }
             ],
@@ -726,8 +738,8 @@ def test_seed_issues_merges_planning_package_context_into_child_ticket_descripti
     assert data["created_children"] == ["GP-2"]
     assert len(created) == 2
     child_description = _adf_text(created[1].description)
-    assert "Implementation Decisions" in child_description
-    assert "Decision owner: Engineering child team." in child_description
+    assert "What to Build" in child_description
+    assert "Expected Outcome" in child_description
     assert "Specialist Planning Context" in child_description
     assert "Architecture Findings: Architectural boundaries should stay modular." in child_description
     assert "Security Findings: Security review must be explicit." in child_description
@@ -826,16 +838,16 @@ def test_seed_issues_truncates_large_jira_descriptions_before_write() -> None:
             "architecture_diagram": "flowchart TD\n" + ("Parent-->Planner\n" * 5000),
             "child_issues": [
                 {
-                    "summary": "Implement checkout planner merge",
+                    "summary": "Merge planning package into Jira child draft",
                     "issue_type": "Sub-task",
-                    "behavior_slice": huge_line,
-                    "technical_objective": huge_line,
-                    "implementation_plan": [huge_line, huge_line, huge_line],
-                    "technical_dependencies": [huge_line],
+                    "capability": huge_line,
+                    "delivery": huge_line,
+                    "expected_outcome": huge_line,
+                    "acceptance_criteria": [huge_line, huge_line],
+                    "dependencies": [huge_line],
                     "risks": [huge_line],
                     "how_to_test": [huge_line],
-                    "done_criteria": [huge_line, huge_line],
-                    "implementation_decisions": [huge_line, huge_line],
+                    "done_means": [huge_line, huge_line],
                     "labels": ["engineering"],
                 }
             ],

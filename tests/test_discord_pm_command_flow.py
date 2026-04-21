@@ -113,6 +113,20 @@ class DiscordPmCommandFlowTests(DiscordCommandApiTestHarness):
                         "findings": ["Split telemetry and UX work."],
                         "recommendations": ["One child ticket per implementation slice."],
                         "required_tasks": ["Implement retry telemetry"],
+                        "child_ticket_specs": [
+                            {
+                                "summary": "Implement retry telemetry",
+                                "capability": "Retry telemetry",
+                                "delivery": "Build retry telemetry so recovery attempts and outcomes are captured for the user-visible retry flow.",
+                                "expected_outcome": "Operators can see retry activity and outcomes for the recovery flow.",
+                                "acceptance_criteria": ["Telemetry needs explicit coverage."],
+                                "how_to_test": ["Run the retry flow and verify telemetry is emitted"],
+                                "done_means": ["Retry telemetry is implemented and validated"],
+                                "dependencies": [],
+                                "risks": ["Recovery telemetry may omit failure cases if the flow is not covered end to end"],
+                                "labels": ["engineering"],
+                            }
+                        ],
                         "open_behavior_questions": [],
                         "acceptance_impacts": ["Telemetry needs explicit coverage."],
                         "mermaid_diagram": "flowchart TD\n  Parent[Parent brief] --> Child[Engineering child]",

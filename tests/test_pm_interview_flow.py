@@ -87,6 +87,20 @@ class PmInterviewFlowTests(DiscordCommandApiTestHarness):
                         "findings": ["Break the work into onboarding and profile slices."],
                         "recommendations": ["Use one child ticket per implementation slice."],
                         "required_tasks": ["Implement share entry points"],
+                        "child_ticket_specs": [
+                            {
+                                "summary": "Implement share entry points",
+                                "capability": "Share entry points",
+                                "delivery": "Build share entry points in onboarding and Profile so users can start the share flow from the intended surfaces.",
+                                "expected_outcome": "Users can reach the share flow from onboarding and Profile.",
+                                "acceptance_criteria": ["Needs entry points in onboarding and profile."],
+                                "how_to_test": ["Verify onboarding and Profile both expose the share entry point"],
+                                "done_means": ["Share entry points are live and covered by automation"],
+                                "dependencies": [],
+                                "risks": ["Entry-point behavior can drift between surfaces"],
+                                "labels": ["engineering"],
+                            }
+                        ],
                         "open_behavior_questions": [],
                         "acceptance_impacts": ["Needs entry points in onboarding and profile."],
                         "mermaid_diagram": "flowchart TD\n  Parent[Parent brief] --> Child[Engineering child]",
@@ -201,7 +215,8 @@ class PmInterviewFlowTests(DiscordCommandApiTestHarness):
         self.assertEqual(seed_children_mock.call_args.kwargs["pm_status"], "pm_completed")
         planning_package = seed_children_mock.call_args.kwargs["planning_package"]
         self.assertEqual(planning_package["planning_state"], "planning_completed")
-        self.assertEqual(len(planning_package["child_issues"]), 2)
+        self.assertEqual(len(planning_package["child_issues"]), 1)
+        self.assertEqual(planning_package["child_issues"][0]["summary"], "Implement share entry points")
         self.assertIn("architecture", planning_package["specialist_outputs"])
         self.assertIn("Parent[Parent brief] --> Child[Engineering child]", planning_package["architecture_diagram"])
         planning_mock.assert_called_once()

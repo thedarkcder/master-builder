@@ -2,6 +2,8 @@
 
 - When the user asks for the best final architecture, do not preserve transitional backward-compatible fallbacks by default. Make the authoritative contract explicit and remove compatibility layers unless the user explicitly asks for a staged migration.
 - When the same lifecycle rule is duplicated across workflow code, retry handlers, and transport integrations, do not stop at normalizing payload shapes. Introduce one application service that owns the rule and make transports/workflows depend on that service through narrow publisher ports.
+- When the intended domain model is strict, do not silently degrade to a weaker relationship on capability errors. If Jira child work must be subtasks, fail clearly when subtasks are unavailable instead of creating linked tasks as a fallback.
+- When removing fallback behavior from a projection flow, update tests and fixtures to satisfy the full strict contract. Do not leave tests implicitly relying on missing Discord channels, missing Jira comment mocks, or single-row assumptions that only held under degraded behavior.
 
 2026-03-23
 
@@ -267,3 +269,4 @@
 - 2026-04-21: Never synthesize product-visible attempt rows from telemetry. `WorkflowOperationAttempt` is the only valid attempt identity; if live telemetry arrives before the UI can target it, fix the write/selection path instead of inventing a transcript-only attempt.
 - 2026-04-21: Do not drive a step drawer from the same transcript contract for both telemetry and audit. Live telemetry must be built from real-time attempt-scoped events, while audit must be loaded separately as durable evidence for the selected persisted attempt.
 - 2026-04-21: If live telemetry is scoped by attempt, every nested runtime/integration path must emit the canonical `attempt_id`, not just an attempt number. Missing attempt IDs orphan live logs and make them disappear when the drawer reloads.
+- 2026-04-21: Engineering child tickets must be executable build specs. Do not generate `Define ...` tickets or boilerplate like `Deliver the behavior slice`; make the ticket state plainly what to build, the expected outcome, and how it is tested.

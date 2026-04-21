@@ -433,14 +433,14 @@ class EngineeringChildDraft:
     summary: str
     issue_type: str
     fallback_issue_type: str
-    behavior_slice: str
-    technical_objective: str
-    implementation_plan: list[str]
-    technical_dependencies: list[str]
+    capability: str
+    delivery: str
+    expected_outcome: str
+    acceptance_criteria: list[str]
+    dependencies: list[str]
     risks: list[str]
     how_to_test: list[str]
-    implementation_decisions: list[str]
-    done_criteria: list[str]
+    done_means: list[str]
     labels: list[str]
     requested_issue_key: str | None
 
@@ -463,13 +463,13 @@ class EngineeringChildDraft:
                 parent_issue_key=parent_issue_key,
                 parent_summary=parent_summary,
                 parent_revision=parent_revision,
-                behavior_slice=self.behavior_slice,
-                technical_objective=self.technical_objective,
-                implementation_plan=self.implementation_plan,
+                capability=self.capability,
+                delivery=self.delivery,
+                expected_outcome=self.expected_outcome,
+                acceptance_criteria=self.acceptance_criteria,
                 how_to_test=self.how_to_test,
-                done_criteria=self.done_criteria,
-                dependencies_and_risks=[*self.technical_dependencies, *self.risks],
-                implementation_decisions=self.implementation_decisions,
+                done_means=self.done_means,
+                dependencies_and_risks=[*self.dependencies, *self.risks],
                 specialist_summary=specialist_summary,
                 planning_state=planning_state,
             ),
@@ -681,6 +681,42 @@ def _parse_engineering_children(
         summary = _optional_string(issue_index=issue_index, field_name="summary", raw_value=item.get("summary"))
         if not summary:
             continue
+        delivery = _optional_string(issue_index=issue_index, field_name="delivery", raw_value=item.get("delivery"))
+        if not delivery:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Engineering child {issue_index} is missing delivery",
+            )
+        acceptance_criteria = _string_list_field(
+            issue_index=issue_index,
+            field_name="acceptance_criteria",
+            raw_value=item.get("acceptance_criteria"),
+        )
+        if not acceptance_criteria:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Engineering child {issue_index} is missing acceptance_criteria",
+            )
+        how_to_test = _string_list_field(
+            issue_index=issue_index,
+            field_name="how_to_test",
+            raw_value=item.get("how_to_test"),
+        )
+        if not how_to_test:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Engineering child {issue_index} is missing how_to_test",
+            )
+        done_means = _string_list_field(
+            issue_index=issue_index,
+            field_name="done_means",
+            raw_value=item.get("done_means"),
+        )
+        if not done_means:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Engineering child {issue_index} is missing done_means",
+            )
         raw_issue_type = _optional_string(issue_index=issue_index, field_name="issue_type", raw_value=item.get("issue_type"))
         requested_issue_key = _normalize_issue_key(
             item.get("issue_key"),
@@ -700,14 +736,14 @@ def _parse_engineering_children(
                 summary=summary[:90],
                 issue_type="Sub-task",
                 fallback_issue_type=fallback_issue_type,
-                behavior_slice=_optional_string(issue_index=issue_index, field_name="behavior_slice", raw_value=item.get("behavior_slice")),
-                technical_objective=_optional_string(issue_index=issue_index, field_name="technical_objective", raw_value=item.get("technical_objective")),
-                implementation_plan=_string_list_field(issue_index=issue_index, field_name="implementation_plan", raw_value=item.get("implementation_plan")),
-                technical_dependencies=_string_list_field(issue_index=issue_index, field_name="technical_dependencies", raw_value=item.get("technical_dependencies")),
+                capability=_optional_string(issue_index=issue_index, field_name="capability", raw_value=item.get("capability")),
+                delivery=delivery,
+                expected_outcome=_optional_string(issue_index=issue_index, field_name="expected_outcome", raw_value=item.get("expected_outcome")),
+                acceptance_criteria=acceptance_criteria,
+                dependencies=_string_list_field(issue_index=issue_index, field_name="dependencies", raw_value=item.get("dependencies")),
                 risks=_string_list_field(issue_index=issue_index, field_name="risks", raw_value=item.get("risks")),
-                how_to_test=_string_list_field(issue_index=issue_index, field_name="how_to_test", raw_value=item.get("how_to_test")),
-                implementation_decisions=_string_list_field(issue_index=issue_index, field_name="implementation_decisions", raw_value=item.get("implementation_decisions")),
-                done_criteria=_string_list_field(issue_index=issue_index, field_name="done_criteria", raw_value=item.get("done_criteria")),
+                how_to_test=how_to_test,
+                done_means=done_means,
                 labels=_string_list_field(issue_index=issue_index, field_name="labels", raw_value=item.get("labels")),
                 requested_issue_key=requested_issue_key,
             )
