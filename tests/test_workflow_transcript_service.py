@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 from orchestrator.api.admin.workflow_transcript_service import build_workflow_step_transcript
 from orchestrator.api.admin.schema_mappers import workflow_observability_event_to_schema
+from orchestrator.api.schemas import WorkflowObservabilityEventRead
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import (
     AuditEvent,
@@ -269,3 +270,119 @@ class WorkflowTranscriptServiceTests(SqliteTemplateDbTestCase):
 
         assert transcript.source == "telemetry"
         assert transcript.attempts == []
+
+    def test_build_workflow_step_transcript_uses_live_attempt_from_telemetry_when_newer_attempt_not_persisted(self) -> None:
+        now = datetime(2026, 4, 21, 12, 0, 0, tzinfo=timezone.utc)
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            workflow = WorkflowExecution(
+                workflow_id="parent_planning:MAB-215",
+                execution_id="wfexec-mab-215",
+                workflow_type_key="parent_planning",
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                issue_key="MAB-215",
+                issue_summary="Identity and authorization v1 contract",
+                issue_description="Parent planning",
+                repo_url=None,
+                branch=None,
+                pr_url=None,
+                orchestration_backend="temporal",
+                dedupe_scope="parent_planning",
+                status="failed",
+                last_error="Answer the product clarification on Jira issue MAB-215, then retry engineering child fanout.",
+                active_run_id=None,
+                latest_checkpoint_id=None,
+                source_workflow_id=None,
+                source_run_id=None,
+                created_at=now,
+                started_at=now,
+                finished_at=None,
+                updated_at=now,
+            )
+            operation = WorkflowOperation(
+                operation_id="operation-jira-child-fanout",
+                workflow_id=workflow.workflow_id,
+                run_id=None,
+                operation_type="jira_child_fanout",
+                idempotency_key="jira-child-fanout:MAB-215",
+                status="failed",
+                target_system="jira",
+                target_ref="MAB-215",
+                summary="Engineering child fanout completed from the confirmed parent brief.",
+                created_at=now,
+                started_at=now,
+                finished_at=now,
+                updated_at=now,
+            )
+            attempt = WorkflowOperationAttempt(
+                attempt_id="attempt-7",
+                operation_id=operation.operation_id,
+                attempt_number=7,
+                status="failed",
+                error_category="missing_input",
+                error_message="Old failed attempt.",
+                status_detail=None,
+                retryable=True,
+                next_retry_at=None,
+                created_at=now,
+                started_at=now,
+                finished_at=now,
+            )
+            session.add_all([workflow, operation, attempt])
+            session.commit()
+
+            telemetry_events = [
+                WorkflowObservabilityEventRead(
+                    event_id="event-running",
+                    source="telemetry",
+                    level="info",
+                    event_kind="runtime_log_stream_started",
+                    message="Runtime telemetry started.",
+                    source_component="runtime_invocation",
+                    run_id=None,
+                    operation_id=operation.operation_id,
+                    attempt_id=None,
+                    agent_id=None,
+                    invocation_id=None,
+                    stage=None,
+                    attempt=8,
+                    stream=None,
+                    payload={},
+                    recorded_at=now,
+                ),
+                WorkflowObservabilityEventRead(
+                    event_id="event-thread",
+                    source="telemetry",
+                    level="info",
+                    event_kind="runtime_log",
+                    message='{"type":"thread.started"}',
+                    source_component="runtime_invocation",
+                    run_id=None,
+                    operation_id=operation.operation_id,
+                    attempt_id=None,
+                    agent_id=None,
+                    invocation_id=None,
+                    stage=None,
+                    attempt=8,
+                    stream="stdout",
+                    payload={},
+                    recorded_at=now,
+                ),
+            ]
+
+            transcript = build_workflow_step_transcript(
+                session=session,
+                workflow=workflow,
+                operation=operation,
+                attempts=[attempt],
+                telemetry_events=telemetry_events,
+                audit_events=[],
+                source="telemetry",
+            )
+
+        assert transcript.source == "telemetry"
+        assert [item.attempt_number for item in transcript.attempts] == [8]
+        assert transcript.attempts[0].status == "running"
+        assert transcript.attempts[0].attempt_id == "telemetry-attempt:8"
+        assert [section.kind for section in transcript.attempts[0].sections] == ["runtime"]
