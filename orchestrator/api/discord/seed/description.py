@@ -14,12 +14,11 @@ _PARENT_SECTION_ITEM_LIMITS: dict[str, int] = {
 }
 
 _CHILD_SECTION_ITEM_LIMITS: dict[str, int] = {
-    "implementation_plan": 10,
+    "acceptance_criteria": 10,
     "how_to_test": 8,
-    "done_criteria": 8,
+    "done_means": 8,
     "dependencies_and_risks": 8,
-    "implementation_decisions": 6,
-    "specialist_summary": 8,
+    "specialist_summary": 12,
 }
 
 _TEXT_LIMITS: dict[str, int] = {
@@ -33,12 +32,11 @@ _TEXT_LIMITS: dict[str, int] = {
     "success_item": 180,
     "dependency_item": 200,
     "question_item": 220,
-    "behavior_slice": 420,
-    "technical_objective": 500,
-    "implementation_item": 220,
+    "capability": 280,
+    "delivery": 500,
+    "expected_outcome": 420,
     "how_to_test_item": 180,
-    "done_criteria_item": 180,
-    "decision_item": 220,
+    "done_means_item": 180,
     "specialist_item": 220,
     "planning_state": 120,
     "revision": 120,
@@ -206,6 +204,21 @@ def build_parent_feature_description(
         _heading("Architecture Context"),
         _bullet_list(bounded_architecture_summary),
     ]
+    planning_status_items = [
+        item
+        for item in (
+            f"PM status: {pm_status}" if isinstance(pm_status, str) and pm_status.strip() else "",
+            f"Planning state: {planning_state}" if isinstance(planning_state, str) and planning_state.strip() else "",
+        )
+        if item
+    ]
+    if planning_status_items:
+        content.extend(
+            [
+                _heading("Planning Status"),
+                _bullet_list(planning_status_items),
+            ]
+        )
     if bounded_architecture_diagram:
         content.extend(
             [
@@ -253,32 +266,36 @@ def build_engineering_child_description(
     parent_issue_key: str,
     parent_summary: str,
     parent_revision: str,
-    behavior_slice: str,
-    technical_objective: str,
-    implementation_plan: list[str],
+    capability: str,
+    delivery: str,
+    expected_outcome: str,
+    acceptance_criteria: list[str],
     how_to_test: list[str],
-    done_criteria: list[str],
+    done_means: list[str],
     dependencies_and_risks: list[str],
-    implementation_decisions: list[str] | None = None,
     specialist_summary: list[str] | None = None,
     planning_state: str | None = None,
 ) -> dict:
-    bounded_technical_objective = (
-        _truncate_text(technical_objective, max_chars=_TEXT_LIMITS["technical_objective"])
-        or "Technical objective was not provided"
+    bounded_delivery = (
+        _truncate_text(delivery, max_chars=_TEXT_LIMITS["delivery"])
+        or "Delivery expectation was not provided"
     )
     bounded_parent_link = _truncate_text(
         f"{parent_issue_key}: {parent_summary}".strip(": "),
-        max_chars=_TEXT_LIMITS["technical_objective"],
+        max_chars=_TEXT_LIMITS["delivery"],
     ) or "Parent link was not provided"
-    bounded_behavior_slice = (
-        _truncate_text(behavior_slice, max_chars=_TEXT_LIMITS["behavior_slice"]) or "Behavior slice was not provided"
+    bounded_capability = (
+        _truncate_text(capability, max_chars=_TEXT_LIMITS["capability"]) or "Capability was not provided"
     )
-    bounded_implementation_plan = _budget_items(
-        implementation_plan,
-        max_items=_CHILD_SECTION_ITEM_LIMITS["implementation_plan"],
-        max_chars=_TEXT_LIMITS["implementation_item"],
-        empty_fallback="Implementation details were not provided",
+    bounded_expected_outcome = (
+        _truncate_text(expected_outcome, max_chars=_TEXT_LIMITS["expected_outcome"])
+        or "Expected outcome was not provided"
+    )
+    bounded_acceptance_criteria = _budget_items(
+        acceptance_criteria,
+        max_items=_CHILD_SECTION_ITEM_LIMITS["acceptance_criteria"],
+        max_chars=_TEXT_LIMITS["acceptance_item"],
+        empty_fallback="Acceptance criteria were not provided",
     )
     bounded_how_to_test = _budget_items(
         how_to_test,
@@ -286,29 +303,17 @@ def build_engineering_child_description(
         max_chars=_TEXT_LIMITS["how_to_test_item"],
         empty_fallback="How-to-test steps were not provided",
     )
-    bounded_done_criteria = _budget_items(
-        done_criteria,
-        max_items=_CHILD_SECTION_ITEM_LIMITS["done_criteria"],
-        max_chars=_TEXT_LIMITS["done_criteria_item"],
-        empty_fallback="Done criteria were not provided",
+    bounded_done_means = _budget_items(
+        done_means,
+        max_items=_CHILD_SECTION_ITEM_LIMITS["done_means"],
+        max_chars=_TEXT_LIMITS["done_means_item"],
+        empty_fallback="Done means were not provided",
     )
     bounded_dependencies_and_risks = _budget_items(
         dependencies_and_risks,
         max_items=_CHILD_SECTION_ITEM_LIMITS["dependencies_and_risks"],
         max_chars=_TEXT_LIMITS["dependency_item"],
         empty_fallback="No explicit technical dependencies or risks were provided",
-    )
-    bounded_implementation_decisions = _budget_items(
-        implementation_decisions
-        if implementation_decisions
-        else [
-            "Decision owner: Engineering child team.",
-            "Approval path: child PR review unless product behavior or non-functional requirements change.",
-            "No implementation decisions have been recorded yet.",
-        ],
-        max_items=_CHILD_SECTION_ITEM_LIMITS["implementation_decisions"],
-        max_chars=_TEXT_LIMITS["decision_item"],
-        empty_fallback="No implementation decisions have been recorded yet.",
     )
     bounded_specialist_summary = _budget_items(
         specialist_summary if specialist_summary else ["No specialist planning context was provided"],
@@ -323,22 +328,22 @@ def build_engineering_child_description(
     bounded_parent_revision = _truncate_text(parent_revision or "unknown", max_chars=_TEXT_LIMITS["revision"]) or "unknown"
 
     content = [
-        _heading("Technical Objective"),
-        _bullet_list([bounded_technical_objective]),
+        _heading("Capability"),
+        _bullet_list([bounded_capability]),
         _heading("Parent Feature Link"),
         _bullet_list([bounded_parent_link]),
-        _heading("Behavior Slice"),
-        _bullet_list([bounded_behavior_slice]),
-        _heading("Implementation Plan"),
-        _bullet_list(bounded_implementation_plan),
+        _heading("What to Build"),
+        _bullet_list([bounded_delivery]),
+        _heading("Expected Outcome"),
+        _bullet_list([bounded_expected_outcome]),
+        _heading("Acceptance Criteria"),
+        _bullet_list(bounded_acceptance_criteria),
         _heading("How to Test"),
         _bullet_list(bounded_how_to_test),
-        _heading("Done Criteria"),
-        _bullet_list(bounded_done_criteria),
+        _heading("Done Means"),
+        _bullet_list(bounded_done_means),
         _heading("Technical Dependencies / Risks"),
         _bullet_list(bounded_dependencies_and_risks),
-        _heading("Implementation Decisions"),
-        _bullet_list(bounded_implementation_decisions),
         _heading("Specialist Planning Context"),
         _bullet_list(bounded_specialist_summary),
         _heading("Planning State"),
@@ -365,11 +370,11 @@ def build_seed_issue_description(
         parent_issue_key="PARENT-UNKNOWN",
         parent_summary="Parent feature not linked",
         parent_revision=nfr_intent.strip() or "Not specified (MVP or scale-ready decision required)",
-        behavior_slice=objective,
-        technical_objective=objective,
-        implementation_plan=[*scope_in, *scope_out] or ["Implementation scope was not provided"],
+        capability=objective,
+        delivery=objective,
+        expected_outcome=objective,
+        acceptance_criteria=acceptance_criteria,
         how_to_test=how_to_test,
-        done_criteria=acceptance_criteria,
+        done_means=acceptance_criteria,
         dependencies_and_risks=dependencies_and_risks,
-        implementation_decisions=None,
     )

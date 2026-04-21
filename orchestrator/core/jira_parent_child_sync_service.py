@@ -310,9 +310,13 @@ class _JiraParentIssueGateway:
             parent_issue_key=issue_key,
             questions=questions,
         )
+        if error is not None or created_comment is None:
+            raise RuntimeError(
+                f"Jira clarification projection failed for {issue_key}: {error or 'comment was not created'}"
+            )
         jira_comment_created = error is None and created_comment is not None
         return ClarificationPublishEffects(
-            state_recorded=posted_to_discord or jira_comment_created,
+            state_recorded=True,
             jira_comment_created=jira_comment_created,
             discord_followup_created=posted_to_discord,
         )
@@ -454,10 +458,7 @@ class _ParentBriefPlanner:
                 selector=selector,
             ),
         )
-        planning_package = build_runtime_seed_planning_package(
-            result=planning_result,
-            behavior_slice=str(product_brief.get("objective") or parent_detail.summary).strip() or parent_detail.summary,
-        )
+        planning_package = build_runtime_seed_planning_package(result=planning_result)
         return planning_result, planning_package
 
 

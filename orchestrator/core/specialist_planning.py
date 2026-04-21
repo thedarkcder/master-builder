@@ -49,6 +49,7 @@ class SpecialistPlanningStageResult:
     findings: tuple[str, ...]
     recommendations: tuple[str, ...]
     required_tasks: tuple[str, ...]
+    child_ticket_specs: tuple[dict[str, object], ...]
     open_behavior_questions: tuple[ClarificationQuestion, ...]
     acceptance_impacts: tuple[str, ...]
     mermaid_diagram: str | None = None
@@ -62,6 +63,7 @@ class SpecialistPlanningStageResult:
             "findings": list(self.findings),
             "recommendations": list(self.recommendations),
             "required_tasks": list(self.required_tasks),
+            "child_ticket_specs": [dict(spec) for spec in self.child_ticket_specs],
             "open_behavior_questions": [question.to_payload() for question in self.open_behavior_questions],
             "acceptance_impacts": list(self.acceptance_impacts),
         }
@@ -160,6 +162,42 @@ def _question_list(value: object) -> tuple[ClarificationQuestion, ...]:
     if not isinstance(value, list):
         return ()
     return ClarificationQuestionSet.from_values(value).questions
+
+
+def _child_ticket_specs(value: object) -> tuple[dict[str, object], ...]:
+    if not isinstance(value, list):
+        return ()
+    specs: list[dict[str, object]] = []
+    for raw_item in value:
+        if not isinstance(raw_item, dict):
+            continue
+        summary = " ".join(str(raw_item.get("summary") or "").split())
+        capability = " ".join(str(raw_item.get("capability") or "").split())
+        delivery = " ".join(str(raw_item.get("delivery") or "").split())
+        expected_outcome = " ".join(str(raw_item.get("expected_outcome") or "").split())
+        if not summary or not delivery:
+            continue
+        acceptance_criteria = _string_list(raw_item.get("acceptance_criteria"))
+        how_to_test = _string_list(raw_item.get("how_to_test"))
+        done_means = _string_list(raw_item.get("done_means"))
+        dependencies = _string_list(raw_item.get("dependencies"))
+        risks = _string_list(raw_item.get("risks"))
+        labels = _string_list(raw_item.get("labels"))
+        specs.append(
+            {
+                "summary": summary,
+                "capability": capability,
+                "delivery": delivery,
+                "expected_outcome": expected_outcome,
+                "acceptance_criteria": list(acceptance_criteria),
+                "how_to_test": list(how_to_test),
+                "done_means": list(done_means),
+                "dependencies": list(dependencies),
+                "risks": list(risks),
+                "labels": list(labels),
+            }
+        )
+    return tuple(specs)
 
 
 def _merge_unique(*sequences: Iterable[str]) -> tuple[str, ...]:
@@ -261,6 +299,7 @@ def _run_stage(
     findings = _string_list(payload.get("findings"))
     recommendations = _string_list(payload.get("recommendations"))
     required_tasks = _string_list(payload.get("required_tasks"))
+    child_ticket_specs = _child_ticket_specs(payload.get("child_ticket_specs"))
     open_behavior_questions = _question_list(payload.get("open_behavior_questions"))
     acceptance_impacts = _string_list(payload.get("acceptance_impacts"))
     mermaid_diagram = None
@@ -277,6 +316,7 @@ def _run_stage(
         findings=findings,
         recommendations=recommendations,
         required_tasks=required_tasks,
+        child_ticket_specs=child_ticket_specs,
         open_behavior_questions=open_behavior_questions,
         acceptance_impacts=acceptance_impacts,
         mermaid_diagram=mermaid_diagram,
@@ -296,34 +336,28 @@ def planning_output_key(*, stage: SpecialistPlanningStageResult) -> str:
 def build_runtime_seed_planning_package(
     *,
     result: SpecialistPlanningResult,
-    behavior_slice: str,
 ) -> dict[str, object]:
     stage_payloads = {
         planning_output_key(stage=stage): stage.to_payload()
         for stage in result.stages
     }
-    child_issues = [
-        {
-            "summary": task,
-            "behavior_slice": behavior_slice,
-            "technical_objective": f"Deliver the behavior slice '{task}' without expanding parent scope.",
-            "implementation_plan": [
-                f"Implement the functional requirement: {task}",
-                "Keep the solution aligned to the parent acceptance criteria and architecture guidance.",
-            ],
-            "technical_dependencies": list(result.acceptance_impacts[:3]),
-            "risks": list(result.findings[:3]),
-            "how_to_test": [f"Verify the functional behavior '{task}' satisfies the parent feature acceptance criteria."],
-            "done_criteria": [f"The functional requirement '{task}' is delivered and validated against the parent feature."],
-            "implementation_decisions": [
-                "Decision owner: Engineering child team.",
-                "Approval path: child PR review and architecture review when boundaries or platform risk change.",
-                "Escalate to the parent PM thread if implementation changes user-visible behavior, permissions, rollout expectations, privacy, security, compliance, or acceptance criteria.",
-            ],
-            "labels": ["engineering"],
-        }
-        for task in result.required_tasks
-    ]
+    architect_payload = stage_payloads.get("architecture")
+    if architect_payload is not None and not isinstance(architect_payload, dict):
+        raise ValueError("Architect planning payload must be an object")
+    child_specs_raw = architect_payload.get("child_ticket_specs", []) if isinstance(architect_payload, dict) else []
+    if not isinstance(child_specs_raw, list):
+        raise ValueError("Architect planning payload must provide child_ticket_specs as a list")
+    child_issues = [dict(spec) for spec in child_specs_raw if isinstance(spec, dict)]
+    architect_required_tasks = architect_payload.get("required_tasks", []) if isinstance(architect_payload, dict) else []
+    if not isinstance(architect_required_tasks, list):
+        raise ValueError("Architect planning payload must provide required_tasks as a list")
+    if (
+        result.planning_state == PLANNING_STATE_COMPLETED
+        and isinstance(architect_payload, dict)
+        and architect_required_tasks
+        and not child_issues
+    ):
+        raise ValueError("Planning completed without executable engineering child ticket specs")
     payload: dict[str, object] = {
         "planning_state": result.planning_state,
         "specialist_outputs": stage_payloads,

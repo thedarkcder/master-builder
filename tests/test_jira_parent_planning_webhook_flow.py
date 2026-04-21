@@ -112,6 +112,20 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                                 "findings": ["Issue needs PM decomposition before execution."],
                                 "recommendations": ["Seed engineering child tickets from the parent brief."],
                                 "required_tasks": ["Create child tickets automatically"],
+                                "child_ticket_specs": [
+                                    {
+                                        "summary": "Create child tickets automatically",
+                                        "capability": "Automatic child-ticket fanout",
+                                        "delivery": "Build parent planning fanout so backlog parent issues create the required engineering child tickets automatically.",
+                                        "expected_outcome": "A PM parent in backlog produces executable engineering child tickets without manual label work.",
+                                        "acceptance_criteria": ["Backlog parent issues create engineering child tickets automatically"],
+                                        "how_to_test": ["Trigger parent planning for a backlog issue and verify child ticket creation"],
+                                        "done_means": ["Parent planning creates the expected engineering child tickets"],
+                                        "dependencies": [],
+                                        "risks": ["Duplicate child creation if fanout is not idempotent"],
+                                        "labels": ["engineering"],
+                                    }
+                                ],
                                 "open_behavior_questions": [],
                                 "acceptance_impacts": ["Parent planning should happen automatically in backlog."],
                             },
@@ -380,6 +394,20 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                                 "findings": ["Backlog board placement should drive intake routing."],
                                 "recommendations": ["Reuse board-location checks for PM routing."],
                                 "required_tasks": ["Seed child tickets from backlog issue"],
+                                "child_ticket_specs": [
+                                    {
+                                        "summary": "Seed child tickets from backlog issue",
+                                        "capability": "Backlog intake routing",
+                                        "delivery": "Build backlog intake routing so a backlog parent issue triggers engineering child ticket seeding.",
+                                        "expected_outcome": "Backlog board placement is enough to start parent planning and child seeding.",
+                                        "acceptance_criteria": ["Board backlog issues still seed children"],
+                                        "how_to_test": ["Move a parent issue into backlog and verify engineering child ticket seeding"],
+                                        "done_means": ["Backlog board placement triggers child seeding deterministically"],
+                                        "dependencies": [],
+                                        "risks": ["Board rules may diverge across projects"],
+                                        "labels": ["engineering"],
+                                    }
+                                ],
                                 "open_behavior_questions": [],
                                 "acceptance_impacts": ["Board backlog issues still seed children."],
                             },
@@ -763,6 +791,20 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                                 "findings": ["Seed/runtime boundary is implementation-specific."],
                                 "recommendations": ["Promote runtime selection into the adapter layer."],
                                 "required_tasks": ["Create runtime-agnostic issue seeding interface"],
+                                "child_ticket_specs": [
+                                    {
+                                        "summary": "Create runtime-agnostic issue seeding interface",
+                                        "capability": "Issue seeding boundary",
+                                        "delivery": "Build a runtime-agnostic issue seeding interface so planning can create Jira children without knowing the concrete runtime implementation.",
+                                        "expected_outcome": "Issue seeding works through a stable adapter boundary instead of runtime-specific wiring.",
+                                        "acceptance_criteria": ["Parent issue includes architecture context", "Issue seeding is routed through the adapter boundary"],
+                                        "how_to_test": ["Run parent backlog planning and verify child seeding through the adapter path"],
+                                        "done_means": ["Issue seeding is runtime-agnostic and verified"],
+                                        "dependencies": [],
+                                        "risks": ["Runtime-specific logic could leak back into the planning path"],
+                                        "labels": ["engineering"],
+                                    }
+                                ],
                                 "open_behavior_questions": [],
                                 "acceptance_impacts": ["Parent issue should include architecture context."],
                                 "mermaid_diagram": "flowchart TD\n  Parent[Parent issue] --> Planner[Planning runtime]",
@@ -1096,7 +1138,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
         self.assertEqual(status_by_type["jira_comment_projection"], "completed")
         self.assertEqual(status_by_type["discord_followup_projection"], "completed")
 
-    def test_webhook_pm_parent_issue_created_blocks_cleanly_when_discord_followup_fails(self) -> None:
+    def test_webhook_pm_parent_issue_created_fails_when_discord_followup_projection_fails(self) -> None:
         payload = self._jira_issue_payload(issue_key="TP-987A", labels=["pm-parent"], status_name="Backlog")
         payload["webhookEvent"] = "jira:issue_created"
         payload["issue"]["fields"]["reporter"] = {"accountId": "jira-user-987A", "displayName": "Casey Reporter"}
@@ -1175,19 +1217,12 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
         self._assert_jira_issue_event_queued(response, issue_key="TP-987A")
         self.assertIsNotNone(processed)
         assert processed is not None
-        self.assertEqual(processed.status, "done")
+        self.assertEqual(processed.status, "failed")
         seed_mock.assert_not_called()
         run_flow_mock.assert_not_called()
         self.assertTrue(oauth_context.client.updated_fields)
         self.assertEqual(len(oauth_context.client.replaced_labels), 1)
-        self.assertGreaterEqual(create_comment_mock.call_count, 1)
-        blocked_comment = create_comment_mock.call_args_list[0].kwargs["comment"]
-        self.assertEqual(blocked_comment["type"], "doc")
-        intro_content = blocked_comment["content"][0]["content"]
-        self.assertEqual(intro_content[0]["type"], "text")
-        self.assertTrue(intro_content[0]["text"].startswith("[mb-system]"))
-        self.assertEqual(intro_content[1]["type"], "mention")
-        self.assertEqual(intro_content[1]["attrs"]["id"], "jira-user-987A")
+        create_comment_mock.assert_not_called()
         with self.session_factory() as session:
             followups = session.execute(
                 select(FollowupContext).where(
@@ -1198,13 +1233,11 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
             ).scalars().all()
             snapshot = session.execute(
                 select(PMInterviewCase).where(PMInterviewCase.request_id == "parent-brief:TP-987A")
-            ).scalars().one()
-        self.assertEqual(len(followups), 1)
-        self.assertEqual(followups[0].channel_id, "TP-987A")
-        self.assertEqual(followups[0].root_message_id, "jira-comment-987A")
-        self.assertEqual(snapshot.status, PM_INTERVIEW_STATUS_QUESTION_PENDING)
+            ).scalars().first()
+        self.assertEqual(followups, [])
+        self.assertIsNone(snapshot)
 
-    def test_webhook_pm_parent_issue_created_planning_block_posts_formatted_jira_questions(self) -> None:
+    def test_webhook_pm_parent_issue_created_planning_block_fails_without_discord_projection(self) -> None:
         payload = self._jira_issue_payload(issue_key="TP-987C", labels=["pm-parent"], status_name="Backlog")
         payload["webhookEvent"] = "jira:issue_created"
         payload["issue"]["fields"]["reporter"] = {"accountId": "jira-user-987C", "displayName": "Casey Reporter"}
@@ -1311,25 +1344,10 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
         self._assert_jira_issue_event_queued(response, issue_key="TP-987C")
         self.assertIsNotNone(processed)
         assert processed is not None
-        self.assertEqual(processed.status, "done")
+        self.assertEqual(processed.status, "failed")
         seed_mock.assert_called_once()
         run_flow_mock.assert_not_called()
-        create_comment_mock.assert_called_once()
-        blocked_comment = create_comment_mock.call_args.kwargs["comment"]
-        ordered_questions = blocked_comment["content"][1]["content"]
-        self.assertEqual(len(ordered_questions), 2)
-        self.assertIn(
-            "What is the required user-visible behavior when a broken identity link is detected",
-            ordered_questions[0]["content"][0]["content"][0]["text"],
-        )
-        self.assertIn(
-            "Why it matters: This defines the recovery and assurance contract.",
-            ordered_questions[0]["content"][1]["content"][0]["text"],
-        )
-        self.assertIn(
-            "What cooldown or rate-limit behavior should users see on repeated auth-initiation attempts?",
-            ordered_questions[1]["content"][0]["content"][0]["text"],
-        )
+        create_comment_mock.assert_not_called()
 
     def test_webhook_pm_parent_issue_created_seed_failure_records_failed_execution_operation(self) -> None:
         payload = self._jira_issue_payload(issue_key="TP-987D", labels=["pm-parent"], status_name="Backlog")
@@ -1560,12 +1578,15 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                     source_kind="jira_parent",
                 ),
             ),
-            patch("orchestrator.core.jira_parent_child_sync_publishers.resolve_platform_secret_ref", return_value=None),
+            patch("orchestrator.core.jira_parent_child_sync_publishers.resolve_platform_secret_ref", return_value="discord-token"),
+            patch("orchestrator.core.jira_parent_child_sync_publishers.DiscordApiClient") as discord_client_cls,
             patch("orchestrator.api.webhooks.jira_parent_child_sync.create_jira_comment", return_value=({"id": "jira-comment-987B-2"}, None)) as create_comment_mock,
             patch("orchestrator.api.webhooks.jira_parent_child_sync.post_jira_comment", return_value=(True, None)),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.seed_issues_with_runtime") as seed_mock,
             patch("orchestrator.api.webhooks.jira_application.plan_jira_run_flow") as run_flow_mock,
         ):
+            discord_client = discord_client_cls.return_value
+            discord_client.post_message.return_value = {"id": "discord-msg-987B"}
             response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
             processed = self._process_one_webhook_job()
 
@@ -1575,6 +1596,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
         self.assertEqual(processed.status, "done")
         seed_mock.assert_not_called()
         run_flow_mock.assert_not_called()
+        discord_client.post_message.assert_called_once()
         create_comment_mock.assert_called_once()
         created_comment = create_comment_mock.call_args.kwargs["comment"]
         ordered_questions = created_comment["content"][1]["content"]
@@ -1588,14 +1610,15 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
             ordered_questions[0]["content"][1]["content"][0]["text"],
         )
         with self.session_factory() as session:
-            followup = session.execute(
+            followups = session.execute(
                 select(FollowupContext).where(
                     FollowupContext.tenant_id == "tenant-webhook",
                     FollowupContext.issue_key == "TP-987B",
                     FollowupContext.context_type == "pm_interview",
                 )
-            ).scalars().one()
-        self.assertEqual(followup.root_message_id, "jira-comment-987B-2")
+            ).scalars().all()
+        jira_followup = next(row for row in followups if row.channel_id == "TP-987B")
+        self.assertEqual(jira_followup.root_message_id, "jira-comment-987B-2")
 
     def test_webhook_pm_parent_issue_updated_same_open_questions_is_idempotent(self) -> None:
         payload = self._jira_issue_payload(issue_key="TP-987B2", labels=["pm-parent"], status_name="Backlog")
@@ -1849,6 +1872,11 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
             access_token="tok",
             connection=SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
         )
+        with self.session_factory() as session:
+            project = session.get(Project, "tenant-webhook-default")
+            assert project is not None
+            project.discord_config = {"channel_id": "discord-channel-1"}
+            session.commit()
         with (
             patch("orchestrator.core.worker.webhook_job_service.tenant_jira_oauth_context", return_value=oauth_context),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_jira_oauth_context", return_value=oauth_context),
@@ -1876,6 +1904,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
             ),
             patch("orchestrator.core.jira_parent_child_sync_publishers.resolve_platform_secret_ref", return_value="discord-bot-token"),
             patch("orchestrator.core.jira_parent_child_sync_publishers.DiscordApiClient", return_value=discord_client),
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.create_jira_comment", return_value=({"id": "jira-comment-988"}, None)),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.post_jira_comment", return_value=(True, None)),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.seed_issues_with_runtime") as seed_mock,
             patch("orchestrator.api.webhooks.jira_application.plan_jira_run_flow") as run_flow_mock,
@@ -1891,24 +1920,25 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
         run_flow_mock.assert_not_called()
         discord_client.create_thread_from_message.assert_called_once()
         with self.session_factory() as session:
-            followup = session.execute(
+            followups = session.execute(
                 select(FollowupContext).where(
                     FollowupContext.tenant_id == "tenant-webhook",
                     FollowupContext.issue_key == "TP-988",
                     FollowupContext.context_type == "pm_interview",
                 )
-            ).scalars().one_or_none()
+            ).scalars().all()
             interview_case = session.execute(
                 select(PMInterviewCase).where(PMInterviewCase.request_id == "pm-parent-interview:TP-988")
             ).scalars().one_or_none()
             project = session.get(Project, "tenant-webhook-default")
-        self.assertIsNotNone(followup)
+        jira_followup = next(row for row in followups if row.channel_id == "TP-988")
+        discord_followup = next(row for row in followups if row.thread_channel_id == "discord-thread-988")
         self.assertIsNotNone(interview_case)
         self.assertIsNotNone(project)
-        assert followup is not None
         assert interview_case is not None
         assert project is not None
-        self.assertEqual(followup.thread_channel_id, "discord-thread-988")
+        self.assertEqual(jira_followup.root_message_id, "jira-comment-988")
+        self.assertEqual(discord_followup.thread_channel_id, "discord-thread-988")
         self.assertEqual(interview_case.thread_channel_id, "discord-thread-988")
         self.assertEqual(interview_case.status, "question_pending")
         self.assertIn("discord-thread-988", (project.discord_config or {}).get("ask_thread_channel_ids", []))

@@ -9,13 +9,28 @@ Return strict JSON only with keys:
 - findings
 - recommendations
 - required_tasks
+- child_ticket_specs
 - open_behavior_questions
 - acceptance_impacts
 - mermaid_diagram
 findings must be concrete observations about the requested behavior and system shape.
 recommendations must be architecture recommendations only.
-required_tasks must be behavior-first functional requirement slices that can become engineering child tickets.
-Each required_task should describe the owned behavior outcome, not an internal code chore.
+required_tasks must be short titles for the engineering child tickets implied by the architecture.
+child_ticket_specs must be the executable engineering child tickets.
+Each child_ticket_specs entry must be an object with:
+- summary
+- capability
+- delivery
+- expected_outcome
+- acceptance_criteria
+- how_to_test
+- done_means
+- dependencies
+- risks
+- labels
+Each child ticket must read like a candid build spec for one coherent user/system capability.
+Do not emit placeholder or definition tickets such as "Define ..." or "Investigate ...".
+Do not use process language such as "Deliver the behavior slice" or "Implement the functional requirement".
 open_behavior_questions must contain only product-safe questions for unresolved behavior or non-functional decisions.
 Each open_behavior_questions entry must be an object with:
 - question
@@ -24,4 +39,5 @@ acceptance_impacts must describe observable effects on the parent acceptance cri
 mermaid_diagram must be a valid Mermaid flowchart that captures the recommended system shape, or an empty string if the brief is too incomplete to draw safely.
 If you ask a question, keep it narrow and include a short example in the question text.
 why_it_matters must explain why the missing answer changes planning, architecture, security, validation, or release behavior.
+If the parent is too ambiguous to write an executable child ticket, ask clarification questions and return child_ticket_specs as an empty array.
 If no behavior ambiguity remains, open_behavior_questions must be an empty array.

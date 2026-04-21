@@ -63,6 +63,20 @@ class SpecialistPlanningTests(unittest.TestCase):
                     "findings": ["Architecture should split invite creation from delivery"],
                     "recommendations": ["Use a dedicated invite service"],
                     "required_tasks": ["Build invite service", "Persist invite state"],
+                    "child_ticket_specs": [
+                        {
+                            "summary": "Create invite service",
+                            "capability": "Invite creation and delivery",
+                            "delivery": "Build the invite flow entry point and service so users can create and send app invites from Profile.",
+                            "expected_outcome": "Users can create an invite from Profile and the system delivers a signed invite link.",
+                            "acceptance_criteria": ["Users can start invite flow from Profile", "Invite links are delivered through the chosen channel"],
+                            "how_to_test": ["Run invite service integration tests", "Verify Profile invite flow in browser automation"],
+                            "done_means": ["Invite flow is implemented and validated end to end"],
+                            "dependencies": ["Invite delivery channel remains available"],
+                            "risks": ["Invite creation and delivery can drift apart if boundaries are unclear"],
+                            "labels": ["engineering"],
+                        }
+                    ],
                     "open_behavior_questions": [],
                     "acceptance_impacts": ["Invite flow works from Profile"],
                     "mermaid_diagram": "flowchart TD\n  Share[Share entry] --> InviteService[Invite service]",
@@ -203,6 +217,7 @@ class SpecialistPlanningTests(unittest.TestCase):
             self.assertIn("acceptance_impacts", prompt_text)
             if "architect" in prompt_name:
                 self.assertIn("mermaid_diagram", prompt_text)
+                self.assertIn("child_ticket_specs", prompt_text)
             if prompt_name in user_prompts:
                 self.assertIn('"type":"tool_request"', prompt_text)
                 self.assertIn('"type":"final_response"', prompt_text)
@@ -264,6 +279,20 @@ class SpecialistPlanningTests(unittest.TestCase):
                     "findings": ["Architecture should split invite creation from delivery"],
                     "recommendations": ["Use a dedicated invite service"],
                     "required_tasks": ["Build invite service"],
+                    "child_ticket_specs": [
+                        {
+                            "summary": "Create invite service",
+                            "capability": "Invite creation and delivery",
+                            "delivery": "Build the invite flow entry point and service so users can create and send app invites from Profile.",
+                            "expected_outcome": "Users can create and send invites without leaving Profile.",
+                            "acceptance_criteria": ["Invite flow is available from Profile", "Invite delivery succeeds with a signed link"],
+                            "how_to_test": ["Run invite flow integration tests"],
+                            "done_means": ["Invite service lands with automated verification"],
+                            "dependencies": ["Invite delivery provider remains available"],
+                            "risks": ["Invite state may split from delivery outcome if boundaries blur"],
+                            "labels": ["engineering"],
+                        }
+                    ],
                     "open_behavior_questions": [],
                     "acceptance_impacts": ["Invite flow works from Profile"],
                     "mermaid_diagram": "flowchart TD\n  Share[Share entry] --> InviteService[Invite service]",
@@ -296,7 +325,6 @@ class SpecialistPlanningTests(unittest.TestCase):
 
         package = build_runtime_seed_planning_package(
             result=result,
-            behavior_slice="Let users share the app with friends",
         )
 
         self.assertEqual(package["planning_state"], PLANNING_STATE_COMPLETED)
@@ -311,9 +339,9 @@ class SpecialistPlanningTests(unittest.TestCase):
         )
         self.assertIn("Invite service", str(package["architecture_diagram"]))
         self.assertTrue(package["child_issues"])
-        self.assertIn("Deliver the behavior slice", package["child_issues"][0]["technical_objective"])
-        self.assertIn("functional requirement", package["child_issues"][0]["implementation_plan"][0])
-        self.assertIn("Decision owner: Engineering child team.", package["child_issues"][0]["implementation_decisions"][0])
+        self.assertEqual(package["child_issues"][0]["summary"], "Create invite service")
+        self.assertIn("Build the invite flow entry point", package["child_issues"][0]["delivery"])
+        self.assertIn("Invite flow is available from Profile", package["child_issues"][0]["acceptance_criteria"][0])
 
 
 if __name__ == "__main__":
