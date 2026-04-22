@@ -523,7 +523,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
         seed_mock.assert_called_once()
         self.assertTrue(seed_mock.call_args.kwargs["allow_create"])
         run_flow_mock.assert_not_called()
-        self.assertGreaterEqual(comment_mock.call_count, 2)
+        comment_mock.assert_not_called()
 
     def test_webhook_pm_parent_material_change_with_no_child_delta_is_successful_no_op(self) -> None:
         payload = self._jira_issue_payload(issue_key="TP-953", labels=["pm-parent"], status_name="To Do")
@@ -601,8 +601,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
         self.assertIsNotNone(processed)
         assert processed is not None
         self.assertEqual(processed.status, "done")
-        parent_sync_comment = comment_mock.call_args_list[0].kwargs["comment"]
-        self.assertIn("No engineering child changes were required.", parent_sync_comment)
+        comment_mock.assert_not_called()
 
     def test_webhook_pm_parent_non_material_change_skips_child_sync(self) -> None:
         payload = self._jira_issue_payload(issue_key="TP-952", labels=["pm-parent"], status_name="To Do")
@@ -714,9 +713,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
             fake_client.transitions,
             [{"issue_id_or_key": "TP-981", "target_status": "To Do"}],
         )
-        parent_comment = comment_mock.call_args_list[0].kwargs["comment"]
-        self.assertIn("Promoted engineering child tickets to To Do: TP-981.", parent_comment)
-        self.assertIn("Already on board or terminal: TP-982.", parent_comment)
+        comment_mock.assert_not_called()
 
     def test_webhook_pm_parent_issue_created_in_backlog_seeds_engineering_children(self) -> None:
         payload = self._jira_issue_payload(issue_key="TP-983", labels=["pm-parent"], status_name="Backlog")
@@ -902,8 +899,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
         self.assertIn("Objective", str(rewritten_description))
         self.assertNotIn("Architecture Context", str(rewritten_description))
         run_flow_mock.assert_not_called()
-        parent_comment = comment_mock.call_args_list[0].kwargs["comment"]
-        self.assertIn("Created engineering child tickets: TP-984, TP-985.", parent_comment)
+        comment_mock.assert_not_called()
 
     def test_webhook_pm_parent_issue_created_uses_canonical_parent_brief_snapshot(self) -> None:
         payload = self._jira_issue_payload(issue_key="TP-986", labels=["pm-parent"], status_name="Backlog")

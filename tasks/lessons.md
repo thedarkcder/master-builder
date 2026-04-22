@@ -1,5 +1,10 @@
 2026-04-21
 
+- When the user asks why an async workflow failed, answer with the exact failing component and exception first. Do not start with layered queue/worker architecture unless it is needed after the root cause is clear.
+- When a workflow already has first-class execution state in the platform UI, do not mirror routine status transitions back into Jira as `[mb-system]` comments. Keep Jira for human collaboration and links, not internal execution chatter.
+- When adding a retry path for failed queue rows, verify the live incident row is actually terminal `failed`. A retry button for failed jobs does not resolve a still-leased `processing` job, and that distinction should be stated explicitly.
+- When a local startup script claims to refresh the worker stack, compare its service list against `docker-compose.yml` before assuming a code fix is live. Missing one worker service, especially `temporal-worker`, leaves stale code running and makes incidents look mysterious.
+- When a Temporal-backed path fails from a webhook or queue symptom, verify the real workflow implementation layer, not just the engine wrapper tests. Mocked client/update tests do not prove the workflow’s `execute_activity(...)` call shape is valid.
 - When renaming a shared integration surface, audit the full user-facing flow end to end: routes, redirects, tab ids, button copy, callback return paths, and tests. Do not stop at component labels if the connect flow still routes users back to the old section name.
 - Do not expose opaque third-party identifiers in admin settings when the connected provider can enumerate real choices. For integration-backed config like Confluence spaces and parent pages, query the provider and present selectable names/titles plus the relevant creation link instead of raw key/id text inputs.
 - When renaming an OAuth integration route, audit the registered provider callback URL and any operator-facing setup guidance at the same time. A route rename without a provider-app callback update will fail before the backend sees the request.

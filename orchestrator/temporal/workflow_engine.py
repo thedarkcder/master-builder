@@ -181,8 +181,9 @@ def _handler_backed_workflow_id(*, workflow_type_key: str, issue_key: str) -> st
     return workflow_execution_id(workflow_type_key=workflow_type_key, issue_key=issue_key)
 
 
-def _handler_advance_input_from_request(request) -> HandlerWorkflowAdvanceInput:
+def _handler_advance_input_from_request(*, workflow_id: str, request) -> HandlerWorkflowAdvanceInput:
     return HandlerWorkflowAdvanceInput(
+        workflow_id=workflow_id,
         workflow_handler_key=request.workflow_handler_key,
         tenant_id=request.tenant_id,
         project_id=request.project_id,
@@ -265,7 +266,10 @@ class TemporalWorkflowEngine:
             workflow_type_key=workflow_type.workflow_type_key,
             issue_key=request.issue_key,
         )
-        advance_payload = _handler_advance_input_from_request(request)
+        advance_payload = _handler_advance_input_from_request(
+            workflow_id=workflow_id,
+            request=request,
+        )
 
         async def _advance() -> HandlerWorkflowAdvanceResult:
             client = await connect_temporal_client(settings)

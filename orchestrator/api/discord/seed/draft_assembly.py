@@ -8,6 +8,7 @@ from typing import Any
 
 from fastapi import HTTPException, status
 
+from orchestrator.core.clarification_questions import ClarificationQuestionSet
 from orchestrator.api.discord.seed.description import (
     build_engineering_child_description,
     build_parent_feature_description,
@@ -202,6 +203,20 @@ def _string_list_from_stage(*, stage_name: str, field_name: str, raw_value: obje
     return values
 
 
+def _question_list_from_stage(*, stage_name: str, raw_value: object) -> list[str]:
+    if raw_value is None:
+        return []
+    if not isinstance(raw_value, list):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Planning package stage '{stage_name}' has invalid 'open_behavior_questions' "
+                "(expected list of clarification questions)"
+            ),
+        )
+    return [question.question for question in ClarificationQuestionSet.from_values(raw_value).questions]
+
+
 def _planning_stage_summary_lines(*, stage_name: str, raw_stage: object) -> list[str]:
     if raw_stage is None:
         return []
@@ -215,12 +230,17 @@ def _planning_stage_summary_lines(*, stage_name: str, raw_stage: object) -> list
         ("findings", "Findings"),
         ("recommendations", "Recommendations"),
         ("required_tasks", "Required tasks"),
-        ("open_behavior_questions", "Open behavior questions"),
         ("acceptance_impacts", "Acceptance impacts"),
     ):
         values = _string_list_from_stage(stage_name=stage_name, field_name=field_name, raw_value=raw_stage.get(field_name))
         if values:
             lines.append(f"{stage_name.title()} {label}: {'; '.join(values)}")
+    question_values = _question_list_from_stage(
+        stage_name=stage_name,
+        raw_value=raw_stage.get("open_behavior_questions"),
+    )
+    if question_values:
+        lines.append(f"{stage_name.title()} Open behavior questions: {'; '.join(question_values)}")
     return lines
 
 

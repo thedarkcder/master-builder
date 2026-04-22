@@ -44,7 +44,6 @@ class HandlerBackedWorkflow:
     async def _advance(self, payload: HandlerWorkflowAdvanceInput) -> HandlerWorkflowAdvanceResult:
         return await workflow.execute_activity(
             process_handler_workflow_advance_activity,
-            self._workflow_id,
             payload,
             start_to_close_timeout=timedelta(seconds=self._activity_timeout_seconds),
         )

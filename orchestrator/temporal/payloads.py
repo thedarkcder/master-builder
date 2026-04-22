@@ -43,6 +43,7 @@ class HandlerWorkflowRunInput:
 
 @dataclass(frozen=True)
 class HandlerWorkflowAdvanceInput:
+    workflow_id: str
     workflow_handler_key: str
     tenant_id: str
     project_id: str | None
@@ -54,7 +55,6 @@ class HandlerWorkflowAdvanceInput:
     webhook_event: str | None = None
     comment_command: str | None = None
     comment_command_argument: str | None = None
-
 
 @dataclass(frozen=True)
 class HandlerWorkflowAdvanceResult:

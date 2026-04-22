@@ -483,6 +483,11 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 path="/api/admin/observability/webhook-jobs?tenant_id=route25&project_id=route25-default&limit=25&offset=0",
                 auth=admin,
             ),
+            ("POST", "/api/admin/observability/webhook-jobs/{job_id}/retry"): RouteScenario(
+                path="/api/admin/observability/webhook-jobs/job-missing/retry?tenant_id=route25&project_id=route25-default",
+                auth=admin,
+                expected_statuses=(404, 409),
+            ),
             ("GET", "/api/admin/observability/knowledge-jira-sync"): RouteScenario(
                 path="/api/admin/observability/knowledge-jira-sync",
                 auth=admin,

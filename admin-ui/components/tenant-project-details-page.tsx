@@ -41,6 +41,7 @@ import {
   listJiraProjects,
   listRuns,
   listWebhookQueueJobs,
+  retryWebhookJob,
   RUN_STATUSES,
   updateProject,
   type ArchitectureDocumentRecord,
@@ -273,6 +274,7 @@ export function TenantProjectDetailsPage() {
   const [webhookSummary, setWebhookSummary] = useState<WebhookQueueSummaryRecord | null>(null);
   const [webhookBusy, setWebhookBusy] = useState(false);
   const [webhookStatusLine, setWebhookStatusLine] = useState("");
+  const [retryingWebhookJobId, setRetryingWebhookJobId] = useState<string | null>(null);
   const [webhookQueryFilter, setWebhookQueryFilter] = useState("");
   const [webhookStatusFilter, setWebhookStatusFilter] = useState<"all" | string>("all");
   const [webhookTransportFilter, setWebhookTransportFilter] = useState<"all" | string>("all");
@@ -469,6 +471,24 @@ export function TenantProjectDetailsPage() {
       setWebhookStatusLine(`Webhook queue is unavailable: ${(error as Error).message}`);
     } finally {
       setWebhookBusy(false);
+    }
+  }
+
+  async function handleRetryWebhookJob(jobId: string) {
+    if (!credentials) return;
+    setRetryingWebhookJobId(jobId);
+    try {
+      await retryWebhookJob(credentials, {
+        tenantId: params.tenantId,
+        projectId: params.projectId,
+        jobId,
+      });
+      await loadWebhookJobs();
+      setWebhookStatusLine(`Retried webhook job ${jobId}.`);
+    } catch (error) {
+      setWebhookStatusLine(`Unable to retry webhook job: ${(error as Error).message}`);
+    } finally {
+      setRetryingWebhookJobId(null);
     }
   }
 
@@ -2017,6 +2037,7 @@ export function TenantProjectDetailsPage() {
                     <TableHead>Run</TableHead>
                     <TableHead>Attempts</TableHead>
                     <TableHead>Last Error</TableHead>
+                    <TableHead className="pr-5 text-right">Action</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -2051,6 +2072,21 @@ export function TenantProjectDetailsPage() {
                       <TableCell className="text-xs">{job.attempt_count}</TableCell>
                       <TableCell className="max-w-[300px] truncate text-xs text-muted-foreground" title={job.last_error ?? ""}>
                         {job.last_error ?? "—"}
+                      </TableCell>
+                      <TableCell className="pr-5 text-right">
+                        {job.status === "failed" ? (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-7 text-xs"
+                            onClick={() => void handleRetryWebhookJob(job.job_id)}
+                            disabled={webhookBusy || retryingWebhookJobId === job.job_id}
+                          >
+                            {retryingWebhookJobId === job.job_id ? "Retrying..." : "Retry"}
+                          </Button>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">—</span>
+                        )}
                       </TableCell>
                     </TableRow>
                   ))}
