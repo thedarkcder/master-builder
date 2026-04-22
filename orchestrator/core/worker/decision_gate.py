@@ -20,7 +20,7 @@ def _load_live_issue_context(
     session,
     tenant,
     settings,
-    tenant_jira_oauth_context_fn,
+    tenant_atlassian_oauth_context_fn,
     issue_key: str,
     fallback_summary: str | None,
     fallback_description: str | None,
@@ -29,7 +29,7 @@ def _load_live_issue_context(
     issue_description = fallback_description
     issue_labels: list[str] | None = None
     try:
-        oauth = tenant_jira_oauth_context_fn(session=session, tenant=tenant, settings=settings)
+        oauth = tenant_atlassian_oauth_context_fn(session=session, tenant=tenant, settings=settings)
         client = getattr(oauth, "client", None)
         connection = getattr(oauth, "connection", None)
         access_token = getattr(oauth, "access_token", None)
@@ -62,7 +62,7 @@ def apply_decision_gate(
     run,
     tenant,
     settings,
-    tenant_jira_oauth_context_fn,
+    tenant_atlassian_oauth_context_fn,
     evaluate_worker_decision_fn=evaluate_worker_readiness_decision,
     send_discord_message_fn,
     send_jira_message_fn,
@@ -77,7 +77,7 @@ def apply_decision_gate(
         session=session,
         tenant=tenant,
         settings=settings,
-        tenant_jira_oauth_context_fn=tenant_jira_oauth_context_fn,
+        tenant_atlassian_oauth_context_fn=tenant_atlassian_oauth_context_fn,
         issue_key=run.issue_key,
         fallback_summary=run.issue_summary,
         fallback_description=run.issue_description,
@@ -96,7 +96,7 @@ def apply_decision_gate(
             project=project,
             issue_labels=issue_labels,
             settings=settings,
-            tenant_jira_oauth_context_fn=tenant_jira_oauth_context_fn,
+            tenant_atlassian_oauth_context_fn=tenant_atlassian_oauth_context_fn,
         )
     except Exception as exc:  # noqa: BLE001
         error_text = f"Execution readiness check failed: {exc}"

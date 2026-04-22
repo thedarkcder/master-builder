@@ -7,7 +7,7 @@ from urllib.parse import quote_plus
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from orchestrator.api.jira_oauth.connection_service import tenant_jira_oauth_context
+from orchestrator.api.atlassian_oauth.connection_service import tenant_atlassian_oauth_context
 from orchestrator.api.webhooks.jira_admission_flow import (
     evaluate_precheck_decision_with_labels,
 )
@@ -25,8 +25,8 @@ from orchestrator.core.decision_state_machine import (
     ExecutionAdmissionReason,
     build_execution_admission_block,
 )
-from orchestrator.tools.jira_oauth import JiraOAuthError
-from orchestrator.tools.jira_oauth_http import JiraOAuthHttpClient
+from orchestrator.tools.atlassian_oauth import AtlassianOAuthError
+from orchestrator.tools.atlassian_oauth_http import AtlassianOAuthHttpClient
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +84,7 @@ def _fetch_issue_board_location(
     board_id: int,
 ) -> tuple[str, str | None]:
     try:
-        oauth_context = tenant_jira_oauth_context(
+        oauth_context = tenant_atlassian_oauth_context(
             session=session,
             tenant=context.tenant,
             settings=settings,
@@ -95,7 +95,7 @@ def _fetch_issue_board_location(
     base_url = f"https://api.atlassian.com/ex/jira/{oauth_context.connection.cloud_id}/rest/agile/1.0"
     backlog_url = f"{base_url}/board/{board_id}/backlog?jql={issue_jql}&maxResults=1"
     board_url = f"{base_url}/board/{board_id}/issue?jql={issue_jql}&maxResults=1"
-    http_client = JiraOAuthHttpClient()
+    http_client = AtlassianOAuthHttpClient()
     backlog_error_detail: str | None = None
     try:
         backlog_payload = http_client.get_json(
@@ -104,7 +104,7 @@ def _fetch_issue_board_location(
         )
         if _issues_payload_contains_issue(payload=backlog_payload, issue_key=context.issue_key):
             return "backlog", None
-    except (JiraOAuthError, ValueError) as exc:
+    except (AtlassianOAuthError, ValueError) as exc:
         backlog_error_detail = f"backlog lookup failed: {exc}"
     try:
         board_payload = http_client.get_json(
@@ -113,7 +113,7 @@ def _fetch_issue_board_location(
         )
         if _issues_payload_contains_issue(payload=board_payload, issue_key=context.issue_key):
             return "board", None
-    except (JiraOAuthError, ValueError) as exc:
+    except (AtlassianOAuthError, ValueError) as exc:
         board_error_detail = f"board lookup failed: {exc}"
         if backlog_error_detail:
             return "error", f"{backlog_error_detail}; {board_error_detail}"

@@ -4,8 +4,8 @@ from fastapi import HTTPException, status
 
 from orchestrator.api.schemas import ReadyGatePreviewRead, ReadyIssuePreviewRead
 from orchestrator.core.tenant_operational_health_service import tenant_integration_snapshot
-from orchestrator.storage.models import JiraOAuthConnection, Tenant
-from orchestrator.tools.jira_oauth import JiraOAuthError
+from orchestrator.storage.models import AtlassianOAuthConnection, Tenant
+from orchestrator.tools.atlassian_oauth import AtlassianOAuthError
 
 
 def preview_tenant_ready_gate(
@@ -15,8 +15,8 @@ def preview_tenant_ready_gate(
     max_results: int,
     settings,
     default_ready_jql_fn,
-    refresh_jira_connection_tokens_fn,
-    jira_oauth_client_fn,
+    refresh_atlassian_connection_tokens_fn,
+    atlassian_oauth_client_fn,
 ) -> ReadyGatePreviewRead:  # noqa: ANN001
     tenant = session.get(Tenant, tenant_id)
     if tenant is None:
@@ -37,28 +37,28 @@ def preview_tenant_ready_gate(
     if not ready_jql:
         ready_jql = default_ready_jql_fn(project_keys=project_keys, ready_statuses=ready_statuses)
 
-    connection_id = integration.jira_connection_id
+    connection_id = integration.atlassian_connection_id
     if not connection_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Jira OAuth connection is not linked")
-    connection = session.get(JiraOAuthConnection, connection_id)
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Atlassian connection is not linked")
+    connection = session.get(AtlassianOAuthConnection, connection_id)
     if connection is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Configured Jira connection was not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Configured Atlassian connection was not found")
 
     try:
-        access_token = refresh_jira_connection_tokens_fn(
+        access_token = refresh_atlassian_connection_tokens_fn(
             session,
             connection=connection,
             settings=settings,
             tenant_id=tenant_id,
         )
-        client = jira_oauth_client_fn(session=session, settings=settings, tenant_id=tenant_id)
+        client = atlassian_oauth_client_fn(session=session, settings=settings, tenant_id=tenant_id)
         issues = client.search_issues_by_jql(
             access_token=access_token,
             cloud_id=connection.cloud_id,
             jql=ready_jql,
             max_results=max_results,
         )
-    except (ValueError, JiraOAuthError) as exc:
+    except (ValueError, AtlassianOAuthError) as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Ready preview failed: {exc}") from exc
 
     guidance = (

@@ -27,12 +27,12 @@ from orchestrator.tools.github_app import (
     WorkflowCheckSuite,
     github_client_from_tenant_config,
 )
-from orchestrator.tools.jira_oauth import (
-    JiraOAuthClient,
-    JiraOAuthClientConfig,
-    JiraOAuthError,
-    JiraOAuthResource,
-    JiraOAuthTokenSet,
+from orchestrator.tools.atlassian_oauth import (
+    AtlassianOAuthClient,
+    AtlassianOAuthClientConfig,
+    AtlassianOAuthError,
+    AtlassianOAuthResource,
+    AtlassianOAuthTokenSet,
     JiraProject,
 )
 from orchestrator.tools.discord_api import DiscordApiClient, DiscordApiError, DiscordTextChannel
@@ -59,11 +59,11 @@ __all__ = [
     "PullRequestResult",
     "WorkflowCheckSuite",
     "github_client_from_tenant_config",
-    "JiraOAuthClient",
-    "JiraOAuthClientConfig",
-    "JiraOAuthError",
-    "JiraOAuthResource",
-    "JiraOAuthTokenSet",
+    "AtlassianOAuthClient",
+    "AtlassianOAuthClientConfig",
+    "AtlassianOAuthError",
+    "AtlassianOAuthResource",
+    "AtlassianOAuthTokenSet",
     "JiraProject",
     "DiscordApiClient",
     "DiscordApiError",

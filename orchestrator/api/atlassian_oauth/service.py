@@ -7,13 +7,13 @@ from sqlalchemy.orm import Session
 
 from orchestrator.core.secrets import decrypt_value, encrypt_value
 from orchestrator.core.platform_secret_service import (
-    PLATFORM_SECRET_JIRA_OAUTH_CLIENT_ID_REF,
-    PLATFORM_SECRET_JIRA_OAUTH_CLIENT_SECRET_REF,
+    PLATFORM_SECRET_ATLASSIAN_OAUTH_CLIENT_ID_REF,
+    PLATFORM_SECRET_ATLASSIAN_OAUTH_CLIENT_SECRET_REF,
     resolve_platform_secret_ref,
 )
-from orchestrator.storage.models import JiraOAuthConnection
-from orchestrator.tools.jira_oauth import JiraOAuthClient, JiraOAuthClientConfig
-from orchestrator.tools.jira_oauth_models import JiraOAuthAuthRequiredError, JiraOAuthHttpError
+from orchestrator.storage.models import AtlassianOAuthConnection
+from orchestrator.tools.atlassian_oauth import AtlassianOAuthClient, AtlassianOAuthClientConfig
+from orchestrator.tools.atlassian_oauth_models import AtlassianOAuthAuthRequiredError, AtlassianOAuthHttpError
 
 T = TypeVar("T")
 
@@ -42,30 +42,30 @@ def resolve_secret_ref(
     return value
 
 
-def jira_oauth_client(
+def atlassian_oauth_client(
     *,
     session: Session,
     settings,
     tenant_id: str | None = None,
     project_id: str | None = None,
-) -> JiraOAuthClient:  # noqa: ANN001
+) -> AtlassianOAuthClient:  # noqa: ANN001
     client_id = resolve_secret_ref(
         session,
-        ref_name=PLATFORM_SECRET_JIRA_OAUTH_CLIENT_ID_REF,
+        ref_name=PLATFORM_SECRET_ATLASSIAN_OAUTH_CLIENT_ID_REF,
         settings=settings,
         tenant_id=tenant_id,
         project_id=project_id,
     )
     client_secret = resolve_secret_ref(
         session,
-        ref_name=PLATFORM_SECRET_JIRA_OAUTH_CLIENT_SECRET_REF,
+        ref_name=PLATFORM_SECRET_ATLASSIAN_OAUTH_CLIENT_SECRET_REF,
         settings=settings,
         tenant_id=tenant_id,
         project_id=project_id,
     )
-    redirect_uri = f"{settings.public_api_base_url.rstrip('/')}/api/admin/jira/connect/callback"
-    return JiraOAuthClient(
-        JiraOAuthClientConfig(
+    redirect_uri = f"{settings.public_api_base_url.rstrip('/')}/api/admin/atlassian/connect/callback"
+    return AtlassianOAuthClient(
+        AtlassianOAuthClientConfig(
             client_id=client_id,
             client_secret=client_secret,
             redirect_uri=redirect_uri,
@@ -73,10 +73,10 @@ def jira_oauth_client(
     )
 
 
-def refresh_jira_connection_tokens(
+def refresh_atlassian_connection_tokens(
     session: Session,
     *,
-    connection: JiraOAuthConnection,
+    connection: AtlassianOAuthConnection,
     settings,
     tenant_id: str | None = None,
     force_refresh: bool = False,
@@ -89,7 +89,7 @@ def refresh_jira_connection_tokens(
             encryption_key=settings.secrets_encryption_key,
         )
 
-    client = jira_oauth_client(session=session, settings=settings, tenant_id=tenant_id)
+    client = atlassian_oauth_client(session=session, settings=settings, tenant_id=tenant_id)
     refresh_token = decrypt_value(
         ciphertext=connection.refresh_token_encrypted,
         encryption_key=settings.secrets_encryption_key,
@@ -110,27 +110,27 @@ def refresh_jira_connection_tokens(
     return token_set.access_token
 
 
-def execute_jira_operation_with_refresh_retry(
+def execute_atlassian_operation_with_refresh_retry(
     *,
     session_factory: Callable[[], Session],
     settings,
     connection_id: str,
-    operation: Callable[[Session, JiraOAuthClient, str], T],
+    operation: Callable[[Session, AtlassianOAuthClient, str], T],
     tenant_id: str | None = None,
     project_id: str | None = None,
 ) -> T:  # noqa: ANN001
     def _run_once(*, force_refresh: bool) -> T:
         with session_factory() as session:
-            connection = session.get(JiraOAuthConnection, connection_id)
+            connection = session.get(AtlassianOAuthConnection, connection_id)
             if connection is None:
-                raise ValueError("Jira OAuth connection record not found.")
-            client = jira_oauth_client(
+                raise ValueError("Atlassian connection record not found.")
+            client = atlassian_oauth_client(
                 session=session,
                 settings=settings,
                 tenant_id=tenant_id,
                 project_id=project_id,
             )
-            access_token = refresh_jira_connection_tokens(
+            access_token = refresh_atlassian_connection_tokens(
                 session,
                 connection=connection,
                 settings=settings,
@@ -141,12 +141,12 @@ def execute_jira_operation_with_refresh_retry(
 
     try:
         return _run_once(force_refresh=False)
-    except JiraOAuthHttpError as exc:
+    except AtlassianOAuthHttpError as exc:
         if exc.status_code not in {401, 403}:
             raise
         try:
             return _run_once(force_refresh=True)
-        except JiraOAuthHttpError as retry_exc:
+        except AtlassianOAuthHttpError as retry_exc:
             if retry_exc.status_code in {401, 403}:
-                raise JiraOAuthAuthRequiredError("Jira OAuth authorization is required") from retry_exc
+                raise AtlassianOAuthAuthRequiredError("Atlassian authorization is required") from retry_exc
             raise

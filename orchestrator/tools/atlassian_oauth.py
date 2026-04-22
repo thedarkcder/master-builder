@@ -2,11 +2,14 @@ from __future__ import annotations
 
 from urllib.request import urlopen
 
-from orchestrator.tools.jira_oauth_attachment_service import JiraOAuthAttachmentService
-from orchestrator.tools.jira_oauth_callback_flow import JiraOAuthCallbackFlow
-from orchestrator.tools.jira_oauth_http import JiraOAuthHttpClient
-from orchestrator.tools.jira_oauth_issue_service import JiraOAuthIssueService, _to_adf_description
-from orchestrator.tools.jira_oauth_models import (
+from orchestrator.tools.atlassian_oauth_attachment_service import AtlassianOAuthAttachmentService
+from orchestrator.tools.atlassian_oauth_callback_flow import AtlassianOAuthCallbackFlow
+from orchestrator.tools.atlassian_oauth_confluence_service import AtlassianOAuthConfluenceService
+from orchestrator.tools.atlassian_oauth_http import AtlassianOAuthHttpClient
+from orchestrator.tools.atlassian_oauth_issue_service import JiraOAuthIssueService, _to_adf_description
+from orchestrator.tools.atlassian_oauth_models import (
+    ConfluencePage,
+    ConfluenceSpace,
     JiraIssueAttachment,
     JiraIssueBulkCreateResult,
     JiraIssueComment,
@@ -14,21 +17,23 @@ from orchestrator.tools.jira_oauth_models import (
     JiraIssueCreateResult,
     JiraIssueDetail,
     JiraIssuePreview,
-    JiraOAuthClientConfig,
-    JiraOAuthError,
-    JiraOAuthResource,
-    JiraOAuthTokenSet,
+    AtlassianOAuthClientConfig,
+    AtlassianOAuthError,
+    AtlassianOAuthResource,
+    AtlassianOAuthTokenSet,
     JiraProject,
 )
-from orchestrator.tools.jira_oauth_webhook_manager import JiraOAuthWebhookManager
+from orchestrator.tools.atlassian_oauth_webhook_manager import AtlassianOAuthWebhookManager
 
 __all__ = [
-    "JiraOAuthClient",
-    "JiraOAuthClientConfig",
-    "JiraOAuthError",
-    "JiraOAuthResource",
-    "JiraOAuthTokenSet",
+    "AtlassianOAuthClient",
+    "AtlassianOAuthClientConfig",
+    "AtlassianOAuthError",
+    "AtlassianOAuthResource",
+    "AtlassianOAuthTokenSet",
     "JiraProject",
+    "ConfluenceSpace",
+    "ConfluencePage",
     "JiraIssuePreview",
     "JiraIssueDetail",
     "JiraIssueComment",
@@ -40,12 +45,12 @@ __all__ = [
 ]
 
 
-class JiraOAuthClient:
-    """Jira OAuth and Jira API client operations."""
+class AtlassianOAuthClient:
+    """Atlassian and Jira API client operations."""
 
-    def __init__(self, config: JiraOAuthClientConfig):
-        self._http = JiraOAuthHttpClient(opener=lambda request, timeout=30: urlopen(request, timeout=timeout))
-        self._callback_flow = JiraOAuthCallbackFlow(
+    def __init__(self, config: AtlassianOAuthClientConfig):
+        self._http = AtlassianOAuthHttpClient(opener=lambda request, timeout=30: urlopen(request, timeout=timeout))
+        self._callback_flow = AtlassianOAuthCallbackFlow(
             config=config,
             post_json=lambda url, payload: self._post_json(url, payload),
             get_json=lambda url, access_token: self._get_json(url, access_token=access_token),
@@ -59,7 +64,7 @@ class JiraOAuthClient:
                 payload=payload,
             ),
         )
-        self._webhook_manager = JiraOAuthWebhookManager(
+        self._webhook_manager = AtlassianOAuthWebhookManager(
             request_json=lambda method, url, access_token, payload: self._request_json(
                 method=method,
                 url=url,
@@ -67,7 +72,7 @@ class JiraOAuthClient:
                 payload=payload,
             )
         )
-        self._attachment_service = JiraOAuthAttachmentService(
+        self._attachment_service = AtlassianOAuthAttachmentService(
             post_multipart=lambda *, url, access_token, filename, content, content_type="application/octet-stream": self._post_multipart(
                 url=url,
                 access_token=access_token,
@@ -76,6 +81,15 @@ class JiraOAuthClient:
                 content_type=content_type,
             ),
             get_bytes=lambda *, url, access_token: self._get_bytes(url=url, access_token=access_token),
+        )
+        self._confluence_service = AtlassianOAuthConfluenceService(
+            get_json=lambda *, url, access_token: self._get_json(url, access_token=access_token),
+            request_json=lambda *, method, url, access_token, payload=None: self._request_json(
+                method=method,
+                url=url,
+                access_token=access_token,
+                payload=payload,
+            ),
         )
 
     def _post_json(self, url: str, payload: dict) -> dict:
@@ -122,17 +136,113 @@ class JiraOAuthClient:
     def build_authorize_url(self, *, state: str) -> str:
         return self._callback_flow.build_authorize_url(state=state)
 
-    def exchange_code(self, *, code: str) -> JiraOAuthTokenSet:
+    def exchange_code(self, *, code: str) -> AtlassianOAuthTokenSet:
         return self._callback_flow.exchange_code(code=code)
 
-    def refresh_tokens(self, *, refresh_token: str) -> JiraOAuthTokenSet:
+    def refresh_tokens(self, *, refresh_token: str) -> AtlassianOAuthTokenSet:
         return self._callback_flow.refresh_tokens(refresh_token=refresh_token)
 
-    def list_accessible_resources(self, *, access_token: str) -> list[JiraOAuthResource]:
+    def list_accessible_resources(self, *, access_token: str) -> list[AtlassianOAuthResource]:
         return self._callback_flow.list_accessible_resources(access_token=access_token)
 
     def list_projects(self, *, access_token: str, cloud_id: str) -> list[JiraProject]:
         return self._issue_service.list_projects(access_token=access_token, cloud_id=cloud_id)
+
+    def get_confluence_space_by_key(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        space_key: str,
+    ) -> ConfluenceSpace:
+        return self._confluence_service.get_space_by_key(
+            access_token=access_token,
+            cloud_id=cloud_id,
+            space_key=space_key,
+        )
+
+    def list_confluence_spaces(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        limit: int = 250,
+    ) -> list[ConfluenceSpace]:
+        return self._confluence_service.list_spaces(
+            access_token=access_token,
+            cloud_id=cloud_id,
+            limit=limit,
+        )
+
+    def list_confluence_pages(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        site_url: str,
+        space_id: str,
+        limit: int = 250,
+    ) -> list[ConfluencePage]:
+        return self._confluence_service.list_pages(
+            access_token=access_token,
+            cloud_id=cloud_id,
+            site_url=site_url,
+            space_id=space_id,
+            limit=limit,
+        )
+
+    def get_confluence_page(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        site_url: str,
+        page_id: str,
+    ) -> ConfluencePage:
+        return self._confluence_service.get_page(
+            access_token=access_token,
+            cloud_id=cloud_id,
+            site_url=site_url,
+            page_id=page_id,
+        )
+
+    def create_confluence_page(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        site_url: str,
+        space_id: str,
+        title: str,
+        body_storage_value: str,
+        parent_page_id: str | None = None,
+    ) -> ConfluencePage:
+        return self._confluence_service.create_page(
+            access_token=access_token,
+            cloud_id=cloud_id,
+            site_url=site_url,
+            space_id=space_id,
+            title=title,
+            body_storage_value=body_storage_value,
+            parent_page_id=parent_page_id,
+        )
+
+    def update_confluence_page_title(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        site_url: str,
+        page_id: str,
+        title: str,
+    ) -> ConfluencePage:
+        return self._confluence_service.update_page_title(
+            access_token=access_token,
+            cloud_id=cloud_id,
+            site_url=site_url,
+            page_id=page_id,
+            title=title,
+        )
 
     def search_issues_by_jql(
         self,

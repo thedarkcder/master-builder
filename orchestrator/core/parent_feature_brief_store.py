@@ -220,16 +220,7 @@ def resolve_parent_feature_case(
             parent_issue_key=normalized_parent_issue_key,
         )
     ).scalars().first()
-    if primary_row is not None:
-        return primary_row
-    return session.execute(
-        select(PMInterviewCase)
-        .where(
-            PMInterviewCase.tenant_id == normalized_tenant_id,
-            PMInterviewCase.parent_issue_key == normalized_parent_issue_key,
-        )
-        .order_by(PMInterviewCase.updated_at.desc(), PMInterviewCase.created_at.desc())
-    ).scalars().first()
+    return primary_row
 
 
 def persist_parent_feature_brief_snapshot(

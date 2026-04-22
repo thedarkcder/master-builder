@@ -8,26 +8,26 @@ from uuid import uuid4
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
-from orchestrator.api.schemas import JiraConnectStart
-from orchestrator.core.jira_oauth_state import (
-    create_jira_oauth_state_token,
-    parse_jira_oauth_state_token,
+from orchestrator.api.schemas import AtlassianConnectStart
+from orchestrator.core.atlassian_oauth_state import (
+    create_atlassian_oauth_state_token,
+    parse_atlassian_oauth_state_token,
 )
 from orchestrator.core.secrets import encrypt_value
-from orchestrator.storage.models import JiraOAuthConnection, Tenant
-from orchestrator.tools.jira_oauth import JiraOAuthError
+from orchestrator.storage.models import AtlassianOAuthConnection, Tenant
+from orchestrator.tools.atlassian_oauth import AtlassianOAuthError
 
 logger = logging.getLogger(__name__)
 
 
-def build_jira_connect_start(
+def build_atlassian_connect_start(
     *,
     return_to: str,
     tenant_id: str | None,
     session: Session,
     settings,
-    jira_oauth_client_fn,
-) -> JiraConnectStart:  # noqa: ANN001
+    atlassian_oauth_client_fn,
+) -> AtlassianConnectStart:  # noqa: ANN001
     if return_to == "edit" and not tenant_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -37,53 +37,53 @@ def build_jira_connect_start(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
 
     expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
-    state_token = create_jira_oauth_state_token(
+    state_token = create_atlassian_oauth_state_token(
         exp=expires_at,
-        secret=settings.jira_oauth_state_secret,
+        secret=settings.atlassian_oauth_state_secret,
         return_to=return_to,
         tenant_id=tenant_id,
     )
     try:
-        client = jira_oauth_client_fn(session=session, settings=settings, tenant_id=tenant_id)
+        client = atlassian_oauth_client_fn(session=session, settings=settings, tenant_id=tenant_id)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     authorize_url = client.build_authorize_url(state=state_token)
-    return JiraConnectStart(authorize_url=authorize_url, expires_at=expires_at)
+    return AtlassianConnectStart(authorize_url=authorize_url, expires_at=expires_at)
 
 
-def handle_jira_connect_callback(
+def handle_atlassian_connect_callback(
     *,
     code: str,
     state_token: str,
     session: Session,
     settings,
-    jira_oauth_client_fn,
+    atlassian_oauth_client_fn,
     auto_provision_jira_webhook_fn=None,
 ) -> str:  # noqa: ANN001
     try:
-        state = parse_jira_oauth_state_token(
+        state = parse_atlassian_oauth_state_token(
             token=state_token,
-            secret=settings.jira_oauth_state_secret,
+            secret=settings.atlassian_oauth_state_secret,
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     try:
-        client = jira_oauth_client_fn(session=session, settings=settings, tenant_id=state.tenant_id)
+        client = atlassian_oauth_client_fn(session=session, settings=settings, tenant_id=state.tenant_id)
         token_set = client.exchange_code(code=code)
         resources = client.list_accessible_resources(access_token=token_set.access_token)
-    except (ValueError, JiraOAuthError) as exc:
+    except (ValueError, AtlassianOAuthError) as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     if not resources:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No Jira resources were granted by OAuth",
+            detail="No Atlassian resources were granted by OAuth",
         )
 
     resource = resources[0]
     now = datetime.now(timezone.utc)
-    connection = JiraOAuthConnection(
+    connection = AtlassianOAuthConnection(
         connection_id=str(uuid4()),
         account_id="unknown",
         account_email=None,
@@ -130,17 +130,17 @@ def handle_jira_connect_callback(
             except Exception:
                 auto_provision_state = "failed"
                 logger.exception(
-                    "jira_connect_callback_webhook_autoprovision_failed tenant_id=%s",
+                    "atlassian_connect_callback_webhook_autoprovision_failed tenant_id=%s",
                     state.tenant_id,
                 )
 
     if state.return_to == "edit" and state.tenant_id:
         webhook_query = f"&jira_webhook={quote(auto_provision_state, safe='')}"
         return (
-            f"{settings.admin_ui_base_url.rstrip('/')}/{quote(state.tenant_id, safe='')}/settings/jira"
-            f"?jira_oauth=success&jira_connection_id={quote(connection.connection_id, safe='')}{webhook_query}"
+            f"{settings.admin_ui_base_url.rstrip('/')}/{quote(state.tenant_id, safe='')}/settings/atlassian"
+            f"?atlassian_oauth=success&atlassian_connection_id={quote(connection.connection_id, safe='')}{webhook_query}"
         )
     return (
         f"{settings.admin_ui_base_url.rstrip('/')}/tenants/new"
-        f"?jira_oauth=success&jira_connection_id={quote(connection.connection_id, safe='')}"
+        f"?atlassian_oauth=success&atlassian_connection_id={quote(connection.connection_id, safe='')}"
     )

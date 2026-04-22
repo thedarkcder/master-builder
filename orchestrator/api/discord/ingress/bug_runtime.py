@@ -117,7 +117,7 @@ def create_discord_bug_issue(
         selected_project_key=selected_project_key,
         tenant_project_keys_fn=tenant_project_keys,
         resolve_discord_channel_name_fn=resolve_discord_channel_name,
-        tenant_jira_oauth_context_fn=jira_runtime.tenant_jira_oauth_context,
+        tenant_atlassian_oauth_context_fn=jira_runtime.tenant_atlassian_oauth_context,
         upload_discord_attachments_to_jira_fn=_upload_attachments,
         settings=settings,
     )

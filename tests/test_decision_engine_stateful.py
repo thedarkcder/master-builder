@@ -210,7 +210,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                     issue_labels=[],
                 ),
                 settings=self.settings,
-                tenant_jira_oauth_context_fn=lambda **__: None,
+                tenant_atlassian_oauth_context_fn=lambda **__: None,
                 evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
             )
             second = evaluate_decision_event(
@@ -227,7 +227,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                     issue_labels=[],
                 ),
                 settings=self.settings,
-                tenant_jira_oauth_context_fn=lambda **__: None,
+                tenant_atlassian_oauth_context_fn=lambda **__: None,
                 evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
             )
 
@@ -283,7 +283,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                     issue_labels=[],
                 ),
                 settings=self.settings,
-                tenant_jira_oauth_context_fn=lambda **__: None,
+                tenant_atlassian_oauth_context_fn=lambda **__: None,
                 evaluate_pre_run_check_fn=lambda **__: precheck,
             )
             second = evaluate_decision_event(
@@ -300,7 +300,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                     issue_labels=[],
                 ),
                 settings=self.settings,
-                tenant_jira_oauth_context_fn=lambda **__: None,
+                tenant_atlassian_oauth_context_fn=lambda **__: None,
                 evaluate_pre_run_check_fn=lambda **__: precheck,
             )
             cycle = session.get(DecisionCycle, second.cycle_id)
@@ -352,7 +352,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                     issue_labels=[],
                 ),
                 settings=self.settings,
-                tenant_jira_oauth_context_fn=lambda **__: None,
+                tenant_atlassian_oauth_context_fn=lambda **__: None,
                 evaluate_pre_run_check_fn=lambda **__: precheck,
             )
             second = evaluate_decision_event(
@@ -369,7 +369,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                     issue_labels=[],
                 ),
                 settings=self.settings,
-                tenant_jira_oauth_context_fn=lambda **__: None,
+                tenant_atlassian_oauth_context_fn=lambda **__: None,
                 evaluate_pre_run_check_fn=lambda **__: precheck,
             )
             event_count = len(session.query(DecisionEvent).all())
@@ -419,7 +419,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                     issue_labels=[],
                 ),
                 settings=self.settings,
-                tenant_jira_oauth_context_fn=lambda **__: None,
+                tenant_atlassian_oauth_context_fn=lambda **__: None,
                 evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
             )
             case_before = session.query(DecisionCase).filter_by(issue_key="MAB-164").one()
@@ -439,7 +439,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                     issue_labels=["agent:ready"],
                 ),
                 settings=self.settings,
-                tenant_jira_oauth_context_fn=lambda **__: None,
+                tenant_atlassian_oauth_context_fn=lambda **__: None,
                 evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
             )
             case_after = session.query(DecisionCase).filter_by(issue_key="MAB-164").one()
@@ -504,7 +504,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                     issue_labels=[],
                 ),
                 settings=self.settings,
-                tenant_jira_oauth_context_fn=lambda **__: None,
+                tenant_atlassian_oauth_context_fn=lambda **__: None,
                 evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
             )
             self.assertEqual(first.classification, "decision_gate")
@@ -551,7 +551,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                     issue_labels=[],
                 ),
                 settings=self.settings,
-                tenant_jira_oauth_context_fn=lambda **__: None,
+                tenant_atlassian_oauth_context_fn=lambda **__: None,
                 evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
             )
 
@@ -614,7 +614,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                     issue_labels=[],
                 ),
                 settings=self.settings,
-                tenant_jira_oauth_context_fn=lambda **__: None,
+                tenant_atlassian_oauth_context_fn=lambda **__: None,
                 evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
             )
             self.assertEqual(first.classification, "decision_gate")
@@ -662,7 +662,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                     issue_labels=[],
                 ),
                 settings=self.settings,
-                tenant_jira_oauth_context_fn=lambda **__: None,
+                tenant_atlassian_oauth_context_fn=lambda **__: None,
                 evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
             )
             case = session.query(DecisionCase).filter_by(issue_key="MAB-167").one()
@@ -726,7 +726,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                     issue_labels=[],
                 ),
                 settings=self.settings,
-                tenant_jira_oauth_context_fn=lambda **__: None,
+                tenant_atlassian_oauth_context_fn=lambda **__: None,
                 evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
             )
             cycle = session.get(DecisionCycle, str(first.cycle_id))
@@ -773,7 +773,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                     issue_labels=[],
                 ),
                 settings=self.settings,
-                tenant_jira_oauth_context_fn=lambda **__: None,
+                tenant_atlassian_oauth_context_fn=lambda **__: None,
                 evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
             )
 
@@ -791,7 +791,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                     issue_labels=[],
                 ),
                 settings=self.settings,
-                tenant_jira_oauth_context_fn=lambda **__: None,
+                tenant_atlassian_oauth_context_fn=lambda **__: None,
                 evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
             )
             case = session.query(DecisionCase).filter_by(issue_key="MAB-168").one()
@@ -868,7 +868,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                     issue_labels=[],
                 ),
                 settings=self.settings,
-                tenant_jira_oauth_context_fn=lambda **__: None,
+                tenant_atlassian_oauth_context_fn=lambda **__: None,
                 evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
             )
             self.assertEqual(first.classification, "decision_gate")
@@ -915,7 +915,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                     issue_labels=[],
                 ),
                 settings=self.settings,
-                tenant_jira_oauth_context_fn=lambda **__: None,
+                tenant_atlassian_oauth_context_fn=lambda **__: None,
                 evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
             )
 
@@ -933,7 +933,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                     issue_labels=["agent:ready", "ios", "payments"],
                 ),
                 settings=self.settings,
-                tenant_jira_oauth_context_fn=lambda **__: None,
+                tenant_atlassian_oauth_context_fn=lambda **__: None,
                 evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
             )
             case = session.query(DecisionCase).filter_by(issue_key="MAB-170").one()
@@ -1000,7 +1000,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                     issue_labels=["agent:ready"],
                 ),
                 settings=self.settings,
-                tenant_jira_oauth_context_fn=lambda **__: None,
+                tenant_atlassian_oauth_context_fn=lambda **__: None,
                 evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
             )
             self.assertEqual(first.classification, "decision_gate")
@@ -1047,7 +1047,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                     issue_labels=["agent:ready"],
                 ),
                 settings=self.settings,
-                tenant_jira_oauth_context_fn=lambda **__: None,
+                tenant_atlassian_oauth_context_fn=lambda **__: None,
                 evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
             )
             rerun = evaluate_decision_event(
@@ -1064,7 +1064,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                     issue_labels=["ios", "payments"],
                 ),
                 settings=self.settings,
-                tenant_jira_oauth_context_fn=lambda **__: None,
+                tenant_atlassian_oauth_context_fn=lambda **__: None,
                 evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
             )
             case = session.query(DecisionCase).filter_by(issue_key="MAB-171").one()
@@ -1200,7 +1200,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                     issue_labels=[],
                 ),
                 settings=self.settings,
-                tenant_jira_oauth_context_fn=lambda **__: None,
+                tenant_atlassian_oauth_context_fn=lambda **__: None,
                 publish_jira_comment_fn=_publish,
                 evaluate_pre_run_check_fn=lambda **__: precheck,
             )
@@ -1259,7 +1259,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                         issue_labels=[],
                     ),
                     settings=self.settings,
-                    tenant_jira_oauth_context_fn=lambda **__: None,
+                    tenant_atlassian_oauth_context_fn=lambda **__: None,
                     evaluate_pre_run_check_fn=_stub_precheck,
                 )
 
@@ -1314,7 +1314,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                         issue_labels=[],
                     ),
                     settings=self.settings,
-                    tenant_jira_oauth_context_fn=lambda **__: None,
+                    tenant_atlassian_oauth_context_fn=lambda **__: None,
                     evaluate_pre_run_check_fn=_stub_precheck,
                 )
 
@@ -1346,6 +1346,6 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                         issue_labels=[],
                     ),
                     settings=self.settings,
-                    tenant_jira_oauth_context_fn=lambda **__: None,
+                    tenant_atlassian_oauth_context_fn=lambda **__: None,
                     evaluate_pre_run_check_fn=lambda **__: _precheck_result(outcome="ready_for_agent"),
                 )

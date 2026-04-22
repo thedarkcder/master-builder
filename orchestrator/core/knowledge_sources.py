@@ -7,10 +7,10 @@ from uuid import uuid4
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from orchestrator.api.admin.route_helpers import jira_oauth_client, refresh_jira_connection_tokens
+from orchestrator.api.admin.route_helpers import atlassian_oauth_client, refresh_atlassian_connection_tokens
 from orchestrator.core.decision_types import JiraConfigKey, tenant_jira_config_text
 from orchestrator.core.knowledge_base import KnowledgeSyncResult, sync_project_knowledge_from_jira
-from orchestrator.storage.models import JiraOAuthConnection, KnowledgeSource, Project, Tenant
+from orchestrator.storage.models import AtlassianOAuthConnection, KnowledgeSource, Project, Tenant
 
 SUPPORTED_KNOWLEDGE_CONNECTORS = frozenset({"jira", "google_drive", "discord"})
 SYNCABLE_KNOWLEDGE_CONNECTORS = frozenset({"jira"})
@@ -162,21 +162,21 @@ def sync_project_knowledge_source(
         )
     connection_id = tenant_jira_config_text(tenant=tenant, key=JiraConfigKey.CONNECTION_ID)
     if not connection_id:
-        raise KnowledgeSourceValidationError("Tenant Jira connection is not configured")
-    connection = session.get(JiraOAuthConnection, connection_id)
+        raise KnowledgeSourceValidationError("Tenant Atlassian connection is not configured")
+    connection = session.get(AtlassianOAuthConnection, connection_id)
     if connection is None:
-        raise KnowledgeSourceValidationError("Jira OAuth connection was not found")
+        raise KnowledgeSourceValidationError("Atlassian connection was not found")
     project_key = str((source.config_json or {}).get("project_key") or project.jira_project_key or "").strip().upper()
     if not project_key:
         raise KnowledgeSourceValidationError("Jira source requires a project key")
 
-    access_token = refresh_jira_connection_tokens(
+    access_token = refresh_atlassian_connection_tokens(
         session,
         connection=connection,
         settings=settings,
         tenant_id=tenant.tenant_id,
     )
-    client = jira_oauth_client(
+    client = atlassian_oauth_client(
         session=session,
         settings=settings,
         tenant_id=tenant.tenant_id,

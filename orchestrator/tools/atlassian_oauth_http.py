@@ -6,10 +6,10 @@ from typing import Any
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-from orchestrator.tools.jira_oauth_models import JiraOAuthError, JiraOAuthHttpError
+from orchestrator.tools.atlassian_oauth_models import AtlassianOAuthError, AtlassianOAuthHttpError
 
 
-class JiraOAuthHttpClient:
+class AtlassianOAuthHttpClient:
     def __init__(self, *, opener=urlopen):
         self._opener = opener
 
@@ -21,7 +21,7 @@ class JiraOAuthHttpClient:
             headers={"Content-Type": "application/json", "Accept": "application/json"},
             method="POST",
         )
-        return self._read_json_response(request=request, error_prefix="Jira OAuth request failed")
+        return self._read_json_response(request=request, error_prefix="Atlassian request failed")
 
     def get_json(self, *, url: str, access_token: str) -> dict[str, Any] | list[Any]:
         request = Request(
@@ -32,7 +32,7 @@ class JiraOAuthHttpClient:
             },
             method="GET",
         )
-        return self._read_json_response(request=request, error_prefix="Jira API request failed")
+        return self._read_json_response(request=request, error_prefix="Atlassian API request failed")
 
     def request_json(
         self,
@@ -56,7 +56,7 @@ class JiraOAuthHttpClient:
             },
             method=method,
         )
-        return self._read_json_response(request=request, error_prefix="Jira API request failed")
+        return self._read_json_response(request=request, error_prefix="Atlassian API request failed")
 
     def get_bytes(self, *, url: str, access_token: str) -> bytes:
         request = Request(
@@ -72,7 +72,7 @@ class JiraOAuthHttpClient:
                 return response.read()
         except HTTPError as exc:
             error_body = exc.read().decode("utf-8", errors="ignore")
-            raise JiraOAuthError(f"Jira API request failed ({exc.code}): {error_body}") from exc
+            raise AtlassianOAuthError(f"Jira API request failed ({exc.code}): {error_body}") from exc
 
     def post_multipart(
         self,
@@ -114,7 +114,7 @@ class JiraOAuthHttpClient:
                 response_body = response.read().decode("utf-8")
         except HTTPError as exc:
             error_body = exc.read().decode("utf-8")
-            raise JiraOAuthHttpError(
+            raise AtlassianOAuthHttpError(
                 f"{error_prefix} ({exc.code}): {error_body}",
                 status_code=exc.code,
                 error_prefix=error_prefix,

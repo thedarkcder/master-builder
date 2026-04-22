@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from fastapi import HTTPException
 
 from orchestrator.api.discord.seed.issue_service import seed_issues_with_runtime, seed_parent_issues_with_runtime
+from orchestrator.core.architecture_document_service import ArchitectureDocumentGate
 from orchestrator.core.runtime_invocation import WorkflowAttemptRef
-from orchestrator.tools.jira_oauth import JiraIssueCreateResult, JiraOAuthError
-from orchestrator.tools.jira_oauth_issue_service import MAX_JIRA_ADF_DOCUMENT_BYTES, _to_adf_description
+from orchestrator.tools.atlassian_oauth import JiraIssueCreateResult, AtlassianOAuthError
+from orchestrator.tools.atlassian_oauth_issue_service import MAX_JIRA_ADF_DOCUMENT_BYTES, _to_adf_description
 
 
 def _seed_payload(*, project_key: str = "GP", parent_issue_type: str = "Story", child_count: int = 1) -> dict:
@@ -148,7 +149,7 @@ def test_seed_issues_scopes_allowed_project_keys() -> None:
             codex_runtime_error_type=RuntimeError,
             build_seed_issue_description_fn=lambda **_kwargs: "",
             issue_key_pattern=__import__("re").compile(r"^[A-Z]+-\d+$"),
-            tenant_jira_oauth_context_fn=lambda **_kwargs: {},
+            tenant_atlassian_oauth_context_fn=lambda **_kwargs: {},
             select_seed_match_fn=lambda **_kwargs: None,
         )
     assert exc_ctx.value.status_code == 409
@@ -195,7 +196,7 @@ def test_seed_issues_creates_parent_and_engineering_child() -> None:
         codex_runtime_error_type=RuntimeError,
         build_seed_issue_description_fn=lambda **_kwargs: {},
         issue_key_pattern=__import__("re").compile(r"^[A-Z]+-\d+$"),
-        tenant_jira_oauth_context_fn=lambda **_kwargs: {
+        tenant_atlassian_oauth_context_fn=lambda **_kwargs: {
             "client": _FakeClient(),
             "access_token": "token",
             "connection": SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
@@ -256,7 +257,7 @@ def test_seed_issues_passes_typed_attempt_ref_into_invocation_context() -> None:
         codex_runtime_error_type=RuntimeError,
         build_seed_issue_description_fn=lambda **_kwargs: {},
         issue_key_pattern=__import__("re").compile(r"^[A-Z]+-\d+$"),
-        tenant_jira_oauth_context_fn=lambda **_kwargs: {
+        tenant_atlassian_oauth_context_fn=lambda **_kwargs: {
             "client": _FakeClient(),
             "access_token": "token",
             "connection": SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
@@ -291,7 +292,7 @@ def test_seed_issues_fails_when_subtasks_are_unavailable() -> None:
             if issue.summary == "Improve checkout recovery":
                 return JiraIssueCreateResult(key="GP-10", issue_id="10")
             if issue.parent_issue_key:
-                raise JiraOAuthError("Subtask issue type is not available for project GP")
+                raise AtlassianOAuthError("Subtask issue type is not available for project GP")
             return JiraIssueCreateResult(key="GP-11", issue_id="11")
 
         def update_issue_fields(self, **_kwargs):  # type: ignore[no-untyped-def]
@@ -318,7 +319,7 @@ def test_seed_issues_fails_when_subtasks_are_unavailable() -> None:
             codex_runtime_error_type=RuntimeError,
             build_seed_issue_description_fn=lambda **_kwargs: {},
             issue_key_pattern=__import__("re").compile(r"^[A-Z]+-\d+$"),
-            tenant_jira_oauth_context_fn=lambda **_kwargs: {
+            tenant_atlassian_oauth_context_fn=lambda **_kwargs: {
                 "client": _FakeClient(),
                 "access_token": "token",
                 "connection": SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
@@ -351,11 +352,11 @@ def test_seed_issues_with_incomplete_oauth_context_returns_controlled_502() -> N
             codex_runtime_error_type=RuntimeError,
             build_seed_issue_description_fn=lambda **_kwargs: {},
             issue_key_pattern=__import__("re").compile(r"^[A-Z]+-\d+$"),
-            tenant_jira_oauth_context_fn=lambda **_kwargs: {"access_token": "tok-only"},
+            tenant_atlassian_oauth_context_fn=lambda **_kwargs: {"access_token": "tok-only"},
             select_seed_match_fn=lambda **_kwargs: None,
         )
     assert exc_ctx.value.status_code == 502
-    assert str(exc_ctx.value.detail) == "Failed to seed Jira issues: Jira OAuth context is incomplete"
+    assert str(exc_ctx.value.detail) == "Failed to seed Jira issues: Atlassian context is incomplete"
     assert "tok-only" not in str(exc_ctx.value.detail)
 
 
@@ -399,7 +400,7 @@ def test_seed_issues_normalizes_blank_parent_issue_type_to_project_supported_sto
         codex_runtime_error_type=RuntimeError,
         build_seed_issue_description_fn=lambda **_kwargs: {},
         issue_key_pattern=__import__("re").compile(r"^[A-Z]+-\d+$"),
-        tenant_jira_oauth_context_fn=lambda **_kwargs: {
+        tenant_atlassian_oauth_context_fn=lambda **_kwargs: {
             "client": _FakeClient(),
             "access_token": "token",
             "connection": SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
@@ -451,7 +452,7 @@ def test_seed_issues_keeps_single_behavior_parent_at_story_when_multiple_childre
         codex_runtime_error_type=RuntimeError,
         build_seed_issue_description_fn=lambda **_kwargs: {},
         issue_key_pattern=__import__("re").compile(r"^[A-Z]+-\d+$"),
-        tenant_jira_oauth_context_fn=lambda **_kwargs: {
+        tenant_atlassian_oauth_context_fn=lambda **_kwargs: {
             "client": _FakeClient(),
             "access_token": "token",
             "connection": SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
@@ -507,7 +508,7 @@ def test_seed_issues_promotes_parent_to_epic_when_pm_brief_signals_initiative_sc
         codex_runtime_error_type=RuntimeError,
         build_seed_issue_description_fn=lambda **_kwargs: {},
         issue_key_pattern=__import__("re").compile(r"^[A-Z]+-\d+$"),
-        tenant_jira_oauth_context_fn=lambda **_kwargs: {
+        tenant_atlassian_oauth_context_fn=lambda **_kwargs: {
             "client": _FakeClient(),
             "access_token": "token",
             "connection": SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
@@ -558,7 +559,7 @@ def test_seed_parent_issues_rejects_incomplete_pm_status_before_jira_write() -> 
             },
             codex_runtime_error_type=RuntimeError,
             issue_key_pattern=__import__("re").compile(r"^[A-Z]+-\d+$"),
-            tenant_jira_oauth_context_fn=lambda **_kwargs: {
+            tenant_atlassian_oauth_context_fn=lambda **_kwargs: {
                 "client": _FakeClient(),
                 "access_token": "token",
                 "connection": SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
@@ -591,7 +592,7 @@ def test_seed_parent_issues_blocks_when_stage_spi_not_ready() -> None:
             plan_pm_parent_issues_with_runtime_fn=lambda **_kwargs: (_ for _ in ()).throw(AssertionError("should not plan")),
             codex_runtime_error_type=RuntimeError,
             issue_key_pattern=__import__("re").compile(r"^[A-Z]+-\d+$"),
-            tenant_jira_oauth_context_fn=lambda **_kwargs: {},
+            tenant_atlassian_oauth_context_fn=lambda **_kwargs: {},
             select_seed_match_fn=lambda **_kwargs: None,
             pm_status="ready_to_write",
             pm_interview_notes_json={
@@ -644,7 +645,7 @@ def test_seed_issues_blocks_children_until_planning_completes_and_keeps_parent_p
         codex_runtime_error_type=RuntimeError,
         build_seed_issue_description_fn=lambda **_kwargs: {},
         issue_key_pattern=__import__("re").compile(r"^[A-Z]+-\d+$"),
-        tenant_jira_oauth_context_fn=lambda **_kwargs: {
+        tenant_atlassian_oauth_context_fn=lambda **_kwargs: {
             "client": _FakeClient(),
             "access_token": "token",
             "connection": SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
@@ -664,9 +665,9 @@ def test_seed_issues_blocks_children_until_planning_completes_and_keeps_parent_p
     parent_description = _adf_text(created[0].description)
     assert "PM status: pm_completed" in parent_description
     assert "Planning state: planning_drafting" in parent_description
-    assert "Architecture Context" in parent_description
-    assert "Architectural boundaries should stay modular." in parent_description
-    assert "Parent[Parent brief] --> Planner[Planning runtime]" in parent_description
+    assert "Architecture Context" not in parent_description
+    assert "Architectural boundaries should stay modular." not in parent_description
+    assert "Parent[Parent brief] --> Planner[Planning runtime]" not in parent_description
 
 
 def test_seed_issues_merges_planning_package_context_into_child_ticket_descriptions() -> None:
@@ -707,7 +708,7 @@ def test_seed_issues_merges_planning_package_context_into_child_ticket_descripti
         codex_runtime_error_type=RuntimeError,
         build_seed_issue_description_fn=lambda **_kwargs: {},
         issue_key_pattern=__import__("re").compile(r"^[A-Z]+-\d+$"),
-        tenant_jira_oauth_context_fn=lambda **_kwargs: {
+        tenant_atlassian_oauth_context_fn=lambda **_kwargs: {
             "client": _FakeClient(),
             "access_token": "token",
             "connection": SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
@@ -801,7 +802,7 @@ def test_seed_issues_truncates_large_jira_descriptions_before_write() -> None:
         codex_runtime_error_type=RuntimeError,
         build_seed_issue_description_fn=lambda **_kwargs: {},
         issue_key_pattern=__import__("re").compile(r"^[A-Z]+-\d+$"),
-        tenant_jira_oauth_context_fn=lambda **_kwargs: {
+        tenant_atlassian_oauth_context_fn=lambda **_kwargs: {
             "client": _FakeClient(),
             "access_token": "token",
             "connection": SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
@@ -863,3 +864,80 @@ def test_seed_issues_truncates_large_jira_descriptions_before_write() -> None:
     assert "Content truncated to fit Jira content size limit." not in created_text
     assert "Content truncated to fit Jira content size limit." not in child_text
     assert "Content truncated to fit Jira content size limit." not in updated_text
+
+
+def test_seed_issues_blocks_child_fanout_when_architecture_document_is_still_draft() -> None:
+    tenant = SimpleNamespace(tenant_id="tenant-a")
+    created: list[object] = []
+    updated: list[object] = []
+
+    class _FakeClient:
+        def list_project_issue_types_for_create(self, **_kwargs):  # type: ignore[no-untyped-def]
+            return ["Epic", "Story", "Task", "Issue"]
+
+        def search_issues_by_jql(self, **_kwargs):  # type: ignore[no-untyped-def]
+            return []
+
+        def create_issue(self, **kwargs):  # type: ignore[no-untyped-def]
+            created.append(kwargs["issue"])
+            return JiraIssueCreateResult(key="GP-1", issue_id="1")
+
+        def update_issue_fields(self, **kwargs):  # type: ignore[no-untyped-def]
+            updated.append(kwargs)
+            return None
+
+    payload = _seed_payload()
+    payload["parent_issue"]["labels"] = ["product", "architecture-required"]
+    with patch(
+        "orchestrator.api.discord.seed.issue_service._architecture_gate_for_parent_issue",
+        return_value=(
+            ArchitectureDocumentGate(
+                required=True,
+                provider="internal",
+                document=SimpleNamespace(
+                    title="Decision Engine v2",
+                    canonical_url="https://docs.example.com/decision-engine-v2",
+                ),
+                ready=False,
+                block_reason="Architecture document is still draft",
+            ),
+            SimpleNamespace(
+                title="Decision Engine v2",
+                url="https://docs.example.com/decision-engine-v2",
+            ),
+        ),
+    ):
+        message, data = seed_issues_with_runtime(
+            session=MagicMock(),
+            tenant=tenant,
+            prompt_markdown="seed issues",
+            scoped_project_id="project-a",
+            force_issue_keys=None,
+            allow_create=True,
+            scoped_project_keys=["GP"],
+            codex_working_dir="/tmp",
+            tenant_project_keys_fn=lambda **_kwargs: ["GP"],
+            get_settings_fn=lambda: SimpleNamespace(),
+            build_runtime_fn=lambda **_kwargs: object(),
+            plan_seed_issues_with_runtime_fn=lambda **_kwargs: payload,
+            codex_runtime_error_type=RuntimeError,
+            build_seed_issue_description_fn=lambda **_kwargs: {},
+            issue_key_pattern=__import__("re").compile(r"^[A-Z]+-\d+$"),
+            tenant_atlassian_oauth_context_fn=lambda **_kwargs: {
+                "client": _FakeClient(),
+                "access_token": "token",
+                "connection": SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
+            },
+            select_seed_match_fn=lambda **_kwargs: None,
+            planning_package=_planning_package(planning_state="planning_completed"),
+        )
+
+    assert "Architecture is required for this epic" in message
+    assert data["children_sync_status"] == "planning_blocked"
+    assert data["created_children"] == []
+    assert data["architecture_document_required"] is True
+    assert len(created) == 1
+    assert len(updated) == 1
+    parent_description = _adf_text(updated[0]["description"])
+    assert "See Architecture: Decision Engine v2 https://docs.example.com/decision-engine-v2" in parent_description
+    assert "Architecture Context" not in parent_description

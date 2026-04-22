@@ -8,7 +8,7 @@ from sqlalchemy import select
 from orchestrator.core.codex_runtime import CodexRuntimeError
 from orchestrator.core.clarification_projection_service import clarification_state_fingerprint
 from orchestrator.storage.models import FollowupContext, PMInterviewCase
-from orchestrator.tools.jira_oauth import JiraIssueDetail
+from orchestrator.tools.atlassian_oauth import JiraIssueDetail
 from tests.test_support.jira_webhook_harness import JiraWebhookHarness
 
 
@@ -69,7 +69,7 @@ class JiraParentClarificationFlowTests(JiraWebhookHarness):
             connection=SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
         )
         with (
-            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_jira_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_atlassian_oauth_context", return_value=oauth_context),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.build_runtime_for_selector", return_value=object()),
             patch(
                 "orchestrator.api.webhooks.jira_parent_child_sync.classify_engineering_clarification_with_codex",
@@ -198,7 +198,7 @@ class JiraParentClarificationFlowTests(JiraWebhookHarness):
             connection=SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
         )
         with (
-            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_jira_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_atlassian_oauth_context", return_value=oauth_context),
             patch(
                 "orchestrator.api.webhooks.jira_parent_child_sync.seed_issues_with_runtime",
                 return_value=(
@@ -308,7 +308,7 @@ class JiraParentClarificationFlowTests(JiraWebhookHarness):
             connection=SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
         )
         with (
-            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_jira_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_atlassian_oauth_context", return_value=oauth_context),
             patch(
                 "orchestrator.api.webhooks.jira_parent_child_sync.seed_issues_with_runtime",
                 return_value=(
@@ -411,7 +411,7 @@ class JiraParentClarificationFlowTests(JiraWebhookHarness):
             connection=SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
         )
         with (
-            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_jira_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_atlassian_oauth_context", return_value=oauth_context),
             patch(
                 "orchestrator.api.webhooks.jira_parent_child_sync.seed_issues_with_runtime",
                 return_value=(
@@ -554,7 +554,7 @@ class JiraParentClarificationFlowTests(JiraWebhookHarness):
             connection=SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
         )
         with (
-            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_jira_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_atlassian_oauth_context", return_value=oauth_context),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.build_runtime_for_selector", return_value=object()),
             patch(
                 "orchestrator.core.pm_interview_followup_service.plan_pm_interview_with_codex",
@@ -622,6 +622,71 @@ class JiraParentClarificationFlowTests(JiraWebhookHarness):
         self.assertEqual(case.status, "pm_completed")
         self.assertIn("90 day retention window", str(case.brief_json))
         self.assertEqual(case.brief_json["open_questions"], [])
+
+    def test_webhook_parent_pm_reply_requires_active_jira_followup_context(self) -> None:
+        now = datetime.now(timezone.utc)
+        with self.session_factory() as session:
+            session.add(
+                PMInterviewCase(
+                    case_id="pm-case-980-missing-followup",
+                    tenant_id="tenant-webhook",
+                    project_id="project-1",
+                    request_id="pm-request-980-missing-followup",
+                    parent_issue_key="TP-980M",
+                    source_kind="jira_parent",
+                    status="question_pending",
+                    channel_id="jira-parent-sync",
+                    thread_channel_id=None,
+                    root_message_id=None,
+                    owner_user_id="jira-user-980m",
+                    source_text="Identity redesign parent",
+                    brief_json={
+                        "objective": "Tenant identity redesign",
+                        "user_value": "Admins can manage identity safely",
+                    },
+                    evidence_json=[],
+                    question_history_json=[],
+                    current_question_json={"slot_key": "constraints", "question": "What audit retention window should v1 support?", "examples": []},
+                    next_question_json={"slot_key": "constraints", "question": "What audit retention window should v1 support?", "examples": []},
+                    missing_slots_json=["constraints"],
+                    notes_json={"source": "jira_parent_brief_normalization"},
+                    created_at=now,
+                    updated_at=now,
+                    closed_at=None,
+                )
+            )
+            session.commit()
+
+        payload = self._jira_issue_payload(issue_key="TP-980M", labels=["pm-parent", "sync-blocked"], status_name="To Do")
+        payload["webhookEvent"] = "comment_created"
+        payload["comment"] = {
+            "id": 2012,
+            "author": {"accountId": "jira-user-980m"},
+            "body": {
+                "type": "doc",
+                "version": 1,
+                "content": [
+                    {
+                        "type": "paragraph",
+                        "content": [{"type": "text", "text": "Use a 90 day audit retention window in v1."}],
+                    }
+                ],
+            },
+        }
+
+        with (
+            patch("orchestrator.core.jira_parent_child_sync_flows.continue_pm_interview_from_followup") as continue_mock,
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.seed_issues_with_runtime") as seed_mock,
+        ):
+            response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+            processed = self._process_one_webhook_job()
+
+        self._assert_jira_issue_event_queued(response, issue_key="TP-980M")
+        self.assertIsNotNone(processed)
+        assert processed is not None
+        self.assertEqual(processed.status, "done")
+        continue_mock.assert_not_called()
+        seed_mock.assert_not_called()
 
     def test_webhook_parent_pm_reply_does_not_post_new_questions_after_pm_completion(self) -> None:
         now = datetime.now(timezone.utc)
@@ -735,7 +800,7 @@ class JiraParentClarificationFlowTests(JiraWebhookHarness):
             connection=SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
         )
         with (
-            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_jira_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_atlassian_oauth_context", return_value=oauth_context),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.build_runtime_for_selector", return_value=object()),
             patch(
                 "orchestrator.core.pm_interview_followup_service.plan_pm_interview_with_codex",
@@ -909,7 +974,7 @@ class JiraParentClarificationFlowTests(JiraWebhookHarness):
             connection=SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
         )
         with (
-            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_jira_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_atlassian_oauth_context", return_value=oauth_context),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.build_runtime_for_selector", return_value=object()),
             patch(
                 "orchestrator.core.pm_interview_followup_service.plan_pm_interview_with_codex",
@@ -935,10 +1000,15 @@ class JiraParentClarificationFlowTests(JiraWebhookHarness):
                     "ready_to_write": False,
                 },
             ),
+            patch("orchestrator.core.jira_parent_child_sync_publishers.resolve_platform_secret_ref", return_value="discord-token"),
+            patch("orchestrator.core.jira_parent_child_sync_publishers.DiscordApiClient") as discord_client_cls,
             patch("orchestrator.api.webhooks.jira_parent_child_sync.create_jira_comment", return_value=({"id": "jira-question-981b"}, None)) as create_comment_mock,
             patch("orchestrator.api.webhooks.jira_parent_child_sync.post_jira_comment", return_value=(True, None)),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.seed_issues_with_runtime") as seed_mock,
         ):
+            discord_client = discord_client_cls.return_value
+            discord_client.post_message.return_value = {"id": "discord-msg-981"}
+            discord_client.create_thread_from_message.return_value = "discord-thread-981"
             response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
             processed = self._process_one_webhook_job()
 
@@ -1053,7 +1123,7 @@ class JiraParentClarificationFlowTests(JiraWebhookHarness):
             connection=SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
         )
         with (
-            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_jira_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_atlassian_oauth_context", return_value=oauth_context),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.build_runtime_for_selector", return_value=object()),
             patch(
                 "orchestrator.core.pm_interview_followup_service.plan_pm_interview_with_codex",

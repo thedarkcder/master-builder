@@ -474,22 +474,22 @@ class AdminRuntimeAndSecretApiTests(AdminApiTestHarness):
         self.assertEqual(missing_delete_response.status_code, 404)
 
     def test_jira_connect_uses_managed_secret_when_env_not_set(self) -> None:
-        os.environ.pop("JIRA_OAUTH_CLIENT_ID", None)
-        os.environ.pop("JIRA_OAUTH_CLIENT_SECRET", None)
+        os.environ.pop("ATLASSIAN_OAUTH_CLIENT_ID", None)
+        os.environ.pop("ATLASSIAN_OAUTH_CLIENT_SECRET", None)
 
         self.client.put(
-            "/api/admin/secrets/platform%2FJIRA_OAUTH_CLIENT_ID",
+            "/api/admin/secrets/platform%2FATLASSIAN_OAUTH_CLIENT_ID",
             json={"value": "jira-client-id-managed"},
             auth=("admin", "secret"),
         )
         self.client.put(
-            "/api/admin/secrets/platform%2FJIRA_OAUTH_CLIENT_SECRET",
+            "/api/admin/secrets/platform%2FATLASSIAN_OAUTH_CLIENT_SECRET",
             json={"value": "jira-client-secret-managed"},
             auth=("admin", "secret"),
         )
 
         response = self.client.post(
-            "/api/admin/jira/connect/start?return_to=wizard",
+            "/api/admin/atlassian/connect/start?return_to=wizard",
             auth=("admin", "secret"),
         )
         self.assertEqual(response.status_code, 200)

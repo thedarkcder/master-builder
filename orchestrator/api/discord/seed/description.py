@@ -3,7 +3,6 @@ from __future__ import annotations
 _ELLIPSIS = "..."
 
 _PARENT_SECTION_ITEM_LIMITS: dict[str, int] = {
-    "architecture_summary": 5,
     "scope_in": 8,
     "scope_out": 8,
     "acceptance_criteria": 10,
@@ -25,7 +24,8 @@ _TEXT_LIMITS: dict[str, int] = {
     "objective": 500,
     "user_value": 500,
     "recommendation": 500,
-    "architecture_item": 260,
+    "architecture_title": 220,
+    "architecture_url": 420,
     "scope_item": 180,
     "acceptance_item": 220,
     "ui_reference_item": 180,
@@ -41,9 +41,6 @@ _TEXT_LIMITS: dict[str, int] = {
     "planning_state": 120,
     "revision": 120,
 }
-
-_MAX_ARCHITECTURE_DIAGRAM_CHARS = 3_500
-_MAX_ARCHITECTURE_DIAGRAM_LINES = 80
 
 
 def _truncate_text(text: str, *, max_chars: int) -> str:
@@ -72,17 +69,6 @@ def _budget_items(
     return normalized if normalized else [empty_fallback]
 
 
-def _budget_code_block(text: str) -> str | None:
-    normalized = str(text or "").strip()
-    if not normalized:
-        return None
-    lines = normalized.splitlines()[:_MAX_ARCHITECTURE_DIAGRAM_LINES]
-    bounded = "\n".join(lines)
-    if len(bounded) <= _MAX_ARCHITECTURE_DIAGRAM_CHARS:
-        return bounded
-    return bounded[: _MAX_ARCHITECTURE_DIAGRAM_CHARS - len(_ELLIPSIS)].rstrip() + _ELLIPSIS
-
-
 def _heading(text: str) -> dict:
     return {
         "type": "heading",
@@ -104,22 +90,6 @@ def _bullet_list(items: list[str]) -> dict:
         ],
     }
 
-
-def _paragraph(text: str) -> dict:
-    return {
-        "type": "paragraph",
-        "content": [{"type": "text", "text": text}],
-    }
-
-
-def _code_block(text: str, *, language: str) -> dict:
-    return {
-        "type": "codeBlock",
-        "attrs": {"language": language},
-        "content": [{"type": "text", "text": text}],
-    }
-
-
 def build_parent_feature_description(
     *,
     objective: str,
@@ -136,20 +106,16 @@ def build_parent_feature_description(
     sync_status: str,
     pm_status: str | None = None,
     planning_state: str | None = None,
-    architecture_summary: list[str] | None = None,
-    architecture_diagram: str | None = None,
+    architecture_title: str | None = None,
+    architecture_url: str | None = None,
 ) -> dict:
     bounded_objective = _truncate_text(objective, max_chars=_TEXT_LIMITS["objective"]) or "No objective provided"
     bounded_user_value = _truncate_text(user_value, max_chars=_TEXT_LIMITS["user_value"]) or "User value was not provided"
     bounded_recommendation = (
         _truncate_text(recommendation, max_chars=_TEXT_LIMITS["recommendation"]) or "Recommendation was not provided"
     )
-    bounded_architecture_summary = _budget_items(
-        architecture_summary or [],
-        max_items=_PARENT_SECTION_ITEM_LIMITS["architecture_summary"],
-        max_chars=_TEXT_LIMITS["architecture_item"],
-        empty_fallback="Architecture context was not provided",
-    )
+    bounded_architecture_title = _truncate_text(architecture_title or "", max_chars=_TEXT_LIMITS["architecture_title"])
+    bounded_architecture_url = _truncate_text(architecture_url or "", max_chars=_TEXT_LIMITS["architecture_url"])
     bounded_scope_in = _budget_items(
         scope_in,
         max_items=_PARENT_SECTION_ITEM_LIMITS["scope_in"],
@@ -192,8 +158,6 @@ def build_parent_feature_description(
         max_chars=_TEXT_LIMITS["question_item"],
         empty_fallback="No open questions remain",
     )
-    bounded_architecture_diagram = _budget_code_block(architecture_diagram)
-
     content = [
         _heading("Objective"),
         _bullet_list([bounded_objective]),
@@ -201,9 +165,14 @@ def build_parent_feature_description(
         _bullet_list([bounded_user_value]),
         _heading("Recommendation"),
         _bullet_list([bounded_recommendation]),
-        _heading("Architecture Context"),
-        _bullet_list(bounded_architecture_summary),
     ]
+    if bounded_architecture_title or bounded_architecture_url:
+        content.extend(
+            [
+                _heading("Architecture"),
+                _bullet_list([f"See Architecture: {bounded_architecture_title} {bounded_architecture_url}".strip()]),
+            ]
+        )
     planning_status_items = [
         item
         for item in (
@@ -217,14 +186,6 @@ def build_parent_feature_description(
             [
                 _heading("Planning Status"),
                 _bullet_list(planning_status_items),
-            ]
-        )
-    if bounded_architecture_diagram:
-        content.extend(
-            [
-                _heading("Architecture Diagram"),
-                _paragraph("Mermaid diagram generated during backlog planning."),
-                _code_block(bounded_architecture_diagram, language="mermaid"),
             ]
         )
     content.extend(
@@ -275,6 +236,8 @@ def build_engineering_child_description(
     dependencies_and_risks: list[str],
     specialist_summary: list[str] | None = None,
     planning_state: str | None = None,
+    architecture_title: str | None = None,
+    architecture_url: str | None = None,
 ) -> dict:
     bounded_delivery = (
         _truncate_text(delivery, max_chars=_TEXT_LIMITS["delivery"])
@@ -291,6 +254,8 @@ def build_engineering_child_description(
         _truncate_text(expected_outcome, max_chars=_TEXT_LIMITS["expected_outcome"])
         or "Expected outcome was not provided"
     )
+    bounded_architecture_title = _truncate_text(architecture_title or "", max_chars=_TEXT_LIMITS["architecture_title"])
+    bounded_architecture_url = _truncate_text(architecture_url or "", max_chars=_TEXT_LIMITS["architecture_url"])
     bounded_acceptance_criteria = _budget_items(
         acceptance_criteria,
         max_items=_CHILD_SECTION_ITEM_LIMITS["acceptance_criteria"],
@@ -353,6 +318,11 @@ def build_engineering_child_description(
         _heading("Notes / Links"),
         _bullet_list(["Owned by Engineering", f"Parent issue: {parent_issue_key}"]),
     ]
+    if bounded_architecture_title or bounded_architecture_url:
+        content[4:4] = [
+            _heading("Architecture"),
+            _bullet_list([f"See Architecture: {bounded_architecture_title} {bounded_architecture_url}".strip()]),
+        ]
     return {"type": "doc", "version": 1, "content": content}
 
 

@@ -82,12 +82,18 @@ class ParentFeaturePlanningWorkflow:
             refresh=False,
         )
         normalization_questions = ClarificationQuestionSet.from_values(normalization_questions).questions
-        self._rewrite_parent_from_brief(
-            issue_gateway=issue_gateway,
-            parent_detail=parent_detail,
-            brief_payload=product_brief,
-            normalization_questions=normalization_questions,
+        architecture_gate = issue_gateway.resolve_architecture_gate(
+            parent_issue_key=context.issue_key,
+            issue_summary=parent_detail.summary,
+            issue_labels=list(parent_detail.labels or []),
         )
+        if not (architecture_gate.required and architecture_gate.document is None):
+            self._rewrite_parent_from_brief(
+                issue_gateway=issue_gateway,
+                parent_detail=parent_detail,
+                brief_payload=product_brief,
+                normalization_questions=normalization_questions,
+            )
         if normalization_questions:
             self._mark_parent_synced(lifecycle=lifecycle, draft=True)
             return self._block_parent_brief(
@@ -100,6 +106,23 @@ class ParentFeaturePlanningWorkflow:
                 body_prefix="Parent feature was created in backlog, but brief normalization is blocked pending clarification.",
                 reason="pm_parent_issue_created_brief_blocked",
                 waiting_operation_type="brief_normalization",
+            )
+        if architecture_gate.required and not architecture_gate.ready:
+            self._mark_parent_synced(lifecycle=lifecycle, draft=True)
+            return self._block_on_architecture(
+                context=context,
+                issue_gateway=issue_gateway,
+                parent_detail=parent_detail,
+                lifecycle=lifecycle,
+                reason="pm_parent_issue_created_architecture_blocked",
+                extra={
+                    "architecture_document_title": architecture_gate.document.title if architecture_gate.document else None,
+                    "architecture_document_url": (
+                        str(architecture_gate.document.canonical_url or "").strip()
+                        if architecture_gate.document is not None
+                        else None
+                    ),
+                },
             )
         self._mark_brief_normalized(lifecycle=lifecycle, source="source issue")
         try:
@@ -230,12 +253,18 @@ class ParentFeaturePlanningWorkflow:
             refresh=True,
         )
         normalization_questions = ClarificationQuestionSet.from_values(normalization_questions).questions
-        self._rewrite_parent_from_brief(
-            issue_gateway=issue_gateway,
-            parent_detail=parent_detail,
-            brief_payload=product_brief,
-            normalization_questions=normalization_questions,
+        architecture_gate = issue_gateway.resolve_architecture_gate(
+            parent_issue_key=context.issue_key,
+            issue_summary=parent_detail.summary,
+            issue_labels=list(parent_detail.labels or []),
         )
+        if not (architecture_gate.required and architecture_gate.document is None):
+            self._rewrite_parent_from_brief(
+                issue_gateway=issue_gateway,
+                parent_detail=parent_detail,
+                brief_payload=product_brief,
+                normalization_questions=normalization_questions,
+            )
         if normalization_questions:
             self._mark_parent_synced(lifecycle=lifecycle, draft=True)
             blocked_issue_keys = [context.issue_key, *[detail.key for detail in child_details]]
@@ -251,6 +280,26 @@ class ParentFeaturePlanningWorkflow:
                 reason="pm_parent_sync_brief_blocked",
                 waiting_operation_type="brief_normalization",
                 extra={"changed_fields": material_changed_fields},
+            )
+        if architecture_gate.required and not architecture_gate.ready:
+            self._mark_parent_synced(lifecycle=lifecycle, draft=True)
+            blocked_issue_keys = [context.issue_key, *[detail.key for detail in child_details]]
+            issue_gateway.mark_issues_sync_blocked(issue_keys=blocked_issue_keys)
+            return self._block_on_architecture(
+                context=context,
+                issue_gateway=issue_gateway,
+                parent_detail=parent_detail,
+                lifecycle=lifecycle,
+                reason="pm_parent_sync_architecture_blocked",
+                extra={
+                    "changed_fields": material_changed_fields,
+                    "architecture_document_title": architecture_gate.document.title if architecture_gate.document else None,
+                    "architecture_document_url": (
+                        str(architecture_gate.document.canonical_url or "").strip()
+                        if architecture_gate.document is not None
+                        else None
+                    ),
+                },
             )
         self._mark_brief_normalized(lifecycle=lifecycle, source="source issue")
 
@@ -536,6 +585,36 @@ class ParentFeaturePlanningWorkflow:
             extra=payload,
         )
 
+    def _block_on_architecture(
+        self,
+        *,
+        context,
+        issue_gateway,
+        parent_detail,
+        lifecycle,
+        reason: str,
+        extra: dict[str, object] | None = None,
+    ) -> WorkflowAdvanceOutcome:
+        issue_gateway.update_issue_sync_label(
+            issue_detail=parent_detail,
+            target_label="sync-blocked",
+        )
+        issue_gateway.post_sync_note(
+            issue_key=parent_detail.key,
+            body="Planning is blocked until the linked architecture document is marked ready.",
+        )
+        lifecycle.mark_waiting_for_input(
+            operation_type="backlog_planning",
+            summary="Parent planning is waiting for the architecture document to be marked ready.",
+        )
+        payload = dict(extra or {})
+        payload["webhook_event"] = context.webhook_event
+        return lifecycle.build_outcome(
+            handled=True,
+            reason=reason,
+            extra=payload,
+        )
+
     def _handle_pm_interview_followup(
         self,
         *,
@@ -590,12 +669,35 @@ class ParentFeaturePlanningWorkflow:
                 },
             )
 
-        self._rewrite_parent_from_brief(
-            issue_gateway=issue_gateway,
-            parent_detail=parent_detail,
-            brief_payload=brief_payload,
-            normalization_questions=(),
+        architecture_gate = issue_gateway.resolve_architecture_gate(
+            parent_issue_key=context.issue_key,
+            issue_summary=parent_detail.summary,
+            issue_labels=list(parent_detail.labels or []),
         )
+        if not (architecture_gate.required and architecture_gate.document is None):
+            self._rewrite_parent_from_brief(
+                issue_gateway=issue_gateway,
+                parent_detail=parent_detail,
+                brief_payload=brief_payload,
+                normalization_questions=(),
+            )
+        if architecture_gate.required and not architecture_gate.ready:
+            self._mark_parent_synced(lifecycle=lifecycle, draft=True)
+            return self._block_on_architecture(
+                context=context,
+                issue_gateway=issue_gateway,
+                parent_detail=parent_detail,
+                lifecycle=lifecycle,
+                reason="pm_interview_followup_architecture_blocked",
+                extra={
+                    "architecture_document_title": architecture_gate.document.title if architecture_gate.document else None,
+                    "architecture_document_url": (
+                        str(architecture_gate.document.canonical_url or "").strip()
+                        if architecture_gate.document is not None
+                        else None
+                    ),
+                },
+            )
         self._mark_brief_normalized(lifecycle=lifecycle, source="PM clarification answers")
 
         try:

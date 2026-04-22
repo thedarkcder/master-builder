@@ -20,7 +20,7 @@ export default async function NewTenantRootRedirect({
       }
     }
   }
-  if (!params.has("tenant_id") && !params.has("jira_connection_id") && !params.has("github_install") && !params.has("discord_install")) {
+  if (!params.has("tenant_id") && !params.has("atlassian_connection_id") && !params.has("github_install") && !params.has("discord_install")) {
     params.set("fresh", "1");
   }
   const query = params.toString();
@@ -29,7 +29,7 @@ export default async function NewTenantRootRedirect({
     targetStep = "discord";
   } else if (params.get("github_install") === "success") {
     targetStep = "github";
-  } else if (params.has("jira_connection_id") || params.get("jira_oauth") === "success") {
+  } else if (params.has("atlassian_connection_id") || params.get("atlassian_oauth") === "success") {
     targetStep = "jira";
   }
 

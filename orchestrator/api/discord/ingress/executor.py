@@ -200,7 +200,7 @@ def _build_ingress_dependencies():
         fetch_issue_detail_fn=jira_runtime.fetch_jira_issue_detail,
         settings_factory_fn=get_settings,
         build_codex_runtime_fn=build_codex_runtime,
-        tenant_jira_oauth_context_fn=jira_runtime.tenant_jira_oauth_context,
+        tenant_atlassian_oauth_context_fn=jira_runtime.tenant_atlassian_oauth_context,
         ensure_issue_is_executable_fn=_ensure_issue_is_executable,
         resolve_codex_working_dir_fn=_resolve_codex_working_dir,
     )

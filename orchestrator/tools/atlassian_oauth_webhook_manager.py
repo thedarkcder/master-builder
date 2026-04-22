@@ -3,13 +3,13 @@ from __future__ import annotations
 import re
 from typing import Any, Callable
 
-from orchestrator.tools.jira_oauth_models import JiraOAuthError
+from orchestrator.tools.atlassian_oauth_models import AtlassianOAuthError
 
 _TRANSIENT_WEBHOOK_ERROR_CODES = {502, 503, 504}
 _TRANSIENT_WEBHOOK_MAX_ATTEMPTS = 3
 
 
-class JiraOAuthWebhookManager:
+class AtlassianOAuthWebhookManager:
     def __init__(
         self,
         *,
@@ -24,17 +24,17 @@ class JiraOAuthWebhookManager:
         access_token: str,
         payload: dict[str, Any] | None,
     ) -> dict[str, Any] | list[Any]:
-        last_error: JiraOAuthError | None = None
+        last_error: AtlassianOAuthError | None = None
         for _attempt in range(_TRANSIENT_WEBHOOK_MAX_ATTEMPTS):
             try:
                 return self._request_json(method, url, access_token, payload)
-            except JiraOAuthError as exc:
+            except AtlassianOAuthError as exc:
                 last_error = exc
                 if not _is_transient_webhook_error(exc):
                     raise
         if last_error is not None:
             raise last_error
-        raise JiraOAuthError("Webhook request failed without a captured error")
+        raise AtlassianOAuthError("Webhook request failed without a captured error")
 
     def register_webhook(
         self,
@@ -62,7 +62,7 @@ class JiraOAuthWebhookManager:
         normalized_ids = _extract_created_webhook_ids(payload)
         if not normalized_ids:
             summary = _summarize_webhook_registration_failure(payload)
-            raise JiraOAuthError(
+            raise AtlassianOAuthError(
                 f"Webhook registration did not return any webhook IDs ({summary})"
             )
         return normalized_ids
@@ -130,7 +130,7 @@ def _extract_created_webhook_ids(payload: dict[str, Any] | list[Any]) -> list[in
     return normalized_ids
 
 
-def _is_transient_webhook_error(exc: JiraOAuthError) -> bool:
+def _is_transient_webhook_error(exc: AtlassianOAuthError) -> bool:
     message = str(exc)
     code_matches = re.findall(r"\b(\d{3})\b", message)
     if not code_matches:

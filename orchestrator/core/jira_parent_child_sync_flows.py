@@ -24,7 +24,7 @@ from orchestrator.core.jira_parent_child_sync_publishers import (
 )
 from orchestrator.core.jira_parent_child_sync_service import (
     _jira_adapter,
-    _jira_oauth_context,
+    _atlassian_oauth_context,
     build_workflow_advance_handler_resolver,
 )
 from orchestrator.core.jira_parent_child_sync_shared import (
@@ -40,13 +40,11 @@ from orchestrator.core.jira_parent_child_sync_shared import (
 )
 from orchestrator.core.parent_feature_brief_store import (
     persist_parent_feature_brief_snapshot,
-    resolve_parent_feature_case,
 )
 from orchestrator.core.parent_planning_clarification_service import ParentPlanningClarificationService
 from orchestrator.core.pm_interview_followup_service import continue_pm_interview_from_followup
 from orchestrator.core.pm_interview_service import (
     PM_INTERVIEW_STATUS_PM_COMPLETED,
-    PM_INTERVIEW_STATUS_QUESTION_PENDING,
     format_pm_interview_question,
     mark_pm_interview_case_completed,
 )
@@ -130,7 +128,7 @@ def handle_engineering_clarification_command(
         tenant=context.tenant,
         settings=settings,
     )
-    oauth = _jira_oauth_context(
+    oauth = _atlassian_oauth_context(
         integration_router=integration_router,
         session=session,
         tenant=context.tenant,
@@ -388,7 +386,7 @@ def handle_engineering_clarification_reply(
         tenant=context.tenant,
         settings=settings,
     )
-    oauth = _jira_oauth_context(
+    oauth = _atlassian_oauth_context(
         integration_router=integration_router,
         session=session,
         tenant=context.tenant,
@@ -546,15 +544,6 @@ def handle_pm_interview_reply(
     if jira_followup is not None:
         metadata = dict(getattr(jira_followup, "metadata_json", {}) or {})
         pm_request_id = str(metadata.get("pm_request_id") or "").strip() or None
-    if not pm_request_id:
-        legacy_case = resolve_parent_feature_case(
-            session=session,
-            tenant_id=context.tenant_id,
-            parent_issue_key=context.issue_key,
-        )
-        if legacy_case is None or str(getattr(legacy_case, "status", "") or "").strip() != PM_INTERVIEW_STATUS_QUESTION_PENDING:
-            return JiraParentChildSyncResult(handled=False)
-        pm_request_id = str(getattr(legacy_case, "request_id", "") or "").strip() or None
     if not pm_request_id:
         return JiraParentChildSyncResult(handled=False)
 

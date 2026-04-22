@@ -178,7 +178,7 @@ class JiraWebhookAdmissionFlowTests(JiraWebhookHarness):
                     return_value=decision_result,
                 ), patch.object(
                     jira_admission_flow,
-                    "tenant_jira_oauth_context",
+                    "tenant_atlassian_oauth_context",
                     return_value=oauth_context,
                 ):
                     result = jira_admission_flow.evaluate_precheck_decision_with_labels(
@@ -253,7 +253,7 @@ class JiraWebhookAdmissionFlowTests(JiraWebhookHarness):
                     return_value=decision_result,
                 ), patch.object(
                     jira_admission_flow,
-                    "tenant_jira_oauth_context",
+                    "tenant_atlassian_oauth_context",
                     return_value=oauth_context,
                 ):
                     result = jira_admission_flow.evaluate_precheck_decision_with_labels(
@@ -303,7 +303,7 @@ class JiraWebhookAdmissionFlowTests(JiraWebhookHarness):
 
         with (
             patch(
-                "orchestrator.api.webhooks.jira_admission_flow.tenant_jira_oauth_context",
+                "orchestrator.api.webhooks.jira_admission_flow.tenant_atlassian_oauth_context",
                 return_value=oauth_context,
             ),
             patch(

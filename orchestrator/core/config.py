@@ -41,7 +41,7 @@ class Settings(BaseSettings):
     github_install_state_secret: str = "local-dev-change-me"
     github_app_slug: str = ""
     public_api_base_url: str = "http://localhost:4000"
-    jira_oauth_state_secret: str = "local-dev-change-me"
+    atlassian_oauth_state_secret: str = "local-dev-change-me"
     secrets_encryption_key: str = ""
     discord_guild_id: str = ""
     discord_channel_name_template: str = "{project_name}"

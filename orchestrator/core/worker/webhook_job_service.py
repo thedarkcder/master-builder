@@ -10,7 +10,7 @@ from orchestrator.api.commands.entrypoint import execute_tenant_discord_ingress_
 from orchestrator.api.discord.interactions.application import build_default_discord_interaction_dispatch_deps
 from orchestrator.api.discord.interactions.dispatcher import dispatch_discord_interaction
 from orchestrator.api.discord.shared.state import command_matches
-from orchestrator.api.jira_oauth.connection_service import tenant_jira_oauth_context
+from orchestrator.api.atlassian_oauth.connection_service import tenant_atlassian_oauth_context
 from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.api.transport_runtime import (
     build_http_transport_action_executors,
@@ -94,7 +94,7 @@ def _non_http_ingress_result(result: IngressResult) -> IngressResult:
 
 
 def _refresh_jira_context_from_live_issue(*, context, session, settings) -> None:  # noqa: ANN001
-    oauth = tenant_jira_oauth_context(session=session, tenant=context.tenant, settings=settings)
+    oauth = tenant_atlassian_oauth_context(session=session, tenant=context.tenant, settings=settings)
     issue_detail = oauth.client.get_issue_detail(
         access_token=oauth.access_token,
         cloud_id=oauth.connection.cloud_id,

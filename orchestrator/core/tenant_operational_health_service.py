@@ -19,7 +19,7 @@ class TenantIntegrationSnapshot:
     jira_connected: bool
     github_connected: bool
     jira_webhook_healthy: bool
-    jira_connection_id: str | None
+    atlassian_connection_id: str | None
     github_installation_id: str | None
     jira_project_keys: list[str]
     jira_ready_statuses: list[str]
@@ -66,18 +66,18 @@ def _is_recent_timestamp(raw: str | None, *, within_hours: int) -> bool:
 def tenant_integration_snapshot(*, tenant: Tenant) -> TenantIntegrationSnapshot:
     jira_config = dict(tenant.jira_config or {})
     github_config = dict(tenant.github_config or {})
-    jira_connection_id = jira_config_text(jira_config=jira_config, key=JiraConfigKey.CONNECTION_ID)
+    atlassian_connection_id = jira_config_text(jira_config=jira_config, key=JiraConfigKey.CONNECTION_ID)
     github_installation_id = str(github_config.get("installation_id") or "").strip() or None
     jira_webhook_last_received_at = str(jira_config.get("webhook_last_received_at") or "").strip() or None
     jira_webhook_last_error = str(jira_config.get("webhook_last_error") or "").strip() or None
     return TenantIntegrationSnapshot(
-        jira_connected=bool(jira_connection_id),
+        jira_connected=bool(atlassian_connection_id),
         github_connected=bool(github_installation_id),
         jira_webhook_healthy=(
             _is_recent_timestamp(jira_webhook_last_received_at, within_hours=24)
             and not bool(jira_webhook_last_error)
         ),
-        jira_connection_id=jira_connection_id,
+        atlassian_connection_id=atlassian_connection_id,
         github_installation_id=github_installation_id,
         jira_project_keys=list(jira_config_project_keys(jira_config=jira_config)),
         jira_ready_statuses=list(tenant_jira_ready_statuses(tenant)) or ["Ready for Agent"],

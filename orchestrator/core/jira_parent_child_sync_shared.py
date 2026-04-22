@@ -6,7 +6,7 @@ from typing import Any
 
 from orchestrator.core.clarification_questions import ClarificationQuestion
 from orchestrator.core.workflow_runtime import WorkflowAdvanceOutcome, WorkflowTransitionPlan, apply_workflow_transition_plan
-from orchestrator.tools.jira_oauth import JiraIssueDetail
+from orchestrator.tools.atlassian_oauth import JiraIssueDetail
 
 _SYSTEM_COMMENT_MARKER = "[mb-system]"
 _SYNC_LABELS = {"sync-current", "sync-stale", "sync-blocked"}

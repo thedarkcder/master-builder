@@ -75,7 +75,7 @@ def _queue_run_from_issue_context(
     issue_labels: list[str] | None,
     decision_clarification_port: DecisionClarificationPort,
     settings_factory: Callable[[], Any],
-    tenant_jira_oauth_context: Callable[..., Any],
+    tenant_atlassian_oauth_context: Callable[..., Any],
     conflict_prefix: str,
     success_message: str,
 ) -> DiscordCommandResponse:
@@ -94,7 +94,7 @@ def _queue_run_from_issue_context(
             issue_labels=issue_labels,
         ),
         settings=settings,
-        tenant_jira_oauth_context_fn=tenant_jira_oauth_context,
+        tenant_atlassian_oauth_context_fn=tenant_atlassian_oauth_context,
         evaluate_pre_run_check_fn=evaluate_pre_run_check,
         oauth_context=None,
         publish_jira_comment_fn=None,
@@ -156,7 +156,7 @@ def dispatch_run_control_command(
     fetch_issue_detail: Callable[..., Any],
     settings_factory: Callable[[], Any],
     build_codex_runtime: Callable[..., Any],
-    tenant_jira_oauth_context: Callable[..., Any],
+    tenant_atlassian_oauth_context: Callable[..., Any],
     ensure_issue_is_executable: Callable[..., Any],
     resolve_codex_working_dir: Callable[..., str],
 ) -> DiscordCommandResponse | None:
@@ -205,7 +205,7 @@ def dispatch_run_control_command(
             issue_labels=issue_labels,
             decision_clarification_port=decision_clarification_port,
             settings_factory=settings_factory,
-            tenant_jira_oauth_context=tenant_jira_oauth_context,
+            tenant_atlassian_oauth_context=tenant_atlassian_oauth_context,
             conflict_prefix="Run could not be queued",
             success_message="Queued run {run_id} for {issue_key}",
         )
@@ -299,7 +299,7 @@ def dispatch_run_control_command(
             issue_labels=issue_labels,
             decision_clarification_port=decision_clarification_port,
             settings_factory=settings_factory,
-            tenant_jira_oauth_context=tenant_jira_oauth_context,
+            tenant_atlassian_oauth_context=tenant_atlassian_oauth_context,
             conflict_prefix="Retry could not be queued",
             success_message="Queued retry run {run_id} for {issue_key}",
         )
@@ -346,13 +346,13 @@ def dispatch_run_control_command(
         issue_description: str | None = None
         codex_working_dir: str | None = None
         try:
-            oauth = tenant_jira_oauth_context(session=session, tenant=tenant, settings=settings)
+            oauth = tenant_atlassian_oauth_context(session=session, tenant=tenant, settings=settings)
             oauth_client = _oauth_context_value(oauth, "client")
             oauth_connection = _oauth_context_value(oauth, "connection")
             oauth_access_token = _oauth_context_value(oauth, "access_token")
             cloud_id = getattr(oauth_connection, "cloud_id", None)
             if oauth_client is None or oauth_access_token is None or not str(cloud_id or "").strip():
-                raise RuntimeError("Tenant Jira OAuth context is incomplete")
+                raise RuntimeError("Tenant Atlassian context is incomplete")
             issue_detail = oauth_client.get_issue_detail(
                 access_token=oauth_access_token,
                 cloud_id=str(cloud_id),
@@ -425,7 +425,7 @@ def dispatch_run_control_command(
                     issue_description=issue_description,
                     issue_labels=issue_labels,
                 ),
-                tenant_jira_oauth_context_fn=tenant_jira_oauth_context,
+                tenant_atlassian_oauth_context_fn=tenant_atlassian_oauth_context,
                 evaluate_pre_run_check_fn=evaluate_pre_run_check,
                 oauth_context=oauth,
                 publish_jira_comment_fn=_publish_jira_comment,
@@ -532,7 +532,7 @@ def dispatch_run_control_command(
             issue_labels=effective_issue_labels or None,
             decision_clarification_port=decision_clarification_port,
             settings_factory=settings_factory,
-            tenant_jira_oauth_context=tenant_jira_oauth_context,
+            tenant_atlassian_oauth_context=tenant_atlassian_oauth_context,
             conflict_prefix="Retry could not be queued" if has_retryable_run else "Run could not be queued",
             success_message=(
                 "Queued retry run {run_id} for {issue_key}"

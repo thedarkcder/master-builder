@@ -2,19 +2,19 @@ import unittest
 from urllib.parse import parse_qs, urlparse
 from unittest.mock import patch
 
-from orchestrator.tools.jira_oauth import (
+from orchestrator.tools.atlassian_oauth import (
     JiraIssueCreateInput,
-    JiraOAuthClient,
-    JiraOAuthClientConfig,
+    AtlassianOAuthClient,
+    AtlassianOAuthClientConfig,
     _to_adf_description,
 )
-from orchestrator.tools.jira_oauth_issue_service import MAX_JIRA_ADF_DOCUMENT_BYTES
+from orchestrator.tools.atlassian_oauth_issue_service import MAX_JIRA_ADF_DOCUMENT_BYTES
 
 
 class JiraOAuthTests(unittest.TestCase):
     def test_authorize_url_includes_offline_access_scope(self) -> None:
-        client = JiraOAuthClient(
-            JiraOAuthClientConfig(
+        client = AtlassianOAuthClient(
+            AtlassianOAuthClientConfig(
                 client_id="client-id",
                 client_secret="client-secret",
                 redirect_uri="https://example.test/callback",
@@ -33,8 +33,8 @@ class JiraOAuthTests(unittest.TestCase):
         self.assertIn("write:attachment:jira", scopes)
 
     def test_search_issues_uses_search_jql_endpoint(self) -> None:
-        client = JiraOAuthClient(
-            JiraOAuthClientConfig(
+        client = AtlassianOAuthClient(
+            AtlassianOAuthClientConfig(
                 client_id="client-id",
                 client_secret="client-secret",
                 redirect_uri="https://example.test/callback",
@@ -56,8 +56,8 @@ class JiraOAuthTests(unittest.TestCase):
         )
 
     def test_upload_issue_attachment_posts_multipart_payload(self) -> None:
-        client = JiraOAuthClient(
-            JiraOAuthClientConfig(
+        client = AtlassianOAuthClient(
+            AtlassianOAuthClientConfig(
                 client_id="client-id",
                 client_secret="client-secret",
                 redirect_uri="https://example.test/callback",
@@ -84,7 +84,7 @@ class JiraOAuthTests(unittest.TestCase):
             captured["payload"] = request.data
             return _FakeResponse()
 
-        with patch("orchestrator.tools.jira_oauth.urlopen", side_effect=_fake_urlopen):
+        with patch("orchestrator.tools.atlassian_oauth.urlopen", side_effect=_fake_urlopen):
             result = client.upload_issue_attachment(
                 access_token="token",
                 cloud_id="cloud-id",
@@ -104,8 +104,8 @@ class JiraOAuthTests(unittest.TestCase):
         self.assertEqual(result[0]["id"], "1001")
 
     def test_create_issues_bulk_uses_valid_project_issue_type_when_requested_type_missing(self) -> None:
-        client = JiraOAuthClient(
-            JiraOAuthClientConfig(
+        client = AtlassianOAuthClient(
+            AtlassianOAuthClientConfig(
                 client_id="client-id",
                 client_secret="client-secret",
                 redirect_uri="https://example.test/callback",
@@ -144,8 +144,8 @@ class JiraOAuthTests(unittest.TestCase):
         self.assertEqual(first_issue["fields"]["issuetype"]["name"], "Story")
 
     def test_create_issues_bulk_surfaces_field_level_errors(self) -> None:
-        client = JiraOAuthClient(
-            JiraOAuthClientConfig(
+        client = AtlassianOAuthClient(
+            AtlassianOAuthClientConfig(
                 client_id="client-id",
                 client_secret="client-secret",
                 redirect_uri="https://example.test/callback",
@@ -224,8 +224,8 @@ class JiraOAuthTests(unittest.TestCase):
         self.assertIn("Content truncated to fit Jira content size limit.", flattened)
 
     def test_client_delegates_to_callback_issue_and_webhook_services(self) -> None:
-        client = JiraOAuthClient(
-            JiraOAuthClientConfig(
+        client = AtlassianOAuthClient(
+            AtlassianOAuthClientConfig(
                 client_id="client-id",
                 client_secret="client-secret",
                 redirect_uri="https://example.test/callback",

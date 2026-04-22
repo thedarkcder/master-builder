@@ -19,7 +19,7 @@ from orchestrator.core.platform_secret_service import platform_secret_service
 from orchestrator.core.secrets import encrypt_value
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
-from orchestrator.storage.models import JiraOAuthConnection, Project, Tenant
+from orchestrator.storage.models import AtlassianOAuthConnection, Project, Tenant
 from tests.test_support.db_harness import SqliteTemplateDbTestCase
 
 
@@ -259,7 +259,7 @@ def seed_core_runtime_state(
     tenant_discord_config: dict | None = None,
     project_discord_config: dict | None = None,
     tenant_is_enabled: bool = True,
-) -> tuple[Tenant, Project, JiraOAuthConnection]:
+) -> tuple[Tenant, Project, AtlassianOAuthConnection]:
     now = datetime.now(timezone.utc)
     tenant_cfg = tenant_discord_config or {
         "channel_id": discord_channel_id,
@@ -322,7 +322,7 @@ def seed_core_runtime_state(
             created_at=now,
             updated_at=now,
         )
-        connection = JiraOAuthConnection(
+        connection = AtlassianOAuthConnection(
             connection_id="conn-1",
             account_id="account-1",
             account_email="test@example.com",

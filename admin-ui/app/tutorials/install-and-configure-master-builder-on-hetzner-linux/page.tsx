@@ -66,7 +66,7 @@ export default function HetznerInstallTutorialPage() {
                 <code>ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET</code>
               </li>
               <li>
-                <code>ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET</code>
+                <code>ORCHESTRATOR_ATLASSIAN_OAUTH_STATE_SECRET</code>
               </li>
               <li>
                 <code>ORCHESTRATOR_SECRETS_ENCRYPTION_KEY</code>

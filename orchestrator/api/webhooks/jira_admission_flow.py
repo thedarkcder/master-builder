@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 
 from orchestrator.api.discord.shared.state import normalize_status_name
-from orchestrator.api.jira_oauth.connection_service import tenant_jira_oauth_context
+from orchestrator.api.atlassian_oauth.connection_service import tenant_atlassian_oauth_context
 from orchestrator.api.webhooks.contracts import post_jira_comment
 from orchestrator.api.webhooks.jira_webhook_types import JiraWebhookContext, TODO_STATUS
 from orchestrator.core.communications import DiscordTenantNotificationAction, TransportAction
@@ -143,7 +143,7 @@ def evaluate_precheck_decision_with_labels(
             issue_labels=context.issue_labels,
         ),
         settings=settings,
-        tenant_jira_oauth_context_fn=tenant_jira_oauth_context,
+        tenant_atlassian_oauth_context_fn=tenant_atlassian_oauth_context,
         publish_jira_comment_fn=_publish_jira_comment,
         evaluate_pre_run_check_fn=evaluate_pre_run_check,
     )
@@ -206,13 +206,13 @@ def _sync_precheck_questions_block(
     if next_description.strip() == str(current_description or "").strip():
         return
     try:
-        oauth = tenant_jira_oauth_context(session=session, tenant=context.tenant, settings=settings)
+        oauth = tenant_atlassian_oauth_context(session=session, tenant=context.tenant, settings=settings)
         oauth_client = _oauth_context_value(oauth, "client")
         oauth_connection = _oauth_context_value(oauth, "connection")
         oauth_access_token = _oauth_context_value(oauth, "access_token")
         cloud_id = getattr(oauth_connection, "cloud_id", None)
         if oauth_client is None or oauth_access_token is None or not str(cloud_id or "").strip():
-            raise RuntimeError("Tenant Jira OAuth context is incomplete")
+            raise RuntimeError("Tenant Atlassian context is incomplete")
         oauth_client.update_issue_summary_and_description(
             access_token=str(oauth_access_token),
             cloud_id=str(cloud_id),

@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from orchestrator.core.clarification_questions import ClarificationQuestion, ClarificationQuestionSet
 from orchestrator.api.webhooks.contracts import create_jira_comment
+from orchestrator.core.architecture_document_service import ArchitectureDocumentService
 from orchestrator.core.clarification_projection_service import (
     ClarificationProjectionSpec,
     has_matching_active_clarification_state,
@@ -133,6 +134,19 @@ def _execute_jira_parent_update(
     )
     oauth = jira_adapter.oauth_context
     parent_detail = jira_adapter.get_issue_detail(issue_id_or_key=context.workflow.issue_key)
+    architecture_gate = ArchitectureDocumentService(settings_factory=lambda: context.settings).resolve_gate(
+        session=context.session,
+        project=context.project,
+        parent_issue_key=context.workflow.issue_key,
+        issue_summary=parent_detail.summary,
+        issue_labels=list(parent_detail.labels or []),
+        actor="system",
+    )
+    if architecture_gate.required and architecture_gate.document is None:
+        raise InvalidWorkflowOperationError(
+            architecture_gate.block_reason or f"Architecture document link is required for {context.workflow.issue_key}"
+        )
+    architecture_document = architecture_gate.document
 
     attempt = start_workflow_operation_attempt(context.session, operation=context.operation)
     mark_workflow_running(workflow=context.workflow, now=_now())
@@ -145,6 +159,12 @@ def _execute_jira_parent_update(
             sync_status="children_syncing",
             planning_state="brief_normalized",
             open_questions=[],
+            architecture_title=architecture_document.title if architecture_document is not None else None,
+            architecture_url=(
+                str(architecture_document.canonical_url or "").strip()
+                if architecture_document is not None
+                else None
+            ),
         )
     except Exception as exc:  # noqa: BLE001
         category = _classify_operation_failure(error=exc)

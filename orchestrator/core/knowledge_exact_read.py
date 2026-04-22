@@ -6,9 +6,9 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from orchestrator.api.jira_oauth.service import jira_oauth_client, refresh_jira_connection_tokens
+from orchestrator.api.atlassian_oauth.service import atlassian_oauth_client, refresh_atlassian_connection_tokens
 from orchestrator.core.decision_types import JiraConfigKey, tenant_jira_config_text
-from orchestrator.storage.models import JiraOAuthConnection, KnowledgeAsset, Project, Tenant
+from orchestrator.storage.models import AtlassianOAuthConnection, KnowledgeAsset, Project, Tenant
 
 
 @dataclass(frozen=True)
@@ -90,11 +90,11 @@ def _jira_exact_read(
     connection_id = tenant_jira_config_text(tenant=tenant, key=JiraConfigKey.CONNECTION_ID)
     if not connection_id:
         return None
-    connection = session.get(JiraOAuthConnection, connection_id)
+    connection = session.get(AtlassianOAuthConnection, connection_id)
     if connection is None:
         return None
-    client = jira_oauth_client(session=session, settings=settings, tenant_id=tenant.tenant_id)
-    access_token = refresh_jira_connection_tokens(
+    client = atlassian_oauth_client(session=session, settings=settings, tenant_id=tenant.tenant_id)
+    access_token = refresh_atlassian_connection_tokens(
         session,
         connection=connection,
         settings=settings,

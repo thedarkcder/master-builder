@@ -5,6 +5,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from orchestrator.core.architecture_document_service import ArchitectureDocumentService
 from orchestrator.core.clarification_questions import ClarificationQuestion
 from orchestrator.core.runtime_invocation import AgentInvocationContext, WorkflowAttemptRef
 from orchestrator.core.specialist_planning import (
@@ -60,7 +61,8 @@ from orchestrator.core.workflow_runtime import (
     WorkflowAdvanceOutcome,
     WorkflowAdvanceRequest,
 )
-from orchestrator.tools.jira_oauth import JiraIssueDetail
+from orchestrator.tools.atlassian_oauth import JiraIssueDetail
+from orchestrator.storage.models import Project
 
 logger = logging.getLogger(__name__)
 
@@ -196,6 +198,7 @@ class _JiraParentIssueGateway:
         self._post_jira_comment_fn = post_jira_comment_fn
         self._create_jira_comment_fn = create_jira_comment_fn
         self._jira_adapter = None
+        self._architecture_document_service = ArchitectureDocumentService(settings_factory=lambda: self._settings)
 
     def _jira(self):
         if self._jira_adapter is None:
@@ -212,6 +215,31 @@ class _JiraParentIssueGateway:
             client=jira.client,
             access_token=jira.access_token,
             connection=SimpleNamespace(cloud_id=jira.cloud_id, site_url=jira.site_url),
+        )
+
+    def _project(self) -> Project:
+        project_id = str(self._context.project_id or "").strip()
+        if not project_id:
+            raise LookupError(f"No scoped project is available for Jira parent workflow {self._context.issue_key}")
+        project = self._session.get(Project, project_id)
+        if project is None or project.tenant_id != self._context.tenant_id:
+            raise LookupError(f"Project {project_id} is not available for Jira parent workflow {self._context.issue_key}")
+        return project
+
+    def resolve_architecture_gate(
+        self,
+        *,
+        parent_issue_key: str,
+        issue_summary: str,
+        issue_labels: list[str] | tuple[str, ...],
+    ):
+        return self._architecture_document_service.resolve_gate(
+            session=self._session,
+            project=self._project(),
+            parent_issue_key=parent_issue_key,
+            issue_summary=issue_summary,
+            issue_labels=issue_labels,
+            actor="system",
         )
 
     def load_parent_detail(self, issue_key: str) -> JiraIssueDetail:
@@ -236,6 +264,14 @@ class _JiraParentIssueGateway:
         planning_state: str | None,
         open_questions: list[object] | None,
     ) -> None:
+        architecture_gate = self.resolve_architecture_gate(
+            parent_issue_key=parent_detail.key,
+            issue_summary=parent_detail.summary,
+            issue_labels=list(parent_detail.labels or []),
+        )
+        architecture_document = architecture_gate.document
+        if architecture_gate.required and architecture_document is None:
+            raise ValueError(architecture_gate.block_reason or f"Architecture document link is required for {parent_detail.key}")
         _rewrite_parent_issue_from_brief(
             oauth=self._oauth_context(),
             parent_detail=parent_detail,
@@ -243,6 +279,12 @@ class _JiraParentIssueGateway:
             sync_status=sync_status,
             planning_state=planning_state,
             open_questions=open_questions,
+            architecture_title=architecture_document.title if architecture_document is not None else None,
+            architecture_url=(
+                str(architecture_document.canonical_url or "").strip()
+                if architecture_document is not None
+                else None
+            ),
         )
 
     def update_issue_sync_label(self, *, issue_detail: JiraIssueDetail, target_label: str) -> None:
@@ -368,7 +410,7 @@ def _jira_adapter(*, integration_router, session: Session, tenant, settings):  #
     )
 
 
-def _jira_oauth_context(*, integration_router, session: Session, tenant, settings):  # noqa: ANN001
+def _atlassian_oauth_context(*, integration_router, session: Session, tenant, settings):  # noqa: ANN001
     jira = _jira_adapter(
         integration_router=integration_router,
         session=session,

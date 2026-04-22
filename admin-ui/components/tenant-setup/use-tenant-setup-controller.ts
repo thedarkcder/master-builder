@@ -13,7 +13,7 @@ import {
   listJiraProjects,
   startDiscordInstall,
   startGitHubInstall,
-  startJiraConnect,
+  startAtlassianConnect,
   updateTenant,
   type GitHubRepositoryRecord,
   type JiraProjectRecord,
@@ -105,7 +105,7 @@ export function useTenantSetupController(stepKey: WizardStepKey) {
     }
     if (stepKey === "jira") {
       if (!values.jira.connection_id?.trim()) {
-        return "Connect Jira before continuing.";
+        return "Connect Atlassian before continuing.";
       }
       if (!textFields.projectKeysText.trim()) {
         return "Select at least one Jira project key before continuing.";
@@ -207,13 +207,13 @@ export function useTenantSetupController(stepKey: WizardStepKey) {
   }, [credentials, searchParams]);
 
   useEffect(() => {
-    const connectionId = searchParams.get("jira_connection_id");
+    const connectionId = searchParams.get("atlassian_connection_id");
     if (!connectionId) {
       return;
     }
     setValues((prev) => ({ ...prev, jira: { ...prev.jira, connection_id: connectionId } }));
-    if (searchParams.get("jira_oauth") === "success") {
-      void loadJiraProjectsForConnectionId(connectionId, { statusPrefix: "Jira OAuth connected." });
+    if (searchParams.get("atlassian_oauth") === "success") {
+      void loadJiraProjectsForConnectionId(connectionId, { statusPrefix: "Atlassian connected." });
     }
   }, [credentials, searchParams]);
 
@@ -248,15 +248,15 @@ export function useTenantSetupController(stepKey: WizardStepKey) {
     }
   }
 
-  async function startJiraOAuth() {
+  async function startAtlassianOAuth() {
     if (!credentials) {
       return;
     }
     try {
-      const result = await startJiraConnect(credentials, { returnTo: "wizard" });
+      const result = await startAtlassianConnect(credentials, { returnTo: "wizard" });
       window.location.href = result.authorize_url;
     } catch (error) {
-      setStatusLine(`Unable to start Jira OAuth: ${(error as Error).message}`);
+      setStatusLine(`Unable to start Atlassian: ${(error as Error).message}`);
     }
   }
 
@@ -546,7 +546,7 @@ export function useTenantSetupController(stepKey: WizardStepKey) {
     selectedProjectKeys,
     nextStep,
     previousStep,
-    startJiraOAuth,
+    startAtlassianOAuth,
     loadJiraProjectsForConnection,
     toggleJiraProject,
     startGitHubInstallFlow,

@@ -22,7 +22,7 @@ def apply_issue_label_actions(
     existing_labels: list[str] | None,
     actions: tuple[DecisionLabelAction, ...],
     settings,  # noqa: ANN001
-    tenant_jira_oauth_context_fn: Callable[..., Any],
+    tenant_atlassian_oauth_context_fn: Callable[..., Any],
     oauth_context: Any | None = None,
     logger,  # noqa: ANN001
 ) -> LabelActionApplyResult:
@@ -53,7 +53,7 @@ def apply_issue_label_actions(
         return LabelActionApplyResult(applied_labels=(), skipped_reason=None)
 
     try:
-        oauth = oauth_context or tenant_jira_oauth_context_fn(
+        oauth = oauth_context or tenant_atlassian_oauth_context_fn(
             session=session,
             tenant=tenant,
             settings=settings,
@@ -63,7 +63,7 @@ def apply_issue_label_actions(
         oauth_access_token = _oauth_context_value(oauth, "access_token")
         cloud_id = getattr(oauth_connection, "cloud_id", None)
         if oauth_client is None or oauth_access_token is None or not str(cloud_id or "").strip():
-            raise RuntimeError("Tenant Jira OAuth context is incomplete")
+            raise RuntimeError("Tenant Atlassian context is incomplete")
     except Exception as exc:  # noqa: BLE001
         logger.warning(
             "label_actions_oauth_context_failed tenant_id=%s issue_key=%s error=%s",

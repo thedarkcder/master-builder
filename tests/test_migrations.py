@@ -61,7 +61,54 @@ class MigrationTests(unittest.TestCase):
 
         duplicates = {revision_id: count for revision_id, count in Counter(revision_ids).items() if count > 1}
         self.assertEqual(duplicates, {})
-        self.assertEqual(script.get_heads(), ["20260420_0084"])
+        self.assertEqual(script.get_heads(), ["20260422_0089"])
+
+    def test_rename_jira_oauth_platform_secrets_migration_updates_managed_secret_refs(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            database_url = f"sqlite:///{Path(tmpdir) / 'atlassian-secret-rename.sqlite'}"
+            engine = create_engine(database_url)
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE managed_secrets (
+                            secret_ref VARCHAR(255) PRIMARY KEY,
+                            value_encrypted TEXT NOT NULL,
+                            created_at DATETIME NOT NULL,
+                            updated_at DATETIME NOT NULL
+                        )
+                        """
+                    )
+                )
+                now = datetime.now(timezone.utc).isoformat()
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO managed_secrets (secret_ref, value_encrypted, created_at, updated_at)
+                        VALUES
+                            ('platform/JIRA_OAUTH_CLIENT_ID', 'enc-id', :now, :now),
+                            ('platform/JIRA_OAUTH_CLIENT_SECRET', 'enc-secret', :now, :now)
+                        """
+                    ),
+                    {"now": now},
+                )
+                connection.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"))
+                connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('20260422_0088')"))
+
+            self._alembic_upgrade(database_url, "20260422_0089")
+
+            with engine.begin() as connection:
+                refs = connection.execute(
+                    text("SELECT secret_ref FROM managed_secrets ORDER BY secret_ref")
+                ).scalars().all()
+
+            self.assertEqual(
+                refs,
+                [
+                    "platform/ATLASSIAN_OAUTH_CLIENT_ID",
+                    "platform/ATLASSIAN_OAUTH_CLIENT_SECRET",
+                ],
+            )
 
     def test_audit_events_migration_creates_append_only_table(self) -> None:
         with TemporaryDirectory() as tmpdir:
@@ -379,6 +426,48 @@ class MigrationTests(unittest.TestCase):
                     )
                 ).mappings().one()
             self.assertEqual(row["orchestration_backend"], "temporal")
+
+    def test_architecture_documents_migration_tolerates_preexisting_project_config_column(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            database_url = f"sqlite:///{Path(tmpdir) / 'architecture-documents.sqlite'}"
+            engine = create_engine(database_url)
+            with engine.begin() as connection:
+                connection.execute(text("CREATE TABLE tenants (tenant_id VARCHAR PRIMARY KEY)"))
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE projects (
+                            project_id VARCHAR PRIMARY KEY,
+                            architecture_docs_config JSON NOT NULL DEFAULT '{}'
+                        )
+                        """
+                    )
+                )
+                connection.execute(text("CREATE TABLE knowledge_assets (asset_id VARCHAR PRIMARY KEY)"))
+                connection.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"))
+                connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('20260421_0086')"))
+
+            self._alembic_upgrade(database_url, "20260421_0087")
+
+            inspector = inspect(engine)
+            project_columns = {column["name"] for column in inspector.get_columns("projects")}
+            self.assertIn("architecture_docs_config", project_columns)
+            architecture_columns = {column["name"] for column in inspector.get_columns("architecture_documents")}
+            self.assertTrue(
+                {
+                    "document_id",
+                    "tenant_id",
+                    "project_id",
+                    "parent_issue_key",
+                    "provider",
+                    "title",
+                    "status",
+                    "canonical_url",
+                }.issubset(architecture_columns)
+            )
+            indexes = {index["name"] for index in inspector.get_indexes("architecture_documents")}
+            self.assertIn("ix_architecture_documents_scope", indexes)
+            self.assertIn("ix_architecture_documents_project_status", indexes)
 
     def test_parent_planning_rename_migration_drops_discovered_workflow_foreign_keys(self) -> None:
         module = self._load_migration_module(
@@ -741,7 +830,7 @@ class MigrationTests(unittest.TestCase):
             inspector = inspect(engine)
 
             self.assertIn("tenants", inspector.get_table_names())
-            self.assertIn("jira_oauth_connections", inspector.get_table_names())
+            self.assertIn("atlassian_oauth_connections", inspector.get_table_names())
             self.assertIn("runs", inspector.get_table_names())
             self.assertIn("workflow_executions", inspector.get_table_names())
             self.assertIn("workflow_checkpoints", inspector.get_table_names())

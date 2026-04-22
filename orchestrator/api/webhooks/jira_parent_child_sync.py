@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 
 from orchestrator.api.discord.ingress.seed_runtime import seed_issues_with_runtime
 from orchestrator.api.discord.seed.issue_service import list_child_issue_previews_for_parent
-from orchestrator.api.jira_oauth.connection_service import tenant_jira_oauth_context
+from orchestrator.api.atlassian_oauth.connection_service import tenant_atlassian_oauth_context
 from orchestrator.api.webhooks.contracts import (
     create_jira_comment,
     extract_changed_fields,
@@ -39,7 +39,7 @@ def _build_workflow_integration_router() -> WorkflowIntegrationRouter:
     return WorkflowIntegrationRouter(
         adapter_provider=WorkflowIntegrationAdapterProvider(
             jira_provider=JiraWorkflowConnectionProvider(
-                oauth_context_resolver=tenant_jira_oauth_context,
+                oauth_context_resolver=tenant_atlassian_oauth_context,
                 list_child_issue_previews_for_parent_fn=list_child_issue_previews_for_parent,
             )
         )

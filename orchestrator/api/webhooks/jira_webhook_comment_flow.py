@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from orchestrator.api.commands.entrypoint import execute_tenant_jira_comment_command
 from orchestrator.api.discord.ask.context import remove_issue_key_from_tenant_ask_history
 from orchestrator.api.discord.shared.state import remove_issue_key_from_seed_followups
-from orchestrator.api.jira_oauth.connection_service import tenant_jira_oauth_context
+from orchestrator.api.atlassian_oauth.connection_service import tenant_atlassian_oauth_context
 from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.api.webhooks.contracts import (
     JIRA_COMMENT_EVENTS,
@@ -195,7 +195,7 @@ def stage_handle_comment_decision_reply(
                 issue_description=context.issue_description,
                 issue_labels=context.issue_labels,
             ),
-            tenant_jira_oauth_context_fn=tenant_jira_oauth_context,
+            tenant_atlassian_oauth_context_fn=tenant_atlassian_oauth_context,
             evaluate_pre_run_check_fn=evaluate_pre_run_check,
             publish_jira_comment_fn=lambda comment: post_jira_comment(
                 session=session,

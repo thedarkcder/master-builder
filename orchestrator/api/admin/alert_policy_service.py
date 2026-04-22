@@ -17,7 +17,7 @@ def _tenant_candidates(*, snapshot) -> list[AlertCandidate]:  # noqa: ANN001
                 severity="HIGH",
                 scope_type="tenant",
                 scope_id=snapshot.tenant_id,
-                reason="Jira integration is not connected.",
+                reason="Atlassian integration is not connected.",
             )
         )
     if not snapshot.integrations.github_connected:

@@ -11,6 +11,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from orchestrator.api.discord.ingress.executor import register_discord_command_executor
 from orchestrator.api.routes.admin_auth import router as admin_auth_router
 from orchestrator.api.routes.admin_agent_runtimes import router as admin_agent_runtimes_router
+from orchestrator.api.routes.admin_architecture_documents import router as admin_architecture_documents_router
+from orchestrator.api.routes.admin_atlassian import router as admin_atlassian_router
 from orchestrator.api.routes.admin_codex import router as admin_codex_router
 from orchestrator.api.routes.admin_discord_commands import (
     router as admin_discord_commands_router,
@@ -219,6 +221,7 @@ def create_app() -> FastAPI:
         )
 
     app.include_router(admin_knowledge_router)
+    app.include_router(admin_architecture_documents_router)
     app.include_router(admin_observability_router)
     app.include_router(admin_runs_router)
     app.include_router(admin_tenants_router)
@@ -229,6 +232,7 @@ def create_app() -> FastAPI:
     app.include_router(admin_discord_allowlist_router)
     app.include_router(admin_discord_install_router)
     app.include_router(admin_github_router)
+    app.include_router(admin_atlassian_router)
     app.include_router(admin_jira_router)
     app.include_router(admin_ready_router)
     app.include_router(admin_release_router)

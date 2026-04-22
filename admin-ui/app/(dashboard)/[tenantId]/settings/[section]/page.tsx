@@ -6,7 +6,7 @@ import { TenantEditPage } from "@/components/tenant-edit-page";
 const ALLOWED = [
   "setup",
   "integrations",
-  "jira",
+  "atlassian",
   "github",
   "discord",
   "health",

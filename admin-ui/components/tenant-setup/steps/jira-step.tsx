@@ -31,13 +31,13 @@ export function JiraStep({
         <div className="space-y-4">
           <div className="flex items-center gap-2 text-sm font-medium text-slate-900">
             <CheckCircle2 className="h-4 w-4 text-emerald-600" />
-            Jira connection
+            Atlassian connection
           </div>
           <div className="text-sm text-slate-600">{connectionId ?? "Not connected yet"}</div>
           <div className="flex flex-col gap-2 pt-1">
             <Button onClick={onStartJiraConnect}>
               <Link2 className="mr-2 h-4 w-4" />
-              Connect Jira
+              Connect Atlassian
             </Button>
             <Button variant="outline" onClick={onLoadJiraProjects} disabled={!connectionId}>
               <RefreshCw className="mr-2 h-4 w-4" />
@@ -80,7 +80,7 @@ export function JiraStep({
           </div>
         ) : (
           <div className="rounded-2xl bg-slate-50 px-4 py-4 text-sm text-slate-600 ring-1 ring-slate-200">
-            Load projects after connecting Jira.
+            Load projects after connecting Atlassian.
           </div>
         )}
 

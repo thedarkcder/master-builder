@@ -21,7 +21,7 @@ from orchestrator.core.workflow.runner import (
     WorkflowResult,
 )
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
-from orchestrator.storage.models import JiraOAuthConnection, Project, Tenant, WorkflowExecution
+from orchestrator.storage.models import AtlassianOAuthConnection, Project, Tenant, WorkflowExecution
 from orchestrator.core.worker.repo_setup_service import RetryableRepoSetupError
 from orchestrator.core.worker.repo_setup_service import TerminalRepoSetupError
 from tests.test_support.db_harness import SqliteTemplateDbTestCase
@@ -502,7 +502,7 @@ class WorkerWorkflowTests(SqliteTemplateDbTestCase):
 
         with self.session_factory() as session:
             session.add(
-                JiraOAuthConnection(
+                AtlassianOAuthConnection(
                     connection_id="jira-tenant-worker",
                     account_id="acct-1",
                     account_email="agent@example.com",

@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select, tuple_
 from sqlalchemy.orm import Session
 
-from orchestrator.api.jira_oauth.service import execute_jira_operation_with_refresh_retry
+from orchestrator.api.atlassian_oauth.service import execute_atlassian_operation_with_refresh_retry
 from orchestrator.core.config import Settings, get_settings
 from orchestrator.core.decision_types import JiraConfigKey, tenant_jira_config_text
 from orchestrator.core.knowledge_base import sync_project_knowledge_from_jira
@@ -24,9 +24,9 @@ from orchestrator.core.logging import configure_logging
 from orchestrator.core.project_policy import resolve_effective_policy
 from orchestrator.core.telemetry import initialize_telemetry
 from orchestrator.storage.db import create_session_factory
-from orchestrator.storage.models import JiraOAuthConnection, KnowledgeJiraSyncProjectState, KnowledgeSource, Project, Tenant
+from orchestrator.storage.models import AtlassianOAuthConnection, KnowledgeJiraSyncProjectState, KnowledgeSource, Project, Tenant
 from orchestrator.storage.run_queue_events import is_postgres_database_url, postgres_dsn_from_database_url
-from orchestrator.tools.jira_oauth_models import JiraOAuthAuthRequiredError, JiraOAuthError, JiraOAuthHttpError
+from orchestrator.tools.atlassian_oauth_models import AtlassianOAuthAuthRequiredError, AtlassianOAuthError, AtlassianOAuthHttpError
 
 try:
     import psycopg
@@ -280,9 +280,9 @@ class KnowledgeJiraSyncRuntime:
 
     def _sync_project(self, *, project: _SyncProject):
         with self._session_factory() as session:
-            connection = session.get(JiraOAuthConnection, project.connection_id)
+            connection = session.get(AtlassianOAuthConnection, project.connection_id)
             if connection is None:
-                raise KnowledgeJiraSyncDependencyFailure("Jira OAuth connection record not found.")
+                raise KnowledgeJiraSyncDependencyFailure("Atlassian connection record not found.")
             cloud_id = connection.cloud_id
 
         def _operation(session: Session, jira_client, access_token: str):  # noqa: ANN001
@@ -297,7 +297,7 @@ class KnowledgeJiraSyncRuntime:
                 max_issues=max(1, int(getattr(self._settings, "knowledge_jira_sync_max_issues", 500))),
             )
 
-        return execute_jira_operation_with_refresh_retry(
+        return execute_atlassian_operation_with_refresh_retry(
             session_factory=self._session_factory,
             settings=self._settings,
             connection_id=project.connection_id,
@@ -448,11 +448,11 @@ class KnowledgeJiraSyncRuntime:
 
 
 def _classify_project_failure(exc: Exception) -> str:
-    if isinstance(exc, JiraOAuthAuthRequiredError):
+    if isinstance(exc, AtlassianOAuthAuthRequiredError):
         return "auth_required"
-    if isinstance(exc, JiraOAuthHttpError) and exc.status_code in {401, 403}:
+    if isinstance(exc, AtlassianOAuthHttpError) and exc.status_code in {401, 403}:
         return "auth_required"
-    if isinstance(exc, JiraOAuthError):
+    if isinstance(exc, AtlassianOAuthError):
         message = str(exc).lower()
         if "refresh_token is invalid" in message or "unauthorized_client" in message:
             return "invalid_refresh_token"

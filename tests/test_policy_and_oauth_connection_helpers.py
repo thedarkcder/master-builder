@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 from fastapi import HTTPException
 
-from orchestrator.api.jira_oauth.connection_service import resolve_tenant_jira_connection, tenant_jira_oauth_context
+from orchestrator.api.atlassian_oauth.connection_service import resolve_tenant_atlassian_connection, tenant_atlassian_oauth_context
 from orchestrator.core.agent_runtime_resolver import resolve_agent_execution_profile
 from orchestrator.core import project_policy
 from orchestrator.core.communications import integration_contracts
@@ -242,20 +242,20 @@ class ProjectPolicyHelpersTests(unittest.TestCase):
 
 
 class JiraConnectionServiceTests(unittest.TestCase):
-    def test_resolve_tenant_jira_connection_validation(self) -> None:
+    def test_resolve_tenant_atlassian_connection_validation(self) -> None:
         session = MagicMock()
         tenant = SimpleNamespace(jira_config={})
         with self.assertRaises(HTTPException) as missing_ctx:
-            resolve_tenant_jira_connection(session=session, tenant=tenant)
+            resolve_tenant_atlassian_connection(session=session, tenant=tenant)
         self.assertEqual(missing_ctx.exception.status_code, 400)
 
         tenant = SimpleNamespace(jira_config={"connection_id": "conn-1"})
         session.get.return_value = None
         with self.assertRaises(HTTPException) as not_found_ctx:
-            resolve_tenant_jira_connection(session=session, tenant=tenant)
+            resolve_tenant_atlassian_connection(session=session, tenant=tenant)
         self.assertEqual(not_found_ctx.exception.status_code, 400)
 
-    def test_tenant_jira_oauth_context(self) -> None:
+    def test_tenant_atlassian_oauth_context(self) -> None:
         session = MagicMock()
         tenant = SimpleNamespace(jira_config={"connection_id": "conn-1"})
         connection = SimpleNamespace(connection_id="conn-1")
@@ -263,10 +263,10 @@ class JiraConnectionServiceTests(unittest.TestCase):
         settings = SimpleNamespace()
 
         with (
-            patch("orchestrator.api.jira_oauth.connection_service.refresh_jira_connection_tokens", return_value="tok"),
-            patch("orchestrator.api.jira_oauth.connection_service.jira_oauth_client", return_value="client"),
+            patch("orchestrator.api.atlassian_oauth.connection_service.refresh_atlassian_connection_tokens", return_value="tok"),
+            patch("orchestrator.api.atlassian_oauth.connection_service.atlassian_oauth_client", return_value="client"),
         ):
-            context = tenant_jira_oauth_context(session=session, tenant=tenant, settings=settings)
+            context = tenant_atlassian_oauth_context(session=session, tenant=tenant, settings=settings)
 
         self.assertEqual(context.connection, connection)
         self.assertEqual(context.access_token, "tok")

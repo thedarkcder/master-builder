@@ -11,15 +11,15 @@ from orchestrator.core.admin_notifications import (
     emit_admin_notification,
     resolve_admin_notification_state,
 )
-from orchestrator.tools.jira_oauth_models import JiraOAuthAuthRequiredError, JiraOAuthError, JiraOAuthHttpError
+from orchestrator.tools.atlassian_oauth_models import AtlassianOAuthAuthRequiredError, AtlassianOAuthError, AtlassianOAuthHttpError
 
 
 def _is_jira_reauth_required(exc: Exception) -> bool:
-    if isinstance(exc, JiraOAuthAuthRequiredError):
+    if isinstance(exc, AtlassianOAuthAuthRequiredError):
         return True
-    if isinstance(exc, JiraOAuthHttpError):
+    if isinstance(exc, AtlassianOAuthHttpError):
         return exc.status_code in {401, 403}
-    if isinstance(exc, JiraOAuthError):
+    if isinstance(exc, AtlassianOAuthError):
         message = str(exc).lower()
         return (
             "refresh_token is invalid" in message
@@ -34,35 +34,35 @@ def list_jira_projects_for_connection(
     *,
     session,
     connection_id: str,
-    jira_oauth_connection_model,
+    atlassian_oauth_connection_model,
     settings,
-    refresh_jira_connection_tokens_fn,
-    jira_oauth_client_fn,
+    refresh_atlassian_connection_tokens_fn,
+    atlassian_oauth_client_fn,
 ):  # noqa: ANN001
-    connection = session.get(jira_oauth_connection_model, connection_id)
+    connection = session.get(atlassian_oauth_connection_model, connection_id)
     if connection is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Jira connection not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Atlassian connection not found")
 
     notification_scope = AdminNotificationScope(
         scope_type="jira_connection",
         scope_id=connection.connection_id,
     )
     try:
-        access_token = refresh_jira_connection_tokens_fn(
+        access_token = refresh_atlassian_connection_tokens_fn(
             session,
             connection=connection,
             settings=settings,
         )
-    except (ValueError, JiraOAuthError) as exc:
+    except (ValueError, AtlassianOAuthError) as exc:
         if _is_jira_reauth_required(exc):
             emit_admin_notification(
                 session=session,
                 notification=AdminNotificationDraft(
                     scope=notification_scope,
-                    source="jira_oauth",
+                    source="atlassian_oauth",
                     kind=ADMIN_NOTIFICATION_KIND_JIRA_CONNECTION_REAUTH_REQUIRED,
                     detail=(
-                        "Stored Jira credentials are no longer valid. Reconnect Jira from tenant settings to "
+                        "Stored Atlassian credentials are no longer valid. Reconnect Atlassian from tenant settings to "
                         "restore project loading, issue sync, and webhook administration."
                     ),
                     dedupe_key="reauth_required",
@@ -76,10 +76,10 @@ def list_jira_projects_for_connection(
             session.commit()
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="Jira connection requires reauthentication.",
+                detail="Atlassian connection requires reauthentication.",
             ) from exc
         raise
-    client = jira_oauth_client_fn(session=session, settings=settings)
+    client = atlassian_oauth_client_fn(session=session, settings=settings)
     projects = client.list_projects(access_token=access_token, cloud_id=connection.cloud_id)
     resolve_admin_notification_state(
         session=session,

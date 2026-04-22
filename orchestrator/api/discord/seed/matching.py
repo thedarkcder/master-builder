@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-from orchestrator.tools.jira_oauth import JiraIssuePreview
+from orchestrator.tools.atlassian_oauth import JiraIssuePreview
 
 
 def normalized_summary_key(summary: str) -> str:

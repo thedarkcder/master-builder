@@ -13,7 +13,7 @@ import {
   getJiraWebhookDiagnostics,
   getTenant,
   testGithub,
-  testJira,
+  testAtlassian,
   type JiraWebhookDiagnosticsRecord,
   type TenantRecord
 } from "@/lib/api";
@@ -84,7 +84,7 @@ export default function TenantWebhooksPage() {
         await Promise.allSettled([
           getTenant(credentials, tenantId),
           getJiraWebhookDiagnostics(credentials, tenantId),
-          testJira(credentials, tenantId),
+          testAtlassian(credentials, tenantId),
           testGithub(credentials, tenantId)
         ]);
       if (tenantResult.status === "fulfilled") setTenant(tenantResult.value);
