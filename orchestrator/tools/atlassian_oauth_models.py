@@ -6,11 +6,11 @@ from datetime import datetime
 from typing import Any
 
 
-class JiraOAuthError(RuntimeError):
+class AtlassianOAuthError(RuntimeError):
     pass
 
 
-class JiraOAuthHttpError(JiraOAuthError):
+class AtlassianOAuthHttpError(AtlassianOAuthError):
     def __init__(self, message: str, *, status_code: int, error_prefix: str, error_body: str):
         super().__init__(message)
         self.status_code = status_code
@@ -18,12 +18,12 @@ class JiraOAuthHttpError(JiraOAuthError):
         self.error_body = error_body
 
 
-class JiraOAuthAuthRequiredError(JiraOAuthError):
+class AtlassianOAuthAuthRequiredError(AtlassianOAuthError):
     pass
 
 
 @dataclass(frozen=True)
-class JiraOAuthTokenSet:
+class AtlassianOAuthTokenSet:
     access_token: str
     refresh_token: str
     expires_at: datetime
@@ -31,7 +31,7 @@ class JiraOAuthTokenSet:
 
 
 @dataclass(frozen=True)
-class JiraOAuthResource:
+class AtlassianOAuthResource:
     cloud_id: str
     site_url: str
     name: str
@@ -41,6 +41,20 @@ class JiraOAuthResource:
 class JiraProject:
     key: str
     name: str
+
+
+@dataclass(frozen=True)
+class ConfluenceSpace:
+    space_id: str
+    key: str
+    name: str
+
+
+@dataclass(frozen=True)
+class ConfluencePage:
+    page_id: str
+    title: str
+    webui_url: str
 
 
 @dataclass(frozen=True)
@@ -101,13 +115,16 @@ class JiraIssueBulkCreateResult:
 
 
 @dataclass(frozen=True)
-class JiraOAuthClientConfig:
+class AtlassianOAuthClientConfig:
     client_id: str
     client_secret: str
     redirect_uri: str
     scopes: tuple[str, ...] = (
         "read:jira-work",
         "write:jira-work",
+        "read:space:confluence",
+        "read:page:confluence",
+        "write:page:confluence",
         "offline_access",
         "manage:jira-webhook",
         "read:board-scope:jira-software",

@@ -56,7 +56,7 @@ export function ProjectSetupWizard() {
         setJiraOptions(jiraProjects.map((p) => p.key));
       } else {
         setJiraOptions([]);
-        setStatusLine("Jira is not connected for this tenant. Connect Jira first.");
+        setStatusLine("Atlassian is not connected for this tenant. Connect Atlassian first.");
       }
     } catch (error) {
       setStatusLine(`Failed to load setup options: ${(error as Error).message}`);

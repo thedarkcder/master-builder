@@ -6,7 +6,7 @@ from orchestrator.api.discord.seed.description import (
     build_engineering_child_description,
     build_parent_feature_description,
 )
-from orchestrator.tools.jira_oauth_issue_service import (
+from orchestrator.tools.atlassian_oauth_issue_service import (
     MAX_JIRA_ADF_DOCUMENT_BYTES,
     _to_adf_description,
 )
@@ -53,16 +53,20 @@ def test_parent_feature_description_omits_pm_handoff_and_sync_status_sections() 
         sync_status="children_syncing",
         pm_status="pm_completed",
         planning_state="planning_completed",
-        architecture_summary=["Identity policy remains tenant-scoped."],
-        architecture_diagram=None,
+        architecture_title="Decision Engine v2",
+        architecture_url="https://docs.example.com/decision-engine-v2",
     )
 
     headings = _heading_texts(doc)
 
     assert "PM Handoff" not in headings
     assert "Sync Status" not in headings
+    assert "Architecture Context" not in headings
+    assert "Architecture Diagram" not in headings
     assert "Objective" in headings
+    assert "Architecture" in headings
     assert "Open Questions" in headings
+    assert "See Architecture: Decision Engine v2 https://docs.example.com/decision-engine-v2" in _flatten_text(doc)
 
 
 def test_seed_description_builders_budget_content_before_jira_transport_cap() -> None:
@@ -82,8 +86,8 @@ def test_seed_description_builders_budget_content_before_jira_transport_cap() ->
         sync_status="children_syncing",
         pm_status="pm_completed",
         planning_state="planning_completed",
-        architecture_summary=[huge_line] * 20,
-        architecture_diagram="flowchart TD\n" + ("Parent-->Planner\n" * 1000),
+        architecture_title=huge_line,
+        architecture_url=f"https://docs.example.com/{'x' * 512}",
     )
     child_doc = build_engineering_child_description(
         parent_issue_key="MAB-215",
@@ -98,6 +102,8 @@ def test_seed_description_builders_budget_content_before_jira_transport_cap() ->
         dependencies_and_risks=[huge_line] * 20,
         specialist_summary=[huge_line] * 20,
         planning_state="planning_completed",
+        architecture_title=huge_line,
+        architecture_url=f"https://docs.example.com/{'y' * 512}",
     )
 
     for doc in (parent_doc, child_doc):
@@ -105,3 +111,52 @@ def test_seed_description_builders_budget_content_before_jira_transport_cap() ->
         serialized = json.dumps(bounded, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
         assert len(serialized) <= MAX_JIRA_ADF_DOCUMENT_BYTES
         assert "Content truncated to fit Jira content size limit." not in _flatten_text(bounded)
+
+
+def test_engineering_child_description_includes_architecture_link_instead_of_embedded_architecture_summary() -> None:
+    doc = build_engineering_child_description(
+        parent_issue_key="MAB-215",
+        parent_summary="Decision engine rollout",
+        parent_revision="normalized-parent-brief",
+        capability="Introduce rollout gating",
+        delivery="Engineering child inherits the canonical architecture document link.",
+        expected_outcome="Implementation tickets use the same architecture reference as the epic.",
+        acceptance_criteria=["Child ticket points at the architecture document."],
+        how_to_test=["Open the child ticket and verify the architecture link is present."],
+        done_means=["Child descriptions reference the architecture doc instead of copying architecture context."],
+        dependencies_and_risks=["Architecture document must exist before fanout completes."],
+        specialist_summary=["Architecture doc is the persistent source of truth."],
+        planning_state="planning_completed",
+        architecture_title="Decision Engine v2",
+        architecture_url="https://docs.example.com/decision-engine-v2",
+    )
+
+    headings = _heading_texts(doc)
+
+    assert "Architecture" in headings
+    assert "Architecture Context" not in headings
+    assert "Architecture Diagram" not in headings
+    assert "See Architecture: Decision Engine v2 https://docs.example.com/decision-engine-v2" in _flatten_text(doc)
+
+
+def test_parent_feature_description_omits_architecture_section_without_canonical_link() -> None:
+    doc = build_parent_feature_description(
+        objective="Keep the parent description focused on execution.",
+        user_value="Teams should use one canonical architecture source.",
+        recommendation="Only render architecture when a canonical document exists.",
+        scope_in=["Jira description cleanup"],
+        scope_out=[],
+        acceptance_criteria=["No placeholder architecture content appears."],
+        ui_references=[],
+        success_outcomes=[],
+        dependencies_and_risks=[],
+        open_questions=[],
+        parent_revision="rev-1",
+        sync_status="children_syncing",
+    )
+
+    headings = _heading_texts(doc)
+    text = _flatten_text(doc)
+
+    assert "Architecture" not in headings
+    assert "See Architecture:" not in text

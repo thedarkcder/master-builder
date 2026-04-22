@@ -117,11 +117,11 @@ export function JiraSection({
   onReadyStatusesTextChange
 }: JiraSectionProps) {
   return (
-    <SectionFrame title="Jira" description="Jira webhook and issue discovery configuration.">
+    <SectionFrame title="Atlassian" description="Atlassian connection plus Jira webhook and issue discovery configuration.">
       <div className="grid gap-3 md:grid-cols-2">
         <div className="space-y-2 md:col-span-2">
           <FieldLabel>OAuth Connection ID</FieldLabel>
-          <Input value={jira.connection_id ?? ""} disabled placeholder="Connect Jira to generate a connection" />
+          <Input value={jira.connection_id ?? ""} disabled placeholder="Connect Atlassian to generate a connection" />
         </div>
         <div className="space-y-2">
           <FieldLabel>Project keys (comma separated)</FieldLabel>

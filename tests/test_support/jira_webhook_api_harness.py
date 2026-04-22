@@ -187,7 +187,7 @@ class JiraWebhookTestsHarness(SqliteTemplateApiTestCase):
             labels_to_add.append(pre_check.required_worker_label)
         if labels_to_add:
             try:
-                oauth = jira_admission_flow.tenant_jira_oauth_context(
+                oauth = jira_admission_flow.tenant_atlassian_oauth_context(
                     session=session,
                     tenant=context.tenant,
                     settings=settings,

@@ -12,7 +12,7 @@ from orchestrator.api.discord.bug.attachments import (
     resolve_discord_channel_name,
     upload_discord_attachments_to_jira,
 )
-from orchestrator.tools.jira_oauth import JiraOAuthError
+from orchestrator.tools.atlassian_oauth import AtlassianOAuthError
 
 
 class _Response:
@@ -106,15 +106,15 @@ class DiscordBugAttachmentsTests(unittest.TestCase):
             fp=io.BytesIO(b"denied"),
         )
         with patch("orchestrator.api.discord.bug.attachments.urlopen", side_effect=http_error):
-            with self.assertRaisesRegex(JiraOAuthError, "HTTP 403"):
+            with self.assertRaisesRegex(AtlassianOAuthError, "HTTP 403"):
                 download_discord_attachment(url="https://discord.test/file")
 
         with patch("orchestrator.api.discord.bug.attachments.urlopen", side_effect=URLError("down")):
-            with self.assertRaisesRegex(JiraOAuthError, "Failed to download attachment"):
+            with self.assertRaisesRegex(AtlassianOAuthError, "Failed to download attachment"):
                 download_discord_attachment(url="https://discord.test/file")
 
         with patch("orchestrator.api.discord.bug.attachments.urlopen", return_value=_Response(b"", "image/png")):
-            with self.assertRaisesRegex(JiraOAuthError, "empty"):
+            with self.assertRaisesRegex(AtlassianOAuthError, "empty"):
                 download_discord_attachment(url="https://discord.test/file")
 
     def test_download_discord_attachment_uses_bot_auth_for_discord_urls(self) -> None:
@@ -208,7 +208,7 @@ class DiscordBugAttachmentsTests(unittest.TestCase):
 
         def _download(*, url: str) -> tuple[bytes, str | None]:
             if url.endswith("bad"):
-                raise JiraOAuthError("failed")
+                raise AtlassianOAuthError("failed")
             if url.endswith("value"):
                 raise ValueError("bad-value")
             return b"payload", "application/octet-stream"
@@ -252,7 +252,7 @@ class DiscordBugAttachmentsTests(unittest.TestCase):
             return b"payload", "application/octet-stream"
 
         def _upload_issue_attachment(**_: object) -> None:
-            raise JiraOAuthError("Jira attachment upload failed (403): permission denied")
+            raise AtlassianOAuthError("Jira attachment upload failed (403): permission denied")
 
         client.upload_issue_attachment = _upload_issue_attachment  # type: ignore[attr-defined]
 
@@ -282,7 +282,7 @@ class DiscordBugAttachmentsTests(unittest.TestCase):
         def _download(*, url: str) -> tuple[bytes, str | None]:
             calls.append(url)
             if "cdn.discordapp.com" in url:
-                raise JiraOAuthError("HTTP 403 downloading attachment: error code: 1010")
+                raise AtlassianOAuthError("HTTP 403 downloading attachment: error code: 1010")
             return b"payload", "image/png"
 
         attachments = [

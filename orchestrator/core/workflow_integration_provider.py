@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from orchestrator.api.discord.seed.issue_service import list_child_issue_previews_for_parent
-from orchestrator.api.jira_oauth.connection_service import tenant_jira_oauth_context
+from orchestrator.api.atlassian_oauth.connection_service import tenant_atlassian_oauth_context
 
 
 @dataclass
@@ -50,7 +50,7 @@ class JiraWorkflowAdapter:
 
 @dataclass
 class JiraWorkflowConnectionProvider:
-    oauth_context_resolver: Callable[..., Any] = tenant_jira_oauth_context
+    oauth_context_resolver: Callable[..., Any] = tenant_atlassian_oauth_context
     list_child_issue_previews_for_parent_fn: Callable[..., Any] = list_child_issue_previews_for_parent
 
     def adapter_for(self, *, session, tenant, settings) -> JiraWorkflowAdapter:  # noqa: ANN001

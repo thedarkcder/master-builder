@@ -4,19 +4,19 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 from urllib.parse import urlencode
 
-from orchestrator.tools.jira_oauth_models import (
-    JiraOAuthClientConfig,
-    JiraOAuthError,
-    JiraOAuthResource,
-    JiraOAuthTokenSet,
+from orchestrator.tools.atlassian_oauth_models import (
+    AtlassianOAuthClientConfig,
+    AtlassianOAuthError,
+    AtlassianOAuthResource,
+    AtlassianOAuthTokenSet,
 )
 
 
-class JiraOAuthCallbackFlow:
+class AtlassianOAuthCallbackFlow:
     def __init__(
         self,
         *,
-        config: JiraOAuthClientConfig,
+        config: AtlassianOAuthClientConfig,
         post_json: Callable[[str, dict[str, Any]], dict[str, Any]],
         get_json: Callable[[str, str], dict[str, Any] | list[Any]],
     ) -> None:
@@ -38,7 +38,7 @@ class JiraOAuthCallbackFlow:
         )
         return f"https://auth.atlassian.com/authorize?{query}"
 
-    def exchange_code(self, *, code: str) -> JiraOAuthTokenSet:
+    def exchange_code(self, *, code: str) -> AtlassianOAuthTokenSet:
         payload = self._post_json(
             "https://auth.atlassian.com/oauth/token",
             {
@@ -51,7 +51,7 @@ class JiraOAuthCallbackFlow:
         )
         return self._parse_tokens(payload)
 
-    def refresh_tokens(self, *, refresh_token: str) -> JiraOAuthTokenSet:
+    def refresh_tokens(self, *, refresh_token: str) -> AtlassianOAuthTokenSet:
         payload = self._post_json(
             "https://auth.atlassian.com/oauth/token",
             {
@@ -63,15 +63,15 @@ class JiraOAuthCallbackFlow:
         )
         return self._parse_tokens(payload)
 
-    def list_accessible_resources(self, *, access_token: str) -> list[JiraOAuthResource]:
+    def list_accessible_resources(self, *, access_token: str) -> list[AtlassianOAuthResource]:
         payload = self._get_json(
             "https://api.atlassian.com/oauth/token/accessible-resources",
             access_token,
         )
         if not isinstance(payload, list):
-            raise JiraOAuthError("Accessible resources response was not a list")
+            raise AtlassianOAuthError("Accessible resources response was not a list")
 
-        resources: list[JiraOAuthResource] = []
+        resources: list[AtlassianOAuthResource] = []
         for item in payload:
             if not isinstance(item, dict):
                 continue
@@ -84,27 +84,27 @@ class JiraOAuthCallbackFlow:
                 continue
             if not isinstance(name, str) or not name:
                 name = site_url
-            resources.append(JiraOAuthResource(cloud_id=cloud_id, site_url=site_url, name=name))
+            resources.append(AtlassianOAuthResource(cloud_id=cloud_id, site_url=site_url, name=name))
         return resources
 
-    def _parse_tokens(self, payload: dict[str, Any]) -> JiraOAuthTokenSet:
+    def _parse_tokens(self, payload: dict[str, Any]) -> AtlassianOAuthTokenSet:
         access_token = payload.get("access_token")
         refresh_token = payload.get("refresh_token")
         expires_in = payload.get("expires_in")
         scope_raw = payload.get("scope")
 
         if not isinstance(access_token, str) or not access_token:
-            raise JiraOAuthError("Jira OAuth response missing access_token")
+            raise AtlassianOAuthError("Atlassian response missing access_token")
         if not isinstance(refresh_token, str) or not refresh_token:
-            raise JiraOAuthError("Jira OAuth response missing refresh_token")
+            raise AtlassianOAuthError("Atlassian response missing refresh_token")
         if not isinstance(expires_in, int):
-            raise JiraOAuthError("Jira OAuth response missing expires_in")
+            raise AtlassianOAuthError("Atlassian response missing expires_in")
         if not isinstance(scope_raw, str):
             scope_raw = ""
 
         expires_at = datetime.now(timezone.utc) + timedelta(seconds=max(1, expires_in))
         scopes = [scope for scope in scope_raw.split(" ") if scope]
-        return JiraOAuthTokenSet(
+        return AtlassianOAuthTokenSet(
             access_token=access_token,
             refresh_token=refresh_token,
             expires_at=expires_at,

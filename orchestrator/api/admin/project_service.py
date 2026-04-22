@@ -12,7 +12,7 @@ from orchestrator.storage.models import Project, Tenant
 from orchestrator.core.secret_manager import normalize_secret_ref
 from orchestrator.core.tenant_secret_service import tenant_secret_service
 from orchestrator.tools.discord_api import DiscordApiError
-from orchestrator.tools.jira_oauth import JiraOAuthError
+from orchestrator.tools.atlassian_oauth import AtlassianOAuthError
 from orchestrator.tools.project_repo_checkout import ProjectRepoCheckoutError
 
 
@@ -24,6 +24,7 @@ class AdminProjectService:
         normalize_project_key: Callable[[str], str],
         normalize_project_policy_overrides: Callable[[dict | None], dict],
         normalize_string_map: Callable[[dict | None], dict],
+        normalize_project_architecture_docs_config: Callable[[dict | None], dict],
         normalize_project_discord_config: Callable[[dict | None], dict],
         with_preserved_discord_system_fields: Callable[[dict, dict], dict],
         resolve_project_discord_channel_binding: Callable[..., dict],
@@ -37,6 +38,7 @@ class AdminProjectService:
         self._normalize_project_key = normalize_project_key
         self._normalize_project_policy_overrides = normalize_project_policy_overrides
         self._normalize_string_map = normalize_string_map
+        self._normalize_project_architecture_docs_config = normalize_project_architecture_docs_config
         self._normalize_project_discord_config = normalize_project_discord_config
         self._with_preserved_discord_system_fields = with_preserved_discord_system_fields
         self._resolve_project_discord_channel_binding = resolve_project_discord_channel_binding
@@ -45,6 +47,20 @@ class AdminProjectService:
         self._resolve_project_run_board_id = resolve_project_run_board_id
         self._project_to_schema = project_to_schema
         self._settings_factory = settings_factory
+
+    def _optional_payload_dict(self, value) -> dict | None:  # noqa: ANN001
+        if value is None:
+            return None
+        model_dump = getattr(value, "model_dump", None)
+        if callable(model_dump):
+            dumped = model_dump(exclude_unset=True)
+            return dumped if isinstance(dumped, dict) else dict(dumped or {})
+        if isinstance(value, dict):
+            return dict(value)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Structured project configuration payload must be an object",
+        )
 
     def _should_bind_project_discord_channel(
         self,
@@ -161,13 +177,20 @@ class AdminProjectService:
                 jira_project_key=normalized_jira_key,
                 settings=self._settings_factory(),
             )
-        except (ValueError, JiraOAuthError) as exc:
+        except (ValueError, AtlassianOAuthError) as exc:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail=f"Unable to resolve Jira board for project {normalized_jira_key}: {exc}",
             ) from exc
         if run_board_id is not None:
             normalized_policy_overrides["run_board_id"] = run_board_id
+
+        try:
+            normalized_architecture_docs_config = self._normalize_project_architecture_docs_config(
+                self._optional_payload_dict(getattr(payload, "architecture_docs", None))
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
         settings = self._settings_factory()
         project = Project(
@@ -177,6 +200,7 @@ class AdminProjectService:
             github_repository=normalized_repo,
             jira_project_key=normalized_jira_key,
             policy_overrides=normalized_policy_overrides,
+            architecture_docs_config=normalized_architecture_docs_config,
             environment=self._normalize_string_map(payload.environment),
             secret_refs={},
             discord_config={},
@@ -195,7 +219,7 @@ class AdminProjectService:
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
         normalized_discord = self._normalize_project_discord_config(
-            payload.discord.model_dump(exclude_unset=True) if payload.discord else None
+            self._optional_payload_dict(getattr(payload, "discord", None))
         )
         if self._should_bind_project_discord_channel(
             tenant=tenant,
@@ -277,14 +301,22 @@ class AdminProjectService:
                 jira_project_key=normalized_jira_key,
                 settings=settings,
             )
-        except (ValueError, JiraOAuthError) as exc:
+        except (ValueError, AtlassianOAuthError) as exc:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail=f"Unable to resolve Jira board for project {normalized_jira_key}: {exc}",
             ) from exc
         if run_board_id is not None:
             normalized_policy_overrides["run_board_id"] = run_board_id
+        try:
+            normalized_architecture_docs_config = self._normalize_project_architecture_docs_config(
+                self._optional_payload_dict(getattr(payload, "architecture_docs", None))
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
         project.policy_overrides = normalized_policy_overrides
+        project.architecture_docs_config = normalized_architecture_docs_config
         project.environment = self._normalize_string_map(payload.environment)
         try:
             project.secret_refs = self._materialize_project_secret_refs(
@@ -299,14 +331,14 @@ class AdminProjectService:
         normalized_discord = self._with_preserved_discord_system_fields(
             existing=dict(project.discord_config or {}),
             proposed=self._normalize_project_discord_config(
-                payload.discord.model_dump(exclude_unset=True) if payload.discord else None
+                self._optional_payload_dict(getattr(payload, "discord", None))
             ),
         )
         if self._should_bind_project_discord_channel(
             tenant=tenant,
             discord_config=normalized_discord,
             is_archived=bool(payload.is_archived),
-            force_bind=payload.discord is not None,
+            force_bind=getattr(payload, "discord", None) is not None,
         ):
             try:
                 normalized_discord = self._resolve_project_discord_channel_binding(

@@ -13,7 +13,7 @@ from orchestrator.core.config import get_settings
 from orchestrator.core.secrets import encrypt_value
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
-from orchestrator.storage.models import JiraOAuthConnection, Run
+from orchestrator.storage.models import AtlassianOAuthConnection, Run
 from tests.test_support.db_harness import SqliteTemplateApiTestCase
 from tests.workflow_test_support import add_human_input_request, add_run_with_workflow, add_workflow_attempt, make_run
 
@@ -38,7 +38,7 @@ class AdminApiTestHarness(SqliteTemplateApiTestCase):
             "ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET": "unit-test-secret",
             "ORCHESTRATOR_ADMIN_UI_BASE_URL": "http://localhost:4100",
             "ORCHESTRATOR_PUBLIC_API_BASE_URL": "http://localhost:4000",
-            "ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET": "jira-oauth-state-secret",
+            "ORCHESTRATOR_ATLASSIAN_OAUTH_STATE_SECRET": "atlassian-oauth-state-secret",
             "ORCHESTRATOR_GITHUB_APP_SLUG": "master-builder-app",
             "ORCHESTRATOR_SECRETS_ENCRYPTION_KEY": cls._secrets_encryption_key,
             "ORCHESTRATOR_CODEX_SUPPORTED_MODELS": "gpt-5.4,gpt-5.4-mini,gpt-5.3-codex",
@@ -67,12 +67,12 @@ class AdminApiTestHarness(SqliteTemplateApiTestCase):
             auth=("admin", "secret"),
         )
         cls._class_client.put(
-            "/api/admin/secrets/platform%2FJIRA_OAUTH_CLIENT_ID",
+            "/api/admin/secrets/platform%2FATLASSIAN_OAUTH_CLIENT_ID",
             json={"value": "jira-client-id"},
             auth=("admin", "secret"),
         )
         cls._class_client.put(
-            "/api/admin/secrets/platform%2FJIRA_OAUTH_CLIENT_SECRET",
+            "/api/admin/secrets/platform%2FATLASSIAN_OAUTH_CLIENT_SECRET",
             json={"value": "jira-client-secret"},
             auth=("admin", "secret"),
         )
@@ -157,19 +157,19 @@ class AdminApiTestHarness(SqliteTemplateApiTestCase):
             },
         }
 
-    def _insert_jira_connection(self, connection_id: str = "conn-1") -> None:
+    def _insert_jira_connection(self, connection_id: str = "conn-1", scopes: list[str] | None = None) -> None:
         session_factory = create_session_factory(self.database_url)
         settings = get_settings()
         now = datetime.now(timezone.utc)
         with session_factory() as session:
             session.add(
-                JiraOAuthConnection(
+                AtlassianOAuthConnection(
                     connection_id=connection_id,
                     account_id="account-1",
                     account_email="test@example.com",
                     cloud_id="cloud-1",
                     site_url="https://example.atlassian.net",
-                    scopes=["read:jira-work", "write:jira-work"],
+                    scopes=scopes or ["read:jira-work", "write:jira-work"],
                     access_token_encrypted=encrypt_value(
                         plaintext="access-token",
                         encryption_key=settings.secrets_encryption_key,

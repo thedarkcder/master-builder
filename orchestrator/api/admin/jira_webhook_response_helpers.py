@@ -11,9 +11,9 @@ from orchestrator.core.decision_types import JiraConfigKey, jira_config_text
 def jira_webhook_action_status_code(result: JiraWebhookActionResult) -> int:
     if result.ok:
         return status.HTTP_200_OK
-    if result.details.startswith("Jira OAuth connection is not linked"):
+    if result.details.startswith("Atlassian connection is not linked"):
         return status.HTTP_400_BAD_REQUEST
-    if result.details.startswith("Configured Jira connection was not found"):
+    if result.details.startswith("Configured Atlassian connection was not found"):
         return status.HTTP_400_BAD_REQUEST
     return status.HTTP_502_BAD_GATEWAY
 

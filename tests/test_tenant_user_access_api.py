@@ -36,7 +36,7 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
             "ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET": "unit-test-secret",
             "ORCHESTRATOR_ADMIN_UI_BASE_URL": "http://localhost:4100",
             "ORCHESTRATOR_PUBLIC_API_BASE_URL": "http://localhost:4000",
-            "ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET": "jira-oauth-state-secret",
+            "ORCHESTRATOR_ATLASSIAN_OAUTH_STATE_SECRET": "atlassian-oauth-state-secret",
             "ORCHESTRATOR_GITHUB_APP_SLUG": "master-builder-app",
             "ORCHESTRATOR_DISCORD_OAUTH_CLIENT_ID": "discord-client-id-123",
             "ORCHESTRATOR_DISCORD_INSTALL_STATE_SECRET": "discord-install-state-secret",

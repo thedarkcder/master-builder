@@ -5,7 +5,7 @@ import { useParams, usePathname } from "next/navigation";
 
 const tabs = [
   { label: "Integrations", section: "integrations" },
-  { label: "Jira", section: "jira" },
+  { label: "Atlassian", section: "atlassian" },
   { label: "GitHub", section: "github" },
   { label: "Discord", section: "discord" },
   { label: "Configuration", section: "config" },

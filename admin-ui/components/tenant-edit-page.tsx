@@ -16,7 +16,7 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   type AdminNotificationRecord,
   archiveTenant,
-  disconnectJira,
+  disconnectAtlassian,
   listCodexModels,
   getTenant,
   getJiraWebhookDiagnostics,
@@ -29,12 +29,12 @@ import {
   type GitHubRepositoryRecord,
   type ReadyGatePreviewRecord,
   type JiraWebhookDiagnosticsRecord,
-  startJiraConnect,
+  startAtlassianConnect,
   startDiscordInstall,
   startGitHubInstall,
   resetJiraWebhook,
   testGithub,
-  testJira,
+  testAtlassian,
   unarchiveTenant,
   createProject,
   updateTenant,
@@ -54,7 +54,7 @@ import { cn } from "@/lib/utils";
 type TenantEditSection =
   | "setup"
   | "integrations"
-  | "jira"
+  | "atlassian"
   | "github"
   | "discord"
   | "health"
@@ -203,7 +203,7 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
       setAuditExportEnabled(payload.policy.observability?.audit_export_enabled ?? true);
       setLegalHoldEnabled(payload.policy.observability?.legal_hold_enabled ?? false);
       setLegalHoldReason(payload.policy.observability?.legal_hold_reason ?? "");
-      if (isPlatformAdmin && (section === "jira" || section === "notifications")) {
+      if (isPlatformAdmin && (section === "atlassian" || section === "notifications")) {
         await Promise.all([loadJiraWebhookDiagnostics(), loadNotifications()]);
       } else {
         setJiraWebhook(null);
@@ -231,8 +231,8 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
     if (searchParams.get("discord_install") === "success") {
       setStatusLine("Discord bot install callback received. Confirm the onboarding channel and invite settings, then save.");
     }
-    if (searchParams.get("jira_oauth") === "success") {
-      setStatusLine("Jira OAuth callback received. Update project keys if needed, then save.");
+    if (searchParams.get("atlassian_oauth") === "success") {
+      setStatusLine("Atlassian callback received. Update project keys if needed, then save.");
     }
   }, [searchParams]);
 
@@ -257,7 +257,7 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
       return;
     }
     try {
-      const jira = await testJira(credentials, params.tenantId);
+      const jira = await testAtlassian(credentials, params.tenantId);
       const github = await testGithub(credentials, params.tenantId);
       setStatusLine(
         `${params.tenantId}: Jira ${jira.ok ? "ok" : "fail"} (${jira.details}); GitHub ${github.ok ? "ok" : "fail"} (${github.details})`
@@ -420,10 +420,10 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
       return;
     }
     try {
-      const result = await startJiraConnect(credentials, { returnTo: "edit", tenantId: params.tenantId });
+      const result = await startAtlassianConnect(credentials, { returnTo: "edit", tenantId: params.tenantId });
       window.location.href = result.authorize_url;
     } catch (error) {
-      setStatusLine(`Unable to start Jira OAuth: ${(error as Error).message}`);
+      setStatusLine(`Unable to start Atlassian: ${(error as Error).message}`);
     }
   }
 
@@ -467,7 +467,7 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
     }
     setJiraWebhookBusy(true);
     try {
-      const result = await disconnectJira(credentials, params.tenantId);
+      const result = await disconnectAtlassian(credentials, params.tenantId);
       setStatusLine(result.details);
       await loadJiraWebhookDiagnostics();
       await loadTenant();
@@ -653,10 +653,10 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
           </div>
           <div className="mt-4 divide-y border-t text-sm">
             <div className="space-y-2 px-6 py-4">
-              <p className="font-medium">Jira</p>
-              <p className="text-muted-foreground">Connect Jira OAuth and verify tenant board access.</p>
+              <p className="font-medium">Atlassian</p>
+              <p className="text-muted-foreground">Connect Atlassian and verify tenant board access.</p>
               <Button asChild variant="outline" size="sm">
-                <Link href={getTenantSettingsRoute(tenant.tenant_id, "jira")}>Open Jira</Link>
+                <Link href={getTenantSettingsRoute(tenant.tenant_id, "atlassian")}>Open Atlassian</Link>
               </Button>
             </div>
             <div className="space-y-2 px-6 py-4">
@@ -677,11 +677,11 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
         </div>
       ) : null}
 
-      {section === "jira" ? (
+      {section === "atlassian" ? (
         <div className="overflow-hidden rounded-2xl border bg-background">
           <div className="px-6 pt-6">
             <div className="flex flex-wrap items-center gap-2">
-              <h2 className="text-base font-semibold">Jira Integration</h2>
+              <h2 className="text-base font-semibold">Atlassian Integration</h2>
               {jiraReauthNotification ? (
                 <Badge variant={notificationBadgeVariant(jiraReauthNotification)}>Reauth required</Badge>
               ) : null}
@@ -703,10 +703,10 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
             <div className="flex flex-wrap gap-2">
               <Button variant="outline" onClick={() => void connectJira()}>
                 <Link2 className="mr-2 h-4 w-4" />
-                {jiraConnected ? "Reconnect Jira" : "Connect Jira"}
+                {jiraConnected ? "Reconnect Atlassian" : "Connect Atlassian"}
               </Button>
               <Button variant="outline" disabled={jiraWebhookBusy} onClick={() => void handleDisconnectJira()}>
-                Disconnect Jira
+                Disconnect Atlassian
               </Button>
             </div>
             {isPlatformAdmin ? (
@@ -1160,11 +1160,11 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
                       <Badge variant={notificationBadgeVariant(notification)}>{notification.status}</Badge>
                       {notification.kind === "reauth_required" ? (
                         <Button size="sm" variant="outline" onClick={() => void connectJira()}>
-                          Reconnect Jira
+                          Reconnect Atlassian
                         </Button>
                       ) : (
                         <Button asChild size="sm" variant="outline">
-                          <Link href={getTenantSettingsRoute(tenant.tenant_id, "jira")}>Review</Link>
+                          <Link href={getTenantSettingsRoute(tenant.tenant_id, "atlassian")}>Review</Link>
                         </Button>
                       )}
                     </li>
@@ -1179,7 +1179,7 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
                       {jiraWebhookStatus.label}
                     </Badge>
                     <Button asChild size="sm" variant="outline">
-                      <Link href={getTenantSettingsRoute(tenant.tenant_id, "jira")}>Review</Link>
+                      <Link href={getTenantSettingsRoute(tenant.tenant_id, "atlassian")}>Review</Link>
                     </Button>
                   </li>
                 )}

@@ -183,35 +183,35 @@ def test_platform_secret_service_get_supports_platform_refs() -> None:
 
 
 def test_platform_secret_service_does_not_fall_back_to_platform_env_names_by_default() -> None:
-    os.environ["platform/JIRA_OAUTH_CLIENT_SECRET"] = "env-platform-secret"
+    os.environ["platform/ATLASSIAN_OAUTH_CLIENT_SECRET"] = "env-platform-secret"
     try:
         with patch("orchestrator.core.platform_secret_service._resolve_platform_secret_ref", return_value=None):
             assert (
                 platform_secret_service.get(
                     session=MagicMock(),
-                    secret_ref="JIRA_OAUTH_CLIENT_SECRET",
+                    secret_ref="ATLASSIAN_OAUTH_CLIENT_SECRET",
                     encryption_key="unused",
                 )
                 is None
             )
     finally:
-        os.environ.pop("platform/JIRA_OAUTH_CLIENT_SECRET", None)
+        os.environ.pop("platform/ATLASSIAN_OAUTH_CLIENT_SECRET", None)
 
 
 def test_platform_secret_service_does_not_fall_back_to_unscoped_env_names() -> None:
-    os.environ["JIRA_OAUTH_CLIENT_SECRET"] = "env-plain-secret"
+    os.environ["ATLASSIAN_OAUTH_CLIENT_SECRET"] = "env-plain-secret"
     try:
         with patch("orchestrator.core.platform_secret_service._resolve_platform_secret_ref", return_value=None):
             assert (
                 platform_secret_service.get(
                     session=MagicMock(),
-                    secret_ref="JIRA_OAUTH_CLIENT_SECRET",
+                    secret_ref="ATLASSIAN_OAUTH_CLIENT_SECRET",
                     encryption_key="unused",
                 )
                 is None
             )
     finally:
-        os.environ.pop("JIRA_OAUTH_CLIENT_SECRET", None)
+        os.environ.pop("ATLASSIAN_OAUTH_CLIENT_SECRET", None)
 
 
 def test_platform_secret_service_rejects_scoped_secret_refs() -> None:

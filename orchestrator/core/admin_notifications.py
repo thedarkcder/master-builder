@@ -37,8 +37,8 @@ ADMIN_NOTIFICATION_KIND_JIRA_CONNECTION_REAUTH_REQUIRED = "reauth_required"
 _NOTIFICATION_TEMPLATES: dict[str, AdminNotificationTemplate] = {
     ADMIN_NOTIFICATION_KIND_JIRA_CONNECTION_REAUTH_REQUIRED: AdminNotificationTemplate(
         severity="HIGH",
-        title="Jira connection needs reauthentication",
-        action_label="Reconnect Jira",
+        title="Atlassian connection needs reauthentication",
+        action_label="Reconnect Atlassian",
         action_path=None,
     ),
 }
@@ -237,13 +237,13 @@ def list_tenant_admin_notifications(
     tenant = session.get(Tenant, tenant_id)
     if tenant is None:
         return []
-    jira_connection_id = str((tenant.jira_config or {}).get("connection_id") or "").strip() or None
+    atlassian_connection_id = str((tenant.jira_config or {}).get("connection_id") or "").strip() or None
     where_clauses = [AdminNotification.tenant_id == tenant_id]
-    if jira_connection_id:
+    if atlassian_connection_id:
         where_clauses.append(
             (
                 (AdminNotification.scope_type == "jira_connection")
-                & (AdminNotification.scope_id == jira_connection_id)
+                & (AdminNotification.scope_id == atlassian_connection_id)
             )
         )
     query = select(AdminNotification).where(or_(*where_clauses))

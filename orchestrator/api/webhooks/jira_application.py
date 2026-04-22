@@ -8,7 +8,7 @@ from fastapi import status
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from orchestrator.api.jira_oauth.connection_service import tenant_jira_oauth_context
+from orchestrator.api.atlassian_oauth.connection_service import tenant_atlassian_oauth_context
 from orchestrator.api.webhooks.jira_comment_planner import plan_jira_comment_flow
 from orchestrator.api.webhooks.jira_admission_flow import (
     build_jira_enqueue_skipped_notification_action,
@@ -131,7 +131,7 @@ def _maybe_apply_runtime_issue_intake_routing(
     if not target_label or target_label in normalized_labels:
         return None
     try:
-        oauth = tenant_jira_oauth_context(
+        oauth = tenant_atlassian_oauth_context(
             session=session,
             tenant=context.tenant,
             settings=settings,

@@ -3,10 +3,10 @@ from __future__ import annotations
 from typing import Any
 from urllib.parse import quote
 
-from orchestrator.tools.jira_oauth_models import JiraOAuthError
+from orchestrator.tools.atlassian_oauth_models import AtlassianOAuthError
 
 
-class JiraOAuthAttachmentService:
+class AtlassianOAuthAttachmentService:
     def __init__(self, *, post_multipart, get_bytes) -> None:
         self._post_multipart = post_multipart
         self._get_bytes = get_bytes
@@ -24,11 +24,11 @@ class JiraOAuthAttachmentService:
         normalized_issue = issue_id_or_key.strip()
         normalized_filename = filename.strip()
         if not normalized_issue:
-            raise JiraOAuthError("Missing issue id/key for attachment upload")
+            raise AtlassianOAuthError("Missing issue id/key for attachment upload")
         if not normalized_filename:
-            raise JiraOAuthError("Missing attachment filename")
+            raise AtlassianOAuthError("Missing attachment filename")
         if not content:
-            raise JiraOAuthError("Attachment payload is empty")
+            raise AtlassianOAuthError("Attachment payload is empty")
 
         parsed = self._post_multipart(
             url=(
@@ -41,7 +41,7 @@ class JiraOAuthAttachmentService:
             content_type=(content_type or "application/octet-stream"),
         )
         if not isinstance(parsed, list):
-            raise JiraOAuthError("Jira attachment upload response was not a list")
+            raise AtlassianOAuthError("Jira attachment upload response was not a list")
         return [item for item in parsed if isinstance(item, dict)]
 
     def download_attachment(
@@ -52,8 +52,8 @@ class JiraOAuthAttachmentService:
     ) -> bytes:
         normalized_url = str(content_url or "").strip()
         if not normalized_url:
-            raise JiraOAuthError("Missing attachment content url")
+            raise AtlassianOAuthError("Missing attachment content url")
         content = self._get_bytes(url=normalized_url, access_token=access_token)
         if not isinstance(content, (bytes, bytearray)):
-            raise JiraOAuthError("Jira attachment download response was not bytes")
+            raise AtlassianOAuthError("Jira attachment download response was not bytes")
         return bytes(content)

@@ -12,7 +12,7 @@ from orchestrator.api.discord.seed.description import (
     build_engineering_child_description,
     build_parent_feature_description,
 )
-from orchestrator.tools.jira_oauth import JiraIssueCreateInput
+from orchestrator.tools.atlassian_oauth import JiraIssueCreateInput
 
 _MAX_ENGINEERING_CHILDREN = 12
 _PM_COMPLETE_STATUSES = {"ready_to_write", "pm_completed"}
@@ -395,8 +395,8 @@ class ParentIssueDraft:
         sync_status: str,
         pm_status: str | None = None,
         planning_state: str | None = None,
-        architecture_summary: list[str] | None = None,
-        architecture_diagram: str | None = None,
+        architecture_title: str | None = None,
+        architecture_url: str | None = None,
     ) -> JiraIssueCreateInput:
         return JiraIssueCreateInput(
             summary=self.summary,
@@ -415,8 +415,8 @@ class ParentIssueDraft:
                 sync_status=sync_status,
                 pm_status=pm_status,
                 planning_state=planning_state,
-                architecture_summary=architecture_summary,
-                architecture_diagram=architecture_diagram,
+                architecture_title=architecture_title,
+                architecture_url=architecture_url,
             ),
             labels=_dedupe_labels(
                 self.labels,
@@ -455,6 +455,8 @@ class EngineeringChildDraft:
         specialist_summary: list[str] | None = None,
         planning_state: str | None = None,
         pm_status: str | None = None,
+        architecture_title: str | None = None,
+        architecture_url: str | None = None,
     ) -> JiraIssueCreateInput:
         parent_label = _normalize_label(parent_issue_key, prefix="parent-")
         return JiraIssueCreateInput(
@@ -472,6 +474,8 @@ class EngineeringChildDraft:
                 dependencies_and_risks=[*self.dependencies, *self.risks],
                 specialist_summary=specialist_summary,
                 planning_state=planning_state,
+                architecture_title=architecture_title,
+                architecture_url=architecture_url,
             ),
             labels=_dedupe_labels(
                 self.labels,

@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from orchestrator.core.platform_secret_service import resolve_platform_secret_ref
 from orchestrator.storage.models import Tenant
 from orchestrator.tools.discord_api import DiscordApiClient
-from orchestrator.tools.jira_oauth import JiraOAuthError
+from orchestrator.tools.atlassian_oauth import AtlassianOAuthError
 
 logger = logging.getLogger(__name__)
 _SNIPPET_LIMIT = 240
@@ -150,7 +150,7 @@ def download_discord_attachment(*, url: str, bot_token: str | None = None) -> tu
         try:
             payload, content_type = _download_discord_attachment(candidate, headers)
             if not payload:
-                raise JiraOAuthError("Downloaded attachment was empty")
+                raise AtlassianOAuthError("Downloaded attachment was empty")
             return (
                 payload,
                 content_type.strip() if isinstance(content_type, str) and content_type.strip() else None,
@@ -172,9 +172,9 @@ def download_discord_attachment(*, url: str, bot_token: str | None = None) -> tu
                     exc.code,
                     "error code: 1010",
                 )
-            raise JiraOAuthError(f"HTTP {exc.code} downloading attachment: {body}") from exc
+            raise AtlassianOAuthError(f"HTTP {exc.code} downloading attachment: {body}") from exc
         except URLError as exc:
-            raise JiraOAuthError(f"Failed to download attachment: {exc.reason}") from exc
+            raise AtlassianOAuthError(f"Failed to download attachment: {exc.reason}") from exc
 
 
 
@@ -253,7 +253,7 @@ def upload_discord_attachments_to_jira(
                 try:
                     content, downloaded_content_type = download_attachment(url=url)
                     break
-                except (JiraOAuthError, ValueError) as exc:
+                except (AtlassianOAuthError, ValueError) as exc:
                     last_error = exc
                     if index + 1 < len(url_list):
                         logger.warning(
@@ -281,7 +281,7 @@ def upload_discord_attachments_to_jira(
                     content_type=content_type,
                 )
                 uploaded_count += 1
-            except (JiraOAuthError, ValueError) as exc:
+            except (AtlassianOAuthError, ValueError) as exc:
                 error_text = str(exc)
                 status, snippet = _extract_status_and_snippet(error_text)
                 failures.append(
@@ -304,7 +304,7 @@ def upload_discord_attachments_to_jira(
                     error_text,
                     snippet,
                 )
-        except (JiraOAuthError, ValueError) as exc:
+        except (AtlassianOAuthError, ValueError) as exc:
             error_text = str(exc)
             status, snippet = _extract_status_and_snippet(error_text)
             failures.append(

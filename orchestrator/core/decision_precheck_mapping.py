@@ -52,7 +52,7 @@ def evaluate_with_labels(
     recorded_answers: list[dict[str, str]] | None,
     issue_labels: list[str] | None,
     settings,  # noqa: ANN001
-    tenant_jira_oauth_context_fn: Callable[..., Any],
+    tenant_atlassian_oauth_context_fn: Callable[..., Any],
     evaluate_ingress_precheck_fn: Callable[..., IngressDecision],
     oauth_context: Any | None = None,
     evaluate_pre_run_check_fn: Callable[..., object] = evaluate_pre_run_check,
@@ -83,7 +83,7 @@ def evaluate_with_labels(
         existing_labels=normalized_labels,
         actions=decision.label_actions,
         settings=settings,
-        tenant_jira_oauth_context_fn=tenant_jira_oauth_context_fn,
+        tenant_atlassian_oauth_context_fn=tenant_atlassian_oauth_context_fn,
         oauth_context=oauth_context,
         logger=logger,
     )

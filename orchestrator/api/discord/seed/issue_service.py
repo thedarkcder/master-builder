@@ -11,11 +11,17 @@ from orchestrator.api.discord.seed.draft_assembly import (
     parse_parent_seed_drafts,
 )
 from orchestrator.api.discord.shared.response_format import build_issue_url_list, format_issue_markdown_list
+from orchestrator.core.architecture_document_service import (
+    ArchitectureDocumentGate,
+    ArchitectureDocumentLink,
+    ArchitectureDocumentService,
+    architecture_required_for_issue,
+)
 from orchestrator.core.audit_events import record_audit_event
 from orchestrator.core.runtime_invocation import AgentInvocationContext, WorkflowAttemptRef
 from orchestrator.core.workflow_operation_logging import emit_workflow_operation_log
-from orchestrator.storage.models import Tenant, WorkflowOperation
-from orchestrator.tools.jira_oauth import JiraIssueCreateInput, JiraIssuePreview, JiraOAuthError
+from orchestrator.storage.models import Project, Tenant, WorkflowOperation
+from orchestrator.tools.atlassian_oauth import JiraIssueCreateInput, JiraIssuePreview, AtlassianOAuthError
 
 SEED_FOLLOWUP_CONTEXT_MAX_AGE = timedelta(hours=24)
 _PM_PARENT_LABEL = "pm-parent"
@@ -24,6 +30,54 @@ _PM_PARENT_LABEL = "pm-parent"
 def _parent_label(parent_issue_key: str) -> str:
     normalized = re.sub(r"[^a-z0-9]+", "-", str(parent_issue_key or "").strip().lower()).strip("-")
     return f"parent-{normalized[:64]}" if normalized else "parent"
+
+
+def _project_for_seed_or_404(
+    *,
+    session,
+    tenant: Tenant,
+    project_id: str | None,
+) -> Project:
+    normalized_project_id = str(project_id or "").strip()
+    if not normalized_project_id:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Issue seeding requires a scoped project")
+    project = session.get(Project, normalized_project_id)
+    if project is None or project.tenant_id != tenant.tenant_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+    return project
+
+
+def _architecture_gate_for_parent_issue(
+    *,
+    session,
+    tenant: Tenant,
+    project_id: str | None,
+    parent_issue_key: str,
+    issue_summary: str,
+    issue_labels: list[str],
+    actor: str | None,
+    settings_factory,
+) -> tuple[ArchitectureDocumentGate, ArchitectureDocumentLink | None]:
+    project = _project_for_seed_or_404(session=session, tenant=tenant, project_id=project_id)
+    service = ArchitectureDocumentService(settings_factory=settings_factory)
+    gate = service.resolve_gate(
+        session=session,
+        project=project,
+        parent_issue_key=parent_issue_key,
+        issue_summary=issue_summary,
+        issue_labels=issue_labels,
+        actor=actor,
+    )
+    if gate.document is None:
+        return gate, None
+    normalized_url = str(gate.document.canonical_url or "").strip()
+    if not normalized_url:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Architecture document '{gate.document.title}' is missing its canonical URL",
+        )
+    return gate, ArchitectureDocumentLink(title=gate.document.title, url=normalized_url)
+
 
 def _assert_stage_spi_allows_parent_seed(
     *,
@@ -55,10 +109,10 @@ def _assert_stage_spi_allows_parent_seed(
     )
 
 
-def _resolve_seed_oauth_context(*, session, tenant: Tenant, settings, tenant_jira_oauth_context_fn):  # noqa: ANN001
+def _resolve_seed_oauth_context(*, session, tenant: Tenant, settings, tenant_atlassian_oauth_context_fn):  # noqa: ANN001
     try:
-        oauth = tenant_jira_oauth_context_fn(session=session, tenant=tenant, settings=settings)
-    except (ValueError, JiraOAuthError) as exc:
+        oauth = tenant_atlassian_oauth_context_fn(session=session, tenant=tenant, settings=settings)
+    except (ValueError, AtlassianOAuthError) as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"Failed to seed Jira issues: {exc}",
@@ -67,7 +121,7 @@ def _resolve_seed_oauth_context(*, session, tenant: Tenant, settings, tenant_jir
     if not isinstance(oauth, dict):
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Failed to seed Jira issues: Jira OAuth context is incomplete",
+            detail="Failed to seed Jira issues: Atlassian context is incomplete",
         )
     client = oauth.get("client")
     access_token = str(oauth.get("access_token") or "").strip()
@@ -76,7 +130,7 @@ def _resolve_seed_oauth_context(*, session, tenant: Tenant, settings, tenant_jir
     if client is None or not access_token or connection is None or not cloud_id:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Failed to seed Jira issues: Jira OAuth context is incomplete",
+            detail="Failed to seed Jira issues: Atlassian context is incomplete",
         )
     return {
         "client": client,
@@ -92,7 +146,7 @@ def validate_seed_followup_context(
     tenant: Tenant,
     context: dict,
     get_settings_fn,
-    tenant_jira_oauth_context_fn,
+    tenant_atlassian_oauth_context_fn,
 ) -> tuple[bool, str | None]:  # noqa: ANN001
     updated_at_raw = str(context.get("updated_at") or "").strip()
     if updated_at_raw:
@@ -110,7 +164,7 @@ def validate_seed_followup_context(
         return True, None
     try:
         settings = get_settings_fn()
-        oauth = tenant_jira_oauth_context_fn(session=session, tenant=tenant, settings=settings)
+        oauth = tenant_atlassian_oauth_context_fn(session=session, tenant=tenant, settings=settings)
         escaped_keys = ", ".join(f'"{value.replace(chr(34), "").strip()}"' for value in issue_keys)
         existing = oauth["client"].search_issues_by_jql(
             access_token=oauth["access_token"],
@@ -118,7 +172,7 @@ def validate_seed_followup_context(
             jql=f"issuekey in ({escaped_keys})",
             max_results=min(len(issue_keys), 50),
         )
-    except (HTTPException, ValueError, JiraOAuthError):
+    except (HTTPException, ValueError, AtlassianOAuthError):
         return True, None
     existing_keys = {str(issue.key).strip().upper() for issue in existing if str(issue.key).strip()}
     if not existing_keys:
@@ -150,7 +204,7 @@ def _child_issue_catalog(*, oauth: dict[str, Any], project_key: str, parent_issu
                 jql=query,
                 max_results=100,
             )
-        except (AttributeError, TypeError, ValueError, JiraOAuthError):
+        except (AttributeError, TypeError, ValueError, AtlassianOAuthError):
             continue
         for issue in issues:
             if issue.key not in matched:
@@ -181,7 +235,7 @@ def _project_available_issue_types(*, oauth: dict[str, Any], project_key: str) -
                 cloud_id=oauth["cloud_id"],
                 project_key=project_key,
             )
-        except (AttributeError, TypeError, ValueError, JiraOAuthError):
+        except (AttributeError, TypeError, ValueError, AtlassianOAuthError):
             return []
         return [str(value).strip() for value in payload if str(value).strip()]
     return []
@@ -296,7 +350,7 @@ def seed_issues_with_runtime(
     codex_runtime_error_type,
     build_seed_issue_description_fn,
     issue_key_pattern,
-    tenant_jira_oauth_context_fn,
+    tenant_atlassian_oauth_context_fn,
     select_seed_match_fn,
     allow_empty_children: bool = False,
     pm_status: str | None = None,
@@ -369,18 +423,21 @@ def seed_issues_with_runtime(
     effective_pm_status = draft_set.pm_status
     effective_planning_package = draft_set.planning_package
     specialist_summary = list(effective_planning_package.specialist_summary)
-    architecture_summary = list(effective_planning_package.architecture_summary)
-    architecture_diagram = effective_planning_package.architecture_diagram
     planning_blocked = effective_planning_package.blocked
     planning_state_for_description = effective_planning_package.planning_state_for_description
     parent_issue = draft_set.parent_issue
     engineering_children = draft_set.engineering_children
+    architecture_gate: ArchitectureDocumentGate | None = None
+    architecture_link: ArchitectureDocumentLink | None = None
+    architecture_required = False
+    architecture_blocked = False
+    architecture_labels = list(parent_issue.labels)
 
     oauth = _resolve_seed_oauth_context(
         session=session,
         tenant=tenant,
         settings=settings,
-        tenant_jira_oauth_context_fn=tenant_jira_oauth_context_fn,
+        tenant_atlassian_oauth_context_fn=tenant_atlassian_oauth_context_fn,
     )
     browse_base_url = str(oauth["connection"].site_url or "").strip().rstrip("/")
     available_issue_types = _project_available_issue_types(oauth=oauth, project_key=project_key)
@@ -396,8 +453,6 @@ def seed_issues_with_runtime(
             sync_status=parent_sync_status,
             pm_status=effective_pm_status or None,
             planning_state=planning_state_for_description,
-            architecture_summary=architecture_summary,
-            architecture_diagram=architecture_diagram if isinstance(architecture_diagram, str) else None,
         )
         _record_seed_operation_event(
             session=session,
@@ -452,14 +507,33 @@ def seed_issues_with_runtime(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Parent issue could not be matched and issue creation is disabled",
             )
+        if architecture_required_for_issue(issue_labels=architecture_labels):
+            architecture_gate, architecture_link = _architecture_gate_for_parent_issue(
+                session=session,
+                tenant=tenant,
+                project_id=scoped_project_id,
+                parent_issue_key=parent_issue_key,
+                issue_summary=parent_issue.summary,
+                issue_labels=architecture_labels,
+                actor="system",
+                settings_factory=get_settings_fn,
+            )
+            if architecture_gate.required and architecture_link is None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=architecture_gate.block_reason or f"Architecture document link is required for {parent_issue_key}",
+                )
+            architecture_required = architecture_gate.required
+            architecture_blocked = architecture_required and not architecture_gate.ready
+        planning_blocked = planning_blocked or architecture_blocked
 
         if planning_blocked:
             parent_final_input = parent_issue.to_jira_input(
                 sync_status=parent_sync_status,
                 pm_status=effective_pm_status or None,
                 planning_state=planning_state_for_description,
-                architecture_summary=architecture_summary,
-                architecture_diagram=architecture_diagram if isinstance(architecture_diagram, str) else None,
+                architecture_title=architecture_link.title if architecture_link else None,
+                architecture_url=architecture_link.url if architecture_link else None,
             )
             _record_seed_operation_event(
                 session=session,
@@ -517,8 +591,14 @@ def seed_issues_with_runtime(
                 f"{format_issue_markdown_list(issue_keys=created_issue_keys, browse_base_url=browse_base_url)}."
             )
             message = (
-                f"{message}\n\nSpecialist planning is not complete yet, so engineering child tickets were not created. "
-                "Once the planning package is complete, refresh this parent issue to create the child tickets."
+                f"{message}\n\n"
+                + (
+                    "Architecture is required for this epic, and the linked architecture document is not ready. "
+                    "Mark the architecture document ready before refreshing this parent issue to create the child tickets."
+                    if architecture_blocked
+                    else "Specialist planning is not complete yet, so engineering child tickets were not created. "
+                    "Once the planning package is complete, refresh this parent issue to create the child tickets."
+                )
             )
             return (
                 message,
@@ -532,6 +612,9 @@ def seed_issues_with_runtime(
                     "pm_status": effective_pm_status or None,
                     "planning_state": planning_state_for_description,
                     "planning_summary": specialist_summary,
+                    "architecture_document_required": architecture_blocked,
+                    "architecture_document_title": architecture_link.title if architecture_link else None,
+                    "architecture_document_url": architecture_link.url if architecture_link else None,
                     "children_sync_status": "planning_blocked",
                     "stale_child_keys": [],
                     "updated_parent": parent_issue_key if parent_updated else None,
@@ -575,6 +658,8 @@ def seed_issues_with_runtime(
                 specialist_summary=specialist_summary,
                 planning_state=planning_state_for_description,
                 pm_status=effective_pm_status or None,
+                architecture_title=architecture_link.title if architecture_link else None,
+                architecture_url=architecture_link.url if architecture_link else None,
             )
             child_key: str | None = None
             child_created = False
@@ -611,52 +696,16 @@ def seed_issues_with_runtime(
                     matched_issue_keys=matched_child_keys,
                     select_seed_match_fn=select_seed_match_fn,
                 )
-            except JiraOAuthError as exc:
+            except AtlassianOAuthError as exc:
                 if "Subtask issue type is not available" not in str(exc):
                     raise
-                fallback_input = child_issue.to_jira_input(
-                    parent_issue_key=parent_issue_key,
-                    parent_summary=parent_issue.summary,
-                    parent_revision=parent_issue.revision,
-                    sync_status=final_sync_status,
-                    use_subtask=False,
-                    specialist_summary=specialist_summary,
-                    planning_state=planning_state_for_description,
-                    pm_status=effective_pm_status or None,
-                )
-                child_key, child_created, child_updated = _upsert_issue(
-                    oauth=oauth,
-                    project_key=project_key,
-                    issue_input=fallback_input,
-                    requested_issue_key=child_issue.requested_issue_key,
-                    allow_create=allow_create,
-                    existing_issues=child_catalog,
-                    matched_issue_keys=matched_child_keys,
-                    select_seed_match_fn=select_seed_match_fn,
-                )
-                if child_created and child_key:
-                    oauth["client"].add_issue_link(
-                        access_token=oauth["access_token"],
-                        cloud_id=oauth["cloud_id"],
-                        inward_issue_key=child_key,
-                        outward_issue_key=parent_issue_key,
-                    )
-                    _record_seed_operation_event(
-                        session=session,
-                        tenant_id=tenant.tenant_id,
-                        project_id=scoped_project_id,
-                        workflow_id=workflow_id,
-                        operation_id=operation_id,
-                        issue_key=parent_issue_key,
-                        attempt=attempt,
-                        attempt_id=attempt_id,
-                        event_kind="jira_child_link_response",
-                        message=f"Linked child issue {child_key} to parent {parent_issue_key}.",
-                        payload={
-                            "child_issue_key": child_key,
-                            "parent_issue_key": parent_issue_key,
-                        },
-                    )
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=(
+                        f"Failed to seed Jira issues: project {project_key} does not support subtasks "
+                        f"for parent issue {parent_issue_key}"
+                    ),
+                ) from exc
             if not child_key:
                 create_errors.append(f"Engineering child '{child_issue.summary}' was not matched and creation is disabled")
                 final_sync_status = "sync_blocked"
@@ -689,6 +738,8 @@ def seed_issues_with_runtime(
             sync_status=final_sync_status,
             pm_status=effective_pm_status or None,
             planning_state=planning_state_for_description,
+            architecture_title=architecture_link.title if architecture_link else None,
+            architecture_url=architecture_link.url if architecture_link else None,
         )
         _record_seed_operation_event(
             session=session,
@@ -741,7 +792,7 @@ def seed_issues_with_runtime(
             parent_updated = True
     except HTTPException:
         raise
-    except (ValueError, TypeError, AttributeError, JiraOAuthError) as exc:
+    except (ValueError, TypeError, AttributeError, AtlassianOAuthError) as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"Failed to seed Jira issues: {exc}",
@@ -788,6 +839,9 @@ def seed_issues_with_runtime(
             "pm_status": effective_pm_status or None,
             "planning_state": planning_state_for_description,
             "planning_summary": specialist_summary,
+            "architecture_document_required": architecture_blocked,
+            "architecture_document_title": architecture_link.title if architecture_link else None,
+            "architecture_document_url": architecture_link.url if architecture_link else None,
             "children_sync_status": final_sync_status,
             "stale_child_keys": stale_child_keys if final_sync_status != "children_current" else [],
             "updated_parent": parent_issue_key if parent_updated else None,
@@ -826,7 +880,7 @@ def seed_parent_issues_with_runtime(
     plan_pm_parent_issues_with_runtime_fn,
     codex_runtime_error_type,
     issue_key_pattern,
-    tenant_jira_oauth_context_fn,
+    tenant_atlassian_oauth_context_fn,
     select_seed_match_fn,
     pm_status: str | None = None,
     pm_interview_notes_json: dict | None = None,
@@ -897,7 +951,7 @@ def seed_parent_issues_with_runtime(
         session=session,
         tenant=tenant,
         settings=settings,
-        tenant_jira_oauth_context_fn=tenant_jira_oauth_context_fn,
+        tenant_atlassian_oauth_context_fn=tenant_atlassian_oauth_context_fn,
     )
     browse_base_url = str(oauth["connection"].site_url or "").strip().rstrip("/")
     available_issue_types = _project_available_issue_types(oauth=oauth, project_key=project_key)
@@ -931,6 +985,42 @@ def seed_parent_issues_with_runtime(
             if not parent_key:
                 errors.append(f"Parent issue '{parent_issue.summary}' was not matched and creation is disabled")
                 continue
+            architecture_gate = None
+            architecture_link = None
+            if architecture_required_for_issue(issue_labels=parent_issue.labels):
+                architecture_gate, architecture_link = _architecture_gate_for_parent_issue(
+                    session=session,
+                    tenant=tenant,
+                    project_id=scoped_project_id,
+                    parent_issue_key=parent_key,
+                    issue_summary=parent_issue.summary,
+                    issue_labels=parent_issue.labels,
+                    actor="system",
+                    settings_factory=get_settings_fn,
+                )
+                if architecture_gate.required and architecture_link is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail=architecture_gate.block_reason or f"Architecture document link is required for {parent_key}",
+                    )
+            final_parent_input = parent_issue.to_jira_input(
+                sync_status=(
+                    "planning_blocked"
+                    if architecture_gate is not None and architecture_gate.required and not architecture_gate.ready
+                    else "children_stale"
+                ),
+                pm_status=effective_pm_status or None,
+                architecture_title=architecture_link.title if architecture_link else None,
+                architecture_url=architecture_link.url if architecture_link else None,
+            )
+            oauth["client"].update_issue_fields(
+                access_token=oauth["access_token"],
+                cloud_id=oauth["cloud_id"],
+                issue_id_or_key=parent_key,
+                summary=final_parent_input.summary,
+                description=final_parent_input.description,
+                labels=final_parent_input.labels,
+            )
             if parent_created:
                 created_parent_issue_keys.append(parent_key)
             if parent_updated:
@@ -942,7 +1032,7 @@ def seed_parent_issues_with_runtime(
             )
     except HTTPException:
         raise
-    except (ValueError, TypeError, AttributeError, JiraOAuthError) as exc:
+    except (ValueError, TypeError, AttributeError, AtlassianOAuthError) as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"Failed to seed Jira issues: {exc}",

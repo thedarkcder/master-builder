@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 
 
 @dataclass(frozen=True)
-class JiraOAuthState:
+class AtlassianOAuthState:
     exp: int
     return_to: str
     tenant_id: str | None
@@ -24,7 +24,7 @@ def _b64url_decode(raw: str) -> bytes:
     return base64.urlsafe_b64decode((raw + padding).encode("ascii"))
 
 
-def create_jira_oauth_state_token(
+def create_atlassian_oauth_state_token(
     *,
     exp: datetime,
     secret: str,
@@ -48,12 +48,12 @@ def create_jira_oauth_state_token(
     return f"{payload_token}.{signature_token}"
 
 
-def parse_jira_oauth_state_token(
+def parse_atlassian_oauth_state_token(
     *,
     token: str,
     secret: str,
     now: datetime | None = None,
-) -> JiraOAuthState:
+) -> AtlassianOAuthState:
     if not token:
         raise ValueError("state token is required")
     if not secret:
@@ -93,4 +93,4 @@ def parse_jira_oauth_state_token(
     if exp <= int(now_utc.timestamp()):
         raise ValueError("state token expired")
 
-    return JiraOAuthState(exp=exp, return_to=return_to, tenant_id=tenant_id)
+    return AtlassianOAuthState(exp=exp, return_to=return_to, tenant_id=tenant_id)

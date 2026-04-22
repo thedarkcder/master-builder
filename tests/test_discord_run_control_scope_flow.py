@@ -11,7 +11,7 @@ from orchestrator.core.decision_engine import DecisionEngineResult
 from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.pre_run_check import PreRunCheckResult
 from orchestrator.storage.models import Project, Run
-from orchestrator.tools.jira_oauth import JiraIssueDetail, JiraIssuePreview
+from orchestrator.tools.atlassian_oauth import JiraIssueDetail, JiraIssuePreview
 from tests.test_support.discord_command_api_harness import DiscordCommandApiTestHarness
 
 

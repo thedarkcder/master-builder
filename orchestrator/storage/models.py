@@ -213,10 +213,60 @@ class Project(Base):
     github_repository: Mapped[str] = mapped_column(String(512), nullable=False)
     jira_project_key: Mapped[str] = mapped_column(String(64), nullable=False)
     policy_overrides: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    architecture_docs_config: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     environment: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     secret_refs: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     discord_config: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     is_archived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ArchitectureDocument(Base):
+    __tablename__ = "architecture_documents"
+    __table_args__ = (
+        Index("ix_architecture_documents_scope_parent", "tenant_id", "project_id", "parent_issue_key"),
+        Index("ix_architecture_documents_status", "status"),
+        Index(
+            "uq_architecture_documents_active_parent",
+            "tenant_id",
+            "project_id",
+            "parent_issue_key",
+            unique=True,
+            postgresql_where=text("is_active = true"),
+            sqlite_where=text("is_active = 1"),
+        ),
+    )
+
+    document_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey("tenants.tenant_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    project_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey("projects.project_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    parent_issue_key: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
+    canonical_url: Mapped[str] = mapped_column(String(1024), nullable=False)
+    provider_ref: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    knowledge_asset_id: Mapped[str | None] = mapped_column(
+        String(64),
+        ForeignKey("knowledge_assets.asset_id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    metadata_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    updated_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
@@ -356,8 +406,8 @@ class ProjectAutomationExecution(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
-class JiraOAuthConnection(Base):
-    __tablename__ = "jira_oauth_connections"
+class AtlassianOAuthConnection(Base):
+    __tablename__ = "atlassian_oauth_connections"
 
     connection_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     account_id: Mapped[str] = mapped_column(String(255), nullable=False)

@@ -1088,6 +1088,38 @@ def delete_knowledge_asset(*, session: Session, tenant_id: str, project_id: str,
     return True
 
 
+def replace_knowledge_asset_text(
+    *,
+    session: Session,
+    tenant_id: str,
+    project_id: str,
+    asset_id: str,
+    title: str,
+    text_content: str,
+    metadata_json: dict[str, Any] | None = None,
+    status: str = "ready",
+    commit: bool = True,
+) -> KnowledgeAsset:
+    asset = session.get(KnowledgeAsset, asset_id)
+    if asset is None or asset.tenant_id != tenant_id or asset.project_id != project_id:
+        raise ValueError("Knowledge asset not found")
+    _refresh_asset_content(
+        session=session,
+        asset=asset,
+        title=title,
+        mime_type="text/markdown",
+        source_timestamp=datetime.now(timezone.utc),
+        text_content=text_content,
+        binary_content=None,
+        metadata_json=dict(metadata_json or {}),
+    )
+    asset.status = str(status or "ready").strip() or "ready"
+    if commit:
+        session.commit()
+        session.refresh(asset)
+    return asset
+
+
 def sync_project_knowledge_from_jira(
     *,
     session: Session,

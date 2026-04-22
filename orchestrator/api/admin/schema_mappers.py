@@ -233,6 +233,7 @@ def project_to_schema(project: Project, *, tenant_policy: dict) -> ProjectRead:
         github_repository=project.github_repository,
         jira_project_key=project.jira_project_key,
         policy_overrides=project.policy_overrides,
+        architecture_docs=dict(project.architecture_docs_config or {}) or None,
         effective_policy=resolve_effective_policy(
             tenant_policy=tenant_policy,
             project_overrides=project.policy_overrides,

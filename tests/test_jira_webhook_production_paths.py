@@ -130,7 +130,7 @@ class JiraWebhookProductionPathTests(ProductionPathApiTestCase):
         )
 
         with (
-            patch("orchestrator.core.worker.webhook_job_service.tenant_jira_oauth_context", return_value=fake_oauth),
+            patch("orchestrator.core.worker.webhook_job_service.tenant_atlassian_oauth_context", return_value=fake_oauth),
             patch(
                 "orchestrator.api.webhooks.jira_admission_flow.evaluate_precheck_decision_with_labels",
                 return_value=self._ready_decision_result(issue_labels=["ready_for_agent"]),

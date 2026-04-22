@@ -29,7 +29,11 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { formatTimestamp } from "@/lib/datetime";
 import {
+  createArchitectureDocument,
   getProject,
+  listArchitectureDocuments,
+  listConfluencePages,
+  listConfluenceSpaces,
   getTenant,
   listDiscordAllowlistRequests,
   listCodexModels,
@@ -39,6 +43,10 @@ import {
   listWebhookQueueJobs,
   RUN_STATUSES,
   updateProject,
+  type ArchitectureDocumentRecord,
+  type ConfluencePageRecord,
+  type ConfluenceSpaceRecord,
+  type ProjectArchitectureDocsConfig,
   type ProjectRecord,
   type RunRecord,
   type RunStatus,
@@ -64,6 +72,9 @@ type ProjectFormState = {
   name: string;
   github_repository: string;
   jira_project_key: string;
+  architecture_provider: "" | "internal" | "confluence";
+  architecture_space_key: string;
+  architecture_parent_page_id: string;
   codex_model: string | null;
   codex_reasoning_effort: "low" | "medium" | "high" | null;
   allow_jira_transitions: OverrideToggleValue;
@@ -165,6 +176,12 @@ function buildProjectFormState(payload: ProjectRecord | null): ProjectFormState 
     name: payload?.name ?? "",
     github_repository: payload?.github_repository ?? "",
     jira_project_key: payload?.jira_project_key ?? "",
+    architecture_provider:
+      payload?.architecture_docs?.provider === "internal" || payload?.architecture_docs?.provider === "confluence"
+        ? payload.architecture_docs.provider
+        : "",
+    architecture_space_key: payload?.architecture_docs?.space_key ?? "",
+    architecture_parent_page_id: payload?.architecture_docs?.parent_page_id ?? "",
     codex_model: typeof overrides.codex_model === "string" ? overrides.codex_model : null,
     codex_reasoning_effort:
       overrides.codex_reasoning_effort === "low" ||
@@ -206,6 +223,22 @@ function formatBoolean(value: boolean): string {
   return value ? "Enabled" : "Disabled";
 }
 
+function buildArchitectureDocsPayload(form: ProjectFormState): ProjectArchitectureDocsConfig | null {
+  if (!form.architecture_provider) {
+    return null;
+  }
+  if (form.architecture_provider === "internal") {
+    return {
+      provider: "internal",
+    };
+  }
+  return {
+    provider: form.architecture_provider,
+    space_key: form.architecture_space_key.trim() || null,
+    parent_page_id: form.architecture_parent_page_id.trim() || null
+  };
+}
+
 export function TenantProjectDetailsPage() {
   const params = useParams<{ tenantId: string; projectId: string }>();
   const pathname = usePathname();
@@ -221,6 +254,12 @@ export function TenantProjectDetailsPage() {
   const [statusLine, setStatusLine] = useState("");
   const [repoOptions, setRepoOptions] = useState<string[]>([]);
   const [jiraOptions, setJiraOptions] = useState<string[]>([]);
+  const [confluenceSpaces, setConfluenceSpaces] = useState<ConfluenceSpaceRecord[]>([]);
+  const [confluencePages, setConfluencePages] = useState<ConfluencePageRecord[]>([]);
+  const [confluenceSpacesLoading, setConfluenceSpacesLoading] = useState(false);
+  const [confluencePagesLoading, setConfluencePagesLoading] = useState(false);
+  const [confluenceCreateSpaceUrl, setConfluenceCreateSpaceUrl] = useState<string | null>(null);
+  const [confluenceStatusLine, setConfluenceStatusLine] = useState("");
   const [codexModels, setCodexModels] = useState<{ id: string; label: string; description?: string | null }[]>([]);
   const [globalCodexModel, setGlobalCodexModel] = useState("");
   const [reasoningEfforts, setReasoningEfforts] = useState<{ id: string; label: string; description?: string | null }[]>([]);
@@ -332,6 +371,53 @@ export function TenantProjectDetailsPage() {
     }
   }
 
+  async function loadConfluenceSpaces() {
+    if (!credentials || !allowProjectManagement) {
+      setConfluenceSpaces([]);
+      setConfluenceCreateSpaceUrl(null);
+      setConfluenceStatusLine("");
+      return;
+    }
+    setConfluenceSpacesLoading(true);
+    try {
+      const payload = await listConfluenceSpaces(credentials, params.tenantId);
+      setConfluenceSpaces(payload.items);
+      setConfluenceCreateSpaceUrl(payload.create_space_url);
+      setConfluenceStatusLine("");
+    } catch (error) {
+      setConfluenceSpaces([]);
+      setConfluenceCreateSpaceUrl(null);
+      setConfluenceStatusLine(`Confluence spaces are unavailable: ${(error as Error).message}`);
+    } finally {
+      setConfluenceSpacesLoading(false);
+    }
+  }
+
+  async function loadConfluencePages(spaceKey: string) {
+    const normalizedSpaceKey = spaceKey.trim();
+    if (!credentials || !allowProjectManagement || !normalizedSpaceKey) {
+      setConfluencePages([]);
+      setConfluenceStatusLine("");
+      return;
+    }
+    setConfluencePagesLoading(true);
+    try {
+      const pages = await listConfluencePages(
+        credentials,
+        params.tenantId,
+        normalizedSpaceKey,
+        form.architecture_parent_page_id.trim() || null,
+      );
+      setConfluencePages(pages);
+      setConfluenceStatusLine("");
+    } catch (error) {
+      setConfluencePages([]);
+      setConfluenceStatusLine(`Confluence pages are unavailable: ${(error as Error).message}`);
+    } finally {
+      setConfluencePagesLoading(false);
+    }
+  }
+
   async function loadRuns() {
     if (!credentials) return;
     setRunsBusy(true);
@@ -409,6 +495,37 @@ export function TenantProjectDetailsPage() {
   }, [ready, credentials, params.tenantId, params.projectId, allowProjectManagement]);
 
   useEffect(() => {
+    if (!ready || !credentials || !allowProjectManagement || form.architecture_provider !== "confluence") {
+      setConfluenceSpaces([]);
+      setConfluencePages([]);
+      setConfluenceCreateSpaceUrl(null);
+      setConfluenceStatusLine("");
+      return;
+    }
+    void loadConfluenceSpaces();
+  }, [allowProjectManagement, credentials, form.architecture_provider, params.tenantId, ready]);
+
+  useEffect(() => {
+    if (!ready || !credentials || !allowProjectManagement || form.architecture_provider !== "confluence") {
+      setConfluencePages([]);
+      return;
+    }
+    if (!form.architecture_space_key.trim()) {
+      setConfluencePages([]);
+      return;
+    }
+    void loadConfluencePages(form.architecture_space_key);
+  }, [
+    allowProjectManagement,
+    credentials,
+    form.architecture_provider,
+    form.architecture_space_key,
+    form.architecture_parent_page_id,
+    params.tenantId,
+    ready,
+  ]);
+
+  useEffect(() => {
     if (ready && credentials && project && (activeTab === "overview" || activeTab === "runs")) void loadRuns();
   }, [activeTab, ready, credentials, project, runFromDate, runIssueFilter, runPage, runPageSize, runPrFilter, runStatusFilter, runToDate]);
 
@@ -471,6 +588,7 @@ export function TenantProjectDetailsPage() {
         environment: project.environment,
         secret_refs: secretRefs,
         discord: project.discord,
+        architecture_docs: buildArchitectureDocsPayload(form),
         is_archived: !project.is_archived,
       });
       if (updated.is_archived) {
@@ -600,6 +718,7 @@ export function TenantProjectDetailsPage() {
         environment: project.environment,
         secret_refs: secretRefs,
         discord: project.discord,
+        architecture_docs: buildArchitectureDocsPayload(form),
         is_archived: project.is_archived,
       });
       setProject(updated);
@@ -653,6 +772,7 @@ export function TenantProjectDetailsPage() {
         environment: project.environment,
         secret_refs: refsToSave,
         discord: project.discord,
+        architecture_docs: project.architecture_docs ?? null,
         is_archived: project.is_archived,
       });
       setProject(updated);
@@ -1112,6 +1232,128 @@ export function TenantProjectDetailsPage() {
                           ? <option value={form.jira_project_key} />
                           : null}
                       </datalist>
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                        Architecture docs provider
+                      </label>
+                      <select
+                        className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                        value={form.architecture_provider}
+                        onChange={(e) =>
+                          setForm((prev) => ({
+                            ...prev,
+                            architecture_provider: e.target.value as ProjectFormState["architecture_provider"]
+                          }))
+                        }
+                        disabled={busy}
+                      >
+                        <option value="">Disabled</option>
+                        <option value="internal">Internal</option>
+                        <option value="confluence">Confluence</option>
+                      </select>
+                    </div>
+                    {form.architecture_provider === "confluence" ? (
+                      <>
+                        <div className="space-y-1.5">
+                          <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                            Confluence space
+                          </label>
+                          <select
+                            className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                            value={form.architecture_space_key}
+                            onChange={(e) =>
+                              setForm((prev) => ({
+                                ...prev,
+                                architecture_space_key: e.target.value,
+                                architecture_parent_page_id: "",
+                              }))
+                            }
+                            disabled={busy}
+                          >
+                            <option value="">
+                              {confluenceSpacesLoading
+                                ? "Loading Confluence spaces..."
+                                : confluenceSpaces.length === 0
+                                  ? "No Confluence spaces available"
+                                  : "Select Confluence space"}
+                            </option>
+                            {confluenceSpaces.map((space) => (
+                              <option key={space.space_id} value={space.key}>
+                                {space.name} ({space.key})
+                              </option>
+                            ))}
+                            {!confluenceSpaces.some((space) => space.key === form.architecture_space_key) && form.architecture_space_key ? (
+                              <option value={form.architecture_space_key}>
+                                {form.architecture_space_key} (configured)
+                              </option>
+                            ) : null}
+                          </select>
+                          {confluenceSpaces.length === 0 && confluenceCreateSpaceUrl ? (
+                            <div className="text-xs text-muted-foreground">
+                              <a
+                                href={confluenceCreateSpaceUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="font-medium text-foreground underline underline-offset-4"
+                              >
+                                Create a Confluence space
+                              </a>
+                            </div>
+                          ) : null}
+                        </div>
+                        <div className="space-y-1.5">
+                          <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                            Confluence parent page
+                          </label>
+                          <select
+                            className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                            value={form.architecture_parent_page_id}
+                            onChange={(e) =>
+                              setForm((prev) => ({ ...prev, architecture_parent_page_id: e.target.value }))
+                            }
+                            disabled={busy || !form.architecture_space_key.trim()}
+                          >
+                            <option value="">
+                              {!form.architecture_space_key.trim()
+                                ? "Top-level in selected space"
+                                : confluencePagesLoading
+                                  ? "Loading space pages..."
+                                  : "Top-level in selected space"}
+                            </option>
+                            {confluencePages.map((page) => (
+                              <option key={page.page_id} value={page.page_id}>
+                                {page.title}
+                              </option>
+                            ))}
+                            {!confluencePages.some((page) => page.page_id === form.architecture_parent_page_id) &&
+                            form.architecture_parent_page_id ? (
+                              <option value={form.architecture_parent_page_id}>
+                                Current parent page ({form.architecture_parent_page_id})
+                              </option>
+                            ) : null}
+                          </select>
+                        </div>
+                        {confluenceStatusLine ? (
+                          <div className="md:col-span-3 text-sm text-muted-foreground">{confluenceStatusLine}</div>
+                        ) : null}
+                      </>
+                    ) : null}
+                    <div className="md:col-span-3 rounded-xl border bg-muted/30 p-4">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div className="space-y-1">
+                          <p className="text-sm font-medium text-foreground">Architecture documents</p>
+                          <p className="text-xs text-muted-foreground">
+                            Jira tickets should reference architecture pages instead of storing architecture inline.
+                          </p>
+                        </div>
+                        <Button asChild variant="outline" size="sm">
+                          <Link href={`/${encodeURIComponent(params.tenantId)}/projects/${encodeURIComponent(params.projectId)}/architecture`}>
+                            Open architecture docs
+                            <ExternalLink className="ml-1.5 h-3.5 w-3.5" />
+                          </Link>
+                        </Button>
+                      </div>
                     </div>
                   </div>
                 </div>

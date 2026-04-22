@@ -34,7 +34,7 @@ from orchestrator.core.pm_interview_service import (
 )
 from orchestrator.storage.models import FollowupContext, Project
 from orchestrator.tools.discord_api import DiscordApiClient, DiscordApiError
-from orchestrator.tools.jira_oauth import JiraIssueDetail
+from orchestrator.tools.atlassian_oauth import JiraIssueDetail
 
 logger = logging.getLogger(__name__)
 
@@ -366,6 +366,8 @@ def rewrite_parent_issue_from_brief(
     sync_status: str,
     planning_state: str | None,
     open_questions: list[object] | None = None,
+    architecture_title: str | None = None,
+    architecture_url: str | None = None,
 ) -> None:
     normalized_open_questions = list(
         ClarificationQuestionSet.from_values(open_questions or []).prompts
@@ -379,12 +381,6 @@ def rewrite_parent_issue_from_brief(
         planning_state_label = f"planning-{planning_state_value.replace('_', '-')}"
         labels = [label for label in labels if not str(label).startswith("planning-")]
         labels.append(planning_state_label)
-    architecture_summary = [
-        str(value).strip()
-        for value in brief_payload.get("architecture_summary", [])
-        if str(value).strip()
-    ]
-    architecture_diagram = str(brief_payload.get("architecture_diagram") or "").strip()
     description = build_parent_feature_description(
         objective=str(brief_payload.get("objective") or "").strip(),
         user_value=str(brief_payload.get("user_value") or "").strip(),
@@ -431,8 +427,8 @@ def rewrite_parent_issue_from_brief(
         sync_status=sync_status,
         pm_status="pm_completed",
         planning_state=planning_state,
-        architecture_summary=architecture_summary,
-        architecture_diagram=architecture_diagram,
+        architecture_title=architecture_title,
+        architecture_url=architecture_url,
     )
     if str(parent_detail.description or "") == description and labels == list(parent_detail.labels or []):
         return
@@ -495,17 +491,21 @@ def post_parent_brief_questions_to_discord(
     existing_thread_channel_id = str(getattr(parent_case, "thread_channel_id", "") or "").strip() or None
     root_channel_id = existing_root_channel_id or project_channel_id or None
     if not root_channel_id:
-        return False
+        raise RuntimeError(
+            f"Discord clarification projection requires a configured parent channel for {parent_issue_key}"
+        )
     token_ref = PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF
     if not token_ref:
-        return False
+        raise RuntimeError("Discord clarification projection requires PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF")
     bot_token = resolve_platform_secret_ref(
         session,
         secret_ref=token_ref,
         encryption_key=settings.secrets_encryption_key,
     )
     if not bot_token:
-        return False
+        raise RuntimeError(
+            f"Discord clarification projection could not resolve bot token for {parent_issue_key}"
+        )
     mention_prefix = f"<@{owner_user_id}> " if owner_user_id else ""
     message = f"{mention_prefix}{format_parent_brief_questions_for_discord(parent_issue_key=parent_issue_key, questions=question_set.questions)}".strip()
     try:
@@ -521,7 +521,9 @@ def post_parent_brief_questions_to_discord(
             )
             posted_root_message_id = str((posted or {}).get("id") or "").strip() or None
             if not posted_root_message_id:
-                return False
+                raise RuntimeError(
+                    f"Discord clarification projection did not return a root message id for {parent_issue_key}"
+                )
             thread_name = f"{getattr(tenant, 'tenant_id', 'tenant')}-pm-{parent_issue_key}".replace(" ", "-")[:100]
             thread_channel_id = client.create_thread_from_message(
                 channel_id=root_channel_id,
@@ -547,7 +549,7 @@ def post_parent_brief_questions_to_discord(
                 channel_id=thread_channel_id,
                 content=message,
             )
-    except (DiscordApiError, ValueError):
+    except (DiscordApiError, ValueError) as exc:
         logger.warning(
             "jira_parent_brief_question_discord_post_failed tenant_id=%s parent_issue_key=%s channel_id=%s",
             getattr(tenant, "tenant_id", None),
@@ -555,7 +557,9 @@ def post_parent_brief_questions_to_discord(
             root_channel_id,
             exc_info=True,
         )
-        return False
+        raise RuntimeError(
+            f"Discord clarification projection failed for {parent_issue_key}: {exc}"
+        ) from exc
     interview_case = upsert_pm_interview_case(
         session=session,
         tenant_id=str(getattr(tenant, "tenant_id", "") or ""),

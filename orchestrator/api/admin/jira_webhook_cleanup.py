@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestrator.storage.models import Tenant
-from orchestrator.tools.jira_oauth import JiraOAuthClient
+from orchestrator.tools.atlassian_oauth import AtlassianOAuthClient
 
 
 def all_managed_webhook_ids(
@@ -50,7 +50,7 @@ def remove_managed_webhook_id_from_tenants(
 def cleanup_unmanaged_jira_webhooks_for_connection(
     *,
     session: Session,
-    client: JiraOAuthClient,
+    client: AtlassianOAuthClient,
     access_token: str,
     cloud_id: str,
     parse_managed_webhook_ids_fn,
@@ -86,7 +86,7 @@ def cleanup_unmanaged_jira_webhooks_for_connection(
 def cleanup_conflicting_jira_webhook_url(
     *,
     session: Session,
-    client: JiraOAuthClient,
+    client: AtlassianOAuthClient,
     access_token: str,
     cloud_id: str,
     callback_url: str,

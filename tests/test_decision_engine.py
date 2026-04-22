@@ -325,7 +325,7 @@ class LabelActionServiceTests(unittest.TestCase):
             existing_labels=["worker:linux"],
             actions=actions,
             settings=SimpleNamespace(),
-            tenant_jira_oauth_context_fn=lambda **_: oauth_context,
+            tenant_atlassian_oauth_context_fn=lambda **_: oauth_context,
             logger=SimpleNamespace(warning=lambda *_, **__: None),
         )
         self.assertEqual(result.applied_labels, ("agent:ready",))
@@ -350,7 +350,7 @@ class LabelActionServiceTests(unittest.TestCase):
                 DecisionLabelAction(label="agent:ready", action="add", reason="ready_label_missing"),
             ),
             settings=SimpleNamespace(),
-            tenant_jira_oauth_context_fn=lambda **_: None,
+            tenant_atlassian_oauth_context_fn=lambda **_: None,
             logger=SimpleNamespace(warning=lambda *_, **__: None),
         )
         self.assertEqual(result.applied_labels, ())

@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 
 from sqlalchemy.orm import Session
 
-from orchestrator.api.jira_oauth.connection_service import tenant_jira_oauth_context
+from orchestrator.api.atlassian_oauth.connection_service import tenant_atlassian_oauth_context
 from orchestrator.core.agent_runtime_resolver import build_runtime_for_selector
 from orchestrator.core.runtime_invocation import AgentInvocationContext, invoke_runtime_json
 from orchestrator.core.platform_secret_service import resolve_platform_secret_ref
@@ -127,7 +127,7 @@ def _collect_jira_facts(
     window_start_at: datetime,
     window_end_at: datetime,
 ) -> dict[str, Any]:
-    oauth = tenant_jira_oauth_context(session=session, tenant=tenant, settings=settings)
+    oauth = tenant_atlassian_oauth_context(session=session, tenant=tenant, settings=settings)
     jql = (
         f'project = "{project.jira_project_key}" '
         f'AND updated >= "{_format_jql_timestamp(window_start_at)}" '

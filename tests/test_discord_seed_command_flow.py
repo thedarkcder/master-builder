@@ -6,8 +6,8 @@ from unittest.mock import patch
 import pytest
 
 from orchestrator.api.discord.ingress.seed_runtime import build_seed_issue_description, seed_issues_with_runtime
-from orchestrator.storage.models import JiraOAuthConnection, Tenant
-from orchestrator.tools.jira_oauth import JiraIssueCreateResult, JiraIssuePreview
+from orchestrator.storage.models import AtlassianOAuthConnection, Tenant
+from orchestrator.tools.atlassian_oauth import JiraIssueCreateResult, JiraIssuePreview
 from tests.test_support.discord_command_api_harness import DiscordCommandApiTestHarness
 
 
@@ -72,7 +72,7 @@ class DiscordSeedCommandFlowTests(DiscordCommandApiTestHarness):
                 },
             ),
             patch(
-                "orchestrator.api.discord.ingress.jira_runtime.tenant_jira_oauth_context",
+                "orchestrator.api.discord.ingress.jira_runtime.tenant_atlassian_oauth_context",
                 return_value={"access_token": "tok-only"},
             ),
         ):
@@ -87,7 +87,7 @@ class DiscordSeedCommandFlowTests(DiscordCommandApiTestHarness):
 
         self.assertEqual(response.status_code, 502)
         self.assertIn("Failed to seed Jira issues", response.json()["detail"])
-        self.assertIn("Jira OAuth context is incomplete", response.json()["detail"])
+        self.assertIn("Atlassian context is incomplete", response.json()["detail"])
         self.assertNotIn("tok-only", response.json()["detail"])
         self.assertNotIn("Internal server error. Ref:", response.json()["detail"])
 
@@ -100,7 +100,7 @@ class DiscordSeedCommandFlowTests(DiscordCommandApiTestHarness):
             jira_config["connection_id"] = "conn-seed-clarify"
             tenant.jira_config = jira_config
             session.add(
-                JiraOAuthConnection(
+                AtlassianOAuthConnection(
                     connection_id="conn-seed-clarify",
                     account_id="acct-1",
                     account_email="dev@example.com",
@@ -173,8 +173,8 @@ class DiscordSeedCommandFlowTests(DiscordCommandApiTestHarness):
                     ],
                 },
             ),
-            patch("orchestrator.api.discord.ingress.jira_runtime.refresh_jira_connection_tokens", return_value="token"),
-            patch("orchestrator.api.discord.ingress.jira_runtime.jira_oauth_client", return_value=_FakeClient()),
+            patch("orchestrator.api.discord.ingress.jira_runtime.refresh_atlassian_connection_tokens", return_value="token"),
+            patch("orchestrator.api.discord.ingress.jira_runtime.atlassian_oauth_client", return_value=_FakeClient()),
         ):
             tenant = session.get(Tenant, self.tenant_id)
             self.assertIsNotNone(tenant)
@@ -200,7 +200,7 @@ class DiscordSeedCommandFlowTests(DiscordCommandApiTestHarness):
             jira_config["connection_id"] = "conn-seed-upsert"
             tenant.jira_config = jira_config
             session.add(
-                JiraOAuthConnection(
+                AtlassianOAuthConnection(
                     connection_id="conn-seed-upsert",
                     account_id="acct-1",
                     account_email="dev@example.com",
@@ -278,8 +278,8 @@ class DiscordSeedCommandFlowTests(DiscordCommandApiTestHarness):
                     ],
                 },
             ),
-            patch("orchestrator.api.discord.ingress.jira_runtime.refresh_jira_connection_tokens", return_value="token"),
-            patch("orchestrator.api.discord.ingress.jira_runtime.jira_oauth_client", return_value=fake_client),
+            patch("orchestrator.api.discord.ingress.jira_runtime.refresh_atlassian_connection_tokens", return_value="token"),
+            patch("orchestrator.api.discord.ingress.jira_runtime.atlassian_oauth_client", return_value=fake_client),
         ):
             tenant = session.get(Tenant, self.tenant_id)
             self.assertIsNotNone(tenant)

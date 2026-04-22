@@ -15,7 +15,7 @@ class AlertingTests(unittest.TestCase):
                 severity="HIGH",
                 scope_type="tenant",
                 scope_id=f"tenant-{index}",
-                reason="Jira integration is not connected.",
+                reason="Atlassian integration is not connected.",
             )
             for index in range(10)
         ]

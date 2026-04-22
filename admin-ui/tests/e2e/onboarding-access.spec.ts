@@ -85,7 +85,7 @@ test("registers a tenant admin and redirects into the setup onboarding flow", as
     page.getByRole("button", { name: "Create workspace" }).click(),
   ]);
   await expect(page.getByRole("heading", { name: "Set up workspace" })).toBeVisible();
-  await expect(page.getByText("Connect Jira and choose at least one project")).toBeVisible();
+  await expect(page.getByText("Connect Atlassian and choose at least one Jira project")).toBeVisible();
   await expect(page.getByText("Credentials")).toHaveCount(0);
   await expect(page.getByText("Open platform secrets")).toHaveCount(0);
   await expect(page.getByText("What this controls")).toHaveCount(0);
@@ -275,16 +275,16 @@ test("lets a platform admin create a workspace through the setup wizard and bloc
     },
     {
       method: "POST",
-      pathname: "/api/bff/api/admin/jira/connect/start",
+      pathname: "/api/bff/api/admin/atlassian/connect/start",
       handler: (route) =>
         fulfillJson(route, {
-          authorize_url: `${APP_BASE_URL}/tenants/new/jira?jira_connection_id=jira-conn-123&jira_oauth=success`,
+          authorize_url: `${APP_BASE_URL}/tenants/new/jira?atlassian_connection_id=jira-conn-123&atlassian_oauth=success`,
           expires_at: "2026-03-29T00:00:00Z",
         }),
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/jira/connections/jira-conn-123/projects",
+      pathname: "/api/bff/api/admin/atlassian/connections/jira-conn-123/jira-projects",
       handler: (route) => fulfillJson(route, [{ key: "BETA", name: "Beta Program" }]),
     },
     {
@@ -388,10 +388,10 @@ test("lets a platform admin create a workspace through the setup wizard and bloc
 
   await page.getByRole("button", { name: /^Next$/ }).click();
   await expect(page).toHaveURL(/\/tenants\/new\/jira$/);
-  await expect(page.getByRole("heading", { name: "Connect Jira" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Connect Atlassian" })).toBeVisible();
 
-  await page.getByRole("button", { name: "Connect Jira" }).click();
-  await expect(page).toHaveURL(/jira_connection_id=jira-conn-123/);
+  await page.getByRole("button", { name: "Connect Atlassian" }).click();
+  await expect(page).toHaveURL(/atlassian_connection_id=jira-conn-123/);
   await page.getByRole("button", { name: "Load projects" }).click();
   await page.getByRole("button", { name: /^Next$/ }).click();
 
@@ -480,7 +480,7 @@ test("formats Jira webhook timestamps on the tenant Jira settings page", async (
     },
   ]);
 
-  await page.goto("/route25/settings/jira");
+  await page.goto("/route25/settings/atlassian");
 
   const expectedTimestamp = await page.evaluate((timestamp) => {
     return new Intl.DateTimeFormat(undefined, {

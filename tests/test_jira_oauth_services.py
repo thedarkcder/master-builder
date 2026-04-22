@@ -5,16 +5,16 @@ from io import BytesIO
 from urllib.error import HTTPError
 
 from orchestrator.tools.jira_mcp_adapter import JiraMcpAdapter
-from orchestrator.tools.jira_oauth_callback_flow import JiraOAuthCallbackFlow
-from orchestrator.tools.jira_oauth_http import JiraOAuthHttpClient
-from orchestrator.tools.jira_oauth_issue_service import (
+from orchestrator.tools.atlassian_oauth_callback_flow import AtlassianOAuthCallbackFlow
+from orchestrator.tools.atlassian_oauth_http import AtlassianOAuthHttpClient
+from orchestrator.tools.atlassian_oauth_issue_service import (
     JiraOAuthIssueService,
     _adf_to_plain_text,
     _parse_issue_type_names_from_payload,
     _select_issue_type_name,
     _to_adf_description,
 )
-from orchestrator.tools.jira_oauth_models import JiraIssueCreateInput, JiraOAuthClientConfig, JiraOAuthError
+from orchestrator.tools.atlassian_oauth_models import JiraIssueCreateInput, AtlassianOAuthClientConfig, AtlassianOAuthError
 
 
 class _FakeResponse:
@@ -54,16 +54,16 @@ class JiraMcpAdapterTests(unittest.TestCase):
         self.assertIn("get_issue", report.missing_required)
 
 
-class JiraOAuthCallbackFlowTests(unittest.TestCase):
-    def _config(self) -> JiraOAuthClientConfig:
-        return JiraOAuthClientConfig(
+class AtlassianOAuthCallbackFlowTests(unittest.TestCase):
+    def _config(self) -> AtlassianOAuthClientConfig:
+        return AtlassianOAuthClientConfig(
             client_id="cid",
             client_secret="csecret",
             redirect_uri="https://example.test/callback",
         )
 
     def test_build_authorize_url_contains_required_parameters(self) -> None:
-        flow = JiraOAuthCallbackFlow(config=self._config(), post_json=lambda *_args, **_kwargs: {}, get_json=lambda *_args, **_kwargs: [])
+        flow = AtlassianOAuthCallbackFlow(config=self._config(), post_json=lambda *_args, **_kwargs: {}, get_json=lambda *_args, **_kwargs: [])
         url = flow.build_authorize_url(state="state-1")
         self.assertIn("audience=api.atlassian.com", url)
         self.assertIn("client_id=cid", url)
@@ -75,7 +75,7 @@ class JiraOAuthCallbackFlowTests(unittest.TestCase):
                 return {"access_token": "a1", "refresh_token": "r1", "expires_in": 3600, "scope": "read write"}
             return {"access_token": "a2", "refresh_token": "r2", "expires_in": 7200, "scope": ""}
 
-        flow = JiraOAuthCallbackFlow(config=self._config(), post_json=_post_json, get_json=lambda *_args, **_kwargs: [])
+        flow = AtlassianOAuthCallbackFlow(config=self._config(), post_json=_post_json, get_json=lambda *_args, **_kwargs: [])
         token_set = flow.exchange_code(code="abc")
         self.assertEqual(token_set.access_token, "a1")
         self.assertEqual(token_set.scopes, ["read", "write"])
@@ -85,16 +85,16 @@ class JiraOAuthCallbackFlowTests(unittest.TestCase):
         self.assertEqual(refreshed.scopes, [])
 
     def test_parse_tokens_missing_fields_raise(self) -> None:
-        flow = JiraOAuthCallbackFlow(config=self._config(), post_json=lambda *_args, **_kwargs: {"access_token": "a"}, get_json=lambda *_args, **_kwargs: [])
-        with self.assertRaisesRegex(JiraOAuthError, "refresh_token"):
+        flow = AtlassianOAuthCallbackFlow(config=self._config(), post_json=lambda *_args, **_kwargs: {"access_token": "a"}, get_json=lambda *_args, **_kwargs: [])
+        with self.assertRaisesRegex(AtlassianOAuthError, "refresh_token"):
             flow.exchange_code(code="abc")
 
     def test_list_accessible_resources_validates_payload(self) -> None:
-        flow = JiraOAuthCallbackFlow(config=self._config(), post_json=lambda *_args, **_kwargs: {}, get_json=lambda *_args, **_kwargs: {})
-        with self.assertRaisesRegex(JiraOAuthError, "not a list"):
+        flow = AtlassianOAuthCallbackFlow(config=self._config(), post_json=lambda *_args, **_kwargs: {}, get_json=lambda *_args, **_kwargs: {})
+        with self.assertRaisesRegex(AtlassianOAuthError, "not a list"):
             flow.list_accessible_resources(access_token="token")
 
-        flow_ok = JiraOAuthCallbackFlow(
+        flow_ok = AtlassianOAuthCallbackFlow(
             config=self._config(),
             post_json=lambda *_args, **_kwargs: {},
             get_json=lambda *_args, **_kwargs: [{"id": "c1", "url": "https://site", "name": ""}, {"id": "bad"}],
@@ -104,7 +104,7 @@ class JiraOAuthCallbackFlowTests(unittest.TestCase):
         self.assertEqual(resources[0].name, "https://site")
 
 
-class JiraOAuthHttpClientTests(unittest.TestCase):
+class AtlassianOAuthHttpClientTests(unittest.TestCase):
     def test_post_get_and_request_json(self) -> None:
         captured = []
 
@@ -112,7 +112,7 @@ class JiraOAuthHttpClientTests(unittest.TestCase):
             captured.append((request.get_method(), request.full_url, dict(request.header_items()), request.data))
             return _FakeResponse(b'{"ok":true}')
 
-        client = JiraOAuthHttpClient(opener=_opener)
+        client = AtlassianOAuthHttpClient(opener=_opener)
         self.assertEqual(client.post_json(url="https://x", payload={"a": 1}), {"ok": True})
         self.assertEqual(client.get_json(url="https://x", access_token="tok"), {"ok": True})
         self.assertEqual(client.request_json(method="PUT", url="https://x", access_token="tok", payload={"b": 2}), {"ok": True})
@@ -129,7 +129,7 @@ class JiraOAuthHttpClientTests(unittest.TestCase):
             self.assertIn(b"file.bin", request.data)
             return _FakeResponse(b"[]")
 
-        client = JiraOAuthHttpClient(opener=_multipart_opener)
+        client = AtlassianOAuthHttpClient(opener=_multipart_opener)
         self.assertEqual(
             client.post_multipart(
                 url="https://x",
@@ -146,12 +146,12 @@ class JiraOAuthHttpClientTests(unittest.TestCase):
         def _error_opener(request, timeout=30):  # noqa: ANN001, ARG001
             raise error
 
-        client_error = JiraOAuthHttpClient(opener=_error_opener)
-        with self.assertRaisesRegex(JiraOAuthError, "500"):
+        client_error = AtlassianOAuthHttpClient(opener=_error_opener)
+        with self.assertRaisesRegex(AtlassianOAuthError, "500"):
             client_error.get_json(url="https://x", access_token="tok")
 
     def test_empty_body_returns_empty_object(self) -> None:
-        client = JiraOAuthHttpClient(opener=lambda _request, timeout=30: _FakeResponse(b""))  # noqa: ARG005
+        client = AtlassianOAuthHttpClient(opener=lambda _request, timeout=30: _FakeResponse(b""))  # noqa: ARG005
         self.assertEqual(client.get_json(url="https://x", access_token="tok"), {})
 
 
@@ -216,7 +216,7 @@ class JiraOAuthIssueServiceTests(unittest.TestCase):
         def _get_json(**kwargs):  # noqa: ANN003
             get_count["n"] += 1
             if get_count["n"] == 1:
-                raise JiraOAuthError("first fails")
+                raise AtlassianOAuthError("first fails")
             if "createmeta?" in kwargs["url"]:
                 return {"projects": [{"issuetypes": [{"name": "Story"}, {"name": "Bug"}]}]}
             return {}
@@ -241,7 +241,7 @@ class JiraOAuthIssueServiceTests(unittest.TestCase):
         self.assertIn("summary: bad", result.errors[0])
         self.assertEqual(captured["payload"]["issueUpdates"][0]["fields"]["issuetype"]["name"], "Story")
 
-        with self.assertRaisesRegex(JiraOAuthError, "No valid issue payloads"):
+        with self.assertRaisesRegex(AtlassianOAuthError, "No valid issue payloads"):
             service.create_issues_bulk(
                 access_token="tok",
                 cloud_id="cloud",
@@ -249,13 +249,13 @@ class JiraOAuthIssueServiceTests(unittest.TestCase):
                 issues=[JiraIssueCreateInput(summary=" ", description="x", labels=[], issue_type=None)],
             )
 
-        with self.assertRaisesRegex(JiraOAuthError, "Missing issue id/key"):
+        with self.assertRaisesRegex(AtlassianOAuthError, "Missing issue id/key"):
             service.update_issue_fields(access_token="tok", cloud_id="c", issue_id_or_key=" ", summary="x", description="d", labels=[])
-        with self.assertRaisesRegex(JiraOAuthError, "Missing issue summary"):
+        with self.assertRaisesRegex(AtlassianOAuthError, "Missing issue summary"):
             service.update_issue_fields(access_token="tok", cloud_id="c", issue_id_or_key="MAB-1", summary=" ", description="d", labels=[])
-        with self.assertRaisesRegex(JiraOAuthError, "Missing issue summary"):
+        with self.assertRaisesRegex(AtlassianOAuthError, "Missing issue summary"):
             service.update_issue_summary(access_token="tok", cloud_id="c", issue_id_or_key="MAB-1", summary=" ")
-        with self.assertRaisesRegex(JiraOAuthError, "Missing issue summary"):
+        with self.assertRaisesRegex(AtlassianOAuthError, "Missing issue summary"):
             service.update_issue_summary_and_description(
                 access_token="tok",
                 cloud_id="c",
@@ -263,7 +263,7 @@ class JiraOAuthIssueServiceTests(unittest.TestCase):
                 summary=" ",
                 description="d",
             )
-        with self.assertRaisesRegex(JiraOAuthError, "Missing issue id/key"):
+        with self.assertRaisesRegex(AtlassianOAuthError, "Missing issue id/key"):
             service.add_issue_comment(access_token="tok", cloud_id="c", issue_id_or_key=" ", comment="hi")
 
     def test_issue_service_edge_cases(self) -> None:
@@ -348,17 +348,17 @@ class JiraOAuthIssueServiceTests(unittest.TestCase):
 
     def test_issue_service_validation_errors_and_issue_type_discovery_fallbacks(self) -> None:
         service = JiraOAuthIssueService(get_json=lambda **_kwargs: {}, request_json=lambda **_kwargs: {})
-        with self.assertRaisesRegex(JiraOAuthError, "missing values list"):
+        with self.assertRaisesRegex(AtlassianOAuthError, "missing values list"):
             service.list_projects(access_token="tok", cloud_id="cloud")
-        with self.assertRaisesRegex(JiraOAuthError, "missing issues list"):
+        with self.assertRaisesRegex(AtlassianOAuthError, "missing issues list"):
             service.search_issues_by_jql(access_token="tok", cloud_id="cloud", jql="project=MAB")
-        with self.assertRaisesRegex(JiraOAuthError, "Missing issue id/key"):
+        with self.assertRaisesRegex(AtlassianOAuthError, "Missing issue id/key"):
             service.get_issue_detail(access_token="tok", cloud_id="cloud", issue_id_or_key=" ")
-        with self.assertRaisesRegex(JiraOAuthError, "not an object"):
+        with self.assertRaisesRegex(AtlassianOAuthError, "not an object"):
             JiraOAuthIssueService(get_json=lambda **_kwargs: [], request_json=lambda **_kwargs: {}).get_issue_detail(
                 access_token="tok", cloud_id="cloud", issue_id_or_key="MAB-1"
             )
-        with self.assertRaisesRegex(JiraOAuthError, "not an object"):
+        with self.assertRaisesRegex(AtlassianOAuthError, "not an object"):
             JiraOAuthIssueService(get_json=lambda **_kwargs: {}, request_json=lambda **_kwargs: []).add_issue_comment(
                 access_token="tok", cloud_id="cloud", issue_id_or_key="MAB-1", comment="hi"
             )
@@ -368,7 +368,7 @@ class JiraOAuthIssueServiceTests(unittest.TestCase):
         def _get_json(**kwargs):  # noqa: ANN003
             calls["count"] += 1
             if calls["count"] <= 2:
-                raise JiraOAuthError("upstream")
+                raise AtlassianOAuthError("upstream")
             return {"issueTypes": [{"name": "Task"}]}
 
         service = JiraOAuthIssueService(get_json=_get_json, request_json=lambda **_kwargs: {})
@@ -588,7 +588,7 @@ class JiraOAuthIssueServiceCoverageEdgesTests(unittest.TestCase):
             get_json=lambda **_kwargs: {"issueTypes": [{"name": "Task"}]},
             request_json=lambda **_kwargs: {},
         )
-        with self.assertRaisesRegex(JiraOAuthError, "Subtask issue type is not available"):
+        with self.assertRaisesRegex(AtlassianOAuthError, "Subtask issue type is not available"):
             service.create_issue(
                 access_token="tok",
                 cloud_id="cloud",

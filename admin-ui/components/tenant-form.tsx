@@ -100,7 +100,7 @@ export function TenantForm({
       return "Tenant name is required.";
     }
     if (sections.jira && !values.jira.connection_id?.trim()) {
-      return "Connect Jira before saving.";
+      return "Connect Atlassian before saving.";
     }
     if (sections.jira && !textFields.projectKeysText.trim()) {
       return "At least one Jira project key is required.";

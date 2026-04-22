@@ -30,6 +30,7 @@ from orchestrator.core.pm_interview_service import (
 from orchestrator.core.parent_feature_brief_store import (
     persist_parent_feature_brief_snapshot,
     resolve_parent_feature_brief,
+    resolve_parent_feature_case,
     resolve_parent_feature_brief_readiness,
 )
 from orchestrator.core.runtime_invocation import AgentInvocationContext
@@ -450,6 +451,30 @@ class PMInterviewServiceTests(unittest.TestCase):
         assert latest_any_status is not None
         self.assertEqual(latest_any_status.objective, "Needs clarification")
         self.assertEqual(latest_any_status.open_questions, ())
+
+    def test_resolve_parent_feature_case_ignores_snapshot_rows(self) -> None:
+        with self.session_factory() as session:
+            persist_parent_feature_brief_snapshot(
+                session=session,
+                tenant_id="route25",
+                project_id="route25-default",
+                parent_issue_key="TP-503A",
+                source_text="Canonical snapshot only",
+                brief={
+                    "objective": "Canonical objective",
+                    "user_value": "Canonical value",
+                },
+            )
+            session.commit()
+
+        with self.session_factory() as session:
+            case = resolve_parent_feature_case(
+                session=session,
+                tenant_id="route25",
+                parent_issue_key="TP-503A",
+            )
+
+        self.assertIsNone(case)
 
     def test_resolve_parent_feature_brief_readiness_ignores_stale_clarification_after_canonical_snapshot(self) -> None:
         now = datetime.now(timezone.utc)

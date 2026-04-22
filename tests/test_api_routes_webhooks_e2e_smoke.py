@@ -19,7 +19,7 @@ from orchestrator.core.config import get_settings
 from orchestrator.core.secrets import encrypt_value
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
-from orchestrator.storage.models import JiraOAuthConnection, Run, Tenant, WorkflowCheckpoint, WorkflowExecution
+from orchestrator.storage.models import AtlassianOAuthConnection, Run, Tenant, WorkflowCheckpoint, WorkflowExecution
 
 pytestmark = pytest.mark.smoke
 
@@ -102,7 +102,7 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
         os.environ["ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET"] = "unit-test-secret"
         os.environ["ORCHESTRATOR_ADMIN_UI_BASE_URL"] = "http://localhost:4100"
         os.environ["ORCHESTRATOR_PUBLIC_API_BASE_URL"] = "http://localhost:4000"
-        os.environ["ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET"] = "jira-oauth-state-secret"
+        os.environ["ORCHESTRATOR_ATLASSIAN_OAUTH_STATE_SECRET"] = "atlassian-oauth-state-secret"
         os.environ["ORCHESTRATOR_GITHUB_APP_SLUG"] = "master-builder-app"
         os.environ["ORCHESTRATOR_SECRETS_ENCRYPTION_KEY"] = Fernet.generate_key().decode("utf-8")
 
@@ -114,13 +114,13 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
         self.addCleanup(self.patch_stack.close)
         self.patch_stack.enter_context(
             patch(
-                "orchestrator.api.admin.integration_dependencies.jira_oauth_client",
+                "orchestrator.api.admin.integration_dependencies.atlassian_oauth_client",
                 side_effect=lambda **_: _FakeJiraClient(),
             )
         )
         self.patch_stack.enter_context(
             patch(
-                "orchestrator.api.admin.integration_dependencies.refresh_jira_connection_tokens",
+                "orchestrator.api.admin.integration_dependencies.refresh_atlassian_connection_tokens",
                 return_value="access-token",
             )
         )
@@ -185,8 +185,8 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
         self._seed_platform_secret("GITHUB_APP_ID", "12345")
         self._seed_platform_secret("GITHUB_APP_PRIVATE_KEY", "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----")
         self._seed_platform_secret("GITHUB_APP_SLUG", "master-builder-app")
-        self._seed_platform_secret("JIRA_OAUTH_CLIENT_ID", "jira-client-id")
-        self._seed_platform_secret("JIRA_OAUTH_CLIENT_SECRET", "jira-client-secret")
+        self._seed_platform_secret("ATLASSIAN_OAUTH_CLIENT_ID", "atlassian-client-id")
+        self._seed_platform_secret("ATLASSIAN_OAUTH_CLIENT_SECRET", "atlassian-client-secret")
         self._seed_platform_secret("DISCORD_INTERACTIONS_PUBLIC_KEY", "0" * 64)
         self._seed_platform_secret("DISCORD_BOT_TOKEN", "discord-token")
         self._seed_platform_secret("DELETE_ME", "remove-me")
@@ -266,7 +266,7 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 "ready_jql": 'project = TP AND status = "To Do"',
             }
             session.add(
-                JiraOAuthConnection(
+                AtlassianOAuthConnection(
                     connection_id="conn-e2e",
                     account_id="account-1",
                     account_email="test@example.com",
@@ -382,16 +382,16 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 path="/api/admin/github/install/callback?state=bad&installation_id=1",
                 expected_statuses=(400,),
             ),
-            ("GET", "/api/admin/jira/connect/callback"): RouteScenario(
-                path="/api/admin/jira/connect/callback?code=x&state=bad",
+            ("GET", "/api/admin/atlassian/connect/callback"): RouteScenario(
+                path="/api/admin/atlassian/connect/callback?code=x&state=bad",
                 expected_statuses=(400,),
             ),
-            ("POST", "/api/admin/jira/connect/start"): RouteScenario(
-                path="/api/admin/jira/connect/start?return_to=wizard",
+            ("POST", "/api/admin/atlassian/connect/start"): RouteScenario(
+                path="/api/admin/atlassian/connect/start?return_to=wizard",
                 auth=admin,
             ),
-            ("GET", "/api/admin/jira/connections/{connection_id}/projects"): RouteScenario(
-                path="/api/admin/jira/connections/conn-e2e/projects",
+            ("GET", "/api/admin/atlassian/connections/{connection_id}/jira-projects"): RouteScenario(
+                path="/api/admin/atlassian/connections/conn-e2e/jira-projects",
                 auth=admin,
             ),
             ("GET", "/api/admin/runs"): RouteScenario(path="/api/admin/runs", auth=admin),
@@ -721,8 +721,8 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 auth=admin,
                 expected_statuses=(200, 404),
             ),
-            ("POST", "/api/admin/tenants/{tenant_id}/jira/disconnect"): RouteScenario(
-                path="/api/admin/tenants/route25/jira/disconnect",
+            ("POST", "/api/admin/tenants/{tenant_id}/atlassian/disconnect"): RouteScenario(
+                path="/api/admin/tenants/route25/atlassian/disconnect",
                 auth=admin,
             ),
             ("GET", "/api/admin/tenants/{tenant_id}/jira/webhooks/diagnostics"): RouteScenario(
@@ -992,8 +992,8 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 path="/api/admin/tenants/route25/test-github",
                 auth=admin,
             ),
-            ("POST", "/api/admin/tenants/{tenant_id}/test-jira"): RouteScenario(
-                path="/api/admin/tenants/route25/test-jira",
+            ("POST", "/api/admin/tenants/{tenant_id}/test-atlassian"): RouteScenario(
+                path="/api/admin/tenants/route25/test-atlassian",
                 auth=admin,
             ),
             ("POST", "/api/admin/tenants/{tenant_id}/unarchive"): RouteScenario(

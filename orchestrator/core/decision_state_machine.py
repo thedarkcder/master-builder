@@ -496,7 +496,7 @@ class ExecutionAdmissionReason(str, Enum):
         if self is ExecutionAdmissionReason.ISSUE_NOT_ON_BOARD:
             return "Issue is not present on the configured board; place it on the board before running."
         if self is ExecutionAdmissionReason.BOARD_GATE_CHECK_FAILED:
-            return "Board-location gate check failed; verify Jira OAuth connection/scopes and board configuration."
+            return "Board-location gate check failed; verify Atlassian connection/scopes and board configuration."
         if self is ExecutionAdmissionReason.BOARD_GATE_UNCONFIGURED:
             return "Run board gating is enabled but no valid board id is configured."
         if self is ExecutionAdmissionReason.DUPLICATE_RUN:

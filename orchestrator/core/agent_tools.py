@@ -14,7 +14,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 from sqlalchemy import select
 
-from orchestrator.api.jira_oauth.service import jira_oauth_client, refresh_jira_connection_tokens
+from orchestrator.api.atlassian_oauth.service import atlassian_oauth_client, refresh_atlassian_connection_tokens
 from orchestrator.core.binding_resolution_service import check_project_bindings
 from orchestrator.core.decision_types import JiraConfigKey, tenant_jira_config_text
 from orchestrator.core.install_registry_service import get_project_install, list_project_installs
@@ -34,7 +34,7 @@ from orchestrator.storage.models import (
     DecisionCase,
     DecisionCycle,
     DecisionEvidence,
-    JiraOAuthConnection,
+    AtlassianOAuthConnection,
     Project,
     Run,
     Tenant,
@@ -663,13 +663,13 @@ def _execute_jira_tool(
 ) -> dict[str, Any]:
     connection_id = tenant_jira_config_text(tenant=context.tenant, key=JiraConfigKey.CONNECTION_ID)
     if not connection_id:
-        raise ValueError("Tenant Jira connection is not configured")
-    connection = session.get(JiraOAuthConnection, connection_id)
+        raise ValueError("Tenant Atlassian connection is not configured")
+    connection = session.get(AtlassianOAuthConnection, connection_id)
     if connection is None:
         raise ValueError(f"Jira connection '{connection_id}' not found")
 
-    client = jira_oauth_client(session=session, settings=settings, tenant_id=context.tenant.tenant_id)
-    access_token = refresh_jira_connection_tokens(
+    client = atlassian_oauth_client(session=session, settings=settings, tenant_id=context.tenant.tenant_id)
+    access_token = refresh_atlassian_connection_tokens(
         session,
         connection=connection,
         settings=settings,

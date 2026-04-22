@@ -23,8 +23,8 @@ from orchestrator.storage.models import (
 
 
 _CREATE_TENANT_JIRA_CONFIGURATION_ERROR_DETAILS = {
-    "Configured Jira connection was not found",
-    "Jira OAuth connection is not linked for this tenant",
+    "Configured Atlassian connection was not found",
+    "Atlassian connection is not linked for this tenant",
 }
 
 

@@ -20,7 +20,7 @@ from orchestrator.storage.models import (
     WorkflowOperation,
     WorkflowOperationAttempt,
 )
-from orchestrator.tools.jira_oauth import JiraIssueDetail, JiraIssuePreview
+from orchestrator.tools.atlassian_oauth import JiraIssueDetail, JiraIssuePreview
 from tests.test_support.jira_webhook_api_harness import JiraWebhookTestsHarness
 
 
@@ -64,9 +64,9 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
             connection=SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
         )
         with (
-            patch("orchestrator.core.worker.webhook_job_service.tenant_jira_oauth_context", return_value=oauth_context),
-            patch("orchestrator.api.webhooks.jira_application.tenant_jira_oauth_context", return_value=oauth_context),
-            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_jira_oauth_context", return_value=oauth_context),
+            patch("orchestrator.core.worker.webhook_job_service.tenant_atlassian_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.webhooks.jira_application.tenant_atlassian_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_atlassian_oauth_context", return_value=oauth_context),
             patch(
                 "orchestrator.api.webhooks.jira_application.classify_jira_issue_intake_with_runtime",
                 return_value={"route": "pm_parent", "reason": "Needs PM breakdown", "confidence": "high"},
@@ -192,9 +192,9 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
             connection=SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
         )
         with (
-            patch("orchestrator.core.worker.webhook_job_service.tenant_jira_oauth_context", return_value=oauth_context),
-            patch("orchestrator.api.webhooks.jira_application.tenant_jira_oauth_context", return_value=oauth_context),
-            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_jira_oauth_context", return_value=oauth_context),
+            patch("orchestrator.core.worker.webhook_job_service.tenant_atlassian_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.webhooks.jira_application.tenant_atlassian_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_atlassian_oauth_context", return_value=oauth_context),
             patch(
                 "orchestrator.api.webhooks.jira_application.classify_jira_issue_intake_with_runtime",
                 return_value={"route": "engineering_child", "reason": "Already implementation scoped", "confidence": "high"},
@@ -236,7 +236,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
             connection=SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
         )
         with (
-            patch("orchestrator.core.worker.webhook_job_service.tenant_jira_oauth_context", return_value=oauth_context),
+            patch("orchestrator.core.worker.webhook_job_service.tenant_atlassian_oauth_context", return_value=oauth_context),
             patch(
                 "orchestrator.api.webhooks.jira_application.classify_jira_issue_intake_with_runtime",
                 side_effect=RuntimeError("runtime returned invalid json"),
@@ -283,12 +283,12 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
             connection=SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
         )
         with (
-            patch("orchestrator.core.worker.webhook_job_service.tenant_jira_oauth_context", return_value=oauth_context),
+            patch("orchestrator.core.worker.webhook_job_service.tenant_atlassian_oauth_context", return_value=oauth_context),
             patch(
                 "orchestrator.api.webhooks.jira_application.classify_jira_issue_intake_with_runtime",
                 return_value={"route": "pm_parent", "reason": "Needs PM breakdown", "confidence": "high"},
             ),
-            patch("orchestrator.api.webhooks.jira_application.tenant_jira_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.webhooks.jira_application.tenant_atlassian_oauth_context", return_value=oauth_context),
             patch("orchestrator.api.webhooks.jira_application.plan_jira_run_flow") as run_flow_mock,
         ):
             response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
@@ -342,9 +342,9 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
             connection=SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
         )
         with (
-            patch("orchestrator.core.worker.webhook_job_service.tenant_jira_oauth_context", return_value=oauth_context),
-            patch("orchestrator.api.webhooks.jira_application.tenant_jira_oauth_context", return_value=oauth_context),
-            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_jira_oauth_context", return_value=oauth_context),
+            patch("orchestrator.core.worker.webhook_job_service.tenant_atlassian_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.webhooks.jira_application.tenant_atlassian_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_atlassian_oauth_context", return_value=oauth_context),
             patch(
                 "orchestrator.api.webhooks.jira_application.resolve_project_issue_board_location",
                 return_value=("backlog", None),
@@ -486,8 +486,8 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
             "acceptance_criteria": ["Users can retry checkout successfully after a transient failure."],
         }
         with (
-            patch("orchestrator.core.worker.webhook_job_service.tenant_jira_oauth_context", return_value=oauth_context),
-            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_jira_oauth_context", return_value=oauth_context),
+            patch("orchestrator.core.worker.webhook_job_service.tenant_atlassian_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_atlassian_oauth_context", return_value=oauth_context),
             patch(
                 "orchestrator.api.webhooks.jira_parent_child_sync.build_runtime_for_selector",
                 return_value=SimpleNamespace(slug="pm-normalization-runtime"),
@@ -568,8 +568,8 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
             "acceptance_criteria": ["Users can retry checkout successfully after a transient failure."],
         }
         with (
-            patch("orchestrator.core.worker.webhook_job_service.tenant_jira_oauth_context", return_value=oauth_context),
-            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_jira_oauth_context", return_value=oauth_context),
+            patch("orchestrator.core.worker.webhook_job_service.tenant_atlassian_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_atlassian_oauth_context", return_value=oauth_context),
             patch(
                 "orchestrator.api.webhooks.jira_parent_child_sync.build_runtime_for_selector",
                 return_value=SimpleNamespace(slug="pm-normalization-runtime"),
@@ -624,7 +624,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
             connection=SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
         )
         with (
-            patch("orchestrator.core.worker.webhook_job_service.tenant_jira_oauth_context", return_value=oauth_context),
+            patch("orchestrator.core.worker.webhook_job_service.tenant_atlassian_oauth_context", return_value=oauth_context),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.seed_issues_with_runtime") as seed_mock,
         ):
             response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
@@ -695,8 +695,8 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
             connection=SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
         )
         with (
-            patch("orchestrator.core.worker.webhook_job_service.tenant_jira_oauth_context", return_value=oauth_context),
-            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_jira_oauth_context", return_value=oauth_context),
+            patch("orchestrator.core.worker.webhook_job_service.tenant_atlassian_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_atlassian_oauth_context", return_value=oauth_context),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.seed_issues_with_runtime") as seed_mock,
             patch("orchestrator.api.webhooks.jira_parent_child_sync.post_jira_comment", return_value=(True, None)) as comment_mock,
             patch("orchestrator.api.webhooks.jira_application.plan_jira_run_flow") as run_flow_mock,
@@ -745,8 +745,8 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
             connection=SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
         )
         with (
-            patch("orchestrator.core.worker.webhook_job_service.tenant_jira_oauth_context", return_value=oauth_context),
-            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_jira_oauth_context", return_value=oauth_context),
+            patch("orchestrator.core.worker.webhook_job_service.tenant_atlassian_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_atlassian_oauth_context", return_value=oauth_context),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.build_runtime_for_selector", return_value=object()),
             patch(
                 "orchestrator.core.jira_parent_child_sync_service.normalize_parent_feature_brief_with_runtime",
@@ -900,7 +900,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
         self.assertTrue(oauth_context.client.updated_fields)
         rewritten_description = oauth_context.client.updated_fields[0]["description"]
         self.assertIn("Objective", str(rewritten_description))
-        self.assertIn("Architecture Context", str(rewritten_description))
+        self.assertNotIn("Architecture Context", str(rewritten_description))
         run_flow_mock.assert_not_called()
         parent_comment = comment_mock.call_args_list[0].kwargs["comment"]
         self.assertIn("Created engineering child tickets: TP-984, TP-985.", parent_comment)
@@ -952,8 +952,8 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
             connection=SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
         )
         with (
-            patch("orchestrator.core.worker.webhook_job_service.tenant_jira_oauth_context", return_value=oauth_context),
-            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_jira_oauth_context", return_value=oauth_context),
+            patch("orchestrator.core.worker.webhook_job_service.tenant_atlassian_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_atlassian_oauth_context", return_value=oauth_context),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.build_runtime_for_selector", return_value=object()),
             patch("orchestrator.core.jira_parent_child_sync_service.normalize_parent_feature_brief_with_runtime") as normalize_mock,
             patch(
@@ -1037,8 +1037,8 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
             connection=SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
         )
         with (
-            patch("orchestrator.core.worker.webhook_job_service.tenant_jira_oauth_context", return_value=oauth_context),
-            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_jira_oauth_context", return_value=oauth_context),
+            patch("orchestrator.core.worker.webhook_job_service.tenant_atlassian_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_atlassian_oauth_context", return_value=oauth_context),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.build_runtime_for_selector", return_value=object()),
             patch(
                 "orchestrator.core.jira_parent_child_sync_service.normalize_parent_feature_brief_with_runtime",
@@ -1171,8 +1171,8 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
             connection=SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
         )
         with (
-            patch("orchestrator.core.worker.webhook_job_service.tenant_jira_oauth_context", return_value=oauth_context),
-            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_jira_oauth_context", return_value=oauth_context),
+            patch("orchestrator.core.worker.webhook_job_service.tenant_atlassian_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_atlassian_oauth_context", return_value=oauth_context),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.build_runtime_for_selector", return_value=object()),
             patch(
                 "orchestrator.core.jira_parent_child_sync_service.normalize_parent_feature_brief_with_runtime",
@@ -1270,8 +1270,8 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
             connection=SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
         )
         with (
-            patch("orchestrator.core.worker.webhook_job_service.tenant_jira_oauth_context", return_value=oauth_context),
-            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_jira_oauth_context", return_value=oauth_context),
+            patch("orchestrator.core.worker.webhook_job_service.tenant_atlassian_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_atlassian_oauth_context", return_value=oauth_context),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.build_runtime_for_selector", return_value=object()),
             patch(
                 "orchestrator.core.jira_parent_child_sync_service.normalize_parent_feature_brief_with_runtime",
@@ -1381,8 +1381,8 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
             connection=SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
         )
         with (
-            patch("orchestrator.core.worker.webhook_job_service.tenant_jira_oauth_context", return_value=oauth_context),
-            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_jira_oauth_context", return_value=oauth_context),
+            patch("orchestrator.core.worker.webhook_job_service.tenant_atlassian_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_atlassian_oauth_context", return_value=oauth_context),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.build_runtime_for_selector", return_value=object()),
             patch(
                 "orchestrator.core.jira_parent_child_sync_service.normalize_parent_feature_brief_with_runtime",
@@ -1532,8 +1532,8 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
             session.commit()
 
         with (
-            patch("orchestrator.core.worker.webhook_job_service.tenant_jira_oauth_context", return_value=oauth_context),
-            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_jira_oauth_context", return_value=oauth_context),
+            patch("orchestrator.core.worker.webhook_job_service.tenant_atlassian_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_atlassian_oauth_context", return_value=oauth_context),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.build_runtime_for_selector", return_value=object()),
             patch(
                 "orchestrator.core.jira_parent_child_sync_service.normalize_parent_feature_brief_with_runtime",
@@ -1652,8 +1652,8 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
             sync_status="sync-blocked",
             pm_status="pm_completed",
             planning_state="brief_normalized",
-            architecture_summary=None,
-            architecture_diagram=None,
+            architecture_title="Decision Engine v2",
+            architecture_url="https://docs.example.com/decision-engine-v2",
         )
 
         class _FakeClient:
@@ -1714,8 +1714,8 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
             session.commit()
 
         with (
-            patch("orchestrator.core.worker.webhook_job_service.tenant_jira_oauth_context", return_value=oauth_context),
-            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_jira_oauth_context", return_value=oauth_context),
+            patch("orchestrator.core.worker.webhook_job_service.tenant_atlassian_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_atlassian_oauth_context", return_value=oauth_context),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.build_runtime_for_selector", return_value=object()),
             patch(
                 "orchestrator.core.jira_parent_child_sync_service.normalize_parent_feature_brief_with_runtime",
@@ -1795,8 +1795,8 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
             connection=SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
         )
         with (
-            patch("orchestrator.core.worker.webhook_job_service.tenant_jira_oauth_context", return_value=oauth_context),
-            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_jira_oauth_context", return_value=oauth_context),
+            patch("orchestrator.core.worker.webhook_job_service.tenant_atlassian_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_atlassian_oauth_context", return_value=oauth_context),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.build_runtime_for_selector", return_value=object()),
             patch(
                 "orchestrator.core.jira_parent_child_sync_service.normalize_parent_feature_brief_with_runtime",
@@ -1878,8 +1878,8 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
             project.discord_config = {"channel_id": "discord-channel-1"}
             session.commit()
         with (
-            patch("orchestrator.core.worker.webhook_job_service.tenant_jira_oauth_context", return_value=oauth_context),
-            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_jira_oauth_context", return_value=oauth_context),
+            patch("orchestrator.core.worker.webhook_job_service.tenant_atlassian_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_atlassian_oauth_context", return_value=oauth_context),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.build_runtime_for_selector", return_value=object()),
             patch(
                 "orchestrator.core.jira_parent_child_sync_service.normalize_parent_feature_brief_with_runtime",

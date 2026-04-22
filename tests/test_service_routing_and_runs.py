@@ -22,16 +22,16 @@ class JiraRouteServiceTests(unittest.TestCase):
             jira_route_service.list_jira_projects_for_connection(
                 session=session,
                 connection_id="conn-1",
-                jira_oauth_connection_model=object,
+                atlassian_oauth_connection_model=object,
                 settings=SimpleNamespace(),
-                refresh_jira_connection_tokens_fn=MagicMock(),
-                jira_oauth_client_fn=MagicMock(),
+                refresh_atlassian_connection_tokens_fn=MagicMock(),
+                atlassian_oauth_client_fn=MagicMock(),
             )
 
         self.assertEqual(exc_ctx.exception.status_code, 404)
 
     def test_list_jira_projects_for_connection_success(self) -> None:
-        connection = SimpleNamespace(cloud_id="cloud-1")
+        connection = SimpleNamespace(connection_id="conn-1", cloud_id="cloud-1")
         session = MagicMock()
         session.get.return_value = connection
 
@@ -46,10 +46,10 @@ class JiraRouteServiceTests(unittest.TestCase):
         projects = jira_route_service.list_jira_projects_for_connection(
             session=session,
             connection_id="conn-1",
-            jira_oauth_connection_model=object,
+            atlassian_oauth_connection_model=object,
             settings=SimpleNamespace(),
-            refresh_jira_connection_tokens_fn=refresh_fn,
-            jira_oauth_client_fn=client_factory,
+            refresh_atlassian_connection_tokens_fn=refresh_fn,
+            atlassian_oauth_client_fn=client_factory,
         )
 
         self.assertEqual([p.key for p in projects], ["MAB", "YANA"])

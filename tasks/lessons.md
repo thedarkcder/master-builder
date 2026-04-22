@@ -1,5 +1,8 @@
 2026-04-21
 
+- When renaming a shared integration surface, audit the full user-facing flow end to end: routes, redirects, tab ids, button copy, callback return paths, and tests. Do not stop at component labels if the connect flow still routes users back to the old section name.
+- Do not expose opaque third-party identifiers in admin settings when the connected provider can enumerate real choices. For integration-backed config like Confluence spaces and parent pages, query the provider and present selectable names/titles plus the relevant creation link instead of raw key/id text inputs.
+- When renaming an OAuth integration route, audit the registered provider callback URL and any operator-facing setup guidance at the same time. A route rename without a provider-app callback update will fail before the backend sees the request.
 - When the user asks for the best final architecture, do not preserve transitional backward-compatible fallbacks by default. Make the authoritative contract explicit and remove compatibility layers unless the user explicitly asks for a staged migration.
 - When the same lifecycle rule is duplicated across workflow code, retry handlers, and transport integrations, do not stop at normalizing payload shapes. Introduce one application service that owns the rule and make transports/workflows depend on that service through narrow publisher ports.
 - When the intended domain model is strict, do not silently degrade to a weaker relationship on capability errors. If Jira child work must be subtasks, fail clearly when subtasks are unavailable instead of creating linked tasks as a fallback.
@@ -270,3 +273,4 @@
 - 2026-04-21: Do not drive a step drawer from the same transcript contract for both telemetry and audit. Live telemetry must be built from real-time attempt-scoped events, while audit must be loaded separately as durable evidence for the selected persisted attempt.
 - 2026-04-21: If live telemetry is scoped by attempt, every nested runtime/integration path must emit the canonical `attempt_id`, not just an attempt number. Missing attempt IDs orphan live logs and make them disappear when the drawer reloads.
 - 2026-04-21: Engineering child tickets must be executable build specs. Do not generate `Define ...` tickets or boilerplate like `Deliver the behavior slice`; make the ticket state plainly what to build, the expected outcome, and how it is tested.
+- 2026-04-22: Do not introduce a global startup setting when behavior is defined per agent/persona. Prewarm and bootstrap logic must derive defaults from the same persona contract the runtime uses, not from a new global fallback env var.

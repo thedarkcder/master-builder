@@ -230,6 +230,35 @@ class ProjectDiscordConfig(BaseModel):
         return serialized
 
 
+class ProjectArchitectureDocsConfig(BaseModel):
+    provider: Literal["internal", "confluence"]
+    space_key: str | None = None
+    parent_page_id: str | None = None
+
+    @field_validator("space_key", "parent_page_id")
+    @classmethod
+    def normalize_optional_text(cls, value: str | None) -> str | None:
+        normalized = str(value or "").strip()
+        return normalized or None
+
+
+class ConfluenceSpaceRead(BaseModel):
+    space_id: str
+    key: str
+    name: str
+
+
+class ConfluenceSpaceCatalogRead(BaseModel):
+    items: list[ConfluenceSpaceRead]
+    create_space_url: str
+
+
+class ConfluencePageRead(BaseModel):
+    page_id: str
+    title: str
+    webui_url: str
+
+
 class TenantCreate(BaseModel):
     name: str = Field(min_length=1)
     is_enabled: bool = True
@@ -456,6 +485,7 @@ class ProjectCreate(BaseModel):
     github_repository: str = Field(min_length=1)
     jira_project_key: str = Field(min_length=1)
     policy_overrides: dict = Field(default_factory=dict)
+    architecture_docs: ProjectArchitectureDocsConfig | None = None
     environment: dict[str, str] = Field(default_factory=dict)
     secret_refs: dict[str, str] = Field(default_factory=dict)
     discord: ProjectDiscordConfig | None = None
@@ -466,6 +496,7 @@ class ProjectUpdate(BaseModel):
     github_repository: str = Field(min_length=1)
     jira_project_key: str = Field(min_length=1)
     policy_overrides: dict = Field(default_factory=dict)
+    architecture_docs: ProjectArchitectureDocsConfig | None = None
     environment: dict[str, str] = Field(default_factory=dict)
     secret_refs: dict[str, str] = Field(default_factory=dict)
     discord: ProjectDiscordConfig | None = None
@@ -479,6 +510,7 @@ class ProjectRead(BaseModel):
     github_repository: str
     jira_project_key: str
     policy_overrides: dict = Field(default_factory=dict)
+    architecture_docs: ProjectArchitectureDocsConfig | None = None
     environment: dict[str, str] = Field(default_factory=dict)
     secret_refs: dict[str, str] = Field(default_factory=dict)
     discord: ProjectDiscordConfig | None = None
@@ -486,6 +518,47 @@ class ProjectRead(BaseModel):
     is_archived: bool
     created_at: datetime
     updated_at: datetime
+
+
+class ArchitectureDocumentCreate(BaseModel):
+    parent_issue_key: str = Field(min_length=1)
+    issue_summary: str | None = None
+    title: str | None = None
+    canonical_url: str | None = None
+    provider_ref: str | None = None
+
+
+class ArchitectureDocumentUpdate(BaseModel):
+    title: str = Field(min_length=1)
+    status: Literal["draft", "ready", "superseded"]
+    content_markdown: str | None = None
+    canonical_url: str | None = None
+    provider_ref: str | None = None
+
+
+class ArchitectureDocumentRead(BaseModel):
+    document_id: str
+    tenant_id: str
+    project_id: str
+    parent_issue_key: str
+    provider: Literal["internal", "confluence"]
+    title: str
+    status: Literal["draft", "ready", "superseded"]
+    is_active: bool
+    canonical_url: str
+    provider_ref: str | None = None
+    knowledge_asset_id: str | None = None
+    content_markdown: str | None = None
+    metadata: dict = Field(default_factory=dict)
+    created_by: str | None = None
+    updated_by: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ArchitectureDocumentPageRead(BaseModel):
+    items: list[ArchitectureDocumentRead] = Field(default_factory=list)
+    total: int
 
 
 class ProjectInstallWrite(BaseModel):
@@ -846,7 +919,7 @@ class DiscordInstallStart(BaseModel):
     expires_at: datetime
 
 
-class JiraConnectStart(BaseModel):
+class AtlassianConnectStart(BaseModel):
     authorize_url: str
     expires_at: datetime
 

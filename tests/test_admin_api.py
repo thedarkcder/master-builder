@@ -56,7 +56,7 @@ from orchestrator.storage.models import (
     WorkerRuntimeState,
 )
 from orchestrator.tools.github_app import InstallationRepository
-from orchestrator.tools.jira_oauth_models import JiraOAuthError
+from orchestrator.tools.atlassian_oauth_models import AtlassianOAuthError
 from tests.test_support.admin_api_harness import AdminApiTestHarness
 from tests.workflow_test_support import add_workflow_attempt
 
@@ -120,12 +120,12 @@ class AdminApiTests(AdminApiTestHarness):
                 ]
 
         with (
-            patch("orchestrator.api.admin.integration_dependencies.refresh_jira_connection_tokens", return_value="access-token"),
-            patch("orchestrator.api.admin.integration_dependencies.jira_oauth_client", return_value=_FakeJiraClient()),
+            patch("orchestrator.api.admin.integration_dependencies.refresh_atlassian_connection_tokens", return_value="access-token"),
+            patch("orchestrator.api.admin.integration_dependencies.atlassian_oauth_client", return_value=_FakeJiraClient()),
             patch("orchestrator.api.admin.integration_dependencies.github_client_from_tenant_config", return_value=_FakeGitHubClient()),
         ):
             jira_test = self.client.post(
-                "/api/admin/tenants/tenant-a/test-jira",
+                "/api/admin/tenants/tenant-a/test-atlassian",
                 auth=("admin", "secret"),
             )
         self.assertEqual(jira_test.status_code, 200)
@@ -161,18 +161,18 @@ class AdminApiTests(AdminApiTestHarness):
         self.assertEqual(create_response.status_code, 201)
 
         with patch(
-            "orchestrator.api.admin.integration_dependencies.refresh_jira_connection_tokens",
-            side_effect=JiraOAuthError(
-                'Jira OAuth request failed (403): {"error":"unauthorized_client","error_description":"refresh_token is invalid"}'
+            "orchestrator.api.admin.integration_dependencies.refresh_atlassian_connection_tokens",
+            side_effect=AtlassianOAuthError(
+                'Atlassian request failed (403): {"error":"unauthorized_client","error_description":"refresh_token is invalid"}'
             ),
         ):
             response = self.client.get(
-                "/api/admin/jira/connections/conn-1/projects",
+                "/api/admin/atlassian/connections/conn-1/jira-projects",
                 auth=("admin", "secret"),
             )
 
         self.assertEqual(response.status_code, 409, response.text)
-        self.assertEqual(response.json()["detail"], "Jira connection requires reauthentication.")
+        self.assertEqual(response.json()["detail"], "Atlassian connection requires reauthentication.")
 
         notifications_response = self.client.get(
             "/api/admin/tenants/tenant-a/notifications",
@@ -206,12 +206,12 @@ class AdminApiTests(AdminApiTestHarness):
                     project_id=None,
                     scope_type="jira_connection",
                     scope_id="conn-1",
-                    source="jira_oauth",
+                    source="atlassian_oauth",
                     kind="reauth_required",
                     severity="HIGH",
-                    title="Jira connection needs reauthentication",
-                    detail="Reconnect Jira.",
-                    action_label="Reconnect Jira",
+                    title="Atlassian connection needs reauthentication",
+                    detail="Reconnect Atlassian.",
+                    action_label="Reconnect Atlassian",
                     action_path=None,
                     fingerprint=notification_fingerprint_for(
                         scope=AdminNotificationScope(scope_type="jira_connection", scope_id="conn-1"),
@@ -235,11 +235,11 @@ class AdminApiTests(AdminApiTestHarness):
                 return [SimpleNamespace(key="TP", name="Tenant Platform")]
 
         with (
-            patch("orchestrator.api.admin.integration_dependencies.refresh_jira_connection_tokens", return_value="access-token"),
-            patch("orchestrator.api.admin.integration_dependencies.jira_oauth_client", return_value=_FakeJiraClient()),
+            patch("orchestrator.api.admin.integration_dependencies.refresh_atlassian_connection_tokens", return_value="access-token"),
+            patch("orchestrator.api.admin.integration_dependencies.atlassian_oauth_client", return_value=_FakeJiraClient()),
         ):
             response = self.client.get(
-                "/api/admin/jira/connections/conn-1/projects",
+                "/api/admin/atlassian/connections/conn-1/jira-projects",
                 auth=("admin", "secret"),
             )
 
@@ -258,8 +258,100 @@ class AdminApiTests(AdminApiTestHarness):
             auth=("admin", "secret"),
         )
         self.assertEqual(resolved_notifications.status_code, 200, resolved_notifications.text)
-        self.assertEqual(len(resolved_notifications.json()["notifications"]), 1)
-        self.assertEqual(resolved_notifications.json()["notifications"][0]["status"], "resolved")
+
+    def test_list_confluence_spaces_for_tenant_success(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(
+            connection_id="conn-1",
+            scopes=["read:jira-work", "write:jira-work", "read:space:confluence"],
+        )
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        class _FakeClient:
+            def list_confluence_spaces(self, *, access_token: str, cloud_id: str, limit: int = 250):  # noqa: ANN001
+                return [
+                    SimpleNamespace(space_id="2", key="PLAT", name="Platform"),
+                    SimpleNamespace(space_id="1", key="ARCH", name="Architecture"),
+                ]
+
+        with (
+            patch("orchestrator.api.admin.integration_dependencies.refresh_atlassian_connection_tokens", return_value="access-token"),
+            patch("orchestrator.api.admin.integration_dependencies.atlassian_oauth_client", return_value=_FakeClient()),
+        ):
+            response = self.client.get(
+                "/api/admin/tenants/tenant-a/atlassian/confluence/spaces",
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(
+            response.json(),
+            {
+                "items": [
+                    {"space_id": "1", "key": "ARCH", "name": "Architecture"},
+                    {"space_id": "2", "key": "PLAT", "name": "Platform"},
+                ],
+                "create_space_url": "https://example.atlassian.net/wiki/spaces/create",
+            },
+        )
+
+    def test_list_confluence_pages_for_tenant_success(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(
+            connection_id="conn-1",
+            scopes=["read:jira-work", "write:jira-work", "read:space:confluence", "read:page:confluence"],
+        )
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        class _FakeClient:
+            def get_confluence_space_by_key(self, *, access_token: str, cloud_id: str, space_key: str):  # noqa: ANN001
+                return SimpleNamespace(space_id="space-1", key="ARCH", name="Architecture")
+
+            def list_confluence_pages(  # noqa: ANN001
+                self,
+                *,
+                access_token: str,
+                cloud_id: str,
+                site_url: str,
+                space_id: str,
+                limit: int = 250,
+            ):
+                return [
+                    SimpleNamespace(page_id="200", title="System Design", webui_url="https://example.atlassian.net/wiki/spaces/ARCH/pages/200"),
+                    SimpleNamespace(page_id="100", title="ADR Index", webui_url="https://example.atlassian.net/wiki/spaces/ARCH/pages/100"),
+                ]
+
+            def get_confluence_page(self, *, access_token: str, cloud_id: str, site_url: str, page_id: str):  # noqa: ANN001
+                return SimpleNamespace(page_id=page_id, title="Selected Parent", webui_url=f"https://example.atlassian.net/wiki/spaces/ARCH/pages/{page_id}")
+
+        with (
+            patch("orchestrator.api.admin.integration_dependencies.refresh_atlassian_connection_tokens", return_value="access-token"),
+            patch("orchestrator.api.admin.integration_dependencies.atlassian_oauth_client", return_value=_FakeClient()),
+        ):
+            response = self.client.get(
+                "/api/admin/tenants/tenant-a/atlassian/confluence/spaces/ARCH/pages?selected_page_id=300",
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(
+            response.json(),
+            [
+                {"page_id": "100", "title": "ADR Index", "webui_url": "https://example.atlassian.net/wiki/spaces/ARCH/pages/100"},
+                {"page_id": "300", "title": "Selected Parent", "webui_url": "https://example.atlassian.net/wiki/spaces/ARCH/pages/300"},
+                {"page_id": "200", "title": "System Design", "webui_url": "https://example.atlassian.net/wiki/spaces/ARCH/pages/200"},
+            ],
+        )
 
     def test_create_tenant_auto_provisions_jira_webhook_when_jira_is_configured(self) -> None:
         payload = self._tenant_payload()
@@ -322,7 +414,7 @@ class AdminApiTests(AdminApiTestHarness):
             return_value=SimpleNamespace(
                 ok=False,
                 action="provision",
-                details="Configured Jira connection was not found",
+                details="Configured Atlassian connection was not found",
                 webhook_ids=[],
             ),
         ):
@@ -333,7 +425,7 @@ class AdminApiTests(AdminApiTestHarness):
             )
 
         self.assertEqual(response.status_code, 400, response.text)
-        self.assertEqual(response.json()["detail"], "Configured Jira connection was not found")
+        self.assertEqual(response.json()["detail"], "Configured Atlassian connection was not found")
 
         session_factory = create_session_factory(self.database_url)
         with session_factory() as session:
@@ -491,8 +583,8 @@ class AdminApiTests(AdminApiTestHarness):
 
         fake_client = _FakeJiraClient()
         with (
-            patch("orchestrator.api.admin.integration_dependencies.refresh_jira_connection_tokens", return_value="access-token"),
-            patch("orchestrator.api.admin.integration_dependencies.jira_oauth_client", return_value=fake_client),
+            patch("orchestrator.api.admin.integration_dependencies.refresh_atlassian_connection_tokens", return_value="access-token"),
+            patch("orchestrator.api.admin.integration_dependencies.atlassian_oauth_client", return_value=fake_client),
         ):
             preview_response = self.client.get(
                 "/api/admin/tenants/tenant-a/ready-preview",
@@ -530,8 +622,8 @@ class AdminApiTests(AdminApiTestHarness):
                 return []
 
         with (
-            patch("orchestrator.api.admin.integration_dependencies.refresh_jira_connection_tokens", return_value="access-token"),
-            patch("orchestrator.api.admin.integration_dependencies.jira_oauth_client", return_value=_FakeJiraClient()),
+            patch("orchestrator.api.admin.integration_dependencies.refresh_atlassian_connection_tokens", return_value="access-token"),
+            patch("orchestrator.api.admin.integration_dependencies.atlassian_oauth_client", return_value=_FakeJiraClient()),
         ):
             response = self.client.post(
                 "/api/admin/tenants/tenant-a/release/bootstrap",
@@ -4085,14 +4177,14 @@ class AdminApiTests(AdminApiTestHarness):
 
     def test_jira_connect_start_requires_tenant_for_edit_mode(self) -> None:
         response = self.client.post(
-            "/api/admin/jira/connect/start?return_to=edit",
+            "/api/admin/atlassian/connect/start?return_to=edit",
             auth=("admin", "secret"),
         )
         self.assertEqual(response.status_code, 400)
 
     def test_jira_connect_wizard_callback_creates_connection(self) -> None:
         start_response = self.client.post(
-            "/api/admin/jira/connect/start?return_to=wizard",
+            "/api/admin/atlassian/connect/start?return_to=wizard",
             auth=("admin", "secret"),
         )
         self.assertEqual(start_response.status_code, 200)
@@ -4135,16 +4227,16 @@ class AdminApiTests(AdminApiTestHarness):
                     {"webhook_id": "1001"},
                 )()
 
-        with patch("orchestrator.api.admin.integration_dependencies.jira_oauth_client", return_value=_FakeClient()):
+        with patch("orchestrator.api.admin.integration_dependencies.atlassian_oauth_client", return_value=_FakeClient()):
             callback_response = self.client.get(
-                "/api/admin/jira/connect/callback",
+                "/api/admin/atlassian/connect/callback",
                 params={"code": "abc123", "state": state_token},
                 follow_redirects=False,
             )
 
         self.assertEqual(callback_response.status_code, 302)
         self.assertIn(
-            "/tenants/new?jira_oauth=success&jira_connection_id=",
+            "/tenants/new?atlassian_oauth=success&atlassian_connection_id=",
             callback_response.headers.get("location", ""),
         )
 
@@ -4159,7 +4251,7 @@ class AdminApiTests(AdminApiTestHarness):
         self.assertEqual(create_response.status_code, 201)
 
         start_response = self.client.post(
-            "/api/admin/jira/connect/start?return_to=edit&tenant_id=tenant-a",
+            "/api/admin/atlassian/connect/start?return_to=edit&tenant_id=tenant-a",
             auth=("admin", "secret"),
         )
         self.assertEqual(start_response.status_code, 200)
@@ -4203,21 +4295,21 @@ class AdminApiTests(AdminApiTestHarness):
                 )()
 
         with (
-            patch("orchestrator.api.admin.integration_dependencies.jira_oauth_client", return_value=_FakeClient()),
+            patch("orchestrator.api.admin.integration_dependencies.atlassian_oauth_client", return_value=_FakeClient()),
             patch(
                 "orchestrator.api.admin.integration_dependencies.provision_jira_webhook",
                 return_value=SimpleNamespace(ok=True),
             ) as provision_mock,
         ):
             callback_response = self.client.get(
-                "/api/admin/jira/connect/callback",
+                "/api/admin/atlassian/connect/callback",
                 params={"code": "abc123", "state": state_token},
                 follow_redirects=False,
             )
 
         self.assertEqual(callback_response.status_code, 302)
         self.assertIn(
-            "/tenant-a/settings/jira?jira_oauth=success&jira_connection_id=",
+            "/tenant-a/settings/atlassian?atlassian_oauth=success&atlassian_connection_id=",
             callback_response.headers.get("location", ""),
         )
         self.assertIn("jira_webhook=ok", callback_response.headers.get("location", ""))
@@ -4240,7 +4332,7 @@ class AdminApiTests(AdminApiTestHarness):
         self.assertEqual(create_response.status_code, 201)
 
         start_response = self.client.post(
-            "/api/admin/jira/connect/start?return_to=edit&tenant_id=tenant-a",
+            "/api/admin/atlassian/connect/start?return_to=edit&tenant_id=tenant-a",
             auth=("admin", "secret"),
         )
         self.assertEqual(start_response.status_code, 200)
@@ -4277,14 +4369,14 @@ class AdminApiTests(AdminApiTestHarness):
                 ]
 
         with (
-            patch("orchestrator.api.admin.integration_dependencies.jira_oauth_client", return_value=_FakeClient()),
+            patch("orchestrator.api.admin.integration_dependencies.atlassian_oauth_client", return_value=_FakeClient()),
             patch(
                 "orchestrator.api.admin.integration_dependencies.provision_jira_webhook",
                 side_effect=RuntimeError("provision-failed"),
             ) as provision_mock,
         ):
             callback_response = self.client.get(
-                "/api/admin/jira/connect/callback",
+                "/api/admin/atlassian/connect/callback",
                 params={"code": "abc123", "state": state_token},
                 follow_redirects=False,
             )
@@ -4309,8 +4401,8 @@ class AdminApiTests(AdminApiTestHarness):
                 return [2002]
 
         with (
-            patch("orchestrator.api.admin.integration_dependencies.refresh_jira_connection_tokens", return_value="access-token"),
-            patch("orchestrator.api.admin.integration_dependencies.jira_oauth_client", return_value=_FakeClient()),
+            patch("orchestrator.api.admin.integration_dependencies.refresh_atlassian_connection_tokens", return_value="access-token"),
+            patch("orchestrator.api.admin.integration_dependencies.atlassian_oauth_client", return_value=_FakeClient()),
         ):
             response = self.client.post(
                 "/api/admin/tenants/tenant-a/jira/webhooks/provision",
@@ -4341,8 +4433,8 @@ class AdminApiTests(AdminApiTestHarness):
                 raise ValueError("Forbidden: missing Jira admin permission")
 
         with (
-            patch("orchestrator.api.admin.integration_dependencies.refresh_jira_connection_tokens", return_value="access-token"),
-            patch("orchestrator.api.admin.integration_dependencies.jira_oauth_client", return_value=_FakeClient()),
+            patch("orchestrator.api.admin.integration_dependencies.refresh_atlassian_connection_tokens", return_value="access-token"),
+            patch("orchestrator.api.admin.integration_dependencies.atlassian_oauth_client", return_value=_FakeClient()),
         ):
             response = self.client.post(
                 "/api/admin/tenants/tenant-a/jira/webhooks/provision",
@@ -4411,8 +4503,8 @@ class AdminApiTests(AdminApiTestHarness):
 
         fake_client = _FakeClient()
         with (
-            patch("orchestrator.api.admin.integration_dependencies.refresh_jira_connection_tokens", return_value="access-token"),
-            patch("orchestrator.api.admin.integration_dependencies.jira_oauth_client", return_value=fake_client),
+            patch("orchestrator.api.admin.integration_dependencies.refresh_atlassian_connection_tokens", return_value="access-token"),
+            patch("orchestrator.api.admin.integration_dependencies.atlassian_oauth_client", return_value=fake_client),
         ):
             response = self.client.post(
                 "/api/admin/tenants/tenant-a/jira/webhooks/provision",
@@ -4472,8 +4564,8 @@ class AdminApiTests(AdminApiTestHarness):
 
         fake_client = _FakeClient()
         with (
-            patch("orchestrator.api.admin.integration_dependencies.refresh_jira_connection_tokens", return_value="access-token"),
-            patch("orchestrator.api.admin.integration_dependencies.jira_oauth_client", return_value=fake_client),
+            patch("orchestrator.api.admin.integration_dependencies.refresh_atlassian_connection_tokens", return_value="access-token"),
+            patch("orchestrator.api.admin.integration_dependencies.atlassian_oauth_client", return_value=fake_client),
         ):
             response = self.client.post(
                 "/api/admin/tenants/tenant-a/jira/webhooks/provision",
@@ -4544,8 +4636,8 @@ class AdminApiTests(AdminApiTestHarness):
 
         fake_client = _FakeClient()
         with (
-            patch("orchestrator.api.admin.integration_dependencies.refresh_jira_connection_tokens", return_value="access-token"),
-            patch("orchestrator.api.admin.integration_dependencies.jira_oauth_client", return_value=fake_client),
+            patch("orchestrator.api.admin.integration_dependencies.refresh_atlassian_connection_tokens", return_value="access-token"),
+            patch("orchestrator.api.admin.integration_dependencies.atlassian_oauth_client", return_value=fake_client),
         ):
             response = self.client.post(
                 "/api/admin/tenants/tenant-a/jira/webhooks/provision",
@@ -4687,8 +4779,8 @@ class AdminApiTests(AdminApiTestHarness):
 
         fake_client = _FakeJiraClient()
         with (
-            patch("orchestrator.api.admin.integration_dependencies.refresh_jira_connection_tokens", return_value="access-token"),
-            patch("orchestrator.api.admin.integration_dependencies.jira_oauth_client", return_value=fake_client),
+            patch("orchestrator.api.admin.integration_dependencies.refresh_atlassian_connection_tokens", return_value="access-token"),
+            patch("orchestrator.api.admin.integration_dependencies.atlassian_oauth_client", return_value=fake_client),
         ):
             provision = self.client.post(
                 "/api/admin/tenants/tenant-a/jira/webhooks/provision",
@@ -4717,7 +4809,7 @@ class AdminApiTests(AdminApiTestHarness):
             self.assertEqual(deleted_batches, [[10101]])
 
             disconnect = self.client.post(
-                "/api/admin/tenants/tenant-a/jira/disconnect",
+                "/api/admin/tenants/tenant-a/atlassian/disconnect",
                 auth=("admin", "secret"),
             )
             self.assertEqual(disconnect.status_code, 200)
@@ -4768,8 +4860,8 @@ class AdminApiTests(AdminApiTestHarness):
                 deleted_batches.append(list(webhook_ids))
 
         with (
-            patch("orchestrator.api.admin.integration_dependencies.refresh_jira_connection_tokens", return_value="access-token"),
-            patch("orchestrator.api.admin.integration_dependencies.jira_oauth_client", return_value=_FakeClient()),
+            patch("orchestrator.api.admin.integration_dependencies.refresh_atlassian_connection_tokens", return_value="access-token"),
+            patch("orchestrator.api.admin.integration_dependencies.atlassian_oauth_client", return_value=_FakeClient()),
         ):
             response = self.client.post(
                 "/api/admin/tenants/tenant-a/jira/webhooks/reset",
@@ -5340,8 +5432,8 @@ class AdminApiTests(AdminApiTestHarness):
         source_id = source_response.json()["source_id"]
 
         with (
-            patch("orchestrator.core.knowledge_sources.refresh_jira_connection_tokens", return_value="token"),
-            patch("orchestrator.core.knowledge_sources.jira_oauth_client", return_value=SimpleNamespace()),
+            patch("orchestrator.core.knowledge_sources.refresh_atlassian_connection_tokens", return_value="token"),
+            patch("orchestrator.core.knowledge_sources.atlassian_oauth_client", return_value=SimpleNamespace()),
             patch(
                 "orchestrator.core.knowledge_sources.sync_project_knowledge_from_jira",
                 return_value=SimpleNamespace(

@@ -47,7 +47,7 @@ def evaluate_worker_decision(
     project: Project | None = None,
     issue_labels: list[str] | None = None,
     settings=None,  # noqa: ANN001
-    tenant_jira_oauth_context_fn: Callable[..., Any] | None = None,
+    tenant_atlassian_oauth_context_fn: Callable[..., Any] | None = None,
     evaluate_pre_run_check_fn: Callable[..., PreRunCheckResult] = evaluate_pre_run_check,
     evaluate_decision_gate_fn: Callable[..., DecisionGateResult] | None = None,
 ) -> WorkerDecision:
@@ -62,7 +62,7 @@ def evaluate_worker_decision(
         project,
         issue_labels,
         settings,
-        tenant_jira_oauth_context_fn,
+        tenant_atlassian_oauth_context_fn,
         evaluate_pre_run_check_fn,
         evaluate_decision_gate_fn,
     )

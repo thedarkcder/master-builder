@@ -189,6 +189,29 @@ export type ProjectDiscordConfig = {
   live_voice_linked_text_channel_id?: string | null;
 };
 
+export type ProjectArchitectureDocsConfig = {
+  provider: "internal" | "confluence";
+  space_key?: string | null;
+  parent_page_id?: string | null;
+};
+
+export type ConfluenceSpaceRecord = {
+  space_id: string;
+  key: string;
+  name: string;
+};
+
+export type ConfluenceSpaceCatalogRecord = {
+  items: ConfluenceSpaceRecord[];
+  create_space_url: string;
+};
+
+export type ConfluencePageRecord = {
+  page_id: string;
+  title: string;
+  webui_url: string;
+};
+
 export type ProjectRecord = {
   project_id: string;
   tenant_id: string;
@@ -199,6 +222,7 @@ export type ProjectRecord = {
   environment: Record<string, string>;
   secret_refs: Record<string, string>;
   discord: ProjectDiscordConfig | null;
+  architecture_docs?: ProjectArchitectureDocsConfig | null;
   effective_policy: PolicyConfig;
   is_archived: boolean;
   created_at: string;
@@ -314,6 +338,7 @@ export type ProjectCreatePayload = {
   environment?: Record<string, string>;
   secret_refs?: Record<string, string>;
   discord?: ProjectDiscordConfig | null;
+  architecture_docs?: ProjectArchitectureDocsConfig | null;
 };
 
 export type ProjectUpdatePayload = {
@@ -324,7 +349,49 @@ export type ProjectUpdatePayload = {
   environment?: Record<string, string>;
   secret_refs?: Record<string, string>;
   discord?: ProjectDiscordConfig | null;
+  architecture_docs?: ProjectArchitectureDocsConfig | null;
   is_archived: boolean;
+};
+
+export type ArchitectureDocumentRecord = {
+  document_id: string;
+  tenant_id: string;
+  project_id: string;
+  parent_issue_key: string;
+  provider: "internal" | "confluence";
+  title: string;
+  status: "draft" | "ready" | "superseded";
+  is_active: boolean;
+  canonical_url: string;
+  provider_ref?: string | null;
+  knowledge_asset_id?: string | null;
+  content_markdown?: string | null;
+  metadata: Record<string, unknown>;
+  created_by?: string | null;
+  updated_by?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ArchitectureDocumentPageRecord = {
+  items: ArchitectureDocumentRecord[];
+  total: number;
+};
+
+export type ArchitectureDocumentCreatePayload = {
+  parent_issue_key: string;
+  issue_summary?: string | null;
+  title?: string | null;
+  canonical_url?: string | null;
+  provider_ref?: string | null;
+};
+
+export type ArchitectureDocumentUpdatePayload = {
+  title: string;
+  status: "draft" | "ready" | "superseded";
+  content_markdown?: string | null;
+  canonical_url?: string | null;
+  provider_ref?: string | null;
 };
 
 export type ProjectKnowledgeAssetRecord = {
@@ -1923,16 +1990,16 @@ export function unarchiveTenant(credentials: Credentials, tenantId: string): Pro
   });
 }
 
-export function testJira(
+export function testAtlassian(
   credentials: Credentials,
   tenantId: string
 ): Promise<{ ok: boolean; details: string }> {
-  return request(credentials, `/api/admin/tenants/${encodeURIComponent(tenantId)}/test-jira`, {
+  return request(credentials, `/api/admin/tenants/${encodeURIComponent(tenantId)}/test-atlassian`, {
     method: "POST"
   });
 }
 
-export function startJiraConnect(
+export function startAtlassianConnect(
   credentials: Credentials,
   options?: { returnTo?: "wizard" | "edit"; tenantId?: string }
 ): Promise<{ authorize_url: string; expires_at: string }> {
@@ -1944,7 +2011,7 @@ export function startJiraConnect(
     query.set("tenant_id", options.tenantId);
   }
   const suffix = query.toString() ? `?${query.toString()}` : "";
-  return request(credentials, `/api/admin/jira/connect/start${suffix}`, {
+  return request(credentials, `/api/admin/atlassian/connect/start${suffix}`, {
     method: "POST"
   });
 }
@@ -1955,7 +2022,34 @@ export function listJiraProjects(
 ): Promise<JiraProjectRecord[]> {
   return request<JiraProjectRecord[]>(
     credentials,
-    `/api/admin/jira/connections/${encodeURIComponent(connectionId)}/projects`
+    `/api/admin/atlassian/connections/${encodeURIComponent(connectionId)}/jira-projects`
+  );
+}
+
+export function listConfluenceSpaces(
+  credentials: Credentials,
+  tenantId: string
+): Promise<ConfluenceSpaceCatalogRecord> {
+  return request<ConfluenceSpaceCatalogRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/atlassian/confluence/spaces`
+  );
+}
+
+export function listConfluencePages(
+  credentials: Credentials,
+  tenantId: string,
+  spaceKey: string,
+  selectedPageId?: string | null
+): Promise<ConfluencePageRecord[]> {
+  const query = new URLSearchParams();
+  if (selectedPageId) {
+    query.set("selected_page_id", selectedPageId);
+  }
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return request<ConfluencePageRecord[]>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/atlassian/confluence/spaces/${encodeURIComponent(spaceKey)}/pages${suffix}`
   );
 }
 
@@ -1993,13 +2087,13 @@ export function resetJiraWebhook(
   );
 }
 
-export function disconnectJira(
+export function disconnectAtlassian(
   credentials: Credentials,
   tenantId: string
 ): Promise<JiraWebhookActionResult> {
   return request<JiraWebhookActionResult>(
     credentials,
-    `/api/admin/tenants/${encodeURIComponent(tenantId)}/jira/disconnect`,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/atlassian/disconnect`,
     { method: "POST" }
   );
 }
@@ -2109,6 +2203,66 @@ export function getProject(credentials: Credentials, tenantId: string, projectId
   return request<ProjectRecord>(
     credentials,
     `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}`
+  );
+}
+
+export function listArchitectureDocuments(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  parentIssueKey?: string
+): Promise<ArchitectureDocumentPageRecord> {
+  const query = parentIssueKey?.trim()
+    ? `?parent_issue_key=${encodeURIComponent(parentIssueKey.trim().toUpperCase())}`
+    : "";
+  return request<ArchitectureDocumentPageRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/architecture-documents${query}`
+  );
+}
+
+export function getArchitectureDocument(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  documentId: string
+): Promise<ArchitectureDocumentRecord> {
+  return request<ArchitectureDocumentRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/architecture-documents/${encodeURIComponent(documentId)}`
+  );
+}
+
+export function createArchitectureDocument(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  payload: ArchitectureDocumentCreatePayload
+): Promise<ArchitectureDocumentRecord> {
+  return request<ArchitectureDocumentRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/architecture-documents`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }
+  );
+}
+
+export function updateArchitectureDocument(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  documentId: string,
+  payload: ArchitectureDocumentUpdatePayload
+): Promise<ArchitectureDocumentRecord> {
+  return request<ArchitectureDocumentRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/architecture-documents/${encodeURIComponent(documentId)}`,
+    {
+      method: "PUT",
+      body: JSON.stringify(payload)
+    }
   );
 }
 

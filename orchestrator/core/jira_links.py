@@ -3,14 +3,14 @@ from __future__ import annotations
 from sqlalchemy.orm import Session
 
 from orchestrator.core.decision_types import JiraConfigKey, tenant_jira_config_text
-from orchestrator.storage.models import JiraOAuthConnection, Tenant
+from orchestrator.storage.models import AtlassianOAuthConnection, Tenant
 
 
 def tenant_jira_browse_base_url(*, session: Session, tenant: Tenant) -> str | None:
     connection_id = tenant_jira_config_text(tenant=tenant, key=JiraConfigKey.CONNECTION_ID)
     if not connection_id:
         return None
-    connection = session.get(JiraOAuthConnection, connection_id)
+    connection = session.get(AtlassianOAuthConnection, connection_id)
     if connection is None:
         return None
     site_url = str(connection.site_url or "").strip().rstrip("/")
