@@ -19,6 +19,7 @@ from orchestrator.api.admin.worker_runtime_auth_service import (
     start_worker_runtime_auth_request as start_worker_runtime_auth_request_impl,
 )
 from orchestrator.api.admin.webhook_queue_service import list_webhook_queue_jobs as list_webhook_queue_jobs_impl
+from orchestrator.api.admin.webhook_queue_service import retry_failed_webhook_job as retry_failed_webhook_job_impl
 from orchestrator.api.admin.project_metrics_service import (
     project_execution_metrics as project_execution_metrics_impl,
 )
@@ -36,6 +37,7 @@ from orchestrator.api.schemas import (
     ProjectObservabilityRead,
     TenantHealthRead,
     TenantObservabilityRead,
+    WebhookQueueJobRead,
     WebhookQueueJobPageRead,
     WorkerRuntimeAuthRequestRead,
 )
@@ -170,6 +172,36 @@ def list_webhook_queue_jobs(
         subject_key=subject_key,
         limit=limit,
         offset=offset,
+    )
+
+
+@router.post("/observability/webhook-jobs/{job_id}/retry", response_model=WebhookQueueJobRead)
+def retry_failed_webhook_job(
+    job_id: str,
+    tenant_id: str | None = Query(default=None),
+    project_id: str | None = Query(default=None),
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> WebhookQueueJobRead:
+    normalized_tenant_id = str(tenant_id or "").strip()
+    normalized_project_id = str(project_id or "").strip()
+    if not normalized_tenant_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="tenant_id is required",
+        )
+    if not normalized_project_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="project_id is required",
+        )
+    if not principal.is_platform_super_admin:
+        require_tenant_workspace_access(principal=principal, tenant_id=normalized_tenant_id)
+    return retry_failed_webhook_job_impl(
+        session=session,
+        tenant_id=normalized_tenant_id,
+        project_id=normalized_project_id,
+        job_id=job_id,
     )
 
 

@@ -5832,6 +5832,100 @@ class AdminApiTests(AdminApiTestHarness):
         self.assertEqual(missing_project_response.status_code, 400)
         self.assertIn("project_id is required", missing_project_response.json()["detail"])
 
+    def test_retry_failed_webhook_job_requeues_terminal_failure(self) -> None:
+        now = datetime.now(timezone.utc)
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            session.add(
+                WebhookJob(
+                    job_id="job-failed-retry",
+                    transport="jira_webhook",
+                    tenant_id="example",
+                    project_id="example-default",
+                    subject_key="jira:example:MAB-229",
+                    dedupe_key="delivery-retry",
+                    request_id="request-retry",
+                    event_type="jira:issue_updated",
+                    status="failed",
+                    owner_id=None,
+                    lease_expires_at=None,
+                    available_at=now - timedelta(minutes=1),
+                    attempt_count=3,
+                    last_error="Workflow Task in failed state",
+                    payload_json={},
+                    context_json={"related_run_id": "run-retry-1"},
+                    created_at=now - timedelta(minutes=5),
+                    updated_at=now - timedelta(minutes=1),
+                    started_at=now - timedelta(minutes=4),
+                    completed_at=now - timedelta(minutes=1),
+                )
+            )
+            session.commit()
+
+        response = self.client.post(
+            "/api/admin/observability/webhook-jobs/job-failed-retry/retry?tenant_id=example&project_id=example-default",
+            auth=("admin", "secret"),
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertEqual(payload["job_id"], "job-failed-retry")
+        self.assertEqual(payload["status"], "pending")
+        self.assertEqual(payload["attempt_count"], 3)
+        self.assertIsNone(payload["last_error"])
+        self.assertIsNone(payload["lease_expires_at"])
+        self.assertIsNone(payload["started_at"])
+        self.assertIsNone(payload["completed_at"])
+        self.assertEqual(payload["related_run_id"], "run-retry-1")
+
+        with session_factory() as session:
+            persisted = session.get(WebhookJob, "job-failed-retry")
+            assert persisted is not None
+            self.assertEqual(persisted.status, "pending")
+            self.assertIsNone(persisted.owner_id)
+            self.assertIsNone(persisted.lease_expires_at)
+            self.assertIsNone(persisted.last_error)
+            self.assertIsNone(persisted.started_at)
+            self.assertIsNone(persisted.completed_at)
+
+    def test_retry_failed_webhook_job_rejects_non_failed_rows(self) -> None:
+        now = datetime.now(timezone.utc)
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            session.add(
+                WebhookJob(
+                    job_id="job-processing-retry",
+                    transport="jira_webhook",
+                    tenant_id="example",
+                    project_id="example-default",
+                    subject_key="jira:example:MAB-229",
+                    dedupe_key="delivery-processing",
+                    request_id="request-processing",
+                    event_type="jira:issue_updated",
+                    status="processing",
+                    owner_id="worker:example:webhooks:child:1",
+                    lease_expires_at=now + timedelta(minutes=2),
+                    available_at=now - timedelta(minutes=1),
+                    attempt_count=2,
+                    last_error=None,
+                    payload_json={},
+                    context_json={},
+                    created_at=now - timedelta(minutes=5),
+                    updated_at=now - timedelta(minutes=1),
+                    started_at=now - timedelta(minutes=4),
+                    completed_at=None,
+                )
+            )
+            session.commit()
+
+        response = self.client.post(
+            "/api/admin/observability/webhook-jobs/job-processing-retry/retry?tenant_id=example&project_id=example-default",
+            auth=("admin", "secret"),
+        )
+
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertIn("only allowed for failed webhook jobs", response.json()["detail"])
+
     def test_platform_status_dedupes_legacy_worker_runtime_rows_by_agent_and_mode(self) -> None:
         now = datetime.now(timezone.utc)
         stale = now - timedelta(minutes=10)

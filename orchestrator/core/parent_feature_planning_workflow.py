@@ -138,7 +138,6 @@ class ParentFeaturePlanningWorkflow:
                 lifecycle=lifecycle,
                 error=exc,
                 failure_reason="pm_parent_issue_created_seed_failed",
-                sync_note_body=f"Parent feature was created in backlog, but engineering child planning failed. Error: {exc}",
             )
         if planning_result.planning_state == PLANNING_STATE_COMPLETED:
             self._mark_planning_completed(
@@ -159,7 +158,6 @@ class ParentFeaturePlanningWorkflow:
                 lifecycle=lifecycle,
                 error=exc,
                 failure_reason="pm_parent_issue_created_seed_failed",
-                sync_note_body=f"Parent feature was created in backlog, but engineering child planning failed. Error: {exc}",
             )
 
         if fanout.planning_result.planning_state != PLANNING_STATE_COMPLETED or bool(fanout.seed_data.get("requires_input")):
@@ -190,18 +188,6 @@ class ParentFeaturePlanningWorkflow:
             fanout_summary="Engineering child tickets were created or refreshed from the parent planning package.",
         )
 
-        issue_gateway.post_sync_note(
-            issue_key=context.issue_key,
-            body=(
-                "Backlog parent feature planning complete. "
-                f"{self._deps.child_sync_gateway.sync_completion_note(updated_children=fanout.updated_children, created_children=fanout.created_children)}"
-            ),
-        )
-        for child_key in fanout.changed_children:
-            issue_gateway.post_sync_note(
-                issue_key=child_key,
-                body=f"Created or refreshed from parent feature {context.issue_key} during backlog planning.",
-            )
         return lifecycle.build_outcome(
             handled=True,
             reason="pm_parent_issue_created_seed_completed",
@@ -327,18 +313,6 @@ class ParentFeaturePlanningWorkflow:
             )
             blocked_issue_keys = [context.issue_key, *[detail.key for detail in child_details]]
             issue_gateway.mark_issues_sync_blocked(issue_keys=blocked_issue_keys)
-            issue_gateway.post_sync_note(
-                issue_key=context.issue_key,
-                body=(
-                    "Parent feature changed and child refresh failed. "
-                    f"Blocked {len(child_details)} engineering child ticket(s). Error: {exc}"
-                ),
-            )
-            for detail in child_details:
-                issue_gateway.post_sync_note(
-                    issue_key=detail.key,
-                    body=f"Blocked because parent feature {context.issue_key} changed and refresh failed.",
-                )
             return lifecycle.build_outcome(
                 handled=True,
                 reason="pm_parent_sync_failed",
@@ -380,11 +354,6 @@ class ParentFeaturePlanningWorkflow:
                         operation_type="jira_comment_projection",
                         summary="Posted PM clarification questions to Jira.",
                     )
-            for detail in child_details:
-                issue_gateway.post_sync_note(
-                    issue_key=detail.key,
-                    body=f"Still blocked because parent feature {context.issue_key} needs clarification before refresh can complete.",
-                )
             return lifecycle.build_outcome(
                 handled=True,
                 reason="pm_parent_sync_blocked",
@@ -404,18 +373,6 @@ class ParentFeaturePlanningWorkflow:
             fanout_summary="Engineering child tickets were refreshed from the parent planning package.",
         )
 
-        issue_gateway.post_sync_note(
-            issue_key=context.issue_key,
-            body=(
-                f"{self._deps.child_sync_gateway.sync_completion_note(updated_children=updated_children, created_children=created_children)} "
-                f"Changed fields: {', '.join(material_changed_fields)}."
-            ),
-        )
-        for child_key in changed_children:
-            issue_gateway.post_sync_note(
-                issue_key=child_key,
-                body=f"Refreshed from parent feature {context.issue_key} after Jira product update.",
-            )
         return lifecycle.build_outcome(
             handled=True,
             reason="pm_parent_sync_completed",
@@ -450,10 +407,6 @@ class ParentFeaturePlanningWorkflow:
                 summary=f"No engineering child tickets required promotion to {target_status}.",
             )
             lifecycle.mark_completed_if_ready()
-            issue_gateway.post_sync_note(
-                issue_key=context.issue_key,
-                body="Parent feature moved onto the board, but there are no engineering child tickets to promote.",
-            )
             return lifecycle.build_outcome(
                 handled=True,
                 reason="pm_parent_board_entry_no_children",
@@ -509,16 +462,6 @@ class ParentFeaturePlanningWorkflow:
             )
             lifecycle.mark_completed_if_ready()
 
-        issue_gateway.post_sync_note(
-            issue_key=context.issue_key,
-            body=self._deps.child_sync_gateway.fanout_completion_note(
-                target_status=target_status,
-                promoted_children=promoted_children,
-                unchanged_children=unchanged_children,
-                skipped_children=skipped_children,
-                failed_children=failed_children,
-            ),
-        )
         return lifecycle.build_outcome(
             handled=True,
             reason="pm_parent_board_entry_fanout_completed" if not failed_children else "pm_parent_board_entry_fanout_partial",
@@ -598,10 +541,6 @@ class ParentFeaturePlanningWorkflow:
         issue_gateway.update_issue_sync_label(
             issue_detail=parent_detail,
             target_label="sync-blocked",
-        )
-        issue_gateway.post_sync_note(
-            issue_key=parent_detail.key,
-            body="Planning is blocked until the linked architecture document is marked ready.",
         )
         lifecycle.mark_waiting_for_input(
             operation_type="backlog_planning",
@@ -746,13 +685,6 @@ class ParentFeaturePlanningWorkflow:
                 issue_detail=parent_detail,
                 target_label="sync-blocked",
             )
-            issue_gateway.post_sync_note(
-                issue_key=context.issue_key,
-                body=(
-                    "PM clarification was recorded, but backlog planning could not complete from the confirmed brief. "
-                    "Internal follow-up is required before engineering child tickets can be refreshed."
-                ),
-            )
             return lifecycle.build_outcome(
                 handled=True,
                 reason="pm_interview_followup_planning_blocked",
@@ -767,18 +699,6 @@ class ParentFeaturePlanningWorkflow:
             lifecycle=lifecycle,
             fanout_summary="Engineering child tickets were created or refreshed from the confirmed brief.",
         )
-        issue_gateway.post_sync_note(
-            issue_key=context.issue_key,
-            body=(
-                "Product clarification was applied and backlog planning is current again. "
-                f"{self._deps.child_sync_gateway.sync_completion_note(updated_children=fanout.updated_children, created_children=fanout.created_children)}"
-            ),
-        )
-        for child_key in fanout.changed_children:
-            issue_gateway.post_sync_note(
-                issue_key=child_key,
-                body=f"Updated from parent feature {context.issue_key} after PM clarification.",
-            )
         return lifecycle.build_outcome(
             handled=True,
             reason="pm_interview_followup_resolved",
@@ -894,7 +814,6 @@ class ParentFeaturePlanningWorkflow:
         lifecycle,
         error: Exception,
         failure_reason: str,
-        sync_note_body: str,
     ) -> WorkflowAdvanceOutcome:
         logger.exception(
             "parent_planning_fanout_failed request_id=%s tenant_id=%s issue_key=%s error=%s",
@@ -912,10 +831,6 @@ class ParentFeaturePlanningWorkflow:
         issue_gateway.update_issue_sync_label(
             issue_detail=issue_gateway.load_parent_detail(context.issue_key),
             target_label="sync-blocked",
-        )
-        issue_gateway.post_sync_note(
-            issue_key=context.issue_key,
-            body=sync_note_body,
         )
         return lifecycle.build_outcome(
             handled=True,

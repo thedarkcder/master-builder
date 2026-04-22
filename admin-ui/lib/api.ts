@@ -2697,6 +2697,26 @@ export function listWebhookQueueJobs(
   return request<WebhookQueueJobPageRecord>(credentials, `/api/admin/observability/webhook-jobs${suffix}`);
 }
 
+export function retryWebhookJob(
+  credentials: Credentials,
+  params: {
+    tenantId: string;
+    projectId: string;
+    jobId: string;
+  },
+): Promise<WebhookQueueJobRecord> {
+  const query = new URLSearchParams();
+  query.set("tenant_id", params.tenantId);
+  query.set("project_id", params.projectId);
+  return request<WebhookQueueJobRecord>(
+    credentials,
+    `/api/admin/observability/webhook-jobs/${encodeURIComponent(params.jobId)}/retry?${query.toString()}`,
+    {
+      method: "POST",
+    },
+  );
+}
+
 export function listRuns(
   credentials: Credentials,
   params: {

@@ -7,11 +7,13 @@ from types import SimpleNamespace
 from orchestrator.temporal.payloads import (
     DevelopmentTeamRunActivityResult,
     DevelopmentTeamRunWorkflowInput,
+    HandlerWorkflowAdvanceInput,
     HandlerWorkflowAdvanceResult,
     HumanInputResumeInput,
 )
 from orchestrator.temporal.workflow_engine import TemporalWorkflowConfig, TemporalWorkflowEngine
 from orchestrator.temporal.workflows.development_team_run import DevelopmentTeamRunWorkflow
+from orchestrator.temporal.workflows.handler_backed_workflow import HandlerBackedWorkflow
 from orchestrator.core.workflow_runtime import WorkflowAdvanceRequest
 
 
@@ -223,6 +225,94 @@ def test_temporal_engine_advances_handler_backed_workflow_through_temporal_updat
     assert result.handled is True
     assert captured["run_method"] == "workflow-run"
     assert captured["update_method"] == "workflow-advance"
+    assert captured["update_payload"].workflow_id == "parent_planning:MAB-215"
+
+
+def test_handler_backed_workflow_advances_with_single_activity_input(monkeypatch):
+    captured: dict[str, object] = {}
+    workflow_defn = HandlerBackedWorkflow()
+    workflow_defn._workflow_id = "workflow-123"
+    workflow_defn._activity_timeout_seconds = 321
+
+    async def _fake_execute_activity(fn, payload, *, start_to_close_timeout):
+        captured["fn"] = fn
+        captured["payload"] = payload
+        captured["timeout"] = start_to_close_timeout
+        return HandlerWorkflowAdvanceResult(
+            handled=True,
+            reason=None,
+            status="running",
+            active_run_id="run-123",
+            last_error=None,
+        )
+
+    monkeypatch.setattr(
+        "orchestrator.temporal.workflows.handler_backed_workflow.workflow.execute_activity",
+        _fake_execute_activity,
+    )
+
+    payload = HandlerWorkflowAdvanceInput(
+        workflow_id="parent_planning:MAB-229",
+        workflow_handler_key="jira_parent_feature",
+        tenant_id="tenant-a",
+        project_id="project-a",
+        issue_key="MAB-229",
+        issue_summary="WorkOS identity redesign",
+        issue_description="description",
+        issue_labels=("pm-parent",),
+        payload={"request_id": "req-123"},
+        webhook_event="issue_created",
+    )
+
+    result = asyncio.run(workflow_defn.advance(payload))
+
+    assert result.handled is True
+    activity_payload = captured["payload"]
+    assert activity_payload == payload
+    assert captured["timeout"] == timedelta(seconds=321)
+
+
+def test_handler_backed_workflow_advance_does_not_depend_on_initialized_workflow_state(monkeypatch):
+    captured: dict[str, object] = {}
+    workflow_defn = HandlerBackedWorkflow()
+    workflow_defn._activity_timeout_seconds = 321
+
+    async def _fake_execute_activity(fn, payload, *, start_to_close_timeout):
+        captured["fn"] = fn
+        captured["payload"] = payload
+        captured["timeout"] = start_to_close_timeout
+        return HandlerWorkflowAdvanceResult(
+            handled=True,
+            reason=None,
+            status="running",
+            active_run_id="run-123",
+            last_error=None,
+        )
+
+    monkeypatch.setattr(
+        "orchestrator.temporal.workflows.handler_backed_workflow.workflow.execute_activity",
+        _fake_execute_activity,
+    )
+
+    payload = HandlerWorkflowAdvanceInput(
+        workflow_id="parent_planning:MAB-230",
+        workflow_handler_key="jira_parent_feature",
+        tenant_id="tenant-a",
+        project_id="project-a",
+        issue_key="MAB-230",
+        issue_summary="WorkOS identity redesign",
+        issue_description="description",
+        issue_labels=("pm-parent",),
+        payload={"request_id": "req-123"},
+        webhook_event="issue_created",
+    )
+
+    result = asyncio.run(workflow_defn.advance(payload))
+
+    assert result.handled is True
+    activity_payload = captured["payload"]
+    assert activity_payload == payload
+    assert captured["timeout"] == timedelta(seconds=321)
 
 
 def test_temporal_registry_includes_parent_planning_and_pr_remediation():

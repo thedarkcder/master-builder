@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 
 from fastapi import HTTPException
 
+from orchestrator.api.discord.seed.draft_assembly import normalize_planning_package
 from orchestrator.api.discord.seed.issue_service import seed_issues_with_runtime, seed_parent_issues_with_runtime
 from orchestrator.core.architecture_document_service import ArchitectureDocumentGate
 from orchestrator.core.runtime_invocation import WorkflowAttemptRef
@@ -154,6 +155,24 @@ def test_seed_issues_scopes_allowed_project_keys() -> None:
         )
     assert exc_ctx.value.status_code == 409
     assert "unsupported Jira project key 'example'" in str(exc_ctx.value.detail)
+
+
+def test_normalize_planning_package_accepts_structured_stage_questions() -> None:
+    package = _planning_package(planning_state="planning_completed")
+    package["specialist_outputs"]["testing"]["open_behavior_questions"] = [
+        {
+            "question": "Which browsers must the regression suite cover in v1?",
+            "why_it_matters": "QA needs a stable compatibility target.",
+        }
+    ]
+
+    normalized = normalize_planning_package(package)
+
+    assert any(
+        "Testing Open behavior questions: Which browsers must the regression suite cover in v1?"
+        == line
+        for line in normalized.specialist_summary
+    )
 
 
 def test_seed_issues_creates_parent_and_engineering_child() -> None:

@@ -343,6 +343,56 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
         self.assertEqual(payload["summary"]["pending_count"], 1)
         self.assertEqual(payload["summary"]["failed_count"], 0)
 
+    def test_tenant_user_can_retry_failed_webhook_jobs_for_project_scope(self) -> None:
+        registration = self._register()
+        token = self._login()
+        tenant_id = registration["tenant"]["tenant_id"]
+        default_project_id = f"{tenant_id}-default"
+        now = datetime.now(timezone.utc)
+
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            session.add(
+                WebhookJob(
+                    job_id="tenant-webhook-job-retry",
+                    transport="jira_webhook",
+                    tenant_id=tenant_id,
+                    project_id=default_project_id,
+                    subject_key=f"jira:{tenant_id}:TP-229",
+                    dedupe_key="webhook-delivery-retry",
+                    request_id="req-retry",
+                    event_type="jira:issue_updated",
+                    status="failed",
+                    owner_id=None,
+                    lease_expires_at=None,
+                    available_at=now,
+                    attempt_count=4,
+                    last_error="workflow failed",
+                    payload_json={},
+                    context_json={"related_run_id": "tenant-run-229"},
+                    created_at=now - timedelta(minutes=5),
+                    updated_at=now - timedelta(minutes=1),
+                    started_at=now - timedelta(minutes=4),
+                    completed_at=now - timedelta(minutes=1),
+                )
+            )
+            session.commit()
+
+        response = self.client.post(
+            (
+                f"/api/admin/observability/webhook-jobs/tenant-webhook-job-retry/retry"
+                f"?tenant_id={tenant_id}&project_id={default_project_id}"
+            ),
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertEqual(payload["job_id"], "tenant-webhook-job-retry")
+        self.assertEqual(payload["status"], "pending")
+        self.assertEqual(payload["related_run_id"], "tenant-run-229")
+        self.assertIsNone(payload["last_error"])
+
     def test_tenant_user_can_list_and_get_workflows_for_their_workspace(self) -> None:
         registration = self._register()
         token = self._login()

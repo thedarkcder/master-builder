@@ -25,8 +25,8 @@ from orchestrator.core.jira_parent_child_sync_service import build_workflow_adva
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import Project, Tenant, WorkflowExecution, WorkflowOperation
 from orchestrator.temporal.payloads import (
-    HandlerWorkflowAdvanceInput,
     HandlerWorkflowAdvanceResult,
+    HandlerWorkflowAdvanceInput,
     WorkflowOperationRetryInput,
     WorkflowOperationRetryResult,
 )
@@ -53,9 +53,10 @@ def _workflow_status_payload(*, workflow: WorkflowExecution) -> dict[str, str | 
 
 @activity.defn(name="process_handler_workflow_advance_activity")
 def process_handler_workflow_advance_activity(
-    workflow_id: str,
-    payload: HandlerWorkflowAdvanceInput,
+    activity_input: HandlerWorkflowAdvanceInput,
 ) -> HandlerWorkflowAdvanceResult:
+    workflow_id = str(activity_input.workflow_id or "").strip()
+    payload = activity_input
     settings = get_settings()
     session_factory = create_session_factory()
     with session_factory() as session:

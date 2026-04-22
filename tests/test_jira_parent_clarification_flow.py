@@ -855,11 +855,7 @@ class JiraParentClarificationFlowTests(JiraWebhookHarness):
         self.assertEqual(processed.status, "done")
         seed_mock.assert_called_once()
         create_comment_mock.assert_not_called()
-        post_comment_mock.assert_called_once()
-        self.assertIn(
-            "Internal follow-up is required",
-            str(post_comment_mock.call_args.kwargs["comment"]),
-        )
+        post_comment_mock.assert_not_called()
 
     def test_webhook_parent_pm_reply_posts_next_jira_question_when_more_detail_is_needed(self) -> None:
         now = datetime.now(timezone.utc)

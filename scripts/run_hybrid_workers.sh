@@ -40,6 +40,7 @@ DOCKER_SERVICES=(
   knowledge-sync
   discord-gateway
   discord-live-voice
+  temporal-worker
   tailscale
 )
 
