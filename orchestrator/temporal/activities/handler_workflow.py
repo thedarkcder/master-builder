@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from temporalio import activity
+from temporalio.exceptions import ApplicationError
 
 from orchestrator.api.discord.ingress.seed_runtime import seed_issues_with_runtime
 from orchestrator.api.discord.seed.issue_service import list_child_issue_previews_for_parent
@@ -13,13 +14,18 @@ from orchestrator.api.webhooks.contracts import (
 )
 from orchestrator.core.agent_runtime_resolver import build_runtime_for_selector
 from orchestrator.core.config import get_settings
-from orchestrator.core.workflow_advance import WorkflowAdvanceRequest, execute_workflow_advance
+from orchestrator.core.workflow_advance import (
+    InvalidWorkflowOperationRetryError,
+    UnsupportedWorkflowOperationRetryError,
+    WorkflowAdvanceRequest,
+    execute_workflow_advance,
+    execute_workflow_operation_retry,
+)
 from orchestrator.core.workflow_integration_provider import (
     JiraWorkflowConnectionProvider,
     WorkflowIntegrationAdapterProvider,
 )
 from orchestrator.core.workflow_integration_router import WorkflowIntegrationRouter
-from orchestrator.core.workflow_operation_executor import execute_workflow_operation_retry
 from orchestrator.core.workflow_type_catalog import get_workflow_type_by_handler_key
 from orchestrator.core.jira_parent_child_sync_service import build_workflow_advance_handler_resolver
 from orchestrator.storage.db import create_session_factory
@@ -129,16 +135,29 @@ def retry_handler_workflow_operation_activity(payload: WorkflowOperationRetryInp
         project = session.get(Project, workflow.project_id)
         if project is None:
             raise RuntimeError(f"Workflow retry is missing project {workflow.project_id}")
-        handle = execute_workflow_operation_retry(
-            session=session,
-            settings=settings,
-            session_factory=session_factory,
-            workflow=workflow,
-            operation=operation,
-            integration_router=_build_workflow_integration_router(),
-            build_runtime_for_selector_fn=build_runtime_for_selector,
-            seed_issues_with_runtime_fn=seed_issues_with_runtime,
-        )
+        try:
+            handle = execute_workflow_operation_retry(
+                session=session,
+                settings=settings,
+                session_factory=session_factory,
+                workflow=workflow,
+                operation=operation,
+                resolve_advance_handler_fn=build_workflow_advance_handler_resolver(
+                    integration_router=_build_workflow_integration_router(),
+                    extract_changed_fields_fn=extract_changed_fields,
+                    extract_status_transition_fn=extract_status_transition,
+                    build_runtime_for_selector_fn=build_runtime_for_selector,
+                    seed_issues_with_runtime_fn=seed_issues_with_runtime,
+                    post_jira_comment_fn=post_jira_comment,
+                    create_jira_comment_fn=create_jira_comment,
+                ),
+            )
+        except (InvalidWorkflowOperationRetryError, UnsupportedWorkflowOperationRetryError) as exc:
+            raise ApplicationError(
+                str(exc),
+                type="terminal_workflow_operation_retry_error",
+                non_retryable=True,
+            ) from exc
         session.commit()
         refreshed_workflow = session.get(WorkflowExecution, workflow.workflow_id)
         if refreshed_workflow is None:

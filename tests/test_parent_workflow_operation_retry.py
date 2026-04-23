@@ -7,21 +7,30 @@ from unittest.mock import patch
 import pytest
 
 from orchestrator.core.config import Settings
-from orchestrator.core.workflow_operation_executor import (
-    InvalidWorkflowOperationError,
-    execute_workflow_operation_retry,
-)
+from orchestrator.core.jira_parent_child_sync_service import build_workflow_advance_handler_resolver
+from orchestrator.core.workflow_advance import InvalidWorkflowOperationRetryError, execute_workflow_operation_retry
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import Project, Tenant, WorkflowExecution, WorkflowOperation
 from tests.test_support.db_harness import SqliteTemplateDbTestCase
 
 
-class WorkflowOperationExecutorTests(SqliteTemplateDbTestCase):
+class ParentWorkflowOperationRetryTests(SqliteTemplateDbTestCase):
     def setUp(self) -> None:
-        self.database_url = self._prepare_test_database(name_prefix="workflow-operation-executor")
+        self.database_url = self._prepare_test_database(name_prefix="parent-workflow-operation-retry")
 
     def tearDown(self) -> None:
         self._cleanup_test_database()
+
+    def _resolver(self, *, fake_router: object):
+        return build_workflow_advance_handler_resolver(
+            integration_router=fake_router,
+            extract_changed_fields_fn=lambda *_args, **_kwargs: [],
+            extract_status_transition_fn=lambda *_args, **_kwargs: (None, None),
+            build_runtime_for_selector_fn=lambda *_args, **_kwargs: object(),
+            seed_issues_with_runtime_fn=lambda *_args, **_kwargs: ("seeded", {}),
+            post_jira_comment_fn=lambda *_args, **_kwargs: (True, None),
+            create_jira_comment_fn=lambda *_args, **_kwargs: ({"id": "comment-123"}, None),
+        )
 
     def test_jira_child_fanout_retry_persists_actionable_missing_input_questions(self) -> None:
         now = datetime.now(timezone.utc)
@@ -137,34 +146,34 @@ class WorkflowOperationExecutorTests(SqliteTemplateDbTestCase):
 
             with (
                 patch(
-                    "orchestrator.core.workflow_operation_executor.resolve_parent_feature_brief",
+                    "orchestrator.core.jira_parent_child_sync_service.resolve_parent_feature_brief",
                     return_value=SimpleNamespace(to_payload=lambda: {"objective": "Ship identity redesign"}),
                 ),
                 patch(
-                    "orchestrator.core.workflow_operation_executor.list_workflow_type_operations",
+                    "orchestrator.core.workflow_execution_status.list_workflow_type_operations",
                     return_value=[
-                        SimpleNamespace(operation_type="jira_child_fanout"),
-                        SimpleNamespace(operation_type="jira_comment_projection"),
+                        SimpleNamespace(operation_type="jira_child_fanout", required=True),
+                        SimpleNamespace(operation_type="jira_comment_projection", required=False),
                     ],
                 ),
                 patch(
-                    "orchestrator.core.workflow_operation_executor._ParentBriefPlanner.plan_backlog_parent",
+                    "orchestrator.core.jira_parent_child_sync_service._ParentBriefPlanner.plan_backlog_parent",
                     return_value=(planner_result, {"planning": "package"}),
                 ) as planner_mock,
                 patch(
-                    "orchestrator.core.workflow_operation_executor._ParentChildSyncGateway.seed_parent_backlog_children",
+                    "orchestrator.core.jira_parent_child_sync_service._ParentChildSyncGateway.seed_parent_backlog_children",
                     return_value={"requires_input": True, "questions": []},
                 ),
                 patch(
-                    "orchestrator.core.workflow_operation_executor.has_matching_active_clarification_state",
+                    "orchestrator.core.jira_parent_child_sync_service.has_matching_active_clarification_state",
                     return_value=False,
                 ),
                 patch(
-                    "orchestrator.core.workflow_operation_executor.upsert_clarification_projection",
+                    "orchestrator.core.jira_parent_child_sync_service.upsert_clarification_projection",
                     return_value=SimpleNamespace(metadata={"questions": []}),
                 ),
                 patch(
-                    "orchestrator.core.workflow_operation_executor._post_engineering_clarification_questions_to_jira",
+                    "orchestrator.core.jira_parent_child_sync_service._post_engineering_clarification_questions_to_jira",
                     return_value=({"id": "comment-123"}, None),
                 ) as post_comment_mock,
             ):
@@ -174,9 +183,7 @@ class WorkflowOperationExecutorTests(SqliteTemplateDbTestCase):
                     session_factory=session_factory,
                     workflow=workflow,
                     operation=fanout_operation,
-                    integration_router=fake_router,
-                    build_runtime_for_selector_fn=lambda *_args, **_kwargs: object(),
-                    seed_issues_with_runtime_fn=lambda *_args, **_kwargs: ("seeded", {}),
+                    resolve_advance_handler_fn=self._resolver(fake_router=fake_router),
                 )
                 session.commit()
 
@@ -290,23 +297,21 @@ class WorkflowOperationExecutorTests(SqliteTemplateDbTestCase):
 
             with (
                 patch(
-                    "orchestrator.core.workflow_operation_executor.resolve_parent_feature_brief",
+                    "orchestrator.core.jira_parent_child_sync_service.resolve_parent_feature_brief",
                     return_value=None,
                 ),
                 patch(
-                    "orchestrator.core.workflow_operation_executor._ParentBriefPlanner.plan_backlog_parent",
+                    "orchestrator.core.jira_parent_child_sync_service._ParentBriefPlanner.plan_backlog_parent",
                 ) as planner_mock,
             ):
-                with pytest.raises(InvalidWorkflowOperationError) as excinfo:
+                with pytest.raises(InvalidWorkflowOperationRetryError) as excinfo:
                     execute_workflow_operation_retry(
                         session=session,
                         settings=settings,
                         session_factory=session_factory,
                         workflow=workflow,
                         operation=fanout_operation,
-                        integration_router=fake_router,
-                        build_runtime_for_selector_fn=lambda *_args, **_kwargs: object(),
-                        seed_issues_with_runtime_fn=lambda *_args, **_kwargs: ("seeded", {}),
+                        resolve_advance_handler_fn=self._resolver(fake_router=fake_router),
                     )
 
             session.refresh(workflow)

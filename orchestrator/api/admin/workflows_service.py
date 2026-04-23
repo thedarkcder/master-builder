@@ -14,6 +14,7 @@ from orchestrator.api.admin.schema_mappers import (
 )
 from orchestrator.api.admin.live_telemetry_service import list_live_workflow_telemetry_events
 from orchestrator.api.admin.workflow_transcript_service import build_workflow_step_transcript
+from orchestrator.api.webhooks.contracts import create_jira_comment, post_jira_comment
 from orchestrator.api.schemas import (
     WorkflowExecutionPreviewRead,
     WorkflowLinkRead,
@@ -36,12 +37,13 @@ from orchestrator.api.schemas import (
 from orchestrator.core.config import get_settings
 from orchestrator.core.workflow_attempt_factory import build_workflow_execution_for_attempt
 from orchestrator.core.workflow_execution_lifecycle import reconcile_execution_with_active_run_state
-from orchestrator.core.workflow_runtime import build_workflow_runtime
-from orchestrator.core.workflow_operation_executor import (
+from orchestrator.core.workflow_advance import (
+    InvalidWorkflowOperationRetryError,
+    UnsupportedWorkflowOperationRetryError,
     execute_workflow_operation_retry,
-    supports_workflow_operation_retry,
-    workflow_operation_retry_unavailable_reason,
 )
+from orchestrator.core.workflow_runtime import build_workflow_runtime
+from orchestrator.core.jira_parent_child_sync_service import build_workflow_advance_handler_resolver
 from orchestrator.core.jira_links import tenant_jira_issue_url
 from orchestrator.core.runtime_requirements import resolve_required_runtime_kinds_for_workflow
 from orchestrator.core.workflow_type_catalog import get_workflow_type, list_workflow_type_operations
@@ -342,8 +344,6 @@ def _workflow_operation_reads(
             return False, "Manual retry is disabled by the workflow type."
         if str(latest_attempt.status or "").strip().lower() not in {"failed", "retrying"}:
             return False, "Latest attempt is not in a failed state."
-        if not supports_workflow_operation_retry(operation_type=operation_type):
-            return False, workflow_operation_retry_unavailable_reason(operation_type=operation_type)
         return True, None
 
     def _default_operation_status(definition_operation_type: str) -> str:
@@ -1641,14 +1641,16 @@ def retry_workflow_operation(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Workflow operation has no attempt history to retry")
     if str(latest_attempt.status or "").strip().lower() not in {"failed", "retrying"}:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Workflow operation is not in a failed state")
-    if not supports_workflow_operation_retry(operation_type=operation.operation_type):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=workflow_operation_retry_unavailable_reason(operation_type=operation.operation_type)
-            or "Workflow operation does not support retry",
-        )
-
     settings = get_settings()
+    resolve_advance_handler_fn = build_workflow_advance_handler_resolver(
+        integration_router=integration_router,
+        extract_changed_fields_fn=lambda *_args, **_kwargs: [],
+        extract_status_transition_fn=lambda *_args, **_kwargs: (None, None),
+        build_runtime_for_selector_fn=build_runtime_for_selector_fn,
+        seed_issues_with_runtime_fn=seed_issues_with_runtime_fn,
+        post_jira_comment_fn=post_jira_comment,
+        create_jira_comment_fn=create_jira_comment,
+    )
     runtime = build_workflow_runtime(
         session=session,
         settings=settings,
@@ -1657,15 +1659,16 @@ def retry_workflow_operation(
         runtime_kwargs_fn=build_run_process_kwargs,
         retry_workflow_operation_fn=lambda **kwargs: execute_workflow_operation_retry(
             **kwargs,
-            integration_router=integration_router,
-            build_runtime_for_selector_fn=build_runtime_for_selector_fn,
-            seed_issues_with_runtime_fn=seed_issues_with_runtime_fn,
+            resolve_advance_handler_fn=resolve_advance_handler_fn,
         ),
     )
-    runtime.retry_operation(
-        workflow=workflow,
-        operation=operation,
-    )
+    try:
+        runtime.retry_operation(
+            workflow=workflow,
+            operation=operation,
+        )
+    except (InvalidWorkflowOperationRetryError, UnsupportedWorkflowOperationRetryError) as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     session.commit()
     refreshed_workflow = _workflow_schema(
         session=session,
