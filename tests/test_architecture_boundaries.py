@@ -379,6 +379,50 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             msg=f"Application roots importing provider helpers directly: {violations}",
         )
 
+    def test_workflow_infrastructure_does_not_import_parent_feature_handlers_directly(self) -> None:
+        modules = [
+            ROOT / "orchestrator" / "api" / "admin" / "workflows_service.py",
+            ROOT / "orchestrator" / "temporal" / "activities" / "handler_workflow.py",
+            ROOT / "orchestrator" / "core" / "workflow_runtime.py",
+            ROOT / "orchestrator" / "core" / "workflow_engine.py",
+            ROOT / "orchestrator" / "core" / "workflow_engine_factory.py",
+            ROOT / "orchestrator" / "core" / "legacy_workflow_engine.py",
+            ROOT / "orchestrator" / "temporal" / "workflow_engine.py",
+        ]
+        banned_imports = {
+            "orchestrator.core.jira_parent_child_sync_service",
+        }
+        violations: list[str] = []
+        for module_path in modules:
+            for module_name in _imported_modules(module_path):
+                if module_name in banned_imports:
+                    violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{module_name}")
+        self.assertEqual(
+            violations,
+            [],
+            msg=f"Workflow infrastructure importing parent-feature handlers directly: {violations}",
+        )
+
+    def test_workflow_runtime_and_engines_do_not_use_retry_callback_escape_hatch(self) -> None:
+        modules = [
+            ROOT / "orchestrator" / "core" / "workflow_runtime.py",
+            ROOT / "orchestrator" / "core" / "workflow_engine.py",
+            ROOT / "orchestrator" / "core" / "workflow_engine_factory.py",
+            ROOT / "orchestrator" / "core" / "legacy_workflow_engine.py",
+            ROOT / "orchestrator" / "temporal" / "workflow_engine.py",
+        ]
+        banned_token = "retry_" + "workflow_operation_fn"
+        violations = [
+            module_path.relative_to(ROOT).as_posix()
+            for module_path in modules
+            if banned_token in module_path.read_text(encoding="utf-8")
+        ]
+        self.assertEqual(
+            violations,
+            [],
+            msg=f"Workflow retry callback escape hatch found: {violations}",
+        )
+
     def test_core_modules_do_not_import_api_routes_outside_allowlist(self) -> None:
         core_modules = sorted(ORCHESTRATOR_ROOT.rglob("core/**/*.py"))
         self.assertTrue(core_modules)

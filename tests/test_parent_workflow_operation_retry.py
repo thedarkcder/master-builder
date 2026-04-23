@@ -7,8 +7,8 @@ from unittest.mock import patch
 import pytest
 
 from orchestrator.core.config import Settings
-from orchestrator.core.jira_parent_child_sync_service import build_workflow_advance_handler_resolver
 from orchestrator.core.workflow_advance import InvalidWorkflowOperationRetryError, execute_workflow_operation_retry
+from orchestrator.core.workflow_handler_registry import build_workflow_handler_registry
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import Project, Tenant, WorkflowExecution, WorkflowOperation
 from tests.test_support.db_harness import SqliteTemplateDbTestCase
@@ -22,7 +22,7 @@ class ParentWorkflowOperationRetryTests(SqliteTemplateDbTestCase):
         self._cleanup_test_database()
 
     def _resolver(self, *, fake_router: object):
-        return build_workflow_advance_handler_resolver(
+        return build_workflow_handler_registry(
             integration_router=fake_router,
             extract_changed_fields_fn=lambda *_args, **_kwargs: [],
             extract_status_transition_fn=lambda *_args, **_kwargs: (None, None),
@@ -183,7 +183,9 @@ class ParentWorkflowOperationRetryTests(SqliteTemplateDbTestCase):
                     session_factory=session_factory,
                     workflow=workflow,
                     operation=fanout_operation,
-                    resolve_advance_handler_fn=self._resolver(fake_router=fake_router),
+                    resolve_operation_retry_handler_fn=(
+                        self._resolver(fake_router=fake_router).resolve_operation_retry_handler
+                    ),
                 )
                 session.commit()
 
@@ -311,7 +313,9 @@ class ParentWorkflowOperationRetryTests(SqliteTemplateDbTestCase):
                         session_factory=session_factory,
                         workflow=workflow,
                         operation=fanout_operation,
-                        resolve_advance_handler_fn=self._resolver(fake_router=fake_router),
+                        resolve_operation_retry_handler_fn=(
+                            self._resolver(fake_router=fake_router).resolve_operation_retry_handler
+                        ),
                     )
 
             session.refresh(workflow)

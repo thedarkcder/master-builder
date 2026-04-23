@@ -26,7 +26,6 @@ from orchestrator.core.jira_parent_child_sync_service import (
     _JiraParentIssueGateway,
     _jira_adapter,
     _atlassian_oauth_context,
-    build_workflow_advance_handler_resolver,
 )
 from orchestrator.core.jira_parent_child_sync_shared import (
     JiraParentChildSyncContext,
@@ -52,6 +51,7 @@ from orchestrator.core.pm_interview_service import (
 from orchestrator.core.runtime_invocation import AgentInvocationContext
 from orchestrator.core.webhook_job_errors import RetryableWebhookJobError
 from orchestrator.core.workflow_runtime import WorkflowAdvanceRequest
+from orchestrator.core.workflow_handler_registry import build_workflow_handler_registry
 
 logger = logging.getLogger(__name__)
 
@@ -108,21 +108,22 @@ def handle_parent_feature_sync(
     post_jira_comment_fn,
     create_jira_comment_fn,
 ) -> JiraParentChildSyncResult:  # noqa: ANN001
+    handler_registry = build_workflow_handler_registry(
+        integration_router=integration_router,
+        extract_changed_fields_fn=extract_changed_fields_fn,
+        extract_status_transition_fn=extract_status_transition_fn,
+        build_runtime_for_selector_fn=build_runtime_for_selector_fn,
+        seed_issues_with_runtime_fn=seed_issues_with_runtime_fn,
+        post_jira_comment_fn=post_jira_comment_fn,
+        create_jira_comment_fn=create_jira_comment_fn,
+    )
     runtime = build_workflow_runtime_fn(
         session=session,
         settings=settings,
         process_claimed_run_fn=None,
         build_runner_fn=None,
         runtime_kwargs_fn=None,
-        resolve_advance_handler_fn=build_workflow_advance_handler_resolver(
-            integration_router=integration_router,
-            extract_changed_fields_fn=extract_changed_fields_fn,
-            extract_status_transition_fn=extract_status_transition_fn,
-            build_runtime_for_selector_fn=build_runtime_for_selector_fn,
-            seed_issues_with_runtime_fn=seed_issues_with_runtime_fn,
-            post_jira_comment_fn=post_jira_comment_fn,
-            create_jira_comment_fn=create_jira_comment_fn,
-        ),
+        resolve_advance_handler_fn=handler_registry.resolve_advance_handler,
     )
     result = runtime.advance(
         request=WorkflowAdvanceRequest(
@@ -701,21 +702,22 @@ def handle_pm_interview_reply(
             issue_key=context.issue_key,
         )
     session.commit()
+    handler_registry = build_workflow_handler_registry(
+        integration_router=integration_router,
+        extract_changed_fields_fn=lambda *args, **kwargs: [],
+        extract_status_transition_fn=lambda *args, **kwargs: (None, None),
+        build_runtime_for_selector_fn=build_runtime_for_selector_fn,
+        seed_issues_with_runtime_fn=seed_issues_with_runtime_fn,
+        post_jira_comment_fn=post_jira_comment_fn,
+        create_jira_comment_fn=create_jira_comment_fn,
+    )
     runtime = build_workflow_runtime_fn(
         session=session,
         settings=settings,
         process_claimed_run_fn=None,
         build_runner_fn=None,
         runtime_kwargs_fn=None,
-        resolve_advance_handler_fn=build_workflow_advance_handler_resolver(
-            integration_router=integration_router,
-            extract_changed_fields_fn=lambda *args, **kwargs: [],
-            extract_status_transition_fn=lambda *args, **kwargs: (None, None),
-            build_runtime_for_selector_fn=build_runtime_for_selector_fn,
-            seed_issues_with_runtime_fn=seed_issues_with_runtime_fn,
-            post_jira_comment_fn=post_jira_comment_fn,
-            create_jira_comment_fn=create_jira_comment_fn,
-        ),
+        resolve_advance_handler_fn=handler_registry.resolve_advance_handler,
     )
     advance_result = runtime.advance(
         request=WorkflowAdvanceRequest(

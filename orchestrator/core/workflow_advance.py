@@ -159,6 +159,8 @@ class WorkflowAdvanceHandler(Protocol):
     ) -> WorkflowAdvanceOutcome:
         ...
 
+
+class WorkflowOperationRetryHandler(Protocol):
     def retry_operation(
         self,
         *,
@@ -212,10 +214,10 @@ def execute_workflow_operation_retry(
     session_factory: sessionmaker[Session],
     workflow: WorkflowExecution,
     operation: WorkflowOperation,
-    resolve_advance_handler_fn: Callable[[str], WorkflowAdvanceHandler],
+    resolve_operation_retry_handler_fn: Callable[[str], WorkflowOperationRetryHandler],
 ) -> WorkflowOperationHandle:
     workflow_type = get_workflow_type(session, workflow_type_key=workflow.workflow_type_key)
-    handler = resolve_advance_handler_fn(str(workflow_type.handler_key or "").strip())
+    handler = resolve_operation_retry_handler_fn(str(workflow_type.handler_key or "").strip())
     return handler.retry_operation(
         session=session,
         settings=settings,

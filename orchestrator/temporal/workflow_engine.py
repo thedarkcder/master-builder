@@ -8,11 +8,11 @@ from datetime import timedelta
 from sqlalchemy.orm import Session, sessionmaker
 
 from orchestrator.core.config import Settings
-from orchestrator.core.workflow_advance import WorkflowAdvanceOutcome
+from orchestrator.core.workflow_advance import WorkflowAdvanceOutcome, execute_workflow_operation_retry
 from orchestrator.core.workflow_engine import WorkflowEngineState
 from orchestrator.core.workflow_operation_service import WorkflowOperationHandle
 from orchestrator.core.workflow_execution_projection import workflow_execution_id
-from orchestrator.core.workflow_type_catalog import get_workflow_type
+from orchestrator.core.workflow_type_catalog import get_workflow_type, normalize_workflow_retry_policy_config
 from orchestrator.storage.models import Run, RunHumanInputRequest, WorkflowExecution, WorkflowOperation
 from orchestrator.temporal.client import connect_temporal_client
 from orchestrator.temporal.payloads import (
@@ -41,6 +41,10 @@ class TemporalWorkflowConfig:
     workflow_run_timeout_seconds: int
     activity_start_to_close_timeout_seconds: int
     human_input_resume_timeout_seconds: int
+    retry_max_attempts: int
+    retry_initial_interval_seconds: int
+    retry_max_interval_seconds: int
+    retry_backoff_coefficient: float
 
 
 def _temporal_workflow_handle_id(*, workflow_id: str) -> str:
@@ -98,6 +102,7 @@ def _temporal_config_for_workflow(
             f"Workflow type {workflow_type.workflow_type_key} is not configured for the temporal engine"
         )
     binding = resolve_temporal_binding_for_handler(handler_key=workflow_type.handler_key)
+    retry_policy = normalize_workflow_retry_policy_config(workflow_type.retry_policy_config_json)
     temporal = {
         "workflow_execution_timeout_seconds": binding.workflow_execution_timeout_seconds,
         "workflow_run_timeout_seconds": binding.workflow_run_timeout_seconds,
@@ -128,6 +133,10 @@ def _temporal_config_for_workflow(
             temporal=temporal,
             field_name="human_input_resume_timeout_seconds",
         ),
+        retry_max_attempts=max(1, int(retry_policy.get("max_attempts") or 1)),
+        retry_initial_interval_seconds=max(0, int(retry_policy.get("initial_interval_seconds") or 0)),
+        retry_max_interval_seconds=max(0, int(retry_policy.get("max_interval_seconds") or 0)),
+        retry_backoff_coefficient=max(1.0, float(retry_policy.get("backoff_coefficient") or 1.0)),
     )
 
 
@@ -144,6 +153,7 @@ def _temporal_config_for_workflow_type(
             f"Workflow type {workflow_type.workflow_type_key} is not configured for the temporal engine"
         )
     binding = resolve_temporal_binding_for_handler(handler_key=workflow_type.handler_key)
+    retry_policy = normalize_workflow_retry_policy_config(workflow_type.retry_policy_config_json)
     temporal = {
         "workflow_execution_timeout_seconds": binding.workflow_execution_timeout_seconds,
         "workflow_run_timeout_seconds": binding.workflow_run_timeout_seconds,
@@ -174,6 +184,10 @@ def _temporal_config_for_workflow_type(
             temporal=temporal,
             field_name="human_input_resume_timeout_seconds",
         ),
+        retry_max_attempts=max(1, int(retry_policy.get("max_attempts") or 1)),
+        retry_initial_interval_seconds=max(0, int(retry_policy.get("initial_interval_seconds") or 0)),
+        retry_max_interval_seconds=max(0, int(retry_policy.get("max_interval_seconds") or 0)),
+        retry_backoff_coefficient=max(1.0, float(retry_policy.get("backoff_coefficient") or 1.0)),
     )
 
 
@@ -181,7 +195,7 @@ def _handler_backed_workflow_id(*, workflow_type_key: str, issue_key: str) -> st
     return workflow_execution_id(workflow_type_key=workflow_type_key, issue_key=issue_key)
 
 
-def _handler_advance_input_from_request(*, workflow_id: str, request) -> HandlerWorkflowAdvanceInput:
+def _handler_advance_input_from_request(*, workflow_id: str, request, config: TemporalWorkflowConfig) -> HandlerWorkflowAdvanceInput:
     return HandlerWorkflowAdvanceInput(
         workflow_id=workflow_id,
         workflow_handler_key=request.workflow_handler_key,
@@ -195,6 +209,10 @@ def _handler_advance_input_from_request(*, workflow_id: str, request) -> Handler
         webhook_event=request.webhook_event,
         comment_command=request.comment_command,
         comment_command_argument=request.comment_command_argument,
+        retry_max_attempts=config.retry_max_attempts,
+        retry_initial_interval_seconds=config.retry_initial_interval_seconds,
+        retry_max_interval_seconds=config.retry_max_interval_seconds,
+        retry_backoff_coefficient=config.retry_backoff_coefficient,
     )
 
 
@@ -236,11 +254,10 @@ async def _ensure_handler_workflow_handle(
 class TemporalWorkflowEngine:
     backend = "temporal"
 
-    def __init__(self, *, process_claimed_run_fn, build_runner_fn, runtime_kwargs_fn, retry_workflow_operation_fn=None):
+    def __init__(self, *, process_claimed_run_fn, build_runner_fn, runtime_kwargs_fn):
         self._process_claimed_run_fn = process_claimed_run_fn
         self._build_runner_fn = build_runner_fn
         self._runtime_kwargs_fn = runtime_kwargs_fn
-        self._retry_workflow_operation_fn = retry_workflow_operation_fn
 
     def advance_workflow(
         self,
@@ -269,6 +286,7 @@ class TemporalWorkflowEngine:
         advance_payload = _handler_advance_input_from_request(
             workflow_id=workflow_id,
             request=request,
+            config=config,
         )
 
         async def _advance() -> HandlerWorkflowAdvanceResult:
@@ -385,6 +403,7 @@ class TemporalWorkflowEngine:
         session_factory: sessionmaker[Session],
         workflow: WorkflowExecution,
         operation: WorkflowOperation,
+        resolve_operation_retry_handler_fn,
     ) -> WorkflowOperationHandle:
         config = _temporal_config_for_workflow(session=session, workflow=workflow, settings=settings)
         if config.execution_mode == "handler":
@@ -412,12 +431,13 @@ class TemporalWorkflowEngine:
                 operation_type=result.operation_type,
                 status=result.operation_status,
             )
-        if self._retry_workflow_operation_fn is None:
-            raise RuntimeError("Workflow operation retry is not configured for this workflow engine invocation")
-        return self._retry_workflow_operation_fn(
+        if resolve_operation_retry_handler_fn is None:
+            raise RuntimeError("Workflow operation retry handler resolution is not configured")
+        return execute_workflow_operation_retry(
             session=session,
             settings=settings,
             session_factory=session_factory,
             workflow=workflow,
             operation=operation,
+            resolve_operation_retry_handler_fn=resolve_operation_retry_handler_fn,
         )

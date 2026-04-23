@@ -63,7 +63,7 @@ def test_workflow_runtime_delegates_start_resume_query_and_retry(monkeypatch):
         process_claimed_run_fn=sentinel.process_claimed_run_fn,
         build_runner_fn=sentinel.build_runner_fn,
         runtime_kwargs_fn=sentinel.runtime_kwargs_fn,
-        retry_workflow_operation_fn=sentinel.retry_workflow_operation_fn,
+        resolve_operation_retry_handler_fn=sentinel.resolve_operation_retry_handler_fn,
     )
 
     assert runtime.start_execution(workflow=workflow, run=run, claim_id="claim-123") is sentinel.started_run
@@ -80,6 +80,7 @@ def test_workflow_runtime_delegates_start_resume_query_and_retry(monkeypatch):
             assert kwargs["session"] is session
         if "session_factory" in kwargs:
             assert kwargs["session_factory"] is session_factory
+    assert engine.calls[-1][1]["resolve_operation_retry_handler_fn"] is sentinel.resolve_operation_retry_handler_fn
 
 
 def test_workflow_runtime_delegates_attempt_creation(monkeypatch):

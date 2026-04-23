@@ -26,10 +26,10 @@ from orchestrator.core.workflow_integration_provider import (
     WorkflowIntegrationAdapterProvider,
 )
 from orchestrator.core.workflow_integration_router import WorkflowIntegrationRouter
+from orchestrator.core.workflow_handler_registry import build_workflow_handler_registry
 from orchestrator.core.workflow_type_catalog import get_workflow_type_by_handler_key
-from orchestrator.core.jira_parent_child_sync_service import build_workflow_advance_handler_resolver
 from orchestrator.storage.db import create_session_factory
-from orchestrator.storage.models import Project, Tenant, WorkflowExecution, WorkflowOperation
+from orchestrator.storage.models import Tenant, WorkflowExecution, WorkflowOperation
 from orchestrator.temporal.payloads import (
     HandlerWorkflowAdvanceResult,
     HandlerWorkflowAdvanceInput,
@@ -87,20 +87,21 @@ def process_handler_workflow_advance_activity(
             comment_command=payload.comment_command,
             comment_command_argument=payload.comment_command_argument,
         )
+        handler_registry = build_workflow_handler_registry(
+            integration_router=_build_workflow_integration_router(),
+            extract_changed_fields_fn=extract_changed_fields,
+            extract_status_transition_fn=extract_status_transition,
+            build_runtime_for_selector_fn=build_runtime_for_selector,
+            seed_issues_with_runtime_fn=seed_issues_with_runtime,
+            post_jira_comment_fn=post_jira_comment,
+            create_jira_comment_fn=create_jira_comment,
+        )
         result = execute_workflow_advance(
             session=session,
             settings=settings,
             workflow_type=workflow_type,
             request=request,
-            resolve_advance_handler_fn=build_workflow_advance_handler_resolver(
-                integration_router=_build_workflow_integration_router(),
-                extract_changed_fields_fn=extract_changed_fields,
-                extract_status_transition_fn=extract_status_transition,
-                build_runtime_for_selector_fn=build_runtime_for_selector,
-                seed_issues_with_runtime_fn=seed_issues_with_runtime,
-                post_jira_comment_fn=post_jira_comment,
-                create_jira_comment_fn=create_jira_comment,
-            ),
+            resolve_advance_handler_fn=handler_registry.resolve_advance_handler,
         )
         session.commit()
         workflow = session.get(WorkflowExecution, workflow_id)
@@ -130,11 +131,15 @@ def retry_handler_workflow_operation_activity(payload: WorkflowOperationRetryInp
         tenant = session.get(Tenant, workflow.tenant_id)
         if tenant is None:
             raise RuntimeError(f"Workflow retry is missing tenant {workflow.tenant_id}")
-        if not workflow.project_id:
-            raise RuntimeError(f"Workflow retry is missing project for workflow {workflow.workflow_id}")
-        project = session.get(Project, workflow.project_id)
-        if project is None:
-            raise RuntimeError(f"Workflow retry is missing project {workflow.project_id}")
+        handler_registry = build_workflow_handler_registry(
+            integration_router=_build_workflow_integration_router(),
+            extract_changed_fields_fn=extract_changed_fields,
+            extract_status_transition_fn=extract_status_transition,
+            build_runtime_for_selector_fn=build_runtime_for_selector,
+            seed_issues_with_runtime_fn=seed_issues_with_runtime,
+            post_jira_comment_fn=post_jira_comment,
+            create_jira_comment_fn=create_jira_comment,
+        )
         try:
             handle = execute_workflow_operation_retry(
                 session=session,
@@ -142,15 +147,7 @@ def retry_handler_workflow_operation_activity(payload: WorkflowOperationRetryInp
                 session_factory=session_factory,
                 workflow=workflow,
                 operation=operation,
-                resolve_advance_handler_fn=build_workflow_advance_handler_resolver(
-                    integration_router=_build_workflow_integration_router(),
-                    extract_changed_fields_fn=extract_changed_fields,
-                    extract_status_transition_fn=extract_status_transition,
-                    build_runtime_for_selector_fn=build_runtime_for_selector,
-                    seed_issues_with_runtime_fn=seed_issues_with_runtime,
-                    post_jira_comment_fn=post_jira_comment,
-                    create_jira_comment_fn=create_jira_comment,
-                ),
+                resolve_operation_retry_handler_fn=handler_registry.resolve_operation_retry_handler,
             )
         except (InvalidWorkflowOperationRetryError, UnsupportedWorkflowOperationRetryError) as exc:
             raise ApplicationError(

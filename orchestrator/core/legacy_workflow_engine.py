@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from sqlalchemy.orm import Session, sessionmaker
 
 from orchestrator.core.config import Settings
-from orchestrator.core.workflow_advance import execute_workflow_advance
+from orchestrator.core.workflow_advance import execute_workflow_advance, execute_workflow_operation_retry
 from orchestrator.core.workflow_engine import WorkflowEngineState
 from orchestrator.core.workflow_operation_service import WorkflowOperationHandle
 from orchestrator.storage.models import Run, RunHumanInputRequest, Tenant, WorkflowExecution, WorkflowOperation
@@ -14,11 +14,10 @@ from orchestrator.storage.models import Run, RunHumanInputRequest, Tenant, Workf
 class LegacyWorkflowEngine:
     backend = "legacy"
 
-    def __init__(self, *, process_claimed_run_fn, build_runner_fn, runtime_kwargs_fn, retry_workflow_operation_fn=None):
+    def __init__(self, *, process_claimed_run_fn, build_runner_fn, runtime_kwargs_fn):
         self._process_claimed_run_fn = process_claimed_run_fn
         self._build_runner_fn = build_runner_fn
         self._runtime_kwargs_fn = runtime_kwargs_fn
-        self._retry_workflow_operation_fn = retry_workflow_operation_fn
 
     def advance_workflow(
         self,
@@ -105,13 +104,15 @@ class LegacyWorkflowEngine:
         session_factory: sessionmaker[Session],
         workflow: WorkflowExecution,
         operation: WorkflowOperation,
+        resolve_operation_retry_handler_fn,
     ) -> WorkflowOperationHandle:
-        if self._retry_workflow_operation_fn is None:
-            raise RuntimeError("Workflow operation retry is not configured for this workflow engine invocation")
-        return self._retry_workflow_operation_fn(
+        if resolve_operation_retry_handler_fn is None:
+            raise RuntimeError("Workflow operation retry handler resolution is not configured")
+        return execute_workflow_operation_retry(
             session=session,
             settings=settings,
             session_factory=session_factory,
             workflow=workflow,
             operation=operation,
+            resolve_operation_retry_handler_fn=resolve_operation_retry_handler_fn,
         )
