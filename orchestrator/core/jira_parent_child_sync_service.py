@@ -60,6 +60,14 @@ from orchestrator.core.pm_interview_service import (
     PM_INTERVIEW_STATUS_QUESTION_PENDING,
     normalize_parent_feature_brief_with_runtime,
 )
+from orchestrator.core.parent_feature_workflow_operations import (
+    PARENT_OP_BACKLOG_PLANNING,
+    PARENT_OP_JIRA_CHILD_FANOUT,
+    PARENT_OP_JIRA_COMMENT_PROJECTION,
+    PARENT_OP_JIRA_PARENT_UPDATE,
+    PARENT_PROJECTION_OPERATION_TYPES,
+    PARENT_RETRYABLE_OPERATION_TYPES,
+)
 from orchestrator.core.parent_feature_planning_workflow import (
     ParentFeaturePlanningWorkflow,
     ParentFeaturePlanningWorkflowDeps,
@@ -94,9 +102,9 @@ logger = logging.getLogger(__name__)
 
 def _validate_parent_workflow_operation_retry(*, operation_type: str) -> None:
     normalized = str(operation_type or "").strip()
-    if normalized in {"jira_parent_update", "jira_child_fanout"}:
+    if normalized in PARENT_RETRYABLE_OPERATION_TYPES:
         return
-    if normalized in {"jira_comment_projection", "discord_followup_projection", "notification_emit"}:
+    if normalized in PARENT_PROJECTION_OPERATION_TYPES:
         raise UnsupportedWorkflowOperationRetryError(
             f"Operation {normalized} is a projection step and must be retried by rerunning its owning workflow operation."
         )
@@ -115,25 +123,24 @@ class _ParentWorkflowRetryContext:
     project: Project
 
 
+@dataclass(frozen=True)
+class ParentFeatureWorkflowHandlerDeps:
+    integration_router: Any
+    extract_changed_fields_fn: Any
+    extract_status_transition_fn: Any
+    build_runtime_for_selector_fn: Any
+    seed_issues_with_runtime_fn: Any
+    post_jira_comment_fn: Any
+    create_jira_comment_fn: Any
+
+
 class ParentFeatureWorkflowAdvanceHandler:
     def __init__(
         self,
         *,
-        integration_router,
-        extract_changed_fields_fn,
-        extract_status_transition_fn,
-        build_runtime_for_selector_fn,
-        seed_issues_with_runtime_fn,
-        post_jira_comment_fn,
-        create_jira_comment_fn,
+        deps: ParentFeatureWorkflowHandlerDeps,
     ) -> None:
-        self._integration_router = integration_router
-        self._extract_changed_fields_fn = extract_changed_fields_fn
-        self._extract_status_transition_fn = extract_status_transition_fn
-        self._build_runtime_for_selector_fn = build_runtime_for_selector_fn
-        self._seed_issues_with_runtime_fn = seed_issues_with_runtime_fn
-        self._post_jira_comment_fn = post_jira_comment_fn
-        self._create_jira_comment_fn = create_jira_comment_fn
+        self._deps = deps
 
     def advance(
         self,
@@ -160,20 +167,20 @@ class ParentFeatureWorkflowAdvanceHandler:
             session=session,
             settings=settings,
             context=context,
-            integration_router=self._integration_router,
-            post_jira_comment_fn=self._post_jira_comment_fn,
-            create_jira_comment_fn=self._create_jira_comment_fn,
+            integration_router=self._deps.integration_router,
+            post_jira_comment_fn=self._deps.post_jira_comment_fn,
+            create_jira_comment_fn=self._deps.create_jira_comment_fn,
         )
         brief_planner = _ParentBriefPlanner(
             session=session,
             settings=settings,
             context=context,
-            build_runtime_for_selector_fn=self._build_runtime_for_selector_fn,
+            build_runtime_for_selector_fn=self._deps.build_runtime_for_selector_fn,
         )
         child_sync_gateway = _ParentChildSyncGateway(
             session=session,
             context=context,
-            seed_issues_with_runtime_fn=self._seed_issues_with_runtime_fn,
+            seed_issues_with_runtime_fn=self._deps.seed_issues_with_runtime_fn,
         )
         workflow = ParentFeaturePlanningWorkflow(
             deps=ParentFeaturePlanningWorkflowDeps(
@@ -186,8 +193,8 @@ class ParentFeatureWorkflowAdvanceHandler:
                 project_key_for_issue_fn=_project_key_for_issue,
                 material_parent_changed_fields_fn=_material_parent_changed_fields,
                 parent_board_entry_target_status_fn=_parent_board_entry_target_status,
-                extract_changed_fields_fn=self._extract_changed_fields_fn,
-                extract_status_transition_fn=self._extract_status_transition_fn,
+                extract_changed_fields_fn=self._deps.extract_changed_fields_fn,
+                extract_status_transition_fn=self._deps.extract_status_transition_fn,
             )
         )
         result = workflow.handle(
@@ -197,6 +204,15 @@ class ParentFeatureWorkflowAdvanceHandler:
             lifecycle=lifecycle,
         )
         return result
+
+
+class ParentFeatureWorkflowOperationRetryHandler:
+    def __init__(
+        self,
+        *,
+        deps: ParentFeatureWorkflowHandlerDeps,
+    ) -> None:
+        self._deps = deps
 
     def retry_operation(
         self,
@@ -228,16 +244,44 @@ class ParentFeatureWorkflowAdvanceHandler:
             tenant=tenant,
             project=project,
         )
-        if operation.operation_type == "jira_parent_update":
+        if operation.operation_type == PARENT_OP_JIRA_PARENT_UPDATE:
             return self._retry_jira_parent_update(context=context)
-        if operation.operation_type == "jira_child_fanout":
+        if operation.operation_type == PARENT_OP_JIRA_CHILD_FANOUT:
             return self._retry_jira_child_fanout(context=context)
         raise UnsupportedWorkflowOperationRetryError(
             f"Parent feature workflow does not support retry for operation {operation.operation_type}"
         )
 
+    def _operation_handle(self, *, context: _ParentWorkflowRetryContext, operation: WorkflowOperation) -> WorkflowOperationHandle:
+        return WorkflowOperationHandle(
+            operation_id=operation.operation_id,
+            workflow_id=context.workflow.workflow_id,
+            operation_type=operation.operation_type,
+            status=operation.status,
+        )
+
+    def _complete_backlog_planning_if_completed(
+        self,
+        *,
+        lifecycle: WorkflowExecutionProjection,
+        planning_result,
+        backlog_planning_operation: WorkflowOperation,
+    ) -> None:
+        if planning_result.planning_state != PLANNING_STATE_COMPLETED:
+            return
+        if backlog_planning_operation.status == "completed":
+            return
+        planning_operation, planning_attempt = lifecycle.start_operation_attempt(
+            operation_type=PARENT_OP_BACKLOG_PLANNING
+        )
+        lifecycle.complete_started_operation(
+            operation=planning_operation,
+            attempt=planning_attempt,
+            summary="Backlog planning completed from the confirmed parent brief.",
+        )
+
     def _retry_jira_parent_update(self, *, context: _ParentWorkflowRetryContext) -> WorkflowOperationHandle:
-        jira_adapter = self._integration_router.jira(
+        jira_adapter = self._deps.integration_router.jira(
             session=context.session,
             tenant=context.tenant,
             settings=context.settings,
@@ -296,23 +340,13 @@ class ParentFeatureWorkflowAdvanceHandler:
                 category=classify_external_workflow_failure(error=exc),
                 message=str(exc),
             )
-            return WorkflowOperationHandle(
-                operation_id=operation.operation_id,
-                workflow_id=context.workflow.workflow_id,
-                operation_type=operation.operation_type,
-                status=operation.status,
-            )
+            return self._operation_handle(context=context, operation=operation)
         lifecycle.complete_started_operation(
             operation=operation,
             attempt=attempt,
             summary="Parent Jira metadata and reference links synced without modifying the description.",
         )
-        return WorkflowOperationHandle(
-            operation_id=operation.operation_id,
-            workflow_id=context.workflow.workflow_id,
-            operation_type=operation.operation_type,
-            status=operation.status,
-        )
+        return self._operation_handle(context=context, operation=operation)
 
     def _retry_jira_child_fanout(self, *, context: _ParentWorkflowRetryContext) -> WorkflowOperationHandle:
         brief = resolve_parent_feature_brief(
@@ -324,7 +358,7 @@ class ParentFeatureWorkflowAdvanceHandler:
             raise InvalidWorkflowOperationRetryError(
                 f"No confirmed parent brief snapshot is available for {context.workflow.issue_key}"
             )
-        jira_adapter = self._integration_router.jira(
+        jira_adapter = self._deps.integration_router.jira(
             session=context.session,
             tenant=context.tenant,
             settings=context.settings,
@@ -352,18 +386,18 @@ class ParentFeatureWorkflowAdvanceHandler:
             session=context.session,
             settings=context.settings,
             context=sync_context,
-            build_runtime_for_selector_fn=self._build_runtime_for_selector_fn,
+            build_runtime_for_selector_fn=self._deps.build_runtime_for_selector_fn,
         )
         child_sync_gateway = _ParentChildSyncGateway(
             session=context.session,
             context=sync_context,
-            seed_issues_with_runtime_fn=self._seed_issues_with_runtime_fn,
+            seed_issues_with_runtime_fn=self._deps.seed_issues_with_runtime_fn,
         )
         backlog_planning_operation = upsert_workflow_operation(
             context.session,
             workflow_id=context.workflow.workflow_id,
-            operation_type="backlog_planning",
-            idempotency_key="workflow-definition:backlog_planning",
+            operation_type=PARENT_OP_BACKLOG_PLANNING,
+            idempotency_key=f"workflow-definition:{PARENT_OP_BACKLOG_PLANNING}",
             target_system=None,
             target_ref=None,
             summary="Backlog planning completed from the confirmed parent brief.",
@@ -378,25 +412,18 @@ class ParentFeatureWorkflowAdvanceHandler:
                 child_sync_gateway=child_sync_gateway,
             )
         except ParentPlanningFanoutSeedError as exc:
-            if exc.planning_result.planning_state == PLANNING_STATE_COMPLETED and backlog_planning_operation.status != "completed":
-                planning_operation, planning_attempt = lifecycle.start_operation_attempt(operation_type="backlog_planning")
-                lifecycle.complete_started_operation(
-                    operation=planning_operation,
-                    attempt=planning_attempt,
-                    summary="Backlog planning completed from the confirmed parent brief.",
-                )
+            self._complete_backlog_planning_if_completed(
+                lifecycle=lifecycle,
+                planning_result=exc.planning_result,
+                backlog_planning_operation=backlog_planning_operation,
+            )
             lifecycle.fail_started_operation(
                 operation=operation,
                 attempt=attempt,
                 category=classify_external_workflow_failure(error=exc.error),
                 message=str(exc.error),
             )
-            return WorkflowOperationHandle(
-                operation_id=operation.operation_id,
-                workflow_id=context.workflow.workflow_id,
-                operation_type=operation.operation_type,
-                status=operation.status,
-            )
+            return self._operation_handle(context=context, operation=operation)
         except Exception as exc:  # noqa: BLE001
             lifecycle.fail_started_operation(
                 operation=operation,
@@ -404,19 +431,12 @@ class ParentFeatureWorkflowAdvanceHandler:
                 category=classify_external_workflow_failure(error=exc),
                 message=str(exc),
             )
-            return WorkflowOperationHandle(
-                operation_id=operation.operation_id,
-                workflow_id=context.workflow.workflow_id,
-                operation_type=operation.operation_type,
-                status=operation.status,
-            )
-        if fanout.planning_result.planning_state == PLANNING_STATE_COMPLETED and backlog_planning_operation.status != "completed":
-            planning_operation, planning_attempt = lifecycle.start_operation_attempt(operation_type="backlog_planning")
-            lifecycle.complete_started_operation(
-                operation=planning_operation,
-                attempt=planning_attempt,
-                summary="Backlog planning completed from the confirmed parent brief.",
-            )
+            return self._operation_handle(context=context, operation=operation)
+        self._complete_backlog_planning_if_completed(
+            lifecycle=lifecycle,
+            planning_result=fanout.planning_result,
+            backlog_planning_operation=backlog_planning_operation,
+        )
         if not fanout.completed:
             questions = fanout.questions
             clarification_service = ParentPlanningClarificationService()
@@ -429,7 +449,7 @@ class ParentFeatureWorkflowAdvanceHandler:
                     tenant=context.tenant,
                     project=context.project,
                     workflow=context.workflow,
-                    create_jira_comment_fn=self._create_jira_comment_fn,
+                    create_jira_comment_fn=self._deps.create_jira_comment_fn,
                 ),
             )
             message = clarification_service.build_missing_input_message(
@@ -442,23 +462,13 @@ class ParentFeatureWorkflowAdvanceHandler:
                 category="missing_input",
                 message=message,
             )
-            return WorkflowOperationHandle(
-                operation_id=operation.operation_id,
-                workflow_id=context.workflow.workflow_id,
-                operation_type=operation.operation_type,
-                status=operation.status,
-            )
+            return self._operation_handle(context=context, operation=operation)
         lifecycle.complete_started_operation(
             operation=operation,
             attempt=attempt,
             summary="Engineering child fanout completed from the confirmed parent brief.",
         )
-        return WorkflowOperationHandle(
-            operation_id=operation.operation_id,
-            workflow_id=context.workflow.workflow_id,
-            operation_type=operation.operation_type,
-            status=operation.status,
-        )
+        return self._operation_handle(context=context, operation=operation)
 
 
 class _ParentWorkflowEngineeringClarificationPublisher:
@@ -529,7 +539,7 @@ class _ParentWorkflowEngineeringClarificationPublisher:
             )
             if error is None and created_comment is not None:
                 lifecycle = WorkflowExecutionProjection(session=self._session, workflow=self._workflow)
-                operation, attempt = lifecycle.start_operation_attempt(operation_type="jira_comment_projection")
+                operation, attempt = lifecycle.start_operation_attempt(operation_type=PARENT_OP_JIRA_COMMENT_PROJECTION)
                 lifecycle.complete_started_operation(
                     operation=operation,
                     attempt=attempt,

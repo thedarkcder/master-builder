@@ -11,6 +11,15 @@ from orchestrator.core.parent_planning_clarification_service import (
     ParentPlanningClarificationService,
 )
 from orchestrator.core.parent_planning_fanout_service import ParentPlanningFanoutSeedError, ParentPlanningFanoutService
+from orchestrator.core.parent_feature_workflow_operations import (
+    PARENT_OP_BACKLOG_PLANNING,
+    PARENT_OP_BRIEF_NORMALIZATION,
+    PARENT_OP_DISCORD_FOLLOWUP_PROJECTION,
+    PARENT_OP_JIRA_CHILD_FANOUT,
+    PARENT_OP_JIRA_CHILD_PROMOTION,
+    PARENT_OP_JIRA_COMMENT_PROJECTION,
+    PARENT_OP_JIRA_PARENT_UPDATE,
+)
 from orchestrator.core.specialist_planning import PLANNING_STATE_COMPLETED
 from orchestrator.core.workflow_runtime import WorkflowAdvanceLifecycle, WorkflowAdvanceOutcome
 from orchestrator.core.workflow_execution_projection import classify_external_workflow_failure
@@ -104,7 +113,7 @@ class ParentFeaturePlanningWorkflow:
                 questions=normalization_questions,
                 body_prefix="Parent feature was created in backlog, but brief normalization is blocked pending clarification.",
                 reason="pm_parent_issue_created_brief_blocked",
-                waiting_operation_type="brief_normalization",
+                waiting_operation_type=PARENT_OP_BRIEF_NORMALIZATION,
             )
         if architecture_gate.required and not architecture_gate.ready:
             self._mark_parent_synced(lifecycle=lifecycle, draft=True)
@@ -171,7 +180,7 @@ class ParentFeaturePlanningWorkflow:
                     "Parent feature was created in backlog, but engineering child planning is blocked pending clarification."
                 ),
                 reason="pm_parent_issue_created_seed_blocked",
-                waiting_operation_type="backlog_planning",
+                waiting_operation_type=PARENT_OP_BACKLOG_PLANNING,
                 extra={
                     "parent_revision": fanout.seed_data.get("parent_revision"),
                     "children_sync_status": fanout.seed_data.get("children_sync_status"),
@@ -256,7 +265,7 @@ class ParentFeaturePlanningWorkflow:
                 questions=normalization_questions,
                 body_prefix="Parent feature changed but brief normalization is blocked pending clarification.",
                 reason="pm_parent_sync_brief_blocked",
-                waiting_operation_type="brief_normalization",
+                waiting_operation_type=PARENT_OP_BRIEF_NORMALIZATION,
                 extra={"changed_fields": material_changed_fields},
             )
         if architecture_gate.required and not architecture_gate.ready:
@@ -299,7 +308,7 @@ class ParentFeaturePlanningWorkflow:
         except Exception as exc:  # noqa: BLE001
             category = classify_external_workflow_failure(error=exc)
             lifecycle.mark_operation_failed(
-                operation_type="jira_child_fanout",
+                operation_type=PARENT_OP_JIRA_CHILD_FANOUT,
                 category=category,
                 message=str(exc),
             )
@@ -323,7 +332,7 @@ class ParentFeaturePlanningWorkflow:
             blocked_issue_keys = [context.issue_key, *[detail.key for detail in child_details]]
             issue_gateway.mark_issues_sync_blocked(issue_keys=blocked_issue_keys)
             lifecycle.mark_waiting_for_input(
-                operation_type="backlog_planning",
+                operation_type=PARENT_OP_BACKLOG_PLANNING,
                 summary="Parent planning is waiting for product clarification before child refresh can complete.",
             )
             if not issue_gateway.has_matching_active_pm_clarification_state(
@@ -340,12 +349,12 @@ class ParentFeaturePlanningWorkflow:
                 )
                 if posted_to_discord:
                     lifecycle.set_operation_completed(
-                        operation_type="discord_followup_projection",
+                        operation_type=PARENT_OP_DISCORD_FOLLOWUP_PROJECTION,
                         summary="Posted PM clarification follow-up to Discord.",
                     )
                 if error is None and created_comment is not None:
                     lifecycle.set_operation_completed(
-                        operation_type="jira_comment_projection",
+                        operation_type=PARENT_OP_JIRA_COMMENT_PROJECTION,
                         summary="Posted PM clarification questions to Jira.",
                     )
             return self._outcome(
@@ -397,7 +406,7 @@ class ParentFeaturePlanningWorkflow:
         child_details = issue_gateway.load_child_details(project_key=project_key, parent_issue_key=context.issue_key)
         if not child_details:
             lifecycle.mark_operation_completed(
-                operation_type="jira_child_promotion",
+                operation_type=PARENT_OP_JIRA_CHILD_PROMOTION,
                 summary=f"No engineering child tickets required promotion to {target_status}.",
             )
             lifecycle.mark_completed_if_ready()
@@ -437,7 +446,7 @@ class ParentFeaturePlanningWorkflow:
 
         if failed_children:
             lifecycle.mark_operation_failed(
-                operation_type="jira_child_promotion",
+                operation_type=PARENT_OP_JIRA_CHILD_PROMOTION,
                 category="external_failure",
                 message=(
                     f"Failed to promote engineering child tickets to {target_status}: "
@@ -446,7 +455,7 @@ class ParentFeaturePlanningWorkflow:
             )
         else:
             lifecycle.mark_operation_completed(
-                operation_type="jira_child_promotion",
+                operation_type=PARENT_OP_JIRA_CHILD_PROMOTION,
                 summary=(
                     f"Promoted engineering child tickets to {target_status}: "
                     f"{', '.join(promoted_children)}."
@@ -497,15 +506,15 @@ class ParentFeaturePlanningWorkflow:
         )
         if publication.discord_followup_created:
             lifecycle.set_operation_completed(
-                operation_type="discord_followup_projection",
+                operation_type=PARENT_OP_DISCORD_FOLLOWUP_PROJECTION,
                 summary="Posted PM clarification follow-up to Discord.",
             )
         if publication.jira_comment_created:
             lifecycle.set_operation_completed(
-                operation_type="jira_comment_projection",
+                operation_type=PARENT_OP_JIRA_COMMENT_PROJECTION,
                 summary="Posted PM clarification questions to Jira.",
             )
-        if waiting_operation_type == "brief_normalization":
+        if waiting_operation_type == PARENT_OP_BRIEF_NORMALIZATION:
             lifecycle.set_operation_waiting_for_input(
                 operation_type=waiting_operation_type,
                 summary="Parent planning is waiting for product clarification.",
@@ -543,7 +552,7 @@ class ParentFeaturePlanningWorkflow:
             target_label="sync-blocked",
         )
         lifecycle.mark_waiting_for_input(
-            operation_type="backlog_planning",
+            operation_type=PARENT_OP_BACKLOG_PLANNING,
             summary="Parent planning is waiting for the architecture document to be marked ready.",
         )
         payload = dict(extra or {})
@@ -580,7 +589,7 @@ class ParentFeaturePlanningWorkflow:
                 target_label="sync-blocked",
             )
             lifecycle.set_operation_waiting_for_input(
-                operation_type="brief_normalization",
+                operation_type=PARENT_OP_BRIEF_NORMALIZATION,
                 summary="Parent brief still needs product clarification before planning can continue.",
             )
             publication = self._deps.clarification_service.ensure_active_clarification(
@@ -590,12 +599,12 @@ class ParentFeaturePlanningWorkflow:
             )
             if publication.discord_followup_created:
                 lifecycle.set_operation_completed(
-                    operation_type="discord_followup_projection",
+                    operation_type=PARENT_OP_DISCORD_FOLLOWUP_PROJECTION,
                     summary="Posted PM clarification follow-up to Discord.",
                 )
             if publication.jira_comment_created:
                 lifecycle.set_operation_completed(
-                    operation_type="jira_comment_projection",
+                    operation_type=PARENT_OP_JIRA_COMMENT_PROJECTION,
                     summary="Posted PM clarification questions to Jira.",
                 )
             return self._outcome(
@@ -682,7 +691,7 @@ class ParentFeaturePlanningWorkflow:
                 questions=fanout.questions,
                 body_prefix="Backlog planning still needs clarification before child fanout can complete.",
                 reason="pm_interview_followup_planning_blocked",
-                waiting_operation_type="backlog_planning",
+                waiting_operation_type=PARENT_OP_BACKLOG_PLANNING,
                 extra={
                     "parent_revision": fanout.seed_data.get("parent_revision"),
                     "children_sync_status": fanout.seed_data.get("children_sync_status"),
@@ -727,7 +736,7 @@ class ParentFeaturePlanningWorkflow:
 
     def _mark_parent_synced(self, *, lifecycle, draft: bool) -> None:
         lifecycle.set_operation_completed(
-            operation_type="jira_parent_update",
+            operation_type=PARENT_OP_JIRA_PARENT_UPDATE,
             summary=(
                 "Parent Jira issue metadata synced without modifying the source description."
                 if draft
@@ -737,7 +746,7 @@ class ParentFeaturePlanningWorkflow:
 
     def _mark_brief_normalized(self, *, lifecycle, source: str) -> None:
         lifecycle.set_operation_completed(
-            operation_type="brief_normalization",
+            operation_type=PARENT_OP_BRIEF_NORMALIZATION,
             summary=f"Parent brief normalized from the {source}.",
         )
         self._mark_parent_synced(lifecycle=lifecycle, draft=False)
@@ -749,7 +758,7 @@ class ParentFeaturePlanningWorkflow:
         planning_summary: str,
     ) -> None:
         lifecycle.mark_operation_completed(
-            operation_type="backlog_planning",
+            operation_type=PARENT_OP_BACKLOG_PLANNING,
             summary=planning_summary,
         )
 
@@ -773,7 +782,7 @@ class ParentFeaturePlanningWorkflow:
         fanout_summary: str,
     ) -> None:
         lifecycle.mark_operation_completed(
-            operation_type="jira_child_fanout",
+            operation_type=PARENT_OP_JIRA_CHILD_FANOUT,
             summary=fanout_summary,
         )
         lifecycle.mark_completed_if_ready()
@@ -796,7 +805,7 @@ class ParentFeaturePlanningWorkflow:
         )
         category = classify_external_workflow_failure(error=error)
         lifecycle.mark_operation_failed(
-            operation_type="jira_child_fanout",
+            operation_type=PARENT_OP_JIRA_CHILD_FANOUT,
             category=category,
             message=str(error),
         )

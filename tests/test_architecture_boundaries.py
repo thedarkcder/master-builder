@@ -423,6 +423,55 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             msg=f"Workflow retry callback escape hatch found: {violations}",
         )
 
+    def test_parent_feature_workflow_capabilities_are_separate(self) -> None:
+        module_path = ROOT / "orchestrator" / "core" / "jira_parent_child_sync_service.py"
+        tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
+        class_methods: dict[str, set[str]] = {}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ClassDef) and node.name in {
+                "ParentFeatureWorkflowAdvanceHandler",
+                "ParentFeatureWorkflowOperationRetryHandler",
+            }:
+                class_methods[node.name] = {
+                    item.name
+                    for item in node.body
+                    if isinstance(item, ast.FunctionDef)
+                }
+        self.assertNotIn(
+            "retry_operation",
+            class_methods.get("ParentFeatureWorkflowAdvanceHandler", set()),
+            msg="Parent feature advance handler must not own operation retry.",
+        )
+        self.assertNotIn(
+            "advance",
+            class_methods.get("ParentFeatureWorkflowOperationRetryHandler", set()),
+            msg="Parent feature retry handler must not own advance routing.",
+        )
+
+    def test_parent_operation_names_do_not_leak_into_workflow_infrastructure(self) -> None:
+        modules = [
+            ROOT / "orchestrator" / "api" / "admin" / "workflows_service.py",
+            ROOT / "orchestrator" / "temporal" / "activities" / "handler_workflow.py",
+            ROOT / "orchestrator" / "core" / "workflow_runtime.py",
+            ROOT / "orchestrator" / "core" / "workflow_advance.py",
+            ROOT / "orchestrator" / "core" / "workflow_engine.py",
+            ROOT / "orchestrator" / "core" / "workflow_engine_factory.py",
+            ROOT / "orchestrator" / "core" / "legacy_workflow_engine.py",
+            ROOT / "orchestrator" / "temporal" / "workflow_engine.py",
+        ]
+        banned_values = {"backlog_planning", "jira_comment_projection", "jira_child_fanout", "jira_parent_update"}
+        violations: list[str] = []
+        for module_path in modules:
+            source = module_path.read_text(encoding="utf-8")
+            for value in banned_values:
+                if value in source:
+                    violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{value}")
+        self.assertEqual(
+            violations,
+            [],
+            msg=f"Parent operation names leaked into workflow infrastructure: {violations}",
+        )
+
     def test_core_modules_do_not_import_api_routes_outside_allowlist(self) -> None:
         core_modules = sorted(ORCHESTRATOR_ROOT.rglob("core/**/*.py"))
         self.assertTrue(core_modules)
