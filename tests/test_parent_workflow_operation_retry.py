@@ -7,8 +7,9 @@ from unittest.mock import patch
 import pytest
 
 from orchestrator.core.config import Settings
-from orchestrator.core.workflow_advance import InvalidWorkflowOperationRetryError, execute_workflow_operation_retry
-from orchestrator.core.workflow_handler_registry import build_workflow_handler_registry
+from orchestrator.core.workflow_advance import InvalidWorkflowOperationRetryError
+from orchestrator.core.workflow_handler_composition import build_installed_workflow_handler_registry
+from orchestrator.core.workflow_operation_retry_use_case import retry_workflow_operation_with_registered_handler
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import Project, Tenant, WorkflowExecution, WorkflowOperation
 from tests.test_support.db_harness import SqliteTemplateDbTestCase
@@ -22,7 +23,7 @@ class ParentWorkflowOperationRetryTests(SqliteTemplateDbTestCase):
         self._cleanup_test_database()
 
     def _resolver(self, *, fake_router: object):
-        return build_workflow_handler_registry(
+        return build_installed_workflow_handler_registry(
             integration_router=fake_router,
             extract_changed_fields_fn=lambda *_args, **_kwargs: [],
             extract_status_transition_fn=lambda *_args, **_kwargs: (None, None),
@@ -146,7 +147,7 @@ class ParentWorkflowOperationRetryTests(SqliteTemplateDbTestCase):
 
             with (
                 patch(
-                    "orchestrator.core.jira_parent_child_sync_service.resolve_parent_feature_brief",
+                    "orchestrator.core.parent_feature_workflow.retry.resolve_parent_feature_brief",
                     return_value=SimpleNamespace(to_payload=lambda: {"objective": "Ship identity redesign"}),
                 ),
                 patch(
@@ -157,35 +158,33 @@ class ParentWorkflowOperationRetryTests(SqliteTemplateDbTestCase):
                     ],
                 ),
                 patch(
-                    "orchestrator.core.jira_parent_child_sync_service._ParentBriefPlanner.plan_backlog_parent",
+                    "orchestrator.core.parent_feature_workflow.adapters._ParentBriefPlanner.plan_backlog_parent",
                     return_value=(planner_result, {"planning": "package"}),
                 ) as planner_mock,
                 patch(
-                    "orchestrator.core.jira_parent_child_sync_service._ParentChildSyncGateway.seed_parent_backlog_children",
+                    "orchestrator.core.parent_feature_workflow.adapters._ParentChildSyncGateway.seed_parent_backlog_children",
                     return_value={"requires_input": True, "questions": []},
                 ),
                 patch(
-                    "orchestrator.core.jira_parent_child_sync_service.has_matching_active_clarification_state",
+                    "orchestrator.core.parent_feature_workflow.retry.has_matching_active_clarification_state",
                     return_value=False,
                 ),
                 patch(
-                    "orchestrator.core.jira_parent_child_sync_service.upsert_clarification_projection",
+                    "orchestrator.core.parent_feature_workflow.retry.upsert_clarification_projection",
                     return_value=SimpleNamespace(metadata={"questions": []}),
                 ),
                 patch(
-                    "orchestrator.core.jira_parent_child_sync_service._post_engineering_clarification_questions_to_jira",
+                    "orchestrator.core.parent_feature_workflow.retry._post_engineering_clarification_questions_to_jira",
                     return_value=({"id": "comment-123"}, None),
                 ) as post_comment_mock,
             ):
-                handle = execute_workflow_operation_retry(
+                handle = retry_workflow_operation_with_registered_handler(
                     session=session,
                     settings=settings,
                     session_factory=session_factory,
                     workflow=workflow,
                     operation=fanout_operation,
-                    resolve_operation_retry_handler_fn=(
-                        self._resolver(fake_router=fake_router).resolve_operation_retry_handler
-                    ),
+                    handler_registry=self._resolver(fake_router=fake_router),
                 )
                 session.commit()
 
@@ -299,23 +298,21 @@ class ParentWorkflowOperationRetryTests(SqliteTemplateDbTestCase):
 
             with (
                 patch(
-                    "orchestrator.core.jira_parent_child_sync_service.resolve_parent_feature_brief",
+                    "orchestrator.core.parent_feature_workflow.retry.resolve_parent_feature_brief",
                     return_value=None,
                 ),
                 patch(
-                    "orchestrator.core.jira_parent_child_sync_service._ParentBriefPlanner.plan_backlog_parent",
+                    "orchestrator.core.parent_feature_workflow.adapters._ParentBriefPlanner.plan_backlog_parent",
                 ) as planner_mock,
             ):
                 with pytest.raises(InvalidWorkflowOperationRetryError) as excinfo:
-                    execute_workflow_operation_retry(
+                    retry_workflow_operation_with_registered_handler(
                         session=session,
                         settings=settings,
                         session_factory=session_factory,
                         workflow=workflow,
                         operation=fanout_operation,
-                        resolve_operation_retry_handler_fn=(
-                            self._resolver(fake_router=fake_router).resolve_operation_retry_handler
-                        ),
+                        handler_registry=self._resolver(fake_router=fake_router),
                     )
 
             session.refresh(workflow)

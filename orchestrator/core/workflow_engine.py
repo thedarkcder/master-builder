@@ -15,7 +15,6 @@ if TYPE_CHECKING:
         WorkflowAdvanceHandler,
         WorkflowAdvanceOutcome,
         WorkflowAdvanceRequest,
-        WorkflowOperationRetryHandler,
     )
 
 
@@ -80,6 +79,5 @@ class WorkflowEngine(Protocol):
         session_factory: sessionmaker[Session],
         workflow: WorkflowExecution,
         operation: WorkflowOperation,
-        resolve_operation_retry_handler_fn: Callable[[str], "WorkflowOperationRetryHandler"] | None,
     ) -> WorkflowOperationHandle:
         ...

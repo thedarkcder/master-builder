@@ -14,19 +14,20 @@ from orchestrator.api.webhooks.contracts import (
 )
 from orchestrator.core.agent_runtime_resolver import build_runtime_for_selector
 from orchestrator.core.config import get_settings
+from orchestrator.core.specialist_planning import RetryableSpecialistPlanningContractError
 from orchestrator.core.workflow_advance import (
     InvalidWorkflowOperationRetryError,
     UnsupportedWorkflowOperationRetryError,
     WorkflowAdvanceRequest,
     execute_workflow_advance,
-    execute_workflow_operation_retry,
 )
 from orchestrator.core.workflow_integration_provider import (
     JiraWorkflowConnectionProvider,
     WorkflowIntegrationAdapterProvider,
 )
 from orchestrator.core.workflow_integration_router import WorkflowIntegrationRouter
-from orchestrator.core.workflow_handler_registry import build_workflow_handler_registry
+from orchestrator.core.workflow_handler_composition import build_installed_workflow_handler_registry
+from orchestrator.core.workflow_operation_retry_use_case import retry_workflow_operation_with_registered_handler
 from orchestrator.core.workflow_type_catalog import get_workflow_type_by_handler_key
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import Tenant, WorkflowExecution, WorkflowOperation
@@ -87,7 +88,7 @@ def process_handler_workflow_advance_activity(
             comment_command=payload.comment_command,
             comment_command_argument=payload.comment_command_argument,
         )
-        handler_registry = build_workflow_handler_registry(
+        handler_registry = build_installed_workflow_handler_registry(
             integration_router=_build_workflow_integration_router(),
             extract_changed_fields_fn=extract_changed_fields,
             extract_status_transition_fn=extract_status_transition,
@@ -96,13 +97,25 @@ def process_handler_workflow_advance_activity(
             post_jira_comment_fn=post_jira_comment,
             create_jira_comment_fn=create_jira_comment,
         )
-        result = execute_workflow_advance(
-            session=session,
-            settings=settings,
-            workflow_type=workflow_type,
-            request=request,
-            resolve_advance_handler_fn=handler_registry.resolve_advance_handler,
-        )
+        try:
+            result = execute_workflow_advance(
+                session=session,
+                settings=settings,
+                workflow_type=workflow_type,
+                request=request,
+                resolve_advance_handler_fn=handler_registry.resolve_advance_handler,
+            )
+        except RetryableSpecialistPlanningContractError as exc:
+            raise ApplicationError(
+                str(exc),
+                type="retryable_invalid_model_output",
+            ) from exc
+        except Exception as exc:
+            raise ApplicationError(
+                str(exc),
+                type="terminal_workflow_advance_error",
+                non_retryable=True,
+            ) from exc
         session.commit()
         workflow = session.get(WorkflowExecution, workflow_id)
         if workflow is None:
@@ -128,10 +141,7 @@ def retry_handler_workflow_operation_activity(payload: WorkflowOperationRetryInp
         operation = session.get(WorkflowOperation, str(payload.operation_id or "").strip())
         if operation is None or operation.workflow_id != workflow.workflow_id:
             raise RuntimeError(f"Workflow retry is missing operation {payload.operation_id}")
-        tenant = session.get(Tenant, workflow.tenant_id)
-        if tenant is None:
-            raise RuntimeError(f"Workflow retry is missing tenant {workflow.tenant_id}")
-        handler_registry = build_workflow_handler_registry(
+        handler_registry = build_installed_workflow_handler_registry(
             integration_router=_build_workflow_integration_router(),
             extract_changed_fields_fn=extract_changed_fields,
             extract_status_transition_fn=extract_status_transition,
@@ -141,13 +151,13 @@ def retry_handler_workflow_operation_activity(payload: WorkflowOperationRetryInp
             create_jira_comment_fn=create_jira_comment,
         )
         try:
-            handle = execute_workflow_operation_retry(
+            handle = retry_workflow_operation_with_registered_handler(
                 session=session,
                 settings=settings,
                 session_factory=session_factory,
                 workflow=workflow,
                 operation=operation,
-                resolve_operation_retry_handler_fn=handler_registry.resolve_operation_retry_handler,
+                handler_registry=handler_registry,
             )
         except (InvalidWorkflowOperationRetryError, UnsupportedWorkflowOperationRetryError) as exc:
             raise ApplicationError(

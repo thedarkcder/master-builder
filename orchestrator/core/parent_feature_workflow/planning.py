@@ -11,7 +11,7 @@ from orchestrator.core.parent_planning_clarification_service import (
     ParentPlanningClarificationService,
 )
 from orchestrator.core.parent_planning_fanout_service import ParentPlanningFanoutSeedError, ParentPlanningFanoutService
-from orchestrator.core.parent_feature_workflow_operations import (
+from orchestrator.core.parent_feature_workflow.operations import (
     PARENT_OP_BACKLOG_PLANNING,
     PARENT_OP_BRIEF_NORMALIZATION,
     PARENT_OP_DISCORD_FOLLOWUP_PROJECTION,

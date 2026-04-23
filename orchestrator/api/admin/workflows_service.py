@@ -42,7 +42,7 @@ from orchestrator.core.workflow_advance import (
     UnsupportedWorkflowOperationRetryError,
 )
 from orchestrator.core.workflow_runtime import build_workflow_runtime
-from orchestrator.core.workflow_handler_registry import build_workflow_handler_registry
+from orchestrator.core.workflow_handler_composition import build_installed_workflow_handler_registry
 from orchestrator.core.jira_links import tenant_jira_issue_url
 from orchestrator.core.runtime_requirements import resolve_required_runtime_kinds_for_workflow
 from orchestrator.core.workflow_type_catalog import get_workflow_type, list_workflow_type_operations
@@ -1641,7 +1641,7 @@ def retry_workflow_operation(
     if str(latest_attempt.status or "").strip().lower() not in {"failed", "retrying"}:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Workflow operation is not in a failed state")
     settings = get_settings()
-    handler_registry = build_workflow_handler_registry(
+    handler_registry = build_installed_workflow_handler_registry(
         integration_router=integration_router,
         extract_changed_fields_fn=lambda *_args, **_kwargs: [],
         extract_status_transition_fn=lambda *_args, **_kwargs: (None, None),
@@ -1657,7 +1657,7 @@ def retry_workflow_operation(
         build_runner_fn=build_workflow_runner_for_session,
         runtime_kwargs_fn=build_run_process_kwargs,
         resolve_advance_handler_fn=handler_registry.resolve_advance_handler,
-        resolve_operation_retry_handler_fn=handler_registry.resolve_operation_retry_handler,
+        workflow_handler_registry=handler_registry,
     )
     try:
         runtime.retry_operation(

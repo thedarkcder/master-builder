@@ -15,14 +15,14 @@ from orchestrator.api.webhooks.contracts import (
 )
 from orchestrator.api.webhooks.jira_webhook_types import JiraWebhookContext, jira_webhook_response
 from orchestrator.core.agent_runtime_resolver import build_runtime_for_selector
-from orchestrator.core.codex_agents import classify_engineering_clarification_with_codex
+from orchestrator.core.codex_agents import classify_engineering_clarification_with_runtime
 from orchestrator.core.workflow_integration_provider import (
     JiraWorkflowConnectionProvider,
     WorkflowIntegrationAdapterProvider,
 )
 from orchestrator.core.workflow_integration_router import WorkflowIntegrationRouter
 from orchestrator.core.workflow_runtime import build_workflow_runtime
-from orchestrator.core.jira_parent_child_sync_flows import (
+from orchestrator.core.parent_feature_workflow.flows import (
     handle_engineering_clarification_command as handle_engineering_clarification_command_service,
     handle_engineering_clarification_reply as handle_engineering_clarification_reply_service,
     handle_pm_interview_reply as handle_pm_interview_reply_service,
@@ -113,7 +113,7 @@ def handle_engineering_clarification_command(
         settings=settings,
         integration_router=_build_workflow_integration_router(),
         build_runtime_for_selector_fn=build_runtime_for_selector,
-        classify_engineering_clarification_with_codex_fn=classify_engineering_clarification_with_codex,
+        classify_engineering_clarification_with_runtime_fn=classify_engineering_clarification_with_runtime,
         post_jira_comment_fn=post_jira_comment,
         create_jira_comment_fn=create_jira_comment,
     )

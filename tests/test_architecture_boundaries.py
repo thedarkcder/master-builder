@@ -384,13 +384,15 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             ROOT / "orchestrator" / "api" / "admin" / "workflows_service.py",
             ROOT / "orchestrator" / "temporal" / "activities" / "handler_workflow.py",
             ROOT / "orchestrator" / "core" / "workflow_runtime.py",
+            ROOT / "orchestrator" / "core" / "workflow_handler_registry.py",
             ROOT / "orchestrator" / "core" / "workflow_engine.py",
             ROOT / "orchestrator" / "core" / "workflow_engine_factory.py",
             ROOT / "orchestrator" / "core" / "legacy_workflow_engine.py",
             ROOT / "orchestrator" / "temporal" / "workflow_engine.py",
         ]
         banned_imports = {
-            "orchestrator.core.jira_parent_child_sync_service",
+            "orchestrator.core.parent_feature_workflow.handlers",
+            "orchestrator.core.parent_feature_workflow.retry",
         }
         violations: list[str] = []
         for module_path in modules:
@@ -411,12 +413,13 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             ROOT / "orchestrator" / "core" / "legacy_workflow_engine.py",
             ROOT / "orchestrator" / "temporal" / "workflow_engine.py",
         ]
-        banned_token = "retry_" + "workflow_operation_fn"
-        violations = [
-            module_path.relative_to(ROOT).as_posix()
-            for module_path in modules
-            if banned_token in module_path.read_text(encoding="utf-8")
-        ]
+        banned_tokens = {"retry_" + "workflow_operation_fn", "resolve_" + "operation_retry_handler_fn"}
+        violations = []
+        for module_path in modules:
+            source = module_path.read_text(encoding="utf-8")
+            for banned_token in banned_tokens:
+                if banned_token in source:
+                    violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{banned_token}")
         self.assertEqual(
             violations,
             [],
@@ -424,19 +427,27 @@ class ArchitectureBoundaryTests(unittest.TestCase):
         )
 
     def test_parent_feature_workflow_capabilities_are_separate(self) -> None:
-        module_path = ROOT / "orchestrator" / "core" / "jira_parent_child_sync_service.py"
-        tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
+        module_paths = [
+            ROOT / "orchestrator" / "core" / "parent_feature_workflow" / "handlers.py",
+            ROOT / "orchestrator" / "core" / "parent_feature_workflow" / "retry.py",
+        ]
         class_methods: dict[str, set[str]] = {}
-        for node in ast.walk(tree):
-            if isinstance(node, ast.ClassDef) and node.name in {
-                "ParentFeatureWorkflowAdvanceHandler",
-                "ParentFeatureWorkflowOperationRetryHandler",
-            }:
-                class_methods[node.name] = {
-                    item.name
-                    for item in node.body
-                    if isinstance(item, ast.FunctionDef)
-                }
+        class_modules: dict[str, str] = {}
+        for module_path in module_paths:
+            tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ClassDef) and node.name in {
+                    "ParentFeatureWorkflowAdvanceHandler",
+                    "ParentFeatureWorkflowOperationRetryHandler",
+                }:
+                    class_methods[node.name] = {
+                        item.name
+                        for item in node.body
+                        if isinstance(item, ast.FunctionDef)
+                    }
+                    class_modules[node.name] = module_path.name
+        self.assertEqual(class_modules.get("ParentFeatureWorkflowAdvanceHandler"), "handlers.py")
+        self.assertEqual(class_modules.get("ParentFeatureWorkflowOperationRetryHandler"), "retry.py")
         self.assertNotIn(
             "retry_operation",
             class_methods.get("ParentFeatureWorkflowAdvanceHandler", set()),

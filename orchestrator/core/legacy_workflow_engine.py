@@ -5,8 +5,10 @@ from types import SimpleNamespace
 from sqlalchemy.orm import Session, sessionmaker
 
 from orchestrator.core.config import Settings
-from orchestrator.core.workflow_advance import execute_workflow_advance, execute_workflow_operation_retry
+from orchestrator.core.workflow_advance import execute_workflow_advance
 from orchestrator.core.workflow_engine import WorkflowEngineState
+from orchestrator.core.workflow_handler_registry import WorkflowHandlerRegistry
+from orchestrator.core.workflow_operation_retry_use_case import retry_workflow_operation_with_registered_handler
 from orchestrator.core.workflow_operation_service import WorkflowOperationHandle
 from orchestrator.storage.models import Run, RunHumanInputRequest, Tenant, WorkflowExecution, WorkflowOperation
 
@@ -14,10 +16,11 @@ from orchestrator.storage.models import Run, RunHumanInputRequest, Tenant, Workf
 class LegacyWorkflowEngine:
     backend = "legacy"
 
-    def __init__(self, *, process_claimed_run_fn, build_runner_fn, runtime_kwargs_fn):
+    def __init__(self, *, process_claimed_run_fn, build_runner_fn, runtime_kwargs_fn, workflow_handler_registry=None):
         self._process_claimed_run_fn = process_claimed_run_fn
         self._build_runner_fn = build_runner_fn
         self._runtime_kwargs_fn = runtime_kwargs_fn
+        self._workflow_handler_registry: WorkflowHandlerRegistry | None = workflow_handler_registry
 
     def advance_workflow(
         self,
@@ -104,15 +107,14 @@ class LegacyWorkflowEngine:
         session_factory: sessionmaker[Session],
         workflow: WorkflowExecution,
         operation: WorkflowOperation,
-        resolve_operation_retry_handler_fn,
     ) -> WorkflowOperationHandle:
-        if resolve_operation_retry_handler_fn is None:
-            raise RuntimeError("Workflow operation retry handler resolution is not configured")
-        return execute_workflow_operation_retry(
+        if self._workflow_handler_registry is None:
+            raise RuntimeError("Workflow operation retry handler registry is not configured")
+        return retry_workflow_operation_with_registered_handler(
             session=session,
             settings=settings,
             session_factory=session_factory,
             workflow=workflow,
             operation=operation,
-            resolve_operation_retry_handler_fn=resolve_operation_retry_handler_fn,
+            handler_registry=self._workflow_handler_registry,
         )

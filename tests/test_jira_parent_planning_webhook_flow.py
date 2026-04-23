@@ -202,7 +202,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
             ),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.build_runtime_for_selector", return_value=object()),
             patch(
-                "orchestrator.core.jira_parent_child_sync_service.normalize_parent_feature_brief_with_runtime",
+                "orchestrator.core.parent_feature_workflow.adapters.normalize_parent_feature_brief_with_runtime",
                 return_value={
                     "brief": {
                         "objective": "Automatically route new Jira issues",
@@ -223,7 +223,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                 },
             ),
             patch(
-                "orchestrator.core.jira_parent_child_sync_service.run_specialist_planning_fanout",
+                "orchestrator.core.parent_feature_workflow.adapters.run_specialist_planning_fanout",
                 return_value=SimpleNamespace(
                     planning_state="planning_completed",
                     required_tasks=("Create child tickets automatically",),
@@ -500,7 +500,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
             ),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.build_runtime_for_selector", return_value=object()),
             patch(
-                "orchestrator.core.jira_parent_child_sync_service.normalize_parent_feature_brief_with_runtime",
+                "orchestrator.core.parent_feature_workflow.adapters.normalize_parent_feature_brief_with_runtime",
                 return_value={
                     "brief": {
                         "objective": "Automatically route backlog issues",
@@ -521,7 +521,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                 },
             ),
             patch(
-                "orchestrator.core.jira_parent_child_sync_service.run_specialist_planning_fanout",
+                "orchestrator.core.parent_feature_workflow.adapters.run_specialist_planning_fanout",
                 return_value=SimpleNamespace(
                     planning_state="planning_completed",
                     required_tasks=("Seed child tickets from backlog issue",),
@@ -642,7 +642,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                 return_value=SimpleNamespace(slug="pm-normalization-runtime"),
             ),
             patch(
-                "orchestrator.core.jira_parent_child_sync_service.normalize_parent_feature_brief_with_runtime",
+                "orchestrator.core.parent_feature_workflow.adapters.normalize_parent_feature_brief_with_runtime",
                 return_value={"brief": normalized_brief, "open_questions": []},
             ),
             patch(
@@ -728,7 +728,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                 return_value=SimpleNamespace(slug="pm-normalization-runtime"),
             ),
             patch(
-                "orchestrator.core.jira_parent_child_sync_service.normalize_parent_feature_brief_with_runtime",
+                "orchestrator.core.parent_feature_workflow.adapters.normalize_parent_feature_brief_with_runtime",
                 return_value={"brief": normalized_brief, "open_questions": []},
             ),
             patch(
@@ -911,7 +911,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
             patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_atlassian_oauth_context", return_value=oauth_context),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.build_runtime_for_selector", return_value=object()),
             patch(
-                "orchestrator.core.jira_parent_child_sync_service.normalize_parent_feature_brief_with_runtime",
+                "orchestrator.core.parent_feature_workflow.adapters.normalize_parent_feature_brief_with_runtime",
                 return_value={
                     "brief": {
                         "objective": "Runtime architecture reset",
@@ -932,7 +932,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                 },
             ),
             patch(
-                "orchestrator.core.jira_parent_child_sync_service.run_specialist_planning_fanout",
+                "orchestrator.core.parent_feature_workflow.adapters.run_specialist_planning_fanout",
                 return_value=SimpleNamespace(
                     planning_state="planning_completed",
                     required_tasks=("Create runtime-agnostic issue seeding interface", "Add architect Mermaid output"),
@@ -1125,9 +1125,9 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
             patch("orchestrator.core.worker.webhook_job_service.tenant_atlassian_oauth_context", return_value=oauth_context),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_atlassian_oauth_context", return_value=oauth_context),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.build_runtime_for_selector", return_value=object()),
-            patch("orchestrator.core.jira_parent_child_sync_service.normalize_parent_feature_brief_with_runtime") as normalize_mock,
+            patch("orchestrator.core.parent_feature_workflow.adapters.normalize_parent_feature_brief_with_runtime") as normalize_mock,
             patch(
-                "orchestrator.core.jira_parent_child_sync_service.run_specialist_planning_fanout",
+                "orchestrator.core.parent_feature_workflow.adapters.run_specialist_planning_fanout",
                 return_value=SimpleNamespace(
                     planning_state="planning_completed",
                     required_tasks=(),
@@ -1229,7 +1229,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
             patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_atlassian_oauth_context", return_value=oauth_context),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.build_runtime_for_selector", return_value=object()),
             patch(
-                "orchestrator.core.jira_parent_child_sync_service.normalize_parent_feature_brief_with_runtime",
+                "orchestrator.core.parent_feature_workflow.adapters.normalize_parent_feature_brief_with_runtime",
                 return_value={
                     "brief": {
                         "objective": "Runtime architecture reset",
@@ -1380,7 +1380,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
             patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_atlassian_oauth_context", return_value=oauth_context),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.build_runtime_for_selector", return_value=object()),
             patch(
-                "orchestrator.core.jira_parent_child_sync_service.normalize_parent_feature_brief_with_runtime",
+                "orchestrator.core.parent_feature_workflow.adapters.normalize_parent_feature_brief_with_runtime",
                 return_value={
                     "brief": {
                         "objective": "Runtime architecture reset",
@@ -1496,7 +1496,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
             patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_atlassian_oauth_context", return_value=oauth_context),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.build_runtime_for_selector", return_value=object()),
             patch(
-                "orchestrator.core.jira_parent_child_sync_service.normalize_parent_feature_brief_with_runtime",
+                "orchestrator.core.parent_feature_workflow.adapters.normalize_parent_feature_brief_with_runtime",
                 return_value={
                     "brief": {
                         "objective": "Runtime architecture reset",
@@ -1517,7 +1517,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                 },
             ),
             patch(
-                "orchestrator.core.jira_parent_child_sync_service.run_specialist_planning_fanout",
+                "orchestrator.core.parent_feature_workflow.adapters.run_specialist_planning_fanout",
                 return_value=SimpleNamespace(
                     planning_state="planning_needs_clarification",
                     required_tasks=(),
@@ -1625,7 +1625,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
             patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_atlassian_oauth_context", return_value=oauth_context),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.build_runtime_for_selector", return_value=object()),
             patch(
-                "orchestrator.core.jira_parent_child_sync_service.normalize_parent_feature_brief_with_runtime",
+                "orchestrator.core.parent_feature_workflow.adapters.normalize_parent_feature_brief_with_runtime",
                 return_value={
                     "brief": {
                         "objective": "Identity redesign",
@@ -1646,7 +1646,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                 },
             ),
             patch(
-                "orchestrator.core.jira_parent_child_sync_service.run_specialist_planning_fanout",
+                "orchestrator.core.parent_feature_workflow.adapters.run_specialist_planning_fanout",
                 return_value=SimpleNamespace(
                     planning_state="planning_completed",
                     required_tasks=(),
@@ -1794,7 +1794,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
             patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_atlassian_oauth_context", return_value=oauth_context),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.build_runtime_for_selector", return_value=object()),
             patch(
-                "orchestrator.core.jira_parent_child_sync_service.normalize_parent_feature_brief_with_runtime",
+                "orchestrator.core.parent_feature_workflow.adapters.normalize_parent_feature_brief_with_runtime",
                 return_value={
                     "brief": {
                         "objective": "Identity redesign",
@@ -1992,7 +1992,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
             patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_atlassian_oauth_context", return_value=oauth_context),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.build_runtime_for_selector", return_value=object()),
             patch(
-                "orchestrator.core.jira_parent_child_sync_service.normalize_parent_feature_brief_with_runtime",
+                "orchestrator.core.parent_feature_workflow.adapters.normalize_parent_feature_brief_with_runtime",
                 return_value={
                     "brief": {
                         "objective": "Identity redesign",
@@ -2091,7 +2091,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
             patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_atlassian_oauth_context", return_value=oauth_context),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.build_runtime_for_selector", return_value=object()),
             patch(
-                "orchestrator.core.jira_parent_child_sync_service.normalize_parent_feature_brief_with_runtime",
+                "orchestrator.core.parent_feature_workflow.adapters.normalize_parent_feature_brief_with_runtime",
                 return_value={
                     "brief": {
                         "objective": "Identity redesign",
@@ -2192,7 +2192,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
             patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_atlassian_oauth_context", return_value=oauth_context),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.build_runtime_for_selector", return_value=object()),
             patch(
-                "orchestrator.core.jira_parent_child_sync_service.normalize_parent_feature_brief_with_runtime",
+                "orchestrator.core.parent_feature_workflow.adapters.normalize_parent_feature_brief_with_runtime",
                 return_value={
                     "brief": {
                         "objective": "Runtime architecture reset",

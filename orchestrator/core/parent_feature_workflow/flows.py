@@ -22,10 +22,10 @@ from orchestrator.core.jira_parent_child_sync_publishers import (
     post_sync_note as _post_sync_note,
     update_issue_sync_label as _update_issue_sync_label,
 )
-from orchestrator.core.jira_parent_child_sync_service import (
+from orchestrator.core.parent_feature_workflow.adapters import (
     _JiraParentIssueGateway,
-    _jira_adapter,
     _atlassian_oauth_context,
+    _jira_adapter,
 )
 from orchestrator.core.jira_parent_child_sync_shared import (
     JiraParentChildSyncContext,
@@ -51,7 +51,7 @@ from orchestrator.core.pm_interview_service import (
 from orchestrator.core.runtime_invocation import AgentInvocationContext
 from orchestrator.core.webhook_job_errors import RetryableWebhookJobError
 from orchestrator.core.workflow_runtime import WorkflowAdvanceRequest
-from orchestrator.core.workflow_handler_registry import build_workflow_handler_registry
+from orchestrator.core.workflow_handler_composition import build_installed_workflow_handler_registry
 
 logger = logging.getLogger(__name__)
 
@@ -108,7 +108,7 @@ def handle_parent_feature_sync(
     post_jira_comment_fn,
     create_jira_comment_fn,
 ) -> JiraParentChildSyncResult:  # noqa: ANN001
-    handler_registry = build_workflow_handler_registry(
+    handler_registry = build_installed_workflow_handler_registry(
         integration_router=integration_router,
         extract_changed_fields_fn=extract_changed_fields_fn,
         extract_status_transition_fn=extract_status_transition_fn,
@@ -124,6 +124,7 @@ def handle_parent_feature_sync(
         build_runner_fn=None,
         runtime_kwargs_fn=None,
         resolve_advance_handler_fn=handler_registry.resolve_advance_handler,
+        workflow_handler_registry=handler_registry,
     )
     result = runtime.advance(
         request=WorkflowAdvanceRequest(
@@ -702,7 +703,7 @@ def handle_pm_interview_reply(
             issue_key=context.issue_key,
         )
     session.commit()
-    handler_registry = build_workflow_handler_registry(
+    handler_registry = build_installed_workflow_handler_registry(
         integration_router=integration_router,
         extract_changed_fields_fn=lambda *args, **kwargs: [],
         extract_status_transition_fn=lambda *args, **kwargs: (None, None),
@@ -718,6 +719,7 @@ def handle_pm_interview_reply(
         build_runner_fn=None,
         runtime_kwargs_fn=None,
         resolve_advance_handler_fn=handler_registry.resolve_advance_handler,
+        workflow_handler_registry=handler_registry,
     )
     advance_result = runtime.advance(
         request=WorkflowAdvanceRequest(
