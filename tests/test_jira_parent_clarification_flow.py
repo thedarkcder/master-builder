@@ -670,7 +670,7 @@ class JiraParentClarificationFlowTests(JiraWebhookHarness):
                 },
             ),
             patch(
-                "orchestrator.core.jira_parent_child_sync_service._ParentBriefPlanner.plan_backlog_parent",
+                "orchestrator.core.parent_feature_workflow.adapters._ParentBriefPlanner.plan_backlog_parent",
                 return_value=(SimpleNamespace(planning_state="planning_completed", open_behavior_questions=()), {"planning": "package"}),
             ),
             patch(
@@ -764,7 +764,7 @@ class JiraParentClarificationFlowTests(JiraWebhookHarness):
         }
 
         with (
-            patch("orchestrator.core.jira_parent_child_sync_flows.continue_pm_interview_from_followup") as continue_mock,
+            patch("orchestrator.core.parent_feature_workflow.flows.continue_pm_interview_from_followup") as continue_mock,
             patch("orchestrator.api.webhooks.jira_parent_child_sync.seed_issues_with_runtime") as seed_mock,
         ):
             response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
@@ -933,7 +933,7 @@ class JiraParentClarificationFlowTests(JiraWebhookHarness):
                 },
             ),
             patch(
-                "orchestrator.core.jira_parent_child_sync_service._ParentBriefPlanner.plan_backlog_parent",
+                "orchestrator.core.parent_feature_workflow.adapters._ParentBriefPlanner.plan_backlog_parent",
                 return_value=(SimpleNamespace(planning_state="planning_blocked", open_behavior_questions=("Where should the user start this flow?",)), {"planning": "package"}),
             ),
             patch(

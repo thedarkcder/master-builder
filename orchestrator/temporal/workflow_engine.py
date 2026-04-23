@@ -8,9 +8,11 @@ from datetime import timedelta
 from sqlalchemy.orm import Session, sessionmaker
 
 from orchestrator.core.config import Settings
-from orchestrator.core.workflow_advance import WorkflowAdvanceOutcome, execute_workflow_operation_retry
+from orchestrator.core.workflow_advance import WorkflowAdvanceOutcome
 from orchestrator.core.workflow_engine import WorkflowEngineState
 from orchestrator.core.workflow_operation_service import WorkflowOperationHandle
+from orchestrator.core.workflow_handler_registry import WorkflowHandlerRegistry
+from orchestrator.core.workflow_operation_retry_use_case import retry_workflow_operation_with_registered_handler
 from orchestrator.core.workflow_execution_projection import workflow_execution_id
 from orchestrator.core.workflow_type_catalog import get_workflow_type, normalize_workflow_retry_policy_config
 from orchestrator.storage.models import Run, RunHumanInputRequest, WorkflowExecution, WorkflowOperation
@@ -254,10 +256,11 @@ async def _ensure_handler_workflow_handle(
 class TemporalWorkflowEngine:
     backend = "temporal"
 
-    def __init__(self, *, process_claimed_run_fn, build_runner_fn, runtime_kwargs_fn):
+    def __init__(self, *, process_claimed_run_fn, build_runner_fn, runtime_kwargs_fn, workflow_handler_registry=None):
         self._process_claimed_run_fn = process_claimed_run_fn
         self._build_runner_fn = build_runner_fn
         self._runtime_kwargs_fn = runtime_kwargs_fn
+        self._workflow_handler_registry: WorkflowHandlerRegistry | None = workflow_handler_registry
 
     def advance_workflow(
         self,
@@ -403,7 +406,6 @@ class TemporalWorkflowEngine:
         session_factory: sessionmaker[Session],
         workflow: WorkflowExecution,
         operation: WorkflowOperation,
-        resolve_operation_retry_handler_fn,
     ) -> WorkflowOperationHandle:
         config = _temporal_config_for_workflow(session=session, workflow=workflow, settings=settings)
         if config.execution_mode == "handler":
@@ -431,13 +433,13 @@ class TemporalWorkflowEngine:
                 operation_type=result.operation_type,
                 status=result.operation_status,
             )
-        if resolve_operation_retry_handler_fn is None:
-            raise RuntimeError("Workflow operation retry handler resolution is not configured")
-        return execute_workflow_operation_retry(
+        if self._workflow_handler_registry is None:
+            raise RuntimeError("Workflow operation retry handler registry is not configured")
+        return retry_workflow_operation_with_registered_handler(
             session=session,
             settings=settings,
             session_factory=session_factory,
             workflow=workflow,
             operation=operation,
-            resolve_operation_retry_handler_fn=resolve_operation_retry_handler_fn,
+            handler_registry=self._workflow_handler_registry,
         )
