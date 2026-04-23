@@ -4405,7 +4405,7 @@ class AdminApiTests(AdminApiTestHarness):
             patch("orchestrator.api.admin.integration_dependencies.atlassian_oauth_client", return_value=_FakeClient()),
         ):
             response = self.client.post(
-                "/api/admin/tenants/tenant-a/jira/webhooks/provision",
+                "/api/admin/tenants/tenant-a/atlassian/jira/webhooks/provision",
                 auth=("admin", "secret"),
             )
 
@@ -4437,12 +4437,12 @@ class AdminApiTests(AdminApiTestHarness):
             patch("orchestrator.api.admin.integration_dependencies.atlassian_oauth_client", return_value=_FakeClient()),
         ):
             response = self.client.post(
-                "/api/admin/tenants/tenant-a/jira/webhooks/provision",
+                "/api/admin/tenants/tenant-a/atlassian/jira/webhooks/provision",
                 auth=("admin", "secret"),
             )
 
         self.assertEqual(response.status_code, 502)
-        self.assertIn("missing Jira admin permission", response.json()["details"])
+        self.assertIn("missing Jira admin permission", response.json()["detail"])
 
         tenant_response = self.client.get("/api/admin/tenants/tenant-a", auth=("admin", "secret"))
         self.assertEqual(tenant_response.status_code, 200)
@@ -4507,7 +4507,7 @@ class AdminApiTests(AdminApiTestHarness):
             patch("orchestrator.api.admin.integration_dependencies.atlassian_oauth_client", return_value=fake_client),
         ):
             response = self.client.post(
-                "/api/admin/tenants/tenant-a/jira/webhooks/provision",
+                "/api/admin/tenants/tenant-a/atlassian/jira/webhooks/provision",
                 auth=("admin", "secret"),
             )
 
@@ -4568,7 +4568,7 @@ class AdminApiTests(AdminApiTestHarness):
             patch("orchestrator.api.admin.integration_dependencies.atlassian_oauth_client", return_value=fake_client),
         ):
             response = self.client.post(
-                "/api/admin/tenants/tenant-a/jira/webhooks/provision",
+                "/api/admin/tenants/tenant-a/atlassian/jira/webhooks/provision",
                 auth=("admin", "secret"),
             )
 
@@ -4640,7 +4640,7 @@ class AdminApiTests(AdminApiTestHarness):
             patch("orchestrator.api.admin.integration_dependencies.atlassian_oauth_client", return_value=fake_client),
         ):
             response = self.client.post(
-                "/api/admin/tenants/tenant-a/jira/webhooks/provision",
+                "/api/admin/tenants/tenant-a/atlassian/jira/webhooks/provision",
                 auth=("admin", "secret"),
             )
 
@@ -4783,7 +4783,7 @@ class AdminApiTests(AdminApiTestHarness):
             patch("orchestrator.api.admin.integration_dependencies.atlassian_oauth_client", return_value=fake_client),
         ):
             provision = self.client.post(
-                "/api/admin/tenants/tenant-a/jira/webhooks/provision",
+                "/api/admin/tenants/tenant-a/atlassian/jira/webhooks/provision",
                 auth=("admin", "secret"),
             )
             self.assertEqual(provision.status_code, 200)
@@ -4791,7 +4791,7 @@ class AdminApiTests(AdminApiTestHarness):
             self.assertEqual(provision.json()["webhook_ids"], [10101])
 
             diagnostics = self.client.get(
-                "/api/admin/tenants/tenant-a/jira/webhooks/diagnostics",
+                "/api/admin/tenants/tenant-a/atlassian/jira/webhooks/diagnostics",
                 auth=("admin", "secret"),
             )
             self.assertEqual(diagnostics.status_code, 200)
@@ -4799,7 +4799,7 @@ class AdminApiTests(AdminApiTestHarness):
             self.assertFalse(diagnostics.json()["recent_delivery_ok"])
 
             reset = self.client.post(
-                "/api/admin/tenants/tenant-a/jira/webhooks/reset",
+                "/api/admin/tenants/tenant-a/atlassian/jira/webhooks/reset",
                 auth=("admin", "secret"),
             )
             self.assertEqual(reset.status_code, 200)
@@ -4820,6 +4820,32 @@ class AdminApiTests(AdminApiTestHarness):
         self.assertEqual(tenant_response.status_code, 200)
         self.assertIsNone(tenant_response.json()["jira"]["connection_id"])
         self.assertEqual(tenant_response.json()["jira"]["managed_webhook_ids"], [])
+
+    def test_disconnect_tenant_atlassian_fails_when_managed_webhook_delete_fails(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        with patch(
+            "orchestrator.api.admin.integration_dependencies.delete_jira_webhooks",
+            return_value=(False, "Jira API rejected webhook deletion", [10101]),
+        ):
+            response = self.client.post(
+                "/api/admin/tenants/tenant-a/atlassian/disconnect",
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(response.status_code, 502)
+        self.assertIn("Jira API rejected webhook deletion", response.json()["detail"])
+
+        tenant_response = self.client.get("/api/admin/tenants/tenant-a", auth=("admin", "secret"))
+        self.assertEqual(tenant_response.status_code, 200)
+        self.assertEqual(tenant_response.json()["jira"]["connection_id"], "conn-1")
 
     def test_reset_tenant_jira_webhooks_recovers_single_url_conflict(self) -> None:
         payload = self._tenant_payload()
@@ -4864,7 +4890,7 @@ class AdminApiTests(AdminApiTestHarness):
             patch("orchestrator.api.admin.integration_dependencies.atlassian_oauth_client", return_value=_FakeClient()),
         ):
             response = self.client.post(
-                "/api/admin/tenants/tenant-a/jira/webhooks/reset",
+                "/api/admin/tenants/tenant-a/atlassian/jira/webhooks/reset",
                 auth=("admin", "secret"),
             )
 
@@ -4888,7 +4914,7 @@ class AdminApiTests(AdminApiTestHarness):
         with patch("orchestrator.api.admin.integration_dependencies.provision_jira_webhook", side_effect=RuntimeError("boom")):
             with TestClient(create_app(), raise_server_exceptions=False) as non_raising_client:
                 response = non_raising_client.post(
-                    "/api/admin/tenants/tenant-a/jira/webhooks/reset",
+                    "/api/admin/tenants/tenant-a/atlassian/jira/webhooks/reset",
                     auth=("admin", "secret"),
                 )
 
