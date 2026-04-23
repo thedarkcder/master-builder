@@ -22,12 +22,16 @@ from orchestrator.core.parent_feature_brief_store import (
     persist_parent_feature_brief_snapshot,
     resolve_parent_feature_brief,
 )
+from orchestrator.core.jira_links import (
+    architecture_document_remote_link_spec,
+    workflow_execution_remote_link_spec,
+)
 from orchestrator.core.jira_parent_child_sync_publishers import (
     mark_issues_sync_blocked as _mark_issues_sync_blocked,
     post_parent_brief_questions_to_discord as _post_parent_brief_questions_to_discord,
     post_parent_brief_questions_to_jira as _post_parent_brief_questions_to_jira,
     post_sync_note as _post_sync_note,
-    rewrite_parent_issue_from_brief as _rewrite_parent_issue_from_brief,
+    upsert_jira_remote_link as _upsert_jira_remote_link,
     update_issue_sync_label as _update_issue_sync_label,
 )
 from orchestrator.core.jira_parent_child_sync_shared import (
@@ -57,10 +61,12 @@ from orchestrator.core.parent_planning_clarification_service import (
     ClarificationPublishEffects,
     ParentPlanningClarificationService,
 )
+from orchestrator.core.parent_planning_fanout_service import ParentPlanningFanoutService
 from orchestrator.core.workflow_runtime import (
     WorkflowAdvanceOutcome,
     WorkflowAdvanceRequest,
 )
+from orchestrator.core.workflow_execution_projection import resolve_latest_issue_workflow
 from orchestrator.tools.atlassian_oauth import JiraIssueDetail
 from orchestrator.storage.models import Project
 
@@ -132,6 +138,7 @@ class ParentFeatureWorkflowAdvanceHandler:
                 brief_planner=brief_planner,
                 child_sync_gateway=child_sync_gateway,
                 clarification_service=ParentPlanningClarificationService(),
+                fanout_service=ParentPlanningFanoutService(),
                 workflow_type=workflow_type,
                 project_key_for_issue_fn=_project_key_for_issue,
                 material_parent_changed_fields_fn=_material_parent_changed_fields,
@@ -255,43 +262,49 @@ class _JiraParentIssueGateway:
             for preview in previews
         ]
 
-    def rewrite_parent_issue_from_brief(
-        self,
-        *,
-        parent_detail: JiraIssueDetail,
-        brief_payload: dict[str, object],
-        sync_status: str,
-        planning_state: str | None,
-        open_questions: list[object] | None,
-    ) -> None:
-        architecture_gate = self.resolve_architecture_gate(
-            parent_issue_key=parent_detail.key,
-            issue_summary=parent_detail.summary,
-            issue_labels=list(parent_detail.labels or []),
-        )
-        architecture_document = architecture_gate.document
-        if architecture_gate.required and architecture_document is None:
-            raise ValueError(architecture_gate.block_reason or f"Architecture document link is required for {parent_detail.key}")
-        _rewrite_parent_issue_from_brief(
-            oauth=self._oauth_context(),
-            parent_detail=parent_detail,
-            brief_payload=brief_payload,
-            sync_status=sync_status,
-            planning_state=planning_state,
-            open_questions=open_questions,
-            architecture_title=architecture_document.title if architecture_document is not None else None,
-            architecture_url=(
-                str(architecture_document.canonical_url or "").strip()
-                if architecture_document is not None
-                else None
-            ),
-        )
-
     def update_issue_sync_label(self, *, issue_detail: JiraIssueDetail, target_label: str) -> None:
         _update_issue_sync_label(
             oauth=self._oauth_context(),
             issue_detail=issue_detail,
             target_label=target_label,
+        )
+
+    def upsert_architecture_document_link(
+        self,
+        *,
+        issue_key: str,
+        title: str,
+        url: str,
+    ) -> None:
+        _upsert_jira_remote_link(
+            oauth=self._oauth_context(),
+            issue_key=issue_key,
+            spec=architecture_document_remote_link_spec(
+                issue_key=issue_key,
+                title=title,
+                url=url,
+            ),
+        )
+
+    def upsert_workflow_execution_link(
+        self,
+        *,
+        issue_key: str,
+    ) -> None:
+        workflow = resolve_latest_issue_workflow(
+            session=self._session,
+            tenant_id=self._context.tenant_id,
+            issue_key=issue_key,
+        )
+        if workflow is None:
+            return
+        _upsert_jira_remote_link(
+            oauth=self._oauth_context(),
+            issue_key=issue_key,
+            spec=workflow_execution_remote_link_spec(
+                admin_ui_base_url=self._settings.admin_ui_base_url,
+                workflow=workflow,
+            ),
         )
 
     def post_parent_brief_questions(

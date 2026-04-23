@@ -26,16 +26,22 @@ from orchestrator.core.jira_parent_child_sync_service import (
     PLANNING_STATE_COMPLETED,
     _ParentBriefPlanner,
     _ParentChildSyncGateway,
-    _rewrite_parent_issue_from_brief,
     JiraParentChildSyncContext,
 )
 from orchestrator.core.jira_parent_child_sync_publishers import (
     post_engineering_clarification_questions_to_jira as _post_engineering_clarification_questions_to_jira,
+    update_issue_sync_label as _update_issue_sync_label,
+    upsert_jira_remote_link as _upsert_jira_remote_link,
+)
+from orchestrator.core.jira_links import (
+    architecture_document_remote_link_spec,
+    workflow_execution_remote_link_spec,
 )
 from orchestrator.core.parent_planning_clarification_service import (
     ClarificationPublishEffects,
     ParentPlanningClarificationService,
 )
+from orchestrator.core.parent_planning_fanout_service import ParentPlanningFanoutSeedError, ParentPlanningFanoutService
 from orchestrator.core.parent_feature_brief_store import resolve_parent_feature_brief
 from orchestrator.core.workflow_operation_service import (
     WorkflowOperationHandle,
@@ -117,16 +123,6 @@ def _execute_jira_parent_update(
     seed_issues_with_runtime_fn,
 ) -> WorkflowOperationHandle:
     _ = build_runtime_for_selector_fn, seed_issues_with_runtime_fn
-    brief = resolve_parent_feature_brief(
-        session=context.session,
-        tenant_id=context.tenant.tenant_id,
-        parent_issue_key=context.workflow.issue_key,
-    )
-    if brief is None:
-        raise InvalidWorkflowOperationError(
-            f"No confirmed parent brief snapshot is available for {context.workflow.issue_key}"
-        )
-
     jira_adapter = integration_router.jira(
         session=context.session,
         tenant=context.tenant,
@@ -152,20 +148,35 @@ def _execute_jira_parent_update(
     mark_workflow_running(workflow=context.workflow, now=_now())
 
     try:
-        _rewrite_parent_issue_from_brief(
+        _update_issue_sync_label(
             oauth=oauth,
             parent_detail=parent_detail,
-            brief_payload=brief.to_payload(),
-            sync_status="children_syncing",
-            planning_state="brief_normalized",
-            open_questions=[],
-            architecture_title=architecture_document.title if architecture_document is not None else None,
-            architecture_url=(
-                str(architecture_document.canonical_url or "").strip()
-                if architecture_document is not None
-                else None
+            target_label="children_syncing",
+        )
+        _upsert_jira_remote_link(
+            oauth=oauth,
+            issue_key=context.workflow.issue_key,
+            spec=workflow_execution_remote_link_spec(
+                admin_ui_base_url=context.settings.admin_ui_base_url,
+                workflow=context.workflow,
             ),
         )
+        if architecture_document is not None:
+            title = str(architecture_document.title or "").strip()
+            url = str(architecture_document.canonical_url or "").strip()
+            if not title or not url:
+                raise InvalidWorkflowOperationError(
+                    f"Architecture document link is incomplete for {context.workflow.issue_key}"
+                )
+            _upsert_jira_remote_link(
+                oauth=oauth,
+                issue_key=context.workflow.issue_key,
+                spec=architecture_document_remote_link_spec(
+                    issue_key=context.workflow.issue_key,
+                    title=title,
+                    url=url,
+                ),
+            )
     except Exception as exc:  # noqa: BLE001
         category = _classify_operation_failure(error=exc)
         logger.exception(
@@ -194,7 +205,7 @@ def _execute_jira_parent_update(
         context.session,
         operation=context.operation,
         attempt=attempt,
-        summary="Parent Jira issue synced from the confirmed brief.",
+        summary="Parent Jira metadata and reference links synced without modifying the description.",
     )
     recompute_workflow_status(session=context.session, workflow=context.workflow, now=_now())
     return WorkflowOperationHandle(
@@ -257,6 +268,7 @@ def _execute_jira_child_fanout(
         seed_issues_with_runtime_fn=seed_issues_with_runtime_fn,
     )
     clarification_service = ParentPlanningClarificationService()
+    fanout_service = ParentPlanningFanoutService()
 
     mark_workflow_running(workflow=context.workflow, now=_now())
 
@@ -271,10 +283,43 @@ def _execute_jira_child_fanout(
     )
 
     try:
-        planning_result, planning_package = planner.plan_backlog_parent(
+        fanout = fanout_service.plan_and_seed(
             parent_detail=parent_detail,
             product_brief=brief.to_payload(),
             project_key=context.project.jira_project_key,
+            planner=planner,
+            child_sync_gateway=child_sync_gateway,
+        )
+    except ParentPlanningFanoutSeedError as exc:
+        if exc.planning_result.planning_state == PLANNING_STATE_COMPLETED and backlog_planning_operation.status != "completed":
+            planning_attempt = start_workflow_operation_attempt(context.session, operation=backlog_planning_operation)
+            complete_workflow_operation(
+                context.session,
+                operation=backlog_planning_operation,
+                attempt=planning_attempt,
+                summary="Backlog planning completed from the confirmed parent brief.",
+            )
+        category = _classify_operation_failure(error=exc.error)
+        logger.exception(
+            "workflow_operation_execution_failed workflow_id=%s operation_id=%s operation_type=%s error=%s",
+            context.workflow.workflow_id,
+            context.operation.operation_id,
+            context.operation.operation_type,
+            exc.error,
+        )
+        fail_workflow_operation(
+            context.session,
+            operation=context.operation,
+            attempt=attempt,
+            category=category,
+            message=str(exc.error),
+        )
+        mark_workflow_failed(workflow=context.workflow, message=str(exc.error), now=_now())
+        return WorkflowOperationHandle(
+            operation_id=context.operation.operation_id,
+            workflow_id=context.workflow.workflow_id,
+            operation_type=context.operation.operation_type,
+            status=context.operation.status,
         )
     except Exception as exc:  # noqa: BLE001
         category = _classify_operation_failure(error=exc)
@@ -299,7 +344,7 @@ def _execute_jira_child_fanout(
             operation_type=context.operation.operation_type,
             status=context.operation.status,
         )
-    if planning_result.planning_state == PLANNING_STATE_COMPLETED and backlog_planning_operation.status != "completed":
+    if fanout.planning_result.planning_state == PLANNING_STATE_COMPLETED and backlog_planning_operation.status != "completed":
         planning_attempt = start_workflow_operation_attempt(context.session, operation=backlog_planning_operation)
         complete_workflow_operation(
             context.session,
@@ -307,42 +352,9 @@ def _execute_jira_child_fanout(
             attempt=planning_attempt,
             summary="Backlog planning completed from the confirmed parent brief.",
         )
-    try:
-        seed_data = child_sync_gateway.seed_parent_backlog_children(
-            parent_detail=parent_detail,
-            project_key=context.project.jira_project_key,
-            planning_package=planning_package,
-            planning_state=planning_result.planning_state,
-        )
-    except Exception as exc:  # noqa: BLE001
-        category = _classify_operation_failure(error=exc)
-        logger.exception(
-            "workflow_operation_execution_failed workflow_id=%s operation_id=%s operation_type=%s error=%s",
-            context.workflow.workflow_id,
-            context.operation.operation_id,
-            context.operation.operation_type,
-            exc,
-        )
-        fail_workflow_operation(
-            context.session,
-            operation=context.operation,
-            attempt=attempt,
-            category=category,
-            message=str(exc),
-        )
-        mark_workflow_failed(workflow=context.workflow, message=str(exc), now=_now())
-        return WorkflowOperationHandle(
-            operation_id=context.operation.operation_id,
-            workflow_id=context.workflow.workflow_id,
-            operation_type=context.operation.operation_type,
-            status=context.operation.status,
-        )
 
-    if planning_result.planning_state != PLANNING_STATE_COMPLETED or bool(seed_data.get("requires_input")):
-        questions = _clarification_questions_for_fanout(
-            planning_result=planning_result,
-            seed_data=seed_data,
-        )
+    if not fanout.completed:
+        questions = fanout.questions
         clarification_service.ensure_active_clarification(
             issue_key=context.workflow.issue_key,
             questions=questions,
@@ -383,19 +395,6 @@ def _execute_jira_child_fanout(
         operation_type=context.operation.operation_type,
         status=context.operation.status,
     )
-
-
-def _clarification_questions_for_fanout(
-    *,
-    planning_result,
-    seed_data: dict[str, Any],
-) -> tuple[ClarificationQuestion, ...]:
-    questions = ClarificationQuestionSet.from_values(
-        getattr(planning_result, "open_behavior_questions", ()) or ()
-    )
-    if questions:
-        return questions.questions
-    return ClarificationQuestionSet.from_values(list(seed_data.get("questions", []) or [])).questions
 
 
 class _WorkflowEngineeringClarificationPublisher:
