@@ -17,11 +17,7 @@ from orchestrator.core.clarification_projection_service import (
 )
 from orchestrator.core.config import Settings
 from orchestrator.core.followup_context_service import FOLLOWUP_CONTEXT_ENGINEERING_CLARIFICATION
-from orchestrator.core.workflow_execution_status import (
-    mark_workflow_failed,
-    mark_workflow_running,
-    recompute_workflow_status,
-)
+from orchestrator.core.workflow_execution_projection import WorkflowExecutionProjection
 from orchestrator.core.jira_parent_child_sync_service import (
     PLANNING_STATE_COMPLETED,
     _ParentBriefPlanner,
@@ -46,7 +42,6 @@ from orchestrator.core.parent_feature_brief_store import resolve_parent_feature_
 from orchestrator.core.workflow_operation_service import (
     WorkflowOperationHandle,
     complete_workflow_operation,
-    fail_workflow_operation,
     start_workflow_operation_attempt,
     upsert_workflow_operation,
 )
@@ -144,8 +139,8 @@ def _execute_jira_parent_update(
         )
     architecture_document = architecture_gate.document
 
-    attempt = start_workflow_operation_attempt(context.session, operation=context.operation)
-    mark_workflow_running(workflow=context.workflow, now=_now())
+    lifecycle = WorkflowExecutionProjection(session=context.session, workflow=context.workflow)
+    operation, attempt = lifecycle.start_operation_attempt(operation_type=context.operation.operation_type)
 
     try:
         _update_issue_sync_label(
@@ -186,14 +181,12 @@ def _execute_jira_parent_update(
             context.operation.operation_type,
             exc,
         )
-        fail_workflow_operation(
-            context.session,
-            operation=context.operation,
+        lifecycle.fail_started_operation(
+            operation=operation,
             attempt=attempt,
             category=category,
             message=str(exc),
         )
-        mark_workflow_failed(workflow=context.workflow, message=str(exc), now=_now())
         return WorkflowOperationHandle(
             operation_id=context.operation.operation_id,
             workflow_id=context.workflow.workflow_id,
@@ -201,13 +194,11 @@ def _execute_jira_parent_update(
             status=context.operation.status,
         )
 
-    complete_workflow_operation(
-        context.session,
-        operation=context.operation,
+    lifecycle.complete_started_operation(
+        operation=operation,
         attempt=attempt,
         summary="Parent Jira metadata and reference links synced without modifying the description.",
     )
-    recompute_workflow_status(session=context.session, workflow=context.workflow, now=_now())
     return WorkflowOperationHandle(
         operation_id=context.operation.operation_id,
         workflow_id=context.workflow.workflow_id,
@@ -238,7 +229,8 @@ def _execute_jira_child_fanout(
         tenant=context.tenant,
         settings=context.settings,
     )
-    attempt = start_workflow_operation_attempt(context.session, operation=context.operation)
+    lifecycle = WorkflowExecutionProjection(session=context.session, workflow=context.workflow)
+    operation, attempt = lifecycle.start_operation_attempt(operation_type=context.operation.operation_type)
     parent_detail = jira_adapter.get_issue_detail(issue_id_or_key=context.workflow.issue_key)
     sync_context = JiraParentChildSyncContext(
         request_id=f"workflow-operation:{context.operation.operation_id}",
@@ -246,7 +238,7 @@ def _execute_jira_child_fanout(
         tenant=context.tenant,
         project_id=context.project.project_id,
         workflow_id=context.workflow.workflow_id,
-        operation_id=context.operation.operation_id,
+        operation_id=operation.operation_id,
         attempt=attempt.attempt_number,
         attempt_id=attempt.attempt_id,
         issue_key=context.workflow.issue_key,
@@ -269,8 +261,6 @@ def _execute_jira_child_fanout(
     )
     clarification_service = ParentPlanningClarificationService()
     fanout_service = ParentPlanningFanoutService()
-
-    mark_workflow_running(workflow=context.workflow, now=_now())
 
     backlog_planning_operation = upsert_workflow_operation(
         context.session,
@@ -307,14 +297,12 @@ def _execute_jira_child_fanout(
             context.operation.operation_type,
             exc.error,
         )
-        fail_workflow_operation(
-            context.session,
-            operation=context.operation,
+        lifecycle.fail_started_operation(
+            operation=operation,
             attempt=attempt,
             category=category,
             message=str(exc.error),
         )
-        mark_workflow_failed(workflow=context.workflow, message=str(exc.error), now=_now())
         return WorkflowOperationHandle(
             operation_id=context.operation.operation_id,
             workflow_id=context.workflow.workflow_id,
@@ -330,14 +318,12 @@ def _execute_jira_child_fanout(
             context.operation.operation_type,
             exc,
         )
-        fail_workflow_operation(
-            context.session,
-            operation=context.operation,
+        lifecycle.fail_started_operation(
+            operation=operation,
             attempt=attempt,
             category=category,
             message=str(exc),
         )
-        mark_workflow_failed(workflow=context.workflow, message=str(exc), now=_now())
         return WorkflowOperationHandle(
             operation_id=context.operation.operation_id,
             workflow_id=context.workflow.workflow_id,
@@ -367,14 +353,12 @@ def _execute_jira_child_fanout(
             issue_key=context.workflow.issue_key,
             questions=questions,
         )
-        fail_workflow_operation(
-            context.session,
-            operation=context.operation,
+        lifecycle.fail_started_operation(
+            operation=operation,
             attempt=attempt,
             category="missing_input",
             message=message,
         )
-        mark_workflow_failed(workflow=context.workflow, message=message, now=_now())
         return WorkflowOperationHandle(
             operation_id=context.operation.operation_id,
             workflow_id=context.workflow.workflow_id,
@@ -382,13 +366,11 @@ def _execute_jira_child_fanout(
             status=context.operation.status,
         )
 
-    complete_workflow_operation(
-        context.session,
-        operation=context.operation,
+    lifecycle.complete_started_operation(
+        operation=operation,
         attempt=attempt,
         summary="Engineering child fanout completed from the confirmed parent brief.",
     )
-    recompute_workflow_status(session=context.session, workflow=context.workflow, now=_now())
     return WorkflowOperationHandle(
         operation_id=context.operation.operation_id,
         workflow_id=context.workflow.workflow_id,

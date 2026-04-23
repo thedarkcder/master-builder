@@ -1282,7 +1282,7 @@ class JiraParentClarificationFlowTests(JiraWebhookHarness):
                     assert len(evidence) == 1
                     assert evidence[0]["source_ref"] == "2099"
                     assert "12 month retention window" in case.brief_json["constraints"]
-                return SimpleNamespace(handled=True, reason="pm_interview_still_open", extra={}, transition_plan=None)
+                return SimpleNamespace(handled=True, reason="pm_interview_still_open", extra={})
 
         oauth_context = SimpleNamespace(
             client=_FakeClient(),

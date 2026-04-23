@@ -21,7 +21,7 @@ from orchestrator.core.workflow_operation_service import (
     upsert_workflow_operation,
 )
 from orchestrator.core.workflow_type_catalog import list_workflow_type_operations
-from orchestrator.storage.models import WorkflowExecution, WorkflowOperation, WorkflowType
+from orchestrator.storage.models import WorkflowExecution, WorkflowOperation, WorkflowOperationAttempt, WorkflowType
 
 
 def _now() -> datetime:
@@ -103,6 +103,57 @@ class WorkflowExecutionProjection:
 
     def mark_running(self) -> None:
         mark_workflow_running(workflow=self.workflow, now=_now())
+
+    def start_operation_attempt(self, *, operation_type: str) -> tuple[WorkflowOperation, WorkflowOperationAttempt]:
+        operation = self._operation(operation_type)
+        attempt = start_workflow_operation_attempt(self.session, operation=operation)
+        return operation, attempt
+
+    def complete_started_operation(self, *, operation: WorkflowOperation, attempt: WorkflowOperationAttempt, summary: str) -> None:
+        complete_workflow_operation(
+            self.session,
+            operation=operation,
+            attempt=attempt,
+            summary=summary,
+        )
+        self.mark_completed_if_ready()
+
+    def fail_started_operation(
+        self,
+        *,
+        operation: WorkflowOperation,
+        attempt: WorkflowOperationAttempt,
+        category: str,
+        message: str,
+    ) -> None:
+        fail_workflow_operation(
+            self.session,
+            operation=operation,
+            attempt=attempt,
+            category=category,
+            message=message,
+        )
+        mark_workflow_failed(workflow=self.workflow, message=message, now=_now())
+
+    def set_operation_waiting_for_input(self, *, operation_type: str, summary: str) -> None:
+        operation = self._operation(operation_type)
+        now = _now()
+        operation.status = "waiting_for_input"
+        operation.summary = summary
+        operation.started_at = operation.started_at or now
+        operation.finished_at = None
+        operation.updated_at = now
+        mark_workflow_waiting_for_input(workflow=self.workflow, now=now)
+
+    def set_operation_completed(self, *, operation_type: str, summary: str) -> None:
+        operation = self._operation(operation_type)
+        now = _now()
+        operation.status = "completed"
+        operation.summary = summary
+        operation.started_at = operation.started_at or now
+        operation.finished_at = now
+        operation.updated_at = now
+        self.mark_running()
 
     def mark_waiting_for_input(self, *, operation_type: str, summary: str) -> None:
         operation = self._operation(operation_type)

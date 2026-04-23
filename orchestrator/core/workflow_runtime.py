@@ -7,12 +7,10 @@ from sqlalchemy.orm import Session
 
 from orchestrator.core.config import Settings
 from orchestrator.core.workflow_advance import (
+    WorkflowAdvanceLifecycle,
     WorkflowAdvanceHandler,
     WorkflowAdvanceOutcome,
     WorkflowAdvanceRequest,
-    WorkflowTransitionPlan,
-    WorkflowTransitionPlanner,
-    apply_workflow_transition_plan,
 )
 from orchestrator.core.workflow_engine import WorkflowEngineState
 from orchestrator.core.workflow_engine_factory import (
@@ -32,13 +30,11 @@ from orchestrator.storage.models import Run, RunHumanInputRequest, WorkflowExecu
 
 __all__ = [
     "WorkflowAdvanceHandler",
+    "WorkflowAdvanceLifecycle",
     "WorkflowAdvanceOutcome",
     "WorkflowAdvanceRequest",
     "WorkflowRuntime",
     "WorkflowRuntimeDeps",
-    "WorkflowTransitionPlan",
-    "WorkflowTransitionPlanner",
-    "apply_workflow_transition_plan",
     "build_workflow_runtime",
 ]
 
