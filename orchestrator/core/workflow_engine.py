@@ -11,7 +11,12 @@ from orchestrator.core.workflow_operation_service import WorkflowOperationHandle
 from orchestrator.storage.models import WorkflowOperation
 
 if TYPE_CHECKING:
-    from orchestrator.core.workflow_advance import WorkflowAdvanceHandler, WorkflowAdvanceOutcome, WorkflowAdvanceRequest
+    from orchestrator.core.workflow_advance import (
+        WorkflowAdvanceHandler,
+        WorkflowAdvanceOutcome,
+        WorkflowAdvanceRequest,
+        WorkflowOperationRetryHandler,
+    )
 
 
 @dataclass(frozen=True)
@@ -75,5 +80,6 @@ class WorkflowEngine(Protocol):
         session_factory: sessionmaker[Session],
         workflow: WorkflowExecution,
         operation: WorkflowOperation,
+        resolve_operation_retry_handler_fn: Callable[[str], "WorkflowOperationRetryHandler"] | None,
     ) -> WorkflowOperationHandle:
         ...

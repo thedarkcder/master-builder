@@ -40,10 +40,9 @@ from orchestrator.core.workflow_execution_lifecycle import reconcile_execution_w
 from orchestrator.core.workflow_advance import (
     InvalidWorkflowOperationRetryError,
     UnsupportedWorkflowOperationRetryError,
-    execute_workflow_operation_retry,
 )
 from orchestrator.core.workflow_runtime import build_workflow_runtime
-from orchestrator.core.jira_parent_child_sync_service import build_workflow_advance_handler_resolver
+from orchestrator.core.workflow_handler_registry import build_workflow_handler_registry
 from orchestrator.core.jira_links import tenant_jira_issue_url
 from orchestrator.core.runtime_requirements import resolve_required_runtime_kinds_for_workflow
 from orchestrator.core.workflow_type_catalog import get_workflow_type, list_workflow_type_operations
@@ -1642,7 +1641,7 @@ def retry_workflow_operation(
     if str(latest_attempt.status or "").strip().lower() not in {"failed", "retrying"}:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Workflow operation is not in a failed state")
     settings = get_settings()
-    resolve_advance_handler_fn = build_workflow_advance_handler_resolver(
+    handler_registry = build_workflow_handler_registry(
         integration_router=integration_router,
         extract_changed_fields_fn=lambda *_args, **_kwargs: [],
         extract_status_transition_fn=lambda *_args, **_kwargs: (None, None),
@@ -1657,10 +1656,8 @@ def retry_workflow_operation(
         process_claimed_run_fn=process_claimed_run,
         build_runner_fn=build_workflow_runner_for_session,
         runtime_kwargs_fn=build_run_process_kwargs,
-        retry_workflow_operation_fn=lambda **kwargs: execute_workflow_operation_retry(
-            **kwargs,
-            resolve_advance_handler_fn=resolve_advance_handler_fn,
-        ),
+        resolve_advance_handler_fn=handler_registry.resolve_advance_handler,
+        resolve_operation_retry_handler_fn=handler_registry.resolve_operation_retry_handler,
     )
     try:
         runtime.retry_operation(

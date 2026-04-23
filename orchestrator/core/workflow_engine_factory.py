@@ -19,7 +19,6 @@ def build_workflow_engine(
     process_claimed_run_fn,
     build_runner_fn,
     runtime_kwargs_fn,
-    retry_workflow_operation_fn=None,
 ) -> WorkflowEngine:
     _ = settings
     backend = resolve_workflow_backend(workflow=workflow)
@@ -30,13 +29,11 @@ def build_workflow_engine(
             process_claimed_run_fn=process_claimed_run_fn,
             build_runner_fn=build_runner_fn,
             runtime_kwargs_fn=runtime_kwargs_fn,
-            retry_workflow_operation_fn=retry_workflow_operation_fn,
         )
     return LegacyWorkflowEngine(
         process_claimed_run_fn=process_claimed_run_fn,
         build_runner_fn=build_runner_fn,
         runtime_kwargs_fn=runtime_kwargs_fn,
-        retry_workflow_operation_fn=retry_workflow_operation_fn,
     )
 
 

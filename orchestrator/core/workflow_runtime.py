@@ -11,6 +11,7 @@ from orchestrator.core.workflow_advance import (
     WorkflowAdvanceHandler,
     WorkflowAdvanceOutcome,
     WorkflowAdvanceRequest,
+    WorkflowOperationRetryHandler,
 )
 from orchestrator.core.workflow_engine import WorkflowEngineState
 from orchestrator.core.workflow_engine_factory import (
@@ -33,6 +34,7 @@ __all__ = [
     "WorkflowAdvanceLifecycle",
     "WorkflowAdvanceOutcome",
     "WorkflowAdvanceRequest",
+    "WorkflowOperationRetryHandler",
     "WorkflowRuntime",
     "WorkflowRuntimeDeps",
     "build_workflow_runtime",
@@ -44,8 +46,8 @@ class WorkflowRuntimeDeps:
     process_claimed_run_fn: Callable | None
     build_runner_fn: Callable | None
     runtime_kwargs_fn: Callable | None
-    retry_workflow_operation_fn: Callable | None = None
     resolve_advance_handler_fn: Callable[[str], "WorkflowAdvanceHandler"] | None = None
+    resolve_operation_retry_handler_fn: Callable[[str], "WorkflowOperationRetryHandler"] | None = None
 
 
 class WorkflowRuntime:
@@ -67,7 +69,6 @@ class WorkflowRuntime:
             process_claimed_run_fn=self._deps.process_claimed_run_fn,
             build_runner_fn=self._deps.build_runner_fn,
             runtime_kwargs_fn=self._deps.runtime_kwargs_fn,
-            retry_workflow_operation_fn=self._deps.retry_workflow_operation_fn,
         )
 
     def advance(
@@ -229,6 +230,7 @@ class WorkflowRuntime:
                 session_factory=create_session_factory_for_engine(session=self._session, settings=self._settings),
                 workflow=workflow,
                 operation=operation,
+                resolve_operation_retry_handler_fn=self._deps.resolve_operation_retry_handler_fn,
             )
 
 
@@ -239,8 +241,8 @@ def build_workflow_runtime(
     process_claimed_run_fn,
     build_runner_fn,
     runtime_kwargs_fn,
-    retry_workflow_operation_fn=None,
     resolve_advance_handler_fn=None,
+    resolve_operation_retry_handler_fn=None,
 ) -> WorkflowRuntime:
     return WorkflowRuntime(
         session=session,
@@ -249,7 +251,7 @@ def build_workflow_runtime(
             process_claimed_run_fn=process_claimed_run_fn,
             build_runner_fn=build_runner_fn,
             runtime_kwargs_fn=runtime_kwargs_fn,
-            retry_workflow_operation_fn=retry_workflow_operation_fn,
             resolve_advance_handler_fn=resolve_advance_handler_fn,
+            resolve_operation_retry_handler_fn=resolve_operation_retry_handler_fn,
         ),
     )

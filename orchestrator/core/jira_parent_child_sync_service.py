@@ -542,38 +542,6 @@ class _ParentWorkflowEngineeringClarificationPublisher:
         )
 
 
-def build_workflow_advance_handler_resolver(
-    *,
-    integration_router,
-    extract_changed_fields_fn,
-    extract_status_transition_fn,
-    build_runtime_for_selector_fn,
-    seed_issues_with_runtime_fn,
-    post_jira_comment_fn,
-    create_jira_comment_fn,
-):
-    handlers = {
-        "jira_parent_feature": ParentFeatureWorkflowAdvanceHandler(
-            integration_router=integration_router,
-            extract_changed_fields_fn=extract_changed_fields_fn,
-            extract_status_transition_fn=extract_status_transition_fn,
-            build_runtime_for_selector_fn=build_runtime_for_selector_fn,
-            seed_issues_with_runtime_fn=seed_issues_with_runtime_fn,
-            post_jira_comment_fn=post_jira_comment_fn,
-            create_jira_comment_fn=create_jira_comment_fn,
-        )
-    }
-
-    def _resolve(handler_key: str):
-        normalized = str(handler_key or "").strip()
-        handler = handlers.get(normalized)
-        if handler is None:
-            raise LookupError(f"No workflow advance handler is registered for {handler_key}")
-        return handler
-
-    return _resolve
-
-
 class _JiraParentIssueGateway:
     def __init__(
         self,
