@@ -1,16 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 from orchestrator.core.clarification_questions import ClarificationQuestion, ClarificationQuestionSet
 from orchestrator.core.specialist_planning import PLANNING_STATE_COMPLETED
 
 
 @dataclass(frozen=True)
-class ParentPlanningFanoutResult:
-    planning_result: Any
-    planning_package: dict[str, Any]
+class ParentPlanningSeedEvaluation:
     seed_data: dict[str, Any]
     updated_children: list[str]
     created_children: list[str]
@@ -19,9 +17,38 @@ class ParentPlanningFanoutResult:
 
     @property
     def completed(self) -> bool:
-        return self.planning_result.planning_state == PLANNING_STATE_COMPLETED and not bool(
-            self.seed_data.get("requires_input")
-        )
+        return not bool(self.seed_data.get("requires_input"))
+
+
+@dataclass(frozen=True)
+class ParentPlanningFanoutResult:
+    planning_result: Any
+    planning_package: dict[str, Any]
+    seed_evaluation: ParentPlanningSeedEvaluation
+
+    @property
+    def seed_data(self) -> dict[str, Any]:
+        return self.seed_evaluation.seed_data
+
+    @property
+    def updated_children(self) -> list[str]:
+        return self.seed_evaluation.updated_children
+
+    @property
+    def created_children(self) -> list[str]:
+        return self.seed_evaluation.created_children
+
+    @property
+    def changed_children(self) -> list[str]:
+        return self.seed_evaluation.changed_children
+
+    @property
+    def questions(self) -> tuple[ClarificationQuestion, ...]:
+        return self.seed_evaluation.questions
+
+    @property
+    def completed(self) -> bool:
+        return self.planning_result.planning_state == PLANNING_STATE_COMPLETED and self.seed_evaluation.completed
 
 
 class ParentPlanningFanoutSeedError(RuntimeError):
@@ -66,21 +93,37 @@ class ParentPlanningFanoutService:
                 planning_result=planning_result,
                 planning_package=planning_package,
             ) from exc
-        updated_children, created_children, changed_children = child_sync_gateway.combined_child_updates(
-            seed_data=seed_data
+        seed_evaluation = self.evaluate_seed_data(
+            seed_data=seed_data,
+            combine_child_updates_fn=child_sync_gateway.combined_child_updates,
+            planning_result=planning_result,
         )
         result = ParentPlanningFanoutResult(
             planning_result=planning_result,
             planning_package=planning_package,
+            seed_evaluation=seed_evaluation,
+        )
+        return result
+
+    def evaluate_seed_data(
+        self,
+        *,
+        seed_data: dict[str, Any],
+        combine_child_updates_fn: Callable[..., tuple[list[str], list[str], list[str]]],
+        planning_result=None,
+    ) -> ParentPlanningSeedEvaluation:
+        updated_children, created_children, changed_children = combine_child_updates_fn(seed_data=seed_data)
+        questions = self._questions_for_result(planning_result=planning_result, seed_data=seed_data)
+        evaluation = ParentPlanningSeedEvaluation(
             seed_data=seed_data,
             updated_children=updated_children,
             created_children=created_children,
             changed_children=changed_children,
-            questions=self._questions_for_result(planning_result=planning_result, seed_data=seed_data),
+            questions=questions,
         )
-        if not result.completed and not result.questions:
-            raise RuntimeError("Parent planning fanout is blocked but did not return clarification questions")
-        return result
+        if not evaluation.completed and not evaluation.questions:
+            raise RuntimeError("Parent planning seed result is blocked but did not return clarification questions")
+        return evaluation
 
     def _questions_for_result(
         self,
@@ -88,9 +131,10 @@ class ParentPlanningFanoutService:
         planning_result,
         seed_data: dict[str, Any],
     ) -> tuple[ClarificationQuestion, ...]:
-        questions = ClarificationQuestionSet.from_values(
-            getattr(planning_result, "open_behavior_questions", ()) or ()
-        )
-        if questions:
-            return questions.questions
+        if planning_result is not None:
+            questions = ClarificationQuestionSet.from_values(
+                getattr(planning_result, "open_behavior_questions", ()) or ()
+            )
+            if questions:
+                return questions.questions
         return ClarificationQuestionSet.from_values(list(seed_data.get("questions", []) or [])).questions

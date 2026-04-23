@@ -306,26 +306,28 @@ class ParentFeaturePlanningWorkflow:
                 },
             )
 
-        updated_children, created_children, changed_children = self._deps.child_sync_gateway.combined_child_updates(seed_data=seed_data)
-        if bool(seed_data.get("requires_input")):
+        seed_evaluation = self._deps.fanout_service.evaluate_seed_data(
+            seed_data=seed_data,
+            combine_child_updates_fn=self._deps.child_sync_gateway.combined_child_updates,
+        )
+        if not seed_evaluation.completed:
             blocked_issue_keys = [context.issue_key, *[detail.key for detail in child_details]]
             issue_gateway.mark_issues_sync_blocked(issue_keys=blocked_issue_keys)
-            questions = ClarificationQuestionSet.from_values(seed_data.get("questions", [])).questions
             lifecycle.mark_waiting_for_input(
                 operation_type="backlog_planning",
                 summary="Parent planning is waiting for product clarification before child refresh can complete.",
             )
             if not issue_gateway.has_matching_active_pm_clarification_state(
                 parent_issue_key=context.issue_key,
-                questions=questions,
+                questions=seed_evaluation.questions,
             ):
                 posted_to_discord = issue_gateway.post_parent_brief_questions(
                     parent_issue_key=context.issue_key,
-                    questions=questions,
+                    questions=seed_evaluation.questions,
                 )
                 created_comment, error = issue_gateway.post_parent_brief_questions_jira(
                     parent_issue_key=context.issue_key,
-                    questions=questions,
+                    questions=seed_evaluation.questions,
                 )
                 if posted_to_discord:
                     lifecycle.set_operation_completed(
@@ -343,7 +345,7 @@ class ParentFeaturePlanningWorkflow:
                 extra={
                     "changed_fields": material_changed_fields,
                     "stale_child_keys": [detail.key for detail in child_details],
-                    "questions": ClarificationQuestionSet(questions=questions).to_payload(),
+                    "questions": ClarificationQuestionSet(questions=seed_evaluation.questions).to_payload(),
                     "webhook_event": context.webhook_event,
                 },
             )
@@ -361,9 +363,9 @@ class ParentFeaturePlanningWorkflow:
             reason="pm_parent_sync_completed",
             extra={
                 "changed_fields": material_changed_fields,
-                "updated_children": changed_children,
-                "parent_revision": seed_data.get("parent_revision"),
-                "children_sync_status": seed_data.get("children_sync_status"),
+                "updated_children": seed_evaluation.changed_children,
+                "parent_revision": seed_evaluation.seed_data.get("parent_revision"),
+                "children_sync_status": seed_evaluation.seed_data.get("children_sync_status"),
                 "webhook_event": context.webhook_event,
             },
         )
