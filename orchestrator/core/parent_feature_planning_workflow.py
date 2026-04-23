@@ -10,6 +10,7 @@ from orchestrator.core.clarification_questions import ClarificationQuestion, Cla
 from orchestrator.core.parent_planning_clarification_service import (
     ParentPlanningClarificationService,
 )
+from orchestrator.core.parent_planning_fanout_service import ParentPlanningFanoutSeedError, ParentPlanningFanoutService
 from orchestrator.core.specialist_planning import PLANNING_STATE_COMPLETED
 from orchestrator.core.workflow_runtime import WorkflowAdvanceOutcome, WorkflowTransitionPlanner
 from orchestrator.core.workflow_execution_projection import classify_external_workflow_failure
@@ -23,22 +24,13 @@ class ParentFeaturePlanningWorkflowDeps:
     brief_planner: Any
     child_sync_gateway: Any
     clarification_service: ParentPlanningClarificationService
+    fanout_service: ParentPlanningFanoutService
     workflow_type: Any
     project_key_for_issue_fn: Callable[[str], str]
     extract_changed_fields_fn: Callable[..., list[str]]
     extract_status_transition_fn: Callable[..., tuple[str | None, str | None]]
     material_parent_changed_fields_fn: Callable[..., list[str]]
     parent_board_entry_target_status_fn: Callable[..., str | None]
-
-
-@dataclass(frozen=True)
-class _ParentPlanningFanoutResult:
-    planning_result: Any
-    planning_package: dict[str, Any]
-    seed_data: dict[str, Any]
-    updated_children: list[str]
-    created_children: list[str]
-    changed_children: list[str]
 
 
 class ParentFeaturePlanningWorkflow:
@@ -87,13 +79,11 @@ class ParentFeaturePlanningWorkflow:
             issue_summary=parent_detail.summary,
             issue_labels=list(parent_detail.labels or []),
         )
-        if not (architecture_gate.required and architecture_gate.document is None):
-            self._rewrite_parent_from_brief(
-                issue_gateway=issue_gateway,
-                parent_detail=parent_detail,
-                brief_payload=product_brief,
-                normalization_questions=normalization_questions,
-            )
+        self._sync_parent_issue_references(
+            issue_gateway=issue_gateway,
+            parent_detail=parent_detail,
+            architecture_gate=architecture_gate,
+        )
         if normalization_questions:
             self._mark_parent_synced(lifecycle=lifecycle, draft=True)
             return self._block_parent_brief(
@@ -126,30 +116,25 @@ class ParentFeaturePlanningWorkflow:
             )
         self._mark_brief_normalized(lifecycle=lifecycle, source="source issue")
         try:
-            planning_result, planning_package = self._plan_children(
+            fanout = self._deps.fanout_service.plan_and_seed(
                 parent_detail=parent_detail,
                 product_brief=product_brief,
                 project_key=project_key,
+                planner=brief_planner,
+                child_sync_gateway=self._deps.child_sync_gateway,
             )
-        except Exception as exc:  # noqa: BLE001
-            return self._handle_fanout_failure(
-                context=context,
-                issue_gateway=issue_gateway,
+        except ParentPlanningFanoutSeedError as exc:
+            self._mark_planning_completed_if_completed(
                 lifecycle=lifecycle,
-                error=exc,
-                failure_reason="pm_parent_issue_created_seed_failed",
-            )
-        if planning_result.planning_state == PLANNING_STATE_COMPLETED:
-            self._mark_planning_completed(
-                lifecycle=lifecycle,
+                planning_result=exc.planning_result,
                 planning_summary="Backlog planning completed from the normalized parent brief.",
             )
-        try:
-            fanout = self._seed_planned_children(
-                parent_detail=parent_detail,
-                project_key=project_key,
-                planning_result=planning_result,
-                planning_package=planning_package,
+            return self._handle_fanout_failure(
+                context=context,
+                issue_gateway=issue_gateway,
+                lifecycle=lifecycle,
+                error=exc.error,
+                failure_reason="pm_parent_issue_created_seed_failed",
             )
         except Exception as exc:  # noqa: BLE001
             return self._handle_fanout_failure(
@@ -159,20 +144,20 @@ class ParentFeaturePlanningWorkflow:
                 error=exc,
                 failure_reason="pm_parent_issue_created_seed_failed",
             )
+        self._mark_planning_completed_if_completed(
+            lifecycle=lifecycle,
+            planning_result=fanout.planning_result,
+            planning_summary="Backlog planning completed from the normalized parent brief.",
+        )
 
-        if fanout.planning_result.planning_state != PLANNING_STATE_COMPLETED or bool(fanout.seed_data.get("requires_input")):
-            question_set = ClarificationQuestionSet.from_values(
-                getattr(fanout.planning_result, "open_behavior_questions", ()) or ()
-            )
-            if not question_set:
-                question_set = ClarificationQuestionSet.from_values(fanout.seed_data.get("questions", []))
+        if not fanout.completed:
             return self._block_parent_brief(
                 context=context,
                 session=session,
                 settings=settings,
                 parent_detail=parent_detail,
                 lifecycle=lifecycle,
-                questions=question_set.questions,
+                questions=fanout.questions,
                 body_prefix=(
                     "Parent feature was created in backlog, but engineering child planning is blocked pending clarification."
                 ),
@@ -244,13 +229,11 @@ class ParentFeaturePlanningWorkflow:
             issue_summary=parent_detail.summary,
             issue_labels=list(parent_detail.labels or []),
         )
-        if not (architecture_gate.required and architecture_gate.document is None):
-            self._rewrite_parent_from_brief(
-                issue_gateway=issue_gateway,
-                parent_detail=parent_detail,
-                brief_payload=product_brief,
-                normalization_questions=normalization_questions,
-            )
+        self._sync_parent_issue_references(
+            issue_gateway=issue_gateway,
+            parent_detail=parent_detail,
+            architecture_gate=architecture_gate,
+        )
         if normalization_questions:
             self._mark_parent_synced(lifecycle=lifecycle, draft=True)
             blocked_issue_keys = [context.issue_key, *[detail.key for detail in child_details]]
@@ -345,12 +328,12 @@ class ParentFeaturePlanningWorkflow:
                     questions=questions,
                 )
                 if posted_to_discord:
-                    lifecycle.mark_operation_completed(
+                    lifecycle.set_operation_completed(
                         operation_type="discord_followup_projection",
                         summary="Posted PM clarification follow-up to Discord.",
                     )
                 if error is None and created_comment is not None:
-                    lifecycle.mark_operation_completed(
+                    lifecycle.set_operation_completed(
                         operation_type="jira_comment_projection",
                         summary="Posted PM clarification questions to Jira.",
                     )
@@ -502,19 +485,25 @@ class ParentFeaturePlanningWorkflow:
             publisher=issue_gateway,
         )
         if publication.discord_followup_created:
-            lifecycle.mark_operation_completed(
+            lifecycle.set_operation_completed(
                 operation_type="discord_followup_projection",
                 summary="Posted PM clarification follow-up to Discord.",
             )
         if publication.jira_comment_created:
-            lifecycle.mark_operation_completed(
+            lifecycle.set_operation_completed(
                 operation_type="jira_comment_projection",
                 summary="Posted PM clarification questions to Jira.",
             )
-        lifecycle.mark_waiting_for_input(
-            operation_type=waiting_operation_type,
-            summary="Parent planning is waiting for product clarification.",
-        )
+        if waiting_operation_type == "brief_normalization":
+            lifecycle.set_operation_waiting_for_input(
+                operation_type=waiting_operation_type,
+                summary="Parent planning is waiting for product clarification.",
+            )
+        else:
+            lifecycle.mark_waiting_for_input(
+                operation_type=waiting_operation_type,
+                summary="Parent planning is waiting for product clarification.",
+            )
         payload = dict(extra or {})
         payload.update(
             {
@@ -579,7 +568,7 @@ class ParentFeaturePlanningWorkflow:
                 issue_detail=parent_detail,
                 target_label="sync-blocked",
             )
-            lifecycle.mark_waiting_for_input(
+            lifecycle.set_operation_waiting_for_input(
                 operation_type="brief_normalization",
                 summary="Parent brief still needs product clarification before planning can continue.",
             )
@@ -589,12 +578,12 @@ class ParentFeaturePlanningWorkflow:
                 publisher=issue_gateway,
             )
             if publication.discord_followup_created:
-                lifecycle.mark_operation_completed(
+                lifecycle.set_operation_completed(
                     operation_type="discord_followup_projection",
                     summary="Posted PM clarification follow-up to Discord.",
                 )
             if publication.jira_comment_created:
-                lifecycle.mark_operation_completed(
+                lifecycle.set_operation_completed(
                     operation_type="jira_comment_projection",
                     summary="Posted PM clarification questions to Jira.",
                 )
@@ -613,13 +602,11 @@ class ParentFeaturePlanningWorkflow:
             issue_summary=parent_detail.summary,
             issue_labels=list(parent_detail.labels or []),
         )
-        if not (architecture_gate.required and architecture_gate.document is None):
-            self._rewrite_parent_from_brief(
-                issue_gateway=issue_gateway,
-                parent_detail=parent_detail,
-                brief_payload=brief_payload,
-                normalization_questions=(),
-            )
+        self._sync_parent_issue_references(
+            issue_gateway=issue_gateway,
+            parent_detail=parent_detail,
+            architecture_gate=architecture_gate,
+        )
         if architecture_gate.required and not architecture_gate.ready:
             self._mark_parent_synced(lifecycle=lifecycle, draft=True)
             return self._block_on_architecture(
@@ -640,31 +627,25 @@ class ParentFeaturePlanningWorkflow:
         self._mark_brief_normalized(lifecycle=lifecycle, source="PM clarification answers")
 
         try:
-            planning_result, planning_package = self._plan_children(
+            fanout = self._deps.fanout_service.plan_and_seed(
                 parent_detail=parent_detail,
                 product_brief=brief_payload,
                 project_key=project_key,
+                planner=self._deps.brief_planner,
+                child_sync_gateway=self._deps.child_sync_gateway,
             )
-        except Exception as exc:  # noqa: BLE001
-            return self._handle_fanout_failure(
-                context=context,
-                issue_gateway=issue_gateway,
+        except ParentPlanningFanoutSeedError as exc:
+            self._mark_planning_completed_if_completed(
                 lifecycle=lifecycle,
-                error=exc,
-                failure_reason="pm_interview_followup_seed_failed",
-                sync_note_body=f"PM clarification was recorded, but backlog planning failed: {exc}",
-            )
-        if planning_result.planning_state == PLANNING_STATE_COMPLETED:
-            self._mark_planning_completed(
-                lifecycle=lifecycle,
+                planning_result=exc.planning_result,
                 planning_summary="Backlog planning completed from the confirmed parent brief.",
             )
-        try:
-            fanout = self._seed_planned_children(
-                parent_detail=parent_detail,
-                project_key=project_key,
-                planning_result=planning_result,
-                planning_package=planning_package,
+            return self._handle_fanout_failure(
+                context=context,
+                issue_gateway=issue_gateway,
+                lifecycle=lifecycle,
+                error=exc.error,
+                failure_reason="pm_interview_followup_seed_failed",
             )
         except Exception as exc:  # noqa: BLE001
             return self._handle_fanout_failure(
@@ -673,25 +654,27 @@ class ParentFeaturePlanningWorkflow:
                 lifecycle=lifecycle,
                 error=exc,
                 failure_reason="pm_interview_followup_seed_failed",
-                sync_note_body=f"PM clarification was recorded, but backlog planning failed: {exc}",
             )
+        self._mark_planning_completed_if_completed(
+            lifecycle=lifecycle,
+            planning_result=fanout.planning_result,
+            planning_summary="Backlog planning completed from the confirmed parent brief.",
+        )
 
-        if fanout.planning_result.planning_state != PLANNING_STATE_COMPLETED or bool(fanout.seed_data.get("requires_input")):
-            lifecycle.mark_waiting_for_input(
-                operation_type="backlog_planning",
-                summary="Backlog planning still needs clarification before child fanout can complete.",
-            )
-            issue_gateway.update_issue_sync_label(
-                issue_detail=parent_detail,
-                target_label="sync-blocked",
-            )
-            return lifecycle.build_outcome(
-                handled=True,
+        if not fanout.completed:
+            return self._block_parent_brief(
+                context=context,
+                session=session,
+                settings=settings,
+                parent_detail=parent_detail,
+                lifecycle=lifecycle,
+                questions=fanout.questions,
+                body_prefix="Backlog planning still needs clarification before child fanout can complete.",
                 reason="pm_interview_followup_planning_blocked",
+                waiting_operation_type="backlog_planning",
                 extra={
                     "parent_revision": fanout.seed_data.get("parent_revision"),
                     "children_sync_status": fanout.seed_data.get("children_sync_status"),
-                    "webhook_event": context.webhook_event,
                 },
             )
 
@@ -710,78 +693,43 @@ class ParentFeaturePlanningWorkflow:
             },
         )
 
-    def _rewrite_parent_from_brief(
+    def _sync_parent_issue_references(
         self,
         *,
         issue_gateway,
         parent_detail,
-        brief_payload: dict[str, Any],
-        normalization_questions: tuple[ClarificationQuestion, ...],
+        architecture_gate,
     ) -> None:
-        issue_gateway.rewrite_parent_issue_from_brief(
-            parent_detail=parent_detail,
-            brief_payload=brief_payload,
-            sync_status="sync-blocked" if normalization_questions else "children_syncing",
-            planning_state="brief_normalized",
-            open_questions=ClarificationQuestionSet(questions=normalization_questions).to_payload() or None,
+        issue_gateway.upsert_workflow_execution_link(issue_key=parent_detail.key)
+        architecture_document = getattr(architecture_gate, "document", None)
+        if architecture_document is None:
+            return
+        title = str(getattr(architecture_document, "title", "") or "").strip()
+        url = str(getattr(architecture_document, "canonical_url", "") or "").strip()
+        if not title or not url:
+            raise ValueError(f"Architecture document link is incomplete for {parent_detail.key}")
+        issue_gateway.upsert_architecture_document_link(
+            issue_key=parent_detail.key,
+            title=title,
+            url=url,
         )
 
     def _mark_parent_synced(self, *, lifecycle, draft: bool) -> None:
-        lifecycle.mark_operation_completed(
+        lifecycle.set_operation_completed(
             operation_type="jira_parent_update",
             summary=(
-                "Parent Jira issue synced with the latest normalized brief draft."
+                "Parent Jira issue metadata synced without modifying the source description."
                 if draft
-                else "Parent Jira issue synced with the normalized brief."
+                else "Parent Jira issue metadata synced without modifying the source description."
             ),
         )
 
     def _mark_brief_normalized(self, *, lifecycle, source: str) -> None:
-        lifecycle.mark_operation_completed(
+        lifecycle.set_operation_completed(
             operation_type="brief_normalization",
             summary=f"Parent brief normalized from the {source}.",
         )
         self._mark_parent_synced(lifecycle=lifecycle, draft=False)
-
-    def _plan_children(
-        self,
-        *,
-        parent_detail,
-        product_brief: dict[str, Any],
-        project_key: str,
-    ) -> tuple[Any, dict[str, Any]]:
-        planning_result, planning_package = self._deps.brief_planner.plan_backlog_parent(
-            parent_detail=parent_detail,
-            product_brief=product_brief,
-            project_key=project_key,
-        )
-        return planning_result, planning_package
-
-    def _seed_planned_children(
-        self,
-        *,
-        parent_detail,
-        project_key: str,
-        planning_result,
-        planning_package: dict[str, Any],
-    ) -> _ParentPlanningFanoutResult:
-        seed_data = self._deps.child_sync_gateway.seed_parent_backlog_children(
-            parent_detail=parent_detail,
-            project_key=project_key,
-            planning_package=planning_package,
-            planning_state=planning_result.planning_state,
-        )
-        updated_children, created_children, changed_children = self._deps.child_sync_gateway.combined_child_updates(
-            seed_data=seed_data
-        )
-        return _ParentPlanningFanoutResult(
-            planning_result=planning_result,
-            planning_package=planning_package,
-            seed_data=seed_data,
-            updated_children=updated_children,
-            created_children=created_children,
-            changed_children=changed_children,
-        )
 
     def _mark_planning_completed(
         self,
@@ -793,6 +741,19 @@ class ParentFeaturePlanningWorkflow:
             operation_type="backlog_planning",
             summary=planning_summary,
         )
+
+    def _mark_planning_completed_if_completed(
+        self,
+        *,
+        lifecycle,
+        planning_result,
+        planning_summary: str,
+    ) -> None:
+        if planning_result.planning_state == PLANNING_STATE_COMPLETED:
+            self._mark_planning_completed(
+                lifecycle=lifecycle,
+                planning_summary=planning_summary,
+            )
 
     def _mark_fanout_completed(
         self,

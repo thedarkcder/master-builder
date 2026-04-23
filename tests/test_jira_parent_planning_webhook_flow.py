@@ -11,6 +11,7 @@ from orchestrator.api.discord.seed.description import build_parent_feature_descr
 from orchestrator.core.followup_context_service import FOLLOWUP_CONTEXT_PM_INTERVIEW, upsert_followup_context
 from orchestrator.core.pm_interview_service import PM_INTERVIEW_STATUS_QUESTION_PENDING
 from orchestrator.core.parent_feature_brief_store import persist_parent_feature_brief_snapshot
+from orchestrator.core.runtime_payload_models import JiraIssueIntakeRoutePayload
 from orchestrator.storage.models import (
     FollowupContext,
     PMInterviewCase,
@@ -27,18 +28,131 @@ from tests.test_support.jira_webhook_api_harness import JiraWebhookTestsHarness
 pytestmark = pytest.mark.contract
 
 
+class _JiraMetadataClientMixin:
+    def update_issue_summary(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        issue_id_or_key: str,
+        summary: str,
+    ) -> None:
+        return None
+
+    def replace_issue_labels(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        issue_id_or_key: str,
+        labels: list[str],
+    ) -> None:
+        return None
+
+    def upsert_remote_issue_link(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        issue_id_or_key: str,
+        global_id: str,
+        relationship: str,
+        title: str,
+        url: str,
+    ) -> dict[str, object]:
+        return {}
+
+    def get_issue_detail(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        issue_id_or_key: str,
+    ) -> JiraIssueDetail:
+        return self._get_issue_detail(issue_id_or_key)
+
+    def _get_issue_detail(self, issue_id_or_key: str) -> JiraIssueDetail:
+        raise NotImplementedError
+
+    def add_issue_labels(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        issue_id_or_key: str,
+        labels: list[str],
+    ) -> None:
+        self._add_issue_labels(issue_id_or_key, labels)
+
+    def _add_issue_labels(self, issue_id_or_key: str, labels: list[str]) -> None:
+        return None
+
+    def update_issue_fields(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        issue_id_or_key: str,
+        summary: str,
+        description: str | dict[str, object],
+        labels: list[str],
+    ) -> None:
+        self._update_issue_fields(issue_id_or_key, summary, description, labels)
+
+    def _update_issue_fields(
+        self,
+        issue_id_or_key: str,
+        summary: str,
+        description: str | dict[str, object],
+        labels: list[str],
+    ) -> None:
+        return None
+
+    def search_issues_by_jql(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        jql: str,
+        max_results: int = 20,
+        start_at: int = 0,
+    ) -> list[JiraIssuePreview]:
+        return self._search_issues_by_jql(jql, max_results, start_at)
+
+    def _search_issues_by_jql(
+        self,
+        jql: str,
+        max_results: int,
+        start_at: int,
+    ) -> list[JiraIssuePreview]:
+        return []
+
+    def transition_issue(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        issue_id_or_key: str,
+        target_status: str,
+    ) -> dict[str, object]:
+        return self._transition_issue(issue_id_or_key, target_status)
+
+    def _transition_issue(self, issue_id_or_key: str, target_status: str) -> dict[str, object]:
+        return {}
+
+
 class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
     def test_webhook_unlabeled_backlog_issue_created_auto_routes_pm_parent_and_seeds_engineering_children(self) -> None:
         payload = self._jira_issue_payload(issue_key="TP-990", labels=[], status_name="Backlog")
         payload["webhookEvent"] = "jira:issue_created"
 
-        class _FakeClient:
+        class _FakeClient(_JiraMetadataClientMixin):
             def __init__(self) -> None:
                 self.labels: list[str] = []
                 self.updated_fields: list[dict] = []
                 self.added_labels: list[dict] = []
 
-            def get_issue_detail(self, **kwargs):
+            def _get_issue_detail(self, issue_id_or_key: str):
                 return JiraIssueDetail(
                     key="TP-990",
                     summary="Runtime routing reset",
@@ -47,16 +161,27 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                     labels=list(self.labels),
                 )
 
-            def add_issue_labels(self, **kwargs):
-                self.added_labels.append(kwargs)
-                for label in kwargs.get("labels", []):
+            def _add_issue_labels(self, issue_id_or_key: str, labels: list[str]) -> None:
+                self.added_labels.append({"issue_id_or_key": issue_id_or_key, "labels": list(labels)})
+                for label in labels:
                     if label not in self.labels:
                         self.labels.append(label)
-                return None
 
-            def update_issue_fields(self, **kwargs):
-                self.updated_fields.append(kwargs)
-                return None
+            def _update_issue_fields(
+                self,
+                issue_id_or_key: str,
+                summary: str,
+                description: str | dict[str, object],
+                labels: list[str],
+            ) -> None:
+                self.updated_fields.append(
+                    {
+                        "issue_id_or_key": issue_id_or_key,
+                        "summary": summary,
+                        "description": description,
+                        "labels": list(labels),
+                    }
+                )
 
         oauth_context = SimpleNamespace(
             client=_FakeClient(),
@@ -69,7 +194,11 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
             patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_atlassian_oauth_context", return_value=oauth_context),
             patch(
                 "orchestrator.api.webhooks.jira_application.classify_jira_issue_intake_with_runtime",
-                return_value={"route": "pm_parent", "reason": "Needs PM breakdown", "confidence": "high"},
+                return_value=JiraIssueIntakeRoutePayload(
+                    route="pm_parent",
+                    reason="Needs PM breakdown",
+                    confidence="high",
+                ),
             ),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.build_runtime_for_selector", return_value=object()),
             patch(
@@ -165,12 +294,12 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
         payload = self._jira_issue_payload(issue_key="TP-992", labels=[], status_name="Backlog")
         payload["webhookEvent"] = "jira:issue_created"
 
-        class _FakeClient:
+        class _FakeClient(_JiraMetadataClientMixin):
             def __init__(self) -> None:
                 self.labels: list[str] = []
                 self.added_labels: list[dict] = []
 
-            def get_issue_detail(self, **kwargs):
+            def _get_issue_detail(self, issue_id_or_key: str):
                 return JiraIssueDetail(
                     key="TP-992",
                     summary="Fix the queue selector duplicate scan ordering",
@@ -179,12 +308,11 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                     labels=list(self.labels),
                 )
 
-            def add_issue_labels(self, **kwargs):
-                self.added_labels.append(kwargs)
-                for label in kwargs.get("labels", []):
+            def _add_issue_labels(self, issue_id_or_key: str, labels: list[str]) -> None:
+                self.added_labels.append({"issue_id_or_key": issue_id_or_key, "labels": list(labels)})
+                for label in labels:
                     if label not in self.labels:
                         self.labels.append(label)
-                return None
 
         oauth_context = SimpleNamespace(
             client=_FakeClient(),
@@ -197,7 +325,11 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
             patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_atlassian_oauth_context", return_value=oauth_context),
             patch(
                 "orchestrator.api.webhooks.jira_application.classify_jira_issue_intake_with_runtime",
-                return_value={"route": "engineering_child", "reason": "Already implementation scoped", "confidence": "high"},
+                return_value=JiraIssueIntakeRoutePayload(
+                    route="engineering_child",
+                    reason="Already implementation scoped",
+                    confidence="high",
+                ),
             ),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.seed_issues_with_runtime") as seed_mock,
             patch(
@@ -220,8 +352,8 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
         payload = self._jira_issue_payload(issue_key="TP-992B", labels=[], status_name="Backlog")
         payload["webhookEvent"] = "jira:issue_created"
 
-        class _FakeClient:
-            def get_issue_detail(self, **kwargs):
+        class _FakeClient(_JiraMetadataClientMixin):
+            def _get_issue_detail(self, issue_id_or_key: str):
                 return JiraIssueDetail(
                     key="TP-992B",
                     summary="Runtime routing reset",
@@ -264,8 +396,8 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
         payload = self._jira_issue_payload(issue_key="TP-992C", labels=[], status_name="Backlog")
         payload["webhookEvent"] = "jira:issue_created"
 
-        class _FailingClient:
-            def get_issue_detail(self, **kwargs):
+        class _FailingClient(_JiraMetadataClientMixin):
+            def _get_issue_detail(self, issue_id_or_key: str):
                 return JiraIssueDetail(
                     key="TP-992C",
                     summary="Runtime routing reset",
@@ -274,7 +406,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                     labels=[],
                 )
 
-            def add_issue_labels(self, **kwargs):
+            def _add_issue_labels(self, issue_id_or_key: str, labels: list[str]) -> None:
                 raise RuntimeError("jira temporarily unavailable")
 
         oauth_context = SimpleNamespace(
@@ -286,7 +418,11 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
             patch("orchestrator.core.worker.webhook_job_service.tenant_atlassian_oauth_context", return_value=oauth_context),
             patch(
                 "orchestrator.api.webhooks.jira_application.classify_jira_issue_intake_with_runtime",
-                return_value={"route": "pm_parent", "reason": "Needs PM breakdown", "confidence": "high"},
+                return_value=JiraIssueIntakeRoutePayload(
+                    route="pm_parent",
+                    reason="Needs PM breakdown",
+                    confidence="high",
+                ),
             ),
             patch("orchestrator.api.webhooks.jira_application.tenant_atlassian_oauth_context", return_value=oauth_context),
             patch("orchestrator.api.webhooks.jira_application.plan_jira_run_flow") as run_flow_mock,
@@ -312,12 +448,12 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
         payload = self._jira_issue_payload(issue_key="TP-992A", labels=[], status_name="To Do")
         payload["webhookEvent"] = "jira:issue_updated"
 
-        class _FakeClient:
+        class _FakeClient(_JiraMetadataClientMixin):
             def __init__(self) -> None:
                 self.labels: list[str] = []
                 self.added_labels: list[dict] = []
 
-            def get_issue_detail(self, **kwargs):
+            def _get_issue_detail(self, issue_id_or_key: str):
                 return JiraIssueDetail(
                     key="TP-992A",
                     summary="Runtime routing reset",
@@ -326,14 +462,19 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                     labels=list(self.labels),
                 )
 
-            def add_issue_labels(self, **kwargs):
-                self.added_labels.append(kwargs)
-                for label in kwargs.get("labels", []):
+            def _add_issue_labels(self, issue_id_or_key: str, labels: list[str]) -> None:
+                self.added_labels.append({"issue_id_or_key": issue_id_or_key, "labels": list(labels)})
+                for label in labels:
                     if label not in self.labels:
                         self.labels.append(label)
-                return None
 
-            def update_issue_fields(self, **kwargs):
+            def _update_issue_fields(
+                self,
+                issue_id_or_key: str,
+                summary: str,
+                description: str | dict[str, object],
+                labels: list[str],
+            ) -> None:
                 return None
 
         oauth_context = SimpleNamespace(
@@ -346,12 +487,16 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
             patch("orchestrator.api.webhooks.jira_application.tenant_atlassian_oauth_context", return_value=oauth_context),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_atlassian_oauth_context", return_value=oauth_context),
             patch(
-                "orchestrator.api.webhooks.jira_application.resolve_project_issue_board_location",
+                "orchestrator.api.webhooks.jira_application.resolve_jira_issue_board_location",
                 return_value=("backlog", None),
             ),
             patch(
                 "orchestrator.api.webhooks.jira_application.classify_jira_issue_intake_with_runtime",
-                return_value={"route": "pm_parent", "reason": "Still a parent feature in backlog", "confidence": "high"},
+                return_value=JiraIssueIntakeRoutePayload(
+                    route="pm_parent",
+                    reason="Still a parent feature in backlog",
+                    confidence="high",
+                ),
             ),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.build_runtime_for_selector", return_value=object()),
             patch(
@@ -447,18 +592,22 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
         payload = self._jira_issue_payload(issue_key="TP-950", labels=["pm-parent"], status_name="To Do")
         payload["changelog"] = {"items": [{"field": "description", "fromString": "old", "toString": "new"}]}
 
-        class _FakeClient:
-            def search_issues_by_jql(self, **kwargs):
-                jql = kwargs["jql"]
+        class _FakeClient(_JiraMetadataClientMixin):
+            def _search_issues_by_jql(self, jql: str, max_results: int, start_at: int) -> list[JiraIssuePreview]:
                 if 'parent = "TP-950"' in jql or 'labels = "parent-tp-950"' in jql:
                     return [JiraIssuePreview(key="TP-951", summary="Update retry UI", status="To Do")]
                 return []
 
-            def update_issue_fields(self, **kwargs):
+            def _update_issue_fields(
+                self,
+                issue_id_or_key: str,
+                summary: str,
+                description: str | dict[str, object],
+                labels: list[str],
+            ) -> None:
                 return None
 
-            def get_issue_detail(self, **kwargs):
-                issue_key = kwargs["issue_id_or_key"]
+            def _get_issue_detail(self, issue_key: str):
                 if issue_key == "TP-950":
                     return JiraIssueDetail(
                         key="TP-950",
@@ -529,18 +678,22 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
         payload = self._jira_issue_payload(issue_key="TP-953", labels=["pm-parent"], status_name="To Do")
         payload["changelog"] = {"items": [{"field": "description", "fromString": "old", "toString": "new"}]}
 
-        class _FakeClient:
-            def search_issues_by_jql(self, **kwargs):
-                jql = kwargs["jql"]
+        class _FakeClient(_JiraMetadataClientMixin):
+            def _search_issues_by_jql(self, jql: str, max_results: int, start_at: int) -> list[JiraIssuePreview]:
                 if 'parent = "TP-953"' in jql or 'labels = "parent-tp-953"' in jql:
                     return [JiraIssuePreview(key="TP-954", summary="Refresh retry UI", status="To Do")]
                 return []
 
-            def update_issue_fields(self, **kwargs):
+            def _update_issue_fields(
+                self,
+                issue_id_or_key: str,
+                summary: str,
+                description: str | dict[str, object],
+                labels: list[str],
+            ) -> None:
                 return None
 
-            def get_issue_detail(self, **kwargs):
-                issue_key = kwargs["issue_id_or_key"]
+            def _get_issue_detail(self, issue_key: str):
                 if issue_key == "TP-953":
                     return JiraIssueDetail(
                         key="TP-953",
@@ -607,10 +760,10 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
         payload = self._jira_issue_payload(issue_key="TP-952", labels=["pm-parent"], status_name="To Do")
         payload["changelog"] = {"items": [{"field": "status", "fromString": "To Do", "toString": "In Progress"}]}
 
-        class _FakeClient:
-            def get_issue_detail(self, **kwargs):
+        class _FakeClient(_JiraMetadataClientMixin):
+            def _get_issue_detail(self, issue_id_or_key: str):
                 return JiraIssueDetail(
-                    key=str(kwargs["issue_id_or_key"]),
+                    key=str(issue_id_or_key),
                     summary="Parent feature",
                     status="In Progress",
                     description="Objective\nParent feature description",
@@ -624,6 +777,8 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
         )
         with (
             patch("orchestrator.core.worker.webhook_job_service.tenant_atlassian_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_atlassian_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.webhooks.jira_application.tenant_atlassian_oauth_context", return_value=oauth_context),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.seed_issues_with_runtime") as seed_mock,
         ):
             response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
@@ -639,12 +794,11 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
         payload = self._jira_issue_payload(issue_key="TP-980", labels=["pm-parent"], status_name="To Do")
         payload["changelog"] = {"items": [{"field": "status", "fromString": "Backlog", "toString": "To Do"}]}
 
-        class _FakeClient:
+        class _FakeClient(_JiraMetadataClientMixin):
             def __init__(self) -> None:
                 self.transitions: list[dict[str, str]] = []
 
-            def search_issues_by_jql(self, **kwargs):
-                jql = kwargs["jql"]
+            def _search_issues_by_jql(self, jql: str, max_results: int, start_at: int) -> list[JiraIssuePreview]:
                 if 'parent = "TP-980"' in jql or 'labels = "parent-tp-980"' in jql:
                     return [
                         JiraIssuePreview(key="TP-981", summary="First child", status="Backlog"),
@@ -652,8 +806,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                     ]
                 return []
 
-            def get_issue_detail(self, **kwargs):
-                issue_key = kwargs["issue_id_or_key"]
+            def _get_issue_detail(self, issue_key: str):
                 if issue_key == "TP-980":
                     return JiraIssueDetail(
                         key="TP-980",
@@ -678,14 +831,14 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                     labels=["engineering-child", "parent-tp-980", "sync-current"],
                 )
 
-            def transition_issue(self, **kwargs):
+            def _transition_issue(self, issue_id_or_key: str, target_status: str) -> dict[str, object]:
                 self.transitions.append(
                     {
-                        "issue_id_or_key": str(kwargs["issue_id_or_key"]),
-                        "target_status": str(kwargs["target_status"]),
+                        "issue_id_or_key": str(issue_id_or_key),
+                        "target_status": str(target_status),
                     }
                 )
-                return {"to_status": str(kwargs["target_status"])}
+                return {"to_status": str(target_status)}
 
         fake_client = _FakeClient()
         oauth_context = SimpleNamespace(
@@ -719,11 +872,11 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
         payload = self._jira_issue_payload(issue_key="TP-983", labels=["pm-parent"], status_name="Backlog")
         payload["webhookEvent"] = "jira:issue_created"
 
-        class _FakeClient:
+        class _FakeClient(_JiraMetadataClientMixin):
             def __init__(self) -> None:
                 self.updated_fields: list[dict] = []
 
-            def get_issue_detail(self, **kwargs):
+            def _get_issue_detail(self, issue_id_or_key: str):
                 return JiraIssueDetail(
                     key="TP-983",
                     summary="Runtime architecture reset",
@@ -732,9 +885,21 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                     labels=["pm-parent", "sync-current"],
                 )
 
-            def update_issue_fields(self, **kwargs):
-                self.updated_fields.append(kwargs)
-                return None
+            def _update_issue_fields(
+                self,
+                issue_id_or_key: str,
+                summary: str,
+                description: str | dict[str, object],
+                labels: list[str],
+            ) -> None:
+                self.updated_fields.append(
+                    {
+                        "issue_id_or_key": issue_id_or_key,
+                        "summary": summary,
+                        "description": description,
+                        "labels": list(labels),
+                    }
+                )
 
         oauth_context = SimpleNamespace(
             client=_FakeClient(),
@@ -894,10 +1059,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                 "notification_emit": "pending",
             },
         )
-        self.assertTrue(oauth_context.client.updated_fields)
-        rewritten_description = oauth_context.client.updated_fields[0]["description"]
-        self.assertIn("Objective", str(rewritten_description))
-        self.assertNotIn("Architecture Context", str(rewritten_description))
+        self.assertEqual(oauth_context.client.updated_fields, [])
         run_flow_mock.assert_not_called()
         comment_mock.assert_not_called()
 
@@ -925,11 +1087,11 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
             )
             session.commit()
 
-        class _FakeClient:
+        class _FakeClient(_JiraMetadataClientMixin):
             def __init__(self) -> None:
                 self.updated_fields: list[dict] = []
 
-            def get_issue_detail(self, **kwargs):
+            def _get_issue_detail(self, issue_id_or_key: str):
                 return JiraIssueDetail(
                     key="TP-986",
                     summary="Runtime architecture reset",
@@ -938,9 +1100,21 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                     labels=["pm-parent", "sync-current"],
                 )
 
-            def update_issue_fields(self, **kwargs):
-                self.updated_fields.append(kwargs)
-                return None
+            def _update_issue_fields(
+                self,
+                issue_id_or_key: str,
+                summary: str,
+                description: str | dict[str, object],
+                labels: list[str],
+            ) -> None:
+                self.updated_fields.append(
+                    {
+                        "issue_id_or_key": issue_id_or_key,
+                        "summary": summary,
+                        "description": description,
+                        "labels": list(labels),
+                    }
+                )
 
         oauth_context = SimpleNamespace(
             client=_FakeClient(),
@@ -994,7 +1168,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
         self.assertEqual(planning_request.product_brief["objective"], "Canonical parent objective")
         self.assertEqual(planning_request.product_brief["user_value"], "Canonical user value")
         self.assertEqual(planning_request.product_brief["acceptance_criteria"], ["Canonical acceptance criteria"])
-        self.assertTrue(oauth_context.client.updated_fields)
+        self.assertEqual(oauth_context.client.updated_fields, [])
         normalize_mock.assert_not_called()
         run_flow_mock.assert_not_called()
 
@@ -1003,12 +1177,12 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
         payload["webhookEvent"] = "jira:issue_created"
         payload["issue"]["fields"]["reporter"] = {"accountId": "jira-user-987", "displayName": "Casey Reporter"}
 
-        class _FakeClient:
+        class _FakeClient(_JiraMetadataClientMixin):
             def __init__(self) -> None:
                 self.updated_fields: list[dict] = []
                 self.replaced_labels: list[dict] = []
 
-            def get_issue_detail(self, **kwargs):
+            def _get_issue_detail(self, issue_id_or_key: str):
                 return JiraIssueDetail(
                     key="TP-987",
                     summary="Runtime architecture reset",
@@ -1017,13 +1191,31 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                     labels=["pm-parent", "sync-current"],
                 )
 
-            def update_issue_fields(self, **kwargs):
-                self.updated_fields.append(kwargs)
-                return None
+            def _update_issue_fields(
+                self,
+                issue_id_or_key: str,
+                summary: str,
+                description: str | dict[str, object],
+                labels: list[str],
+            ) -> None:
+                self.updated_fields.append(
+                    {
+                        "issue_id_or_key": issue_id_or_key,
+                        "summary": summary,
+                        "description": description,
+                        "labels": list(labels),
+                    }
+                )
 
-            def replace_issue_labels(self, **kwargs):
-                self.replaced_labels.append(kwargs)
-                return None
+            def replace_issue_labels(
+                self,
+                *,
+                access_token: str,
+                cloud_id: str,
+                issue_id_or_key: str,
+                labels: list[str],
+            ) -> None:
+                self.replaced_labels.append({"issue_id_or_key": issue_id_or_key, "labels": list(labels)})
 
         discord_client = MagicMock()
         discord_client.post_message.return_value = {"id": "discord-msg-987"}
@@ -1087,7 +1279,6 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
         discord_message = discord_client.post_message.call_args.kwargs["content"]
         self.assertIn("TP-987", discord_message)
         self.assertIn("Who owns release-train supervision", discord_message)
-        self.assertTrue(oauth_context.client.updated_fields)
         self.assertEqual(len(oauth_context.client.replaced_labels), 1)
         self.assertGreaterEqual(create_comment_mock.call_count, 1)
         jira_question_comment = create_comment_mock.call_args_list[0].kwargs["comment"]
@@ -1139,12 +1330,12 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
         payload["webhookEvent"] = "jira:issue_created"
         payload["issue"]["fields"]["reporter"] = {"accountId": "jira-user-987A", "displayName": "Casey Reporter"}
 
-        class _FakeClient:
+        class _FakeClient(_JiraMetadataClientMixin):
             def __init__(self) -> None:
                 self.updated_fields: list[dict] = []
                 self.replaced_labels: list[dict] = []
 
-            def get_issue_detail(self, **kwargs):
+            def _get_issue_detail(self, issue_id_or_key: str):
                 return JiraIssueDetail(
                     key="TP-987A",
                     summary="Runtime architecture reset",
@@ -1153,13 +1344,31 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                     labels=["pm-parent", "sync-current"],
                 )
 
-            def update_issue_fields(self, **kwargs):
-                self.updated_fields.append(kwargs)
-                return None
+            def _update_issue_fields(
+                self,
+                issue_id_or_key: str,
+                summary: str,
+                description: str | dict[str, object],
+                labels: list[str],
+            ) -> None:
+                self.updated_fields.append(
+                    {
+                        "issue_id_or_key": issue_id_or_key,
+                        "summary": summary,
+                        "description": description,
+                        "labels": list(labels),
+                    }
+                )
 
-            def replace_issue_labels(self, **kwargs):
-                self.replaced_labels.append(kwargs)
-                return None
+            def replace_issue_labels(
+                self,
+                *,
+                access_token: str,
+                cloud_id: str,
+                issue_id_or_key: str,
+                labels: list[str],
+            ) -> None:
+                self.replaced_labels.append({"issue_id_or_key": issue_id_or_key, "labels": list(labels)})
 
         oauth_context = SimpleNamespace(
             client=_FakeClient(),
@@ -1216,7 +1425,6 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
         self.assertEqual(processed.status, "failed")
         seed_mock.assert_not_called()
         run_flow_mock.assert_not_called()
-        self.assertTrue(oauth_context.client.updated_fields)
         self.assertEqual(len(oauth_context.client.replaced_labels), 1)
         create_comment_mock.assert_not_called()
         with self.session_factory() as session:
@@ -1238,12 +1446,12 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
         payload["webhookEvent"] = "jira:issue_created"
         payload["issue"]["fields"]["reporter"] = {"accountId": "jira-user-987C", "displayName": "Casey Reporter"}
 
-        class _FakeClient:
+        class _FakeClient(_JiraMetadataClientMixin):
             def __init__(self) -> None:
                 self.updated_fields: list[dict] = []
                 self.replaced_labels: list[dict] = []
 
-            def get_issue_detail(self, **kwargs):
+            def _get_issue_detail(self, issue_id_or_key: str):
                 return JiraIssueDetail(
                     key="TP-987C",
                     summary="Runtime architecture reset",
@@ -1252,13 +1460,31 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                     labels=["pm-parent", "sync-current"],
                 )
 
-            def update_issue_fields(self, **kwargs):
-                self.updated_fields.append(kwargs)
-                return None
+            def _update_issue_fields(
+                self,
+                issue_id_or_key: str,
+                summary: str,
+                description: str | dict[str, object],
+                labels: list[str],
+            ) -> None:
+                self.updated_fields.append(
+                    {
+                        "issue_id_or_key": issue_id_or_key,
+                        "summary": summary,
+                        "description": description,
+                        "labels": list(labels),
+                    }
+                )
 
-            def replace_issue_labels(self, **kwargs):
-                self.replaced_labels.append(kwargs)
-                return None
+            def replace_issue_labels(
+                self,
+                *,
+                access_token: str,
+                cloud_id: str,
+                issue_id_or_key: str,
+                labels: list[str],
+            ) -> None:
+                self.replaced_labels.append({"issue_id_or_key": issue_id_or_key, "labels": list(labels)})
 
         oauth_context = SimpleNamespace(
             client=_FakeClient(),
@@ -1349,12 +1575,12 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
         payload = self._jira_issue_payload(issue_key="TP-987D", labels=["pm-parent"], status_name="Backlog")
         payload["webhookEvent"] = "jira:issue_created"
 
-        class _FakeClient:
+        class _FakeClient(_JiraMetadataClientMixin):
             def __init__(self) -> None:
                 self.updated_fields: list[dict] = []
                 self.replaced_labels: list[dict] = []
 
-            def get_issue_detail(self, **kwargs):
+            def _get_issue_detail(self, issue_id_or_key: str):
                 return JiraIssueDetail(
                     key="TP-987D",
                     summary="Identity redesign",
@@ -1363,13 +1589,31 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                     labels=["pm-parent", "sync-current"],
                 )
 
-            def update_issue_fields(self, **kwargs):
-                self.updated_fields.append(kwargs)
-                return None
+            def _update_issue_fields(
+                self,
+                issue_id_or_key: str,
+                summary: str,
+                description: str | dict[str, object],
+                labels: list[str],
+            ) -> None:
+                self.updated_fields.append(
+                    {
+                        "issue_id_or_key": issue_id_or_key,
+                        "summary": summary,
+                        "description": description,
+                        "labels": list(labels),
+                    }
+                )
 
-            def replace_issue_labels(self, **kwargs):
-                self.replaced_labels.append(kwargs)
-                return None
+            def replace_issue_labels(
+                self,
+                *,
+                access_token: str,
+                cloud_id: str,
+                issue_id_or_key: str,
+                labels: list[str],
+            ) -> None:
+                self.replaced_labels.append({"issue_id_or_key": issue_id_or_key, "labels": list(labels)})
 
         oauth_context = SimpleNamespace(
             client=_FakeClient(),
@@ -1470,12 +1714,12 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
         payload["issue"]["fields"]["reporter"] = {"accountId": "jira-user-987B", "displayName": "Casey Reporter"}
         payload["changelog"] = {"items": [{"field": "description"}]}
 
-        class _FakeClient:
+        class _FakeClient(_JiraMetadataClientMixin):
             def __init__(self) -> None:
                 self.updated_fields: list[dict] = []
                 self.replaced_labels: list[dict] = []
 
-            def get_issue_detail(self, **kwargs):
+            def _get_issue_detail(self, issue_id_or_key: str):
                 return JiraIssueDetail(
                     key="TP-987B",
                     summary="Identity redesign",
@@ -1484,13 +1728,31 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                     labels=["pm-parent", "sync-blocked"],
                 )
 
-            def update_issue_fields(self, **kwargs):
-                self.updated_fields.append(kwargs)
-                return None
+            def _update_issue_fields(
+                self,
+                issue_id_or_key: str,
+                summary: str,
+                description: str | dict[str, object],
+                labels: list[str],
+            ) -> None:
+                self.updated_fields.append(
+                    {
+                        "issue_id_or_key": issue_id_or_key,
+                        "summary": summary,
+                        "description": description,
+                        "labels": list(labels),
+                    }
+                )
 
-            def replace_issue_labels(self, **kwargs):
-                self.replaced_labels.append(kwargs)
-                return None
+            def replace_issue_labels(
+                self,
+                *,
+                access_token: str,
+                cloud_id: str,
+                issue_id_or_key: str,
+                labels: list[str],
+            ) -> None:
+                self.replaced_labels.append({"issue_id_or_key": issue_id_or_key, "labels": list(labels)})
 
         oauth_context = SimpleNamespace(
             client=_FakeClient(),
@@ -1648,16 +1910,14 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
             sync_status="sync-blocked",
             pm_status="pm_completed",
             planning_state="brief_normalized",
-            architecture_title="Decision Engine v2",
-            architecture_url="https://docs.example.com/decision-engine-v2",
         )
 
-        class _FakeClient:
+        class _FakeClient(_JiraMetadataClientMixin):
             def __init__(self) -> None:
                 self.updated_fields: list[dict] = []
                 self.replaced_labels: list[dict] = []
 
-            def get_issue_detail(self, **kwargs):
+            def _get_issue_detail(self, issue_id_or_key: str):
                 return JiraIssueDetail(
                     key="TP-987B2",
                     summary="Identity redesign",
@@ -1666,13 +1926,31 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                     labels=["pm-parent", "sync-blocked"],
                 )
 
-            def update_issue_fields(self, **kwargs):
-                self.updated_fields.append(kwargs)
-                return None
+            def _update_issue_fields(
+                self,
+                issue_id_or_key: str,
+                summary: str,
+                description: str | dict[str, object],
+                labels: list[str],
+            ) -> None:
+                self.updated_fields.append(
+                    {
+                        "issue_id_or_key": issue_id_or_key,
+                        "summary": summary,
+                        "description": description,
+                        "labels": list(labels),
+                    }
+                )
 
-            def replace_issue_labels(self, **kwargs):
-                self.replaced_labels.append(kwargs)
-                return None
+            def replace_issue_labels(
+                self,
+                *,
+                access_token: str,
+                cloud_id: str,
+                issue_id_or_key: str,
+                labels: list[str],
+            ) -> None:
+                self.replaced_labels.append({"issue_id_or_key": issue_id_or_key, "labels": list(labels)})
 
         oauth_context = SimpleNamespace(
             client=_FakeClient(),
@@ -1763,12 +2041,12 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
         payload["webhookEvent"] = "jira:issue_updated"
         payload["changelog"] = {"items": [{"field": "description"}]}
 
-        class _FakeClient:
+        class _FakeClient(_JiraMetadataClientMixin):
             def __init__(self) -> None:
                 self.updated_fields: list[dict] = []
                 self.replaced_labels: list[dict] = []
 
-            def get_issue_detail(self, **kwargs):
+            def _get_issue_detail(self, issue_id_or_key: str):
                 return JiraIssueDetail(
                     key="TP-987C",
                     summary="Identity redesign",
@@ -1777,13 +2055,31 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                     labels=["pm-parent", "sync-current"],
                 )
 
-            def update_issue_fields(self, **kwargs):
-                self.updated_fields.append(kwargs)
-                return None
+            def _update_issue_fields(
+                self,
+                issue_id_or_key: str,
+                summary: str,
+                description: str | dict[str, object],
+                labels: list[str],
+            ) -> None:
+                self.updated_fields.append(
+                    {
+                        "issue_id_or_key": issue_id_or_key,
+                        "summary": summary,
+                        "description": description,
+                        "labels": list(labels),
+                    }
+                )
 
-            def replace_issue_labels(self, **kwargs):
-                self.replaced_labels.append(kwargs)
-                return None
+            def replace_issue_labels(
+                self,
+                *,
+                access_token: str,
+                cloud_id: str,
+                issue_id_or_key: str,
+                labels: list[str],
+            ) -> None:
+                self.replaced_labels.append({"issue_id_or_key": issue_id_or_key, "labels": list(labels)})
 
         oauth_context = SimpleNamespace(
             client=_FakeClient(),
@@ -1835,12 +2131,12 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
         payload = self._jira_issue_payload(issue_key="TP-988", labels=["pm-parent"], status_name="Backlog")
         payload["webhookEvent"] = "jira:issue_created"
 
-        class _FakeClient:
+        class _FakeClient(_JiraMetadataClientMixin):
             def __init__(self) -> None:
                 self.updated_fields: list[dict] = []
                 self.replaced_labels: list[dict] = []
 
-            def get_issue_detail(self, **kwargs):
+            def _get_issue_detail(self, issue_id_or_key: str):
                 return JiraIssueDetail(
                     key="TP-988",
                     summary="Runtime architecture reset",
@@ -1849,13 +2145,31 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                     labels=["pm-parent", "sync-current"],
                 )
 
-            def update_issue_fields(self, **kwargs):
-                self.updated_fields.append(kwargs)
-                return None
+            def _update_issue_fields(
+                self,
+                issue_id_or_key: str,
+                summary: str,
+                description: str | dict[str, object],
+                labels: list[str],
+            ) -> None:
+                self.updated_fields.append(
+                    {
+                        "issue_id_or_key": issue_id_or_key,
+                        "summary": summary,
+                        "description": description,
+                        "labels": list(labels),
+                    }
+                )
 
-            def replace_issue_labels(self, **kwargs):
-                self.replaced_labels.append(kwargs)
-                return None
+            def replace_issue_labels(
+                self,
+                *,
+                access_token: str,
+                cloud_id: str,
+                issue_id_or_key: str,
+                labels: list[str],
+            ) -> None:
+                self.replaced_labels.append({"issue_id_or_key": issue_id_or_key, "labels": list(labels)})
 
         discord_client = MagicMock()
         discord_client.post_message.side_effect = [

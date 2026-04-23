@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 import json
 from typing import Any, Mapping, Sequence
@@ -13,6 +13,7 @@ from orchestrator.core.codex_agents import _invoke_discord_json_maybe_tools
 from orchestrator.core.runtime_invocation import AgentInvocationContext
 from orchestrator.core.codex_runtime import CodexRuntime, CodexRuntimeError
 from orchestrator.core.prompt_templates import render_prompt
+from orchestrator.core.runtime_payload_models import PMInterviewPlanPayload
 from orchestrator.core.runtime_stage_session import RuntimeStageSession
 from orchestrator.storage.models import PMInterviewCase
 
@@ -31,14 +32,6 @@ PM_INTERVIEW_ACTIVE_STATUSES = (
     PM_INTERVIEW_STATUS_RESEARCHING,
     PM_INTERVIEW_STATUS_READY_TO_WRITE,
 )
-
-
-@dataclass(frozen=True)
-class PMInterviewSlotDefinition:
-    slot_key: str
-    question: str
-    examples: tuple[str, ...]
-    required: bool = True
 
 
 @dataclass(frozen=True)
@@ -140,85 +133,15 @@ class PMInterviewCaseResolution:
     interview_case: PMInterviewCase | None = None
     matches: tuple[PMInterviewCase, ...] = ()
 
-
-_PM_INTERVIEW_SLOT_DEFINITIONS: tuple[PMInterviewSlotDefinition, ...] = (
-    PMInterviewSlotDefinition(
-        slot_key="objective",
-        question="What outcome should this feature deliver?",
-        examples=(
-            "Share the app with friends",
-            "Let a user invite teammates into a workspace",
-            "Help customers pause and resume a subscription",
-        ),
-    ),
-    PMInterviewSlotDefinition(
-        slot_key="user_value",
-        question="Why does the user want this feature?",
-        examples=(
-            "They can bring in friends more easily",
-            "It reduces friction during onboarding",
-            "It helps them avoid contacting support",
-        ),
-    ),
-    PMInterviewSlotDefinition(
-        slot_key="acceptance_criteria",
-        question="What should happen when the feature works?",
-        examples=(
-            "The user can tap share and send a link",
-            "The recipient can open the right app store page",
-            "The user can see when the subscription pause takes effect",
-        ),
-    ),
-    PMInterviewSlotDefinition(
-        slot_key="scope_in",
-        question="What must be included in the first version?",
-        examples=(
-            "Share link only",
-            "Invite by email and copy link",
-            "Pause and resume with no rewards or referral credits",
-        ),
-    ),
-    PMInterviewSlotDefinition(
-        slot_key="scope_out",
-        question="What should stay out of scope for now?",
-        examples=(
-            "Rewards or referral tracking",
-            "Support tooling changes",
-            "Admin-only workflows",
-        ),
-    ),
-    PMInterviewSlotDefinition(
-        slot_key="constraints",
-        question="Are there any product constraints we need to respect?",
-        examples=(
-            "Must work on iOS and Android",
-            "Needs to ship this quarter",
-            "Must avoid enterprise-managed accounts",
-        ),
-    ),
-    PMInterviewSlotDefinition(
-        slot_key="risks",
-        question="Any risks, edge cases, or dependencies we should account for?",
-        examples=(
-            "Privacy or consent concerns",
-            "App store or platform policy limits",
-            "Abuse or spam risk",
-        ),
-    ),
-    PMInterviewSlotDefinition(
-        slot_key="success_outcomes",
-        question="How will we know the feature succeeded?",
-        examples=(
-            "More invites are sent",
-            "Fewer users contact support",
-            "Higher activation or retention",
-        ),
-    ),
-)
-
-_PM_INTERVIEW_SLOT_BY_KEY = {definition.slot_key: definition for definition in _PM_INTERVIEW_SLOT_DEFINITIONS}
-_PM_INTERVIEW_REQUIRED_SLOT_KEYS = tuple(
-    definition.slot_key for definition in _PM_INTERVIEW_SLOT_DEFINITIONS if definition.required
+_PM_INTERVIEW_REQUIRED_SLOT_KEYS = (
+    "objective",
+    "user_value",
+    "acceptance_criteria",
+    "scope_in",
+    "scope_out",
+    "constraints",
+    "risks",
+    "success_outcomes",
 )
 
 
@@ -385,7 +308,7 @@ def _evidence_updates(evidence: Sequence[PMInterviewEvidence]) -> dict[str, obje
             if not isinstance(slot_values, Mapping):
                 continue
             for key, value in slot_values.items():
-                if key in _PM_INTERVIEW_SLOT_BY_KEY:
+                if key in _PM_INTERVIEW_REQUIRED_SLOT_KEYS:
                     updates[key] = value
     return updates
 
@@ -414,24 +337,11 @@ def pm_interview_missing_slots(*, brief: PMInterviewBrief) -> tuple[str, ...]:
     return tuple(missing)
 
 
-def build_pm_interview_question(slot_key: str) -> PMInterviewQuestion | None:
-    slot = _PM_INTERVIEW_SLOT_BY_KEY.get(str(slot_key or "").strip())
-    if slot is None:
-        return None
-    return PMInterviewQuestion(slot_key=slot.slot_key, question=slot.question, examples=slot.examples)
-
-
-def select_next_pm_interview_question(*, missing_slots: Sequence[str]) -> PMInterviewQuestion | None:
-    for slot_key in missing_slots:
-        question = build_pm_interview_question(slot_key)
-        if question is not None:
-            return question
-    return None
-
-
 def format_pm_interview_question(question: PMInterviewQuestion | None) -> str:
     if question is None:
         return "The product brief looks complete."
+    if not question.examples:
+        return question.question
     example_lines = "\n".join(f"- {example}" for example in question.examples)
     return f"{question.question}\nExamples:\n{example_lines}"
 
@@ -472,23 +382,28 @@ def assess_pm_interview_brief(
     else:
         status = PM_INTERVIEW_STATUS_QUESTION_PENDING
 
-    next_question = select_next_pm_interview_question(missing_slots=missing_slots)
     return PMInterviewAssessment(
         status=status,
         brief=merged_brief,
         evidence=normalized_evidence,
         missing_slots=missing_slots,
-        next_question=next_question,
+        next_question=None,
         ready_to_write=status == PM_INTERVIEW_STATUS_READY_TO_WRITE,
     )
 
 
 def pm_interview_case_from_row(row: PMInterviewCase) -> PMInterviewAssessment:
-    return assess_pm_interview_brief(
+    assessment = assess_pm_interview_brief(
         brief=getattr(row, "brief_json", None) or {},
         evidence=getattr(row, "evidence_json", None) or [],
         status_hint=str(getattr(row, "status", "") or "").strip().lower() or None,
     )
+    stored_question = _question_from_payload(
+        getattr(row, "next_question_json", None) or getattr(row, "current_question_json", None)
+    )
+    if stored_question is None:
+        return assessment
+    return replace(assessment, next_question=stored_question)
 
 
 def resolve_pm_interview_case_match(
@@ -681,8 +596,8 @@ def upsert_pm_interview_case(
                 for item in (question_history or [])
                 if isinstance(item, Mapping)
             ],
-            current_question_json=_question_payload(current_question) or (assessment.next_question.to_payload() if assessment.next_question else {}),
-            next_question_json=_question_payload(next_question) or (assessment.next_question.to_payload() if assessment.next_question else {}),
+            current_question_json=_question_payload(current_question),
+            next_question_json=_question_payload(next_question),
             missing_slots_json=list(assessment.missing_slots),
             notes_json=_json_safe_value(dict(notes or {})),
             created_at=now,
@@ -709,8 +624,15 @@ def upsert_pm_interview_case(
         if isinstance(item, Mapping):
             existing_history.append(_json_safe_value(dict(item)))
     case.question_history_json = existing_history
-    case.current_question_json = _question_payload(current_question) or (assessment.next_question.to_payload() if assessment.next_question else case.current_question_json)
-    case.next_question_json = _question_payload(next_question) or (assessment.next_question.to_payload() if assessment.next_question else case.next_question_json)
+    current_question_payload = _question_payload(current_question)
+    next_question_payload = _question_payload(next_question)
+    if normalized_status in {PM_INTERVIEW_STATUS_READY_TO_WRITE, PM_INTERVIEW_STATUS_PM_COMPLETED, PM_INTERVIEW_STATUS_ABANDONED}:
+        case.current_question_json = {}
+        case.next_question_json = {}
+    elif current_question_payload:
+        case.current_question_json = current_question_payload
+    if normalized_status not in {PM_INTERVIEW_STATUS_READY_TO_WRITE, PM_INTERVIEW_STATUS_PM_COMPLETED, PM_INTERVIEW_STATUS_ABANDONED} and next_question_payload:
+        case.next_question_json = next_question_payload
     case.missing_slots_json = list(assessment.missing_slots)
     merged_notes = dict(case.notes_json or {})
     merged_notes.update(_json_safe_value(dict(notes or {})))
@@ -744,8 +666,6 @@ def append_pm_interview_evidence(
     case.brief_json = assessment.brief.to_payload()
     case.evidence_json = [item.to_payload() for item in existing_evidence + normalized_new_evidence]
     case.missing_slots_json = list(assessment.missing_slots)
-    case.current_question_json = assessment.next_question.to_payload() if assessment.next_question else case.current_question_json
-    case.next_question_json = assessment.next_question.to_payload() if assessment.next_question else case.next_question_json
     case.status = assessment.status
     case.updated_at = _now()
     session.flush()
@@ -765,6 +685,8 @@ def mark_pm_interview_case_completed(
         raise ValueError("PM interview case not found")
     case.status = PM_INTERVIEW_STATUS_PM_COMPLETED
     case.parent_issue_key = _normalized_text(parent_issue_key) or case.parent_issue_key
+    case.current_question_json = {}
+    case.next_question_json = {}
     merged_notes = dict(case.notes_json or {})
     merged_notes.update(_json_safe_value(dict(notes or {})))
     case.notes_json = merged_notes
@@ -838,8 +760,10 @@ def normalize_parent_feature_brief_with_runtime(
     normalized_brief = normalize_pm_interview_brief(brief_payload)
     assessment = assess_pm_interview_brief(brief=normalized_brief.to_payload(), evidence=())
     questions = _normalized_text_list(payload.get("open_questions"))
-    if not assessment.ready_to_write and not questions and assessment.next_question is not None:
-        questions = (format_pm_interview_question(assessment.next_question),)
+    if not assessment.ready_to_write and not questions:
+        raise CodexRuntimeError(
+            "Codex did not return explicit open_questions for an incomplete parent brief normalization"
+        )
     return {
         "brief": assessment.brief.to_payload(),
         "open_questions": list(questions),
@@ -847,27 +771,38 @@ def normalize_parent_feature_brief_with_runtime(
     }
 
 
-def _question_payload(value: Mapping[str, Any] | PMInterviewQuestion | None) -> dict[str, Any]:
+def pm_interview_question_from_payload(
+    value: Mapping[str, Any] | PMInterviewQuestion | None,
+) -> PMInterviewQuestion | None:
     if isinstance(value, PMInterviewQuestion):
-        return value.to_payload()
+        return value
     if isinstance(value, Mapping):
         payload = dict(value)
-        slot_key = _normalized_text(payload.get("slot_key"))
+        slot_key = _normalized_text(payload.get("slot_key")) or "product_clarification"
         question = _normalized_text(payload.get("question"))
         examples = _normalized_text_list(payload.get("examples"))
-        if slot_key and question:
-            return {"slot_key": slot_key, "question": question, "examples": list(examples)}
-    return {}
+        if question:
+            return PMInterviewQuestion(slot_key=slot_key, question=question, examples=examples)
+    return None
 
 
-def plan_pm_interview_with_codex(
+def _question_payload(value: Mapping[str, Any] | PMInterviewQuestion | None) -> dict[str, Any]:
+    question = pm_interview_question_from_payload(value)
+    return question.to_payload() if question is not None else {}
+
+
+def _question_from_payload(value: Mapping[str, Any] | PMInterviewQuestion | None) -> PMInterviewQuestion | None:
+    return pm_interview_question_from_payload(value)
+
+
+def plan_pm_interview_with_runtime(
     *,
     runtime: CodexRuntime,
     request_text: str,
     brief: Mapping[str, Any] | PMInterviewBrief | None,
     evidence: Sequence[Mapping[str, Any] | PMInterviewEvidence] | None,
     missing_slots: Sequence[str],
-    next_question: PMInterviewQuestion | None,
+    current_question: PMInterviewQuestion | None,
     project_keys: list[str],
     issues: list[dict],
     status_counts: dict[str, int],
@@ -880,7 +815,7 @@ def plan_pm_interview_with_codex(
     normalized_brief = normalize_pm_interview_brief(brief)
     normalized_evidence = [item.to_payload() for item in normalize_pm_interview_evidence(evidence)]
     normalized_history = [dict(item) for item in history or [] if isinstance(item, Mapping)]
-    next_question_payload = next_question.to_payload() if next_question is not None else None
+    current_question_payload = current_question.to_payload() if current_question is not None else None
 
     user_prompt = render_prompt(
         "discord/pm_interview_user.j2",
@@ -888,8 +823,8 @@ def plan_pm_interview_with_codex(
         brief_json=json.dumps(normalized_brief.to_payload()),
         evidence_json=json.dumps(normalized_evidence),
         missing_slots_json=json.dumps(list(missing_slots)),
-        next_question_json=json.dumps(next_question_payload or {}),
-        next_question_examples_json=json.dumps(list(next_question.examples) if next_question is not None else []),
+        current_question_json=json.dumps(current_question_payload or {}),
+        current_question_examples_json=json.dumps(list(current_question.examples) if current_question is not None else []),
         project_keys_json=json.dumps(project_keys),
         status_counts_json=json.dumps(status_counts),
         github_context_json=json.dumps(dict(github_context or {})),
@@ -906,26 +841,13 @@ def plan_pm_interview_with_codex(
         settings=settings,
         max_tool_hops=10,
     )
-    if not isinstance(payload, dict):
-        raise CodexRuntimeError("Codex did not return a PM interview JSON object")
-    message = _normalized_text(payload.get("message"))
-    if not message:
-        raise CodexRuntimeError("Codex did not return a PM interview message")
-    brief_payload = payload.get("brief")
-    if brief_payload is None:
-        brief_payload = normalized_brief.to_payload()
-    if not isinstance(brief_payload, Mapping):
-        raise CodexRuntimeError("Codex did not return a PM interview brief object")
+    try:
+        parsed_payload = PMInterviewPlanPayload.from_payload(payload)
+    except RuntimeError as exc:
+        raise CodexRuntimeError(str(exc)) from exc
 
-    normalized_payload = dict(payload)
-    normalized_payload["message"] = message
-    normalized_payload["brief"] = normalize_pm_interview_brief(brief_payload).to_payload()
-    normalized_payload["status"] = _normalized_text(payload.get("status")).lower() or (
-        PM_INTERVIEW_STATUS_READY_TO_WRITE if not missing_slots else PM_INTERVIEW_STATUS_QUESTION_PENDING
-    )
+    normalized_payload = parsed_payload.to_payload()
+    normalized_payload["brief"] = normalize_pm_interview_brief(parsed_payload.brief).to_payload()
     normalized_payload["missing_slots"] = list(missing_slots)
-    normalized_payload["next_question"] = next_question_payload
-    normalized_payload["next_question_examples"] = list(next_question.examples) if next_question is not None else []
-    normalized_payload["ready_to_write"] = bool(payload.get("ready_to_write")) if "ready_to_write" in payload else not missing_slots
     normalized_payload["evidence"] = normalized_evidence
     return normalized_payload

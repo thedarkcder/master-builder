@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Any, Mapping, Sequence
 from uuid import uuid4
@@ -10,12 +10,17 @@ from sqlalchemy.orm import Session
 from orchestrator.core.pm_interview_service import (
     PMInterviewAssessment,
     PMInterviewEvidence,
+    PMInterviewQuestion,
     assess_pm_interview_brief,
+    format_pm_interview_question,
     normalize_pm_interview_evidence,
-    plan_pm_interview_with_codex,
+    pm_interview_case_from_row,
+    pm_interview_question_from_payload,
+    plan_pm_interview_with_runtime,
     resolve_pm_interview_case,
     upsert_pm_interview_case,
 )
+from orchestrator.core.codex_runtime import CodexRuntimeError
 from orchestrator.core.runtime_invocation import AgentInvocationContext
 from orchestrator.storage.models import PMInterviewCase
 
@@ -25,6 +30,32 @@ class PMInterviewFollowupResult:
     interview_case: PMInterviewCase
     assessment: PMInterviewAssessment
     message: str
+    next_question: PMInterviewQuestion | None = None
+    clarification_questions: tuple[str, ...] = ()
+
+
+def _existing_followup_assessment(
+    *,
+    existing_case: PMInterviewCase,
+    source_transport: str,
+    source_ref: str | None,
+) -> PMInterviewAssessment | None:
+    normalized_source_ref = str(source_ref or "").strip()
+    if not normalized_source_ref:
+        return None
+    existing_evidence = normalize_pm_interview_evidence(
+        list(getattr(existing_case, "evidence_json", None) or [])
+    )
+    for item in existing_evidence:
+        if item.evidence_type != "human_reply":
+            continue
+        if str(item.source_ref or "").strip() != normalized_source_ref:
+            continue
+        metadata = dict(item.metadata or {})
+        if str(metadata.get("source_transport") or "").strip() != str(source_transport or "").strip():
+            continue
+        return pm_interview_case_from_row(existing_case)
+    return None
 
 
 def continue_pm_interview_from_followup(
@@ -54,13 +85,28 @@ def continue_pm_interview_from_followup(
     if existing_case is None:
         raise ValueError("PM interview case not found")
 
+    duplicate_assessment = _existing_followup_assessment(
+        existing_case=existing_case,
+        source_transport=source_transport,
+        source_ref=source_ref,
+    )
+    if duplicate_assessment is not None:
+        duplicate_message = (
+            format_pm_interview_question(duplicate_assessment.next_question)
+            if duplicate_assessment.next_question is not None
+            else ""
+        )
+        return PMInterviewFollowupResult(
+            interview_case=existing_case,
+            assessment=duplicate_assessment,
+            message=duplicate_message,
+            next_question=duplicate_assessment.next_question,
+            clarification_questions=(duplicate_message,) if duplicate_message else (),
+        )
+
     existing_brief = getattr(existing_case, "brief_json", None) or {}
     existing_evidence = list(getattr(existing_case, "evidence_json", None) or [])
-    current_assessment = assess_pm_interview_brief(
-        brief=existing_brief,
-        evidence=existing_evidence,
-        status_hint=str(getattr(existing_case, "status", "") or "").strip() or None,
-    )
+    current_assessment = pm_interview_case_from_row(existing_case)
     new_evidence = normalize_pm_interview_evidence(
         [
             PMInterviewEvidence(
@@ -77,13 +123,13 @@ def continue_pm_interview_from_followup(
             )
         ]
     )
-    pm_payload = plan_pm_interview_with_codex(
+    pm_payload = plan_pm_interview_with_runtime(
         runtime=runtime,
         request_text=reply_text,
         brief=existing_brief,
         evidence=[*existing_evidence, *[item.to_payload() for item in new_evidence]],
         missing_slots=current_assessment.missing_slots,
-        next_question=current_assessment.next_question,
+        current_question=current_assessment.next_question,
         project_keys=list(project_keys),
         issues=list(issues or []),
         status_counts=dict(status_counts or {}),
@@ -102,6 +148,17 @@ def continue_pm_interview_from_followup(
         evidence=[*existing_evidence, *[item.to_payload() for item in new_evidence]],
         status_hint=str(pm_payload.get("status") or "").strip() or None,
     )
+    explicit_next_question = pm_interview_question_from_payload(pm_payload.get("next_question"))
+    if final_assessment.ready_to_write:
+        assessment_to_store = final_assessment
+        stored_next_question = None
+        clarification_questions: tuple[str, ...] = ()
+    elif explicit_next_question is None:
+        raise CodexRuntimeError("PM interview follow-up did not return a next clarification question")
+    else:
+        assessment_to_store = replace(final_assessment, next_question=explicit_next_question)
+        stored_next_question = explicit_next_question
+        clarification_questions = (format_pm_interview_question(explicit_next_question),)
     question_history = [
         {
             "speaker": "user",
@@ -114,7 +171,7 @@ def continue_pm_interview_from_followup(
             "speaker": "pm",
             "text": message,
             "request_id": request_id,
-            "status": final_assessment.status,
+            "status": assessment_to_store.status,
         },
     ]
     interview_case = upsert_pm_interview_case(
@@ -129,16 +186,18 @@ def continue_pm_interview_from_followup(
         owner_user_id=str(getattr(existing_case, "owner_user_id", "") or "").strip() or None,
         parent_issue_key=str(getattr(existing_case, "parent_issue_key", "") or "").strip() or None,
         source_text=reply_text,
-        status=final_assessment.status,
-        brief=final_assessment.brief.to_payload(),
+        status=assessment_to_store.status,
+        brief=assessment_to_store.brief.to_payload(),
         evidence=[item.to_payload() for item in new_evidence],
         question_history=question_history,
-        current_question=final_assessment.next_question,
-        next_question=final_assessment.next_question,
+        current_question=stored_next_question,
+        next_question=stored_next_question,
         notes=dict(getattr(existing_case, "notes_json", None) or {}),
     )
     return PMInterviewFollowupResult(
         interview_case=interview_case,
-        assessment=final_assessment,
+        assessment=assessment_to_store,
         message=message,
+        next_question=stored_next_question,
+        clarification_questions=clarification_questions,
     )

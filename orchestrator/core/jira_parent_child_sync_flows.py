@@ -23,6 +23,7 @@ from orchestrator.core.jira_parent_child_sync_publishers import (
     update_issue_sync_label as _update_issue_sync_label,
 )
 from orchestrator.core.jira_parent_child_sync_service import (
+    _JiraParentIssueGateway,
     _jira_adapter,
     _atlassian_oauth_context,
     build_workflow_advance_handler_resolver,
@@ -45,7 +46,6 @@ from orchestrator.core.parent_planning_clarification_service import ParentPlanni
 from orchestrator.core.pm_interview_followup_service import continue_pm_interview_from_followup
 from orchestrator.core.pm_interview_service import (
     PM_INTERVIEW_STATUS_PM_COMPLETED,
-    format_pm_interview_question,
     mark_pm_interview_case_completed,
 )
 from orchestrator.core.runtime_invocation import AgentInvocationContext
@@ -53,6 +53,44 @@ from orchestrator.core.webhook_job_errors import RetryableWebhookJobError
 from orchestrator.core.workflow_runtime import WorkflowAdvanceRequest
 
 logger = logging.getLogger(__name__)
+
+
+def _sync_parent_issue_reference_links(
+    *,
+    session: Session,
+    settings,  # noqa: ANN001
+    integration_router,
+    context: JiraParentChildSyncContext,
+    issue_key: str,
+    issue_summary: str,
+    issue_labels: list[str] | tuple[str, ...],
+) -> None:
+    gateway = _JiraParentIssueGateway(
+        session=session,
+        settings=settings,
+        context=context,
+        integration_router=integration_router,
+        post_jira_comment_fn=None,
+        create_jira_comment_fn=None,
+    )
+    architecture_gate = gateway.resolve_architecture_gate(
+        parent_issue_key=issue_key,
+        issue_summary=issue_summary,
+        issue_labels=list(issue_labels),
+    )
+    gateway.upsert_workflow_execution_link(issue_key=issue_key)
+    architecture_document = architecture_gate.document
+    if architecture_document is None:
+        return
+    title = str(getattr(architecture_document, "title", "") or "").strip()
+    url = str(getattr(architecture_document, "canonical_url", "") or "").strip()
+    if not title or not url:
+        raise RuntimeError(f"Architecture document link is incomplete for {issue_key}")
+    gateway.upsert_architecture_document_link(
+        issue_key=issue_key,
+        title=title,
+        url=url,
+    )
 
 
 def handle_parent_feature_sync(
@@ -99,6 +137,22 @@ def handle_parent_feature_sync(
             comment_command_argument=context.comment_command_argument,
         )
     )
+    if result.handled:
+        parent_detail = _jira_adapter(
+            integration_router=integration_router,
+            session=session,
+            tenant=context.tenant,
+            settings=settings,
+        ).get_issue_detail(issue_id_or_key=context.issue_key)
+        _sync_parent_issue_reference_links(
+            session=session,
+            settings=settings,
+            integration_router=integration_router,
+            context=context,
+            issue_key=context.issue_key,
+            issue_summary=parent_detail.summary,
+            issue_labels=list(parent_detail.labels or []),
+        )
     return JiraParentChildSyncResult(
         handled=result.handled,
         reason=result.reason,
@@ -113,7 +167,7 @@ def handle_engineering_clarification_command(
     settings,  # noqa: ANN001
     integration_router,
     build_runtime_for_selector_fn,
-    classify_engineering_clarification_with_codex_fn,
+    classify_engineering_clarification_with_runtime_fn,
     post_jira_comment_fn,
     create_jira_comment_fn,
 ) -> JiraParentChildSyncResult:  # noqa: ANN001
@@ -160,7 +214,7 @@ def handle_engineering_clarification_command(
         agent_name="pm_primary",
     )
     try:
-        translation = classify_engineering_clarification_with_codex_fn(
+        translation = classify_engineering_clarification_with_runtime_fn(
             runtime=runtime,
             parent_issue_key=parent_issue_key,
             parent_summary=parent_detail.summary,
@@ -188,10 +242,10 @@ def handle_engineering_clarification_command(
             reason="clarification_translation_failed",
             extra={"error": str(exc), "webhook_event": context.webhook_event},
         )
-    classification = str(translation.get("classification") or "").strip().lower() or "technical_implementation"
-    stakeholder_question = str(translation.get("stakeholder_question") or "").strip()
-    child_block_note = str(translation.get("child_block_note") or "").strip()
-    reason = str(translation.get("reason") or "").strip()
+    classification = translation.classification
+    stakeholder_question = translation.stakeholder_question or ""
+    child_block_note = translation.child_block_note
+    reason = translation.reason
     if classification != "product_behavior" or not stakeholder_question:
         comment_text = _engineering_decision_note(
             question=question,
@@ -616,11 +670,6 @@ def handle_pm_interview_reply(
         settings=settings,
     ).get_issue_detail(issue_id_or_key=context.issue_key)
     brief_payload = followup_result.assessment.brief.to_payload()
-    next_questions: list[object] = []
-    if followup_result.assessment.next_question is not None:
-        next_questions.append(format_pm_interview_question(followup_result.assessment.next_question))
-    if not bool(followup_result.assessment.ready_to_write) and not next_questions:
-        raise RuntimeError("PM interview follow-up must produce a next clarification question before planning can continue")
     if bool(followup_result.assessment.ready_to_write):
         persist_parent_feature_brief_snapshot(
             session=session,
@@ -645,6 +694,7 @@ def handle_pm_interview_reply(
             context_type=FOLLOWUP_CONTEXT_PM_INTERVIEW,
             issue_key=context.issue_key,
         )
+    session.commit()
     runtime = build_workflow_runtime_fn(
         session=session,
         settings=settings,
@@ -674,7 +724,9 @@ def handle_pm_interview_reply(
                 "request_id": context.request_id,
                 "_mb_pm_interview_followup": True,
                 "brief_payload": brief_payload,
-                "next_questions": ClarificationQuestionSet.from_values(next_questions).to_payload(),
+                "next_questions": ClarificationQuestionSet.from_values(
+                    followup_result.clarification_questions
+                ).to_payload(),
                 "ready_to_write": bool(followup_result.assessment.ready_to_write),
             },
             webhook_event=context.webhook_event,
@@ -682,6 +734,16 @@ def handle_pm_interview_reply(
             comment_command_argument=context.comment_command_argument,
         )
     )
+    if advance_result.handled:
+        _sync_parent_issue_reference_links(
+            session=session,
+            settings=settings,
+            integration_router=integration_router,
+            context=context,
+            issue_key=context.issue_key,
+            issue_summary=parent_detail.summary,
+            issue_labels=list(parent_detail.labels or []),
+        )
     session.commit()
     return JiraParentChildSyncResult(
         handled=advance_result.handled,
