@@ -43,6 +43,7 @@ from orchestrator.core.parent_feature_brief_store import (
     persist_parent_feature_brief_snapshot,
 )
 from orchestrator.core.parent_planning_clarification_service import ParentPlanningClarificationService
+from orchestrator.core.parent_planning_fanout_service import ParentPlanningFanoutService
 from orchestrator.core.pm_interview_followup_service import continue_pm_interview_from_followup
 from orchestrator.core.pm_interview_service import (
     PM_INTERVIEW_STATUS_PM_COMPLETED,
@@ -492,15 +493,18 @@ def handle_engineering_clarification_reply(
             extra={"stale_child_keys": affected_child_keys, "webhook_event": context.webhook_event},
         )
 
-    if bool(seed_data.get("requires_input")):
-        questions = ClarificationQuestionSet.from_values(seed_data.get("questions", [])).questions
+    seed_evaluation = ParentPlanningFanoutService().evaluate_seed_data(
+        seed_data=seed_data,
+        combine_child_updates_fn=_combined_child_updates,
+    )
+    if not seed_evaluation.completed:
         _mark_issues_sync_blocked(oauth=oauth, issue_keys=[context.issue_key, *affected_child_keys])
         metadata["parent_updated"] = bool(seed_data.get("updated_parent") or seed_data.get("created_parent"))
         metadata["updated_at"] = datetime.now(timezone.utc).isoformat()
         clarification_service = ParentPlanningClarificationService()
         clarification_service.ensure_active_clarification(
             issue_key=context.issue_key,
-            questions=questions,
+            questions=seed_evaluation.questions,
             publisher=JiraEngineeringClarificationPublisher(
                 session=session,
                 context=context,
@@ -514,7 +518,7 @@ def handle_engineering_clarification_reply(
             handled=True,
             reason="engineering_clarification_still_open",
             extra={
-                "questions": ClarificationQuestionSet.from_values(questions).to_payload(),
+                "questions": ClarificationQuestionSet.from_values(seed_evaluation.questions).to_payload(),
                 "stale_child_keys": affected_child_keys,
                 "webhook_event": context.webhook_event,
             },
@@ -527,7 +531,9 @@ def handle_engineering_clarification_reply(
         issue_key=context.issue_key,
     )
     session.commit()
-    updated_children, created_children, changed_children = _combined_child_updates(seed_data=seed_data)
+    updated_children = seed_evaluation.updated_children
+    created_children = seed_evaluation.created_children
+    changed_children = seed_evaluation.changed_children
     _post_sync_note(
         session=session,
         tenant=context.tenant,
