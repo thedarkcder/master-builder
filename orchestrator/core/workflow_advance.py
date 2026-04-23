@@ -3,13 +3,16 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from orchestrator.core.config import Settings
+from orchestrator.core.workflow_operation_service import WorkflowOperationHandle
+from orchestrator.core.workflow_type_catalog import get_workflow_type
 from orchestrator.core.workflow_execution_projection import (
     WorkflowExecutionProjection,
     ensure_issue_workflow_execution,
 )
+from orchestrator.storage.models import WorkflowExecution, WorkflowOperation
 
 
 @dataclass(frozen=True)
@@ -156,6 +159,26 @@ class WorkflowAdvanceHandler(Protocol):
     ) -> WorkflowAdvanceOutcome:
         ...
 
+    def retry_operation(
+        self,
+        *,
+        session: Session,
+        settings: Settings,
+        session_factory: sessionmaker[Session],
+        workflow_type,
+        workflow: WorkflowExecution,
+        operation: WorkflowOperation,
+    ) -> WorkflowOperationHandle:
+        ...
+
+
+class UnsupportedWorkflowOperationRetryError(RuntimeError):
+    pass
+
+
+class InvalidWorkflowOperationRetryError(RuntimeError):
+    pass
+
 
 def execute_workflow_advance(
     *,
@@ -179,4 +202,25 @@ def execute_workflow_advance(
         workflow_type=workflow_type,
         request=request,
         lifecycle=lifecycle,
+    )
+
+
+def execute_workflow_operation_retry(
+    *,
+    session: Session,
+    settings: Settings,
+    session_factory: sessionmaker[Session],
+    workflow: WorkflowExecution,
+    operation: WorkflowOperation,
+    resolve_advance_handler_fn: Callable[[str], WorkflowAdvanceHandler],
+) -> WorkflowOperationHandle:
+    workflow_type = get_workflow_type(session, workflow_type_key=workflow.workflow_type_key)
+    handler = resolve_advance_handler_fn(str(workflow_type.handler_key or "").strip())
+    return handler.retry_operation(
+        session=session,
+        settings=settings,
+        session_factory=session_factory,
+        workflow_type=workflow_type,
+        workflow=workflow,
+        operation=operation,
     )
