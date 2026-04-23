@@ -92,3 +92,20 @@ def test_parent_planning_fanout_service_returns_blocking_questions() -> None:
 
     assert result.completed is False
     assert result.questions[0].question == "What audit retention window should v1 support?"
+
+
+def test_parent_planning_fanout_service_evaluates_refresh_seed_data() -> None:
+    result = ParentPlanningFanoutService().evaluate_seed_data(
+        seed_data={
+            "requires_input": True,
+            "questions": ["Which child behavior should update?"],
+            "updated_children": ["MAB-230"],
+            "created_children": [],
+            "changed_children": ["MAB-230"],
+        },
+        combine_child_updates_fn=_ChildSyncGateway(seed_data={}).combined_child_updates,
+    )
+
+    assert result.completed is False
+    assert result.changed_children == ["MAB-230"]
+    assert result.questions[0].question == "Which child behavior should update?"
