@@ -31,12 +31,16 @@ NON_ROUTE_API_ROUTE_IMPORT_ALLOWLIST = {
     "orchestrator/api/main.py": {
         "orchestrator.api.routes.admin_auth",
         "orchestrator.api.routes.admin_agent_runtimes",
+        "orchestrator.api.routes.admin_architecture_documents",
+        "orchestrator.api.routes.admin_atlassian_confluence",
+        "orchestrator.api.routes.admin_atlassian_jira",
+        "orchestrator.api.routes.admin_atlassian_oauth",
+        "orchestrator.api.routes.admin_atlassian_webhooks",
         "orchestrator.api.routes.admin_codex",
         "orchestrator.api.routes.admin_discord_commands",
         "orchestrator.api.routes.admin_discord_allowlist",
         "orchestrator.api.routes.admin_discord_install",
         "orchestrator.api.routes.admin_github",
-        "orchestrator.api.routes.admin_jira",
         "orchestrator.api.routes.admin_knowledge",
         "orchestrator.api.routes.admin_observability",
         "orchestrator.api.routes.admin_ready",
@@ -69,6 +73,41 @@ def _imported_modules(module_path: Path) -> set[str]:
 
 
 class ArchitectureBoundaryTests(unittest.TestCase):
+    def test_abstract_runtime_modules_do_not_use_vendor_runtime_function_names(self) -> None:
+        banned_token = "with_" + "codex"
+        roots = [
+            ORCHESTRATOR_ROOT / "core",
+            ORCHESTRATOR_ROOT / "api",
+        ]
+        violations: list[str] = []
+        for root in roots:
+            for module_path in sorted(root.rglob("*.py")):
+                source = module_path.read_text(encoding="utf-8")
+                if banned_token in source:
+                    violations.append(module_path.relative_to(ROOT).as_posix())
+
+        self.assertEqual(
+            violations,
+            [],
+            msg=f"Runtime-abstracted modules must use domain/runtime names, not vendor names: {violations}",
+        )
+
+    def test_atlassian_admin_surface_is_split_by_provider_capability(self) -> None:
+        stale_module = ORCHESTRATOR_ROOT / "api" / "routes" / "admin_atlassian.py"
+        self.assertFalse(
+            stale_module.exists(),
+            msg="Do not restore the broad Atlassian admin router; split OAuth, Jira, Confluence, and webhook routes.",
+        )
+        jira_route = ORCHESTRATOR_ROOT / "api" / "routes" / "admin_atlassian_jira.py"
+        jira_source = jira_route.read_text(encoding="utf-8")
+        self.assertNotIn(
+            "webhooks/",
+            jira_source,
+            msg="Jira project discovery routes must not own Jira webhook lifecycle endpoints.",
+        )
+        webhook_route = ORCHESTRATOR_ROOT / "api" / "routes" / "admin_atlassian_webhooks.py"
+        self.assertTrue(webhook_route.exists(), msg="Jira webhook lifecycle must have an explicit Atlassian webhook route module.")
+
     def test_jira_http_ingress_does_not_plan_issue_runs_inline(self) -> None:
         module_path = ROOT / "orchestrator" / "api" / "webhooks" / "jira_application.py"
         tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))

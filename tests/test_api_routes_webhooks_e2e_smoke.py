@@ -39,6 +39,28 @@ class _FakeJiraClient:
     def list_projects(self, *, access_token: str, cloud_id: str) -> list[SimpleNamespace]:
         return [SimpleNamespace(key="TP", name="Tenant Project")]
 
+    def list_confluence_spaces(self, *, access_token: str, cloud_id: str, limit: int = 250) -> list[SimpleNamespace]:
+        return [SimpleNamespace(space_id="space-1", key="ARCH", name="Architecture")]
+
+    def get_confluence_space_by_key(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        space_key: str,
+    ) -> SimpleNamespace:
+        return SimpleNamespace(space_id="space-1", key=space_key, name="Architecture")
+
+    def list_confluence_pages(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        site_url: str,
+        space_id: str,
+    ) -> list[SimpleNamespace]:
+        return [SimpleNamespace(page_id="page-1", title="Architecture Home", webui_url=f"{site_url}/wiki/spaces/ARCH")]
+
     def register_webhook(
         self,
         *,
@@ -272,7 +294,7 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                     account_email="test@example.com",
                     cloud_id="cloud-1",
                     site_url="https://example.atlassian.net",
-                    scopes=["read:jira-work", "write:jira-work"],
+                    scopes=["read:jira-work", "write:jira-work", "read:space:confluence", "read:page:confluence"],
                     access_token_encrypted=encrypt_value(
                         plaintext="access-token",
                         encryption_key=settings.secrets_encryption_key,
@@ -299,6 +321,7 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                     repo_url="https://github.com/example/repo",
                     branch="feature/e2e",
                     pr_url=None,
+                    orchestration_backend="legacy",
                     dedupe_scope="issue_execution",
                     status="queued",
                     last_error=None,
@@ -397,8 +420,30 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
             ("GET", "/api/admin/runs"): RouteScenario(path="/api/admin/runs", auth=admin),
             ("GET", "/api/admin/runs/{run_id}"): RouteScenario(path="/api/admin/runs/run-e2e", auth=admin),
             ("GET", "/api/admin/workflows"): RouteScenario(path="/api/admin/workflows", auth=admin),
-            ("GET", "/api/admin/workflows/{workflow_id}"): RouteScenario(
+            ("GET", "/api/admin/workflow-types"): RouteScenario(
+                path="/api/admin/workflow-types?tenant_id=route25",
+                auth=admin,
+            ),
+            ("GET", "/api/admin/workflow-types/{workflow_type_key}"): RouteScenario(
+                path="/api/admin/workflow-types/issue_execution?tenant_id=route25",
+                auth=admin,
+            ),
+            ("PUT", "/api/admin/workflow-types/{workflow_type_key}"): RouteScenario(
+                path="/api/admin/workflow-types/issue_execution",
+                auth=admin,
+                json={"orchestration_backend": "legacy", "retry_policy": {}},
+                expected_statuses=(200, 404, 422),
+            ),
+            ("GET", "/api/admin/workflows/{execution_id}"): RouteScenario(
                 path="/api/admin/workflows/workflow-e2e",
+                auth=admin,
+            ),
+            ("GET", "/api/admin/workflows/{execution_id}/telemetry"): RouteScenario(
+                path="/api/admin/workflows/workflow-e2e/telemetry",
+                auth=admin,
+            ),
+            ("GET", "/api/admin/workflows/{execution_id}/audit"): RouteScenario(
+                path="/api/admin/workflows/workflow-e2e/audit",
                 auth=admin,
             ),
             ("GET", "/api/admin/runs/{run_id}/events"): RouteScenario(
@@ -422,11 +467,56 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 path="/api/admin/codex/events/stream?tenant_id=route25&project_id=route25-default",
                 auth=admin,
             ),
-            ("POST", "/api/admin/workflows/{workflow_id}/attempts"): RouteScenario(
+            ("POST", "/api/admin/workflows/{execution_id}/attempts"): RouteScenario(
                 path="/api/admin/workflows/workflow-e2e/attempts",
                 auth=admin,
                 json={"mode": "resume", "checkpoint_kind": "pm"},
                 expected_statuses=(201, 409),
+            ),
+            ("POST", "/api/admin/workflows/{execution_id}/resume"): RouteScenario(
+                path="/api/admin/workflows/workflow-e2e/resume",
+                auth=admin,
+                expected_statuses=(201, 400, 404, 409),
+            ),
+            ("GET", "/api/admin/workflows/{execution_id}/operations/{operation_id}/telemetry"): RouteScenario(
+                path="/api/admin/workflows/workflow-e2e/operations/op-missing/telemetry",
+                auth=admin,
+                expected_statuses=(404,),
+            ),
+            ("GET", "/api/admin/workflows/{execution_id}/operations/{operation_id}/attempts/{attempt_id}/telemetry"): RouteScenario(
+                path="/api/admin/workflows/workflow-e2e/operations/op-missing/attempts/attempt-missing/telemetry",
+                auth=admin,
+                expected_statuses=(404,),
+            ),
+            ("GET", "/api/admin/workflows/{execution_id}/operations/{operation_id}/telemetry/stream"): RouteScenario(
+                path="/api/admin/workflows/workflow-e2e/operations/op-missing/telemetry/stream",
+                auth=admin,
+                expected_statuses=(404,),
+            ),
+            ("GET", "/api/admin/workflows/{execution_id}/operations/{operation_id}/attempts/{attempt_id}/telemetry/stream"): RouteScenario(
+                path="/api/admin/workflows/workflow-e2e/operations/op-missing/attempts/attempt-missing/telemetry/stream",
+                auth=admin,
+                expected_statuses=(404,),
+            ),
+            ("GET", "/api/admin/workflows/{execution_id}/operations/{operation_id}/audit"): RouteScenario(
+                path="/api/admin/workflows/workflow-e2e/operations/op-missing/audit",
+                auth=admin,
+                expected_statuses=(404,),
+            ),
+            ("GET", "/api/admin/workflows/{execution_id}/operations/{operation_id}/attempts/{attempt_id}/audit"): RouteScenario(
+                path="/api/admin/workflows/workflow-e2e/operations/op-missing/attempts/attempt-missing/audit",
+                auth=admin,
+                expected_statuses=(200, 404),
+            ),
+            ("GET", "/api/admin/workflows/{execution_id}/operations/{operation_id}/transcript"): RouteScenario(
+                path="/api/admin/workflows/workflow-e2e/operations/op-missing/transcript",
+                auth=admin,
+                expected_statuses=(200, 404),
+            ),
+            ("POST", "/api/admin/workflows/{execution_id}/operations/{operation_id}/retry"): RouteScenario(
+                path="/api/admin/workflows/workflow-e2e/operations/op-missing/retry",
+                auth=admin,
+                expected_statuses=(400, 404, 409),
             ),
             ("POST", "/api/admin/runs/{run_id}/cancel"): RouteScenario(
                 path="/api/admin/runs/run-e2e/cancel",
@@ -444,6 +534,11 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
             ("GET", "/api/admin/alerts/evaluate"): RouteScenario(
                 path="/api/admin/alerts/evaluate?tenant_id=route25",
                 auth=admin,
+            ),
+            ("POST", "/api/admin/audit/export"): RouteScenario(
+                path="/api/admin/audit/export",
+                auth=admin,
+                json={"tenant_id": "route25"},
             ),
             ("GET", "/api/admin/discord/commands/status"): RouteScenario(
                 path="/api/admin/discord/commands/status",
@@ -730,17 +825,25 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 path="/api/admin/tenants/route25/atlassian/disconnect",
                 auth=admin,
             ),
-            ("GET", "/api/admin/tenants/{tenant_id}/jira/webhooks/diagnostics"): RouteScenario(
-                path="/api/admin/tenants/route25/jira/webhooks/diagnostics",
+            ("GET", "/api/admin/tenants/{tenant_id}/atlassian/jira/webhooks/diagnostics"): RouteScenario(
+                path="/api/admin/tenants/route25/atlassian/jira/webhooks/diagnostics",
                 auth=admin,
             ),
-            ("POST", "/api/admin/tenants/{tenant_id}/jira/webhooks/provision"): RouteScenario(
-                path="/api/admin/tenants/route25/jira/webhooks/provision",
+            ("GET", "/api/admin/tenants/{tenant_id}/atlassian/confluence/spaces"): RouteScenario(
+                path="/api/admin/tenants/route25/atlassian/confluence/spaces",
+                auth=admin,
+            ),
+            ("GET", "/api/admin/tenants/{tenant_id}/atlassian/confluence/spaces/{space_key}/pages"): RouteScenario(
+                path="/api/admin/tenants/route25/atlassian/confluence/spaces/ARCH/pages",
+                auth=admin,
+            ),
+            ("POST", "/api/admin/tenants/{tenant_id}/atlassian/jira/webhooks/provision"): RouteScenario(
+                path="/api/admin/tenants/route25/atlassian/jira/webhooks/provision",
                 auth=admin,
                 expected_statuses=(200, 400, 502),
             ),
-            ("POST", "/api/admin/tenants/{tenant_id}/jira/webhooks/reset"): RouteScenario(
-                path="/api/admin/tenants/route25/jira/webhooks/reset",
+            ("POST", "/api/admin/tenants/{tenant_id}/atlassian/jira/webhooks/reset"): RouteScenario(
+                path="/api/admin/tenants/route25/atlassian/jira/webhooks/reset",
                 auth=admin,
                 expected_statuses=(200, 400, 502),
             ),
@@ -846,6 +949,27 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 path="/api/admin/tenants/route25/projects/route25-default/automations/daily-summary/run-now",
                 auth=admin,
                 expected_statuses=(200, 400, 404, 409),
+            ),
+            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/architecture-documents"): RouteScenario(
+                path="/api/admin/tenants/route25/projects/route25-default/architecture-documents",
+                auth=admin,
+            ),
+            ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/architecture-documents"): RouteScenario(
+                path="/api/admin/tenants/route25/projects/route25-default/architecture-documents",
+                auth=admin,
+                json={},
+                expected_statuses=(422,),
+            ),
+            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/architecture-documents/{document_id}"): RouteScenario(
+                path="/api/admin/tenants/route25/projects/route25-default/architecture-documents/document-missing",
+                auth=admin,
+                expected_statuses=(404,),
+            ),
+            ("PUT", "/api/admin/tenants/{tenant_id}/projects/{project_id}/architecture-documents/{document_id}"): RouteScenario(
+                path="/api/admin/tenants/route25/projects/route25-default/architecture-documents/document-missing",
+                auth=admin,
+                json={"title": "Missing", "status": "draft"},
+                expected_statuses=(404,),
             ),
             ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/knowledge/assets"): RouteScenario(
                 path="/api/admin/tenants/route25/projects/route25-default/knowledge/assets",

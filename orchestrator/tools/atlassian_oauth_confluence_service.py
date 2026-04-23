@@ -28,11 +28,11 @@ class AtlassianOAuthConfluenceService:
         results = payload.get("results") if isinstance(payload, dict) else None
         if not isinstance(results, list):
             raise AtlassianOAuthError("Confluence space response missing results list")
-        for item in results:
+        for index, item in enumerate(results):
             if not isinstance(item, dict):
-                continue
+                raise AtlassianOAuthError(f"Confluence space response item {index} was not an object")
             space = _parse_confluence_space(item)
-            if space is not None and space.key == normalized_space_key:
+            if space.key == normalized_space_key:
                 return space
         raise AtlassianOAuthError(f"Confluence space '{normalized_space_key}' was not found")
 
@@ -45,12 +45,11 @@ class AtlassianOAuthConfluenceService:
         if not isinstance(results, list):
             raise AtlassianOAuthError("Confluence space response missing results list")
         spaces: list[ConfluenceSpace] = []
-        for item in results:
+        for index, item in enumerate(results):
             if not isinstance(item, dict):
-                continue
+                raise AtlassianOAuthError(f"Confluence space response item {index} was not an object")
             space = _parse_confluence_space(item)
-            if space is not None:
-                spaces.append(space)
+            spaces.append(space)
         return spaces
 
     def list_pages(
@@ -74,9 +73,9 @@ class AtlassianOAuthConfluenceService:
         if not isinstance(results, list):
             raise AtlassianOAuthError("Confluence page response missing results list")
         pages: list[ConfluencePage] = []
-        for item in results:
+        for index, item in enumerate(results):
             if not isinstance(item, dict):
-                continue
+                raise AtlassianOAuthError(f"Confluence page response item {index} was not an object")
             pages.append(_parse_confluence_page(response=item, site_url=site_url))
         return pages
 
@@ -220,10 +219,10 @@ def _parse_confluence_page(*, response, site_url: str) -> ConfluencePage:  # noq
     return ConfluencePage(page_id=page_id, title=title, webui_url=canonical_url)
 
 
-def _parse_confluence_space(response: dict) -> ConfluenceSpace | None:
+def _parse_confluence_space(response: dict) -> ConfluenceSpace:
     key = str(response.get("key") or "").strip()
     space_id = str(response.get("id") or "").strip()
-    name = str(response.get("name") or "").strip() or key
-    if not key or not space_id:
-        return None
+    name = str(response.get("name") or "").strip()
+    if not key or not space_id or not name:
+        raise AtlassianOAuthError("Confluence space response is missing id, key, or name")
     return ConfluenceSpace(space_id=space_id, key=key, name=name)

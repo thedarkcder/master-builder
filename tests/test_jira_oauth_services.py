@@ -5,6 +5,7 @@ from io import BytesIO
 from urllib.error import HTTPError
 
 from orchestrator.tools.jira_mcp_adapter import JiraMcpAdapter
+from orchestrator.tools.atlassian_oauth_confluence_service import AtlassianOAuthConfluenceService
 from orchestrator.tools.atlassian_oauth_callback_flow import AtlassianOAuthCallbackFlow
 from orchestrator.tools.atlassian_oauth_http import AtlassianOAuthHttpClient
 from orchestrator.tools.atlassian_oauth_issue_service import (
@@ -164,9 +165,9 @@ class JiraOAuthIssueServiceTests(unittest.TestCase):
             get_calls.append(kwargs["url"])
             url = kwargs["url"]
             if "project/search" in url:
-                return {"values": [{"key": "B", "name": "Beta"}, {"key": "A", "name": ""}]}
+                return {"values": [{"key": "B", "name": "Beta"}, {"key": "A", "name": "Alpha"}]}
             if "search/jql" in url:
-                return {"issues": [{"key": "MAB-1", "fields": {"summary": "", "status": {}}}]}
+                return {"issues": [{"key": "MAB-1", "fields": {"summary": "MAB-1", "status": {"name": "Done"}}}]}
             if url.endswith("/comment?startAt=0&maxResults=100"):
                 return {
                     "comments": [
@@ -194,7 +195,7 @@ class JiraOAuthIssueServiceTests(unittest.TestCase):
 
         issues = service.search_issues_by_jql(access_token="tok", cloud_id="cloud", jql="project=MAB", max_results=99)
         self.assertEqual(issues[0].summary, "MAB-1")
-        self.assertEqual(issues[0].status, "Unknown")
+        self.assertEqual(issues[0].status, "Done")
         self.assertIn("maxResults=50", get_calls[1])
 
         detail = service.get_issue_detail(access_token="tok", cloud_id="cloud", issue_id_or_key=" MAB-1 ")
@@ -211,14 +212,9 @@ class JiraOAuthIssueServiceTests(unittest.TestCase):
         self.assertTrue(request_calls)
 
     def test_issue_service_bulk_create_and_update_validation(self) -> None:
-        get_count = {"n": 0}
-
         def _get_json(**kwargs):  # noqa: ANN003
-            get_count["n"] += 1
-            if get_count["n"] == 1:
-                raise AtlassianOAuthError("first fails")
-            if "createmeta?" in kwargs["url"]:
-                return {"projects": [{"issuetypes": [{"name": "Story"}, {"name": "Bug"}]}]}
+            if "createmeta/" in kwargs["url"]:
+                return {"values": [{"name": "Task"}, {"name": "Bug"}]}
             return {}
 
         captured = {}
@@ -234,14 +230,13 @@ class JiraOAuthIssueServiceTests(unittest.TestCase):
             project_key="mab",
             issues=[
                 JiraIssueCreateInput(summary="One", description="Desc", labels=["a", ""], issue_type="Task"),
-                JiraIssueCreateInput(summary=" ", description="Skip me", labels=[], issue_type=None),
             ],
         )
         self.assertEqual([item.key for item in result.created], ["MAB-1"])
         self.assertIn("summary: bad", result.errors[0])
-        self.assertEqual(captured["payload"]["issueUpdates"][0]["fields"]["issuetype"]["name"], "Story")
+        self.assertEqual(captured["payload"]["issueUpdates"][0]["fields"]["issuetype"]["name"], "Task")
 
-        with self.assertRaisesRegex(AtlassianOAuthError, "No valid issue payloads"):
+        with self.assertRaisesRegex(AtlassianOAuthError, "missing summary"):
             service.create_issues_bulk(
                 access_token="tok",
                 cloud_id="cloud",
@@ -270,16 +265,15 @@ class JiraOAuthIssueServiceTests(unittest.TestCase):
         def _get_json(**kwargs):  # noqa: ANN003
             url = kwargs["url"]
             if "project/search" in url:
-                return {"values": [{}, {"key": "MAB"}, {"key": "APP", "name": "App"}]}
+                return {"values": [{"key": "APP", "name": "App"}, {"key": "MAB", "name": "Master"}]}
             if "search/jql" in url:
                 return {
                     "issues": [
-                        {"fields": {}},
-                        {"key": "MAB-2", "fields": {"summary": "Summary", "status": {"name": ""}}},
+                        {"key": "MAB-2", "fields": {"summary": "Summary", "status": {"name": "Backlog"}}},
                     ]
                 }
             if "/issue/" in url:
-                return {"fields": {"summary": " ", "status": {}, "description": None}}
+                return {"key": "MAB-2", "fields": {"summary": "Summary", "status": {"name": "Backlog"}, "description": None}}
             return {}
 
         captured: list[dict] = []
@@ -295,15 +289,15 @@ class JiraOAuthIssueServiceTests(unittest.TestCase):
         service = JiraOAuthIssueService(get_json=_get_json, request_json=_request_json)
         projects = service.list_projects(access_token="tok", cloud_id="cloud")
         self.assertEqual([project.key for project in projects], ["APP", "MAB"])
-        self.assertEqual(projects[1].name, "MAB")
+        self.assertEqual(projects[1].name, "Master")
 
         issues = service.search_issues_by_jql(access_token="tok", cloud_id="cloud", jql="project=MAB", max_results=0)
         self.assertEqual(len(issues), 1)
-        self.assertEqual(issues[0].status, "Unknown")
+        self.assertEqual(issues[0].status, "Backlog")
 
         detail = service.get_issue_detail(access_token="tok", cloud_id="cloud", issue_id_or_key="MAB-2")
         self.assertEqual(detail.key, "MAB-2")
-        self.assertEqual(detail.summary, "MAB-2")
+        self.assertEqual(detail.summary, "Summary")
         self.assertEqual(detail.description, "")
 
         service.update_issue_fields(
@@ -341,12 +335,77 @@ class JiraOAuthIssueServiceTests(unittest.TestCase):
             {"update": {"labels": [{"add": "worker:linux"}]}},
             [call.get("payload") for call in captured if call.get("method") == "PUT"],
         )
-        self.assertIn(
-            {"fields": {"labels": ["engineering-child", "sync-blocked"]}},
-            [call.get("payload") for call in captured if call.get("method") == "PUT"],
+
+    def test_confluence_service_rejects_malformed_space_and_page_rows(self) -> None:
+        service = AtlassianOAuthConfluenceService(
+            get_json=lambda **_kwargs: {"results": [{"id": "space-1", "key": "ARCH"}]},
+            request_json=lambda **_kwargs: {},
+        )
+        with self.assertRaisesRegex(AtlassianOAuthError, "missing id, key, or name"):
+            service.list_spaces(access_token="tok", cloud_id="cloud")
+
+        service = AtlassianOAuthConfluenceService(
+            get_json=lambda **_kwargs: {"results": ["not-an-object"]},
+            request_json=lambda **_kwargs: {},
+        )
+        with self.assertRaisesRegex(AtlassianOAuthError, "space response item 0"):
+            service.get_space_by_key(access_token="tok", cloud_id="cloud", space_key="ARCH")
+        with self.assertRaisesRegex(AtlassianOAuthError, "page response item 0"):
+            service.list_pages(access_token="tok", cloud_id="cloud", site_url="https://example.atlassian.net", space_id="space-1")
+
+    def test_issue_service_upserts_remote_issue_link(self) -> None:
+        captured: list[dict] = []
+
+        def _request_json(**kwargs):  # noqa: ANN003
+            captured.append(kwargs)
+            return {"id": "10000"}
+
+        service = JiraOAuthIssueService(get_json=lambda **_kwargs: {}, request_json=_request_json)
+        service.upsert_remote_issue_link(
+            access_token="tok",
+            cloud_id="cloud",
+            issue_id_or_key="MAB-2",
+            global_id="system=master-builder&issueKey=MAB-2&kind=architecture_document",
+            relationship="Architecture",
+            title="Decision Engine v2",
+            url="https://docs.example.com/decision-engine-v2",
         )
 
-    def test_issue_service_validation_errors_and_issue_type_discovery_fallbacks(self) -> None:
+        assert captured[0]["method"] == "POST"
+        assert captured[0]["payload"] == {
+            "globalId": "system=master-builder&issueKey=MAB-2&kind=architecture_document",
+            "relationship": "Architecture",
+            "object": {
+                "title": "Decision Engine v2",
+                "url": "https://docs.example.com/decision-engine-v2",
+            },
+        }
+
+    def test_issue_service_remote_issue_link_validation(self) -> None:
+        service = JiraOAuthIssueService(get_json=lambda **_kwargs: {}, request_json=lambda **_kwargs: {})
+
+        with self.assertRaisesRegex(AtlassianOAuthError, "Missing issue id/key"):
+            service.upsert_remote_issue_link(
+                access_token="tok",
+                cloud_id="cloud",
+                issue_id_or_key=" ",
+                global_id="gid",
+                relationship="architecture_document",
+                title="Title",
+                url="https://docs.example.com/x",
+            )
+        with self.assertRaisesRegex(AtlassianOAuthError, "Missing global id for remote issue link"):
+            service.upsert_remote_issue_link(
+                access_token="tok",
+                cloud_id="cloud",
+                issue_id_or_key="MAB-2",
+                global_id=" ",
+                relationship="architecture_document",
+                title="Title",
+                url="https://docs.example.com/x",
+            )
+
+    def test_issue_service_validation_errors_and_issue_type_discovery_strictness(self) -> None:
         service = JiraOAuthIssueService(get_json=lambda **_kwargs: {}, request_json=lambda **_kwargs: {})
         with self.assertRaisesRegex(AtlassianOAuthError, "missing values list"):
             service.list_projects(access_token="tok", cloud_id="cloud")
@@ -363,20 +422,24 @@ class JiraOAuthIssueServiceTests(unittest.TestCase):
                 access_token="tok", cloud_id="cloud", issue_id_or_key="MAB-1", comment="hi"
             )
 
-        calls = {"count": 0}
-
         def _get_json(**kwargs):  # noqa: ANN003
-            calls["count"] += 1
-            if calls["count"] <= 2:
-                raise AtlassianOAuthError("upstream")
-            return {"issueTypes": [{"name": "Task"}]}
+            if "createmeta/" in kwargs["url"]:
+                return {"values": [{"name": "Task"}]}
+            return {}
 
         service = JiraOAuthIssueService(get_json=_get_json, request_json=lambda **_kwargs: {})
         names = service._list_project_issue_types_for_create(access_token="tok", cloud_id="cloud", project_key="mab")
         self.assertEqual(names, ["Task"])
-        self.assertEqual(service._list_project_issue_types_for_create(access_token="tok", cloud_id="cloud", project_key=" "), [])
+        with self.assertRaisesRegex(AtlassianOAuthError, "Missing project key"):
+            service._list_project_issue_types_for_create(access_token="tok", cloud_id="cloud", project_key=" ")
+        strict_service = JiraOAuthIssueService(
+            get_json=lambda **_kwargs: (_ for _ in ()).throw(AtlassianOAuthError("upstream")),
+            request_json=lambda **_kwargs: {},
+        )
+        with self.assertRaisesRegex(AtlassianOAuthError, "upstream"):
+            strict_service._list_project_issue_types_for_create(access_token="tok", cloud_id="cloud", project_key="mab")
 
-    def test_issue_service_parsing_edge_paths(self) -> None:
+    def test_issue_service_rejects_malformed_provider_rows(self) -> None:
         def _get_json(**kwargs):  # noqa: ANN003
             url = kwargs["url"]
             if "project/search" in url:
@@ -386,21 +449,12 @@ class JiraOAuthIssueServiceTests(unittest.TestCase):
             return {"key": "MAB-1", "fields": "bad-fields"}
 
         service = JiraOAuthIssueService(get_json=_get_json, request_json=lambda **_kwargs: ["not-an-object"])
-        self.assertEqual([project.key for project in service.list_projects(access_token="tok", cloud_id="cloud")], ["MAB"])
-        previews = service.search_issues_by_jql(access_token="tok", cloud_id="cloud", jql="project=MAB")
-        self.assertEqual(len(previews), 1)
-        self.assertEqual(previews[0].summary, "MAB-1")
-        self.assertEqual(previews[0].status, "Unknown")
-        detail = service.get_issue_detail(access_token="tok", cloud_id="cloud", issue_id_or_key="MAB-1")
-        self.assertEqual(detail.summary, "MAB-1")
-        bulk = service.create_issues_bulk(
-            access_token="tok",
-            cloud_id="cloud",
-            project_key="MAB",
-            issues=[JiraIssueCreateInput(summary="one", description="desc", labels=["a"], issue_type=None)],
-        )
-        self.assertEqual(bulk.created, [])
-        self.assertEqual(bulk.errors, [])
+        with self.assertRaisesRegex(AtlassianOAuthError, "Project search response item 0"):
+            service.list_projects(access_token="tok", cloud_id="cloud")
+        with self.assertRaisesRegex(AtlassianOAuthError, "Issue search response item 0"):
+            service.search_issues_by_jql(access_token="tok", cloud_id="cloud", jql="project=MAB")
+        with self.assertRaisesRegex(AtlassianOAuthError, "fields object"):
+            service.get_issue_detail(access_token="tok", cloud_id="cloud", issue_id_or_key="MAB-1")
 
 
 class JiraOAuthIssueHelpersTests(unittest.TestCase):
@@ -433,14 +487,13 @@ class JiraOAuthIssueHelpersTests(unittest.TestCase):
         self.assertEqual(names_from_list, ["Story", "Task"])
 
         self.assertEqual(_select_issue_type_name(requested_issue_type="Bug", available_issue_types=["Task", "Bug"]), "Bug")
-        self.assertEqual(_select_issue_type_name(requested_issue_type="Defect", available_issue_types=["Task"]), "Task")
-        self.assertEqual(_select_issue_type_name(requested_issue_type="Epic", available_issue_types=["Story", "Task"]), "Story")
-        self.assertEqual(_select_issue_type_name(requested_issue_type="feature", available_issue_types=["Issue", "Task"]), "Task")
-        self.assertEqual(_select_issue_type_name(requested_issue_type="unknown", available_issue_types=["Foo", "Bar"]), "Foo")
         self.assertEqual(_select_issue_type_name(requested_issue_type="Task", available_issue_types=["Task", "Bug"]), "Task")
-        self.assertEqual(_select_issue_type_name(requested_issue_type="story", available_issue_types=["Epic", "Bug"]), "Epic")
-        self.assertEqual(_select_issue_type_name(requested_issue_type="epic", available_issue_types=["Issue"]), "Issue")
-        self.assertEqual(_select_issue_type_name(requested_issue_type="", available_issue_types=[]), "Task")
+        with self.assertRaisesRegex(AtlassianOAuthError, "not available"):
+            _select_issue_type_name(requested_issue_type="Defect", available_issue_types=["Task"])
+        with self.assertRaisesRegex(AtlassianOAuthError, "missing issue type"):
+            _select_issue_type_name(requested_issue_type="", available_issue_types=["Task"])
+        with self.assertRaisesRegex(AtlassianOAuthError, "no issue types"):
+            _select_issue_type_name(requested_issue_type="Task", available_issue_types=[])
 
     def test_additional_branch_edges_for_issue_service_helpers(self) -> None:
         # _to_adf_description branches: non-doc dict, None, non-str, and empty text fallback.
@@ -476,11 +529,6 @@ class JiraOAuthIssueHelpersTests(unittest.TestCase):
         self.assertEqual(names, ["Task", "Bug"])
         self.assertEqual(_parse_issue_type_names_from_payload("invalid"), [])  # type: ignore[arg-type]
 
-        # _select_issue_type_name fallback branches where preferred category candidates are absent.
-        self.assertEqual(_select_issue_type_name(requested_issue_type="bug", available_issue_types=["Epic"]), "Epic")
-        self.assertEqual(_select_issue_type_name(requested_issue_type="story", available_issue_types=["Epic"]), "Epic")
-        self.assertEqual(_select_issue_type_name(requested_issue_type="epic", available_issue_types=["Bug"]), "Bug")
-
 
 class JiraOAuthIssueServiceCoverageEdgesTests(unittest.TestCase):
     def test_search_issues_preserves_known_status_name_branch(self) -> None:
@@ -491,35 +539,28 @@ class JiraOAuthIssueServiceCoverageEdgesTests(unittest.TestCase):
         issues = service.search_issues_by_jql(access_token="tok", cloud_id="cloud", jql="project=MAB")
         self.assertEqual(issues[0].status, "Done")
 
-    def test_bulk_create_handles_mixed_created_and_error_rows(self) -> None:
+    def test_bulk_create_rejects_malformed_created_rows(self) -> None:
         service = JiraOAuthIssueService(
             get_json=lambda **_kwargs: {"issueTypes": [{"name": "Task"}]},
             request_json=lambda **_kwargs: {
                 "issues": [
-                    "skip",
-                    {"key": "", "id": "100"},
                     {"key": "MAB-1", "id": "1001"},
+                    {"key": "", "id": "100"},
                 ],
-                "errors": [
-                    "skip",
-                    {"failedElementNumber": 1, "elementErrors": None},
-                    {"failedElementNumber": 2, "elementErrors": {"errors": {"": "bad", "summary": ""}}},
-                ],
+                "errors": [],
             },
         )
-        result = service.create_issues_bulk(
-            access_token="tok",
-            cloud_id="cloud",
-            project_key="MAB",
-            issues=[JiraIssueCreateInput(summary="One", description="Desc", labels=["a"], issue_type="Task")],
-        )
-        self.assertEqual([item.key for item in result.created], ["MAB-1"])
-        self.assertIn("Item 1: Unknown error", result.errors[0])
-        self.assertIn("Item 2: Unknown error", result.errors[1])
+        with self.assertRaisesRegex(AtlassianOAuthError, "missing issue key/id"):
+            service.create_issues_bulk(
+                access_token="tok",
+                cloud_id="cloud",
+                project_key="MAB",
+                issues=[JiraIssueCreateInput(summary="One", description="Desc", labels=["a"], issue_type="Task")],
+            )
 
-    def test_bulk_create_error_messages_branch_and_select_issue_type_fallbacks(self) -> None:
+    def test_bulk_create_error_messages_and_select_issue_type_strictness(self) -> None:
         service = JiraOAuthIssueService(
-            get_json=lambda **_kwargs: {"issueTypes": [{"name": "Chore"}]},
+            get_json=lambda **_kwargs: {"issueTypes": [{"name": "Task"}]},
             request_json=lambda **_kwargs: {
                 "issues": [],
                 "errors": [
@@ -534,14 +575,13 @@ class JiraOAuthIssueServiceCoverageEdgesTests(unittest.TestCase):
             access_token="tok",
             cloud_id="cloud",
             project_key="MAB",
-            issues=[JiraIssueCreateInput(summary="One", description="Desc", labels=["a"], issue_type="story")],
+            issues=[JiraIssueCreateInput(summary="One", description="Desc", labels=["a"], issue_type="Task")],
         )
         self.assertEqual(result.created, [])
         self.assertEqual(result.errors, ["Item 0: bad request"])
 
-        # Exercise remaining _select_issue_type_name branches.
-        self.assertEqual(_select_issue_type_name(requested_issue_type="", available_issue_types=["Task"]), "Task")
-        self.assertEqual(_select_issue_type_name(requested_issue_type="story", available_issue_types=["Chore"]), "Chore")
+        with self.assertRaisesRegex(AtlassianOAuthError, "not available"):
+            _select_issue_type_name(requested_issue_type="story", available_issue_types=["Chore"])
 
     def test_create_issue_and_link_support_parent_hierarchy(self) -> None:
         captured: list[dict] = []

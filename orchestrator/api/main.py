@@ -12,7 +12,10 @@ from orchestrator.api.discord.ingress.executor import register_discord_command_e
 from orchestrator.api.routes.admin_auth import router as admin_auth_router
 from orchestrator.api.routes.admin_agent_runtimes import router as admin_agent_runtimes_router
 from orchestrator.api.routes.admin_architecture_documents import router as admin_architecture_documents_router
-from orchestrator.api.routes.admin_atlassian import router as admin_atlassian_router
+from orchestrator.api.routes.admin_atlassian_confluence import router as admin_atlassian_confluence_router
+from orchestrator.api.routes.admin_atlassian_jira import router as admin_atlassian_jira_router
+from orchestrator.api.routes.admin_atlassian_oauth import router as admin_atlassian_oauth_router
+from orchestrator.api.routes.admin_atlassian_webhooks import router as admin_atlassian_webhooks_router
 from orchestrator.api.routes.admin_codex import router as admin_codex_router
 from orchestrator.api.routes.admin_discord_commands import (
     router as admin_discord_commands_router,
@@ -24,7 +27,6 @@ from orchestrator.api.routes.admin_discord_install import (
     router as admin_discord_install_router,
 )
 from orchestrator.api.routes.admin_github import router as admin_github_router
-from orchestrator.api.routes.admin_jira import router as admin_jira_router
 from orchestrator.api.routes.admin_knowledge import router as admin_knowledge_router
 from orchestrator.api.routes.admin_observability import router as admin_observability_router
 from orchestrator.api.routes.admin_ready import router as admin_ready_router
@@ -232,8 +234,10 @@ def create_app() -> FastAPI:
     app.include_router(admin_discord_allowlist_router)
     app.include_router(admin_discord_install_router)
     app.include_router(admin_github_router)
-    app.include_router(admin_atlassian_router)
-    app.include_router(admin_jira_router)
+    app.include_router(admin_atlassian_oauth_router)
+    app.include_router(admin_atlassian_jira_router)
+    app.include_router(admin_atlassian_confluence_router)
+    app.include_router(admin_atlassian_webhooks_router)
     app.include_router(admin_ready_router)
     app.include_router(admin_release_router)
     app.include_router(admin_secrets_router)
