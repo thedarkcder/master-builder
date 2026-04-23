@@ -6,7 +6,10 @@ from typing import Any, Callable, Protocol
 from sqlalchemy.orm import Session
 
 from orchestrator.core.config import Settings
-from orchestrator.core.workflow_execution_projection import ensure_issue_workflow_execution
+from orchestrator.core.workflow_execution_projection import (
+    WorkflowExecutionProjection,
+    ensure_issue_workflow_execution,
+)
 
 
 @dataclass(frozen=True)
@@ -26,25 +29,10 @@ class WorkflowAdvanceRequest:
 
 
 @dataclass(frozen=True)
-class WorkflowTransitionStep:
-    kind: str
-    payload: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass
-class WorkflowTransitionPlan:
-    steps: tuple[WorkflowTransitionStep, ...] = ()
-
-    def __bool__(self) -> bool:
-        return bool(self.steps)
-
-
-@dataclass(frozen=True)
 class WorkflowAdvanceOutcome:
     handled: bool
     reason: str | None = None
     extra: dict[str, object] = field(default_factory=dict)
-    transition_plan: WorkflowTransitionPlan | None = None
 
 
 class WorkflowAdvanceLifecycle(Protocol):
@@ -54,6 +42,9 @@ class WorkflowAdvanceLifecycle(Protocol):
     def mark_running(self) -> None:
         ...
 
+    def set_operation_completed(self, *, operation_type: str, summary: str) -> None:
+        ...
+
     def mark_operation_completed(self, *, operation_type: str, summary: str) -> None:
         ...
 
@@ -66,6 +57,9 @@ class WorkflowAdvanceLifecycle(Protocol):
     ) -> None:
         ...
 
+    def set_operation_waiting_for_input(self, *, operation_type: str, summary: str) -> None:
+        ...
+
     def mark_waiting_for_input(self, *, operation_type: str, summary: str) -> None:
         ...
 
@@ -73,34 +67,59 @@ class WorkflowAdvanceLifecycle(Protocol):
         ...
 
 
-@dataclass
-class WorkflowTransitionPlanner:
-    _steps: list[WorkflowTransitionStep] = field(default_factory=list)
+class DurableWorkflowLifecycle:
+    def __init__(
+        self,
+        *,
+        session: Session,
+        workflow_type: Any,
+        tenant_id: str,
+        project_id: str | None,
+        issue_key: str,
+    ) -> None:
+        self._session = session
+        self._workflow_type = workflow_type
+        self._tenant_id = tenant_id
+        self._project_id = project_id
+        self._issue_key = issue_key
+        self._issue_summary: str | None = None
+        self._issue_description: object | None = None
+        self._projection: WorkflowExecutionProjection | None = None
+
+    def _ensure_projection(self) -> WorkflowExecutionProjection:
+        if self._projection is None:
+            self._projection = ensure_issue_workflow_execution(
+                session=self._session,
+                workflow_type=self._workflow_type,
+                tenant_id=self._tenant_id,
+                project_id=self._project_id,
+                issue_key=self._issue_key,
+                issue_summary=self._issue_summary,
+                issue_description=self._issue_description,
+            )
+        return self._projection
 
     def ensure_issue_execution(self, *, issue_summary: str | None, issue_description: object | None) -> None:
-        self._steps.append(
-            WorkflowTransitionStep(
-                kind="ensure_issue_execution",
-                payload={
-                    "issue_summary": issue_summary,
-                    "issue_description": issue_description,
-                },
-            )
+        self._issue_summary = issue_summary
+        self._issue_description = issue_description
+        self._projection = ensure_issue_workflow_execution(
+            session=self._session,
+            workflow_type=self._workflow_type,
+            tenant_id=self._tenant_id,
+            project_id=self._project_id,
+            issue_key=self._issue_key,
+            issue_summary=issue_summary,
+            issue_description=issue_description,
         )
 
     def mark_running(self) -> None:
-        self._steps.append(WorkflowTransitionStep(kind="mark_running"))
+        self._ensure_projection().mark_running()
+
+    def set_operation_completed(self, *, operation_type: str, summary: str) -> None:
+        self._ensure_projection().set_operation_completed(operation_type=operation_type, summary=summary)
 
     def mark_operation_completed(self, *, operation_type: str, summary: str) -> None:
-        self._steps.append(
-            WorkflowTransitionStep(
-                kind="mark_operation_completed",
-                payload={
-                    "operation_type": operation_type,
-                    "summary": summary,
-                },
-            )
-        )
+        self._ensure_projection().mark_operation_completed(operation_type=operation_type, summary=summary)
 
     def mark_operation_failed(
         self,
@@ -109,44 +128,20 @@ class WorkflowTransitionPlanner:
         category: str,
         message: str,
     ) -> None:
-        self._steps.append(
-            WorkflowTransitionStep(
-                kind="mark_operation_failed",
-                payload={
-                    "operation_type": operation_type,
-                    "category": category,
-                    "message": message,
-                },
-            )
+        self._ensure_projection().mark_operation_failed(
+            operation_type=operation_type,
+            category=category,
+            message=message,
         )
+
+    def set_operation_waiting_for_input(self, *, operation_type: str, summary: str) -> None:
+        self._ensure_projection().set_operation_waiting_for_input(operation_type=operation_type, summary=summary)
 
     def mark_waiting_for_input(self, *, operation_type: str, summary: str) -> None:
-        self._steps.append(
-            WorkflowTransitionStep(
-                kind="mark_waiting_for_input",
-                payload={
-                    "operation_type": operation_type,
-                    "summary": summary,
-                },
-            )
-        )
+        self._ensure_projection().mark_waiting_for_input(operation_type=operation_type, summary=summary)
 
     def mark_completed_if_ready(self) -> None:
-        self._steps.append(WorkflowTransitionStep(kind="mark_completed_if_ready"))
-
-    def build_outcome(
-        self,
-        *,
-        handled: bool,
-        reason: str | None = None,
-        extra: dict[str, object] | None = None,
-    ) -> WorkflowAdvanceOutcome:
-        return WorkflowAdvanceOutcome(
-            handled=handled,
-            reason=reason,
-            extra=dict(extra or {}),
-            transition_plan=WorkflowTransitionPlan(steps=tuple(self._steps)),
-        )
+        self._ensure_projection().mark_completed_if_ready()
 
 
 class WorkflowAdvanceHandler(Protocol):
@@ -157,60 +152,9 @@ class WorkflowAdvanceHandler(Protocol):
         settings: Settings,
         workflow_type,
         request: WorkflowAdvanceRequest,
+        lifecycle: WorkflowAdvanceLifecycle,
     ) -> WorkflowAdvanceOutcome:
         ...
-
-
-def apply_workflow_transition_plan(
-    *,
-    session: Session,
-    workflow_type: Any,
-    tenant_id: str,
-    project_id: str | None,
-    issue_key: str,
-    transition_plan: WorkflowTransitionPlan | None,
-) -> None:
-    if not transition_plan:
-        return
-    projection = None
-    issue_summary = None
-    issue_description = None
-    for step in transition_plan.steps:
-        if step.kind == "ensure_issue_execution":
-            issue_summary = step.payload.get("issue_summary")
-            issue_description = step.payload.get("issue_description")
-            projection = ensure_issue_workflow_execution(
-                session=session,
-                workflow_type=workflow_type,
-                tenant_id=tenant_id,
-                project_id=project_id,
-                issue_key=issue_key,
-                issue_summary=issue_summary,
-                issue_description=issue_description,
-            )
-            continue
-        if projection is None:
-            projection = ensure_issue_workflow_execution(
-                session=session,
-                workflow_type=workflow_type,
-                tenant_id=tenant_id,
-                project_id=project_id,
-                issue_key=issue_key,
-                issue_summary=issue_summary,
-                issue_description=issue_description,
-            )
-        if step.kind == "mark_running":
-            projection.mark_running()
-        elif step.kind == "mark_operation_completed":
-            projection.mark_operation_completed(**step.payload)
-        elif step.kind == "mark_operation_failed":
-            projection.mark_operation_failed(**step.payload)
-        elif step.kind == "mark_waiting_for_input":
-            projection.mark_waiting_for_input(**step.payload)
-        elif step.kind == "mark_completed_if_ready":
-            projection.mark_completed_if_ready()
-        else:  # pragma: no cover
-            raise RuntimeError(f"Unsupported workflow transition step kind: {step.kind}")
 
 
 def execute_workflow_advance(
@@ -222,18 +166,17 @@ def execute_workflow_advance(
     resolve_advance_handler_fn: Callable[[str], WorkflowAdvanceHandler],
 ) -> WorkflowAdvanceOutcome:
     handler = resolve_advance_handler_fn(str(workflow_type.handler_key or "").strip())
-    result = handler.advance(
-        session=session,
-        settings=settings,
-        workflow_type=workflow_type,
-        request=request,
-    )
-    apply_workflow_transition_plan(
+    lifecycle = DurableWorkflowLifecycle(
         session=session,
         workflow_type=workflow_type,
         tenant_id=request.tenant_id,
         project_id=request.project_id,
         issue_key=request.issue_key,
-        transition_plan=result.transition_plan,
     )
-    return result
+    return handler.advance(
+        session=session,
+        settings=settings,
+        workflow_type=workflow_type,
+        request=request,
+        lifecycle=lifecycle,
+    )

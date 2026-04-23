@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from orchestrator.core.clarification_questions import ClarificationQuestion
-from orchestrator.core.workflow_runtime import WorkflowAdvanceOutcome, WorkflowTransitionPlan, apply_workflow_transition_plan
+from orchestrator.core.workflow_runtime import WorkflowAdvanceOutcome
 from orchestrator.tools.atlassian_oauth import JiraIssueDetail
 
 _SYSTEM_COMMENT_MARKER = "[mb-system]"
@@ -68,7 +68,6 @@ class JiraParentChildSyncResult:
     handled: bool
     reason: str | None = None
     extra: dict[str, object] = field(default_factory=dict)
-    transition_plan: WorkflowTransitionPlan | None = None
 
 
 def jira_sync_result_from_advance_result(
@@ -80,20 +79,11 @@ def jira_sync_result_from_advance_result(
     issue_key: str,
     result: WorkflowAdvanceOutcome,
 ) -> JiraParentChildSyncResult:
-    if result.transition_plan:
-        apply_workflow_transition_plan(
-            session=session,
-            workflow_type=workflow_type,
-            tenant_id=tenant_id,
-            project_id=project_id,
-            issue_key=issue_key,
-            transition_plan=result.transition_plan,
-        )
+    _ = session, workflow_type, tenant_id, project_id, issue_key
     return JiraParentChildSyncResult(
         handled=result.handled,
         reason=result.reason,
         extra=dict(result.extra or {}),
-        transition_plan=result.transition_plan,
     )
 
 

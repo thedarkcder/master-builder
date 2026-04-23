@@ -755,5 +755,4 @@ def handle_pm_interview_reply(
         handled=advance_result.handled,
         reason=advance_result.reason,
         extra=dict(advance_result.extra or {}),
-        transition_plan=advance_result.transition_plan,
     )

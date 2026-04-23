@@ -12,7 +12,7 @@ from orchestrator.core.parent_planning_clarification_service import (
 )
 from orchestrator.core.parent_planning_fanout_service import ParentPlanningFanoutSeedError, ParentPlanningFanoutService
 from orchestrator.core.specialist_planning import PLANNING_STATE_COMPLETED
-from orchestrator.core.workflow_runtime import WorkflowAdvanceOutcome, WorkflowTransitionPlanner
+from orchestrator.core.workflow_runtime import WorkflowAdvanceLifecycle, WorkflowAdvanceOutcome
 from orchestrator.core.workflow_execution_projection import classify_external_workflow_failure
 
 logger = logging.getLogger(__name__)
@@ -43,8 +43,8 @@ class ParentFeaturePlanningWorkflow:
         context,
         session: Session,
         settings,  # noqa: ANN001
+        lifecycle: WorkflowAdvanceLifecycle,
     ) -> WorkflowAdvanceOutcome:
-        lifecycle = WorkflowTransitionPlanner()
         if bool(context.payload.get("_mb_pm_interview_followup")):
             return self._handle_pm_interview_followup(
                 context=context,
@@ -54,11 +54,20 @@ class ParentFeaturePlanningWorkflow:
             )
         normalized_labels = {str(label).strip().casefold() for label in context.issue_labels or []}
         if context.webhook_event not in {"issue_created", "issue_updated"} or "pm-parent" not in normalized_labels:
-            return lifecycle.build_outcome(handled=False)
+            return self._outcome(handled=False)
         routed_from_backlog = bool(context.payload.get("_mb_pm_parent_routed_from_backlog"))
         if context.webhook_event == "issue_created" or routed_from_backlog:
             return self._handle_issue_created(context=context, session=session, settings=settings, lifecycle=lifecycle)
         return self._handle_issue_updated(context=context, session=session, settings=settings, lifecycle=lifecycle)
+
+    def _outcome(
+        self,
+        *,
+        handled: bool,
+        reason: str | None = None,
+        extra: dict[str, object] | None = None,
+    ) -> WorkflowAdvanceOutcome:
+        return WorkflowAdvanceOutcome(handled=handled, reason=reason, extra=dict(extra or {}))
 
     def _handle_issue_created(self, *, context, session: Session, settings, lifecycle) -> WorkflowAdvanceOutcome:  # noqa: ANN001
         issue_gateway = self._deps.issue_gateway
@@ -173,7 +182,7 @@ class ParentFeaturePlanningWorkflow:
             fanout_summary="Engineering child tickets were created or refreshed from the parent planning package.",
         )
 
-        return lifecycle.build_outcome(
+        return self._outcome(
             handled=True,
             reason="pm_parent_issue_created_seed_completed",
             extra={
@@ -203,7 +212,7 @@ class ParentFeaturePlanningWorkflow:
                     target_status=board_entry_target_status,
                     lifecycle=lifecycle,
                 )
-            return lifecycle.build_outcome(
+            return self._outcome(
                 handled=True,
                 reason="pm_parent_non_material_change",
                 extra={"changed_fields": [], "webhook_event": context.webhook_event},
@@ -274,7 +283,7 @@ class ParentFeaturePlanningWorkflow:
 
         if not child_details:
             lifecycle.mark_completed_if_ready()
-            return lifecycle.build_outcome(
+            return self._outcome(
                 handled=True,
                 reason="pm_parent_no_children",
                 extra={"changed_fields": material_changed_fields, "webhook_event": context.webhook_event},
@@ -296,7 +305,7 @@ class ParentFeaturePlanningWorkflow:
             )
             blocked_issue_keys = [context.issue_key, *[detail.key for detail in child_details]]
             issue_gateway.mark_issues_sync_blocked(issue_keys=blocked_issue_keys)
-            return lifecycle.build_outcome(
+            return self._outcome(
                 handled=True,
                 reason="pm_parent_sync_failed",
                 extra={
@@ -339,7 +348,7 @@ class ParentFeaturePlanningWorkflow:
                         operation_type="jira_comment_projection",
                         summary="Posted PM clarification questions to Jira.",
                     )
-            return lifecycle.build_outcome(
+            return self._outcome(
                 handled=True,
                 reason="pm_parent_sync_blocked",
                 extra={
@@ -358,7 +367,7 @@ class ParentFeaturePlanningWorkflow:
             fanout_summary="Engineering child tickets were refreshed from the parent planning package.",
         )
 
-        return lifecycle.build_outcome(
+        return self._outcome(
             handled=True,
             reason="pm_parent_sync_completed",
             extra={
@@ -392,7 +401,7 @@ class ParentFeaturePlanningWorkflow:
                 summary=f"No engineering child tickets required promotion to {target_status}.",
             )
             lifecycle.mark_completed_if_ready()
-            return lifecycle.build_outcome(
+            return self._outcome(
                 handled=True,
                 reason="pm_parent_board_entry_no_children",
                 extra={"target_status": target_status, "webhook_event": context.webhook_event},
@@ -447,7 +456,7 @@ class ParentFeaturePlanningWorkflow:
             )
             lifecycle.mark_completed_if_ready()
 
-        return lifecycle.build_outcome(
+        return self._outcome(
             handled=True,
             reason="pm_parent_board_entry_fanout_completed" if not failed_children else "pm_parent_board_entry_fanout_partial",
             extra={
@@ -513,7 +522,7 @@ class ParentFeaturePlanningWorkflow:
                 "webhook_event": context.webhook_event,
             }
         )
-        return lifecycle.build_outcome(
+        return self._outcome(
             handled=True,
             reason=reason,
             extra=payload,
@@ -539,7 +548,7 @@ class ParentFeaturePlanningWorkflow:
         )
         payload = dict(extra or {})
         payload["webhook_event"] = context.webhook_event
-        return lifecycle.build_outcome(
+        return self._outcome(
             handled=True,
             reason=reason,
             extra=payload,
@@ -589,7 +598,7 @@ class ParentFeaturePlanningWorkflow:
                     operation_type="jira_comment_projection",
                     summary="Posted PM clarification questions to Jira.",
                 )
-            return lifecycle.build_outcome(
+            return self._outcome(
                 handled=True,
                 reason="pm_interview_still_open",
                 extra={
@@ -684,7 +693,7 @@ class ParentFeaturePlanningWorkflow:
             lifecycle=lifecycle,
             fanout_summary="Engineering child tickets were created or refreshed from the confirmed brief.",
         )
-        return lifecycle.build_outcome(
+        return self._outcome(
             handled=True,
             reason="pm_interview_followup_resolved",
             extra={
@@ -795,7 +804,7 @@ class ParentFeaturePlanningWorkflow:
             issue_detail=issue_gateway.load_parent_detail(context.issue_key),
             target_label="sync-blocked",
         )
-        return lifecycle.build_outcome(
+        return self._outcome(
             handled=True,
             reason=failure_reason,
             extra={"error": str(error), "webhook_event": context.webhook_event},
