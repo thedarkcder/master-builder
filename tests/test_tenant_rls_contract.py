@@ -45,6 +45,8 @@ def test_tenant_owned_tables_are_not_classified_as_platform_global() -> None:
 
     assert owned
     assert owned.isdisjoint(PLATFORM_GLOBAL_TABLES)
+    assert "atlassian_oauth_connections" in owned
+    assert "atlassian_oauth_connections" not in PLATFORM_GLOBAL_TABLES
 
 
 def test_tenant_rls_migration_enables_forced_rls_for_every_tenant_owned_table() -> None:

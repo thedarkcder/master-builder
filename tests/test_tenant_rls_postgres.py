@@ -89,6 +89,24 @@ def _seed_two_tenants(connection) -> None:  # noqa: ANN001
     connection.execute(
         text(
             """
+            INSERT INTO atlassian_oauth_connections (
+                connection_id, account_id, account_email, cloud_id, site_url, scopes,
+                access_token_encrypted, refresh_token_encrypted, access_token_expires_at,
+                created_at, updated_at
+            ) VALUES (
+                'conn-a', 'acct-a', 'a@example.com', 'cloud-a', 'https://a.atlassian.net',
+                '[]', 'access-a', 'refresh-a', :now, :now, :now
+            )
+            """
+        ),
+        {"now": now},
+    )
+    connection.execute(
+        text("UPDATE tenants SET jira_config = '{\"connection_id\":\"conn-a\"}' WHERE tenant_id = 'tenant-a'")
+    )
+    connection.execute(
+        text(
+            """
             INSERT INTO tenant_memberships (
                 membership_id, tenant_id, user_id, role, onboarding_kind,
                 discord_state, created_at, updated_at
@@ -129,6 +147,10 @@ def test_postgres_rls_enforces_tenant_membership_and_context() -> None:
             set_tenant_user_rls_context(connection, user_id="user-a")
             rows = connection.execute(text("SELECT project_id FROM projects ORDER BY project_id")).scalars().all()
             assert rows == ["project-a"]
+            connection_rows = connection.execute(
+                text("SELECT connection_id FROM atlassian_oauth_connections ORDER BY connection_id")
+            ).scalars().all()
+            assert connection_rows == ["conn-a"]
 
         with engine.begin() as connection:
             set_tenant_user_rls_context(connection, user_id="user-a", tenant_id="tenant-b")
@@ -136,6 +158,10 @@ def test_postgres_rls_enforces_tenant_membership_and_context() -> None:
                 text("SELECT project_id FROM projects WHERE tenant_id = 'tenant-b'")
             ).scalars().all()
             assert rows == []
+            connection_rows = connection.execute(
+                text("SELECT connection_id FROM atlassian_oauth_connections")
+            ).scalars().all()
+            assert connection_rows == []
             with pytest.raises(DatabaseError):
                 connection.execute(
                     text(

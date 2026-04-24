@@ -1,6 +1,7 @@
 2026-04-21
 
 - When the product requirement is hardened multi-tenant SaaS, never describe database tenant isolation as optional defense-in-depth. Treat PostgreSQL RLS with fail-closed tenant context as a mandatory data boundary.
+- Do not classify credential-bearing integration tables as platform-global just because they lack a direct tenant_id. If a tenant/project config references the row, protect it with tenant-reachability RLS or add a tenant_id.
 - When a user asks to update a run script, search for all script names containing the concept, not only exact `run.sh`/`launch.sh` filenames. Include `scripts/run_hybrid_workers.sh` in deployment/startup contract audits because it starts the local hybrid runtime directly.
 - When the user says workflows are engineer-defined and Temporal-decorated, do not introduce a transition-plan DSL, even a typed one. Keep workflow logic as normal code that calls a lifecycle boundary directly; Temporal should provide durability/retry around that code, not turn it into n8n-style graph execution.
 - Do not use `**kwargs: object` in fake clients or contract tests when the real call shape is known. Match the production signature or use a typed request object so drift is caught where it starts.
