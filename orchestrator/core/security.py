@@ -31,6 +31,10 @@ from orchestrator.storage.models import (
     TenantTeamMembership,
     TenantUser,
 )
+from orchestrator.storage.tenant_rls import (
+    set_platform_admin_rls_context,
+    set_tenant_user_rls_context,
+)
 
 basic_auth = HTTPBasic(auto_error=False)
 bearer_auth = HTTPBearer(auto_error=False)
@@ -173,6 +177,7 @@ def _load_tenant_memberships(*, session: Session, user_id: str) -> tuple[TenantM
 
 
 def load_tenant_user_principal(*, session: Session, user_id: str) -> AuthenticatedPrincipal:
+    set_tenant_user_rls_context(session=session, user_id=user_id)
     tenant_user = session.get(TenantUser, user_id)
     if tenant_user is None or not tenant_user.is_active:
         raise _admin_unauthorized("Invalid tenant credentials")
@@ -205,9 +210,11 @@ def require_authenticated_principal(
             except ValueError as exc:
                 raise _admin_unauthorized(str(exc)) from exc
             return load_tenant_user_principal(session=session, user_id=user_id)
+        set_platform_admin_rls_context(session)
         return _build_platform_admin_principal(username)
 
     if basic_credentials is not None:
+        set_platform_admin_rls_context(session)
         if validate_admin_credentials(session=session, username=basic_credentials.username, password=basic_credentials.password):
             return _build_platform_admin_principal(basic_credentials.username)
         raise _admin_unauthorized()

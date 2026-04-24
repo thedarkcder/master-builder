@@ -5,12 +5,12 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from sqlalchemy import text
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestrator.core.secrets import decrypt_value, encrypt_value
 from orchestrator.storage.models import ManagedSecret
+from orchestrator.storage.tenant_rls import set_platform_system_rls_context, set_tenant_system_rls_context
 
 _SECRET_REF_PATTERN = re.compile(r"^[A-Za-z0-9._:/-]{1,255}$")
 _SECRET_SCOPE_ALL = "all"
@@ -291,14 +291,11 @@ def _apply_secret_scope_context(
     else:
         normalized_tenant_id = ""
 
-    if session.bind is None or session.bind.dialect.name != "postgresql":
-        return
-
-    session.execute(
-        text("SELECT set_config('app.secret_scope', :scope, true)"),
-        {"scope": scope},
-    )
-    session.execute(
-        text("SELECT set_config('app.secret_tenant_id', :tenant_id, true)"),
-        {"tenant_id": normalized_tenant_id},
-    )
+    if scope == _SECRET_SCOPE_TENANT:
+        set_tenant_system_rls_context(
+            session,
+            tenant_id=normalized_tenant_id,
+            system_purpose="managed_secret_access",
+        )
+    else:
+        set_platform_system_rls_context(session, system_purpose="managed_secret_access")
