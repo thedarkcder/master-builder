@@ -72,6 +72,28 @@ services:
       timeout: 5s
       retries: 20
 
+  migrate:
+    <<: *extra_hosts_host_gateway
+    build:
+      context: .
+      dockerfile: orchestrator/Dockerfile
+      target: app-runtime-base
+      args:
+        CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
+    container_name: master-builder-migrate
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
+      POSTGRES_URL: ${POSTGRES_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
+    command:
+      - python
+      - -m
+      - orchestrator
+      - migrate
+
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.122.1
     container_name: master-builder-otel-collector
@@ -190,6 +212,8 @@ services:
     ports:
       - "4000:4000"
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       mailpit:
         condition: service_healthy
       postgres:
@@ -211,7 +235,6 @@ services:
       - -ceu
       - |
         if [ -f /app/AGENTS.md ]; then cp /app/AGENTS.md /root/AGENTS.md; fi
-        python -m orchestrator migrate
         uvicorn orchestrator.api.main:app --host 0.0.0.0 --port 4000 --workers "${ORCHESTRATOR_API_WORKERS:-4}"
     volumes:
       - codex-home:/root/.codex
@@ -228,6 +251,8 @@ services:
     container_name: master-builder-run-worker
     restart: unless-stopped
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       api:
         condition: service_started
       postgres:
@@ -262,7 +287,6 @@ services:
       - -ceu
       - |
         if [ -f /app/AGENTS.md ]; then cp /app/AGENTS.md /root/AGENTS.md; fi
-        python -m orchestrator migrate
         HF_HUB_OFFLINE=0 python -m orchestrator knowledge-prewarm
         python -m orchestrator worker-runs
     volumes:
@@ -281,6 +305,8 @@ services:
     container_name: master-builder-webhook-worker
     restart: unless-stopped
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       api:
         condition: service_started
       mailpit:
@@ -327,7 +353,6 @@ services:
       - -ceu
       - |
         if [ -f /app/AGENTS.md ]; then cp /app/AGENTS.md /root/AGENTS.md; fi
-        python -m orchestrator migrate
         HF_HUB_OFFLINE=0 python -m orchestrator voice-prewarm
         python -m orchestrator worker-webhooks
     volumes:
@@ -348,6 +373,8 @@ services:
     container_name: master-builder-project-automation
     restart: unless-stopped
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       api:
         condition: service_started
       postgres:
@@ -378,7 +405,6 @@ services:
       - -ceu
       - |
         if [ -f /app/AGENTS.md ]; then cp /app/AGENTS.md /root/AGENTS.md; fi
-        python -m orchestrator migrate
         python -m orchestrator project-automation
     volumes:
       - codex-home:/root/.codex
@@ -395,6 +421,8 @@ services:
         LIBDAVE_FORCE_BUILD: ${LIBDAVE_FORCE_BUILD:-0}
     container_name: master-builder-discord-gateway
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
     environment:
@@ -418,7 +446,6 @@ services:
       - -ceu
       - |
         if [ -f /app/AGENTS.md ]; then cp /app/AGENTS.md /root/AGENTS.md; fi
-        python -m orchestrator migrate
         HF_HUB_OFFLINE=0 python -m orchestrator voice-prewarm
         python -m orchestrator discord-gateway
     volumes:
@@ -438,6 +465,8 @@ services:
     container_name: master-builder-temporal-worker
     restart: unless-stopped
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       api:
         condition: service_started
       postgres:
@@ -465,7 +494,6 @@ services:
       - -ceu
       - |
         if [ -f /app/AGENTS.md ]; then cp /app/AGENTS.md /root/AGENTS.md; fi
-        python -m orchestrator migrate
         python -m orchestrator temporal-worker
     volumes:
       - codex-home:/root/.codex
@@ -482,6 +510,8 @@ services:
         LIBDAVE_FORCE_BUILD: ${LIBDAVE_FORCE_BUILD:-0}
     container_name: master-builder-discord-live-voice
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
     environment:
@@ -504,7 +534,6 @@ services:
       - -ceu
       - |
         if [ -f /app/AGENTS.md ]; then cp /app/AGENTS.md /root/AGENTS.md; fi
-        python -m orchestrator migrate
         HF_HUB_OFFLINE=0 python -m orchestrator voice-prewarm
         python -m orchestrator discord-live-voice
     volumes:
@@ -523,6 +552,8 @@ services:
         CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
     container_name: master-builder-knowledge-sync
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
     environment:
@@ -547,7 +578,6 @@ services:
       - -ceu
       - |
         if [ -f /app/AGENTS.md ]; then cp /app/AGENTS.md /root/AGENTS.md; fi
-        python -m orchestrator migrate
         HF_HUB_OFFLINE=0 python -m orchestrator knowledge-prewarm
         python -m orchestrator knowledge-jira-sync
     volumes:

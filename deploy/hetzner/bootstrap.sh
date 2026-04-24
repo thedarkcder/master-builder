@@ -138,6 +138,7 @@ deploy_stack() {
     compose_args+=(-f "${GPU_COMPOSE_FILE}")
   fi
 
+  docker compose "${compose_args[@]}" up --build --exit-code-from migrate migrate
   docker compose "${compose_args[@]}" up -d --build
 }
 
