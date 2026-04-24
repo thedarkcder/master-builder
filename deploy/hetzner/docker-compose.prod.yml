@@ -82,6 +82,27 @@ services:
       timeout: 5s
       retries: 20
 
+  migrate:
+    <<: *extra_hosts_host_gateway
+    build:
+      context: ../..
+      dockerfile: orchestrator/Dockerfile
+      target: app-runtime-base
+      args:
+        CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
+      POSTGRES_URL: ${POSTGRES_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
+    command:
+      - python
+      - -m
+      - orchestrator
+      - migrate
+
   api:
     <<: *extra_hosts_host_gateway
     build:
@@ -126,6 +147,8 @@ services:
     ports:
       - "${MASTER_BUILDER_API_PORT:-4000}:4000"
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
@@ -145,7 +168,6 @@ services:
         mkdir -p /root/.codex
         cp -a /app/.codex/. /root/.codex/
         if [ -f /app/AGENTS.md ]; then cp /app/AGENTS.md /root/AGENTS.md; fi
-        python -m orchestrator migrate
         uvicorn orchestrator.api.main:app --host 0.0.0.0 --port 4000 --workers "${ORCHESTRATOR_API_WORKERS:-4}"
     volumes:
       - codex-home:/root/.codex
@@ -161,6 +183,8 @@ services:
         CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
     restart: unless-stopped
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       api:
         condition: service_started
       postgres:
@@ -195,7 +219,6 @@ services:
         mkdir -p /root/.codex
         cp -a /app/.codex/. /root/.codex/
         if [ -f /app/AGENTS.md ]; then cp /app/AGENTS.md /root/AGENTS.md; fi
-        python -m orchestrator migrate
         HF_HUB_OFFLINE=0 python -m orchestrator knowledge-prewarm
         python -m orchestrator worker-runs
     volumes:
@@ -213,6 +236,8 @@ services:
         CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
     restart: unless-stopped
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       api:
         condition: service_started
       postgres:
@@ -255,7 +280,6 @@ services:
         mkdir -p /root/.codex
         cp -a /app/.codex/. /root/.codex/
         if [ -f /app/AGENTS.md ]; then cp /app/AGENTS.md /root/AGENTS.md; fi
-        python -m orchestrator migrate
         HF_HUB_OFFLINE=0 python -m orchestrator voice-prewarm
         python -m orchestrator worker-webhooks
     volumes:
@@ -274,6 +298,8 @@ services:
         CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
     restart: unless-stopped
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       api:
         condition: service_started
       postgres:
@@ -300,7 +326,6 @@ services:
         mkdir -p /root/.codex
         cp -a /app/.codex/. /root/.codex/
         if [ -f /app/AGENTS.md ]; then cp /app/AGENTS.md /root/AGENTS.md; fi
-        python -m orchestrator migrate
         python -m orchestrator project-automation
     volumes:
       - codex-home:/root/.codex
@@ -317,6 +342,8 @@ services:
         LIBDAVE_FORCE_BUILD: ${LIBDAVE_FORCE_BUILD:-0}
     restart: unless-stopped
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
     environment:
@@ -337,7 +364,6 @@ services:
         mkdir -p /root/.codex
         cp -a /app/.codex/. /root/.codex/
         if [ -f /app/AGENTS.md ]; then cp /app/AGENTS.md /root/AGENTS.md; fi
-        python -m orchestrator migrate
         HF_HUB_OFFLINE=0 python -m orchestrator voice-prewarm
         python -m orchestrator discord-gateway
     volumes:
@@ -357,6 +383,8 @@ services:
         LIBDAVE_FORCE_BUILD: ${LIBDAVE_FORCE_BUILD:-0}
     restart: unless-stopped
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
     environment:
@@ -380,7 +408,6 @@ services:
         mkdir -p /root/.codex
         cp -a /app/.codex/. /root/.codex/
         if [ -f /app/AGENTS.md ]; then cp /app/AGENTS.md /root/AGENTS.md; fi
-        python -m orchestrator migrate
         HF_HUB_OFFLINE=0 python -m orchestrator voice-prewarm
         python -m orchestrator discord-live-voice
     volumes:
@@ -399,6 +426,8 @@ services:
         CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
     restart: unless-stopped
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
     environment:
@@ -424,7 +453,6 @@ services:
         mkdir -p /root/.codex
         cp -a /app/.codex/. /root/.codex/
         if [ -f /app/AGENTS.md ]; then cp /app/AGENTS.md /root/AGENTS.md; fi
-        python -m orchestrator migrate
         HF_HUB_OFFLINE=0 python -m orchestrator knowledge-prewarm
         python -m orchestrator knowledge-jira-sync
     volumes:

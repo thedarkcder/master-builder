@@ -108,7 +108,7 @@ RUN mkdir -p /app/data
 
 EXPOSE 4000
 
-CMD ["sh", "-c", "python -m orchestrator migrate && uvicorn orchestrator.api.main:app --host 0.0.0.0 --port 4000"]
+CMD ["uvicorn", "orchestrator.api.main:app", "--host", "0.0.0.0", "--port", "4000"]
 
 
 FROM python-common-base AS python-android-base
@@ -155,7 +155,7 @@ RUN mkdir -p /app/data
 
 EXPOSE 4000
 
-CMD ["sh", "-c", "python -m orchestrator migrate && uvicorn orchestrator.api.main:app --host 0.0.0.0 --port 4000"]
+CMD ["uvicorn", "orchestrator.api.main:app", "--host", "0.0.0.0", "--port", "4000"]
 
 
 FROM python-common-base AS voice-runtime
@@ -191,4 +191,4 @@ RUN mkdir -p /app/data
 
 EXPOSE 4000
 
-CMD ["sh", "-c", "python -m orchestrator migrate && uvicorn orchestrator.api.main:app --host 0.0.0.0 --port 4000"]
+CMD ["uvicorn", "orchestrator.api.main:app", "--host", "0.0.0.0", "--port", "4000"]
