@@ -145,20 +145,15 @@ class RuntimeStageSession:
         *,
         system_prompt: str,
         user_prompt: str,
-        require_json: bool = True,
         max_tool_hops: int = 8,
         extra_on_log_line: Callable[[str, str], None] | None = None,
     ) -> dict[str, Any]:
-        invocation_kwargs: dict[str, Any] = {}
-        if require_json is not True:
-            invocation_kwargs["require_json"] = require_json
         if self.execute_tool is None or not self.tooling.governed_tools:
             return invoke_runtime_json(
                 runtime=self.runtime,
                 context=self.context,
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
-                **invocation_kwargs,
             )
         return invoke_runtime_json_with_tools(
             runtime=self.runtime,
@@ -169,5 +164,4 @@ class RuntimeStageSession:
             execute_tool=self.execute_tool,
             max_tool_hops=max_tool_hops,
             extra_on_log_line=extra_on_log_line,
-            **invocation_kwargs,
         )

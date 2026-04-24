@@ -1,14 +1,15 @@
 import unittest
 from unittest.mock import patch
 import json
+import pytest
 
 from orchestrator.core.codex_agents import (
     CodexWorkflowAgents,
     answer_board_question_with_runtime,
-    answer_voice_room_persona_with_codex,
+    answer_voice_room_persona_with_runtime,
     route_voice_entry_with_runtime,
 )
-from orchestrator.core.runtime_invocation import AgentInvocationContext
+from orchestrator.core.runtime_invocation import AgentInvocationContext, RuntimeJsonContractError
 from orchestrator.core.codex_runtime import CodexRuntime, CodexRuntimeError
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.core.workflow.runner import (
@@ -482,7 +483,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             plan = agents.pm(request, 1, None, [], None, None, None)
             dev = agents.dev(request, plan, 1, None)
             test_result = agents.test(request, plan, dev, 1)
-            with self.assertRaises(CodexRuntimeError):
+            with self.assertRaises(RuntimeJsonContractError):
                 agents.review(request, plan, dev, test_result, 1)
 
     def test_review_outcome_uses_explicit_blocked_contract(self) -> None:
@@ -528,7 +529,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         request = self._request()
 
         with patch("orchestrator.core.codex_agents.render_prompt", side_effect=lambda template_name, **_: template_name):
-            with self.assertRaises(CodexRuntimeError):
+            with self.assertRaises(RuntimeJsonContractError):
                 agents.pm(request, 1, None, [], None, None, None)
 
     def test_answer_board_question(self) -> None:
@@ -641,7 +642,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         self.assertEqual(system_call[1].get("persona_id"), "security")
         self.assertEqual(user_call[1].get("persona_id"), "security")
 
-    def test_voice_entry_interview_lane_normalizes_persona_to_pm(self) -> None:
+    def test_voice_entry_interview_lane_requires_pm_persona(self) -> None:
         runtime = CodexRuntime(
             model="gpt-5-codex",
             max_output_tokens=1200,
@@ -661,14 +662,13 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             working_dir="/tmp",
         )
         with patch("orchestrator.core.codex_agents.render_prompt", side_effect=lambda template_name, **_: template_name):
-            payload = route_voice_entry_with_runtime(
-                runtime=runtime,
-                transcript="We should define MVP scope",
-                entry_source="unit-test",
-                invocation_context=ctx,
-            )
-        self.assertEqual(payload["lane"], "interview")
-        self.assertEqual(payload["persona"], "pm")
+            with pytest.raises(CodexRuntimeError, match="interview lane without pm persona"):
+                route_voice_entry_with_runtime(
+                    runtime=runtime,
+                    transcript="We should define MVP scope",
+                    entry_source="unit-test",
+                    invocation_context=ctx,
+                )
 
     def test_stage_log_sink_emits_payload(self) -> None:
         captured_logs: list[dict] = []
@@ -722,7 +722,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         self.assertEqual(len(captured_logs), 1)
         self.assertEqual(captured_logs[0]["message"], "line-1")
 
-    def test_voice_entry_router_normalizes_invalid_lane_and_persona(self) -> None:
+    def test_voice_entry_router_rejects_invalid_lane_and_persona(self) -> None:
         runtime = CodexRuntime(
             model="gpt-5-codex",
             max_output_tokens=1200,
@@ -742,17 +742,15 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             working_dir="/tmp",
         )
         with patch("orchestrator.core.codex_agents.render_prompt", side_effect=lambda template_name, **_: template_name):
-            payload = route_voice_entry_with_runtime(
-                runtime=runtime,
-                transcript="What is the status?",
-                entry_source="unit-test",
-                invocation_context=ctx,
-            )
-        self.assertEqual(payload["lane"], "ask")
-        self.assertEqual(payload["persona"], "pm")
-        self.assertEqual(payload["confidence"], 0.0)
+            with pytest.raises(CodexRuntimeError, match="invalid lane"):
+                route_voice_entry_with_runtime(
+                    runtime=runtime,
+                    transcript="What is the status?",
+                    entry_source="unit-test",
+                    invocation_context=ctx,
+                )
 
-    def test_voice_entry_router_legacy_persona_lane_maps_to_ask(self) -> None:
+    def test_voice_entry_router_rejects_legacy_persona_lane(self) -> None:
         runtime = CodexRuntime(
             model="gpt-5-codex",
             max_output_tokens=1200,
@@ -772,16 +770,15 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             working_dir="/tmp",
         )
         with patch("orchestrator.core.codex_agents.render_prompt", side_effect=lambda template_name, **_: template_name):
-            payload = route_voice_entry_with_runtime(
-                runtime=runtime,
-                transcript="Help me scope this",
-                entry_source="unit-test",
-                invocation_context=ctx,
-            )
-        self.assertEqual(payload["lane"], "ask")
-        self.assertEqual(payload["persona"], "pm")
+            with pytest.raises(CodexRuntimeError, match="invalid lane"):
+                route_voice_entry_with_runtime(
+                    runtime=runtime,
+                    transcript="Help me scope this",
+                    entry_source="unit-test",
+                    invocation_context=ctx,
+                )
 
-    def test_voice_entry_router_pm_lane_maps_to_interview(self) -> None:
+    def test_voice_entry_router_rejects_legacy_pm_lane(self) -> None:
         runtime = CodexRuntime(
             model="gpt-5-codex",
             max_output_tokens=1200,
@@ -801,16 +798,15 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             working_dir="/tmp",
         )
         with patch("orchestrator.core.codex_agents.render_prompt", side_effect=lambda template_name, **_: template_name):
-            payload = route_voice_entry_with_runtime(
-                runtime=runtime,
-                transcript="We should build a dashboard",
-                entry_source="unit-test",
-                invocation_context=ctx,
-            )
-        self.assertEqual(payload["lane"], "interview")
-        self.assertEqual(payload["persona"], "pm")
+            with pytest.raises(CodexRuntimeError, match="invalid lane"):
+                route_voice_entry_with_runtime(
+                    runtime=runtime,
+                    transcript="We should build a dashboard",
+                    entry_source="unit-test",
+                    invocation_context=ctx,
+                )
 
-    def test_voice_room_persona_answer_accepts_message_only_schema(self) -> None:
+    def test_voice_room_persona_answer_requires_explicit_brief_schema(self) -> None:
         runtime = CodexRuntime(
             model="gpt-5-codex",
             max_output_tokens=1200,
@@ -823,27 +819,25 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         )
 
         with patch("orchestrator.core.codex_agents.render_prompt", side_effect=lambda template_name, **_: template_name):
-            payload = answer_voice_room_persona_with_codex(
-                runtime=runtime,
-                persona_id="architect",
-                transcript="What is the main risk?",
-                project_keys=["MAB"],
-                issues=[{"key": "MAB-174"}],
-                status_counts={"To Do": 1},
-                invocation_context=AgentInvocationContext(
-                    channel="discord",
-                    tenant_id="tenant-1",
-                    project_id="project-1",
-                    command="pm",
-                    stage="voice-room-architect",
-                    working_dir="/tmp/test-repo",
-                ),
-                history=[{"question": "hi", "answer": "hello"}],
-                github_context={"repository": "repo"},
-            )
-
-        self.assertEqual(payload["message"], "The main integration risk is Discord attachment churn.")
-        self.assertEqual(payload["brief"], {})
+            with pytest.raises(CodexRuntimeError, match="Voice room persona payload missing brief"):
+                answer_voice_room_persona_with_runtime(
+                    runtime=runtime,
+                    persona_id="architect",
+                    transcript="What is the main risk?",
+                    project_keys=["MAB"],
+                    issues=[{"key": "MAB-174"}],
+                    status_counts={"To Do": 1},
+                    invocation_context=AgentInvocationContext(
+                        channel="discord",
+                        tenant_id="tenant-1",
+                        project_id="project-1",
+                        command="pm",
+                        stage="voice-room-architect",
+                        working_dir="/tmp/test-repo",
+                    ),
+                    history=[{"question": "hi", "answer": "hello"}],
+                    github_context={"repository": "repo"},
+                )
 
 
 if __name__ == "__main__":

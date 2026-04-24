@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from orchestrator.api.schemas import DiscordCommandRequest, DiscordCommandResponse
 from orchestrator.core.agent_runtime_resolver import build_runtime_for_selector
-from orchestrator.core.codex_agents import answer_voice_room_persona_with_codex
+from orchestrator.core.codex_agents import answer_voice_room_persona_with_runtime
 from orchestrator.core.runtime_invocation import AgentInvocationContext
 from orchestrator.core.codex_runtime import CodexRuntimeError
 from orchestrator.core.config import get_settings
@@ -112,7 +112,7 @@ def dispatch_persona_command(
         project_discord_config=None,
     )
     try:
-        answer_payload = answer_voice_room_persona_with_codex(
+        answer_payload = answer_voice_room_persona_with_runtime(
             runtime=runtime,
             persona_id=persona_id,
             transcript=question,

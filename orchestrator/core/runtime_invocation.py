@@ -67,6 +67,26 @@ class WorkflowAttemptRef:
     attempt_id: str | None = None
 
 
+class RuntimeInvocationError(RuntimeError):
+    """Base error for runtime invocation contract failures."""
+
+
+class RuntimeJsonContractError(RuntimeInvocationError):
+    """Raised when a runtime JSON invocation cannot satisfy the JSON contract."""
+
+
+class ToolBridgeProtocolError(RuntimeInvocationError):
+    """Raised when the runtime violates the governed tool bridge protocol."""
+
+
+class ToolBridgeExhaustedError(RuntimeInvocationError):
+    """Raised when the governed tool bridge cannot reach a final response."""
+
+
+class ToolExecutionError(RuntimeInvocationError):
+    """Raised when a governed tool execution fails."""
+
+
 @dataclass(frozen=True)
 class _QueuedLogLine:
     context: AgentInvocationContext
@@ -401,6 +421,7 @@ def _augment_prompt_with_knowledge_context(
         return (
             user_prompt,
             {"kb_lookup_attempted": False, "kb_hits": 0, "kb_context_chars": 0},
+            resolved_model_override,
             resolved_codex_reasoning_effort,
             has_explicit_reasoning_override,
         )
@@ -684,13 +705,6 @@ def _enqueue_runtime_log_line(*, context: AgentInvocationContext, stream: str, m
     writer.enqueue(context=context, stream=stream, message=message)
 
 
-def _is_recoverable_json_parse_failure(exc: Exception) -> bool:
-    if not isinstance(exc, CodexRuntimeError):
-        return False
-    failure_reason_lower = str(exc).lower()
-    return any(marker in failure_reason_lower for marker in _JSON_PARSE_ERROR_MARKERS)
-
-
 def invoke_runtime_json(
     *,
     runtime: CodexRuntime,
@@ -698,7 +712,6 @@ def invoke_runtime_json(
     system_prompt: str,
     user_prompt: str,
     extra_on_log_line: Callable[[str, str], None] | None = None,
-    require_json: bool = True,
 ) -> dict:
     payload, _ = _invoke_runtime_json_once(
         runtime=runtime,
@@ -706,7 +719,6 @@ def invoke_runtime_json(
         system_prompt=system_prompt,
         user_prompt=user_prompt,
         extra_on_log_line=extra_on_log_line,
-        require_json=require_json,
     )
     return payload
 
@@ -721,16 +733,13 @@ def invoke_runtime_json_with_tools(
     execute_tool: Callable[[str, dict[str, object]], dict[str, object]],
     extra_on_log_line: Callable[[str, str], None] | None = None,
     max_tool_hops: int = 8,
-    require_json: bool = True,
 ) -> dict:
     resume_session_id = str(context.codex_session_id or "").strip() or None
     current_user_prompt = user_prompt
     normalized_allowed_tools = {str(tool).strip() for tool in allowed_tools if str(tool).strip()}
     tool_hops_used = 0
-    final_response_required = False
-    bridge_error: str | None = None
 
-    for tool_hop in range(max(0, int(max_tool_hops)) + 2):
+    for _tool_hop in range(max(0, int(max_tool_hops)) + 1):
         payload, observed_session_id = _invoke_runtime_json_once(
             runtime=runtime,
             context=AgentInvocationContext(
@@ -754,7 +763,6 @@ def invoke_runtime_json_with_tools(
             system_prompt=system_prompt,
             user_prompt=current_user_prompt,
             extra_on_log_line=extra_on_log_line,
-            require_json=require_json,
         )
         if observed_session_id:
             resume_session_id = observed_session_id
@@ -766,89 +774,26 @@ def invoke_runtime_json_with_tools(
             result = payload.get("result")
             if isinstance(result, dict):
                 return result
-            bridge_error = "Codex tool bridge final_response must contain an object result"
-            current_user_prompt = _build_tool_result_prompt(
-                tool_result={
-                    "tool_name": "__tool_bridge__",
-                    "ok": False,
-                    "error": bridge_error,
-                },
-                require_final_response=True,
-            )
-            final_response_required = True
-            continue
+            raise ToolBridgeProtocolError("Runtime tool bridge final_response must contain an object result")
         if response_type != _TOOL_REQUEST_TYPE:
-            bridge_error = f"Codex tool bridge returned unsupported response type '{response_type}'"
-            current_user_prompt = _build_tool_result_prompt(
-                tool_result={
-                    "tool_name": "__tool_bridge__",
-                    "ok": False,
-                    "error": bridge_error,
-                },
-                require_final_response=True,
-            )
-            final_response_required = True
-            continue
-        if final_response_required:
-            bridge_error = "Codex tool bridge requested another tool after a tool-bridge error"
-            break
+            raise ToolBridgeProtocolError(f"Runtime tool bridge returned unsupported response type '{response_type}'")
         if tool_hops_used >= max_tool_hops:
-            bridge_error = "Codex tool hop limit exceeded"
-            current_user_prompt = _build_tool_result_prompt(
-                tool_result={
-                    "tool_name": "__tool_bridge__",
-                    "ok": False,
-                    "error": bridge_error,
-                },
-                require_final_response=True,
-            )
-            final_response_required = True
-            continue
+            raise ToolBridgeExhaustedError("Runtime tool hop limit exceeded")
 
         tool_hops_used += 1
 
         tool_name = str(payload.get("tool_name") or "").strip()
         if not tool_name:
-            bridge_error = "Codex tool bridge tool_request missing tool_name"
-            current_user_prompt = _build_tool_result_prompt(
-                tool_result={
-                    "tool_name": "__tool_bridge__",
-                    "ok": False,
-                    "error": bridge_error,
-                },
-                require_final_response=True,
-            )
-            final_response_required = True
-            continue
+            raise ToolBridgeProtocolError("Runtime tool bridge tool_request missing tool_name")
         if tool_name not in normalized_allowed_tools:
-            bridge_error = f"Codex tool bridge requested disallowed tool '{tool_name}'"
-            current_user_prompt = _build_tool_result_prompt(
-                tool_result={
-                    "tool_name": tool_name,
-                    "ok": False,
-                    "error": bridge_error,
-                },
-                require_final_response=True,
-            )
-            final_response_required = True
-            continue
+            raise ToolBridgeProtocolError(f"Runtime tool bridge requested disallowed tool '{tool_name}'")
         raw_tool_args = payload.get("tool_args")
         if raw_tool_args is None:
             tool_args: dict[str, object] = {}
         elif isinstance(raw_tool_args, dict):
             tool_args = dict(raw_tool_args)
         else:
-            bridge_error = "Codex tool bridge tool_request tool_args must be an object"
-            current_user_prompt = _build_tool_result_prompt(
-                tool_result={
-                    "tool_name": tool_name,
-                    "ok": False,
-                    "error": bridge_error,
-                },
-                require_final_response=True,
-            )
-            final_response_required = True
-            continue
+            raise ToolBridgeProtocolError("Runtime tool bridge tool_request tool_args must be an object")
         _emit_invocation_event(
             context=context,
             event_kind="tool_request",
@@ -879,11 +824,6 @@ def invoke_runtime_json_with_tools(
                 },
             )
         except Exception as exc:  # noqa: BLE001
-            bridge_result = {
-                "tool_name": tool_name,
-                "ok": False,
-                "error": str(exc),
-            }
             _emit_invocation_event(
                 context=context,
                 event_kind="tool_result",
@@ -895,15 +835,11 @@ def invoke_runtime_json_with_tools(
                     "error": str(exc),
                 },
             )
+            raise ToolExecutionError(f"Runtime tool {tool_name} failed: {exc}") from exc
 
         current_user_prompt = _build_tool_result_prompt(tool_result=bridge_result)
-        final_response_required = False
 
-    fallback_message = bridge_error or "Codex tool bridge could not obtain a final response"
-    return {
-        "_raw_response": fallback_message,
-        "_tool_bridge_error": fallback_message,
-    }
+    raise ToolBridgeExhaustedError("Runtime tool bridge could not obtain a final response")
 
 
 def _invoke_runtime_json_once(
@@ -913,7 +849,6 @@ def _invoke_runtime_json_once(
     system_prompt: str,
     user_prompt: str,
     extra_on_log_line: Callable[[str, str], None] | None = None,
-    require_json: bool = True,
 ) -> tuple[dict, str | None]:
     (
         effective_user_prompt,
@@ -993,7 +928,7 @@ def _invoke_runtime_json_once(
         context=invocation_context,
         system_prompt=system_prompt,
         user_prompt=effective_user_prompt,
-        require_json=require_json,
+        require_json=True,
         resumed_session=bool(resume_session_id),
     )
     payload: dict | None = None
@@ -1036,13 +971,8 @@ def _invoke_runtime_json_once(
         failure_reason_lower = failure_reason.lower()
         if "empty response" in failure_reason_lower:
             sink_state["no_assistant_output_detected"] = True
-        if not require_json and _is_recoverable_json_parse_failure(exc):
-            return {
-                "_raw_response": failure_payload_preview or "",
-                "_parse_error": failure_reason,
-                "_stage": context.stage,
-                "_command": context.command,
-            }, str(sink_state.get("codex_session_id") or "").strip() or None
+        if isinstance(exc, CodexRuntimeError) and any(marker in failure_reason_lower for marker in _JSON_PARSE_ERROR_MARKERS):
+            raise RuntimeJsonContractError(f"Runtime did not return a JSON object: {failure_reason}") from exc
         raise
     finally:
         _get_log_writer().flush_invocation(invocation_id=invocation_id)

@@ -13,6 +13,15 @@ from orchestrator.core.runtime_invocation import (
 from orchestrator.core.codex_runtime import CodexRuntime, CodexRuntimeError
 from orchestrator.core.discord.personas import get_voice_room_persona_definition
 from orchestrator.core.prompt_templates import render_prompt
+from orchestrator.core.runtime_payload_models import (
+    AskIntentPayload,
+    EngineeringClarificationPayload,
+    EngineeringSeedPlanPayload,
+    PmParentSeedPlanPayload,
+    RuntimeMessageBriefPayload,
+    RuntimeMessagePayload,
+    VoiceEntryRoutePayload,
+)
 from orchestrator.core.runtime_stage_session import (
     RuntimeStageSession,
     build_governed_tool_executor,
@@ -219,7 +228,6 @@ class CodexWorkflowAgents:
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             extra_on_log_line=self._stage_log_sink(request=request, stage=stage, attempt=attempt),
-            require_json=False,
         )
 
     def _execute_stage_tool(
@@ -596,13 +604,13 @@ def answer_board_question_with_runtime(
         settings=settings,
         max_tool_hops=8,
     )
-    message = str(payload.get("message") or "").strip()
-    if not message:
-        raise CodexRuntimeError("Codex did not return an ask/board message")
-    return message
+    try:
+        return RuntimeMessagePayload.from_payload(payload, context="Ask answer payload").message
+    except RuntimeError as exc:
+        raise CodexRuntimeError(str(exc)) from exc
 
 
-def answer_pm_question_with_codex(
+def answer_pm_question_with_runtime(
     *,
     runtime: CodexRuntime,
     question: str,
@@ -634,23 +642,13 @@ def answer_pm_question_with_codex(
             issues_json=json.dumps(issues[:40]),
         ),
     )
-    if not isinstance(payload, dict):
-        raise CodexRuntimeError("Codex did not return a pm JSON object")
-    message = str(payload.get("message") or "").strip()
-    if not message:
-        raise CodexRuntimeError("Codex did not return a pm message")
-    brief = payload.get("brief")
-    if brief is None:
-        brief = {}
-    if not isinstance(brief, dict):
-        raise CodexRuntimeError("Codex did not return a pm brief object")
-    normalized_payload = dict(payload)
-    normalized_payload["message"] = message
-    normalized_payload["brief"] = brief
-    return normalized_payload
+    try:
+        return RuntimeMessageBriefPayload.from_payload(payload, context="PM answer payload").to_payload()
+    except RuntimeError as exc:
+        raise CodexRuntimeError(str(exc)) from exc
 
 
-def classify_engineering_clarification_with_codex(
+def classify_engineering_clarification_with_runtime(
     *,
     runtime: CodexRuntime,
     parent_issue_key: str,
@@ -661,7 +659,7 @@ def classify_engineering_clarification_with_codex(
     child_description: str,
     question: str,
     invocation_context: AgentInvocationContext,
-) -> dict:
+) -> EngineeringClarificationPayload:
     payload = invoke_runtime_json(
         runtime=runtime,
         context=invocation_context,
@@ -677,9 +675,10 @@ def classify_engineering_clarification_with_codex(
             question=question,
         ),
     )
-    if not isinstance(payload, dict):
-        raise CodexRuntimeError("Codex did not return an engineering clarification JSON object")
-    return payload
+    try:
+        return EngineeringClarificationPayload.from_payload(payload)
+    except RuntimeError as exc:
+        raise CodexRuntimeError(str(exc)) from exc
 
 
 def route_voice_entry_with_runtime(
@@ -692,7 +691,7 @@ def route_voice_entry_with_runtime(
     room_context: dict | None = None,
     sqlalchemy_session: Session | None = None,
     settings: Any | None = None,
-) -> dict:
+) -> VoiceEntryRoutePayload:
     """Route voice transcript to ask vs interview (strict JSON from agent runtime)."""
     normalized_history = history if isinstance(history, list) else []
     user_prompt = render_prompt(
@@ -712,36 +711,13 @@ def route_voice_entry_with_runtime(
         settings=settings,
         max_tool_hops=6,
     )
-    if not isinstance(payload, dict):
-        raise CodexRuntimeError("Codex did not return a voice-entry router JSON object")
-    lane = str(payload.get("lane") or "").strip().lower()
-    if lane == "pm":
-        lane = "interview"
-    if lane == "persona":
-        lane = "ask"
-    if lane not in {"ask", "interview"}:
-        lane = "ask"
-    persona_id = str(payload.get("persona") or "").strip().lower()
-    valid_personas = {"pm", "architect", "engineer", "qa", "security"}
-    if persona_id not in valid_personas:
-        persona_id = "pm"
     try:
-        confidence = float(payload.get("confidence"))
-    except (TypeError, ValueError):
-        confidence = 0.0
-    confidence = max(0.0, min(1.0, confidence))
-    reason = str(payload.get("reason") or "").strip()
-    if lane == "interview":
-        persona_id = "pm"
-    return {
-        "lane": lane,
-        "persona": persona_id,
-        "confidence": confidence,
-        "reason": reason,
-    }
+        return VoiceEntryRoutePayload.from_payload(payload)
+    except RuntimeError as exc:
+        raise CodexRuntimeError(str(exc)) from exc
 
 
-def answer_voice_room_persona_with_codex(
+def answer_voice_room_persona_with_runtime(
     *,
     runtime: CodexRuntime,
     persona_id: str,
@@ -791,23 +767,13 @@ def answer_voice_room_persona_with_codex(
         settings=settings,
         max_tool_hops=6,
     )
-    if not isinstance(payload, dict):
-        raise CodexRuntimeError("Codex did not return a voice-room persona JSON object")
-    message = str(payload.get("message") or "").strip()
-    if not message:
-        raise CodexRuntimeError("Codex did not return a voice-room persona message")
-    brief = payload.get("brief")
-    if brief is None:
-        brief = {}
-    if not isinstance(brief, dict):
-        raise CodexRuntimeError("Codex did not return a voice-room brief object")
-    return {
-        "message": message,
-        "brief": brief,
-    }
+    try:
+        return RuntimeMessageBriefPayload.from_payload(payload, context="Voice room persona payload").to_payload()
+    except RuntimeError as exc:
+        raise CodexRuntimeError(str(exc)) from exc
 
 
-def plan_discord_ask_intent_with_codex(
+def plan_discord_ask_intent_with_runtime(
     *,
     runtime: CodexRuntime,
     question: str,
@@ -817,7 +783,7 @@ def plan_discord_ask_intent_with_codex(
     invocation_context: AgentInvocationContext,
     history: list[dict] | None = None,
     github_context: dict | None = None,
-) -> dict:
+) -> AskIntentPayload:
     normalized_history: list[dict] = []
     normalized_github_context = github_context or {}
     payload = invoke_runtime_json(
@@ -834,82 +800,53 @@ def plan_discord_ask_intent_with_codex(
             issues_json=json.dumps(issues[:40]),
         ),
     )
-    if not isinstance(payload, dict):
-        raise CodexRuntimeError("Codex did not return an ask-intent JSON object")
-    return payload
+    try:
+        return AskIntentPayload.from_payload(payload)
+    except RuntimeError as exc:
+        raise CodexRuntimeError(str(exc)) from exc
 
 
-def plan_seed_issues_with_codex(
+def plan_seed_issues_with_runtime(
     *,
     runtime: CodexRuntime,
     prompt_markdown: str,
     allowed_project_keys: list[str],
     invocation_context: AgentInvocationContext,
-) -> dict:
-    last_error: CodexRuntimeError | None = None
-    for attempt in range(2):
-        try:
-            payload = invoke_runtime_json(
-                runtime=runtime,
-                context=invocation_context,
-                system_prompt=render_prompt("discord/issues_seed_system.j2"),
-                user_prompt=render_prompt(
-                    "discord/issues_seed_user.j2",
-                    allowed_project_keys_json=json.dumps(allowed_project_keys),
-                    prompt_markdown=prompt_markdown,
-                ),
-            )
-            if not isinstance(payload, dict):
-                raise CodexRuntimeError("Codex did not return an issue-seeding JSON object")
-            return payload
-        except CodexRuntimeError as exc:
-            last_error = exc
-            error_text = str(exc).lower()
-            retryable_empty_output = (
-                "no last agent message" in error_text
-                or "returned empty output" in error_text
-                or "empty response" in error_text
-                or "wrote empty content" in error_text
-            )
-            if not retryable_empty_output or attempt > 0:
-                raise
-    assert last_error is not None
-    raise last_error
+) -> EngineeringSeedPlanPayload:
+    payload = invoke_runtime_json(
+        runtime=runtime,
+        context=invocation_context,
+        system_prompt=render_prompt("discord/issues_seed_system.j2"),
+        user_prompt=render_prompt(
+            "discord/issues_seed_user.j2",
+            allowed_project_keys_json=json.dumps(allowed_project_keys),
+            prompt_markdown=prompt_markdown,
+        ),
+    )
+    try:
+        return EngineeringSeedPlanPayload.from_payload(payload)
+    except RuntimeError as exc:
+        raise CodexRuntimeError(str(exc)) from exc
 
 
-def plan_pm_parent_issues_with_codex(
+def plan_pm_parent_issues_with_runtime(
     *,
     runtime: CodexRuntime,
     prompt_markdown: str,
     allowed_project_keys: list[str],
     invocation_context: AgentInvocationContext,
-) -> dict:
-    last_error: CodexRuntimeError | None = None
-    for attempt in range(2):
-        try:
-            payload = invoke_runtime_json(
-                runtime=runtime,
-                context=invocation_context,
-                system_prompt=render_prompt("discord/pm_seed_batch_system.j2"),
-                user_prompt=render_prompt(
-                    "discord/pm_seed_batch_user.j2",
-                    allowed_project_keys_json=json.dumps(allowed_project_keys),
-                    prompt_markdown=prompt_markdown,
-                ),
-            )
-            if not isinstance(payload, dict):
-                raise CodexRuntimeError("Codex did not return a PM batch issue-seeding JSON object")
-            return payload
-        except CodexRuntimeError as exc:
-            last_error = exc
-            error_text = str(exc).lower()
-            retryable_empty_output = (
-                "no last agent message" in error_text
-                or "returned empty output" in error_text
-                or "empty response" in error_text
-                or "wrote empty content" in error_text
-            )
-            if not retryable_empty_output or attempt > 0:
-                raise
-    assert last_error is not None
-    raise last_error
+) -> PmParentSeedPlanPayload:
+    payload = invoke_runtime_json(
+        runtime=runtime,
+        context=invocation_context,
+        system_prompt=render_prompt("discord/pm_seed_batch_system.j2"),
+        user_prompt=render_prompt(
+            "discord/pm_seed_batch_user.j2",
+            allowed_project_keys_json=json.dumps(allowed_project_keys),
+            prompt_markdown=prompt_markdown,
+        ),
+    )
+    try:
+        return PmParentSeedPlanPayload.from_payload(payload)
+    except RuntimeError as exc:
+        raise CodexRuntimeError(str(exc)) from exc

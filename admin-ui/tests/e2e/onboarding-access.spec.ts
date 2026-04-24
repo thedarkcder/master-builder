@@ -462,7 +462,7 @@ test("formats Jira webhook timestamps on the tenant Jira settings page", async (
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/route25/jira/webhooks/diagnostics",
+      pathname: "/api/bff/api/admin/tenants/route25/atlassian/jira/webhooks/diagnostics",
       handler: (route) =>
         fulfillJson(route, {
           tenant_id: "route25",
@@ -791,7 +791,7 @@ test("lets tenant admins manage team settings from dedicated Team tabs", async (
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/route25/jira/webhooks/diagnostics",
+      pathname: "/api/bff/api/admin/tenants/route25/atlassian/jira/webhooks/diagnostics",
       handler: (route) =>
         fulfillJson(route, {
           webhook_url: "https://example.test/jira/webhook",

@@ -65,6 +65,21 @@ def resolve_ready_label_for_tenant(tenant) -> str | None:  # noqa: ANN001
     return tenant_ready_label(tenant)
 
 
+def resolve_jira_issue_board_location(
+    *,
+    context: JiraWebhookContext,
+    session: Session,
+    settings,  # noqa: ANN001
+) -> tuple[str | None, str | None]:
+    from orchestrator.api.webhooks import jira_webhook_board_gate
+
+    return jira_webhook_board_gate.resolve_project_issue_board_location(
+        context=context,
+        session=session,
+        settings=settings,
+    )
+
+
 def build_jira_enqueue_skipped_notification_action(
     *,
     context,

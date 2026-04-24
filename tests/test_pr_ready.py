@@ -21,7 +21,7 @@ class PrReadinessTests(unittest.TestCase):
 
     def test_ready_when_required_workflows_green_and_review_present(self) -> None:
         with patch(
-            "orchestrator.core.pr_ready._evaluate_pr_readiness_with_codex",
+            "orchestrator.core.pr_ready._evaluate_pr_readiness_with_runtime",
             return_value=PrReadinessResult(
                 ready=True,
                 state="ready",
@@ -45,7 +45,7 @@ class PrReadinessTests(unittest.TestCase):
 
     def test_not_ready_when_review_summary_missing(self) -> None:
         with patch(
-            "orchestrator.core.pr_ready._evaluate_pr_readiness_with_codex",
+            "orchestrator.core.pr_ready._evaluate_pr_readiness_with_runtime",
             return_value=PrReadinessResult(
                 ready=False,
                 state="missing_review_summary",
@@ -69,7 +69,7 @@ class PrReadinessTests(unittest.TestCase):
 
     def test_not_ready_when_review_sections_missing(self) -> None:
         with patch(
-            "orchestrator.core.pr_ready._evaluate_pr_readiness_with_codex",
+            "orchestrator.core.pr_ready._evaluate_pr_readiness_with_runtime",
             return_value=PrReadinessResult(
                 ready=False,
                 state="missing_review_sections",
@@ -94,7 +94,7 @@ class PrReadinessTests(unittest.TestCase):
 
     def test_not_ready_when_checks_pending(self) -> None:
         with patch(
-            "orchestrator.core.pr_ready._evaluate_pr_readiness_with_codex",
+            "orchestrator.core.pr_ready._evaluate_pr_readiness_with_runtime",
             return_value=PrReadinessResult(
                 ready=False,
                 state="pending_checks",
@@ -119,7 +119,7 @@ class PrReadinessTests(unittest.TestCase):
 
     def test_not_ready_when_checks_failing(self) -> None:
         with patch(
-            "orchestrator.core.pr_ready._evaluate_pr_readiness_with_codex",
+            "orchestrator.core.pr_ready._evaluate_pr_readiness_with_runtime",
             return_value=PrReadinessResult(
                 ready=False,
                 state="failing_checks",
@@ -144,7 +144,7 @@ class PrReadinessTests(unittest.TestCase):
 
     def test_not_ready_when_required_checks_missing(self) -> None:
         with patch(
-            "orchestrator.core.pr_ready._evaluate_pr_readiness_with_codex",
+            "orchestrator.core.pr_ready._evaluate_pr_readiness_with_runtime",
             return_value=PrReadinessResult(
                 ready=False,
                 state="missing_checks",
@@ -174,7 +174,7 @@ class PrReadinessTests(unittest.TestCase):
             "Follow-ups:\n- none\n"
         )
         with patch(
-            "orchestrator.core.pr_ready._evaluate_pr_readiness_with_codex",
+            "orchestrator.core.pr_ready._evaluate_pr_readiness_with_runtime",
             return_value=PrReadinessResult(
                 ready=True,
                 state="ready",

@@ -5,12 +5,17 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from orchestrator.core.specialist_planning import (
+    ArchitectStageOutput,
+    ChildTicketSpec,
     PLANNING_STATE_BLOCKED,
     PLANNING_STATE_COMPLETED,
     PLANNING_STATE_ENGINEERING,
     PLANNING_STATE_SECURITY,
     PLANNING_STATE_TEST,
+    RetryableSpecialistPlanningContractError,
+    SecurityStageOutput,
     SpecialistPlanningRequest,
+    TestingStageOutput,
     build_runtime_seed_planning_package,
     run_specialist_planning_fanout,
 )
@@ -120,6 +125,9 @@ class SpecialistPlanningTests(unittest.TestCase):
             [stage.planning_state for stage in result.stages],
             [PLANNING_STATE_ENGINEERING, PLANNING_STATE_SECURITY, PLANNING_STATE_TEST],
         )
+        self.assertIsInstance(result.stages[0], ArchitectStageOutput)
+        self.assertIsInstance(result.stages[1], SecurityStageOutput)
+        self.assertIsInstance(result.stages[2], TestingStageOutput)
         self.assertFalse(any(stage.blocked for stage in result.stages))
         self.assertIn("Architecture should split invite creation from delivery", result.findings)
         self.assertIn("Use a dedicated invite service", result.recommendations)
@@ -136,6 +144,7 @@ class SpecialistPlanningTests(unittest.TestCase):
             ),
         )
         self.assertIn("Invite service", result.architecture_diagram or "")
+        self.assertIsInstance(result.stages[0].child_ticket_specs[0], ChildTicketSpec)
         self.assertTrue(prompts)
         first_prompt_name, first_prompt_context = prompts[0]
         self.assertEqual(first_prompt_name, "workflow/pm_planning_architect_system.j2")
@@ -155,6 +164,7 @@ class SpecialistPlanningTests(unittest.TestCase):
                     "findings": ["Architecture is straightforward"],
                     "recommendations": ["Proceed with a service boundary"],
                     "required_tasks": ["Add invite service"],
+                    "child_ticket_specs": [],
                     "open_behavior_questions": [],
                     "acceptance_impacts": ["Share entry point exists"],
                 }
@@ -245,6 +255,7 @@ class SpecialistPlanningTests(unittest.TestCase):
                 "findings": [],
                 "recommendations": [],
                 "required_tasks": [],
+                "child_ticket_specs": [] if context.stage == PLANNING_STATE_ENGINEERING else None,
                 "open_behavior_questions": [],
                 "acceptance_impacts": [],
                 "mermaid_diagram": "",
@@ -342,6 +353,54 @@ class SpecialistPlanningTests(unittest.TestCase):
         self.assertEqual(package["child_issues"][0]["summary"], "Create invite service")
         self.assertIn("Build the invite flow entry point", package["child_issues"][0]["delivery"])
         self.assertIn("Invite flow is available from Profile", package["child_issues"][0]["acceptance_criteria"][0])
+
+    def test_architect_stage_fails_fast_when_child_ticket_spec_is_missing_done_means(self) -> None:
+        def _invoke_runtime_json(*, context, system_prompt, user_prompt, runtime):  # noqa: ANN001
+            _ = (system_prompt, user_prompt, runtime)
+            if context.stage == PLANNING_STATE_ENGINEERING:
+                return {
+                    "findings": ["Architecture should split invite creation from delivery"],
+                    "recommendations": ["Use a dedicated invite service"],
+                    "required_tasks": ["Build invite service"],
+                    "child_ticket_specs": [
+                        {
+                            "summary": "Create invite service",
+                            "capability": "Invite creation and delivery",
+                            "delivery": "Build the invite flow entry point and service so users can create and send app invites from Profile.",
+                            "expected_outcome": "Users can create and send invites without leaving Profile.",
+                            "acceptance_criteria": ["Invite flow is available from Profile"],
+                            "how_to_test": ["Run invite flow integration tests"],
+                            "done_means": [],
+                            "dependencies": [],
+                            "risks": [],
+                            "labels": ["engineering"],
+                        }
+                    ],
+                    "open_behavior_questions": [],
+                    "acceptance_impacts": ["Invite flow works from Profile"],
+                    "mermaid_diagram": "flowchart TD\n  Share[Share entry] --> InviteService[Invite service]",
+                }
+            return {
+                "findings": [],
+                "recommendations": [],
+                "required_tasks": [],
+                "open_behavior_questions": [],
+                "acceptance_impacts": [],
+            }
+
+        with (
+            patch("orchestrator.core.specialist_planning.render_prompt", return_value="prompt"),
+            patch("orchestrator.core.runtime_stage_session.invoke_runtime_json", side_effect=_invoke_runtime_json),
+        ):
+            with self.assertRaisesRegex(
+                RetryableSpecialistPlanningContractError,
+                "engineering_planning child_ticket_specs\\[1\\] without done_means",
+            ):
+                run_specialist_planning_fanout(
+                    runtime=SimpleNamespace(),
+                    request=self._request(),
+                    runtime_for_selector=lambda _selector: SimpleNamespace(),
+                )
 
 
 if __name__ == "__main__":

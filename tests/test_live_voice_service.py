@@ -15,6 +15,7 @@ from orchestrator.core.discord.live_voice_service import (
 )
 from orchestrator.core.discord.live_voice_session import LiveVoiceTurn
 from orchestrator.core.observability import current_log_context
+from orchestrator.core.runtime_payload_models import VoiceEntryRoutePayload
 
 
 class _FakeSidecarClient:
@@ -371,7 +372,7 @@ class LiveVoiceServiceTests(unittest.TestCase):
             ),
             patch(
                 "orchestrator.core.discord.live_voice_service.route_discord_voice_entry",
-                return_value={"lane": "ask", "persona": "pm", "confidence": 0.9, "reason": "product"},
+                return_value=VoiceEntryRoutePayload(lane="ask", persona="pm", confidence=0.9, reason="product"),
             ),
             patch(
                 "orchestrator.core.discord.live_voice_service.execute_tenant_command_ingress",

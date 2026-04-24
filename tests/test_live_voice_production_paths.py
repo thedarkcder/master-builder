@@ -12,6 +12,7 @@ import pytest
 from orchestrator.api.schemas import DiscordCommandResponse
 from orchestrator.core.discord.live_voice_service import DiscordLiveVoiceService
 from orchestrator.core.discord.live_voice_session import LiveVoiceTurn
+from orchestrator.core.runtime_payload_models import VoiceEntryRoutePayload
 from tests.production_path_support import (
     FakeDiscordApiClient,
     clear_runtime_environment,
@@ -144,7 +145,7 @@ class LiveVoiceProductionPathTests(unittest.TestCase):
             patch("orchestrator.core.discord.live_voice_service.transcribe_audio_bytes", return_value="What is the relink policy?"),
             patch(
                 "orchestrator.core.discord.live_voice_service.route_discord_voice_entry",
-                return_value={"lane": "ask", "persona": "pm", "confidence": 0.91, "reason": "policy"},
+                return_value=VoiceEntryRoutePayload(lane="ask", persona="pm", confidence=0.91, reason="policy"),
             ),
             patch(
                 "orchestrator.core.discord.live_voice_service.execute_tenant_command_ingress",

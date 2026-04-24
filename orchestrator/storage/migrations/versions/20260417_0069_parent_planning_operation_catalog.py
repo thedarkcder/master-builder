@@ -23,7 +23,17 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _has_column(table_name: str, column_name: str) -> bool:
+    inspector = sa.inspect(op.get_bind())
+    if table_name not in inspector.get_table_names():
+        return False
+    return any(column.get("name") == column_name for column in inspector.get_columns(table_name))
+
+
 def upgrade() -> None:
+    if not _has_column("workflow_type_operations", "retry_policy"):
+        return
+
     now = _utcnow()
     workflow_type_operations = sa.table(
         "workflow_type_operations",

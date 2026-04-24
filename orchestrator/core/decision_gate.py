@@ -67,13 +67,20 @@ def load_decision_gate_rules(*, path: str | None = None) -> DecisionGateRules:
     )
 
 
-def _string_list(value: object) -> tuple[str, ...]:
+def _required_string_tuple(value: object, *, field: str) -> tuple[str, ...]:
     if not isinstance(value, list):
-        return ()
-    return tuple(str(item).strip() for item in value if str(item).strip())
+        raise RuntimeError(f"Runtime decision gate evaluation returned invalid {field}")
+    normalized: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            raise RuntimeError(f"Runtime decision gate evaluation returned invalid {field} item")
+        stripped = item.strip()
+        if stripped:
+            normalized.append(stripped)
+    return tuple(normalized)
 
 
-def _evaluate_decision_gate_with_codex(
+def _evaluate_decision_gate_with_runtime(
     *,
     issue_summary: str,
     issue_description: str,
@@ -107,19 +114,19 @@ def _evaluate_decision_gate_with_codex(
             ),
         )
     except CodexRuntimeError as exc:
-        raise RuntimeError(f"Codex decision gate evaluation failed: {exc}") from exc
+        raise RuntimeError(f"Runtime decision gate evaluation failed: {exc}") from exc
 
     triggered = bool(payload.get("triggered"))
     reason = str(payload.get("reason") or "").strip()
-    missing_sections = _string_list(payload.get("missing_sections"))
-    questions = _string_list(payload.get("questions"))
+    missing_sections = _required_string_tuple(payload.get("missing_sections"), field="missing_sections")
+    questions = _required_string_tuple(payload.get("questions"), field="questions")
     recommendation = str(payload.get("recommendation") or "").strip()
-    tags = _string_list(payload.get("tags"))
+    tags = _required_string_tuple(payload.get("tags"), field="tags")
 
     if not reason:
-        raise RuntimeError("Codex decision gate evaluation returned empty reason")
+        raise RuntimeError("Runtime decision gate evaluation returned empty reason")
     if not recommendation:
-        raise RuntimeError("Codex decision gate evaluation returned empty recommendation")
+        raise RuntimeError("Runtime decision gate evaluation returned empty recommendation")
 
     return DecisionGateResult(
         triggered=triggered,
@@ -142,7 +149,7 @@ def evaluate_decision_gate(
     rules_path: str | None = None,
 ) -> DecisionGateResult:
     _ = rules_path
-    return _evaluate_decision_gate_with_codex(
+    return _evaluate_decision_gate_with_runtime(
         issue_summary=(issue_summary or "").strip(),
         issue_description=(issue_description or "").strip(),
         tenant_id=tenant_id,

@@ -24,7 +24,14 @@ class DecisionPlannerTests(unittest.TestCase):
             patch("orchestrator.core.decision_planner.build_codex_runtime", return_value=SimpleNamespace()),
             patch(
                 "orchestrator.core.runtime_stage_session.invoke_runtime_json_with_tools",
-                return_value={"gate_status": "clear", "reason": "", "questions": [], "question_states": []},
+                return_value={
+                    "gate_status": "clear",
+                    "reason": "",
+                    "questions": [],
+                    "question_states": [],
+                    "resolved_items": [],
+                    "missing_items": [],
+                },
             ),
             patch("orchestrator.core.decision_planner.render_prompt", side_effect=_render_prompt),
         ):

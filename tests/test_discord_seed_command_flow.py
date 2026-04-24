@@ -6,6 +6,7 @@ from unittest.mock import patch
 import pytest
 
 from orchestrator.api.discord.ingress.seed_runtime import build_seed_issue_description, seed_issues_with_runtime
+from orchestrator.core.runtime_payload_models import EngineeringSeedPlanPayload, PmParentSeedPlanPayload
 from orchestrator.storage.models import AtlassianOAuthConnection, Tenant
 from orchestrator.tools.atlassian_oauth import JiraIssueCreateResult, JiraIssuePreview
 from tests.test_support.discord_command_api_harness import DiscordCommandApiTestHarness
@@ -49,27 +50,31 @@ class DiscordSeedCommandFlowTests(DiscordCommandApiTestHarness):
         with (
             patch("orchestrator.api.discord.ingress.seed_runtime.build_issue_seed_runtime", return_value=object()),
             patch(
-                "orchestrator.api.discord.ingress.seed_runtime.plan_pm_parent_issues_with_codex",
-                return_value={
-                    "project_key": "TP",
-                    "issues": [
-                        {
-                            "summary": "Build API and webhook reliability feature",
-                            "issue_type": "Story",
-                            "objective": "Improve reliability",
-                            "user_value": "Customers see fewer delivery failures",
-                            "recommendation": "Ship API validation plus webhook retries",
-                            "scope_in": ["API changes"],
-                            "scope_out": [],
-                            "acceptance_criteria": ["Validation passes"],
-                            "ui_references": [],
-                            "risks": [],
-                            "open_questions": [],
-                            "success_outcomes": ["Lower webhook failure rate"],
-                            "labels": [],
-                        }
-                    ],
-                },
+                "orchestrator.api.discord.ingress.seed_runtime.plan_pm_parent_issues_with_runtime",
+                return_value=PmParentSeedPlanPayload.from_payload(
+                    {
+                        "project_key": "TP",
+                        "issues": [
+                            {
+                                "summary": "Build API and webhook reliability feature",
+                                "issue_type": "Story",
+                                "objective": "Improve reliability",
+                                "user_value": "Customers see fewer delivery failures",
+                                "recommendation": "Ship API validation plus webhook retries",
+                                "scope_in": ["API changes"],
+                                "scope_out": [],
+                                "acceptance_criteria": ["Validation passes"],
+                                "ui_references": [],
+                                "dependencies": [],
+                                "risks": [],
+                                "open_questions": [],
+                                "success_outcomes": ["Lower webhook failure rate"],
+                                "labels": [],
+                            },
+                        ],
+                        "questions": [],
+                    }
+                ),
             ),
             patch(
                 "orchestrator.api.discord.ingress.jira_runtime.tenant_atlassian_oauth_context",
@@ -117,29 +122,72 @@ class DiscordSeedCommandFlowTests(DiscordCommandApiTestHarness):
             session.commit()
 
         class _FakeClient:
-            def search_issues_by_jql(self, **_: object) -> list[JiraIssuePreview]:
+            def list_project_issue_types_for_create(self, **_kwargs: object) -> list[str]:
+                return ["Story", "Sub-task", "Task"]
+
+            def search_issues_by_jql(
+                self,
+                *,
+                access_token: str,
+                cloud_id: str,
+                jql: str,
+                max_results: int = 20,
+                start_at: int = 0,
+            ) -> list[JiraIssuePreview]:
                 return []
 
-            def create_issue(self, **kwargs: object) -> JiraIssueCreateResult:
-                issue = kwargs["issue"]
+            def create_issue(
+                self,
+                *,
+                access_token: str,
+                cloud_id: str,
+                project_key: str,
+                issue,
+            ) -> JiraIssueCreateResult:
                 if getattr(issue, "parent_issue_key", None):
                     return JiraIssueCreateResult(key="TP-301", issue_id="301")
                 return JiraIssueCreateResult(key="TP-300", issue_id="300")
 
-            def update_issue_fields(self, **_: object) -> None:
+            def update_issue_summary(
+                self,
+                *,
+                access_token: str,
+                cloud_id: str,
+                issue_id_or_key: str,
+                summary: str,
+            ) -> None:
                 return None
 
-            def add_issue_link(self, **_: object) -> dict:
+            def replace_issue_labels(
+                self,
+                *,
+                access_token: str,
+                cloud_id: str,
+                issue_id_or_key: str,
+                labels: list[str],
+            ) -> None:
+                return None
+
+            def add_issue_link(
+                self,
+                *,
+                access_token: str,
+                cloud_id: str,
+                inward_issue_key: str,
+                outward_issue_key: str,
+                link_type: str = "Relates",
+            ) -> dict:
                 return {}
 
         with (
             self.session_factory() as session,
             patch("orchestrator.api.discord.ingress.seed_runtime.build_issue_seed_runtime", return_value=object()),
             patch(
-                "orchestrator.api.discord.ingress.seed_runtime.plan_seed_issues_with_codex",
-                return_value={
-                    "project_key": "TP",
-                    "parent_issue": {
+                "orchestrator.api.discord.ingress.seed_runtime.plan_seed_issues_with_runtime",
+                return_value=EngineeringSeedPlanPayload.from_payload(
+                    {
+                        "project_key": "TP",
+                        "parent_issue": {
                         "summary": "Improve worker retry reliability",
                         "issue_type": "Story",
                         "objective": "Improve reliability",
@@ -154,10 +202,10 @@ class DiscordSeedCommandFlowTests(DiscordCommandApiTestHarness):
                         "open_questions": [],
                         "success_outcomes": ["Lower worker retry failures"],
                         "labels": ["seeded"],
-                    },
-                    "questions": ["What is the rollout plan?"],
-                    "engineering_children": [
-                        {
+                        },
+                        "questions": ["What is the rollout plan?"],
+                        "engineering_children": [
+                            {
                             "summary": "Create worker retries",
                             "issue_type": "Sub-task",
                             "capability": "Worker retry safety",
@@ -169,9 +217,10 @@ class DiscordSeedCommandFlowTests(DiscordCommandApiTestHarness):
                             "how_to_test": ["Run worker retry integration test"],
                             "done_means": ["Retries are bounded and observable"],
                             "labels": ["seeded"],
-                        }
-                    ],
-                },
+                            },
+                        ],
+                    }
+                ),
             ),
             patch("orchestrator.api.discord.ingress.jira_runtime.refresh_atlassian_connection_tokens", return_value="token"),
             patch("orchestrator.api.discord.ingress.jira_runtime.atlassian_oauth_client", return_value=_FakeClient()),
@@ -218,23 +267,80 @@ class DiscordSeedCommandFlowTests(DiscordCommandApiTestHarness):
 
         class _FakeClient:
             def __init__(self) -> None:
-                self.updated_issue_keys: list[str] = []
+                self.updated_issue_summary_keys: list[str] = []
+                self.updated_issue_field_keys: list[str] = []
+                self.replaced_label_keys: list[str] = []
                 self.create_called = False
 
-            def search_issues_by_jql(self, **_: object) -> list[JiraIssuePreview]:
+            def list_project_issue_types_for_create(self, **_kwargs: object) -> list[str]:
+                return ["Story", "Sub-task", "Task"]
+
+            def search_issues_by_jql(
+                self,
+                *,
+                access_token: str,
+                cloud_id: str,
+                jql: str,
+                max_results: int = 20,
+                start_at: int = 0,
+            ) -> list[JiraIssuePreview]:
                 return [
                     JiraIssuePreview(key="TP-110", summary="Improve worker retry reliability", status="To Do"),
                     JiraIssuePreview(key="TP-111", summary="Create worker retries", status="To Do"),
                 ]
 
-            def update_issue_fields(self, **kwargs: object) -> None:
-                self.updated_issue_keys.append(str(kwargs["issue_id_or_key"]))
+            def update_issue_summary(
+                self,
+                *,
+                access_token: str,
+                cloud_id: str,
+                issue_id_or_key: str,
+                summary: str,
+            ) -> None:
+                self.updated_issue_summary_keys.append(str(issue_id_or_key))
 
-            def create_issue(self, **_: object) -> JiraIssueCreateResult:
+            def update_issue_fields(
+                self,
+                *,
+                access_token: str,
+                cloud_id: str,
+                issue_id_or_key: str,
+                summary: str,
+                description,
+                labels: list[str],
+            ) -> None:
+                self.updated_issue_field_keys.append(str(issue_id_or_key))
+
+            def replace_issue_labels(
+                self,
+                *,
+                access_token: str,
+                cloud_id: str,
+                issue_id_or_key: str,
+                labels: list[str],
+            ) -> None:
+                self.replaced_label_keys.append(str(issue_id_or_key))
+
+            def create_issue(
+                self,
+                *,
+                access_token: str,
+                cloud_id: str,
+                project_key: str,
+                issue,
+            ) -> JiraIssueCreateResult:
                 self.create_called = True
                 return JiraIssueCreateResult(key="TP-999", issue_id="999")
 
-            def add_issue_link(self, **_: object) -> dict:
+            def add_issue_link(
+                self,
+                *,
+                access_token: str,
+                cloud_id: str,
+                inward_issue_key: str,
+                outward_issue_key: str,
+                link_type: str = "Relates",
+            ) -> dict:
                 return {}
 
         fake_client = _FakeClient()
@@ -242,10 +348,11 @@ class DiscordSeedCommandFlowTests(DiscordCommandApiTestHarness):
             self.session_factory() as session,
             patch("orchestrator.api.discord.ingress.seed_runtime.build_issue_seed_runtime", return_value=object()),
             patch(
-                "orchestrator.api.discord.ingress.seed_runtime.plan_seed_issues_with_codex",
-                return_value={
-                    "project_key": "TP",
-                    "parent_issue": {
+                "orchestrator.api.discord.ingress.seed_runtime.plan_seed_issues_with_runtime",
+                return_value=EngineeringSeedPlanPayload.from_payload(
+                    {
+                        "project_key": "TP",
+                        "parent_issue": {
                         "summary": "Improve worker retry reliability",
                         "issue_type": "Story",
                         "objective": "Improve reliability",
@@ -260,9 +367,9 @@ class DiscordSeedCommandFlowTests(DiscordCommandApiTestHarness):
                         "open_questions": [],
                         "success_outcomes": ["Lower worker retry failures"],
                         "labels": ["seeded"],
-                    },
-                    "engineering_children": [
-                        {
+                        },
+                        "engineering_children": [
+                            {
                             "summary": "Create worker retries",
                             "issue_type": "Sub-task",
                             "capability": "Worker retry safety",
@@ -274,9 +381,11 @@ class DiscordSeedCommandFlowTests(DiscordCommandApiTestHarness):
                             "how_to_test": ["Run worker retry integration test"],
                             "done_means": ["Retries are bounded and observable"],
                             "labels": ["seeded"],
-                        }
-                    ],
-                },
+                            },
+                        ],
+                        "questions": [],
+                    }
+                ),
             ),
             patch("orchestrator.api.discord.ingress.jira_runtime.refresh_atlassian_connection_tokens", return_value="token"),
             patch("orchestrator.api.discord.ingress.jira_runtime.atlassian_oauth_client", return_value=fake_client),
@@ -293,7 +402,9 @@ class DiscordSeedCommandFlowTests(DiscordCommandApiTestHarness):
         self.assertIn("Updated 2", message)
         self.assertEqual(data["updated_issue_keys"], ["TP-110", "TP-111"])
         self.assertEqual(data["created_issue_keys"], [])
-        self.assertEqual(fake_client.updated_issue_keys, ["TP-110", "TP-111", "TP-110"])
+        self.assertEqual(fake_client.updated_issue_summary_keys, ["TP-110", "TP-110"])
+        self.assertEqual(fake_client.updated_issue_field_keys, ["TP-111"])
+        self.assertEqual(fake_client.replaced_label_keys, ["TP-110", "TP-110"])
         self.assertFalse(fake_client.create_called)
 
     def test_seed_issue_description_is_native_jira_adf(self) -> None:

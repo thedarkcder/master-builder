@@ -18,7 +18,7 @@ from orchestrator.core.decision_precheck_mapping import (
 from orchestrator.core.decision_resolution_service import (
     append_auto_resolved_block as append_auto_resolved_block_resolution,
     resolve_slots_before_block as resolve_slots_before_block_resolution,
-    resolve_slots_with_codex as resolve_slots_with_codex_resolution,
+    resolve_slots_with_runtime as resolve_slots_with_runtime_resolution,
     slot_resolutions_from_case as slot_resolutions_from_case_resolution,
 )
 from orchestrator.core.decision_reply_service import (
@@ -630,12 +630,12 @@ def evaluate_decision_event(
             settings=settings,
             persisted_slot_answers=persisted_slot_answers,
             resolve_missing_slots_from_knowledge_fn=resolve_missing_slots_from_knowledge,
-            resolve_slots_with_codex_fn=lambda **kwargs: resolve_slots_with_codex_resolution(
+            resolve_slots_with_runtime_fn=lambda **kwargs: resolve_slots_with_runtime_resolution(
                 **kwargs,
-                build_codex_runtime_fn=build_codex_runtime,
+                build_runtime_fn=build_codex_runtime,
                 invoke_runtime_json_fn=invoke_runtime_json,
                 project_repo_dir_fn=project_repo_dir,
-                codex_runtime_error_type=CodexRuntimeError,
+                runtime_error_type=CodexRuntimeError,
             ),
         )
         if slot_answers:

@@ -137,7 +137,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
         self.session_factory = create_session_factory(database_url=self.database_url)
         self.settings = get_settings()
         self._codex_resolution_patcher = patch(
-            "orchestrator.core.decision_engine.resolve_slots_with_codex_resolution",
+            "orchestrator.core.decision_engine.resolve_slots_with_runtime_resolution",
             return_value={},
         )
         self._codex_resolution_patcher.start()

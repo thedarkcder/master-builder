@@ -4,6 +4,7 @@ import pytest
 
 from orchestrator.api.discord.ingress.executor import execute_discord_command
 from orchestrator.api.schemas import DiscordCommandRequest
+from orchestrator.core.runtime_payload_models import AskIntentPayload
 from tests.test_support.discord_command_api_harness import DiscordCommandApiTestHarness
 
 
@@ -27,7 +28,7 @@ class DiscordAskPersonaCommandFlowTests(DiscordCommandApiTestHarness):
                 return_value=("TP-20", "To Do", [{"key": "TP-20", "summary": "Do thing", "status": "To Do"}], {"To Do": 1}, []),
             ),
             patch(
-                "orchestrator.api.discord.commands.personas.answer_voice_room_persona_with_codex",
+                "orchestrator.api.discord.commands.personas.answer_voice_room_persona_with_runtime",
                 return_value={
                     "message": "Split the work by persistence, API, and validation boundaries.",
                     "brief": {"focus": "decomposition"},
@@ -60,7 +61,7 @@ class DiscordAskPersonaCommandFlowTests(DiscordCommandApiTestHarness):
                 return_value=(None, None, [], {"To Do": 1}, []),
             ),
             patch(
-                "orchestrator.api.discord.commands.personas.answer_voice_room_persona_with_codex",
+                "orchestrator.api.discord.commands.personas.answer_voice_room_persona_with_runtime",
                 return_value={
                     "message": "Cover the happy path and one failed validation path.",
                     "brief": {},
@@ -89,8 +90,8 @@ class DiscordAskPersonaCommandFlowTests(DiscordCommandApiTestHarness):
                 return_value=(None, None, [], {"To Do": 2}, []),
             ),
             patch(
-                "orchestrator.api.discord.commands.ask.plan_discord_ask_intent_with_codex",
-                return_value={"mode": "answer", "summary": "answer"},
+                "orchestrator.api.discord.commands.ask.plan_discord_ask_intent_with_runtime",
+                return_value=AskIntentPayload(mode="answer", summary="answer", command=None),
             ),
             patch(
                 "orchestrator.api.discord.commands.ask.answer_board_question_with_runtime",
@@ -117,8 +118,8 @@ class DiscordAskPersonaCommandFlowTests(DiscordCommandApiTestHarness):
                 return_value=("TP-101", None, [], {}, []),
             ),
             patch(
-                "orchestrator.api.discord.commands.ask.plan_discord_ask_intent_with_codex",
-                return_value={"mode": "answer", "summary": "answer"},
+                "orchestrator.api.discord.commands.ask.plan_discord_ask_intent_with_runtime",
+                return_value=AskIntentPayload(mode="answer", summary="answer", command=None),
             ),
             patch(
                 "orchestrator.api.discord.commands.ask.answer_board_question_with_runtime",

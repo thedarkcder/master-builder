@@ -7,7 +7,6 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from orchestrator.api.discord.seed.description import build_parent_feature_description
 from orchestrator.core.clarification_projection_service import (
     ClarificationProjectionSpec,
     has_matching_active_clarification_state,
@@ -23,6 +22,7 @@ from orchestrator.core.jira_parent_child_sync_shared import (
     pm_interview_jira_transport,
     system_comment_marker,
 )
+from orchestrator.core.jira_links import JiraRemoteLinkSpec
 from orchestrator.core.parent_feature_brief_store import resolve_parent_feature_brief, resolve_parent_feature_case
 from orchestrator.core.parent_planning_clarification_service import ClarificationPublishEffects
 from orchestrator.core.platform_secret_service import PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF, resolve_platform_secret_ref
@@ -357,88 +357,20 @@ def mark_issues_sync_blocked(
             target_label="sync-blocked",
         )
 
-
-def rewrite_parent_issue_from_brief(
+def upsert_jira_remote_link(
     *,
     oauth,
-    parent_detail: JiraIssueDetail,
-    brief_payload: dict[str, object],
-    sync_status: str,
-    planning_state: str | None,
-    open_questions: list[object] | None = None,
-    architecture_title: str | None = None,
-    architecture_url: str | None = None,
-) -> None:
-    normalized_open_questions = list(
-        ClarificationQuestionSet.from_values(open_questions or []).prompts
-    )
-    labels = normalize_sync_labels(
-        list(parent_detail.labels or []),
-        target_label=sync_status,
-    )
-    planning_state_value = str(planning_state or "").strip()
-    if planning_state_value:
-        planning_state_label = f"planning-{planning_state_value.replace('_', '-')}"
-        labels = [label for label in labels if not str(label).startswith("planning-")]
-        labels.append(planning_state_label)
-    description = build_parent_feature_description(
-        objective=str(brief_payload.get("objective") or "").strip(),
-        user_value=str(brief_payload.get("user_value") or "").strip(),
-        recommendation=str(brief_payload.get("recommendation") or "").strip(),
-        scope_in=[
-            str(value).strip()
-            for value in brief_payload.get("scope_in", [])
-            if str(value).strip()
-        ],
-        scope_out=[
-            str(value).strip()
-            for value in brief_payload.get("scope_out", [])
-            if str(value).strip()
-        ],
-        acceptance_criteria=[
-            str(value).strip()
-            for value in brief_payload.get("acceptance_criteria", [])
-            if str(value).strip()
-        ],
-        ui_references=[
-            str(value).strip()
-            for value in brief_payload.get("ui_references", [])
-            if str(value).strip()
-        ],
-        success_outcomes=[
-            str(value).strip()
-            for value in brief_payload.get("success_outcomes", [])
-            if str(value).strip()
-        ],
-        dependencies_and_risks=[
-            *[
-                str(value).strip()
-                for value in brief_payload.get("constraints", [])
-                if str(value).strip()
-            ],
-            *[
-                str(value).strip()
-                for value in brief_payload.get("risks", [])
-                if str(value).strip()
-            ],
-        ],
-        open_questions=normalized_open_questions,
-        parent_revision="normalized-parent-brief",
-        sync_status=sync_status,
-        pm_status="pm_completed",
-        planning_state=planning_state,
-        architecture_title=architecture_title,
-        architecture_url=architecture_url,
-    )
-    if str(parent_detail.description or "") == description and labels == list(parent_detail.labels or []):
-        return
-    oauth.client.update_issue_fields(
+    issue_key: str,
+    spec: JiraRemoteLinkSpec,
+) -> dict[str, Any]:
+    return oauth.client.upsert_remote_issue_link(
         access_token=oauth.access_token,
         cloud_id=oauth.connection.cloud_id,
-        issue_id_or_key=parent_detail.key,
-        summary=parent_detail.summary,
-        description=description,
-        labels=labels,
+        issue_id_or_key=issue_key,
+        global_id=spec.global_id,
+        relationship=spec.relationship,
+        title=spec.title,
+        url=spec.url,
     )
 
 

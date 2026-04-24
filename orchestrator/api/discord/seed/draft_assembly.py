@@ -25,18 +25,6 @@ _PM_COMPLETE_LABEL = "pm-complete"
 _PLANNING_COMPLETE_LABEL = "planning-complete"
 _PM_PARENT_LABEL = "pm-parent"
 _ENGINEERING_CHILD_LABEL = "engineering-child"
-_PARENT_MULTI_STORY_HINTS = (
-    "multi-story",
-    "multi story",
-    "multi-step",
-    "multi step",
-    "cross-cutting",
-    "cross cutting",
-    "program",
-    "initiative",
-    "roadmap",
-)
-_PARENT_PRIMARY_ISSUE_TYPES = ("Story", "Feature", "Task", "Issue")
 
 
 def _string_list_field(*, issue_index: int, field_name: str, raw_value: object) -> list[str]:
@@ -148,17 +136,6 @@ def _parse_questions(raw_questions: object) -> list[str]:
         seen.add(question)
         questions.append(question)
     return questions
-
-
-def _first_present_issue_type(choices: tuple[str, ...], available_issue_types: list[str]) -> str | None:
-    if not available_issue_types:
-        return choices[0] if choices else None
-    by_lower = {name.casefold(): name for name in available_issue_types if str(name).strip()}
-    for choice in choices:
-        matched = by_lower.get(choice.casefold())
-        if matched:
-            return matched
-    return None
 
 
 @dataclass(frozen=True)
@@ -361,33 +338,25 @@ class ParentIssueDraft:
         return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:12]
 
     def normalized_issue_type(self, *, engineering_children: list[EngineeringChildDraft], available_issue_types: list[str]) -> str:
-        if available_issue_types:
-            by_lower = {name.casefold(): name for name in available_issue_types if str(name).strip()}
-            requested_match = by_lower.get(self.issue_type.casefold()) if self.issue_type else None
-            if requested_match:
-                return requested_match
-        candidate_text = " ".join(
-            [
-                self.summary,
-                self.objective,
-                self.recommendation,
-                " ".join(self.scope_in),
-                " ".join(self.success_outcomes),
-            ]
-        ).casefold()
-        preferred_choices: tuple[str, ...]
-        if any(hint in candidate_text for hint in _PARENT_MULTI_STORY_HINTS):
-            preferred_choices = ("Epic", *_PARENT_PRIMARY_ISSUE_TYPES)
-        else:
-            preferred_choices = (*_PARENT_PRIMARY_ISSUE_TYPES, "Epic")
-        normalized = _first_present_issue_type(preferred_choices, available_issue_types)
-        if normalized:
-            return normalized
-        if self.issue_type:
-            return self.issue_type
+        del engineering_children
+        by_lower = {name.casefold(): name for name in available_issue_types if str(name).strip()}
+        if not by_lower:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="No supported parent Jira issue type is available for this project",
+            )
+        if not self.issue_type:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Parent issue '{self.summary}' is missing issue_type",
+            )
+        requested_match = by_lower.get(self.issue_type.casefold())
+        if requested_match:
+            return requested_match
+        available = ", ".join(available_issue_types)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="No supported parent Jira issue type is available for this project",
+            detail=f"Parent issue '{self.summary}' requested unavailable Jira issue_type '{self.issue_type}'; available issue types: {available}",
         )
 
     def with_issue_type(self, issue_type: str) -> ParentIssueDraft:
@@ -415,8 +384,6 @@ class ParentIssueDraft:
         sync_status: str,
         pm_status: str | None = None,
         planning_state: str | None = None,
-        architecture_title: str | None = None,
-        architecture_url: str | None = None,
     ) -> JiraIssueCreateInput:
         return JiraIssueCreateInput(
             summary=self.summary,
@@ -435,8 +402,6 @@ class ParentIssueDraft:
                 sync_status=sync_status,
                 pm_status=pm_status,
                 planning_state=planning_state,
-                architecture_title=architecture_title,
-                architecture_url=architecture_url,
             ),
             labels=_dedupe_labels(
                 self.labels,
@@ -452,7 +417,6 @@ class ParentIssueDraft:
 class EngineeringChildDraft:
     summary: str
     issue_type: str
-    fallback_issue_type: str
     capability: str
     delivery: str
     expected_outcome: str
@@ -471,12 +435,9 @@ class EngineeringChildDraft:
         parent_summary: str,
         parent_revision: str,
         sync_status: str,
-        use_subtask: bool,
         specialist_summary: list[str] | None = None,
         planning_state: str | None = None,
         pm_status: str | None = None,
-        architecture_title: str | None = None,
-        architecture_url: str | None = None,
     ) -> JiraIssueCreateInput:
         parent_label = _normalize_label(parent_issue_key, prefix="parent-")
         return JiraIssueCreateInput(
@@ -494,8 +455,6 @@ class EngineeringChildDraft:
                 dependencies_and_risks=[*self.dependencies, *self.risks],
                 specialist_summary=specialist_summary,
                 planning_state=planning_state,
-                architecture_title=architecture_title,
-                architecture_url=architecture_url,
             ),
             labels=_dedupe_labels(
                 self.labels,
@@ -503,8 +462,8 @@ class EngineeringChildDraft:
                 [_PM_COMPLETE_LABEL] if _is_pm_complete(pm_status) else [],
                 [_PLANNING_COMPLETE_LABEL] if _is_planning_complete(planning_state) else [],
             ),
-            issue_type=self.issue_type if use_subtask else self.fallback_issue_type,
-            parent_issue_key=parent_issue_key if use_subtask else None,
+            issue_type=self.issue_type,
+            parent_issue_key=parent_issue_key,
             linked_parent_issue_key=parent_issue_key,
         )
 
@@ -742,6 +701,11 @@ def _parse_engineering_children(
                 detail=f"Engineering child {issue_index} is missing done_means",
             )
         raw_issue_type = _optional_string(issue_index=issue_index, field_name="issue_type", raw_value=item.get("issue_type"))
+        if raw_issue_type and raw_issue_type.strip().casefold() not in {"sub-task", "subtask"}:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Engineering child {issue_index} must use Jira issue_type 'Sub-task'",
+            )
         requested_issue_key = _normalize_issue_key(
             item.get("issue_key"),
             field_name="issue_key",
@@ -750,16 +714,10 @@ def _parse_engineering_children(
         )
         if requested_issue_key is None and len(remaining_force_keys) >= len(children) + 1:
             requested_issue_key = remaining_force_keys[len(children)]
-        fallback_issue_type = (
-            raw_issue_type
-            if raw_issue_type and raw_issue_type.strip().casefold() not in {"sub-task", "subtask"}
-            else "Task"
-        )
         children.append(
             EngineeringChildDraft(
                 summary=summary[:90],
                 issue_type="Sub-task",
-                fallback_issue_type=fallback_issue_type,
                 capability=_optional_string(issue_index=issue_index, field_name="capability", raw_value=item.get("capability")),
                 delivery=delivery,
                 expected_outcome=_optional_string(issue_index=issue_index, field_name="expected_outcome", raw_value=item.get("expected_outcome")),

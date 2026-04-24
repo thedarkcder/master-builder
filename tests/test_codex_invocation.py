@@ -7,6 +7,10 @@ from unittest.mock import patch
 from orchestrator.core.knowledge_base import KnowledgeEmbeddingAccessMode
 from orchestrator.core.runtime_invocation import (
     AgentInvocationContext,
+    RuntimeJsonContractError,
+    ToolBridgeExhaustedError,
+    ToolBridgeProtocolError,
+    ToolExecutionError,
     invoke_runtime_json,
     invoke_runtime_json_with_tools,
 )
@@ -152,7 +156,6 @@ class CodexInvocationTests(unittest.TestCase):
         self.assertEqual(finished_payload["actual_usage_observed"], True)
 
     def test_runtime_log_sink_redacts_sensitive_content_before_persistence(self) -> None:
-        captured_raw: list[str] = []
         captured_db: list[str] = []
 
         def _request(  # noqa: ANN001
@@ -192,11 +195,6 @@ class CodexInvocationTests(unittest.TestCase):
             run_id="run-1",
         )
 
-        def _capture_raw(*, context, stream: str, message: str) -> None:  # noqa: ANN001
-            _ = context
-            _ = stream
-            captured_raw.append(message)
-
         def _capture_db(*, context, stream: str, message: str) -> None:  # noqa: ANN001
             _ = context
             _ = stream
@@ -204,7 +202,7 @@ class CodexInvocationTests(unittest.TestCase):
 
         with (
             patch("orchestrator.core.runtime_invocation._get_log_writer", return_value=self._Writer()),
-            patch("orchestrator.core.runtime_invocation._append_raw_log_line", side_effect=_capture_raw),
+            patch("orchestrator.core.runtime_invocation._append_raw_log_line"),
             patch("orchestrator.core.runtime_invocation._enqueue_runtime_log_line", side_effect=_capture_db),
             patch("orchestrator.core.runtime_invocation._emit_invocation_event"),
         ):
@@ -216,9 +214,8 @@ class CodexInvocationTests(unittest.TestCase):
             )
 
         self.assertEqual(payload, {"ok": True})
-        self.assertEqual(len(captured_raw), 1)
         self.assertEqual(len(captured_db), 1)
-        for message in (*captured_raw, *captured_db):
+        for message in captured_db:
             self.assertNotIn("super-secret-value", message)
             self.assertNotIn("user@example.com", message)
             self.assertIn("123e4567-e89b-12d3-a456-426614174000", message)
@@ -750,7 +747,7 @@ class CodexInvocationTests(unittest.TestCase):
         self.assertEqual(captured["model_override"], "openai/gpt-oss-20b")
         self.assertEqual(captured["reasoning_effort"], "high")
 
-    def test_invoke_runtime_json_non_json_fallback_only_for_parse_failures(self) -> None:
+    def test_invoke_runtime_json_fails_on_non_json_payload(self) -> None:
         class _Runtime:
             def run_json(self, **_kwargs):  # noqa: ANN003
                 raise CodexRuntimeError(
@@ -768,19 +765,20 @@ class CodexInvocationTests(unittest.TestCase):
             run_id="run-1",
         )
 
-        with patch("orchestrator.core.runtime_invocation._get_log_writer", return_value=self._Writer()):
-            payload = invoke_runtime_json(
+        with (
+            patch("orchestrator.core.runtime_invocation._get_log_writer", return_value=self._Writer()),
+            self.assertRaises(RuntimeJsonContractError) as raised,
+        ):
+            invoke_runtime_json(
                 runtime=_Runtime(),  # type: ignore[arg-type]
                 context=context,
                 system_prompt="system",
                 user_prompt="user",
-                require_json=False,
             )
 
-        self.assertEqual(payload["_raw_response"], "not-json")
-        self.assertIn("invalid json payload", payload["_parse_error"].lower())
+        self.assertIn("invalid json payload", str(raised.exception).lower())
 
-    def test_invoke_runtime_json_non_json_fallback_does_not_swallow_runtime_failures(self) -> None:
+    def test_invoke_runtime_json_does_not_reclassify_runtime_failures_as_json_contract_errors(self) -> None:
         class _Runtime:
             def run_json(self, **_kwargs):  # noqa: ANN003
                 raise CodexRuntimeError("Codex CLI command failed with exit code 2: unknown option --json")
@@ -804,7 +802,6 @@ class CodexInvocationTests(unittest.TestCase):
                 context=context,
                 system_prompt="system",
                 user_prompt="user",
-                require_json=False,
             )
 
     def test_invoke_runtime_json_with_tools_executes_request_and_resumes_same_session(self) -> None:
@@ -984,7 +981,7 @@ class CodexInvocationTests(unittest.TestCase):
             invocation_events,
         )
 
-    def test_invoke_runtime_json_with_tools_recovers_from_disallowed_tool(self) -> None:
+    def test_invoke_runtime_json_with_tools_fails_on_disallowed_tool(self) -> None:
         runtime_calls: list[dict[str, object]] = []
 
         class _Runtime:
@@ -1010,8 +1007,11 @@ class CodexInvocationTests(unittest.TestCase):
             working_dir=".",
         )
 
-        with patch("orchestrator.core.runtime_invocation._get_log_writer", return_value=self._Writer()):
-            payload = invoke_runtime_json_with_tools(
+        with (
+            patch("orchestrator.core.runtime_invocation._get_log_writer", return_value=self._Writer()),
+            self.assertRaises(ToolBridgeProtocolError) as raised,
+        ):
+            invoke_runtime_json_with_tools(
                 runtime=_Runtime(),  # type: ignore[arg-type]
                 context=context,
                 system_prompt="system",
@@ -1020,11 +1020,10 @@ class CodexInvocationTests(unittest.TestCase):
                 execute_tool=lambda _tool_name, _tool_args: {"ok": True},
             )
 
-        self.assertEqual(payload, {"message": "continued without disallowed tool"})
-        self.assertIn("disallowed tool", str(runtime_calls[1]["user_prompt"]).lower())
-        self.assertIn("do not issue another tool_request", str(runtime_calls[1]["user_prompt"]).lower())
+        self.assertIn("disallowed tool", str(raised.exception).lower())
+        self.assertEqual(len(runtime_calls), 1)
 
-    def test_invoke_runtime_json_with_tools_recovers_after_tool_hop_limit(self) -> None:
+    def test_invoke_runtime_json_with_tools_fails_after_tool_hop_limit(self) -> None:
         runtime_calls: list[dict[str, object]] = []
 
         class _Runtime:
@@ -1050,8 +1049,11 @@ class CodexInvocationTests(unittest.TestCase):
             working_dir=".",
         )
 
-        with patch("orchestrator.core.runtime_invocation._get_log_writer", return_value=self._Writer()):
-            payload = invoke_runtime_json_with_tools(
+        with (
+            patch("orchestrator.core.runtime_invocation._get_log_writer", return_value=self._Writer()),
+            self.assertRaises(ToolBridgeExhaustedError) as raised,
+        ):
+            invoke_runtime_json_with_tools(
                 runtime=_Runtime(),  # type: ignore[arg-type]
                 context=context,
                 system_prompt="system",
@@ -1061,11 +1063,10 @@ class CodexInvocationTests(unittest.TestCase):
                 max_tool_hops=1,
             )
 
-        self.assertEqual(payload, {"message": "continued after hop limit"})
-        self.assertIn("tool hop limit exceeded", str(runtime_calls[2]["user_prompt"]).lower())
-        self.assertIn("do not issue another tool_request", str(runtime_calls[2]["user_prompt"]).lower())
+        self.assertIn("tool hop limit exceeded", str(raised.exception).lower())
+        self.assertEqual(len(runtime_calls), 2)
 
-    def test_invoke_runtime_json_with_tools_returns_fallback_payload_when_bridge_never_finalizes(self) -> None:
+    def test_invoke_runtime_json_with_tools_fails_when_bridge_never_finalizes(self) -> None:
         class _Runtime:
             def run_json(self, **_kwargs):  # noqa: ANN003
                 return {
@@ -1083,8 +1084,11 @@ class CodexInvocationTests(unittest.TestCase):
             working_dir=".",
         )
 
-        with patch("orchestrator.core.runtime_invocation._get_log_writer", return_value=self._Writer()):
-            payload = invoke_runtime_json_with_tools(
+        with (
+            patch("orchestrator.core.runtime_invocation._get_log_writer", return_value=self._Writer()),
+            self.assertRaises(ToolBridgeProtocolError) as raised,
+        ):
+            invoke_runtime_json_with_tools(
                 runtime=_Runtime(),  # type: ignore[arg-type]
                 context=context,
                 system_prompt="system",
@@ -1093,8 +1097,43 @@ class CodexInvocationTests(unittest.TestCase):
                 execute_tool=lambda _tool_name, _tool_args: {"ok": True},
             )
 
-        self.assertIn("_tool_bridge_error", payload)
-        self.assertIn("tool bridge", str(payload["_tool_bridge_error"]).lower())
+        self.assertIn("disallowed tool", str(raised.exception).lower())
+
+    def test_invoke_runtime_json_with_tools_fails_when_tool_executor_fails(self) -> None:
+        class _Runtime:
+            def run_json(self, **_kwargs):  # noqa: ANN003
+                return {
+                    "type": "tool_request",
+                    "tool_name": "decision.read_state",
+                    "tool_args": {},
+                }
+
+        context = AgentInvocationContext(
+            channel="system",
+            tenant_id="tenant-1",
+            project_id=None,
+            command="policy",
+            stage="decision_planner",
+            working_dir=".",
+        )
+
+        def _raise_tool_failure(_tool_name: str, _tool_args: dict[str, object]) -> dict[str, object]:
+            raise RuntimeError("tool database unavailable")
+
+        with (
+            patch("orchestrator.core.runtime_invocation._get_log_writer", return_value=self._Writer()),
+            self.assertRaises(ToolExecutionError) as raised,
+        ):
+            invoke_runtime_json_with_tools(
+                runtime=_Runtime(),  # type: ignore[arg-type]
+                context=context,
+                system_prompt="system",
+                user_prompt="user",
+                allowed_tools={"decision.read_state"},
+                execute_tool=_raise_tool_failure,
+            )
+
+        self.assertIn("tool database unavailable", str(raised.exception))
 
 
 if __name__ == "__main__":

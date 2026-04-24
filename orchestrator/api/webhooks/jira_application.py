@@ -13,10 +13,10 @@ from orchestrator.api.webhooks.jira_comment_planner import plan_jira_comment_flo
 from orchestrator.api.webhooks.jira_admission_flow import (
     build_jira_enqueue_skipped_notification_action,
     plan_jira_run_flow,
+    resolve_jira_issue_board_location,
 )
 from orchestrator.api.webhooks.jira_event_classifier import evaluate_jira_trigger_state
 from orchestrator.api.webhooks.jira_parent_child_sync import handle_parent_feature_sync
-from orchestrator.api.webhooks.jira_webhook_board_gate import resolve_project_issue_board_location
 from orchestrator.api.webhooks.jira_webhook_types import (
     JiraWebhookContext,
     JiraWebhookContextSnapshot,
@@ -78,7 +78,7 @@ def _maybe_apply_runtime_issue_intake_routing(
         return None
     if _PM_PARENT_LABEL in normalized_labels or _ENGINEERING_CHILD_LABEL in normalized_labels:
         return None
-    board_location, _detail = resolve_project_issue_board_location(
+    board_location, _detail = resolve_jira_issue_board_location(
         context=context,
         session=session,
         settings=settings,
@@ -127,7 +127,7 @@ def _maybe_apply_runtime_issue_intake_routing(
             "Jira issue intake routing classification failed",
             retry_after_seconds=45,
         ) from exc
-    target_label = _route_label_for_issue_intake(routing["route"])
+    target_label = _route_label_for_issue_intake(routing.route)
     if not target_label or target_label in normalized_labels:
         return None
     try:
@@ -163,9 +163,9 @@ def _maybe_apply_runtime_issue_intake_routing(
         context.request_id,
         context.tenant_id,
         context.issue_key,
-        routing["route"],
-        routing["confidence"],
-        routing["reason"],
+        routing.route,
+        routing.confidence,
+        routing.reason,
     )
     return target_label
 
