@@ -63,6 +63,7 @@ TENANT_CHILD_TABLES: tuple[str, ...] = (
 )
 
 CUSTOM_RLS_TABLES: tuple[str, ...] = (
+    "atlassian_oauth_connections",
     "managed_secrets",
     "tenant_memberships",
     "tenant_teams",
@@ -76,7 +77,6 @@ IDENTITY_GLOBAL_TABLES: tuple[str, ...] = (
 )
 
 PLATFORM_GLOBAL_TABLES: tuple[str, ...] = (
-    "atlassian_oauth_connections",
     "platform_settings",
     "workflow_types",
     "workflow_type_operations",
@@ -310,7 +310,26 @@ def _custom_policies() -> tuple[RLSPolicy, ...]:
     )
 )""",
     )
-    return (membership_policy, team_policy, team_membership_policy, managed_secrets_policy)
+    atlassian_oauth_policy = RLSPolicy(
+        table_name="atlassian_oauth_connections",
+        policy_name="atlassian_oauth_connections_tenant_isolation",
+        using_expression=f"""(
+    current_setting('app.principal_type', true) IN ('platform_admin', 'platform_system')
+    OR EXISTS (
+        SELECT 1
+        FROM tenants t
+        WHERE t.jira_config ->> 'connection_id' = atlassian_oauth_connections.connection_id
+          AND {_tenant_access_expression("t.tenant_id")}
+    )
+)""",
+    )
+    return (
+        atlassian_oauth_policy,
+        membership_policy,
+        team_policy,
+        team_membership_policy,
+        managed_secrets_policy,
+    )
 
 
 def _identity_policies() -> tuple[RLSPolicy, ...]:

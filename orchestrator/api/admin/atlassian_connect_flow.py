@@ -15,6 +15,7 @@ from orchestrator.core.atlassian_oauth_state import (
 )
 from orchestrator.core.secrets import encrypt_value
 from orchestrator.storage.models import AtlassianOAuthConnection, Tenant
+from orchestrator.storage.tenant_rls import set_platform_system_rls_context
 from orchestrator.tools.atlassian_oauth import AtlassianOAuthError
 
 logger = logging.getLogger(__name__)
@@ -68,6 +69,7 @@ def handle_atlassian_connect_callback(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
+    set_platform_system_rls_context(session, system_purpose="atlassian_oauth_callback")
     try:
         client = atlassian_oauth_client_fn(session=session, settings=settings, tenant_id=state.tenant_id)
         token_set = client.exchange_code(code=code)
