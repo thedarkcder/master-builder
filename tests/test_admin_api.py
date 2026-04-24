@@ -1815,7 +1815,7 @@ class AdminApiTests(AdminApiTestHarness):
         fake_jira_adapter = SimpleNamespace(list_child_issue_previews=lambda **_kwargs: [])
         with (
             patch(
-                "orchestrator.api.admin.workflows_service.build_workflow_runtime",
+                "orchestrator.api.admin.workflow_operation_retry_service.build_workflow_runtime",
                 side_effect=lambda **kwargs: _FakeRuntime(kwargs["session"]),
             ),
             patch.object(
@@ -1933,7 +1933,13 @@ class AdminApiTests(AdminApiTestHarness):
             )
             session.commit()
 
-        response = self.client.get("/api/admin/workflows/wfexec-mab-215", auth=("admin", "secret"))
+        fake_jira_adapter = SimpleNamespace(list_child_issue_previews=lambda **_kwargs: [])
+        with patch.object(
+            __import__("orchestrator.api.routes.admin_runs", fromlist=["workflow_integration_router"]).workflow_integration_router,
+            "jira",
+            return_value=fake_jira_adapter,
+        ):
+            response = self.client.get("/api/admin/workflows/wfexec-mab-215", auth=("admin", "secret"))
         self.assertEqual(response.status_code, 200, response.text)
         body = response.json()
         operation_body = next(item for item in body["operations"] if item["operation_type"] == "jira_child_fanout")
@@ -2091,7 +2097,7 @@ class AdminApiTests(AdminApiTestHarness):
             session.commit()
 
         with patch(
-            "orchestrator.api.admin.workflows_service.list_live_workflow_telemetry_events",
+            "orchestrator.api.routes.admin_runs.list_workflow_operation_live_events_impl",
             return_value=[
                 workflow_observability_event_to_schema(
                     {
