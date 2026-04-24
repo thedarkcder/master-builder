@@ -136,6 +136,11 @@ wait_for_docker_services_ready() {
 run_compose_up() {
   local output_file
   output_file="$(mktemp)"
+  if ! docker compose up --build --force-recreate --exit-code-from migrate migrate; then
+    rm -f "$output_file"
+    return 1
+  fi
+
   if docker compose up --build -d --remove-orphans "${DOCKER_SERVICES[@]}" 2>&1 | tee "$output_file"; then
     rm -f "$output_file"
     return 0
