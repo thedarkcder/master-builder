@@ -1265,8 +1265,9 @@ class WorkflowTypeRead(BaseModel):
 class WorkflowExecutionPreviewRead(BaseModel):
     execution_id: str
     workflow_id: str
-    issue_key: str
-    issue_summary: str | None = None
+    source_system: str
+    source_ref: str
+    display_name: str | None = None
     status: str
     waiting_on: str | None = None
     next_step: str | None = None
@@ -1324,8 +1325,9 @@ class WorkflowRead(BaseModel):
     workflow_id: str
     tenant_id: str
     project_id: str | None
-    issue_key: str
-    issue_summary: str | None = None
+    source_system: str
+    source_ref: str
+    display_name: str | None = None
     repo_url: str | None = None
     branch: str | None = None
     pr_url: str | None = None

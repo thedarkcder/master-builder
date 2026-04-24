@@ -42,17 +42,26 @@ class ParentFeatureWorkflowAdvanceHandler:
         request: WorkflowAdvanceRequest,
         lifecycle,
     ) -> WorkflowAdvanceOutcome:
+        request_id = str(request.payload.get("request_id") or "").strip()
+        if not request_id:
+            raise RuntimeError("Parent feature workflow advance requires request_id")
+        issue_key = str(request.execution.source.source_ref or "").strip().upper()
+        if request.execution.source.source_system != "jira" or not issue_key:
+            raise RuntimeError("Parent feature workflow requires a Jira execution reference")
+        issue_labels = request.execution.source.attributes.get("jira_issue_labels")
+        if not isinstance(issue_labels, list):
+            raise RuntimeError("Parent feature workflow requires jira_issue_labels execution attribute")
         context = JiraParentChildSyncContext(
-            request_id=str(request.payload.get("request_id") or "").strip() or f"workflow-advance:{request.issue_key}",
+            request_id=request_id,
             tenant_id=request.tenant_id,
             tenant=request.tenant,
             project_id=request.project_id,
-            issue_key=request.issue_key,
-            issue_labels=list(request.issue_labels),
+            issue_key=issue_key,
+            issue_labels=[str(label) for label in issue_labels],
             payload=dict(request.payload),
-            webhook_event=request.webhook_event,
-            comment_command=request.comment_command,
-            comment_command_argument=request.comment_command_argument,
+            webhook_event=request.trigger.event,
+            comment_command=request.trigger.command,
+            comment_command_argument=request.trigger.argument,
         )
         issue_gateway = _JiraParentIssueGateway(
             session=session,

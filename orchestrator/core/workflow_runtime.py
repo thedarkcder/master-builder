@@ -11,6 +11,7 @@ from orchestrator.core.workflow_advance import (
     WorkflowAdvanceHandler,
     WorkflowAdvanceOutcome,
     WorkflowAdvanceRequest,
+    WorkflowTrigger,
 )
 from orchestrator.core.workflow_engine import WorkflowEngineState
 from orchestrator.core.workflow_engine_factory import (
@@ -34,6 +35,7 @@ __all__ = [
     "WorkflowAdvanceLifecycle",
     "WorkflowAdvanceOutcome",
     "WorkflowAdvanceRequest",
+    "WorkflowTrigger",
     "WorkflowRuntime",
     "WorkflowRuntimeDeps",
     "build_workflow_runtime",
@@ -76,14 +78,13 @@ class WorkflowRuntime:
         *,
         request: WorkflowAdvanceRequest,
     ) -> WorkflowAdvanceOutcome:
-        request_workflow_id = str(getattr(request, "workflow_id", "") or "").strip()
-        request_issue_key = str(getattr(request, "issue_key", "") or "").strip()
         with telemetry_span(
             "workflow_runtime.advance",
             attributes={
                 "workflow.handler_key": request.workflow_handler_key,
-                "workflow.id": request_workflow_id,
-                "workflow.issue_key": request_issue_key,
+                "workflow.execution_key": request.execution.key,
+                "workflow.source_system": request.execution.source.source_system,
+                "workflow.source_ref": request.execution.source.source_ref,
                 "orchestration.backend": str(getattr(self._settings, "orchestration_backend", "") or ""),
             },
         ):

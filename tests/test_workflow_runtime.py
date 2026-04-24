@@ -3,8 +3,9 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import sentinel
 
+from orchestrator.core.workflow_execution_projection import WorkflowExecutionReference, WorkflowSourceReference
 from orchestrator.core.workflow_engine import WorkflowEngineState
-from orchestrator.core.workflow_runtime import WorkflowAdvanceRequest, build_workflow_runtime
+from orchestrator.core.workflow_runtime import WorkflowAdvanceRequest, WorkflowTrigger, build_workflow_runtime
 
 
 class FakeEngine:
@@ -116,10 +117,16 @@ def test_workflow_runtime_delegates_advance_to_handler_resolved_from_workflow_ty
         tenant_id="tenant-a",
         tenant=sentinel.tenant,
         project_id="project-a",
-        issue_key="MAB-215",
-        issue_labels=("pm-parent",),
+        execution=WorkflowExecutionReference(
+            key="MAB-215",
+            source=WorkflowSourceReference(
+                source_system="jira",
+                source_ref="MAB-215",
+                attributes={"jira_issue_labels": ["pm-parent"]},
+            ),
+        ),
         payload={"request_id": "req-1"},
-        webhook_event="issue_updated",
+        trigger=WorkflowTrigger(event="issue_updated"),
     )
     engine = FakeEngine()
 

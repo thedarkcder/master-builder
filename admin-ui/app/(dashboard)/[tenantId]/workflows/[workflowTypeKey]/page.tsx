@@ -282,7 +282,7 @@ export default function TenantWorkflowTypeDetailPage() {
                               className="text-primary hover:underline"
                               href={`/${encodeURIComponent(tenantId)}/executions/${encodeURIComponent(execution.execution_id)}`}
                             >
-                              {execution.issue_summary?.trim() || execution.issue_key}
+                              {execution.display_name?.trim() || execution.source_ref}
                             </Link>
                           </TableCell>
                           <TableCell>

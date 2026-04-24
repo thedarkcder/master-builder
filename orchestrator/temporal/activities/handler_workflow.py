@@ -3,32 +3,19 @@ from __future__ import annotations
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
-from orchestrator.api.discord.ingress.seed_runtime import seed_issues_with_runtime
-from orchestrator.api.discord.seed.issue_service import list_child_issue_previews_for_parent
-from orchestrator.api.atlassian_oauth.connection_service import tenant_atlassian_oauth_context
-from orchestrator.api.webhooks.contracts import (
-    create_jira_comment,
-    extract_changed_fields,
-    extract_status_transition,
-    post_jira_comment,
-)
-from orchestrator.core.agent_runtime_resolver import build_runtime_for_selector
 from orchestrator.core.config import get_settings
 from orchestrator.core.specialist_planning import RetryableSpecialistPlanningContractError
 from orchestrator.core.workflow_advance import (
     InvalidWorkflowOperationRetryError,
     UnsupportedWorkflowOperationRetryError,
     WorkflowAdvanceRequest,
+    WorkflowTrigger,
     execute_workflow_advance,
 )
-from orchestrator.core.workflow_integration_provider import (
-    JiraWorkflowConnectionProvider,
-    WorkflowIntegrationAdapterProvider,
-)
-from orchestrator.core.workflow_integration_router import WorkflowIntegrationRouter
-from orchestrator.core.workflow_handler_composition import build_installed_workflow_handler_registry
+from orchestrator.core.workflow_execution_projection import WorkflowExecutionReference, WorkflowSourceReference
 from orchestrator.core.workflow_operation_retry_use_case import retry_workflow_operation_with_registered_handler
 from orchestrator.core.workflow_type_catalog import get_workflow_type_by_handler_key
+from orchestrator.runtime.installed_workflow_handlers import build_runtime_workflow_handler_registry
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import Tenant, WorkflowExecution, WorkflowOperation
 from orchestrator.temporal.payloads import (
@@ -37,17 +24,6 @@ from orchestrator.temporal.payloads import (
     WorkflowOperationRetryInput,
     WorkflowOperationRetryResult,
 )
-
-
-def _build_workflow_integration_router() -> WorkflowIntegrationRouter:
-    return WorkflowIntegrationRouter(
-        adapter_provider=WorkflowIntegrationAdapterProvider(
-            jira_provider=JiraWorkflowConnectionProvider(
-                oauth_context_resolver=tenant_atlassian_oauth_context,
-                list_child_issue_previews_for_parent_fn=list_child_issue_previews_for_parent,
-            )
-        )
-    )
 
 
 def _workflow_status_payload(*, workflow: WorkflowExecution) -> dict[str, str | None]:
@@ -79,24 +55,24 @@ def process_handler_workflow_advance_activity(
             tenant_id=payload.tenant_id,
             tenant=tenant,
             project_id=payload.project_id,
-            issue_key=payload.issue_key,
-            issue_summary=payload.issue_summary,
-            issue_description=payload.issue_description,
-            issue_labels=tuple(payload.issue_labels or ()),
+            execution=WorkflowExecutionReference(
+                key=payload.execution_key,
+                source=WorkflowSourceReference(
+                    source_system=payload.source_system,
+                    source_ref=payload.source_ref,
+                    display_name=payload.source_display_name,
+                    description=payload.source_description,
+                    attributes=dict(payload.source_attributes or {}),
+                ),
+            ),
             payload=dict(payload.payload or {}),
-            webhook_event=payload.webhook_event,
-            comment_command=payload.comment_command,
-            comment_command_argument=payload.comment_command_argument,
+            trigger=WorkflowTrigger(
+                event=payload.trigger_event,
+                command=payload.trigger_command,
+                argument=payload.trigger_argument,
+            ),
         )
-        handler_registry = build_installed_workflow_handler_registry(
-            integration_router=_build_workflow_integration_router(),
-            extract_changed_fields_fn=extract_changed_fields,
-            extract_status_transition_fn=extract_status_transition,
-            build_runtime_for_selector_fn=build_runtime_for_selector,
-            seed_issues_with_runtime_fn=seed_issues_with_runtime,
-            post_jira_comment_fn=post_jira_comment,
-            create_jira_comment_fn=create_jira_comment,
-        )
+        handler_registry = build_runtime_workflow_handler_registry()
         try:
             result = execute_workflow_advance(
                 session=session,
@@ -141,15 +117,7 @@ def retry_handler_workflow_operation_activity(payload: WorkflowOperationRetryInp
         operation = session.get(WorkflowOperation, str(payload.operation_id or "").strip())
         if operation is None or operation.workflow_id != workflow.workflow_id:
             raise RuntimeError(f"Workflow retry is missing operation {payload.operation_id}")
-        handler_registry = build_installed_workflow_handler_registry(
-            integration_router=_build_workflow_integration_router(),
-            extract_changed_fields_fn=extract_changed_fields,
-            extract_status_transition_fn=extract_status_transition,
-            build_runtime_for_selector_fn=build_runtime_for_selector,
-            seed_issues_with_runtime_fn=seed_issues_with_runtime,
-            post_jira_comment_fn=post_jira_comment,
-            create_jira_comment_fn=create_jira_comment,
-        )
+        handler_registry = build_runtime_workflow_handler_registry()
         try:
             handle = retry_workflow_operation_with_registered_handler(
                 session=session,

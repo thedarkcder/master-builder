@@ -488,7 +488,7 @@ class WorkflowExecution(Base):
     __table_args__ = (
         Index("ix_workflow_executions_tenant_id", "tenant_id"),
         Index("ix_workflow_executions_project_id", "project_id"),
-        Index("ix_workflow_executions_issue_key", "issue_key"),
+        Index("ix_workflow_executions_source", "source_system", "source_ref"),
         Index("ix_workflow_executions_status", "status"),
         CheckConstraint(
             "orchestration_backend IN ('legacy', 'temporal', 'database')",
@@ -497,7 +497,8 @@ class WorkflowExecution(Base):
         Index(
             "uq_workflow_executions_active_scope",
             "tenant_id",
-            "issue_key",
+            "source_system",
+            "source_ref",
             "dedupe_scope",
             unique=True,
             postgresql_where=text("status IN ('queued', 'running', 'waiting_for_input')"),
@@ -529,9 +530,10 @@ class WorkflowExecution(Base):
         ForeignKey("projects.project_id", ondelete="SET NULL"),
         nullable=True,
     )
-    issue_key: Mapped[str] = mapped_column(String(64), nullable=False)
-    issue_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
-    issue_description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_system: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_ref: Mapped[str] = mapped_column(String(255), nullable=False)
+    display_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_description: Mapped[str | None] = mapped_column(Text, nullable=True)
     repo_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     branch: Mapped[str | None] = mapped_column(String(255), nullable=True)
     pr_url: Mapped[str | None] = mapped_column(String(512), nullable=True)

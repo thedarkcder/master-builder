@@ -113,7 +113,7 @@ def record_workflow_operation_audit_event(
         run_id=operation.run_id,
         operation_id=operation.operation_id,
         attempt_id=attempt_id,
-        issue_key=workflow.issue_key,
+        issue_key=workflow.source_ref,
         actor_type=actor_type,
         actor_id=actor_id,
         source_component=source_component,

@@ -49,7 +49,7 @@ from orchestrator.core.specialist_planning import (
     build_runtime_seed_planning_package,
     run_specialist_planning_fanout,
 )
-from orchestrator.core.workflow_execution_projection import resolve_latest_issue_workflow
+from orchestrator.core.workflow_execution_projection import resolve_latest_workflow_execution_by_source
 from orchestrator.storage.models import Project
 from orchestrator.tools.atlassian_oauth import JiraIssueDetail
 
@@ -157,10 +157,11 @@ class _JiraParentIssueGateway:
         *,
         issue_key: str,
     ) -> None:
-        workflow = resolve_latest_issue_workflow(
+        workflow = resolve_latest_workflow_execution_by_source(
             session=self._session,
             tenant_id=self._context.tenant_id,
-            issue_key=issue_key,
+            source_system="jira",
+            source_ref=issue_key,
         )
         if workflow is None:
             return

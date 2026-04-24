@@ -60,7 +60,7 @@ def test_temporal_retry_activity_dispatches_projectless_workflow(monkeypatch):
         lambda: lambda: SessionContextManager(),
     )
     monkeypatch.setattr(
-        "orchestrator.temporal.activities.handler_workflow.build_installed_workflow_handler_registry",
+        "orchestrator.temporal.activities.handler_workflow.build_runtime_workflow_handler_registry",
         lambda **_kwargs: registry,
     )
     monkeypatch.setattr(

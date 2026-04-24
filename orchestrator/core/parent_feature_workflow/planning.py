@@ -82,9 +82,9 @@ class ParentFeaturePlanningWorkflow:
         issue_gateway = self._deps.issue_gateway
         brief_planner = self._deps.brief_planner
         parent_detail = issue_gateway.load_parent_detail(context.issue_key)
-        lifecycle.ensure_issue_execution(
-            issue_summary=parent_detail.summary,
-            issue_description=parent_detail.description,
+        lifecycle.ensure_execution(
+            display_name=parent_detail.summary,
+            description=parent_detail.description,
         )
         project_key = self._deps.project_key_for_issue_fn(context.issue_key)
         product_brief, normalization_questions = brief_planner.resolve_product_brief(
@@ -228,9 +228,9 @@ class ParentFeaturePlanningWorkflow:
             )
 
         parent_detail = issue_gateway.load_parent_detail(context.issue_key)
-        lifecycle.ensure_issue_execution(
-            issue_summary=parent_detail.summary,
-            issue_description=parent_detail.description,
+        lifecycle.ensure_execution(
+            display_name=parent_detail.summary,
+            description=parent_detail.description,
         )
         project_key = self._deps.project_key_for_issue_fn(context.issue_key)
         child_details = issue_gateway.load_child_details(
@@ -398,9 +398,9 @@ class ParentFeaturePlanningWorkflow:
     ) -> WorkflowAdvanceOutcome:
         issue_gateway = self._deps.issue_gateway
         parent_detail = issue_gateway.load_parent_detail(context.issue_key)
-        lifecycle.ensure_issue_execution(
-            issue_summary=parent_detail.summary,
-            issue_description=parent_detail.description,
+        lifecycle.ensure_execution(
+            display_name=parent_detail.summary,
+            description=parent_detail.description,
         )
         project_key = self._deps.project_key_for_issue_fn(context.issue_key)
         child_details = issue_gateway.load_child_details(project_key=project_key, parent_issue_key=context.issue_key)
@@ -573,9 +573,9 @@ class ParentFeaturePlanningWorkflow:
     ) -> WorkflowAdvanceOutcome:
         issue_gateway = self._deps.issue_gateway
         parent_detail = issue_gateway.load_parent_detail(context.issue_key)
-        lifecycle.ensure_issue_execution(
-            issue_summary=parent_detail.summary,
-            issue_description=parent_detail.description,
+        lifecycle.ensure_execution(
+            display_name=parent_detail.summary,
+            description=parent_detail.description,
         )
         project_key = self._deps.project_key_for_issue_fn(context.issue_key)
         brief_payload = dict(context.payload.get("brief_payload") or {})

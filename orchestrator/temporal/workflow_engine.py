@@ -193,8 +193,8 @@ def _temporal_config_for_workflow_type(
     )
 
 
-def _handler_backed_workflow_id(*, workflow_type_key: str, issue_key: str) -> str:
-    return workflow_execution_id(workflow_type_key=workflow_type_key, issue_key=issue_key)
+def _handler_backed_workflow_id(*, workflow_type_key: str, execution_key: str) -> str:
+    return workflow_execution_id(workflow_type_key=workflow_type_key, execution_key=execution_key)
 
 
 def _handler_advance_input_from_request(*, workflow_id: str, request, config: TemporalWorkflowConfig) -> HandlerWorkflowAdvanceInput:
@@ -203,14 +203,16 @@ def _handler_advance_input_from_request(*, workflow_id: str, request, config: Te
         workflow_handler_key=request.workflow_handler_key,
         tenant_id=request.tenant_id,
         project_id=request.project_id,
-        issue_key=request.issue_key,
-        issue_summary=request.issue_summary,
-        issue_description=request.issue_description,
-        issue_labels=tuple(request.issue_labels or ()),
+        execution_key=request.execution.key,
+        source_system=request.execution.source.source_system,
+        source_ref=request.execution.source.source_ref,
+        source_display_name=request.execution.source.display_name,
+        source_description=request.execution.source.description,
+        source_attributes=dict(request.execution.source.attributes or {}),
         payload=dict(request.payload or {}),
-        webhook_event=request.webhook_event,
-        comment_command=request.comment_command,
-        comment_command_argument=request.comment_command_argument,
+        trigger_event=request.trigger.event,
+        trigger_command=request.trigger.command,
+        trigger_argument=request.trigger.argument,
         retry_max_attempts=config.retry_max_attempts,
         retry_initial_interval_seconds=config.retry_initial_interval_seconds,
         retry_max_interval_seconds=config.retry_max_interval_seconds,
@@ -284,7 +286,7 @@ class TemporalWorkflowEngine:
             )
         workflow_id = _handler_backed_workflow_id(
             workflow_type_key=workflow_type.workflow_type_key,
-            issue_key=request.issue_key,
+            execution_key=request.execution.key,
         )
         advance_payload = _handler_advance_input_from_request(
             workflow_id=workflow_id,

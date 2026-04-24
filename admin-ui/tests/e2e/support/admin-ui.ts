@@ -926,8 +926,9 @@ export async function mockTenantWorkflowApis(
     recent_executions: options.workflows.map((workflow) => ({
       execution_id: workflow.execution_id,
       workflow_id: workflow.workflow_id,
-      issue_key: workflow.issue_key,
-      issue_summary: workflow.issue_summary,
+      source_system: workflow.source_system,
+      source_ref: workflow.source_ref,
+      display_name: workflow.display_name,
       status: workflow.status,
       waiting_on: workflow.waiting_on,
       next_step: workflow.next_step,
