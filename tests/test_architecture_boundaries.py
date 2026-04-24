@@ -10,6 +10,7 @@ from orchestrator.core.communications.contracts import (
     DiscordSeedWithThreadAction,
     DiscordThreadReplyAction,
 )
+from orchestrator.core.workflow_runtime import WorkflowAdvanceRequest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -403,6 +404,40 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             violations,
             [],
             msg=f"Workflow infrastructure importing parent-feature handlers directly: {violations}",
+        )
+
+    def test_temporal_handler_activity_does_not_import_workflow_provider_adapters(self) -> None:
+        module_path = ROOT / "orchestrator" / "temporal" / "activities" / "handler_workflow.py"
+        banned_prefixes = {
+            "orchestrator.api.atlassian_oauth",
+            "orchestrator.api.discord",
+            "orchestrator.api.webhooks",
+            "orchestrator.core.parent_feature_workflow",
+        }
+        violations: list[str] = []
+        for module_name in _imported_modules(module_path):
+            if any(module_name.startswith(prefix) for prefix in banned_prefixes):
+                violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{module_name}")
+        self.assertEqual(
+            violations,
+            [],
+            msg=f"Temporal workflow activities must dispatch through the installed workflow registry, not provider adapters: {violations}",
+        )
+
+    def test_workflow_advance_contract_is_provider_agnostic(self) -> None:
+        field_names = {field.name for field in fields(WorkflowAdvanceRequest)}
+        banned_fields = {
+            "issue_key",
+            "issue_summary",
+            "issue_description",
+            "issue_labels",
+            "webhook_event",
+            "comment_command",
+            "comment_command_argument",
+        }
+        self.assertFalse(
+            field_names.intersection(banned_fields),
+            msg=f"Workflow advance contract must not expose provider-specific fields: {field_names}",
         )
 
     def test_workflow_runtime_and_engines_do_not_use_retry_callback_escape_hatch(self) -> None:

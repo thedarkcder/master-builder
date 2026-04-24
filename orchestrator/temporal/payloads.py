@@ -47,14 +47,20 @@ class HandlerWorkflowAdvanceInput:
     workflow_handler_key: str
     tenant_id: str
     project_id: str | None
-    issue_key: str
-    issue_summary: str | None = None
-    issue_description: object | None = None
-    issue_labels: tuple[str, ...] = ()
+    execution_key: str
+    source_system: str
+    source_ref: str
+    source_display_name: str | None = None
+    source_description: object | None = None
+    source_attributes: dict[str, Any] | None = None
     payload: dict[str, Any] | None = None
-    webhook_event: str | None = None
-    comment_command: str | None = None
-    comment_command_argument: str | None = None
+    trigger_event: str | None = None
+    trigger_command: str | None = None
+    trigger_argument: str | None = None
+    retry_max_attempts: int = 1
+    retry_initial_interval_seconds: int = 0
+    retry_max_interval_seconds: int = 0
+    retry_backoff_coefficient: float = 1.0
 
 @dataclass(frozen=True)
 class HandlerWorkflowAdvanceResult:

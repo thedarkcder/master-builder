@@ -577,13 +577,19 @@ def _workflow_links(
     integration_router=None,
 ) -> list[WorkflowLinkRead]:  # noqa: ANN001
     links: list[WorkflowLinkRead] = []
-    jira_url = tenant_jira_issue_url(session=session, tenant=tenant, issue_key=workflow.issue_key) if tenant is not None else None
+    workflow_source_ref = str(workflow.source_ref or "").strip()
+    is_jira_workflow = str(workflow.source_system or "").strip() == "jira"
+    jira_url = (
+        tenant_jira_issue_url(session=session, tenant=tenant, issue_key=workflow_source_ref)
+        if tenant is not None and is_jira_workflow
+        else None
+    )
     if jira_url:
         links.append(
             WorkflowLinkRead(
                 kind="jira_issue",
-                label=f"Jira issue {workflow.issue_key}",
-                ref=workflow.issue_key,
+                label=f"Jira issue {workflow_source_ref}",
+                ref=workflow_source_ref,
                 url=jira_url,
                 status=workflow.status,
             )
@@ -592,6 +598,7 @@ def _workflow_links(
         tenant is not None
         and project is not None
         and _workflow_supports_child_issue_links(workflow_type=workflow_type)
+        and is_jira_workflow
         and integration_router is not None
         and str(project.jira_project_key or "").strip()
     ):
@@ -603,7 +610,7 @@ def _workflow_links(
             )
             child_previews = jira_adapter.list_child_issue_previews(
                 project_key=project.jira_project_key,
-                parent_issue_key=workflow.issue_key,
+                parent_issue_key=workflow_source_ref,
             )
         except Exception:  # noqa: BLE001
             child_previews = []
@@ -672,8 +679,9 @@ def _workflow_execution_preview(*, session, workflow: WorkflowExecution) -> Work
     return WorkflowExecutionPreviewRead(
         execution_id=workflow.execution_id,
         workflow_id=workflow.workflow_id,
-        issue_key=workflow.issue_key,
-        issue_summary=workflow.issue_summary,
+        source_system=workflow.source_system,
+        source_ref=workflow.source_ref,
+        display_name=workflow.display_name,
         status=workflow.status,
         waiting_on=waiting_on,
         next_step=_next_step(waiting_on=waiting_on, state_path=state_path, workflow=workflow),
@@ -823,7 +831,11 @@ def _workflow_schema(
     waiting_on = _waiting_on(pending_request=pending_request, operations=operations)
     tenant = session.get(Tenant, workflow.tenant_id)
     project = session.get(Project, workflow.project_id) if str(workflow.project_id or "").strip() else None
-    followup_contexts = _active_followup_contexts(session=session, tenant_id=workflow.tenant_id, issue_key=workflow.issue_key)
+    followup_contexts = (
+        _active_followup_contexts(session=session, tenant_id=workflow.tenant_id, issue_key=workflow.source_ref)
+        if str(workflow.source_system or "").strip() == "jira"
+        else []
+    )
     conditional_branches_taken, conditional_branches_available = _branch_sets(runs=workflow_runs)
     can_resume, resume_unavailable_reason = _resume_execution_state(
         workflow=workflow,
@@ -926,7 +938,7 @@ def _latest_decision_issue_labels_for_workflow(*, session, workflow) -> list[str
         select(DecisionEvent)
         .where(
             DecisionEvent.tenant_id == workflow.tenant_id,
-            DecisionEvent.issue_key == workflow.issue_key,
+            DecisionEvent.issue_key == workflow.source_ref,
         )
         .order_by(desc(DecisionEvent.created_at))
         .limit(1)
@@ -951,7 +963,7 @@ def _resolve_required_worker_capability_for_admin_attempt(*, session, workflow, 
         select(DecisionCase)
         .where(
             DecisionCase.tenant_id == workflow.tenant_id,
-            DecisionCase.issue_key == workflow.issue_key,
+            DecisionCase.issue_key == workflow.source_ref,
         )
         .limit(1)
     ).scalar_one_or_none()
@@ -959,12 +971,12 @@ def _resolve_required_worker_capability_for_admin_attempt(*, session, workflow, 
     if case_capability:
         return case_capability
     inferred = infer_required_worker_capability(
-        issue_summary=workflow.issue_summary,
-        issue_description=workflow.issue_description,
+        issue_summary=workflow.display_name,
+        issue_description=workflow.source_description,
         issue_labels=_latest_decision_issue_labels_for_workflow(session=session, workflow=workflow),
         tenant_id=workflow.tenant_id,
         project_id=workflow.project_id,
-        issue_key=workflow.issue_key,
+        issue_key=workflow.source_ref,
     )
     return str(inferred or "").strip() or None
 
@@ -1016,7 +1028,8 @@ def _is_active_scope_unique_violation(error: IntegrityError) -> bool:
         return True
     return (
         "workflow_executions.tenant_id" in message
-        and "workflow_executions.issue_key" in message
+        and "workflow_executions.source_system" in message
+        and "workflow_executions.source_ref" in message
         and "workflow_executions.dedupe_scope" in message
     )
 
@@ -1109,8 +1122,8 @@ def list_workflows(
         like_value = f"%{normalized_issue}%"
         query = query.where(
             or_(
-                WorkflowExecution.issue_key.ilike(like_value),
-                WorkflowExecution.issue_summary.ilike(like_value),
+                WorkflowExecution.source_ref.ilike(like_value),
+                WorkflowExecution.display_name.ilike(like_value),
             )
         )
     query = query.order_by(desc(WorkflowExecution.created_at)).limit(limit).offset(offset)
@@ -1358,9 +1371,10 @@ def create_workflow_attempt(
             workflow_type_key=workflow.workflow_type_key,
             tenant_id=workflow.tenant_id,
             project_id=project.project_id,
-            issue_key=workflow.issue_key,
-            issue_summary=workflow.issue_summary,
-            issue_description=workflow.issue_description,
+            source_system=workflow.source_system,
+            source_ref=workflow.source_ref,
+            display_name=workflow.display_name,
+            source_description=workflow.source_description,
             repo_url=workflow.repo_url,
             branch=None if normalized_mode == "fresh" else workflow.branch,
             pr_url=None if normalized_mode == "fresh" else workflow.pr_url,

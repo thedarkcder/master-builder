@@ -747,8 +747,9 @@ export type WorkflowRecord = {
   workflow_id: string;
   tenant_id: string;
   project_id: string | null;
-  issue_key: string;
-  issue_summary: string | null;
+  source_system: string;
+  source_ref: string;
+  display_name: string | null;
   repo_url: string | null;
   branch: string | null;
   pr_url: string | null;
@@ -828,8 +829,9 @@ export type WorkflowTypeRecord = {
 export type WorkflowExecutionPreviewRecord = {
   execution_id: string;
   workflow_id: string;
-  issue_key: string;
-  issue_summary: string | null;
+  source_system: string;
+  source_ref: string;
+  display_name: string | null;
   status: string;
   waiting_on: string | null;
   next_step: string | null;
@@ -2061,7 +2063,7 @@ export function getJiraWebhookDiagnostics(
   const query = new URLSearchParams({ within_minutes: String(withinMinutes) });
   return request<JiraWebhookDiagnosticsRecord>(
     credentials,
-    `/api/admin/tenants/${encodeURIComponent(tenantId)}/jira/webhooks/diagnostics?${query.toString()}`
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/atlassian/jira/webhooks/diagnostics?${query.toString()}`
   );
 }
 
@@ -2071,7 +2073,7 @@ export function provisionJiraWebhook(
 ): Promise<JiraWebhookActionResult> {
   return request<JiraWebhookActionResult>(
     credentials,
-    `/api/admin/tenants/${encodeURIComponent(tenantId)}/jira/webhooks/provision`,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/atlassian/jira/webhooks/provision`,
     { method: "POST" }
   );
 }
@@ -2082,7 +2084,7 @@ export function resetJiraWebhook(
 ): Promise<JiraWebhookActionResult> {
   return request<JiraWebhookActionResult>(
     credentials,
-    `/api/admin/tenants/${encodeURIComponent(tenantId)}/jira/webhooks/reset`,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/atlassian/jira/webhooks/reset`,
     { method: "POST" }
   );
 }

@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 from sqlalchemy import select
 
+from orchestrator.core.workflow_execution_projection import WorkflowExecutionReference, WorkflowSourceReference
 from orchestrator.core.workflow_advance import (
     WorkflowAdvanceLifecycle,
     WorkflowAdvanceOutcome,
@@ -33,9 +34,9 @@ class _LifecycleCaseHandler:
         _ = session, settings
         if self.case == "unhandled":
             return WorkflowAdvanceOutcome(handled=False)
-        lifecycle.ensure_issue_execution(
-            issue_summary="Lifecycle matrix",
-            issue_description="Exercise durable lifecycle ownership",
+        lifecycle.ensure_execution(
+            display_name="Lifecycle matrix",
+            description="Exercise durable lifecycle ownership",
         )
         if self.case == "waiting":
             lifecycle.mark_waiting_for_input(
@@ -76,7 +77,14 @@ class WorkflowLifecycleTests(SqliteTemplateDbTestCase):
             tenant_id="tenant-a",
             tenant=SimpleNamespace(tenant_id="tenant-a"),
             project_id="tenant-a-default",
-            issue_key=issue_key,
+            execution=WorkflowExecutionReference(
+                key=issue_key,
+                source=WorkflowSourceReference(
+                    source_system="jira",
+                    source_ref=issue_key,
+                    attributes={"jira_issue_labels": ["pm-parent"]},
+                ),
+            ),
         )
 
     def test_unhandled_workflow_does_not_create_durable_lifecycle(self) -> None:
@@ -116,7 +124,10 @@ class WorkflowLifecycleTests(SqliteTemplateDbTestCase):
                 session.commit()
 
                 workflow = session.execute(
-                    select(WorkflowExecution).where(WorkflowExecution.issue_key == f"MAB-30{index}")
+                    select(WorkflowExecution).where(
+                        WorkflowExecution.source_system == "jira",
+                        WorkflowExecution.source_ref == f"MAB-30{index}",
+                    )
                 ).scalar_one()
                 operation = session.execute(
                     select(WorkflowOperation).where(

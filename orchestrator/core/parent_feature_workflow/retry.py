@@ -64,6 +64,15 @@ def _validate_parent_workflow_operation_retry(*, operation_type: str) -> None:
     )
 
 
+def _jira_issue_key_for_workflow(workflow: WorkflowExecution) -> str:
+    if str(workflow.source_system or "").strip() != "jira":
+        raise InvalidWorkflowOperationRetryError("Parent feature retry requires a Jira workflow source")
+    issue_key = str(workflow.source_ref or "").strip().upper()
+    if not issue_key:
+        raise InvalidWorkflowOperationRetryError("Parent feature retry requires a Jira issue source reference")
+    return issue_key
+
+
 @dataclass(frozen=True)
 class _ParentWorkflowRetryContext:
     session: Session
@@ -149,24 +158,25 @@ class ParentFeatureWorkflowOperationRetryHandler:
         )
 
     def _retry_jira_parent_update(self, *, context: _ParentWorkflowRetryContext) -> WorkflowOperationHandle:
+        parent_issue_key = _jira_issue_key_for_workflow(context.workflow)
         jira_adapter = self._deps.integration_router.jira(
             session=context.session,
             tenant=context.tenant,
             settings=context.settings,
         )
         oauth = jira_adapter.oauth_context
-        parent_detail = jira_adapter.get_issue_detail(issue_id_or_key=context.workflow.issue_key)
+        parent_detail = jira_adapter.get_issue_detail(issue_id_or_key=parent_issue_key)
         architecture_gate = ArchitectureDocumentService(settings_factory=lambda: context.settings).resolve_gate(
             session=context.session,
             project=context.project,
-            parent_issue_key=context.workflow.issue_key,
+            parent_issue_key=parent_issue_key,
             issue_summary=parent_detail.summary,
             issue_labels=list(parent_detail.labels or []),
             actor="system",
         )
         if architecture_gate.required and architecture_gate.document is None:
             raise InvalidWorkflowOperationRetryError(
-                architecture_gate.block_reason or f"Architecture document link is required for {context.workflow.issue_key}"
+                architecture_gate.block_reason or f"Architecture document link is required for {parent_issue_key}"
             )
         architecture_document = architecture_gate.document
         lifecycle = WorkflowExecutionProjection(session=context.session, workflow=context.workflow)
@@ -179,7 +189,7 @@ class ParentFeatureWorkflowOperationRetryHandler:
             )
             _upsert_jira_remote_link(
                 oauth=oauth,
-                issue_key=context.workflow.issue_key,
+                issue_key=parent_issue_key,
                 spec=workflow_execution_remote_link_spec(
                     admin_ui_base_url=context.settings.admin_ui_base_url,
                     workflow=context.workflow,
@@ -190,13 +200,13 @@ class ParentFeatureWorkflowOperationRetryHandler:
                 url = str(architecture_document.canonical_url or "").strip()
                 if not title or not url:
                     raise InvalidWorkflowOperationRetryError(
-                        f"Architecture document link is incomplete for {context.workflow.issue_key}"
+                        f"Architecture document link is incomplete for {parent_issue_key}"
                     )
                 _upsert_jira_remote_link(
                     oauth=oauth,
-                    issue_key=context.workflow.issue_key,
+                    issue_key=parent_issue_key,
                     spec=architecture_document_remote_link_spec(
-                        issue_key=context.workflow.issue_key,
+                        issue_key=parent_issue_key,
                         title=title,
                         url=url,
                     ),
@@ -217,14 +227,15 @@ class ParentFeatureWorkflowOperationRetryHandler:
         return self._operation_handle(context=context, operation=operation)
 
     def _retry_jira_child_fanout(self, *, context: _ParentWorkflowRetryContext) -> WorkflowOperationHandle:
+        parent_issue_key = _jira_issue_key_for_workflow(context.workflow)
         brief = resolve_parent_feature_brief(
             session=context.session,
             tenant_id=context.tenant.tenant_id,
-            parent_issue_key=context.workflow.issue_key,
+            parent_issue_key=parent_issue_key,
         )
         if brief is None:
             raise InvalidWorkflowOperationRetryError(
-                f"No confirmed parent brief snapshot is available for {context.workflow.issue_key}"
+                f"No confirmed parent brief snapshot is available for {parent_issue_key}"
             )
         jira_adapter = self._deps.integration_router.jira(
             session=context.session,
@@ -233,7 +244,7 @@ class ParentFeatureWorkflowOperationRetryHandler:
         )
         lifecycle = WorkflowExecutionProjection(session=context.session, workflow=context.workflow)
         operation, attempt = lifecycle.start_operation_attempt(operation_type=context.operation.operation_type)
-        parent_detail = jira_adapter.get_issue_detail(issue_id_or_key=context.workflow.issue_key)
+        parent_detail = jira_adapter.get_issue_detail(issue_id_or_key=parent_issue_key)
         sync_context = JiraParentChildSyncContext(
             request_id=f"workflow-operation:{operation.operation_id}",
             tenant_id=context.tenant.tenant_id,
@@ -243,7 +254,7 @@ class ParentFeatureWorkflowOperationRetryHandler:
             operation_id=operation.operation_id,
             attempt=attempt.attempt_number,
             attempt_id=attempt.attempt_id,
-            issue_key=context.workflow.issue_key,
+            issue_key=parent_issue_key,
             issue_labels=list(parent_detail.labels or []),
             payload={},
             webhook_event="admin_operation_retry",
@@ -309,7 +320,7 @@ class ParentFeatureWorkflowOperationRetryHandler:
             questions = fanout.questions
             clarification_service = ParentPlanningClarificationService()
             clarification_service.ensure_active_clarification(
-                issue_key=context.workflow.issue_key,
+                issue_key=parent_issue_key,
                 questions=questions,
                 publisher=_ParentWorkflowEngineeringClarificationPublisher(
                     session=context.session,
@@ -321,7 +332,7 @@ class ParentFeatureWorkflowOperationRetryHandler:
                 ),
             )
             message = clarification_service.build_missing_input_message(
-                issue_key=context.workflow.issue_key,
+                issue_key=parent_issue_key,
                 questions=questions,
             )
             lifecycle.fail_started_operation(

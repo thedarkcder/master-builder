@@ -223,7 +223,8 @@ def _active_workflow_for_issue(session: Session, tenant_id: str, issue_key: str,
     return session.execute(
         select(WorkflowExecution).where(
             WorkflowExecution.tenant_id == tenant_id,
-            WorkflowExecution.issue_key == issue_key,
+            WorkflowExecution.source_system == "jira",
+            WorkflowExecution.source_ref == issue_key,
             WorkflowExecution.dedupe_scope == dedupe_scope,
             WorkflowExecution.status.in_(WORKFLOW_ACTIVE_STATUSES),
         )
@@ -465,9 +466,10 @@ def enqueue_run(
         workflow_type_key="issue_execution",
         tenant_id=tenant_id,
         project_id=project_id,
-        issue_key=issue_key,
-        issue_summary=issue_summary,
-        issue_description=issue_description,
+        source_system="jira",
+        source_ref=issue_key,
+        display_name=issue_summary,
+        source_description=issue_description,
         repo_url=repo_url,
         branch=bootstrap.branch if bootstrap is not None else None,
         pr_url=normalized_pr_url,
@@ -653,9 +655,9 @@ def _enqueue_attempt_for_workflow(
         workflow_id=workflow.workflow_id,
         tenant_id=workflow.tenant_id,
         project_id=workflow.project_id,
-        issue_key=workflow.issue_key,
-        issue_summary=workflow.issue_summary,
-        issue_description=workflow.issue_description,
+        issue_key=workflow.source_ref,
+        issue_summary=workflow.display_name,
+        issue_description=workflow.source_description,
         repo_url=workflow.repo_url,
         branch=bootstrap.branch or workflow.branch,
         pr_url=normalized_pr_url,
@@ -687,7 +689,7 @@ def _enqueue_attempt_for_workflow(
         tenant_id=workflow.tenant_id,
         project_id=workflow.project_id,
         run_id=run.run_id,
-        issue_key=workflow.issue_key,
+        issue_key=workflow.source_ref,
     )
     if commit:
         session.commit()

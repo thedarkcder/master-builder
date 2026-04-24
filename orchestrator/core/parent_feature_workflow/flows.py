@@ -50,10 +50,33 @@ from orchestrator.core.pm_interview_service import (
 )
 from orchestrator.core.runtime_invocation import AgentInvocationContext
 from orchestrator.core.webhook_job_errors import RetryableWebhookJobError
-from orchestrator.core.workflow_runtime import WorkflowAdvanceRequest
+from orchestrator.core.workflow_runtime import WorkflowAdvanceRequest, WorkflowTrigger
+from orchestrator.core.workflow_execution_projection import WorkflowExecutionReference, WorkflowSourceReference
 from orchestrator.core.workflow_handler_composition import build_installed_workflow_handler_registry
 
 logger = logging.getLogger(__name__)
+
+
+def _jira_workflow_execution_reference(
+    *,
+    issue_key: str,
+    issue_summary: str | None = None,
+    issue_description: object | None = None,
+    issue_labels: list[str] | tuple[str, ...] = (),
+) -> WorkflowExecutionReference:
+    normalized_issue_key = str(issue_key or "").strip().upper()
+    if not normalized_issue_key:
+        raise RuntimeError("Jira parent workflow execution requires an issue key")
+    return WorkflowExecutionReference(
+        key=normalized_issue_key,
+        source=WorkflowSourceReference(
+            source_system="jira",
+            source_ref=normalized_issue_key,
+            display_name=issue_summary,
+            description=issue_description,
+            attributes={"jira_issue_labels": list(issue_labels)},
+        ),
+    )
 
 
 def _sync_parent_issue_reference_links(
@@ -132,12 +155,16 @@ def handle_parent_feature_sync(
             tenant_id=context.tenant_id,
             tenant=context.tenant,
             project_id=context.project_id,
-            issue_key=context.issue_key,
-            issue_labels=tuple(context.issue_labels or []),
+            execution=_jira_workflow_execution_reference(
+                issue_key=context.issue_key,
+                issue_labels=tuple(context.issue_labels or []),
+            ),
             payload={**dict(context.payload or {}), "request_id": context.request_id},
-            webhook_event=context.webhook_event,
-            comment_command=context.comment_command,
-            comment_command_argument=context.comment_command_argument,
+            trigger=WorkflowTrigger(
+                event=context.webhook_event,
+                command=context.comment_command,
+                argument=context.comment_command_argument,
+            ),
         )
     )
     if result.handled:
@@ -727,8 +754,12 @@ def handle_pm_interview_reply(
             tenant_id=context.tenant_id,
             tenant=context.tenant,
             project_id=context.project_id,
-            issue_key=context.issue_key,
-            issue_labels=tuple(parent_detail.labels or []),
+            execution=_jira_workflow_execution_reference(
+                issue_key=context.issue_key,
+                issue_summary=parent_detail.summary,
+                issue_description=parent_detail.description,
+                issue_labels=tuple(parent_detail.labels or []),
+            ),
             payload={
                 **dict(context.payload or {}),
                 "request_id": context.request_id,
@@ -739,9 +770,11 @@ def handle_pm_interview_reply(
                 ).to_payload(),
                 "ready_to_write": bool(followup_result.assessment.ready_to_write),
             },
-            webhook_event=context.webhook_event,
-            comment_command=context.comment_command,
-            comment_command_argument=context.comment_command_argument,
+            trigger=WorkflowTrigger(
+                event=context.webhook_event,
+                command=context.comment_command,
+                argument=context.comment_command_argument,
+            ),
         )
     )
     if advance_result.handled:

@@ -461,7 +461,7 @@ export default function TenantExecutionDetailPage() {
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
             <div className="rounded-2xl border bg-background p-4">
               <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Execution</p>
-              <p className="mt-2 text-sm font-semibold">{workflow.issue_summary?.trim() || workflow.issue_key}</p>
+              <p className="mt-2 text-sm font-semibold">{workflow.display_name?.trim() || workflow.source_ref}</p>
             </div>
             <div className="rounded-2xl border bg-background p-4">
               <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Workflow type</p>
@@ -493,7 +493,7 @@ export default function TenantExecutionDetailPage() {
             <div className="rounded-2xl border bg-background p-4">
               <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Created</p>
               <p className="mt-2 text-sm font-semibold">{formatTimestamp(workflow.created_at)}</p>
-              <p className="mt-1 text-xs text-muted-foreground">Issue key: {workflow.issue_key}</p>
+              <p className="mt-1 text-xs text-muted-foreground">Source: {workflow.source_system}:{workflow.source_ref}</p>
             </div>
           </div>
 

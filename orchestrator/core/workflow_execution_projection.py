@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import json
 
@@ -28,8 +28,39 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def workflow_execution_id(*, workflow_type_key: str, issue_key: str) -> str:
-    return f"{str(workflow_type_key or '').strip()}:{str(issue_key or '').strip().upper()}"
+@dataclass(frozen=True)
+class WorkflowSourceReference:
+    source_system: str
+    source_ref: str
+    display_name: str | None = None
+    description: object | None = None
+    attributes: dict[str, object] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not str(self.source_system or "").strip():
+            raise ValueError("Workflow source reference source_system is required")
+        if not str(self.source_ref or "").strip():
+            raise ValueError("Workflow source reference source_ref is required")
+
+
+@dataclass(frozen=True)
+class WorkflowExecutionReference:
+    key: str
+    source: WorkflowSourceReference
+
+    def __post_init__(self) -> None:
+        if not str(self.key or "").strip():
+            raise ValueError("Workflow execution reference key is required")
+
+
+def workflow_execution_id(*, workflow_type_key: str, execution_key: str) -> str:
+    normalized_type = str(workflow_type_key or "").strip()
+    normalized_key = str(execution_key or "").strip()
+    if not normalized_type:
+        raise ValueError("workflow_type_key is required")
+    if not normalized_key:
+        raise ValueError("execution_key is required")
+    return f"{normalized_type}:{normalized_key}"
 
 
 def classify_external_workflow_failure(*, error: Exception) -> str:
@@ -55,14 +86,14 @@ def _target_system_for_operation(operation_type: str) -> str | None:
     return None
 
 
-def _normalize_issue_description(issue_description: object | None) -> str | None:
-    if issue_description is None:
+def _normalize_source_description(source_description: object | None) -> str | None:
+    if source_description is None:
         return None
-    if isinstance(issue_description, str):
-        return issue_description
-    if isinstance(issue_description, (dict, list)):
-        return json.dumps(issue_description, sort_keys=True)
-    return str(issue_description)
+    if isinstance(source_description, str):
+        return source_description
+    if isinstance(source_description, (dict, list)):
+        return json.dumps(source_description, sort_keys=True)
+    return str(source_description)
 
 
 @dataclass
@@ -78,7 +109,7 @@ class WorkflowExecutionProjection:
                 operation_type=definition.operation_type,
                 idempotency_key=f"workflow-definition:{definition.operation_type}",
                 target_system=_target_system_for_operation(definition.operation_type),
-                target_ref=self.workflow.issue_key if _target_system_for_operation(definition.operation_type) else None,
+                target_ref=self.workflow.source_ref if _target_system_for_operation(definition.operation_type) else None,
                 summary=definition.description,
             )
 
@@ -96,7 +127,7 @@ class WorkflowExecutionProjection:
                 operation_type=operation_type,
                 idempotency_key=f"workflow-definition:{operation_type}",
                 target_system=_target_system_for_operation(operation_type),
-                target_ref=self.workflow.issue_key if _target_system_for_operation(operation_type) else None,
+                target_ref=self.workflow.source_ref if _target_system_for_operation(operation_type) else None,
                 summary=None,
             )
         return operation
@@ -200,21 +231,22 @@ class WorkflowExecutionProjection:
         recompute_workflow_status(session=self.session, workflow=self.workflow, now=_now())
 
 
-def ensure_issue_workflow_execution(
+def ensure_workflow_execution(
     *,
     session: Session,
     workflow_type: WorkflowType,
     tenant_id: str,
     project_id: str | None,
-    issue_key: str,
-    issue_summary: str | None,
-    issue_description: object | None,
+    execution: WorkflowExecutionReference,
+    display_name: str | None,
+    description: object | None,
 ) -> WorkflowExecutionProjection:
     workflow_id = workflow_execution_id(
         workflow_type_key=workflow_type.workflow_type_key,
-        issue_key=issue_key,
+        execution_key=execution.key,
     )
-    normalized_issue_description = _normalize_issue_description(issue_description)
+    normalized_description = _normalize_source_description(description)
+    source_ref = str(execution.source.source_ref or "").strip()
     workflow = session.get(WorkflowExecution, workflow_id)
     now = _now()
     if workflow is None:
@@ -223,9 +255,10 @@ def ensure_issue_workflow_execution(
             workflow_type_key=workflow_type.workflow_type_key,
             tenant_id=tenant_id,
             project_id=project_id,
-            issue_key=str(issue_key or "").strip().upper(),
-            issue_summary=issue_summary,
-            issue_description=normalized_issue_description,
+            source_system=execution.source.source_system,
+            source_ref=source_ref,
+            display_name=display_name,
+            source_description=normalized_description,
             repo_url=None,
             branch=None,
             pr_url=None,
@@ -246,8 +279,10 @@ def ensure_issue_workflow_execution(
         session.flush()
     else:
         workflow.project_id = project_id or workflow.project_id
-        workflow.issue_summary = issue_summary
-        workflow.issue_description = normalized_issue_description
+        workflow.source_system = execution.source.source_system
+        workflow.source_ref = source_ref
+        workflow.display_name = display_name
+        workflow.source_description = normalized_description
         workflow.orchestration_backend = workflow_type.orchestration_backend
         workflow.dedupe_scope = workflow_type.system_key
         workflow.updated_at = now
@@ -257,17 +292,21 @@ def ensure_issue_workflow_execution(
     return projection
 
 
-def resolve_latest_issue_workflow(
+def resolve_latest_workflow_execution_by_source(
     *,
     session: Session,
     tenant_id: str,
-    issue_key: str,
+    source_system: str,
+    source_ref: str,
 ) -> WorkflowExecution | None:
+    if not str(source_system or "").strip():
+        raise ValueError("source_system is required")
     return session.execute(
         select(WorkflowExecution)
         .where(
             WorkflowExecution.tenant_id == str(tenant_id or "").strip(),
-            WorkflowExecution.issue_key == str(issue_key or "").strip().upper(),
+            WorkflowExecution.source_system == str(source_system or "").strip(),
+            WorkflowExecution.source_ref == str(source_ref or "").strip().upper(),
         )
         .order_by(desc(WorkflowExecution.created_at))
         .limit(1)

@@ -55,7 +55,8 @@ class WorkerRunHealthTests(unittest.TestCase):
         return session.execute(
             select(WorkflowExecution).where(
                 WorkflowExecution.tenant_id == "tenant-a",
-                WorkflowExecution.issue_key == issue_key,
+                WorkflowExecution.source_system == "jira",
+                WorkflowExecution.source_ref == issue_key,
                 WorkflowExecution.dedupe_scope == "issue_execution",
             )
         ).scalar_one_or_none()

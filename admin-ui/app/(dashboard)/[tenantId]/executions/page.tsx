@@ -190,13 +190,13 @@ export default function TenantExecutionsPage() {
                       className="text-primary hover:underline"
                       href={`/${encodeURIComponent(tenantId)}/executions/${encodeURIComponent(workflow.execution_id)}`}
                     >
-                      {workflow.issue_summary?.trim() || workflow.issue_key}
+                      {workflow.display_name?.trim() || workflow.source_ref}
                     </Link>
                   </TableCell>
                   <TableCell className="text-sm text-muted-foreground">
                     <p>{workflow.workflow_type.label}</p>
                   </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">{workflow.issue_key}</TableCell>
+                  <TableCell className="text-sm text-muted-foreground">{workflow.source_ref}</TableCell>
                   <TableCell>
                     <div className="space-y-1">
                       <StatusBadge status={workflow.current_state} />
