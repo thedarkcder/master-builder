@@ -7,9 +7,9 @@ from orchestrator.core.decision_gate import DecisionGateResult, evaluate_decisio
 
 
 class DecisionGateTests(unittest.TestCase):
-    def test_decision_gate_returns_codex_payload(self) -> None:
+    def test_decision_gate_returns_runtime_payload(self) -> None:
         with patch(
-            "orchestrator.core.decision_gate._evaluate_decision_gate_with_codex",
+            "orchestrator.core.decision_gate._evaluate_decision_gate_with_runtime",
             return_value=DecisionGateResult(
                 triggered=True,
                 reason="Missing GTD sections: Objective",
@@ -27,7 +27,7 @@ class DecisionGateTests(unittest.TestCase):
 
     def test_decision_gate_clear_summary(self) -> None:
         with patch(
-            "orchestrator.core.decision_gate._evaluate_decision_gate_with_codex",
+            "orchestrator.core.decision_gate._evaluate_decision_gate_with_runtime",
             return_value=DecisionGateResult(
                 triggered=False,
                 reason="Decision Gate not required",

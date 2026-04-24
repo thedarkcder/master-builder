@@ -9,6 +9,7 @@ from orchestrator.core.agent_runtime_resolver import build_runtime_for_selector
 from orchestrator.core.codex_runtime import CodexRuntimeError
 from orchestrator.core.pm_plugin_catalog import plugin_catalog_payload, tool_catalog_payload
 from orchestrator.core.prompt_templates import render_prompt
+from orchestrator.core.runtime_payload_models import DesignPlanningPayload
 from orchestrator.core.runtime_invocation import AgentInvocationContext, invoke_runtime_json
 
 
@@ -27,7 +28,7 @@ def invoke_stage_design_planning_llm(
     stage_artifacts: dict[str, Any],
     stage_open_questions: list[str],
     stage_tool_outputs: list[dict[str, Any]],
-) -> dict[str, Any]:
+) -> DesignPlanningPayload:
     runtime = build_runtime_for_selector(
         session=session,
         settings=settings,
@@ -62,6 +63,7 @@ def invoke_stage_design_planning_llm(
             tool_catalog_json=json.dumps(tool_catalog_payload(), ensure_ascii=False, sort_keys=True),
         ),
     )
-    if not isinstance(payload, dict):
-        raise CodexRuntimeError("Design planning did not return a JSON object")
-    return payload
+    try:
+        return DesignPlanningPayload.from_payload(payload)
+    except RuntimeError as exc:
+        raise CodexRuntimeError(str(exc)) from exc

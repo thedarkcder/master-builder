@@ -139,9 +139,15 @@ def _create_workflow_tables() -> None:
         ("ix_workflow_executions_issue_key", ["issue_key"]),
         ("ix_workflow_executions_status", ["status"]),
     ):
-        if not _has_index("workflow_executions", index_name):
+        if all(_has_column("workflow_executions", column) for column in columns) and not _has_index(
+            "workflow_executions",
+            index_name,
+        ):
             op.create_index(index_name, "workflow_executions", columns, unique=False)
-    if not _has_index("workflow_executions", "uq_workflow_executions_active_scope"):
+    if _has_column("workflow_executions", "issue_key") and not _has_index(
+        "workflow_executions",
+        "uq_workflow_executions_active_scope",
+    ):
         op.create_index(
             "uq_workflow_executions_active_scope",
             "workflow_executions",

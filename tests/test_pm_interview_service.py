@@ -15,16 +15,16 @@ from orchestrator.core.pm_interview_service import (
     PM_INTERVIEW_SOURCE_KIND_PARENT_BRIEF_SNAPSHOT,
     PM_INTERVIEW_STATUS_READY_TO_WRITE,
     PM_INTERVIEW_STATUS_QUESTION_PENDING,
+    PMInterviewQuestion,
     assess_pm_interview_brief,
-    format_pm_interview_question,
+    CodexRuntimeError,
     mark_pm_interview_case_abandoned,
     mark_pm_interview_case_completed,
     normalize_pm_interview_evidence,
     normalize_parent_feature_brief_with_runtime,
-    plan_pm_interview_with_codex,
+    plan_pm_interview_with_runtime,
     resolve_pm_interview_case,
     resolve_pm_interview_case_match,
-    select_next_pm_interview_question,
     upsert_pm_interview_case,
 )
 from orchestrator.core.parent_feature_brief_store import (
@@ -69,18 +69,12 @@ class PMInterviewServiceTests(unittest.TestCase):
         self.temp_dir.cleanup()
         clear_runtime_environment()
 
-    def test_assess_pm_interview_brief_selects_next_question_with_examples(self) -> None:
+    def test_assess_pm_interview_brief_does_not_synthesize_next_question(self) -> None:
         assessment = assess_pm_interview_brief(brief={"objective": "Share the app with friends"})
 
         self.assertEqual(assessment.status, PM_INTERVIEW_STATUS_QUESTION_PENDING)
         self.assertGreater(len(assessment.missing_slots), 0)
-        self.assertIsNotNone(assessment.next_question)
-        assert assessment.next_question is not None
-        self.assertEqual(assessment.next_question.slot_key, "user_value")
-        question_text = format_pm_interview_question(assessment.next_question)
-        self.assertIn("Why does the user want this feature?", question_text)
-        self.assertIn("Examples:", question_text)
-        self.assertIn("friction during onboarding", question_text)
+        self.assertIsNone(assessment.next_question)
 
     def test_assess_pm_interview_brief_uses_evidence_updates_and_reaches_ready_to_write(self) -> None:
         evidence = normalize_pm_interview_evidence(
@@ -658,7 +652,7 @@ class PMInterviewServiceTests(unittest.TestCase):
         self.assertIn("knowledge.read", str(captured["governed_tools_json"]))
         self.assertIn("web.search", str(captured["native_tools_json"]))
 
-    def test_plan_pm_interview_with_codex_uses_question_examples_and_json_contract(self) -> None:
+    def test_plan_pm_interview_with_runtime_uses_current_question_examples_and_json_contract(self) -> None:
         captured: dict[str, object] = {}
 
         def _render_prompt(template_name: str, **kwargs):  # noqa: ANN001
@@ -668,17 +662,31 @@ class PMInterviewServiceTests(unittest.TestCase):
         with (
             patch(
                 "orchestrator.core.pm_interview_service._invoke_discord_json_maybe_tools",
-                return_value={"message": "What user group?", "brief": {"objective": "Share the app with friends"}},
+                return_value={
+                    "message": "What user group?",
+                    "brief": {"objective": "Share the app with friends"},
+                    "status": PM_INTERVIEW_STATUS_QUESTION_PENDING,
+                    "ready_to_write": False,
+                    "next_question": {
+                        "slot_key": "user_value",
+                        "question": "What user group should this support first?",
+                        "examples": ["New invited users", "Tenant admins", "Existing members inviting teammates"],
+                    },
+                },
             ),
             patch("orchestrator.core.pm_interview_service.render_prompt", side_effect=_render_prompt),
         ):
-            payload = plan_pm_interview_with_codex(
+            payload = plan_pm_interview_with_runtime(
                 runtime=SimpleNamespace(),
                 request_text="create a share feature",
                 brief={"objective": "Share the app with friends"},
                 evidence=[],
                 missing_slots=["user_value", "acceptance_criteria"],
-                next_question=select_next_pm_interview_question(missing_slots=["user_value", "acceptance_criteria"]),
+                current_question=PMInterviewQuestion(
+                    slot_key="user_value",
+                    question="Why does the user want this feature?",
+                    examples=("It reduces friction during onboarding",),
+                ),
                 project_keys=["TP"],
                 issues=[],
                 status_counts={},
@@ -692,10 +700,43 @@ class PMInterviewServiceTests(unittest.TestCase):
         self.assertEqual(payload["missing_slots"], ["user_value", "acceptance_criteria"])
         self.assertIn("discord/pm_interview_system.j2", captured)
         user_kwargs = captured["discord/pm_interview_user.j2"]
-        self.assertIn("next_question_examples_json", user_kwargs)
-        self.assertTrue(json.loads(user_kwargs["next_question_examples_json"]))
+        self.assertIn("current_question_examples_json", user_kwargs)
+        self.assertTrue(json.loads(user_kwargs["current_question_examples_json"]))
         self.assertIn("brief_json", user_kwargs)
         self.assertEqual(json.loads(user_kwargs["brief_json"])["objective"], "Share the app with friends")
+
+    def test_plan_pm_interview_with_runtime_requires_explicit_next_question_when_incomplete(self) -> None:
+        with patch(
+            "orchestrator.core.pm_interview_service._invoke_discord_json_maybe_tools",
+            return_value={
+                "message": "I still need one more product clarification.",
+                "brief": {"objective": "Share the app with friends"},
+                "ready_to_write": False,
+                "status": PM_INTERVIEW_STATUS_QUESTION_PENDING,
+            },
+        ):
+            with self.assertRaisesRegex(
+                CodexRuntimeError,
+                "missing next_question for incomplete brief",
+            ):
+                plan_pm_interview_with_runtime(
+                    runtime=SimpleNamespace(),
+                    request_text="create a share feature",
+                    brief={"objective": "Share the app with friends"},
+                    evidence=[],
+                    missing_slots=["user_value"],
+                    current_question=PMInterviewQuestion(
+                        slot_key="user_value",
+                        question="Why does the user want this feature?",
+                        examples=("It reduces friction during onboarding",),
+                    ),
+                    project_keys=["TP"],
+                    issues=[],
+                    status_counts={},
+                    invocation_context=SimpleNamespace(),
+                    history=[],
+                    github_context={},
+                )
 
 
 if __name__ == "__main__":

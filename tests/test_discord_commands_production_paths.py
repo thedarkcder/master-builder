@@ -24,6 +24,7 @@ from orchestrator.core.decision_types import (
 )
 from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.pre_run_check import PreRunCheckResult
+from orchestrator.core.runtime_payload_models import AskIntentPayload
 from orchestrator.core.secrets import encrypt_value
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.models import AtlassianOAuthConnection, Project, Tenant
@@ -131,7 +132,41 @@ class _FakeJiraClient:
         cloud_id: str,
         project_key: str,
     ) -> list[str]:  # noqa: ARG002
-        return ["Epic", "Story", "Task", "Subtask"]
+        return ["Epic", "Story", "Task", "Sub-task"]
+
+    def update_issue_summary(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        issue_id_or_key: str,
+        summary: str,
+    ) -> None:
+        self.update_calls.append(
+            {
+                "access_token": access_token,
+                "cloud_id": cloud_id,
+                "issue_id_or_key": issue_id_or_key,
+                "summary": summary,
+            }
+        )
+
+    def replace_issue_labels(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        issue_id_or_key: str,
+        labels: list[str],
+    ) -> None:
+        self.update_calls.append(
+            {
+                "access_token": access_token,
+                "cloud_id": cloud_id,
+                "issue_id_or_key": issue_id_or_key,
+                "labels": list(labels),
+            }
+        )
 
     def update_issue_fields(
         self,
@@ -395,6 +430,7 @@ class DiscordCommandProductionPathTests(SqliteTemplateDbTestCase):
                         "acceptance_criteria": ["Policy is documented"],
                         "ui_references": [],
                         "success_outcomes": ["Stakeholders can review the product behavior without technical detail."],
+                        "dependencies": [],
                         "risks": [],
                         "open_questions": [],
                         "labels": ["seeded", "pm-parent"],
@@ -558,8 +594,8 @@ class DiscordCommandProductionPathTests(SqliteTemplateDbTestCase):
         with (
             patch("orchestrator.api.discord.commands.ask.build_runtime_for_selector", return_value=runtime),
             patch(
-                "orchestrator.api.discord.commands.ask.plan_discord_ask_intent_with_codex",
-                return_value={"mode": "answer", "summary": "Scoped answer"},
+                "orchestrator.api.discord.commands.ask.plan_discord_ask_intent_with_runtime",
+                return_value=AskIntentPayload(mode="answer", summary="Scoped answer", command=None),
             ),
             patch("orchestrator.api.discord.ask.context.tenant_atlassian_oauth_context", return_value=fake_oauth),
             patch("orchestrator.api.discord.ask.context._refresh_atlassian_connection_tokens", return_value="access-token"),
@@ -599,61 +635,21 @@ class DiscordCommandProductionPathTests(SqliteTemplateDbTestCase):
         self.assertEqual(response.status_code, 409)
         self.assertIn("requires a single mapped project scope", response.json()["detail"])
 
-    def test_issues_seed_retries_empty_codex_output_once_then_succeeds(self) -> None:
+    def test_issues_seed_returns_controlled_503_when_codex_output_is_empty(self) -> None:
         runtime, queue = self._seed_runtime(
             [
                 CodexRuntimeError(
                     "Codex CLI command failed (exit=1): Warning: no last agent message; wrote empty content to /tmp/seed.txt"
                 ),
-                self._planned_seed_output(summary="Retry succeeded for seed planner"),
             ]
         )
-        fake_jira_client = _FakeJiraClient(
-            issue_key="TP-42",
-            summary="Cross-account relink policy",
-            status="To Do",
-            description="Clarify the device relink policy.",
-            labels=["agent:ready"],
-            created_issue_keys=["TP-302", "TP-303"],
-        )
-        fake_oauth = {
-            "client": fake_jira_client,
-            "connection": SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
-            "access_token": "access-token",
-        }
-
-        with (
-            patch("orchestrator.api.discord.ingress.seed_runtime.build_issue_seed_runtime", return_value=runtime),
-            patch("orchestrator.api.discord.ingress.jira_runtime.tenant_atlassian_oauth_context", return_value=fake_oauth),
-        ):
-            response = self._post_command("!issues seed draft a backlog item for relink policy")
-
-        self.assertEqual(response.status_code, 200)
-        body = response.json()
-        self.assertTrue(body["ok"])
-        self.assertIn("TP-302", body["message"])
-        self.assertEqual(body["data"]["created_parent_issue_keys"], ["TP-302"])
-        self.assertEqual(queue.calls, 2)
-
-    def test_issues_seed_returns_controlled_503_when_codex_empty_output_repeats(self) -> None:
-        runtime, queue = self._seed_runtime(
-            [
-                CodexRuntimeError(
-                    "Codex CLI command failed (exit=1): Warning: no last agent message; wrote empty content to /tmp/seed.txt"
-                ),
-                CodexRuntimeError(
-                    "Codex CLI command failed (exit=1): Warning: no last agent message; wrote empty content to /tmp/seed.txt"
-                ),
-            ]
-        )
-
         with patch("orchestrator.api.discord.ingress.seed_runtime.build_issue_seed_runtime", return_value=runtime):
             response = self._post_command("!issues seed draft a backlog item for relink policy")
 
         self.assertEqual(response.status_code, 503)
         self.assertIn("PM parent seeding runtime is unavailable", response.json()["detail"])
         self.assertIn("no last agent message", response.json()["detail"].lower())
-        self.assertEqual(queue.calls, 2)
+        self.assertEqual(queue.calls, 1)
 
     def test_issues_seed_surfaces_usage_limit_without_retrying(self) -> None:
         runtime, queue = self._seed_runtime(

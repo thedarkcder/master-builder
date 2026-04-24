@@ -25,6 +25,7 @@ admin-ui/tsconfig.tsbuildinfo
 mcp.json
 admin-ui/.next-playwright
 .playwright-mcp/
+.playwright-cli/
 .runtime-home/
 .DS_Store
 .runtime-home/

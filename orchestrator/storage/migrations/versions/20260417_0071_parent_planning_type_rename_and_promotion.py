@@ -253,6 +253,9 @@ def upgrade() -> None:
     )
     _create_workflow_id_foreign_keys(bind)
 
+    if not _has_column("workflow_type_operations", "retry_policy"):
+        return
+
     now = _now()
     operations_table = sa.table(
         "workflow_type_operations",

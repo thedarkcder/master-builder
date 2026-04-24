@@ -8,7 +8,7 @@ from orchestrator.core.agent_runtime_resolver import (
 )
 from orchestrator.core.codex_runtime import CodexRuntimeError, build_runtime_for_execution_profile
 from orchestrator.core.prompt_templates import render_prompt
-from orchestrator.core.runtime_invocation import AgentInvocationContext
+from orchestrator.core.runtime_invocation import AgentInvocationContext, RuntimeInvocationError
 from orchestrator.core.runtime_stage_session import RuntimeStageSession
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.storage.models import Project, Run, Tenant
@@ -137,16 +137,12 @@ def prepare_execution_repo_for_run(
                 integration_branch=integration_branch,
                 **stage_session.tooling.governed_prompt_context(),
             ),
-            require_json=False,
         )
-    except CodexRuntimeError as exc:
+    except (CodexRuntimeError, RuntimeInvocationError) as exc:
         raise RetryableRepoSetupError(f"Repo setup runtime failed: {exc}") from exc
 
     if not isinstance(payload, dict):
         raise RetryableRepoSetupError("Repo setup runtime did not return a JSON object")
-    tool_bridge_error = str(payload.get("_tool_bridge_error") or "").strip()
-    if tool_bridge_error:
-        raise RetryableRepoSetupError(f"Repo setup runtime bridge failed: {tool_bridge_error}")
 
     outcome = str(payload.get("outcome") or "").strip().lower()
     if outcome == "retryable_failure":

@@ -11,6 +11,7 @@ from orchestrator.core.communications import (
     DiscordChannelMessageWithAttachmentAction,
     DiscordThreadReplyAction,
 )
+from orchestrator.core.runtime_payload_models import VoiceEntryRoutePayload
 
 
 class DiscordMessageApplicationTests(unittest.TestCase):
@@ -53,7 +54,14 @@ class DiscordMessageApplicationTests(unittest.TestCase):
             logger=logger,
             settings=SimpleNamespace(),
             route_voice_entry=route_voice_entry
-            or MagicMock(return_value={"lane": "interview", "persona": "pm", "confidence": 1.0, "reason": "default"}),
+            or MagicMock(
+                return_value=VoiceEntryRoutePayload(
+                    lane="interview",
+                    persona="pm",
+                    confidence=1.0,
+                    reason="default",
+                )
+            ),
         )
 
     def test_pm_command_opens_interview_thread(self) -> None:
@@ -240,7 +248,7 @@ class DiscordMessageApplicationTests(unittest.TestCase):
                 },
             )
         )
-        route = MagicMock(return_value={"lane": "ask", "persona": "pm", "confidence": 0.8, "reason": "routing"})
+        route = MagicMock(return_value=VoiceEntryRoutePayload(lane="ask", persona="pm", confidence=0.8, reason="routing"))
         deps = self._deps(
             execute_tenant_discord_command=execute,
             resolve_followup_context_match=MagicMock(return_value=SimpleNamespace(status="no_match", context=None, matches=())),
@@ -289,7 +297,7 @@ class DiscordMessageApplicationTests(unittest.TestCase):
                 data={"pm_mode": True, "followup_context_type": "pm_interview", "issue_key": "TP-1"},
             )
         )
-        route = MagicMock(return_value={"lane": "interview", "persona": "pm", "confidence": 0.9, "reason": "brief"})
+        route = MagicMock(return_value=VoiceEntryRoutePayload(lane="interview", persona="pm", confidence=0.9, reason="brief"))
         deps = self._deps(
             execute_tenant_discord_command=execute,
             resolve_followup_context_match=MagicMock(return_value=SimpleNamespace(status="no_match", context=None, matches=())),
@@ -348,7 +356,7 @@ class DiscordMessageApplicationTests(unittest.TestCase):
                 },
             )
         )
-        route = MagicMock(return_value={"lane": "ask", "persona": "pm", "confidence": 0.9, "reason": "ask"})
+        route = MagicMock(return_value=VoiceEntryRoutePayload(lane="ask", persona="pm", confidence=0.9, reason="ask"))
         deps = self._deps(
             execute_tenant_discord_command=execute,
             resolve_followup_context_match=MagicMock(return_value=SimpleNamespace(status="no_match", context=None, matches=())),

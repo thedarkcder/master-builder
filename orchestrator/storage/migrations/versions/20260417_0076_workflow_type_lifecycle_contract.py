@@ -19,6 +19,10 @@ branch_labels = None
 depends_on = None
 
 
+def _has_column(table_name: str, column_name: str) -> bool:
+    return column_name in {column["name"] for column in sa.inspect(op.get_bind()).get_columns(table_name)}
+
+
 def _read_json_object(value: object, *, workflow_type_key: str, field_name: str) -> dict:
     raw_value = value
     if isinstance(raw_value, str):
@@ -53,7 +57,9 @@ def upgrade() -> None:
     bind = op.get_bind()
     dialect = bind.dialect.name
 
-    op.add_column("workflow_types", sa.Column("lifecycle_json", sa.JSON(), nullable=True))
+    added_lifecycle_json = not _has_column("workflow_types", "lifecycle_json")
+    if added_lifecycle_json:
+        op.add_column("workflow_types", sa.Column("lifecycle_json", sa.JSON(), nullable=True))
 
     workflow_types = sa.table(
         "workflow_types",
@@ -149,6 +155,8 @@ def upgrade() -> None:
         )
         _validate_lifecycle(lifecycle, workflow_type_key=str(row["workflow_type_key"]))
 
+    if not added_lifecycle_json:
+        return
     if dialect == "sqlite":
         with op.batch_alter_table("workflow_types") as batch_op:
             batch_op.alter_column("lifecycle_json", nullable=False)

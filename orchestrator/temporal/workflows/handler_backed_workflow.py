@@ -17,6 +17,7 @@ from orchestrator.temporal.payloads import (
 
 try:  # pragma: no cover - exercised when temporal backend is enabled
     from temporalio import workflow
+    from temporalio.common import RetryPolicy
 except ImportError as exc:  # pragma: no cover - exercised when temporal backend is enabled
     raise RuntimeError("Temporal backend requires temporalio to be installed") from exc
 
@@ -30,6 +31,21 @@ class HandlerBackedWorkflow:
         self._active_run_id: str | None = None
         self._last_error: str | None = None
         self._activity_timeout_seconds: int = 7200
+
+    @staticmethod
+    def _activity_retry_policy(payload: HandlerWorkflowAdvanceInput) -> RetryPolicy | None:
+        max_attempts = max(1, int(payload.retry_max_attempts or 1))
+        if max_attempts <= 1:
+            return None
+        initial_interval_seconds = max(1, int(payload.retry_initial_interval_seconds or 1))
+        max_interval_seconds = max(initial_interval_seconds, int(payload.retry_max_interval_seconds or 0))
+        return RetryPolicy(
+            initial_interval=timedelta(seconds=initial_interval_seconds),
+            maximum_interval=timedelta(seconds=max_interval_seconds),
+            backoff_coefficient=max(1.0, float(payload.retry_backoff_coefficient or 1.0)),
+            maximum_attempts=max_attempts,
+            non_retryable_error_types=("terminal_workflow_advance_error",),
+        )
 
     def _apply_advance_result(self, result: HandlerWorkflowAdvanceResult) -> None:
         self._status = str(result.status or "").strip().lower() or self._status
@@ -46,6 +62,7 @@ class HandlerBackedWorkflow:
             process_handler_workflow_advance_activity,
             payload,
             start_to_close_timeout=timedelta(seconds=self._activity_timeout_seconds),
+            retry_policy=self._activity_retry_policy(payload),
         )
 
     async def _retry_operation(self, payload: WorkflowOperationRetryInput) -> WorkflowOperationRetryResult:

@@ -11,6 +11,13 @@ from orchestrator.core.clarification_questions import ClarificationQuestion, Cla
 from orchestrator.core.runtime_invocation import AgentInvocationContext
 from orchestrator.core.codex_runtime import CodexRuntimeError
 from orchestrator.core.prompt_templates import render_prompt
+from orchestrator.core.runtime_payload_models import (
+    ArchitectStageOutputPayload,
+    ChildTicketSpecPayload,
+    PlanningStageOutputPayload,
+    SecurityStageOutputPayload,
+    TestingStageOutputPayload,
+)
 from orchestrator.core.runtime_stage_session import RuntimeStageSession
 
 PLANNING_STATE_ENGINEERING = "engineering_planning"
@@ -18,6 +25,10 @@ PLANNING_STATE_SECURITY = "security_planning"
 PLANNING_STATE_TEST = "test_planning"
 PLANNING_STATE_BLOCKED = "planning_blocked"
 PLANNING_STATE_COMPLETED = "planning_completed"
+
+
+class RetryableSpecialistPlanningContractError(CodexRuntimeError):
+    """Raised when model output violates the specialist-planning schema contract."""
 
 
 @dataclass(frozen=True)
@@ -40,36 +51,13 @@ class SpecialistPlanningRequest:
     attempt: int | None = None
 
 
-@dataclass(frozen=True)
-class SpecialistPlanningStageResult:
-    planning_state: str
-    persona_id: str
-    role_label: str
-    blocked: bool
-    findings: tuple[str, ...]
-    recommendations: tuple[str, ...]
-    required_tasks: tuple[str, ...]
-    child_ticket_specs: tuple[dict[str, object], ...]
-    open_behavior_questions: tuple[ClarificationQuestion, ...]
-    acceptance_impacts: tuple[str, ...]
-    mermaid_diagram: str | None = None
+ChildTicketSpec = ChildTicketSpecPayload
+PlanningStageOutput = PlanningStageOutputPayload
+ArchitectStageOutput = ArchitectStageOutputPayload
+SecurityStageOutput = SecurityStageOutputPayload
+TestingStageOutput = TestingStageOutputPayload
 
-    def to_payload(self) -> dict[str, object]:
-        payload = {
-            "planning_state": self.planning_state,
-            "persona_id": self.persona_id,
-            "role_label": self.role_label,
-            "blocked": self.blocked,
-            "findings": list(self.findings),
-            "recommendations": list(self.recommendations),
-            "required_tasks": list(self.required_tasks),
-            "child_ticket_specs": [dict(spec) for spec in self.child_ticket_specs],
-            "open_behavior_questions": [question.to_payload() for question in self.open_behavior_questions],
-            "acceptance_impacts": list(self.acceptance_impacts),
-        }
-        if isinstance(self.mermaid_diagram, str) and self.mermaid_diagram.strip():
-            payload["mermaid_diagram"] = self.mermaid_diagram.strip()
-        return payload
+SpecialistPlanningStageResult = ArchitectStageOutputPayload | SecurityStageOutputPayload | TestingStageOutputPayload
 
 
 @dataclass(frozen=True)
@@ -145,59 +133,6 @@ _PLANNING_STAGES = (
         reasoning_effort="medium",
     ),
 )
-
-
-def _string_list(value: object) -> tuple[str, ...]:
-    if not isinstance(value, list):
-        return ()
-    normalized: list[str] = []
-    for item in value:
-        text = " ".join(str(item).split())
-        if text:
-            normalized.append(text)
-    return tuple(normalized)
-
-
-def _question_list(value: object) -> tuple[ClarificationQuestion, ...]:
-    if not isinstance(value, list):
-        return ()
-    return ClarificationQuestionSet.from_values(value).questions
-
-
-def _child_ticket_specs(value: object) -> tuple[dict[str, object], ...]:
-    if not isinstance(value, list):
-        return ()
-    specs: list[dict[str, object]] = []
-    for raw_item in value:
-        if not isinstance(raw_item, dict):
-            continue
-        summary = " ".join(str(raw_item.get("summary") or "").split())
-        capability = " ".join(str(raw_item.get("capability") or "").split())
-        delivery = " ".join(str(raw_item.get("delivery") or "").split())
-        expected_outcome = " ".join(str(raw_item.get("expected_outcome") or "").split())
-        if not summary or not delivery:
-            continue
-        acceptance_criteria = _string_list(raw_item.get("acceptance_criteria"))
-        how_to_test = _string_list(raw_item.get("how_to_test"))
-        done_means = _string_list(raw_item.get("done_means"))
-        dependencies = _string_list(raw_item.get("dependencies"))
-        risks = _string_list(raw_item.get("risks"))
-        labels = _string_list(raw_item.get("labels"))
-        specs.append(
-            {
-                "summary": summary,
-                "capability": capability,
-                "delivery": delivery,
-                "expected_outcome": expected_outcome,
-                "acceptance_criteria": list(acceptance_criteria),
-                "how_to_test": list(how_to_test),
-                "done_means": list(done_means),
-                "dependencies": list(dependencies),
-                "risks": list(risks),
-                "labels": list(labels),
-            }
-        )
-    return tuple(specs)
 
 
 def _merge_unique(*sequences: Iterable[str]) -> tuple[str, ...]:
@@ -293,42 +228,46 @@ def _run_stage(
         system_prompt=system_prompt,
         user_prompt=user_prompt,
     )
-    if not isinstance(payload, dict):
-        raise CodexRuntimeError(f"Codex did not return a {stage.planning_state} JSON object")
-
-    findings = _string_list(payload.get("findings"))
-    recommendations = _string_list(payload.get("recommendations"))
-    required_tasks = _string_list(payload.get("required_tasks"))
-    child_ticket_specs = _child_ticket_specs(payload.get("child_ticket_specs"))
-    open_behavior_questions = _question_list(payload.get("open_behavior_questions"))
-    acceptance_impacts = _string_list(payload.get("acceptance_impacts"))
-    mermaid_diagram = None
-    if isinstance(payload.get("mermaid_diagram"), str):
-        normalized_diagram = payload.get("mermaid_diagram", "").strip()
-        mermaid_diagram = normalized_diagram or None
-    blocked = bool(open_behavior_questions)
-
-    return SpecialistPlanningStageResult(
-        planning_state=stage.planning_state,
-        persona_id=stage.persona_id,
-        role_label=stage.role_label,
-        blocked=blocked,
-        findings=findings,
-        recommendations=recommendations,
-        required_tasks=required_tasks,
-        child_ticket_specs=child_ticket_specs,
-        open_behavior_questions=open_behavior_questions,
-        acceptance_impacts=acceptance_impacts,
-        mermaid_diagram=mermaid_diagram,
-    )
+    try:
+        if stage.persona_id == "architect":
+            return ArchitectStageOutput.from_payload(
+                planning_state=stage.planning_state,
+                persona_id=stage.persona_id,
+                role_label=stage.role_label,
+                payload=payload,
+            )
+        if stage.persona_id == "security":
+            return SecurityStageOutput.from_payload(
+                planning_state=stage.planning_state,
+                persona_id=stage.persona_id,
+                role_label=stage.role_label,
+                payload=payload,
+            )
+        if stage.persona_id == "qa":
+            return TestingStageOutput.from_payload(
+                planning_state=stage.planning_state,
+                persona_id=stage.persona_id,
+                role_label=stage.role_label,
+                payload=payload,
+            )
+    except RuntimeError as exc:
+        raise RetryableSpecialistPlanningContractError(str(exc)) from exc
+    raise CodexRuntimeError(f"Unsupported specialist planning persona '{stage.persona_id}'")
 
 
 def planning_output_key(*, stage: SpecialistPlanningStageResult) -> str:
-    if stage.persona_id == "architect":
+    if isinstance(stage, ArchitectStageOutput):
         return "architecture"
-    if stage.persona_id == "security":
+    if isinstance(stage, SecurityStageOutput):
         return "security"
-    if stage.persona_id == "qa":
+    if isinstance(stage, TestingStageOutput):
+        return "testing"
+    persona_id = getattr(stage, "persona_id", None)
+    if persona_id == "architect":
+        return "architecture"
+    if persona_id == "security":
+        return "security"
+    if persona_id == "qa":
         return "testing"
     return stage.planning_state
 
@@ -341,23 +280,21 @@ def build_runtime_seed_planning_package(
         planning_output_key(stage=stage): stage.to_payload()
         for stage in result.stages
     }
-    architect_payload = stage_payloads.get("architecture")
-    if architect_payload is not None and not isinstance(architect_payload, dict):
-        raise ValueError("Architect planning payload must be an object")
-    child_specs_raw = architect_payload.get("child_ticket_specs", []) if isinstance(architect_payload, dict) else []
-    if not isinstance(child_specs_raw, list):
-        raise ValueError("Architect planning payload must provide child_ticket_specs as a list")
-    child_issues = [dict(spec) for spec in child_specs_raw if isinstance(spec, dict)]
-    architect_required_tasks = architect_payload.get("required_tasks", []) if isinstance(architect_payload, dict) else []
-    if not isinstance(architect_required_tasks, list):
-        raise ValueError("Architect planning payload must provide required_tasks as a list")
+    architect_stage = next(
+        (stage for stage in result.stages if isinstance(stage, ArchitectStageOutput)),
+        None,
+    )
+    child_issues = [spec.to_payload() for spec in architect_stage.child_ticket_specs] if architect_stage else []
+    architect_required_tasks = architect_stage.required_tasks if architect_stage else ()
     if (
         result.planning_state == PLANNING_STATE_COMPLETED
-        and isinstance(architect_payload, dict)
+        and architect_stage is not None
         and architect_required_tasks
         and not child_issues
     ):
-        raise ValueError("Planning completed without executable engineering child ticket specs")
+        raise RetryableSpecialistPlanningContractError(
+            "Codex returned planning_completed without executable engineering child ticket specs"
+        )
     payload: dict[str, object] = {
         "planning_state": result.planning_state,
         "specialist_outputs": stage_payloads,
@@ -406,7 +343,7 @@ def run_specialist_planning_fanout(
             for stage_result in stage_results
             if stage_result.blocked and stage_result.open_behavior_questions
         )
-    architect_stage = next((stage for stage in stage_results if stage.persona_id == "architect"), None)
+    architect_stage = next((stage for stage in stage_results if isinstance(stage, ArchitectStageOutput)), None)
     architecture_summary = ()
     architecture_diagram = None
     if architect_stage is not None:

@@ -24,8 +24,6 @@ _TEXT_LIMITS: dict[str, int] = {
     "objective": 500,
     "user_value": 500,
     "recommendation": 500,
-    "architecture_title": 220,
-    "architecture_url": 420,
     "scope_item": 180,
     "acceptance_item": 220,
     "ui_reference_item": 180,
@@ -106,16 +104,12 @@ def build_parent_feature_description(
     sync_status: str,
     pm_status: str | None = None,
     planning_state: str | None = None,
-    architecture_title: str | None = None,
-    architecture_url: str | None = None,
 ) -> dict:
     bounded_objective = _truncate_text(objective, max_chars=_TEXT_LIMITS["objective"]) or "No objective provided"
     bounded_user_value = _truncate_text(user_value, max_chars=_TEXT_LIMITS["user_value"]) or "User value was not provided"
     bounded_recommendation = (
         _truncate_text(recommendation, max_chars=_TEXT_LIMITS["recommendation"]) or "Recommendation was not provided"
     )
-    bounded_architecture_title = _truncate_text(architecture_title or "", max_chars=_TEXT_LIMITS["architecture_title"])
-    bounded_architecture_url = _truncate_text(architecture_url or "", max_chars=_TEXT_LIMITS["architecture_url"])
     bounded_scope_in = _budget_items(
         scope_in,
         max_items=_PARENT_SECTION_ITEM_LIMITS["scope_in"],
@@ -166,13 +160,6 @@ def build_parent_feature_description(
         _heading("Recommendation"),
         _bullet_list([bounded_recommendation]),
     ]
-    if bounded_architecture_title or bounded_architecture_url:
-        content.extend(
-            [
-                _heading("Architecture"),
-                _bullet_list([f"See Architecture: {bounded_architecture_title} {bounded_architecture_url}".strip()]),
-            ]
-        )
     planning_status_items = [
         item
         for item in (
@@ -236,8 +223,6 @@ def build_engineering_child_description(
     dependencies_and_risks: list[str],
     specialist_summary: list[str] | None = None,
     planning_state: str | None = None,
-    architecture_title: str | None = None,
-    architecture_url: str | None = None,
 ) -> dict:
     bounded_delivery = (
         _truncate_text(delivery, max_chars=_TEXT_LIMITS["delivery"])
@@ -254,8 +239,6 @@ def build_engineering_child_description(
         _truncate_text(expected_outcome, max_chars=_TEXT_LIMITS["expected_outcome"])
         or "Expected outcome was not provided"
     )
-    bounded_architecture_title = _truncate_text(architecture_title or "", max_chars=_TEXT_LIMITS["architecture_title"])
-    bounded_architecture_url = _truncate_text(architecture_url or "", max_chars=_TEXT_LIMITS["architecture_url"])
     bounded_acceptance_criteria = _budget_items(
         acceptance_criteria,
         max_items=_CHILD_SECTION_ITEM_LIMITS["acceptance_criteria"],
@@ -318,11 +301,6 @@ def build_engineering_child_description(
         _heading("Notes / Links"),
         _bullet_list(["Owned by Engineering", f"Parent issue: {parent_issue_key}"]),
     ]
-    if bounded_architecture_title or bounded_architecture_url:
-        content[4:4] = [
-            _heading("Architecture"),
-            _bullet_list([f"See Architecture: {bounded_architecture_title} {bounded_architecture_url}".strip()]),
-        ]
     return {"type": "doc", "version": 1, "content": content}
 
 

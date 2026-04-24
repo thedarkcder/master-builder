@@ -21,10 +21,17 @@ class PrReadinessResult:
     missing_review_sections: tuple[str, ...] = ()
 
 
-def _string_list(value: object) -> tuple[str, ...]:
+def _required_string_tuple(value: object, *, field: str) -> tuple[str, ...]:
     if not isinstance(value, list):
-        return ()
-    return tuple(str(item).strip() for item in value if str(item).strip())
+        raise RuntimeError(f"Runtime PR readiness evaluation returned invalid {field}")
+    normalized: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            raise RuntimeError(f"Runtime PR readiness evaluation returned invalid {field} item")
+        stripped = item.strip()
+        if stripped:
+            normalized.append(stripped)
+    return tuple(normalized)
 
 
 def _workflow_checks_payload(workflow_checks: list[WorkflowCheckSuite]) -> list[dict[str, str | None]]:
@@ -38,7 +45,7 @@ def _workflow_checks_payload(workflow_checks: list[WorkflowCheckSuite]) -> list[
     ]
 
 
-def _evaluate_pr_readiness_with_codex(
+def _evaluate_pr_readiness_with_runtime(
     *,
     review_summary_markdown: str | None,
     required_workflows: tuple[str, ...],
@@ -68,18 +75,21 @@ def _evaluate_pr_readiness_with_codex(
             ),
         )
     except CodexRuntimeError as exc:
-        raise RuntimeError(f"Codex PR readiness evaluation failed: {exc}") from exc
+        raise RuntimeError(f"Runtime PR readiness evaluation failed: {exc}") from exc
 
     ready = bool(payload.get("ready"))
     state = str(payload.get("state") or "").strip()
     reason = str(payload.get("reason") or "").strip()
-    missing_workflows = _string_list(payload.get("missing_workflows"))
-    pending_workflows = _string_list(payload.get("pending_workflows"))
-    failing_workflows = _string_list(payload.get("failing_workflows"))
-    missing_review_sections = _string_list(payload.get("missing_review_sections"))
+    missing_workflows = _required_string_tuple(payload.get("missing_workflows"), field="missing_workflows")
+    pending_workflows = _required_string_tuple(payload.get("pending_workflows"), field="pending_workflows")
+    failing_workflows = _required_string_tuple(payload.get("failing_workflows"), field="failing_workflows")
+    missing_review_sections = _required_string_tuple(
+        payload.get("missing_review_sections"),
+        field="missing_review_sections",
+    )
 
     if not state or not reason:
-        raise RuntimeError("Codex PR readiness evaluation returned incomplete payload")
+        raise RuntimeError("Runtime PR readiness evaluation returned incomplete payload")
 
     return PrReadinessResult(
         ready=ready,
@@ -100,7 +110,7 @@ def evaluate_pr_readiness(
     tenant_id: str | None = None,
     project_id: str | None = None,
 ) -> PrReadinessResult:
-    return _evaluate_pr_readiness_with_codex(
+    return _evaluate_pr_readiness_with_runtime(
         review_summary_markdown=review_summary_markdown,
         required_workflows=required_workflows,
         workflow_checks=workflow_checks,

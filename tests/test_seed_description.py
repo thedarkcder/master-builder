@@ -53,8 +53,6 @@ def test_parent_feature_description_omits_pm_handoff_and_sync_status_sections() 
         sync_status="children_syncing",
         pm_status="pm_completed",
         planning_state="planning_completed",
-        architecture_title="Decision Engine v2",
-        architecture_url="https://docs.example.com/decision-engine-v2",
     )
 
     headings = _heading_texts(doc)
@@ -64,9 +62,9 @@ def test_parent_feature_description_omits_pm_handoff_and_sync_status_sections() 
     assert "Architecture Context" not in headings
     assert "Architecture Diagram" not in headings
     assert "Objective" in headings
-    assert "Architecture" in headings
+    assert "Architecture" not in headings
     assert "Open Questions" in headings
-    assert "See Architecture: Decision Engine v2 https://docs.example.com/decision-engine-v2" in _flatten_text(doc)
+    assert "See Architecture:" not in _flatten_text(doc)
 
 
 def test_seed_description_builders_budget_content_before_jira_transport_cap() -> None:
@@ -86,8 +84,6 @@ def test_seed_description_builders_budget_content_before_jira_transport_cap() ->
         sync_status="children_syncing",
         pm_status="pm_completed",
         planning_state="planning_completed",
-        architecture_title=huge_line,
-        architecture_url=f"https://docs.example.com/{'x' * 512}",
     )
     child_doc = build_engineering_child_description(
         parent_issue_key="MAB-215",
@@ -102,8 +98,6 @@ def test_seed_description_builders_budget_content_before_jira_transport_cap() ->
         dependencies_and_risks=[huge_line] * 20,
         specialist_summary=[huge_line] * 20,
         planning_state="planning_completed",
-        architecture_title=huge_line,
-        architecture_url=f"https://docs.example.com/{'y' * 512}",
     )
 
     for doc in (parent_doc, child_doc):
@@ -113,7 +107,7 @@ def test_seed_description_builders_budget_content_before_jira_transport_cap() ->
         assert "Content truncated to fit Jira content size limit." not in _flatten_text(bounded)
 
 
-def test_engineering_child_description_includes_architecture_link_instead_of_embedded_architecture_summary() -> None:
+def test_engineering_child_description_omits_architecture_section() -> None:
     doc = build_engineering_child_description(
         parent_issue_key="MAB-215",
         parent_summary="Decision engine rollout",
@@ -127,19 +121,17 @@ def test_engineering_child_description_includes_architecture_link_instead_of_emb
         dependencies_and_risks=["Architecture document must exist before fanout completes."],
         specialist_summary=["Architecture doc is the persistent source of truth."],
         planning_state="planning_completed",
-        architecture_title="Decision Engine v2",
-        architecture_url="https://docs.example.com/decision-engine-v2",
     )
 
     headings = _heading_texts(doc)
 
-    assert "Architecture" in headings
+    assert "Architecture" not in headings
     assert "Architecture Context" not in headings
     assert "Architecture Diagram" not in headings
-    assert "See Architecture: Decision Engine v2 https://docs.example.com/decision-engine-v2" in _flatten_text(doc)
+    assert "See Architecture:" not in _flatten_text(doc)
 
 
-def test_parent_feature_description_omits_architecture_section_without_canonical_link() -> None:
+def test_parent_feature_description_omits_architecture_section() -> None:
     doc = build_parent_feature_description(
         objective="Keep the parent description focused on execution.",
         user_value="Teams should use one canonical architecture source.",

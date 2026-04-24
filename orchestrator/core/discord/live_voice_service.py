@@ -799,10 +799,10 @@ class DiscordLiveVoiceService:
                     "voice_channel_id": room.voice_channel_id,
                 },
             )
-            lane = str(routed.get("lane") or "ask").strip().lower()
-            entry_persona = str(routed.get("persona") or "pm").strip().lower()
-            conf = float(routed.get("confidence") or 0.0)
-            reason = str(routed.get("reason") or "").strip()
+            lane = routed.lane
+            entry_persona = routed.persona
+            conf = routed.confidence
+            reason = routed.reason
             logger.info(
                 "discord_live_voice_entry_routed lane=%s persona=%s confidence=%s reason=%s",
                 lane,

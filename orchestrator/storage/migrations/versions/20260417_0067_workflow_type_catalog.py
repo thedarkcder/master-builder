@@ -23,7 +23,34 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _has_table(table_name: str) -> bool:
+    inspector = sa.inspect(op.get_bind())
+    return table_name in inspector.get_table_names()
+
+
+def _has_column(table_name: str, column_name: str) -> bool:
+    inspector = sa.inspect(op.get_bind())
+    if table_name not in inspector.get_table_names():
+        return False
+    return any(column.get("name") == column_name for column in inspector.get_columns(table_name))
+
+
+def _has_index(table_name: str, index_name: str) -> bool:
+    inspector = sa.inspect(op.get_bind())
+    if table_name not in inspector.get_table_names():
+        return False
+    return any(index.get("name") == index_name for index in inspector.get_indexes(table_name))
+
+
 def upgrade() -> None:
+    if (
+        _has_table("workflow_types")
+        and _has_table("workflow_type_operations")
+        and _has_column("workflow_executions", "workflow_type_key")
+        and _has_index("workflow_executions", "ix_workflow_executions_workflow_type_key")
+    ):
+        return
+
     now = _utcnow()
     op.create_table(
         "workflow_types",

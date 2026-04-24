@@ -61,7 +61,113 @@ class MigrationTests(unittest.TestCase):
 
         duplicates = {revision_id: count for revision_id, count in Counter(revision_ids).items() if count > 1}
         self.assertEqual(duplicates, {})
-        self.assertEqual(script.get_heads(), ["20260422_0089"])
+        self.assertEqual(script.get_heads(), ["20260424_0091"])
+
+    def test_projection_attempt_history_cleanup_removes_projection_only_attempt_rows(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            database_url = f"sqlite:///{Path(tmpdir) / 'projection-attempt-cleanup.sqlite'}"
+            engine = create_engine(database_url)
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE workflow_operations (
+                            operation_id VARCHAR PRIMARY KEY,
+                            operation_type VARCHAR NOT NULL
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE workflow_operation_attempts (
+                            attempt_id VARCHAR PRIMARY KEY,
+                            operation_id VARCHAR NOT NULL,
+                            attempt_number INTEGER NOT NULL
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE audit_events (
+                            event_id VARCHAR PRIMARY KEY,
+                            operation_id VARCHAR NULL
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE observability_stream_events (
+                            event_id VARCHAR PRIMARY KEY,
+                            operation_id VARCHAR NULL
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO workflow_operations (operation_id, operation_type) VALUES
+                            ('op-brief', 'brief_normalization'),
+                            ('op-parent', 'jira_parent_update'),
+                            ('op-fanout', 'jira_child_fanout')
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO workflow_operation_attempts (attempt_id, operation_id, attempt_number) VALUES
+                            ('attempt-brief', 'op-brief', 1),
+                            ('attempt-parent', 'op-parent', 1),
+                            ('attempt-fanout', 'op-fanout', 1)
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO audit_events (event_id, operation_id) VALUES
+                            ('audit-brief', 'op-brief'),
+                            ('audit-parent', 'op-parent'),
+                            ('audit-fanout', 'op-fanout')
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO observability_stream_events (event_id, operation_id) VALUES
+                            ('stream-brief', 'op-brief'),
+                            ('stream-parent', 'op-parent'),
+                            ('stream-fanout', 'op-fanout')
+                        """
+                    )
+                )
+                connection.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"))
+                connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('20260422_0089')"))
+
+            self._alembic_upgrade(database_url, "20260422_0090")
+
+            with engine.begin() as connection:
+                attempts = connection.execute(
+                    text("SELECT attempt_id FROM workflow_operation_attempts ORDER BY attempt_id")
+                ).scalars().all()
+                audit_ids = connection.execute(
+                    text("SELECT event_id FROM audit_events ORDER BY event_id")
+                ).scalars().all()
+                stream_ids = connection.execute(
+                    text("SELECT event_id FROM observability_stream_events ORDER BY event_id")
+                ).scalars().all()
+
+            self.assertEqual(attempts, ["attempt-fanout"])
+            self.assertEqual(audit_ids, ["audit-fanout"])
+            self.assertEqual(stream_ids, ["stream-fanout"])
 
     def test_rename_jira_oauth_platform_secrets_migration_updates_managed_secret_refs(self) -> None:
         with TemporaryDirectory() as tmpdir:
@@ -744,7 +850,7 @@ class MigrationTests(unittest.TestCase):
             self.assertIn("tenant_user_discord_identities", inspector.get_table_names())
             with engine.begin() as connection:
                 versions = connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
-            self.assertEqual(versions, ["20260413_0064"])
+            self.assertEqual(versions, ["20260424_0091"])
 
     def test_run_migrations_repairs_legacy_stream_only_0039_head(self) -> None:
         with TemporaryDirectory() as tmp_dir:
@@ -788,7 +894,7 @@ class MigrationTests(unittest.TestCase):
             self.assertIn("tenant_user_discord_identities", inspector.get_table_names())
             with engine.begin() as connection:
                 versions = connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
-            self.assertEqual(versions, ["20260413_0064"])
+            self.assertEqual(versions, ["20260424_0091"])
 
     def test_run_migrations_repairs_stamp_when_schema_0045_but_version_0044(self) -> None:
         with TemporaryDirectory() as tmp_dir:
@@ -802,7 +908,7 @@ class MigrationTests(unittest.TestCase):
 
             with engine.begin() as connection:
                 versions = connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
-            self.assertEqual(versions, ["20260413_0064"])
+            self.assertEqual(versions, ["20260424_0091"])
 
     def test_run_migrations_disables_alembic_logger_reconfiguration(self) -> None:
         fake_config = MagicMock()
@@ -1117,7 +1223,7 @@ class MigrationTests(unittest.TestCase):
             with engine.begin() as connection:
                 current_revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
 
-            self.assertEqual(current_revision, "20260413_0064")
+            self.assertEqual(current_revision, "20260424_0091")
 
     def test_run_migrations_rejects_sqlite_without_test_opt_in(self) -> None:
         previous = os.environ.get("ORCHESTRATOR_ALLOW_SQLITE_FOR_TESTS")
@@ -1271,7 +1377,7 @@ class MigrationTests(unittest.TestCase):
                         """
                         SELECT workflow_id, status, active_run_id, latest_checkpoint_id
                         FROM workflow_executions
-                        WHERE issue_key = 'GP-184'
+                        WHERE source_ref = 'GP-184'
                         """
                     )
                 ).mappings().one()

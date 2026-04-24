@@ -1,15 +1,12 @@
 from __future__ import annotations
 
 import json
-import logging
 from pathlib import Path
 from typing import Callable
 
 from orchestrator.core.runtime_invocation import AgentInvocationContext
 from orchestrator.core.knowledge_base import SlotResolution, parse_source_timestamp
 from orchestrator.core.project_policy import resolve_effective_policy
-
-logger = logging.getLogger(__name__)
 
 
 def resolve_slots_before_block(
@@ -24,7 +21,7 @@ def resolve_slots_before_block(
     settings,  # noqa: ANN001
     persisted_slot_answers: dict[str, SlotResolution],
     resolve_missing_slots_from_knowledge_fn: Callable[..., dict[str, SlotResolution]],
-    resolve_slots_with_codex_fn: Callable[..., dict[str, SlotResolution]],
+    resolve_slots_with_runtime_fn: Callable[..., dict[str, SlotResolution]],
 ) -> dict[str, SlotResolution]:
     effective_policy = resolve_effective_policy(
         tenant_policy=tenant.policy_config or {},
@@ -52,7 +49,7 @@ def resolve_slots_before_block(
     if not remaining:
         return resolved
 
-    codex_answers = resolve_slots_with_codex_fn(
+    runtime_answers = resolve_slots_with_runtime_fn(
         session=session,
         settings=settings,
         tenant=tenant,
@@ -63,14 +60,14 @@ def resolve_slots_before_block(
         missing_slots=remaining,
     )
     merged = dict(resolved)
-    for slot_name, answer in codex_answers.items():
+    for slot_name, answer in runtime_answers.items():
         if slot_name in merged:
             continue
         merged[slot_name] = answer
     return merged
 
 
-def resolve_slots_with_codex(
+def resolve_slots_with_runtime(
     *,
     session,
     settings,  # noqa: ANN001
@@ -80,12 +77,12 @@ def resolve_slots_with_codex(
     issue_summary: str | None,
     issue_description: str | None,
     missing_slots: list[str],
-    build_codex_runtime_fn,
+    build_runtime_fn,
     invoke_runtime_json_fn,
     project_repo_dir_fn,
-    codex_runtime_error_type,
+    runtime_error_type,
 ) -> dict[str, SlotResolution]:
-    runtime = build_codex_runtime_fn(session=session, settings=settings)
+    runtime = build_runtime_fn(session=session, settings=settings)
     repo_evidence = collect_repo_evidence(
         base_dir=str(getattr(settings, "project_repo_checkout_base_dir", "") or ""),
         tenant_id=tenant.tenant_id,
@@ -136,19 +133,12 @@ def resolve_slots_with_codex(
                 ]
             ),
         )
-    except codex_runtime_error_type as exc:
-        logger.warning(
-            "decision_resolution_codex_failed tenant_id=%s project_id=%s issue_key=%s error=%s",
-            tenant.tenant_id,
-            project.project_id,
-            issue_key,
-            exc,
-        )
-        return {}
+    except runtime_error_type as exc:
+        raise RuntimeError(f"Runtime decision resolution failed: {exc}") from exc
 
     answers_raw = payload.get("answers") if isinstance(payload, dict) else None
     if not isinstance(answers_raw, dict):
-        return {}
+        raise RuntimeError("Runtime decision resolution returned invalid answers")
 
     resolved: dict[str, SlotResolution] = {}
     for slot_name in missing_slots:
@@ -161,7 +151,7 @@ def resolve_slots_with_codex(
             source_timestamp=None,
             confidence=0.66,
             citation={
-                "source_type": "codex_inference",
+                "source_type": "runtime_inference",
                 "title": "Decision resolution inference",
                 "source_timestamp": None,
             },

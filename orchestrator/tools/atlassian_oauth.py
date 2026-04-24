@@ -394,6 +394,27 @@ class AtlassianOAuthClient:
             link_type=link_type,
         )
 
+    def upsert_remote_issue_link(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        issue_id_or_key: str,
+        global_id: str,
+        relationship: str,
+        title: str,
+        url: str,
+    ) -> dict:
+        return self._issue_service.upsert_remote_issue_link(
+            access_token=access_token,
+            cloud_id=cloud_id,
+            issue_id_or_key=issue_id_or_key,
+            global_id=global_id,
+            relationship=relationship,
+            title=title,
+            url=url,
+        )
+
     def transition_issue(
         self,
         *,

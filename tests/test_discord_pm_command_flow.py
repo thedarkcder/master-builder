@@ -31,7 +31,7 @@ class DiscordPmCommandFlowTests(DiscordCommandApiTestHarness):
                 return_value=(None, None, [{"key": "TP-20", "summary": "Do thing", "status": "To Do"}], {"To Do": 1}, []),
             ),
             patch(
-                "orchestrator.api.discord.commands.ask.plan_pm_interview_with_codex",
+                "orchestrator.api.discord.commands.ask.plan_pm_interview_with_runtime",
                 return_value={
                     "message": (
                         "What kind of rollout narrative do you need?\n"
@@ -163,7 +163,7 @@ class DiscordPmCommandFlowTests(DiscordCommandApiTestHarness):
                 return_value=(None, None, [{"key": "TP-20", "summary": "Do thing", "status": "To Do"}], {"To Do": 1}, []),
             ),
             patch(
-                "orchestrator.api.discord.commands.ask.plan_pm_interview_with_codex",
+                "orchestrator.api.discord.commands.ask.plan_pm_interview_with_runtime",
                 return_value={
                     "message": "The PM brief is complete and ready for parent creation.",
                     "brief": {
@@ -256,7 +256,7 @@ class DiscordPmCommandFlowTests(DiscordCommandApiTestHarness):
                     return_value=(None, None, [{"key": "TP-20", "summary": "Do thing", "status": "To Do"}], {"To Do": 1}, []),
                 ),
                 patch(
-                    "orchestrator.api.discord.commands.ask.plan_pm_interview_with_codex",
+                    "orchestrator.api.discord.commands.ask.plan_pm_interview_with_runtime",
                     return_value={
                         "message": "The PM brief is complete and ready for parent creation.",
                         "brief": {
@@ -323,7 +323,7 @@ class DiscordPmCommandFlowTests(DiscordCommandApiTestHarness):
                 return_value=(None, None, [{"key": "TP-20", "summary": "Do thing", "status": "To Do"}], {"To Do": 1}, []),
             ),
             patch(
-                "orchestrator.api.discord.commands.ask.plan_pm_interview_with_codex",
+                "orchestrator.api.discord.commands.ask.plan_pm_interview_with_runtime",
                 return_value={
                     "message": (
                         "What kind of PM outcome do you need here?\n"
@@ -382,7 +382,7 @@ class DiscordPmCommandFlowTests(DiscordCommandApiTestHarness):
                 return_value=(None, None, [{"key": "TP-20", "summary": "Do thing", "status": "To Do"}], {"To Do": 1}, [{"question": "voice earlier", "answer": "security: older reply"}]),
             ),
             patch(
-                "orchestrator.api.discord.commands.ask.plan_pm_interview_with_codex",
+                "orchestrator.api.discord.commands.ask.plan_pm_interview_with_runtime",
                 return_value={
                     "message": (
                         "What product decision do you need to make about session security?\n"

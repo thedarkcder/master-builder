@@ -12,7 +12,7 @@ from orchestrator.api.discord.seed.issue_service import (
 from orchestrator.api.discord.seed.matching import select_seed_match
 from orchestrator.api.discord.ask.context import tenant_project_keys
 from orchestrator.core.agent_runtime_resolver import build_runtime_for_selector
-from orchestrator.core.codex_agents import plan_pm_parent_issues_with_codex, plan_seed_issues_with_codex
+from orchestrator.core.codex_agents import plan_pm_parent_issues_with_runtime, plan_seed_issues_with_runtime
 from orchestrator.core.codex_runtime import CodexRuntimeError
 from orchestrator.core.config import get_settings
 from orchestrator.core.runtime_invocation import WorkflowAttemptRef
@@ -72,7 +72,7 @@ def seed_issues_with_runtime(
             project_id=scoped_project_id,
             selector="discord.issue_seed",
         ),
-        plan_seed_issues_with_runtime_fn=plan_seed_issues_with_codex,
+        plan_seed_issues_with_runtime_fn=plan_seed_issues_with_runtime,
         codex_runtime_error_type=CodexRuntimeError,
         build_seed_issue_description_fn=build_seed_issue_description,
         issue_key_pattern=ISSUE_KEY_PATTERN,
@@ -118,7 +118,7 @@ def seed_parent_issues_with_runtime(
             project_id=scoped_project_id,
             selector="discord.pm_seed",
         ),
-        plan_pm_parent_issues_with_runtime_fn=plan_pm_parent_issues_with_codex,
+        plan_pm_parent_issues_with_runtime_fn=plan_pm_parent_issues_with_runtime,
         codex_runtime_error_type=CodexRuntimeError,
         issue_key_pattern=ISSUE_KEY_PATTERN,
         tenant_atlassian_oauth_context_fn=jira_runtime.tenant_atlassian_oauth_context,
