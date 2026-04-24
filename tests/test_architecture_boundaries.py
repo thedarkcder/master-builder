@@ -406,6 +406,34 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             msg=f"Workflow infrastructure importing parent-feature handlers directly: {violations}",
         )
 
+    def test_admin_workflows_service_is_route_facade_not_god_service(self) -> None:
+        module_path = ROOT / "orchestrator" / "api" / "admin" / "workflows_service.py"
+        tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
+        local_functions = [node.name for node in tree.body if isinstance(node, ast.FunctionDef)]
+        banned_local_helpers = {
+            "_workflow_schema",
+            "_workflow_operation_reads",
+            "_workflow_links",
+            "_workflow_runs",
+            "_workflow_operations",
+            "_pending_input_request",
+            "_step_buckets",
+            "_fresh_start_plan",
+            "_checkpoint_resume_plan",
+            "_cursor_filtered_events",
+        }
+        violations = sorted(banned_local_helpers.intersection(local_functions))
+        self.assertLessEqual(
+            len(local_functions),
+            6,
+            msg=f"Admin workflows service must remain a route-facing facade; found functions: {local_functions}",
+        )
+        self.assertEqual(
+            violations,
+            [],
+            msg=f"Admin workflows service must not own implementation helpers: {violations}",
+        )
+
     def test_temporal_handler_activity_does_not_import_workflow_provider_adapters(self) -> None:
         module_path = ROOT / "orchestrator" / "temporal" / "activities" / "handler_workflow.py"
         banned_prefixes = {
