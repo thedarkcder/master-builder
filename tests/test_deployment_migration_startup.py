@@ -66,13 +66,25 @@ class DeploymentMigrationStartupTests(unittest.TestCase):
     def test_hetzner_bootstrap_runs_migration_job_before_runtime_stack(self) -> None:
         bootstrap = (ROOT / "deploy" / "hetzner" / "bootstrap.sh").read_text(encoding="utf-8")
 
-        migrate_index = bootstrap.index("up --build --exit-code-from migrate migrate")
+        migrate_index = bootstrap.index("up --build --force-recreate --exit-code-from migrate migrate")
         stack_index = bootstrap.index("up -d --build")
 
         self.assertLess(
             migrate_index,
             stack_index,
             msg="Hetzner bootstrap must run the explicit migration job before starting long-running services.",
+        )
+
+    def test_hybrid_worker_script_runs_migration_job_before_runtime_stack(self) -> None:
+        script = (ROOT / "scripts" / "run_hybrid_workers.sh").read_text(encoding="utf-8")
+
+        migrate_index = script.index("up --build --force-recreate --exit-code-from migrate migrate")
+        stack_index = script.index("up --build -d --remove-orphans")
+
+        self.assertLess(
+            migrate_index,
+            stack_index,
+            msg="Hybrid worker launcher must run the explicit migration job before starting Docker services.",
         )
 
 
