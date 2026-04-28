@@ -27,6 +27,20 @@ def test_run_stage_preserves_attempt_id_in_invocation_context(monkeypatch) -> No
                 "findings": [],
                 "recommendations": [],
                 "required_tasks": [],
+                "child_ticket_specs": [
+                    {
+                        "summary": "Build child workflow",
+                        "capability": "workflow",
+                        "delivery": "implementation",
+                        "expected_outcome": "Child work can be executed",
+                        "acceptance_criteria": ["Child work is visible"],
+                        "how_to_test": ["Run the workflow"],
+                        "done_means": ["Workflow is complete"],
+                        "dependencies": [],
+                        "risks": [],
+                        "labels": [],
+                    }
+                ],
                 "open_behavior_questions": [],
                 "acceptance_impacts": [],
             }

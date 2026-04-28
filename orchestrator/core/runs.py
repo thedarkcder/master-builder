@@ -523,7 +523,6 @@ def enqueue_run(
         tenant_id=tenant_id,
         project_id=project_id,
         run_id=run_id,
-        issue_key=issue_key,
     )
     try:
         session.commit()
@@ -689,7 +688,6 @@ def _enqueue_attempt_for_workflow(
         tenant_id=workflow.tenant_id,
         project_id=workflow.project_id,
         run_id=run.run_id,
-        issue_key=workflow.source_ref,
     )
     if commit:
         session.commit()
@@ -729,6 +727,7 @@ def mark_run_terminal(
     run_id: str,
     terminal_status: str,
     last_error: str | None = None,
+    expected_worker_service_instance_id: str | None = None,
     expected_claim_id: str | None = None,
 ) -> Run:
     if terminal_status not in TERMINAL_RUN_STATUSES | {RUN_STATUS_BLOCKED}:
@@ -736,7 +735,16 @@ def mark_run_terminal(
     run = session.get(Run, run_id)
     if run is None:
         raise RunStateTransitionError(f"Run not found: {run_id}")
+    normalized_expected_worker_service_instance_id = str(expected_worker_service_instance_id or "").strip() or None
     normalized_expected_claim_id = str(expected_claim_id or "").strip() or None
+    if (
+        normalized_expected_worker_service_instance_id is not None
+        and str(run.worker_service_instance_id or "").strip() != normalized_expected_worker_service_instance_id
+    ):
+        raise RunStateTransitionError(
+            "Worker owner mismatch while terminalizing run "
+            f"{run_id}: expected {normalized_expected_worker_service_instance_id} got {run.worker_service_instance_id}"
+        )
     if normalized_expected_claim_id is not None and str(run.claim_id or "").strip() != normalized_expected_claim_id:
         raise RunStateTransitionError(
             f"Claim mismatch while terminalizing run {run_id}: expected {normalized_expected_claim_id} got {run.claim_id}"

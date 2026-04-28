@@ -7,14 +7,15 @@ from sqlalchemy import select
 
 from orchestrator.core.workflow_execution_projection import WorkflowExecutionReference, WorkflowSourceReference
 from orchestrator.core.workflow_advance import (
+    DurableWorkflowLifecycle,
     WorkflowAdvanceLifecycle,
     WorkflowAdvanceOutcome,
     WorkflowAdvanceRequest,
     execute_workflow_advance,
 )
-from orchestrator.core.workflow_type_catalog import list_workflow_type_operations
+from orchestrator.core.workflow_type_catalog import get_workflow_type
 from orchestrator.storage.db import create_session_factory
-from orchestrator.storage.models import WorkflowExecution, WorkflowOperation, WorkflowType
+from orchestrator.storage.models import WorkflowExecution, WorkflowOperation, WorkflowOperationAttempt
 from tests.test_support.db_harness import SqliteTemplateDbTestCase
 
 
@@ -39,24 +40,30 @@ class _LifecycleCaseHandler:
             description="Exercise durable lifecycle ownership",
         )
         if self.case == "waiting":
-            lifecycle.mark_waiting_for_input(
-                operation_type="backlog_planning",
+            operation, attempt = lifecycle.start_operation_attempt(operation_type="backlog_planning")
+            lifecycle.wait_started_operation(
+                operation=operation,
+                attempt=attempt,
                 summary="Need product clarification.",
             )
             return WorkflowAdvanceOutcome(handled=True, reason="waiting")
         if self.case == "failed":
-            lifecycle.mark_operation_failed(
-                operation_type="jira_child_fanout",
+            operation, attempt = lifecycle.start_operation_attempt(operation_type="jira_child_fanout")
+            lifecycle.fail_started_operation(
+                operation=operation,
+                attempt=attempt,
                 category="external_failure",
                 message="Jira rejected child fanout.",
             )
             return WorkflowAdvanceOutcome(handled=True, reason="failed")
         if self.case == "completed":
-            for definition in list_workflow_type_operations(session, workflow_type_key=workflow_type.workflow_type_key):
+            for definition in workflow_type.steps:
                 if definition.required:
-                    lifecycle.set_operation_completed(
-                        operation_type=definition.operation_type,
-                        summary=f"{definition.operation_type} completed.",
+                    operation, attempt = lifecycle.start_operation_attempt(operation_type=definition.key)
+                    lifecycle.complete_started_operation(
+                        operation=operation,
+                        attempt=attempt,
+                        summary=f"{definition.key} completed.",
                     )
             lifecycle.mark_completed_if_ready()
             return WorkflowAdvanceOutcome(handled=True, reason="completed")
@@ -89,8 +96,7 @@ class WorkflowLifecycleTests(SqliteTemplateDbTestCase):
 
     def test_unhandled_workflow_does_not_create_durable_lifecycle(self) -> None:
         with self.session_factory() as session:
-            workflow_type = session.get(WorkflowType, "parent_planning")
-            assert workflow_type is not None
+            workflow_type = get_workflow_type(session, workflow_type_key="parent_planning")
 
             result = execute_workflow_advance(
                 session=session,
@@ -111,8 +117,7 @@ class WorkflowLifecycleTests(SqliteTemplateDbTestCase):
         }
         for index, (case, expected) in enumerate(cases.items(), start=1):
             with self.session_factory() as session:
-                workflow_type = session.get(WorkflowType, "parent_planning")
-                assert workflow_type is not None
+                workflow_type = get_workflow_type(session, workflow_type_key="parent_planning")
 
                 result = execute_workflow_advance(
                     session=session,
@@ -139,3 +144,57 @@ class WorkflowLifecycleTests(SqliteTemplateDbTestCase):
                 assert result.handled is True
                 assert workflow.status == expected[0]
                 assert operation.status == expected[2]
+
+    def test_started_attempt_is_durable_before_external_work_runs(self) -> None:
+        with self.session_factory() as session:
+            workflow_type = get_workflow_type(session, workflow_type_key="parent_planning")
+            request = self._request(issue_key="MAB-399")
+            lifecycle = DurableWorkflowLifecycle(
+                session=session,
+                workflow_type=workflow_type,
+                tenant_id=request.tenant_id,
+                project_id=request.project_id,
+                execution=request.execution,
+            )
+            lifecycle.ensure_execution(
+                display_name="Attempt durability",
+                description="Runtime telemetry validates attempts from a separate writer session.",
+            )
+
+            operation, attempt = lifecycle.start_operation_attempt(operation_type="brief_normalization")
+
+            with self.session_factory() as observer:
+                persisted_attempt = observer.get(WorkflowOperationAttempt, attempt.attempt_id)
+                assert persisted_attempt is not None
+                assert persisted_attempt.operation_id == operation.operation_id
+                assert persisted_attempt.status == "running"
+
+    def test_completed_attempt_transition_survives_later_session_rollback(self) -> None:
+        with self.session_factory() as session:
+            workflow_type = get_workflow_type(session, workflow_type_key="parent_planning")
+            request = self._request(issue_key="MAB-398")
+            lifecycle = DurableWorkflowLifecycle(
+                session=session,
+                workflow_type=workflow_type,
+                tenant_id=request.tenant_id,
+                project_id=request.project_id,
+                execution=request.execution,
+            )
+            lifecycle.ensure_execution(
+                display_name="Attempt completion durability",
+                description="Completed work remains completed even if a later step rolls back.",
+            )
+            operation, attempt = lifecycle.start_operation_attempt(operation_type="brief_normalization")
+            lifecycle.complete_started_operation(
+                operation=operation,
+                attempt=attempt,
+                summary="Parent brief normalized.",
+            )
+
+            session.rollback()
+
+            with self.session_factory() as observer:
+                persisted_attempt = observer.get(WorkflowOperationAttempt, attempt.attempt_id)
+                assert persisted_attempt is not None
+                assert persisted_attempt.operation_id == operation.operation_id
+                assert persisted_attempt.status == "completed"

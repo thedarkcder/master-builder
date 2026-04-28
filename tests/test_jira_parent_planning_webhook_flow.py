@@ -12,6 +12,12 @@ from orchestrator.core.followup_context_service import FOLLOWUP_CONTEXT_PM_INTER
 from orchestrator.core.pm_interview_service import PM_INTERVIEW_STATUS_QUESTION_PENDING
 from orchestrator.core.parent_feature_brief_store import persist_parent_feature_brief_snapshot
 from orchestrator.core.runtime_payload_models import JiraIssueIntakeRoutePayload
+from orchestrator.core.workflow_execution_projection import (
+    WorkflowExecutionReference,
+    WorkflowSourceReference,
+    ensure_workflow_execution,
+)
+from orchestrator.core.workflow_type_catalog import get_workflow_type
 from orchestrator.storage.models import (
     FollowupContext,
     PMInterviewCase,
@@ -139,6 +145,121 @@ class _JiraMetadataClientMixin:
 
     def _transition_issue(self, issue_id_or_key: str, target_status: str) -> dict[str, object]:
         return {}
+
+
+class _CollectingProductEventStore:
+    def __init__(self) -> None:
+        self.executed_sql: list[str] = []
+
+    def execute(self, sql: str, **_kwargs) -> str:  # noqa: ANN001
+        self.executed_sql.append(sql)
+        return ""
+
+    def query_events(self, _sql: str):  # noqa: ANN001
+        return []
+
+
+class _TraceRuntime:
+    command = "trace-runtime"
+    model = "trace-model"
+
+    def __init__(self, responses: list[dict[str, object]]) -> None:
+        self._responses = list(responses)
+        self.calls: list[dict[str, object]] = []
+
+    def run_json(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        working_dir: str | None = None,
+        on_log_line=None,  # noqa: ANN001
+        reasoning_effort: str | None = None,
+        model_override: str | None = None,
+        resume_session_id: str | None = None,
+        on_session_id=None,  # noqa: ANN001
+        on_usage=None,  # noqa: ANN001
+    ) -> dict[str, object]:
+        call_index = len(self.calls) + 1
+        self.calls.append(
+            {
+                "system_prompt": system_prompt,
+                "user_prompt": user_prompt,
+                "working_dir": working_dir,
+                "reasoning_effort": reasoning_effort,
+                "model_override": model_override,
+                "resume_session_id": resume_session_id,
+            }
+        )
+        if on_session_id is not None:
+            on_session_id(f"trace-session-{call_index}")
+        if on_usage is not None:
+            on_usage({"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15})
+        if on_log_line is not None:
+            on_log_line("stdout", f"trace runtime call {call_index} started")
+            on_log_line(
+                "stdout",
+                '{"type":"turn.completed","input_tokens":10,"cached_input_tokens":0,"output_tokens":5}',
+            )
+        if not self._responses:
+            raise AssertionError("Trace runtime received more calls than expected")
+        return self._responses.pop(0)
+
+
+def _trace_runtime_responses() -> list[dict[str, object]]:
+    child_spec = {
+        "summary": "Implement tenant authorization evaluator",
+        "capability": "Tenant authorization",
+        "delivery": "Build a single tenant authorization evaluator.",
+        "expected_outcome": "Tenant access decisions are consistent.",
+        "acceptance_criteria": ["Tenant authorization is enforced consistently."],
+        "how_to_test": ["Run evaluator contract tests."],
+        "done_means": ["Evaluator is used by protected paths."],
+        "dependencies": [],
+        "risks": [],
+        "labels": ["engineering"],
+    }
+    return [
+        {
+            "brief": {
+                "objective": "Build one identity and authorization model.",
+                "user_value": "Admins can manage access consistently.",
+                "acceptance_criteria": ["Tenant authorization is enforced consistently."],
+                "scope_in": ["Tenant authorization"],
+                "scope_out": ["Billing permissions are not changed."],
+                "constraints": ["Existing valid access must continue to work during rollout."],
+                "risks": ["Inconsistent tenant checks could expose data across tenants."],
+                "success_outcomes": ["Access decisions are consistent."],
+                "recommendation": "Seed engineering child tickets.",
+                "open_questions": [],
+                "next_steps": ["Create implementation slices."],
+            },
+            "open_questions": [],
+        },
+        {
+            "findings": ["Identity and authorization need one execution plan."],
+            "recommendations": ["Seed engineering child tickets from the parent brief."],
+            "required_tasks": ["Implement tenant authorization evaluator"],
+            "child_ticket_specs": [child_spec],
+            "open_behavior_questions": [],
+            "acceptance_impacts": ["Access enforcement must be consistent."],
+            "mermaid_diagram": "flowchart TD\n  Parent[Parent brief] --> Auth[Authorization evaluator]",
+        },
+        {
+            "findings": ["Authorization decisions must be auditable."],
+            "recommendations": ["Keep policy evaluation explicit."],
+            "required_tasks": ["Add authorization audit evidence"],
+            "open_behavior_questions": [],
+            "acceptance_impacts": ["Access enforcement remains explainable."],
+        },
+        {
+            "findings": ["Contract tests should cover allowed and denied access."],
+            "recommendations": ["Add regression tests for tenant boundaries."],
+            "required_tasks": ["Add tenant boundary tests"],
+            "open_behavior_questions": [],
+            "acceptance_impacts": ["Access enforcement is testable."],
+        },
+    ]
 
 
 class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
@@ -759,6 +880,26 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
     def test_webhook_pm_parent_non_material_change_skips_child_sync(self) -> None:
         payload = self._jira_issue_payload(issue_key="TP-952", labels=["pm-parent"], status_name="To Do")
         payload["changelog"] = {"items": [{"field": "status", "fromString": "To Do", "toString": "In Progress"}]}
+        with self.session_factory() as session:
+            workflow_type = get_workflow_type(session, workflow_type_key="parent_planning")
+            assert workflow_type is not None
+            ensure_workflow_execution(
+                session=session,
+                workflow_type=workflow_type,
+                tenant_id="tenant-webhook",
+                project_id="tenant-webhook-default",
+                execution=WorkflowExecutionReference(
+                    key="TP-952",
+                    source=WorkflowSourceReference(
+                        source_system="jira",
+                        source_ref="TP-952",
+                        attributes={"jira_issue_labels": ["pm-parent"]},
+                    ),
+                ),
+                display_name="Parent feature",
+                description="Objective\nParent feature description",
+            )
+            session.commit()
 
         class _FakeClient(_JiraMetadataClientMixin):
             def _get_issue_detail(self, issue_id_or_key: str):
@@ -789,6 +930,220 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
         assert processed is not None
         self.assertEqual(processed.status, "done")
         seed_mock.assert_not_called()
+
+    def test_webhook_pm_parent_non_material_update_bootstraps_missing_execution(self) -> None:
+        payload = self._jira_issue_payload(issue_key="TP-955", labels=["pm-parent"], status_name="To Do")
+        payload["changelog"] = {"items": [{"field": "labels", "fromString": "", "toString": "pm-parent"}]}
+
+        class _FakeClient(_JiraMetadataClientMixin):
+            def _get_issue_detail(self, issue_id_or_key: str):
+                return JiraIssueDetail(
+                    key=str(issue_id_or_key),
+                    summary="Identity redesign",
+                    status="To Do",
+                    description="Build one identity and authorization model.",
+                    labels=["pm-parent"],
+                )
+
+        oauth_context = SimpleNamespace(
+            client=_FakeClient(),
+            access_token="tok",
+            connection=SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
+        )
+        normalized_brief = {
+            "objective": "Build one identity and authorization model.",
+            "user_value": "Admins can manage access consistently.",
+            "acceptance_criteria": ["Tenant authorization is enforced consistently."],
+        }
+        with (
+            patch("orchestrator.core.worker.webhook_job_service.tenant_atlassian_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_atlassian_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.webhooks.jira_application.tenant_atlassian_oauth_context", return_value=oauth_context),
+            patch(
+                "orchestrator.api.webhooks.jira_parent_child_sync.build_runtime_for_selector",
+                return_value=SimpleNamespace(slug="pm-planning-runtime"),
+            ),
+            patch(
+                "orchestrator.core.parent_feature_workflow.adapters.normalize_parent_feature_brief_with_runtime",
+                return_value={"brief": normalized_brief, "open_questions": []},
+            ),
+            patch(
+                "orchestrator.core.parent_feature_workflow.adapters.run_specialist_planning_fanout",
+                return_value=SimpleNamespace(
+                    planning_state="planning_completed",
+                    required_tasks=("Implement tenant authorization evaluator",),
+                    findings=("Identity and authorization need one execution plan.",),
+                    recommendations=("Seed engineering child tickets from the parent brief.",),
+                    acceptance_impacts=("Access enforcement must be consistent.",),
+                    open_behavior_questions=(),
+                    architecture_summary=("Centralize tenant authorization.",),
+                    architecture_diagram="",
+                    stages=(
+                        SimpleNamespace(
+                            planning_state="engineering_planning",
+                            persona_id="architect",
+                            to_payload=lambda: {
+                                "findings": ["Identity and authorization need one execution plan."],
+                                "recommendations": ["Seed engineering child tickets from the parent brief."],
+                                "required_tasks": ["Implement tenant authorization evaluator"],
+                                "child_ticket_specs": [
+                                    {
+                                        "summary": "Implement tenant authorization evaluator",
+                                        "capability": "Tenant authorization",
+                                        "delivery": "Build a single tenant authorization evaluator.",
+                                        "expected_outcome": "Tenant access decisions are consistent.",
+                                        "acceptance_criteria": ["Tenant authorization is enforced consistently."],
+                                        "how_to_test": ["Run evaluator contract tests."],
+                                        "done_means": ["Evaluator is used by protected paths."],
+                                        "dependencies": [],
+                                        "risks": [],
+                                        "labels": ["engineering"],
+                                    }
+                                ],
+                                "open_behavior_questions": [],
+                                "acceptance_impacts": ["Access enforcement must be consistent."],
+                            },
+                        ),
+                    ),
+                    to_payload=lambda: {
+                        "planning_state": "planning_completed",
+                        "required_tasks": ["Implement tenant authorization evaluator"],
+                        "findings": ["Identity and authorization need one execution plan."],
+                        "recommendations": ["Seed engineering child tickets from the parent brief."],
+                        "child_ticket_specs": [
+                            {
+                                "summary": "Implement tenant authorization evaluator",
+                                "capability": "Tenant authorization",
+                                "delivery": "Build a single tenant authorization evaluator.",
+                                "expected_outcome": "Tenant access decisions are consistent.",
+                                "acceptance_criteria": ["Tenant authorization is enforced consistently."],
+                                "how_to_test": ["Run evaluator contract tests."],
+                                "done_means": ["Evaluator is used by protected paths."],
+                                "dependencies": [],
+                                "risks": [],
+                                "labels": ["engineering"],
+                            }
+                        ],
+                        "open_behavior_questions": [],
+                    },
+                ),
+            ),
+            patch(
+                "orchestrator.api.webhooks.jira_parent_child_sync.seed_issues_with_runtime",
+                return_value=(
+                    "synced",
+                    {
+                        "updated_parent": "TP-955",
+                        "updated_children": [],
+                        "created_children": ["TP-956"],
+                        "requires_input": False,
+                        "parent_revision": "rev-955",
+                        "children_sync_status": "children_current",
+                    },
+                ),
+            ) as seed_mock,
+        ):
+            response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+            processed = self._process_one_webhook_job()
+
+        self._assert_jira_issue_event_queued(response, issue_key="TP-955")
+        self.assertIsNotNone(processed)
+        assert processed is not None
+        self.assertEqual(processed.status, "done")
+        seed_mock.assert_called_once()
+        with self.session_factory() as session:
+            workflow = session.get(WorkflowExecution, "parent_planning:TP-955")
+        self.assertIsNotNone(workflow)
+
+    def test_pm_parent_webhook_trace_persists_attempt_before_runtime_live_logs(self) -> None:
+        payload = self._jira_issue_payload(issue_key="TP-957", labels=["pm-parent"], status_name="To Do")
+        payload["changelog"] = {"items": [{"field": "labels", "fromString": "", "toString": "pm-parent"}]}
+
+        class _FakeClient(_JiraMetadataClientMixin):
+            def _get_issue_detail(self, issue_id_or_key: str):
+                return JiraIssueDetail(
+                    key=str(issue_id_or_key),
+                    summary="Identity redesign",
+                    status="To Do",
+                    description="Build one identity and authorization model.",
+                    labels=["pm-parent"],
+                )
+
+        oauth_context = SimpleNamespace(
+            client=_FakeClient(),
+            access_token="tok",
+            connection=SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
+        )
+        runtime = _TraceRuntime(_trace_runtime_responses())
+        product_event_store = _CollectingProductEventStore()
+
+        with (
+            patch("orchestrator.core.product_events.event_store", return_value=product_event_store),
+            patch("orchestrator.core.worker.webhook_job_service.tenant_atlassian_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_atlassian_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.webhooks.jira_application.tenant_atlassian_oauth_context", return_value=oauth_context),
+            patch(
+                "orchestrator.api.webhooks.jira_parent_child_sync.build_runtime_for_selector",
+                return_value=runtime,
+            ),
+            patch(
+                "orchestrator.api.webhooks.jira_parent_child_sync.seed_issues_with_runtime",
+                return_value=(
+                    "synced",
+                    {
+                        "updated_parent": "TP-957",
+                        "updated_children": [],
+                        "created_children": ["TP-958"],
+                        "requires_input": False,
+                        "parent_revision": "rev-957",
+                        "children_sync_status": "children_current",
+                    },
+                ),
+            ) as seed_mock,
+        ):
+            response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+            processed = self._process_one_webhook_job()
+
+        self._assert_jira_issue_event_queued(response, issue_key="TP-957")
+        self.assertIsNotNone(processed)
+        assert processed is not None
+        self.assertEqual(processed.status, "done")
+        self.assertEqual(len(runtime.calls), 4)
+        seed_mock.assert_called_once()
+        seed_attempt_ref = seed_mock.call_args.kwargs["attempt_ref"]
+        self.assertEqual(seed_attempt_ref.require_workflow_id(), "parent_planning:TP-957")
+
+        with self.session_factory() as session:
+            workflow = session.get(WorkflowExecution, "parent_planning:TP-957")
+            self.assertIsNotNone(workflow)
+            operations = {
+                operation.operation_type: operation
+                for operation in session.execute(
+                    select(WorkflowOperation).where(WorkflowOperation.workflow_id == "parent_planning:TP-957")
+                ).scalars()
+            }
+            for operation_type in (
+                "brief_normalization",
+                "jira_parent_update",
+                "backlog_planning",
+                "jira_child_fanout",
+            ):
+                self.assertIn(operation_type, operations)
+                attempts = session.execute(
+                    select(WorkflowOperationAttempt).where(
+                        WorkflowOperationAttempt.operation_id == operations[operation_type].operation_id
+                    )
+                ).scalars().all()
+                self.assertEqual(len(attempts), 1)
+                self.assertEqual(attempts[0].status, "completed")
+            self.assertEqual(seed_attempt_ref.require_operation_id(), operations["jira_child_fanout"].operation_id)
+
+        event_sql = "\n".join(product_event_store.executed_sql)
+        self.assertIn("stage_request", event_sql)
+        self.assertIn("stage_response", event_sql)
+        self.assertIn("runtime_log", event_sql)
+        self.assertIn("brief_normalization", event_sql)
+        self.assertIn(seed_attempt_ref.require_attempt_id(), event_sql)
 
     def test_webhook_pm_parent_transition_to_todo_promotes_backlog_engineering_children(self) -> None:
         payload = self._jira_issue_payload(issue_key="TP-980", labels=["pm-parent"], status_name="To Do")
@@ -1439,7 +1794,9 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                 select(PMInterviewCase).where(PMInterviewCase.request_id == "parent-brief:TP-987A")
             ).scalars().first()
         self.assertEqual(followups, [])
-        self.assertIsNone(snapshot)
+        self.assertIsNotNone(snapshot)
+        assert snapshot is not None
+        self.assertEqual(snapshot.status, PM_INTERVIEW_STATUS_QUESTION_PENDING)
 
     def test_webhook_pm_parent_issue_created_planning_block_fails_without_discord_projection(self) -> None:
         payload = self._jira_issue_payload(issue_key="TP-987C", labels=["pm-parent"], status_name="Backlog")

@@ -19,54 +19,14 @@ from orchestrator.api.schemas import (
     WorkflowRetryPolicyRead,
     WorkflowTypeDetailRead,
     WorkflowTypeLifecycleRead,
-    WorkflowTypeLifecycleStateRead,
-    WorkflowTypeLifecycleTransitionRead,
     WorkflowTypeOperationRead,
     WorkflowTypeRead,
     WorkflowTypeSummaryRead,
 )
-from orchestrator.core.workflow_type_catalog import get_workflow_type, list_workflow_type_operations
-from orchestrator.storage.models import AuditEvent, WorkflowExecution, WorkflowOperation, WorkflowOperationAttempt, WorkflowType
-
-
-def workflow_type_capabilities_read(*, workflow_type: WorkflowType) -> dict[str, object]:
-    raw = workflow_type.capabilities_json if isinstance(workflow_type.capabilities_json, dict) else {}
-    return dict(raw)
-
-
-def workflow_type_lifecycle_read(*, workflow_type: WorkflowType) -> WorkflowTypeLifecycleRead:
-    raw = workflow_type.lifecycle_json if isinstance(workflow_type.lifecycle_json, dict) else {}
-    states = raw.get("states") if isinstance(raw.get("states"), list) else []
-    transitions = raw.get("transitions") if isinstance(raw.get("transitions"), list) else []
-    return WorkflowTypeLifecycleRead(
-        state_path_kind=str(raw.get("state_path_kind") or "operation").strip().lower() or "operation",
-        execution_modes=[str(value).strip() for value in raw.get("execution_modes", []) if str(value).strip()],
-        conditional_paths=[str(value).strip() for value in raw.get("conditional_paths", []) if str(value).strip()],
-        states=[
-            WorkflowTypeLifecycleStateRead(
-                key=str(state.get("key") or "").strip(),
-                label=str(state.get("label") or "").strip(),
-                terminal=bool(state.get("terminal")),
-                waits_for_input=bool(state.get("waits_for_input")),
-            )
-            for state in states
-            if isinstance(state, dict) and str(state.get("key") or "").strip() and str(state.get("label") or "").strip()
-        ],
-        transitions=[
-            WorkflowTypeLifecycleTransitionRead(
-                **{
-                    "from": str(transition.get("from") or "").strip(),
-                    "to_state": str(transition.get("to_state") or transition.get("to") or "").strip(),
-                    "label": str(transition.get("label") or "").strip(),
-                }
-            )
-            for transition in transitions
-            if isinstance(transition, dict)
-            and str(transition.get("from") or "").strip()
-            and str(transition.get("to_state") or transition.get("to") or "").strip()
-            and str(transition.get("label") or "").strip()
-        ],
-    )
+from orchestrator.core.product_events import ProductEvent
+from orchestrator.core.workflow_definition import WorkflowDefinition, WorkflowStepDefinition
+from orchestrator.core.workflow_type_catalog import get_workflow_type, list_workflow_types
+from orchestrator.storage.models import WorkflowExecution, WorkflowOperation, WorkflowOperationAttempt
 
 
 def workflow_retry_policy_read(*, raw_config: dict | None) -> WorkflowRetryPolicyRead:
@@ -92,21 +52,60 @@ def operation_status_by_type(*, operations: list[WorkflowOperation]) -> dict[str
     }
 
 
+def _workflow_type_read(*, workflow_type: WorkflowDefinition, operations: list[WorkflowOperation] | None = None) -> WorkflowTypeRead:
+    status_by_type = operation_status_by_type(operations=operations or [])
+    operation_reads = [
+        WorkflowTypeOperationRead(
+            operation_type=definition.key,
+            label=definition.label,
+            description=definition.description,
+            completion_required=bool(definition.required),
+            kind=definition.kind.value,
+            after=list(definition.after),
+            required=bool(definition.required),
+            retryable=bool(definition.retryable),
+            graph_index=definition.graph_index,
+            status=(status_by_type[definition.key].status if definition.key in status_by_type else _default_operation_status(definition.key, None)),
+        )
+        for definition in workflow_type.steps
+    ]
+    return WorkflowTypeRead(
+        key=workflow_type.workflow_type_key,
+        label=workflow_type.label,
+        description=workflow_type.description,
+        orchestration_backend=workflow_type.orchestration_backend,
+        retry_policy=workflow_retry_policy_read(raw_config=workflow_type.retry_policy.to_payload()),
+        capabilities=dict(workflow_type.capabilities),
+        lifecycle=WorkflowTypeLifecycleRead(state_path_kind="operation"),
+        operations=operation_reads,
+    )
+
+
+def _default_operation_status(operation_type: str, workflow: WorkflowExecution | None) -> str:
+    if operation_type == "run_attempt_execution" and workflow is not None:
+        return str(workflow.status or "").strip() or "pending"
+    return "pending"
+
+
+def _definition_by_key(workflow_type: WorkflowDefinition) -> dict[str, WorkflowStepDefinition]:
+    return {definition.key: definition for definition in workflow_type.steps}
+
+
 def workflow_operation_reads(
     *,
     session,
     workflow: WorkflowExecution,
     operations: list[WorkflowOperation],
     operation_attempts: dict[str, list[WorkflowOperationAttempt]],
-    operation_events: dict[str, list[AuditEvent]],
+    operation_events: dict[str, list[ProductEvent]],
 ) -> tuple[WorkflowTypeRead, list[WorkflowOperationRead]]:
     workflow_type = get_workflow_type(session, workflow_type_key=workflow.workflow_type_key)
-    definitions = list_workflow_type_operations(session, workflow_type_key=workflow_type.workflow_type_key)
     status_by_type = operation_status_by_type(operations=operations)
+    definitions_by_key = _definition_by_key(workflow_type)
 
     def operation_retry_state(
         *,
-        retry_policy_config: WorkflowRetryPolicyRead,
+        definition: WorkflowStepDefinition,
         current: WorkflowOperation | None,
     ) -> tuple[bool, str | None]:
         if current is None:
@@ -115,55 +114,26 @@ def workflow_operation_reads(
         latest_attempt = attempts[-1] if attempts else None
         if latest_attempt is None:
             return False, "Operation has no attempt history to retry."
-        if not retry_policy_config.manual_retry_enabled:
-            return False, "Manual retry is disabled by the workflow type."
+        if not definition.retryable:
+            return False, "Manual retry is disabled by the workflow definition."
         if str(latest_attempt.status or "").strip().lower() not in {"failed", "retrying"}:
             return False, "Latest attempt is not in a failed state."
         return True, None
 
-    def default_operation_status(definition_operation_type: str) -> str:
-        if definition_operation_type == "run_attempt_execution":
-            return str(workflow.status or "").strip() or "pending"
-        return "pending"
-
-    workflow_retry_policy = workflow_retry_policy_read(raw_config=workflow_type.retry_policy_config_json)
-    type_reads = [
-        WorkflowTypeOperationRead(
-            operation_type=definition.operation_type,
-            label=definition.label,
-            description=definition.description,
-            completion_required=bool(definition.required),
-            status=(
-                status_by_type[definition.operation_type].status
-                if definition.operation_type in status_by_type
-                else default_operation_status(definition.operation_type)
-            ),
-        )
-        for definition in definitions
-    ]
-
+    workflow_type_read = _workflow_type_read(workflow_type=workflow_type, operations=operations)
     operation_reads: list[WorkflowOperationRead] = []
-    defined_operation_types = {definition.operation_type for definition in definitions}
-    for definition in definitions:
-        current = status_by_type.get(definition.operation_type)
+    for definition in workflow_type.steps:
+        current = status_by_type.get(definition.key)
         can_retry, retry_unavailable_reason = operation_retry_state(
-            retry_policy_config=workflow_retry_policy,
+            definition=definition,
             current=current,
         )
         operation_reads.append(
             workflow_operation_to_schema(
                 current,
-                operation_id=(
-                    current.operation_id
-                    if current is not None
-                    else f"{workflow.workflow_id}:{definition.operation_type}"
-                ),
-                operation_type=definition.operation_type,
-                status=(
-                    current.status
-                    if current is not None
-                    else default_operation_status(definition.operation_type)
-                ),
+                operation_id=(current.operation_id if current is not None else f"{workflow.workflow_id}:{definition.key}"),
+                operation_type=definition.key,
+                status=(current.status if current is not None else _default_operation_status(definition.key, workflow)),
                 label=definition.label,
                 description=definition.description,
                 required=bool(definition.required),
@@ -172,6 +142,8 @@ def workflow_operation_reads(
                 events=(operation_events.get(current.operation_id, []) if current is not None else []),
                 can_retry=can_retry,
                 retry_unavailable_reason=retry_unavailable_reason,
+                kind=definition.kind.value,
+                after=list(definition.after),
             )
         )
 
@@ -180,7 +152,7 @@ def workflow_operation_reads(
             str(operation.operation_type or "").strip()
             for operation in operations
             if str(operation.operation_type or "").strip()
-            and str(operation.operation_type or "").strip() not in defined_operation_types
+            and str(operation.operation_type or "").strip() not in definitions_by_key
         }
     )
     if undefined_operation_types:
@@ -189,19 +161,7 @@ def workflow_operation_reads(
             f"{workflow.workflow_type_key}: {', '.join(undefined_operation_types)}"
         )
 
-    return (
-        WorkflowTypeRead(
-            key=workflow_type.workflow_type_key,
-            label=workflow_type.label,
-            description=workflow_type.description,
-            orchestration_backend=workflow_type.orchestration_backend,
-            retry_policy=workflow_retry_policy,
-            capabilities=workflow_type_capabilities_read(workflow_type=workflow_type),
-            lifecycle=workflow_type_lifecycle_read(workflow_type=workflow_type),
-            operations=type_reads,
-        ),
-        operation_reads,
-    )
+    return workflow_type_read, operation_reads
 
 
 def workflow_execution_preview(*, session, workflow: WorkflowExecution) -> WorkflowExecutionPreviewRead:  # noqa: ANN001
@@ -241,29 +201,10 @@ def workflow_execution_preview(*, session, workflow: WorkflowExecution) -> Workf
 def workflow_type_detail(
     *,
     session,
-    workflow_type: WorkflowType,
+    workflow_type: WorkflowDefinition,
     tenant_id: str | None,
 ) -> WorkflowTypeDetailRead:  # noqa: ANN001
-    definition_reads = [
-        WorkflowTypeOperationRead(
-            operation_type=definition.operation_type,
-            label=definition.label,
-            description=definition.description,
-            completion_required=bool(definition.required),
-            status=None,
-        )
-        for definition in list_workflow_type_operations(session, workflow_type_key=workflow_type.workflow_type_key)
-    ]
-    type_read = WorkflowTypeRead(
-        key=workflow_type.workflow_type_key,
-        label=workflow_type.label,
-        description=workflow_type.description,
-        orchestration_backend=workflow_type.orchestration_backend,
-        retry_policy=workflow_retry_policy_read(raw_config=workflow_type.retry_policy_config_json),
-        capabilities=workflow_type_capabilities_read(workflow_type=workflow_type),
-        lifecycle=workflow_type_lifecycle_read(workflow_type=workflow_type),
-        operations=definition_reads,
-    )
+    type_read = _workflow_type_read(workflow_type=workflow_type)
     execution_query = (
         select(WorkflowExecution)
         .where(WorkflowExecution.workflow_type_key == workflow_type.workflow_type_key)
@@ -300,11 +241,8 @@ def workflow_type_detail(
 
 
 def list_workflow_type_summaries(*, session, tenant_id: str | None) -> list[WorkflowTypeSummaryRead]:  # noqa: ANN001
-    workflow_types = session.execute(
-        select(WorkflowType).order_by(WorkflowType.label.asc(), WorkflowType.workflow_type_key.asc())
-    ).scalars().all()
     result: list[WorkflowTypeSummaryRead] = []
-    for workflow_type in workflow_types:
+    for workflow_type in list_workflow_types(session):
         count_query = select(func.count()).select_from(WorkflowExecution).where(
             WorkflowExecution.workflow_type_key == workflow_type.workflow_type_key
         )
@@ -319,7 +257,7 @@ def list_workflow_type_summaries(*, session, tenant_id: str | None) -> list[Work
                 key=workflow_type.workflow_type_key,
                 label=workflow_type.label,
                 description=workflow_type.description,
-                operation_count=len(list_workflow_type_operations(session, workflow_type_key=workflow_type.workflow_type_key)),
+                operation_count=len(workflow_type.steps),
                 execution_count=int(session.execute(count_query).scalar_one()),
                 latest_execution_at=session.execute(latest_query).scalar_one(),
             )

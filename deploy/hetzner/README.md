@@ -5,7 +5,7 @@ Deliver a one-click, non-HA deployment on a fresh Hetzner server.
 
 ## Topology
 - Single VM host.
-- Single deployment stack with local `postgres`, `redis`, and `llama.cpp` inference service.
+- Single deployment stack with local `postgres`, `clickhouse`, and `llama.cpp` inference service.
 - Persistent host storage for data and caches.
 
 ## Required Deliverables

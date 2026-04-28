@@ -159,6 +159,7 @@ class DiscordCommandApiTestHarness(SqliteTemplateApiTestCase):
                     repo_url="https://github.com/example/repo",
                     branch=None,
                     pr_url=None,
+                    orchestration_backend="legacy",
                     dedupe_scope="issue_execution",
                     status=status,
                     last_error=None,

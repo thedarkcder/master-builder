@@ -4,8 +4,8 @@ from datetime import datetime
 
 from sqlalchemy import desc, select
 
+from orchestrator.core.product_events import ProductEvent, list_product_events
 from orchestrator.storage.models import (
-    AuditEvent,
     DecisionEvent,
     FollowupContext,
     Run,
@@ -118,13 +118,15 @@ def workflow_operation_attempts(*, session, operation_id: str) -> list[WorkflowO
     ).scalars().all()
 
 
-def audit_events_by_operation(*, session, workflow_id: str) -> dict[str, list[AuditEvent]]:  # noqa: ANN001
-    rows = session.execute(
-        select(AuditEvent)
-        .where(AuditEvent.workflow_id == workflow_id, AuditEvent.operation_id.is_not(None))
-        .order_by(AuditEvent.recorded_at.asc(), AuditEvent.event_id.asc())
-    ).scalars().all()
-    grouped: dict[str, list[AuditEvent]] = {}
+def audit_events_by_operation(*, session, workflow_id: str) -> dict[str, list[ProductEvent]]:  # noqa: ANN001
+    del session
+    rows = list_product_events(
+        event_class="audit_evidence",
+        filters={"workflow_id": workflow_id},
+        limit=2000,
+        newest_first=False,
+    )
+    grouped: dict[str, list[ProductEvent]] = {}
     for row in rows:
         operation_id = str(row.operation_id or "").strip()
         if not operation_id:

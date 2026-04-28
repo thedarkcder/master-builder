@@ -22,12 +22,30 @@ from orchestrator.storage.models import Project, Run, Tenant, TenantRunClaim
 logger = logging.getLogger(__name__)
 
 
-@dataclass
+@dataclass(frozen=True)
 class QueueSelectionResult:
     run: Run | None = None
     tenant: Tenant | None = None
     project: Project | None = None
     effective_policy: dict | None = None
+    terminal_run: Run | None = None
+
+
+@dataclass(frozen=True)
+class ClaimedRun:
+    run: Run
+    tenant: Tenant
+    project: Project | None
+    effective_policy: dict
+    run_id: str
+    claim_id: str
+    worker_service_instance_id: str
+    status: str
+
+
+@dataclass(frozen=True)
+class QueueClaimResult:
+    claimed_run: ClaimedRun | None = None
     terminal_run: Run | None = None
 
 
@@ -484,7 +502,10 @@ def claim_next_queued_run(
     worker_capabilities: set[WorkerCapability] | None = None,
     ready_runtime_kinds: set[str] | None = None,
     running_stale_timeout_seconds: int | None = None,
-) -> QueueSelectionResult:
+) -> QueueClaimResult:
+    normalized_owner = str(worker_service_instance_id or "").strip()
+    if not normalized_owner:
+        raise ValueError("worker_service_instance_id is required to claim a queued run")
     allowed_capabilities = parse_worker_capabilities(worker_capabilities or [])
     scan = _scan_queued_candidates(
         session,
@@ -499,7 +520,7 @@ def claim_next_queued_run(
     )
     selection = scan.selection
     if scan.claimability.reason == QueueClaimabilityReason.TERMINAL:
-        return selection
+        return QueueClaimResult(terminal_run=selection.terminal_run)
     if scan.claimability.reason != QueueClaimabilityReason.CLAIMABLE or selection.run is None or selection.tenant is None:
         if scan.claimability.reason == QueueClaimabilityReason.CONCURRENCY_LIMIT:
             logger.info(
@@ -507,13 +528,13 @@ def claim_next_queued_run(
                 selection.tenant.tenant_id if selection.tenant is not None else None,
                 selection.run.issue_key if selection.run is not None else None,
             )
-        return QueueSelectionResult()
+        return QueueClaimResult()
 
     dispatching_run = claim_run_for_dispatch(
         session,
         run=selection.run,
         expected_status=queued_status,
-        worker_service_instance_id=worker_service_instance_id,
+        worker_service_instance_id=normalized_owner,
     )
     if dispatching_run is None:
         logger.info(
@@ -523,15 +544,28 @@ def claim_next_queued_run(
             selection.run.issue_key,
         )
         session.rollback()
-        return QueueSelectionResult()
+        return QueueClaimResult()
 
     logger.info(
         "worker_claimed_run run_id=%s tenant_id=%s issue_key=%s worker_service_instance_id=%s claim_id=%s",
         dispatching_run.run_id,
         dispatching_run.tenant_id,
         dispatching_run.issue_key,
-        worker_service_instance_id,
+        normalized_owner,
         dispatching_run.claim_id,
     )
-    selection.run = dispatching_run
-    return selection
+    claim_id = str(dispatching_run.claim_id or "").strip()
+    if not claim_id:
+        raise RuntimeError(f"Claimed run {dispatching_run.run_id} has no claim_id")
+    return QueueClaimResult(
+        claimed_run=ClaimedRun(
+            run=dispatching_run,
+            tenant=selection.tenant,
+            project=selection.project,
+            effective_policy=dict(selection.effective_policy or {}),
+            run_id=dispatching_run.run_id,
+            claim_id=claim_id,
+            worker_service_instance_id=normalized_owner,
+            status=str(dispatching_run.status or "").strip(),
+        )
+    )

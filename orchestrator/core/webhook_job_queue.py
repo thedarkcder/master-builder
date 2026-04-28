@@ -20,6 +20,7 @@ WEBHOOK_TRANSPORT_GITHUB = "github_webhook"
 WEBHOOK_TRANSPORT_DISCORD_COMMAND = "discord_webhook"
 WEBHOOK_TRANSPORT_DISCORD_INTERACTION = "discord_interaction"
 WEBHOOK_TRANSPORT_PROJECT_AUTOMATION = "project_automation"
+WEBHOOK_SUBJECT_BATCH_TRANSPORTS = frozenset({WEBHOOK_TRANSPORT_JIRA, WEBHOOK_TRANSPORT_GITHUB})
 
 _LEASE_DURATION = timedelta(minutes=5)
 
@@ -28,7 +29,7 @@ _LEASE_DURATION = timedelta(minutes=5)
 class WebhookJobEnqueueRequest:
     transport: str
     request_id: str
-    tenant_id: str | None
+    tenant_id: str
     project_id: str | None
     subject_key: str
     payload_json: dict[str, object]
@@ -45,10 +46,32 @@ class WebhookJobEnqueueResult:
 
 
 @dataclass(frozen=True)
-class WebhookJobClaimResult:
+class WebhookJobBatch:
+    owner_id: str
+    transport: str
+    subject_key: str
+    jobs: tuple[WebhookJob, ...]
+
+    @property
+    def primary_job(self) -> WebhookJob:
+        if not self.jobs:
+            raise RuntimeError("Webhook job batch has no jobs")
+        return self.jobs[0]
+
+    @property
+    def related_jobs(self) -> tuple[WebhookJob, ...]:
+        return self.jobs[1:]
+
+    @property
+    def job_ids(self) -> tuple[str, ...]:
+        return tuple(str(job.job_id) for job in self.jobs)
+
+
+@dataclass(frozen=True)
+class WebhookJobBatchClaimResult:
     acquired: bool
     reason: str | None
-    job: WebhookJob | None
+    batch: WebhookJobBatch | None
 
 
 def _now() -> datetime:
@@ -75,12 +98,15 @@ def enqueue_webhook_job(
     now: datetime | None = None,
 ) -> WebhookJobEnqueueResult:
     timestamp = now or _now()
+    normalized_tenant_id = str(request.tenant_id or "").strip()
+    if not normalized_tenant_id:
+        raise ValueError("webhook jobs require tenant_id")
     normalized_dedupe_key = str(request.dedupe_key or "").strip() or None
     if normalized_dedupe_key is not None:
         existing = session.execute(
             select(WebhookJob).where(
                 WebhookJob.transport == request.transport,
-                WebhookJob.tenant_id == request.tenant_id,
+                WebhookJob.tenant_id == normalized_tenant_id,
                 WebhookJob.dedupe_key == normalized_dedupe_key,
             )
         ).scalar_one_or_none()
@@ -90,7 +116,7 @@ def enqueue_webhook_job(
     job = WebhookJob(
         job_id=str(uuid4()),
         transport=request.transport,
-        tenant_id=request.tenant_id,
+        tenant_id=normalized_tenant_id,
         project_id=request.project_id,
         subject_key=request.subject_key,
         dedupe_key=normalized_dedupe_key,
@@ -119,7 +145,7 @@ def enqueue_webhook_job(
         existing = session.execute(
             select(WebhookJob).where(
                 WebhookJob.transport == request.transport,
-                WebhookJob.tenant_id == request.tenant_id,
+                WebhookJob.tenant_id == normalized_tenant_id,
                 WebhookJob.dedupe_key == normalized_dedupe_key,
             )
         ).scalar_one_or_none()
@@ -202,117 +228,103 @@ def _release_subject_claim(
     session.flush()
 
 
-def _claim_job_row(
-    session: Session,
-    *,
-    job_id: str,
-    owner_id: str,
-    now: datetime,
-) -> WebhookJob | None:
-    query = select(WebhookJob).where(
-        WebhookJob.job_id == job_id,
-        or_(
-            WebhookJob.status == WEBHOOK_JOB_STATUS_PENDING,
-            (
-                (WebhookJob.status == WEBHOOK_JOB_STATUS_PROCESSING)
-                & (WebhookJob.lease_expires_at.is_not(None))
-                & (WebhookJob.lease_expires_at <= now)
-            ),
+def _claimable_job_filter(timestamp: datetime):  # noqa: ANN202
+    return or_(
+        WebhookJob.status == WEBHOOK_JOB_STATUS_PENDING,
+        (
+            (WebhookJob.status == WEBHOOK_JOB_STATUS_PROCESSING)
+            & (WebhookJob.lease_expires_at.is_not(None))
+            & (WebhookJob.lease_expires_at <= timestamp)
         ),
     )
+
+
+def _claim_job_batch_for_candidate(
+    session: Session,
+    *,
+    candidate_job_id: str,
+    owner_id: str,
+    now: datetime,
+) -> WebhookJobBatch | None:
+    candidate_query = select(WebhookJob).where(
+        WebhookJob.job_id == candidate_job_id,
+        WebhookJob.available_at <= now,
+        _claimable_job_filter(now),
+    )
     if _is_postgres(session):
-        query = query.with_for_update(skip_locked=True)
-    job = session.execute(query).scalar_one_or_none()
-    if job is None:
+        candidate_query = candidate_query.with_for_update(skip_locked=True)
+    candidate = session.execute(candidate_query).scalar_one_or_none()
+    if candidate is None:
         return None
     if not _acquire_subject_claim(
         session,
-        subject_key=job.subject_key,
+        subject_key=candidate.subject_key,
         owner_id=owner_id,
         now=now,
     ):
         return None
-    job.status = WEBHOOK_JOB_STATUS_PROCESSING
-    job.owner_id = owner_id
-    job.lease_expires_at = now + _LEASE_DURATION
-    job.attempt_count = int(job.attempt_count or 0) + 1
-    job.last_error = None
-    job.updated_at = now
-    if job.started_at is None:
-        job.started_at = now
-    session.flush()
-    return job
 
-
-def claim_next_webhook_job(
-    session: Session,
-    *,
-    owner_id: str,
-    now: datetime | None = None,
-) -> WebhookJobClaimResult:
-    timestamp = now or _now()
-    candidate_query = select(WebhookJob.job_id).where(
-        WebhookJob.available_at <= timestamp,
-        or_(
-            WebhookJob.status == WEBHOOK_JOB_STATUS_PENDING,
-            (
-                (WebhookJob.status == WEBHOOK_JOB_STATUS_PROCESSING)
-                & (WebhookJob.lease_expires_at.is_not(None))
-                & (WebhookJob.lease_expires_at <= timestamp)
-            ),
-        ),
+    batch_query = select(WebhookJob).where(
+        WebhookJob.transport == candidate.transport,
+        WebhookJob.subject_key == candidate.subject_key,
+        WebhookJob.available_at <= now,
+        _claimable_job_filter(now),
     ).order_by(WebhookJob.created_at.asc())
-    candidate_ids = [row[0] for row in session.execute(candidate_query).all()]
-    for job_id in candidate_ids:
-        job = _claim_job_row(
-            session,
-            job_id=job_id,
-            owner_id=owner_id,
-            now=timestamp,
-        )
-        if job is None:
-            session.rollback()
-            continue
-        session.commit()
-        session.refresh(job)
-        return WebhookJobClaimResult(acquired=True, reason=None, job=job)
-    return WebhookJobClaimResult(acquired=False, reason="no_pending_job", job=None)
-
-
-def claim_pending_jobs_for_subject(
-    session: Session,
-    *,
-    transport: str,
-    subject_key: str,
-    owner_id: str,
-    exclude_job_id: str | None = None,
-    now: datetime | None = None,
-) -> tuple[WebhookJob, ...]:
-    timestamp = now or _now()
-    query = select(WebhookJob).where(
-        WebhookJob.transport == transport,
-        WebhookJob.subject_key == subject_key,
-        WebhookJob.available_at <= timestamp,
-        WebhookJob.status == WEBHOOK_JOB_STATUS_PENDING,
-    ).order_by(WebhookJob.created_at.asc())
-    if exclude_job_id:
-        query = query.where(WebhookJob.job_id != exclude_job_id)
+    if candidate.transport not in WEBHOOK_SUBJECT_BATCH_TRANSPORTS:
+        batch_query = batch_query.where(WebhookJob.job_id == candidate.job_id)
     if _is_postgres(session):
-        query = query.with_for_update(skip_locked=True)
-    jobs = list(session.execute(query).scalars().all())
-    claimed: list[WebhookJob] = []
+        batch_query = batch_query.with_for_update(skip_locked=True)
+    jobs = tuple(session.execute(batch_query).scalars().all())
+    if not jobs:
+        raise RuntimeError(
+            f"Webhook subject claim acquired but no claimable jobs found for '{candidate.subject_key}'."
+        )
+
     for job in jobs:
         job.status = WEBHOOK_JOB_STATUS_PROCESSING
         job.owner_id = owner_id
-        job.lease_expires_at = timestamp + _LEASE_DURATION
+        job.lease_expires_at = now + _LEASE_DURATION
         job.attempt_count = int(job.attempt_count or 0) + 1
         job.last_error = None
-        job.updated_at = timestamp
+        job.updated_at = now
         if job.started_at is None:
-            job.started_at = timestamp
-        claimed.append(job)
+            job.started_at = now
     session.flush()
-    return tuple(claimed)
+    session.commit()
+    for job in jobs:
+        session.refresh(job)
+    return WebhookJobBatch(
+        owner_id=owner_id,
+        transport=str(jobs[0].transport),
+        subject_key=str(jobs[0].subject_key),
+        jobs=jobs,
+    )
+
+
+def claim_next_webhook_subject_batch(
+    session: Session,
+    *,
+    owner_id: str,
+    now: datetime | None = None,
+) -> WebhookJobBatchClaimResult:
+    timestamp = now or _now()
+    candidate_query = select(WebhookJob.job_id).where(
+        WebhookJob.available_at <= timestamp,
+        _claimable_job_filter(timestamp),
+    ).order_by(WebhookJob.created_at.asc())
+    candidate_ids = [row[0] for row in session.execute(candidate_query).all()]
+    for job_id in candidate_ids:
+        batch = _claim_job_batch_for_candidate(
+            session,
+            candidate_job_id=job_id,
+            owner_id=owner_id,
+            now=timestamp,
+        )
+        if batch is None:
+            session.rollback()
+            continue
+        return WebhookJobBatchClaimResult(acquired=True, reason=None, batch=batch)
+    return WebhookJobBatchClaimResult(acquired=False, reason="no_pending_job", batch=None)
 
 
 def _finalize_jobs(

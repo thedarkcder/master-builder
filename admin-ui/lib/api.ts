@@ -789,6 +789,11 @@ export type WorkflowTypeOperationRecord = {
   label: string;
   description: string | null;
   completion_required: boolean;
+  kind: string;
+  after: string[];
+  required: boolean;
+  retryable: boolean;
+  graph_index: number;
   status: string | null;
 };
 
@@ -878,11 +883,6 @@ export type WorkflowTypeDetailRecord = {
   recent_executions: WorkflowExecutionPreviewRecord[];
 };
 
-export type WorkflowTypeUpdatePayload = {
-  orchestration_backend: string;
-  retry_policy: WorkflowRetryPolicyRecord;
-};
-
 export type WorkflowStatePathEntryRecord = {
   key: string;
   label: string;
@@ -914,6 +914,7 @@ export type WorkflowOperationAttemptRecord = {
 
 export type WorkflowObservabilityEventRecord = {
   event_id: string;
+  event_sequence?: number | null;
   source: "audit" | "telemetry";
   level: string;
   event_kind: string;
@@ -983,6 +984,8 @@ export type WorkflowOperationRecord = {
   label?: string | null;
   description?: string | null;
   required?: boolean;
+  kind: string;
+  after: string[];
   definition_only?: boolean;
   target_system: string | null;
   target_ref: string | null;
@@ -1007,7 +1010,9 @@ export type RunEventRecord = {
   recorded_at: string;
 };
 
-export type RunLogEventRecord = {
+export type RuntimeLogEventRecord = {
+  event_id: string;
+  event_sequence?: number | null;
   run_id: string;
   issue_key: string | null;
   project_id: string | null;
@@ -2805,21 +2810,6 @@ export function getWorkflowType(
   );
 }
 
-export function updateWorkflowType(
-  credentials: Credentials,
-  workflowTypeKey: string,
-  payload: WorkflowTypeUpdatePayload,
-): Promise<WorkflowTypeDetailRecord> {
-  return request<WorkflowTypeDetailRecord>(
-    credentials,
-    `/api/admin/workflow-types/${encodeURIComponent(workflowTypeKey)}`,
-    {
-      method: "PUT",
-      body: JSON.stringify(payload),
-    },
-  );
-}
-
 export function listWorkflows(
   credentials: Credentials,
   params: {
@@ -2914,7 +2904,7 @@ export function listRunLogs(
   credentials: Credentials,
   runId: string,
   params: { limit?: number; beforeRecordedAt?: string; beforeEventId?: string } = {}
-): Promise<RunLogEventRecord[]> {
+): Promise<RuntimeLogEventRecord[]> {
   const query = new URLSearchParams();
   if (params.limit) {
     query.set("limit", String(params.limit));
@@ -2926,7 +2916,7 @@ export function listRunLogs(
     query.set("before_event_id", params.beforeEventId);
   }
   const suffix = query.toString() ? `?${query.toString()}` : "";
-  return request<RunLogEventRecord[]>(
+  return request<RuntimeLogEventRecord[]>(
     credentials,
     `/api/admin/runs/${encodeURIComponent(runId)}/logs${suffix}`
   );
@@ -3343,7 +3333,7 @@ export function getTokenStageDiagnosticsCompare(
 export async function streamRunEvents(
   credentials: Credentials,
   runId: string,
-  onEvent: (event: RunEventRecord | (RunLogEventRecord & { event_kind?: string })) => void,
+  onEvent: (event: RunEventRecord | (RuntimeLogEventRecord & { event_kind?: string })) => void,
   signal?: AbortSignal
 ): Promise<void> {
   void credentials;

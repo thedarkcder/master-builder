@@ -5,14 +5,47 @@ from datetime import datetime, timezone
 from orchestrator.api.admin.workflow_transcript_service import build_workflow_step_transcript
 from orchestrator.api.admin.schema_mappers import workflow_observability_event_to_schema
 from orchestrator.api.schemas import WorkflowObservabilityEventRead
+from orchestrator.core.product_events import ProductEvent
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import (
-    AuditEvent,
     WorkflowExecution,
     WorkflowOperation,
     WorkflowOperationAttempt,
 )
 from tests.test_support.db_harness import SqliteTemplateDbTestCase
+
+
+def _audit_event(
+    *,
+    sequence: int,
+    workflow_id: str,
+    operation_id: str,
+    attempt_id: str,
+    event_kind: str,
+    message: str,
+    payload: dict[str, object],
+    recorded_at: datetime,
+    source_component: str = "runtime_invocation",
+    level: str = "info",
+) -> ProductEvent:
+    return ProductEvent(
+        event_sequence=sequence,
+        event_id=f"event-{sequence}",
+        event_class="audit_evidence",
+        tenant_id="tenant-a",
+        project_id="tenant-a-default",
+        workflow_id=workflow_id,
+        run_id=None,
+        operation_id=operation_id,
+        attempt_id=attempt_id,
+        issue_key="MAB-215",
+        event_kind=event_kind,
+        level=level,
+        source_component=source_component,
+        message=message,
+        payload_json=payload,
+        recorded_at=recorded_at,
+    )
 
 
 class WorkflowTranscriptServiceTests(SqliteTemplateDbTestCase):
@@ -84,85 +117,54 @@ class WorkflowTranscriptServiceTests(SqliteTemplateDbTestCase):
             session.add(workflow)
             session.add(operation)
             session.add(attempt)
-            session.add_all(
-                [
-                    AuditEvent(
-                        event_id="event-request",
-                        tenant_id="tenant-a",
-                        project_id="tenant-a-default",
+            audit_events = [
+                workflow_observability_event_to_schema(row)
+                for row in (
+                    _audit_event(
+                        sequence=1,
                         workflow_id=workflow.workflow_id,
-                        run_id=None,
                         operation_id=operation.operation_id,
                         attempt_id=attempt.attempt_id,
-                        issue_key="MAB-215",
-                        actor_type=None,
-                        actor_id=None,
-                        source_component="runtime_invocation",
                         event_kind="stage_request",
-                        level="info",
-                        correlation_id=None,
-                        trace_id=None,
-                        span_id=None,
                         message="Submitted runtime request.",
-                        payload_json={
+                        payload={
                             "attempt": 7,
                             "system_prompt": "You are the planner.",
                             "user_prompt": "Create or refresh engineering child tickets.",
                         },
                         recorded_at=now,
                     ),
-                    AuditEvent(
-                        event_id="event-tool",
-                        tenant_id="tenant-a",
-                        project_id="tenant-a-default",
+                    _audit_event(
+                        sequence=2,
                         workflow_id=workflow.workflow_id,
-                        run_id=None,
                         operation_id=operation.operation_id,
                         attempt_id=attempt.attempt_id,
-                        issue_key="MAB-215",
-                        actor_type=None,
-                        actor_id=None,
-                        source_component="runtime_invocation",
                         event_kind="tool_request",
-                        level="info",
-                        correlation_id=None,
-                        trace_id=None,
-                        span_id=None,
                         message="Requested tool jira.search.",
-                        payload_json={
+                        payload={
                             "attempt": 7,
                             "tool_name": "jira.search",
                             "tool_args": {"query": "project = MAB"},
                         },
                         recorded_at=now,
                     ),
-                    AuditEvent(
-                        event_id="event-external",
-                        tenant_id="tenant-a",
-                        project_id="tenant-a-default",
+                    _audit_event(
+                        sequence=3,
                         workflow_id=workflow.workflow_id,
-                        run_id=None,
                         operation_id=operation.operation_id,
                         attempt_id=attempt.attempt_id,
-                        issue_key="MAB-215",
-                        actor_type=None,
-                        actor_id=None,
-                        source_component="jira_seed",
                         event_kind="jira_child_upsert_request",
-                        level="info",
-                        correlation_id=None,
-                        trace_id=None,
-                        span_id=None,
                         message="Submitting child Jira issue upsert for Create tenant assurance boundary.",
-                        payload_json={
+                        payload={
                             "attempt": 7,
                             "summary": "Create tenant assurance boundary",
                             "description": "Detailed ticket body",
                         },
                         recorded_at=now,
+                        source_component="jira_seed",
                     ),
-                ]
-            )
+                )
+            ]
             session.commit()
 
             transcript = build_workflow_step_transcript(
@@ -171,10 +173,7 @@ class WorkflowTranscriptServiceTests(SqliteTemplateDbTestCase):
                 operation=operation,
                 attempts=[attempt],
                 telemetry_events=[],
-                audit_events=[
-                    workflow_observability_event_to_schema(row)
-                    for row in session.query(AuditEvent).order_by(AuditEvent.recorded_at.asc()).all()
-                ],
+                audit_events=audit_events,
                 source="audit",
             )
 
@@ -273,7 +272,7 @@ class WorkflowTranscriptServiceTests(SqliteTemplateDbTestCase):
         assert transcript.source == "telemetry"
         assert transcript.attempts == []
 
-    def test_build_workflow_step_transcript_uses_live_attempt_from_telemetry_when_newer_attempt_not_persisted(self) -> None:
+    def test_build_workflow_step_transcript_ignores_telemetry_without_persisted_attempt(self) -> None:
         now = datetime(2026, 4, 21, 12, 0, 0, tzinfo=timezone.utc)
         session_factory = create_session_factory(self.database_url)
         with session_factory() as session:
@@ -385,10 +384,7 @@ class WorkflowTranscriptServiceTests(SqliteTemplateDbTestCase):
             )
 
         assert transcript.source == "telemetry"
-        assert [item.attempt_number for item in transcript.attempts] == [8]
-        assert transcript.attempts[0].status == "running"
-        assert transcript.attempts[0].attempt_id == "telemetry-attempt:8"
-        assert [section.kind for section in transcript.attempts[0].sections] == ["runtime"]
+        assert transcript.attempts == []
 
     def test_build_workflow_step_transcript_prefers_persisted_attempt_when_attempt_number_matches(self) -> None:
         now = datetime(2026, 4, 21, 12, 0, 0, tzinfo=timezone.utc)
@@ -459,10 +455,10 @@ class WorkflowTranscriptServiceTests(SqliteTemplateDbTestCase):
                     level="info",
                     event_kind="runtime_log",
                     message="Live runtime line.",
-                    source_component="runtime_invocation",
+                    source_component="logging_pane",
                     run_id=None,
                     operation_id=operation.operation_id,
-                    attempt_id="live-attempt-10",
+                    attempt_id="attempt-10",
                     agent_id=None,
                     invocation_id=None,
                     stage=None,
@@ -487,3 +483,4 @@ class WorkflowTranscriptServiceTests(SqliteTemplateDbTestCase):
         assert transcript.attempts[0].attempt_id == "attempt-10"
         assert [section.kind for section in transcript.attempts[0].sections] == ["runtime"]
         assert transcript.attempts[0].sections[0].entries[0].message == "Live runtime line."
+        assert transcript.attempts[0].sections[0].entries[0].title == "runtime log"

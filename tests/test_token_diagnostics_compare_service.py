@@ -7,9 +7,10 @@ from cryptography.fernet import Fernet
 
 from orchestrator.api.admin.token_diagnostics_compare_service import get_token_stage_diagnostics_compare
 from orchestrator.core.config import get_settings
+from orchestrator.core.logging_pane_events import emit_logging_pane_event
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
-from orchestrator.storage.models import Project, RunLogEvent, Tenant
+from orchestrator.storage.models import Project, Tenant
 from tests.workflow_test_support import add_run_with_workflow, make_run
 
 
@@ -122,43 +123,39 @@ class TokenDiagnosticsCompareServiceTests(unittest.TestCase):
                     finished_at=self.now,
                 ),
             )
-            session.add_all(
-                [
-                    RunLogEvent(
-                        event_id="event-1",
-                        tenant_id="tenant-a",
-                        project_id="project-1",
-                        run_id="run-1",
-                        issue_key="P1-1",
-                        agent_id="agent-1",
-                        invocation_id="inv-1",
-                        channel="codex",
-                        command="npm run test",
-                        working_dir="/workspace",
-                        stage="test",
-                        attempt=1,
-                        stream="stdout",
-                        message='{"type":"turn.completed","turn_id":"turn-1","usage":{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}',
-                        recorded_at=self.now,
-                    ),
-                    RunLogEvent(
-                        event_id="event-2",
-                        tenant_id="tenant-a",
-                        project_id="project-2",
-                        run_id="run-2",
-                        issue_key="P2-1",
-                        agent_id="agent-1",
-                        invocation_id="inv-2",
-                        channel="codex",
-                        command="npm run test",
-                        working_dir="/workspace",
-                        stage="test",
-                        attempt=1,
-                        stream="stdout",
-                        message='{"type":"turn.completed","turn_id":"turn-2","usage":{"input_tokens":150,"cached_input_tokens":30,"output_tokens":20}}',
-                        recorded_at=self.now,
-                    ),
-                ]
+            emit_logging_pane_event(
+                session=session,
+                tenant_id="tenant-a",
+                project_id="project-1",
+                run_id="run-1",
+                issue_key="P1-1",
+                agent_id="agent-1",
+                invocation_id="inv-1",
+                channel="codex",
+                command="npm run test",
+                working_dir="/workspace",
+                stage="test",
+                attempt=1,
+                stream="stdout",
+                message='{"type":"turn.completed","turn_id":"turn-1","usage":{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}',
+                recorded_at=self.now,
+            )
+            emit_logging_pane_event(
+                session=session,
+                tenant_id="tenant-a",
+                project_id="project-2",
+                run_id="run-2",
+                issue_key="P2-1",
+                agent_id="agent-1",
+                invocation_id="inv-2",
+                channel="codex",
+                command="npm run test",
+                working_dir="/workspace",
+                stage="test",
+                attempt=1,
+                stream="stdout",
+                message='{"type":"turn.completed","turn_id":"turn-2","usage":{"input_tokens":150,"cached_input_tokens":30,"output_tokens":20}}',
+                recorded_at=self.now,
             )
             session.commit()
 

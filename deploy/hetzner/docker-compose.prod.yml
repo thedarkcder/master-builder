@@ -2,6 +2,12 @@ x-extra_hosts_host_gateway: &extra_hosts_host_gateway
   extra_hosts:
     - "host.docker.internal:host-gateway"
 
+x-clickhouse-env: &clickhouse_env
+  ORCHESTRATOR_CLICKHOUSE_HTTP_URL: ${ORCHESTRATOR_CLICKHOUSE_HTTP_URL:-http://clickhouse:8123}
+  ORCHESTRATOR_CLICKHOUSE_DATABASE: ${ORCHESTRATOR_CLICKHOUSE_DATABASE:-master_builder}
+  ORCHESTRATOR_CLICKHOUSE_USERNAME: ${ORCHESTRATOR_CLICKHOUSE_USERNAME:-master_builder}
+  ORCHESTRATOR_CLICKHOUSE_PASSWORD: ${ORCHESTRATOR_CLICKHOUSE_PASSWORD:?Set ORCHESTRATOR_CLICKHOUSE_PASSWORD}
+
 services:
   llama-cpp-model-init:
     image: curlimages/curl:8.16.0
@@ -70,14 +76,18 @@ services:
       timeout: 5s
       retries: 20
 
-  redis:
-    image: redis:7-alpine
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.12
     restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes"]
+    environment:
+      CLICKHOUSE_DB: ${ORCHESTRATOR_CLICKHOUSE_DATABASE:-master_builder}
+      CLICKHOUSE_USER: ${ORCHESTRATOR_CLICKHOUSE_USERNAME:-master_builder}
+      CLICKHOUSE_PASSWORD: ${ORCHESTRATOR_CLICKHOUSE_PASSWORD:?Set ORCHESTRATOR_CLICKHOUSE_PASSWORD}
     volumes:
-      - redis-data:/data
+      - clickhouse-data:/var/lib/clickhouse
+      - ../../ops/observability/clickhouse/users.d/master-builder-user.xml:/etc/clickhouse-server/users.d/master-builder-user.xml:ro
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://127.0.0.1:8123/ping || exit 1"]
       interval: 5s
       timeout: 5s
       retries: 20
@@ -113,11 +123,11 @@ services:
         CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
     restart: unless-stopped
     environment:
+      <<: *clickhouse_env
       ORCHESTRATOR_ADMIN_USERNAME: ${ORCHESTRATOR_ADMIN_USERNAME:-admin}
       ORCHESTRATOR_ADMIN_PASSWORD: ${ORCHESTRATOR_ADMIN_PASSWORD:?Set ORCHESTRATOR_ADMIN_PASSWORD}
       ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
       POSTGRES_URL: ${POSTGRES_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
-      ORCHESTRATOR_REDIS_URL: ${ORCHESTRATOR_REDIS_URL:-redis://redis:6379/0}
       ORCHESTRATOR_CORS_ORIGINS: ${ORCHESTRATOR_CORS_ORIGINS:-http://localhost:4100,http://127.0.0.1:4100}
       ORCHESTRATOR_CORS_ORIGIN_REGEX: ${ORCHESTRATOR_CORS_ORIGIN_REGEX:-}
       ORCHESTRATOR_PUBLIC_API_BASE_URL: ${ORCHESTRATOR_PUBLIC_API_BASE_URL:-http://localhost:4000}
@@ -141,7 +151,6 @@ services:
       ORCHESTRATOR_SENTRY_RELEASE: ${ORCHESTRATOR_SENTRY_RELEASE:-}
       ORCHESTRATOR_SENTRY_TRACES_SAMPLE_RATE: ${ORCHESTRATOR_SENTRY_TRACES_SAMPLE_RATE:-0.0}
       ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR: /var/lib/master-builder/workdirs
-      ORCHESTRATOR_LOG_BUS_ENABLED: ${ORCHESTRATOR_LOG_BUS_ENABLED:-true}
       ORCHESTRATOR_WORKER_CAPABILITIES: ${ORCHESTRATOR_WORKER_CAPABILITIES:-linux}
       ORCHESTRATOR_API_WORKERS: ${ORCHESTRATOR_API_WORKERS:-4}
     ports:
@@ -151,7 +160,7 @@ services:
         condition: service_completed_successfully
       postgres:
         condition: service_healthy
-      redis:
+      clickhouse:
         condition: service_healthy
     healthcheck:
       test:
@@ -189,16 +198,16 @@ services:
         condition: service_started
       postgres:
         condition: service_healthy
-      redis:
+      clickhouse:
         condition: service_healthy
       llama-cpp:
         condition: service_healthy
     environment:
+      <<: *clickhouse_env
       ORCHESTRATOR_ADMIN_USERNAME: ${ORCHESTRATOR_ADMIN_USERNAME:-admin}
       ORCHESTRATOR_ADMIN_PASSWORD: ${ORCHESTRATOR_ADMIN_PASSWORD:?Set ORCHESTRATOR_ADMIN_PASSWORD}
       ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
       POSTGRES_URL: ${POSTGRES_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
-      ORCHESTRATOR_REDIS_URL: ${ORCHESTRATOR_REDIS_URL:-redis://redis:6379/0}
       ORCHESTRATOR_PUBLIC_API_BASE_URL: ${ORCHESTRATOR_PUBLIC_API_BASE_URL:-http://localhost:4000}
       ORCHESTRATOR_ADMIN_UI_BASE_URL: ${ORCHESTRATOR_ADMIN_UI_BASE_URL:-http://localhost:4100}
       ORCHESTRATOR_CODEX_SANDBOX_MODE: ${ORCHESTRATOR_CODEX_SANDBOX_MODE:-danger-full-access}
@@ -242,16 +251,16 @@ services:
         condition: service_started
       postgres:
         condition: service_healthy
-      redis:
+      clickhouse:
         condition: service_healthy
       llama-cpp:
         condition: service_healthy
     environment:
+      <<: *clickhouse_env
       ORCHESTRATOR_ADMIN_USERNAME: ${ORCHESTRATOR_ADMIN_USERNAME:-admin}
       ORCHESTRATOR_ADMIN_PASSWORD: ${ORCHESTRATOR_ADMIN_PASSWORD:?Set ORCHESTRATOR_ADMIN_PASSWORD}
       ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
       POSTGRES_URL: ${POSTGRES_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
-      ORCHESTRATOR_REDIS_URL: ${ORCHESTRATOR_REDIS_URL:-redis://redis:6379/0}
       ORCHESTRATOR_PUBLIC_API_BASE_URL: ${ORCHESTRATOR_PUBLIC_API_BASE_URL:-http://localhost:4000}
       ORCHESTRATOR_ADMIN_UI_BASE_URL: ${ORCHESTRATOR_ADMIN_UI_BASE_URL:-http://localhost:4100}
       ORCHESTRATOR_CODEX_SANDBOX_MODE: ${ORCHESTRATOR_CODEX_SANDBOX_MODE:-danger-full-access}
@@ -304,14 +313,14 @@ services:
         condition: service_started
       postgres:
         condition: service_healthy
-      redis:
+      clickhouse:
         condition: service_healthy
     environment:
+      <<: *clickhouse_env
       ORCHESTRATOR_ADMIN_USERNAME: ${ORCHESTRATOR_ADMIN_USERNAME:-admin}
       ORCHESTRATOR_ADMIN_PASSWORD: ${ORCHESTRATOR_ADMIN_PASSWORD:?Set ORCHESTRATOR_ADMIN_PASSWORD}
       ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
       POSTGRES_URL: ${POSTGRES_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
-      ORCHESTRATOR_REDIS_URL: ${ORCHESTRATOR_REDIS_URL:-redis://redis:6379/0}
       ORCHESTRATOR_PUBLIC_API_BASE_URL: ${ORCHESTRATOR_PUBLIC_API_BASE_URL:-http://localhost:4000}
       ORCHESTRATOR_ADMIN_UI_BASE_URL: ${ORCHESTRATOR_ADMIN_UI_BASE_URL:-http://localhost:4100}
       ORCHESTRATOR_CODEX_SANDBOX_MODE: ${ORCHESTRATOR_CODEX_SANDBOX_MODE:-danger-full-access}
@@ -478,7 +487,7 @@ services:
 volumes:
   llama-models:
   postgres-data:
-  redis-data:
+  clickhouse-data:
   codex-home:
   workdirs-data:
   huggingface-cache:

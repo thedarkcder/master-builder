@@ -9,6 +9,7 @@ import { useAuth } from "@/components/auth-provider";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { useToast } from "@/components/ui/toast-provider";
 import { createProject, getTenant, listGitHubRepositories, listJiraProjects } from "@/lib/api";
 import { canManageProjects } from "@/lib/auth-routing";
 
@@ -25,6 +26,7 @@ export function ProjectSetupWizard() {
   const params = useParams<{ tenantId: string }>();
   const router = useRouter();
   const { credentials, ready, principal } = useAuth();
+  const { showToast } = useToast();
 
   const [step, setStep] = useState<Step>(1);
   const [busy, setBusy] = useState(false);
@@ -89,7 +91,7 @@ export function ProjectSetupWizard() {
       });
       router.push(`/${encodeURIComponent(params.tenantId)}/projects/${encodeURIComponent(created.project_id)}`);
     } catch (error) {
-      setStatusLine(`Create failed: ${(error as Error).message}`);
+      showToast({ title: "Project create failed", description: (error as Error).message, tone: "error" });
       setBusy(false);
     }
   }

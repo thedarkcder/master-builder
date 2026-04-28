@@ -3,12 +3,10 @@ from __future__ import annotations
 from datetime import datetime
 
 from fastapi import HTTPException, status
-from sqlalchemy import desc, select
 
-from orchestrator.api.admin.live_telemetry_service import list_live_workflow_telemetry_events
 from orchestrator.api.admin.schema_mappers import workflow_observability_event_to_schema
+from orchestrator.api.admin.workflow_live_stream_service import list_workflow_operation_live_events
 from orchestrator.api.admin.workflow_queries import (
-    cursor_filtered_events,
     workflow_by_execution_id,
     workflow_operation_attempts,
 )
@@ -18,8 +16,12 @@ from orchestrator.api.schemas import (
     WorkflowStepAttemptTranscriptRead,
     WorkflowStepTranscriptRead,
 )
-from orchestrator.core.config import get_settings
-from orchestrator.storage.models import AuditEvent, WorkflowOperation, WorkflowOperationAttempt
+from orchestrator.core.observability_stream import (
+    list_workflow_observability_events,
+    observability_stream_event_to_payload,
+)
+from orchestrator.core.product_events import EventCursor, list_product_events
+from orchestrator.storage.models import WorkflowOperation
 
 
 def workflow_operation_for_execution(
@@ -47,21 +49,21 @@ def list_workflow_audit_events(
     if workflow is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow not found")
 
-    query = (
-        select(AuditEvent)
-        .where(AuditEvent.workflow_id == workflow.workflow_id)
-        .order_by(desc(AuditEvent.recorded_at), desc(AuditEvent.event_id))
-    )
+    filters = {"workflow_id": workflow.workflow_id}
     if operation_id is not None:
         operation = workflow_operation_for_execution(session=session, workflow=workflow, operation_id=operation_id)
-        query = query.where(AuditEvent.operation_id == operation.operation_id)
-    rows = session.execute(query).scalars().all()
-    return cursor_filtered_events(
-        events=[workflow_observability_event_to_schema(row) for row in rows],
-        before_recorded_at=before_recorded_at,
-        before_event_id=before_event_id,
+        filters["operation_id"] = operation.operation_id
+    rows = list_product_events(
+        event_class="audit_evidence",
+        filters=filters,
+        before=EventCursor(
+            recorded_at=before_recorded_at,
+            event_sequence=_event_sequence_from_id(before_event_id, prefix="audit:"),
+        ),
         limit=limit,
+        newest_first=True,
     )
+    return [workflow_observability_event_to_schema(row) for row in rows]
 
 
 def list_workflow_telemetry_events(
@@ -77,36 +79,17 @@ def list_workflow_telemetry_events(
     if workflow is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow not found")
 
-    latest_attempt_started_at: datetime | None
     operation = None
     if operation_id is not None:
         operation = workflow_operation_for_execution(session=session, workflow=workflow, operation_id=operation_id)
-        latest_attempt = session.execute(
-            select(WorkflowOperationAttempt)
-            .where(WorkflowOperationAttempt.operation_id == operation.operation_id)
-            .order_by(desc(WorkflowOperationAttempt.attempt_number))
-            .limit(1)
-        ).scalar_one_or_none()
-        latest_attempt_started_at = (
-            latest_attempt.started_at
-            if latest_attempt is not None and latest_attempt.started_at is not None
-            else operation.updated_at
-        )
-    else:
-        latest_attempt_started_at = workflow.started_at or workflow.created_at
-    return cursor_filtered_events(
-        events=list_live_workflow_telemetry_events(
-            settings=get_settings(),
-            tenant_id=workflow.tenant_id,
-            workflow_id=workflow.workflow_id,
-            operation_id=(operation.operation_id if operation is not None else None),
-            limit=limit,
-            start_at=latest_attempt_started_at,
-        ),
+    rows = list_workflow_observability_events(
+        workflow_id=workflow.workflow_id,
+        operation_id=operation.operation_id if operation is not None else None,
+        limit=limit,
         before_recorded_at=before_recorded_at,
         before_event_id=before_event_id,
-        limit=limit,
     )
+    return [WorkflowObservabilityEventRead(**observability_stream_event_to_payload(row)) for row in rows]
 
 
 def get_workflow_step_transcript(
@@ -135,27 +118,22 @@ def get_workflow_step_transcript(
     audit_events: list[WorkflowObservabilityEventRead] = []
     telemetry_events: list[WorkflowObservabilityEventRead] = []
     if normalized_source == "audit":
-        audit_query = (
-            select(AuditEvent)
-            .where(AuditEvent.workflow_id == workflow.workflow_id, AuditEvent.operation_id == operation.operation_id)
-            .order_by(desc(AuditEvent.recorded_at), desc(AuditEvent.event_id))
-            .limit(limit)
-        )
+        filters = {"workflow_id": workflow.workflow_id, "operation_id": operation.operation_id}
         if normalized_attempt_id is not None:
-            audit_query = audit_query.where(AuditEvent.attempt_id == normalized_attempt_id)
-        audit_rows = list(session.execute(audit_query).scalars().all())
-        audit_rows.reverse()
+            filters["attempt_id"] = normalized_attempt_id
+        audit_rows = list_product_events(
+            event_class="audit_evidence",
+            filters=filters,
+            limit=limit,
+            newest_first=False,
+        )
         audit_events = [workflow_observability_event_to_schema(event) for event in audit_rows]
     else:
-        started_candidates = [attempt.started_at for attempt in attempts if attempt.started_at is not None]
-        telemetry_start_at = min(started_candidates) if started_candidates else operation.updated_at
-        telemetry_events = list_live_workflow_telemetry_events(
-            settings=get_settings(),
-            tenant_id=workflow.tenant_id,
-            workflow_id=workflow.workflow_id,
-            operation_id=operation.operation_id,
+        telemetry_events = list_workflow_operation_live_events(
+            session=session,
+            operation=operation,
+            attempt_id=normalized_attempt_id,
             limit=limit,
-            start_at=telemetry_start_at,
         )
     return build_workflow_step_transcript(
         session=session,
@@ -187,3 +165,15 @@ def get_workflow_step_audit_attempt(
     if not transcript.attempts:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow operation attempt not found")
     return transcript.attempts[0]
+
+
+def _event_sequence_from_id(event_id: str | None, *, prefix: str) -> int | None:
+    normalized = str(event_id or "").strip()
+    if normalized.startswith(prefix):
+        normalized = normalized.removeprefix(prefix)
+    if not normalized:
+        return None
+    try:
+        return int(normalized)
+    except ValueError:
+        return None

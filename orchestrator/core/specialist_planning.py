@@ -210,6 +210,7 @@ def _run_stage(
         issue_key=request.parent_issue_key,
         attempt=request.attempt,
         reasoning_effort=stage.reasoning_effort,
+        db_session=session,
     )
     stage_session = RuntimeStageSession.create(
         runtime=selected_runtime,

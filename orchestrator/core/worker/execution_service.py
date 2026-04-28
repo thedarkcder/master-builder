@@ -158,7 +158,11 @@ def process_claimed_run_with_dependencies(
         settings=settings,
         process_claimed_run_fn=_process_claimed_run_impl,
         build_runner_fn=lambda *, session: runner,
-        runtime_kwargs_fn=build_run_process_kwargs,
+        runtime_kwargs_fn=lambda *, session, settings: build_run_process_kwargs(
+            session=session,
+            settings=settings,
+            send_discord_message_fn=send_discord_message_fn,
+        ),
     )
     result = runtime.start_execution(
         workflow=workflow,
@@ -173,6 +177,7 @@ def build_run_process_kwargs(
     session: Session,
     settings: Settings,
     worker_service_instance_id: str | None = None,
+    send_discord_message_fn: TransportActionSender = send_tenant_discord_message,
 ) -> dict[str, object]:
     def _emit_agent_event(
         *,
@@ -195,6 +200,7 @@ def build_run_process_kwargs(
 
     return dict(
         logger=logger,
+        send_discord_message_fn=send_discord_message_fn,
         send_jira_message_fn=_send_stage_update_to_jira,
         resolve_project_for_run_fn=resolve_project_for_run,
         fail_missing_project_mapping_fn=fail_missing_project_mapping,
@@ -259,7 +265,10 @@ def process_next_queued_run_with_dependencies(
         runner=runner,
         settings_fn=lambda: settings,
         claim_next_queued_run_fn=claim_next_queued_run,
-        send_discord_message_fn=send_discord_message_fn,
         run_status_queued=RUN_STATUS_QUEUED,
-        **build_run_process_kwargs(session=session, settings=settings),
+        **build_run_process_kwargs(
+            session=session,
+            settings=settings,
+            send_discord_message_fn=send_discord_message_fn,
+        ),
     )

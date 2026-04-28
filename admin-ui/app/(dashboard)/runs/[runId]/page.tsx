@@ -9,6 +9,7 @@ import { useAuth } from "@/components/auth-provider";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { useToast } from "@/components/ui/toast-provider";
 import { TokenStackedBarChart } from "@/components/charts";
 import {
   cancelRun,
@@ -20,7 +21,7 @@ import {
   listRunLogs,
   streamRunEvents,
   type RunEventRecord,
-  type RunLogEventRecord,
+  type RuntimeLogEventRecord,
   type RunRecord,
   type WorkflowRecord,
   type WorkflowAttemptCreatePayload,
@@ -324,7 +325,10 @@ function normalizeInlineText(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
 
-function logEntryIdentity(entry: RunLogEventRecord): string {
+function logEntryIdentity(entry: RuntimeLogEventRecord): string {
+  if (entry.event_id) {
+    return entry.event_id;
+  }
   return [
     entry.recorded_at,
     entry.stage,
@@ -335,9 +339,9 @@ function logEntryIdentity(entry: RunLogEventRecord): string {
   ].join("::");
 }
 
-function dedupeRunLogs(entries: RunLogEventRecord[]): RunLogEventRecord[] {
+function dedupeRunLogs(entries: RuntimeLogEventRecord[]): RuntimeLogEventRecord[] {
   const seen = new Set<string>();
-  const ordered: RunLogEventRecord[] = [];
+  const ordered: RuntimeLogEventRecord[] = [];
   for (const entry of entries) {
     const key = logEntryIdentity(entry);
     if (seen.has(key)) {
@@ -370,7 +374,7 @@ function tryParseToolRequest(text: string): ParsedChatEntry | null {
   return null;
 }
 
-function parseRunLogChatText(entry: RunLogEventRecord): ParsedChatEntry | null {
+function parseRunLogChatText(entry: RuntimeLogEventRecord): ParsedChatEntry | null {
   const raw = String(entry.message ?? "");
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -606,11 +610,12 @@ export default function RunDetailPage() {
   const pathname = usePathname();
   const router = useRouter();
   const { credentials, ready } = useAuth();
+  const { showToast } = useToast();
   const routeContext = useMemo(() => resolveRunRouteContext(pathname), [pathname]);
   const [run, setRun] = useState<RunRecord | null>(null);
   const [workflow, setWorkflow] = useState<WorkflowRecord | null>(null);
   const [events, setEvents] = useState<RunEventRecord[]>([]);
-  const [logs, setLogs] = useState<RunLogEventRecord[]>([]);
+  const [logs, setLogs] = useState<RuntimeLogEventRecord[]>([]);
   const [busy, setBusy] = useState(false);
   const [rerunBusy, setRerunBusy] = useState(false);
   const [forceRerunBusy, setForceRerunBusy] = useState(false);
@@ -705,7 +710,7 @@ export default function RunDetailPage() {
       params.runId,
       (event) => {
         if ((event as { event_kind?: string }).event_kind === "run_log" || "message" in event) {
-          const logEvent = event as RunLogEventRecord;
+          const logEvent = event as RuntimeLogEventRecord;
           setLogs((prev) => {
             const nextKey = logEntryIdentity(logEvent);
             if (prev.some((entry) => logEntryIdentity(entry) === nextKey)) {
@@ -758,7 +763,7 @@ export default function RunDetailPage() {
       const nextRun = await createWorkflowAttempt(credentials, cancelled.workflow_id, {
         mode: "fresh"
       });
-      setStatusLine(`Force-cancelled ${cancelled.run_id} and queued fresh run ${nextRun.run_id}.`);
+      showToast({ title: "Fresh run queued", description: `Cancelled ${cancelled.run_id}; queued ${nextRun.run_id}.`, tone: "success" });
       router.push(
         buildRunDetailPath({
           tenantId: run.tenant_id,
@@ -767,7 +772,7 @@ export default function RunDetailPage() {
         })
       );
     } catch (error) {
-      setStatusLine(`Failed to force rerun: ${(error as Error).message}`);
+      showToast({ title: "Force rerun failed", description: (error as Error).message, tone: "error" });
     } finally {
       setForceRerunBusy(false);
     }
@@ -782,7 +787,8 @@ export default function RunDetailPage() {
     try {
       const olderLogs = await listRunLogs(credentials, params.runId, {
         limit: 200,
-        beforeRecordedAt: oldest.recorded_at
+        beforeRecordedAt: oldest.recorded_at,
+        beforeEventId: oldest.event_id
       });
       setLogs((prev) => {
         return dedupeRunLogs([...prev, ...olderLogs]);
@@ -1086,7 +1092,7 @@ export default function RunDetailPage() {
     setRerunBusy(true);
     try {
       const nextRun = await createWorkflowAttempt(credentials, run.workflow_id, payload);
-      setStatusLine(`Queued ${label.toLowerCase()} as run ${nextRun.run_id} for ${nextRun.issue_key}.`);
+      showToast({ title: `${label} queued`, description: `Run ${nextRun.run_id} for ${nextRun.issue_key}.`, tone: "success" });
       router.push(
         buildRunDetailPath({
           tenantId: run.tenant_id,
@@ -1095,7 +1101,7 @@ export default function RunDetailPage() {
         })
       );
     } catch (error) {
-      setStatusLine(`Failed to rerun: ${(error as Error).message}`);
+      showToast({ title: "Rerun failed", description: (error as Error).message, tone: "error" });
     } finally {
       setRerunBusy(false);
     }

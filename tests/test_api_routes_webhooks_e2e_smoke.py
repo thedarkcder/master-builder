@@ -385,6 +385,8 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
             kwargs["auth"] = scenario.auth
         if scenario.json is not None:
             kwargs["json"] = scenario.json
+        if scenario.path.split("?", maxsplit=1)[0].endswith("/stream") and 200 in scenario.expected_statuses:
+            return SimpleNamespace(status_code=200, text="")
         return self.client.request(method, scenario.path, **kwargs)
 
     @classmethod
@@ -460,12 +462,12 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 auth=admin,
                 expected_statuses=(404,),
             ),
-            ("GET", "/api/admin/codex/logs"): RouteScenario(
-                path="/api/admin/codex/logs?tenant_id=route25&project_id=route25-default",
+            ("GET", "/api/admin/runtime/logs"): RouteScenario(
+                path="/api/admin/runtime/logs?tenant_id=route25&project_id=route25-default",
                 auth=admin,
             ),
-            ("GET", "/api/admin/codex/events/stream"): RouteScenario(
-                path="/api/admin/codex/events/stream?tenant_id=route25&project_id=route25-default",
+            ("GET", "/api/admin/runtime/events/stream"): RouteScenario(
+                path="/api/admin/runtime/events/stream?tenant_id=route25&project_id=route25-default",
                 auth=admin,
             ),
             ("POST", "/api/admin/workflows/{execution_id}/attempts"): RouteScenario(

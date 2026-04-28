@@ -35,22 +35,22 @@ def notify_run_enqueued(
     tenant_id: str,
     project_id: str | None,
     run_id: str,
-    issue_key: str,
 ) -> None:
+    normalized_run_id = str(run_id or "").strip()
+    if not normalized_run_id:
+        raise ValueError("run queue notification requires run_id")
     _notify_worker_event(
         session,
         payload={
             "event_kind": "run_enqueued",
             "tenant_id": tenant_id,
             "project_id": project_id,
-            "run_id": run_id,
-            "issue_key": issue_key,
+            "run_id": normalized_run_id,
         },
         log_context={
             "tenant_id": tenant_id,
             "project_id": project_id,
-            "run_id": run_id,
-            "issue_key": issue_key,
+            "run_id": normalized_run_id,
             "event_kind": "run_enqueued",
         },
     )

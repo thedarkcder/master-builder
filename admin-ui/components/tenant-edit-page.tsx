@@ -13,6 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
+import { useToast } from "@/components/ui/toast-provider";
 import {
   type AdminNotificationRecord,
   archiveTenant,
@@ -78,6 +79,7 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
   const params = useParams<{ tenantId: string }>();
   const searchParams = useSearchParams();
   const { credentials, principal, ready } = useAuth();
+  const { showToast } = useToast();
   const isPlatformAdmin = canAccessPlatformAdmin(principal);
 
   const [tenant, setTenant] = useState<TenantRecord | null>(null);
@@ -244,9 +246,9 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
     try {
       const updated = await updateTenant(credentials, params.tenantId, payload);
       setTenant(updated);
-      setStatusLine(`Saved ${updated.tenant_id}.`);
+      showToast({ title: "Tenant saved", description: updated.tenant_id, tone: "success" });
     } catch (error) {
-      setStatusLine(`Save failed: ${(error as Error).message}`);
+      showToast({ title: "Tenant save failed", description: (error as Error).message, tone: "error" });
     } finally {
       setSaving(false);
     }
@@ -282,7 +284,7 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
         ? await archiveTenant(credentials, tenant.tenant_id)
         : await unarchiveTenant(credentials, tenant.tenant_id);
       setTenant(updated);
-      setStatusLine(`Tenant ${action}d: ${updated.tenant_id}.`);
+      showToast({ title: `Tenant ${action}d`, description: updated.tenant_id, tone: "success" });
       if (!updated.is_enabled) {
         setArchiveConfirmationName("");
         router.push(
@@ -294,7 +296,7 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
       }
       setArchiveConfirmationName("");
     } catch (error) {
-      setStatusLine(`Unable to ${action} tenant: ${(error as Error).message}`);
+      showToast({ title: `Tenant ${action} failed`, description: (error as Error).message, tone: "error" });
     } finally {
       setArchiveBusy(false);
     }
@@ -330,9 +332,9 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
       setDiscordOnboardingChannelId(updated.discord?.onboarding_channel_id ?? "");
       setDiscordInviteExpirySeconds(String(updated.discord?.onboarding_invite_expires_in_seconds ?? 86400));
       setDiscordInviteMaxUses(String(updated.discord?.onboarding_invite_max_uses ?? 1));
-      setStatusLine("Discord tenant settings saved.");
+      showToast({ title: "Discord settings saved", tone: "success" });
     } catch (error) {
-      setStatusLine(`Unable to save Discord settings: ${(error as Error).message}`);
+      showToast({ title: "Discord settings save failed", description: (error as Error).message, tone: "error" });
     } finally {
       setSaving(false);
     }
@@ -370,9 +372,9 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
       setAuditExportEnabled(updated.policy.observability?.audit_export_enabled ?? true);
       setLegalHoldEnabled(updated.policy.observability?.legal_hold_enabled ?? false);
       setLegalHoldReason(updated.policy.observability?.legal_hold_reason ?? "");
-      setStatusLine("Observability policy saved.");
+      showToast({ title: "Observability policy saved", tone: "success" });
     } catch (error) {
-      setStatusLine(`Unable to save observability policy: ${(error as Error).message}`);
+      showToast({ title: "Observability policy save failed", description: (error as Error).message, tone: "error" });
     } finally {
       setSaving(false);
     }
@@ -434,11 +436,11 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
     setJiraWebhookBusy(true);
     try {
       const result = await provisionJiraWebhook(credentials, params.tenantId);
-      setStatusLine(result.details);
+      showToast({ title: "Jira webhook provisioned", description: result.details, tone: "success" });
       await loadJiraWebhookDiagnostics();
       await loadTenant();
     } catch (error) {
-      setStatusLine(`Unable to provision Jira webhook: ${(error as Error).message}`);
+      showToast({ title: "Jira webhook provision failed", description: (error as Error).message, tone: "error" });
     } finally {
       setJiraWebhookBusy(false);
     }
@@ -451,11 +453,11 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
     setJiraWebhookBusy(true);
     try {
       const result = await resetJiraWebhook(credentials, params.tenantId);
-      setStatusLine(result.details);
+      showToast({ title: "Jira webhook reset", description: result.details, tone: "success" });
       await loadJiraWebhookDiagnostics();
       await loadTenant();
     } catch (error) {
-      setStatusLine(`Unable to reset Jira webhook: ${(error as Error).message}`);
+      showToast({ title: "Jira webhook reset failed", description: (error as Error).message, tone: "error" });
     } finally {
       setJiraWebhookBusy(false);
     }
@@ -468,11 +470,11 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
     setJiraWebhookBusy(true);
     try {
       const result = await disconnectAtlassian(credentials, params.tenantId);
-      setStatusLine(result.details);
+      showToast({ title: "Atlassian disconnected", description: result.details, tone: "success" });
       await loadJiraWebhookDiagnostics();
       await loadTenant();
     } catch (error) {
-      setStatusLine(`Unable to disconnect Jira: ${(error as Error).message}`);
+      showToast({ title: "Atlassian disconnect failed", description: (error as Error).message, tone: "error" });
     } finally {
       setJiraWebhookBusy(false);
     }
@@ -489,9 +491,9 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
       const availableProjects = await listJiraProjects(credentials, tenant.jira.connection_id);
       setJiraProjects(availableProjects);
       }
-      setStatusLine("Project option sources refreshed.");
+      showToast({ title: "Project option sources refreshed", tone: "success" });
     } catch (error) {
-      setStatusLine(`Unable to refresh project options: ${(error as Error).message}`);
+      showToast({ title: "Project option refresh failed", description: (error as Error).message, tone: "error" });
       if (tenant?.jira.connection_id) {
         await loadNotifications();
       }
@@ -509,9 +511,9 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
       await createProject(credentials, params.tenantId, payload);
       const refreshed = await listProjects(credentials, params.tenantId);
       setProjects(refreshed);
-      setStatusLine("Project created.");
+      showToast({ title: "Project created", description: payload.name, tone: "success" });
     } catch (error) {
-      setStatusLine(`Unable to create project: ${(error as Error).message}`);
+      showToast({ title: "Project create failed", description: (error as Error).message, tone: "error" });
     } finally {
       setProjectsBusy(false);
     }
@@ -526,9 +528,9 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
       await updateProject(credentials, params.tenantId, projectId, payload);
       const refreshed = await listProjects(credentials, params.tenantId);
       setProjects(refreshed);
-      setStatusLine(payload.is_archived ? "Project archived." : "Project updated.");
+      showToast({ title: payload.is_archived ? "Project archived" : "Project updated", description: projectId, tone: "success" });
     } catch (error) {
-      setStatusLine(`Unable to update project: ${(error as Error).message}`);
+      showToast({ title: "Project update failed", description: (error as Error).message, tone: "error" });
     } finally {
       setProjectsBusy(false);
     }

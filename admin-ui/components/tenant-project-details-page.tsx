@@ -27,6 +27,7 @@ import { Input } from "@/components/ui/input";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
+import { useToast } from "@/components/ui/toast-provider";
 import { formatTimestamp } from "@/lib/datetime";
 import {
   createArchitectureDocument,
@@ -245,6 +246,7 @@ export function TenantProjectDetailsPage() {
   const pathname = usePathname();
   const router = useRouter();
   const { credentials, ready, principal } = useAuth();
+  const { showToast } = useToast();
 
   // Project state
   const [project, setProject] = useState<ProjectRecord | null>(null);
@@ -281,6 +283,7 @@ export function TenantProjectDetailsPage() {
   const [webhookTotal, setWebhookTotal] = useState(0);
   const [webhookPage, setWebhookPage] = useState(1);
   const [webhookPageSize, setWebhookPageSize] = useState<25 | 50 | 100>(25);
+  const [selectedWebhookJobId, setSelectedWebhookJobId] = useState<string | null>(null);
   const [activeSettingsSection, setActiveSettingsSection] = useState<SettingsSection>("general");
   const [runIssueFilter, setRunIssueFilter] = useState("");
   const [runStatusFilter, setRunStatusFilter] = useState<RunStatus | "all">("all");
@@ -325,6 +328,10 @@ export function TenantProjectDetailsPage() {
   const webhookTransportOptions = useMemo(
     () => Array.from(new Set(webhookJobs.map((job) => job.transport).filter(Boolean))).sort(),
     [webhookJobs],
+  );
+  const selectedWebhookJob = useMemo(
+    () => webhookJobs.find((job) => job.job_id === selectedWebhookJobId) ?? null,
+    [selectedWebhookJobId, webhookJobs],
   );
 
   async function loadOptions() {
@@ -461,6 +468,9 @@ export function TenantProjectDetailsPage() {
         offset: (webhookPage - 1) * webhookPageSize,
       });
       setWebhookJobs(payload.items);
+      setSelectedWebhookJobId((current) => (
+        current && payload.items.some((job) => job.job_id === current) ? current : null
+      ));
       setWebhookSummary(payload.summary);
       setWebhookTotal(payload.total);
       setWebhookStatusLine("");
@@ -484,9 +494,17 @@ export function TenantProjectDetailsPage() {
         jobId,
       });
       await loadWebhookJobs();
-      setWebhookStatusLine(`Retried webhook job ${jobId}.`);
+      showToast({
+        title: "Webhook retry queued",
+        description: `Retried webhook job ${jobId}.`,
+        tone: "success",
+      });
     } catch (error) {
-      setWebhookStatusLine(`Unable to retry webhook job: ${(error as Error).message}`);
+      showToast({
+        title: "Webhook retry failed",
+        description: (error as Error).message,
+        tone: "error",
+      });
     } finally {
       setRetryingWebhookJobId(null);
     }
@@ -619,9 +637,17 @@ export function TenantProjectDetailsPage() {
       setProject(updated);
       setForm(buildProjectFormState(updated));
       setArchiveConfirmationName("");
-      setStatusLine(updated.is_archived ? "Project archived." : "Project unarchived.");
+      showToast({
+        title: updated.is_archived ? "Project archived" : "Project unarchived",
+        description: updated.name,
+        tone: "success",
+      });
     } catch (error) {
-      setStatusLine(`Unable to update project: ${(error as Error).message}`);
+      showToast({
+        title: "Project update failed",
+        description: (error as Error).message,
+        tone: "error",
+      });
     } finally {
       setBusy(false);
     }
@@ -744,8 +770,17 @@ export function TenantProjectDetailsPage() {
       setProject(updated);
       setForm(buildProjectFormState(updated));
       setStatusLine("");
+      showToast({
+        title: "Project saved",
+        description: updated.name,
+        tone: "success",
+      });
     } catch (error) {
-      setStatusLine(`Unable to update project: ${(error as Error).message}`);
+      showToast({
+        title: "Project update failed",
+        description: (error as Error).message,
+        tone: "error",
+      });
     } finally {
       setBusy(false);
     }
@@ -800,7 +835,11 @@ export function TenantProjectDetailsPage() {
       setSecretsStatusLine("");
       return true;
     } catch (error) {
-      setSecretsStatusLine(`Save failed: ${(error as Error).message}`);
+      showToast({
+        title: "Project secrets save failed",
+        description: (error as Error).message,
+        tone: "error",
+      });
       return false;
     } finally {
       setSecretsBusy(false);
@@ -822,6 +861,11 @@ export function TenantProjectDetailsPage() {
     setSecretKey("");
     setSecretValue("");
     setEditingSecretKey(null);
+    showToast({
+      title: editingSecretKey ? "Secret updated" : "Secret saved",
+      description: key,
+      tone: "success",
+    });
   }
 
   async function removeSecretRef(key: string) {
@@ -834,6 +878,13 @@ export function TenantProjectDetailsPage() {
       setEditingSecretKey(null);
       setSecretKey("");
       setSecretValue("");
+    }
+    if (saved) {
+      showToast({
+        title: "Secret removed",
+        description: key,
+        tone: "success",
+      });
     }
   }
 
@@ -2042,7 +2093,20 @@ export function TenantProjectDetailsPage() {
                 </TableHeader>
                 <TableBody>
                   {webhookJobs.map((job) => (
-                    <TableRow key={job.job_id}>
+                    <TableRow
+                      key={job.job_id}
+                      data-testid={`webhook-job-row-${job.job_id}`}
+                      tabIndex={0}
+                      aria-selected={selectedWebhookJobId === job.job_id}
+                      className="cursor-pointer"
+                      onClick={() => setSelectedWebhookJobId(job.job_id)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          setSelectedWebhookJobId(job.job_id);
+                        }
+                      }}
+                    >
                       <TableCell className="pl-5">
                         <StatusBadge status={job.status} />
                       </TableCell>
@@ -2061,6 +2125,7 @@ export function TenantProjectDetailsPage() {
                               projectId: params.projectId,
                               runId: job.related_run_id,
                             })}
+                            onClick={(event) => event.stopPropagation()}
                             className="text-primary underline-offset-4 hover:underline"
                           >
                             {job.related_run_id}
@@ -2079,7 +2144,10 @@ export function TenantProjectDetailsPage() {
                             variant="outline"
                             size="sm"
                             className="h-7 text-xs"
-                            onClick={() => void handleRetryWebhookJob(job.job_id)}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              void handleRetryWebhookJob(job.job_id);
+                            }}
                             disabled={webhookBusy || retryingWebhookJobId === job.job_id}
                           >
                             {retryingWebhookJobId === job.job_id ? "Retrying..." : "Retry"}
@@ -2372,6 +2440,127 @@ export function TenantProjectDetailsPage() {
             )}
             </div>
           </div>
+        </div>
+      ) : null}
+
+      {selectedWebhookJob ? (
+        <div className="fixed inset-0 z-50" role="dialog" aria-modal="true" aria-label="Webhook job details">
+          <button
+            type="button"
+            aria-label="Close webhook job details"
+            className="absolute inset-0 bg-black/40"
+            onClick={() => setSelectedWebhookJobId(null)}
+          />
+          <aside
+            className="absolute top-0 right-0 bottom-0 flex w-full max-w-5xl flex-col overflow-hidden border-l bg-background shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="shrink-0 border-b bg-background">
+              <div className="flex items-start justify-between gap-4 px-6 py-5">
+                <div className="min-w-0 space-y-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="rounded-md border bg-muted/40 px-2 py-1 font-mono text-xs text-muted-foreground">
+                      {selectedWebhookJob.transport}
+                    </span>
+                    <StatusBadge status={selectedWebhookJob.status} />
+                  </div>
+                  <div>
+                    <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Webhook subject</p>
+                    <h2 className="mt-1 break-all font-mono text-2xl font-semibold tracking-tight">{selectedWebhookJob.subject_key}</h2>
+                  </div>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  {selectedWebhookJob.status === "failed" ? (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => void handleRetryWebhookJob(selectedWebhookJob.job_id)}
+                      disabled={webhookBusy || retryingWebhookJobId === selectedWebhookJob.job_id}
+                    >
+                      {retryingWebhookJobId === selectedWebhookJob.job_id ? "Retrying..." : "Retry"}
+                    </Button>
+                  ) : null}
+                  <Button variant="ghost" size="sm" className="h-8 w-8 px-0" onClick={() => setSelectedWebhookJobId(null)}>
+                    <X className="h-4 w-4" />
+                    <span className="sr-only">Close</span>
+                  </Button>
+                </div>
+              </div>
+
+              <div className="grid border-t bg-muted/20 sm:grid-cols-2 lg:grid-cols-4">
+                {[
+                  { label: "Attempts", value: String(selectedWebhookJob.attempt_count) },
+                  { label: "Arrived", value: formatTimestamp(selectedWebhookJob.created_at, "—") },
+                  { label: "Updated", value: formatTimestamp(selectedWebhookJob.updated_at, "—") },
+                  { label: "Event", value: selectedWebhookJob.event_type ?? "—", mono: true },
+                ].map((item) => (
+                  <div key={item.label} className="border-b px-6 py-3 last:border-b-0 sm:border-r sm:last:border-r-0 lg:border-b-0">
+                    <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{item.label}</p>
+                    <p className={`mt-1 truncate text-sm ${item.mono ? "font-mono" : "font-medium"}`} title={item.value}>
+                      {item.value}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-hidden">
+              <div className="grid h-full min-h-0 lg:grid-cols-[minmax(0,1fr)_320px]">
+                <section className="min-h-0 overflow-hidden border-r">
+                  <div className="flex items-center justify-between gap-2 border-b px-6 py-3">
+                    <h3 className="text-sm font-semibold">Failure detail</h3>
+                    <span className="rounded-full border px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+                      {selectedWebhookJob.last_error ? "Recorded" : "Empty"}
+                    </span>
+                  </div>
+                  <div className="h-full min-h-0 overflow-auto bg-slate-950 p-6 text-slate-100">
+                    <pre className="whitespace-pre-wrap break-words font-mono text-sm leading-6">
+                      {selectedWebhookJob.last_error ?? "No error recorded."}
+                    </pre>
+                  </div>
+                </section>
+
+                <section className="min-h-0 overflow-y-auto bg-muted/10">
+                  <div className="border-b px-5 py-4">
+                    <h3 className="text-sm font-semibold">Job context</h3>
+                  </div>
+                  <dl className="divide-y text-sm">
+                    {[
+                      ["Job ID", selectedWebhookJob.job_id],
+                      ["Request ID", selectedWebhookJob.request_id],
+                      ["Dedupe key", selectedWebhookJob.dedupe_key ?? "—"],
+                      ["Started", formatTimestamp(selectedWebhookJob.started_at, "—")],
+                      ["Completed", formatTimestamp(selectedWebhookJob.completed_at, "—")],
+                    ].map(([label, value]) => (
+                      <div key={label} className="px-5 py-3">
+                        <dt className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{label}</dt>
+                        <dd className="mt-1 break-all font-mono text-xs text-foreground">{value}</dd>
+                      </div>
+                    ))}
+                    <div className="px-5 py-3">
+                      <dt className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Related run</dt>
+                      <dd className="mt-1 break-all font-mono text-xs">
+                        {selectedWebhookJob.related_run_id ? (
+                          <Link
+                            href={buildRunDetailPath({
+                              tenantId: params.tenantId,
+                              projectId: params.projectId,
+                              runId: selectedWebhookJob.related_run_id,
+                            })}
+                            className="text-primary underline-offset-4 hover:underline"
+                          >
+                            {selectedWebhookJob.related_run_id}
+                          </Link>
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
+                      </dd>
+                    </div>
+                  </dl>
+                </section>
+              </div>
+            </div>
+          </aside>
         </div>
       ) : null}
     </div>

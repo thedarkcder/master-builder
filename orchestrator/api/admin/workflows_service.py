@@ -13,8 +13,7 @@ from orchestrator.api.admin.workflow_execution_read_service import list_workflow
 from orchestrator.api.admin.workflow_operation_retry_service import retry_workflow_operation
 from orchestrator.api.admin.workflow_queries import workflow_by_execution_id
 from orchestrator.api.admin.workflow_type_read_model import list_workflow_type_summaries, workflow_type_detail
-from orchestrator.api.schemas import WorkflowTypeUpdateRequest
-from orchestrator.core.workflow_type_catalog import get_workflow_type, update_workflow_type_configuration
+from orchestrator.core.workflow_type_catalog import get_workflow_type
 
 __all__ = [
     "create_workflow_attempt",
@@ -28,7 +27,6 @@ __all__ = [
     "list_workflows",
     "resume_workflow_execution",
     "retry_workflow_operation",
-    "update_workflow_type_detail",
 ]
 
 
@@ -48,28 +46,6 @@ def get_workflow_type_detail(
 ):  # noqa: ANN001
     workflow_type = get_workflow_type(session, workflow_type_key=workflow_type_key)
     return workflow_type_detail(session=session, workflow_type=workflow_type, tenant_id=tenant_id)
-
-
-def update_workflow_type_detail(
-    *,
-    session,
-    workflow_type_key: str,
-    tenant_id: str | None,
-    payload: WorkflowTypeUpdateRequest,
-):  # noqa: ANN001
-    del tenant_id
-    try:
-        workflow_type = update_workflow_type_configuration(
-            session,
-            workflow_type_key=workflow_type_key,
-            orchestration_backend=payload.orchestration_backend,
-            retry_policy=payload.retry_policy.model_dump(),
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-    session.commit()
-    session.refresh(workflow_type)
-    return workflow_type_detail(session=session, workflow_type=workflow_type, tenant_id=None)
 
 
 def list_workflows(
@@ -103,7 +79,6 @@ def get_workflow(
     execution_id: str,
     workflow_to_schema_fn,
     run_to_schema_fn,
-    integration_router=None,
 ):  # noqa: ANN001
     workflow = workflow_by_execution_id(session=session, execution_id=execution_id)
     if workflow is None:
@@ -113,5 +88,4 @@ def get_workflow(
         workflow=workflow,
         workflow_to_schema_fn=workflow_to_schema_fn,
         run_to_schema_fn=run_to_schema_fn,
-        integration_router=integration_router,
     )

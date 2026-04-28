@@ -14,13 +14,15 @@ class WorkerExecutionServiceTests(unittest.TestCase):
             run_id="run-1",
             tenant_id="tenant-1",
             issue_key="GP-122",
+            workflow_id="workflow-1",
             status="dispatching",
             worker_service_instance_id="worker-linux-local:runs",
             claim_id="claim-1",
         )
         tenant = SimpleNamespace(tenant_id="tenant-1")
+        workflow = SimpleNamespace(workflow_id="workflow-1", orchestration_backend="legacy")
         session = MagicMock()
-        session.get.side_effect = [claimed_run, tenant, claimed_run]
+        session.get.side_effect = [claimed_run, tenant, workflow, tenant]
 
         with (
             patch.object(

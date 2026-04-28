@@ -7,6 +7,7 @@ import { useAuth } from "@/components/auth-provider";
 import { ProjectKnowledgeAddSection } from "@/components/project-knowledge-add-section";
 import { ProjectKnowledgeSourcesSection } from "@/components/project-knowledge-sources-section";
 import { Button } from "@/components/ui/button";
+import { useToast } from "@/components/ui/toast-provider";
 
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -55,6 +56,7 @@ export function ProjectKnowledgeBrowserPage({
   initialView = "browse"
 }: ProjectKnowledgeBrowserPageProps) {
   const { credentials } = useAuth();
+  const { showToast } = useToast();
   const [activeView, setActiveView] = useState<"browse" | "add" | "sources">(initialView);
   const [stats, setStats] = useState<ProjectKnowledgeStatsRecord | null>(null);
   const [assets, setAssets] = useState<ProjectKnowledgeAssetRecord[]>([]);
@@ -245,9 +247,9 @@ export function ProjectKnowledgeBrowserPage({
         setAssetOffset(Math.max(0, assetOffset - ASSET_PAGE_SIZE));
       }
       await refreshAll();
-      setStatusLine("Knowledge asset deleted.");
+      showToast({ title: "Knowledge asset deleted", tone: "success" });
     } catch (error) {
-      setStatusLine(`Unable to delete knowledge asset: ${(error as Error).message}`);
+      showToast({ title: "Knowledge asset delete failed", description: (error as Error).message, tone: "error" });
     } finally {
       setDeletingAssetId(null);
     }
@@ -270,15 +272,18 @@ export function ProjectKnowledgeBrowserPage({
         setSelectedAsset((current) => (current ? { ...current, status: updatedAsset.status, updated_at: updatedAsset.updated_at } : current));
       }
       await refreshAll();
-      setStatusLine(
-        nextStatus === "ready"
-          ? `Knowledge asset "${updatedAsset.title}" approved.`
-          : nextStatus === "rejected"
-            ? `Knowledge asset "${updatedAsset.title}" rejected.`
-            : `Knowledge asset "${updatedAsset.title}" moved back to review.`
-      );
+      showToast({
+        title:
+          nextStatus === "ready"
+            ? "Knowledge asset approved"
+            : nextStatus === "rejected"
+              ? "Knowledge asset rejected"
+              : "Knowledge asset moved to review",
+        description: updatedAsset.title,
+        tone: "success",
+      });
     } catch (error) {
-      setStatusLine(`Unable to update knowledge asset status: ${(error as Error).message}`);
+      showToast({ title: "Knowledge asset update failed", description: (error as Error).message, tone: "error" });
     } finally {
       setUpdatingAssetId(null);
     }

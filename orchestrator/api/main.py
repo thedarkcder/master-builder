@@ -47,7 +47,6 @@ from orchestrator.api.routes.webhook_github import router as webhook_github_rout
 from orchestrator.core.config import get_settings
 from orchestrator.core.discord.commands_sync import sync_discord_guild_commands
 from orchestrator.core.error_observability import emit_hard_error
-from orchestrator.core.log_event_bus import initialize_run_streaming, shutdown_run_streaming
 from orchestrator.core.logging import configure_logging
 from orchestrator.core.observability_stream import initialize_observability_streaming, shutdown_observability_streaming
 from orchestrator.core.platform_metrics import platform_metrics
@@ -55,6 +54,7 @@ from orchestrator.core.observability import reset_log_context, set_log_context
 from orchestrator.core.sentry import initialize_sentry
 from orchestrator.core.telemetry import initialize_telemetry, shutdown_telemetry
 from orchestrator.core.workflow.execution_snapshot_startup import ensure_execution_snapshot_startup_bootstrap
+from orchestrator.core.workflow_type_catalog import validate_persisted_workflow_definitions
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.database_support import ensure_postgres_database_url
 from orchestrator.storage.migrations import run_migrations
@@ -85,20 +85,21 @@ def create_app() -> FastAPI:
     async def lifespan(_: FastAPI):
         if settings.auto_migrate_on_startup:
             run_migrations()
+        session_factory = create_session_factory()
         ensure_execution_snapshot_startup_bootstrap(
-            session_factory=create_session_factory(),
+            session_factory=session_factory,
             database_url=settings.database_url,
             actor="api",
         )
+        with session_factory() as session:
+            validate_persisted_workflow_definitions(session=session)
         # Best-effort: failures are logged by sync_discord_guild_commands and must not block API startup.
         sync_discord_guild_commands(settings=settings)
-        initialize_run_streaming()
         initialize_observability_streaming()
         try:
             yield
         finally:
             shutdown_observability_streaming()
-            shutdown_run_streaming()
             shutdown_telemetry()
 
     app = FastAPI(title="master-builder orchestrator", lifespan=lifespan)

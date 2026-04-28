@@ -138,7 +138,8 @@ def upsert_clarification_projection(
         transport=spec.transport,
         reply_scope=spec.reply_scope,
     )
-    metadata = dict(getattr(existing, "metadata_json", {}) or {})
+    existing_metadata = dict(getattr(existing, "metadata_json", {}) or {})
+    metadata = dict(existing_metadata)
     metadata.update(dict(spec.metadata or {}))
     if spec.transport is not None:
         metadata["transport"] = spec.transport
@@ -148,11 +149,11 @@ def upsert_clarification_projection(
     if "questions" not in metadata:
         metadata["questions"] = ClarificationQuestionSet(questions=spec.questions).to_payload()
     already_projected = False
-    existing_fingerprint = str(metadata.get("question_state_fingerprint") or "").strip()
+    existing_fingerprint = str(existing_metadata.get("question_state_fingerprint") or "").strip()
     if existing is not None:
         if not existing_fingerprint:
             existing_questions = ClarificationQuestionSet.from_values(
-                metadata.get("questions") if isinstance(metadata.get("questions"), list) else ()
+                existing_metadata.get("questions") if isinstance(existing_metadata.get("questions"), list) else ()
             )
             if existing_questions:
                 existing_fingerprint = clarification_state_fingerprint(questions=existing_questions.questions)

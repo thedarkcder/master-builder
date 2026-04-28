@@ -9,6 +9,7 @@ import pytest
 from temporalio.exceptions import ApplicationError
 
 from orchestrator.core.specialist_planning import RetryableSpecialistPlanningContractError
+from orchestrator.core.workflow_advance import WorkflowAdvanceOutcome
 from orchestrator.core.workflow_execution_projection import WorkflowExecutionReference, WorkflowSourceReference
 from orchestrator.core.workflow_runtime import WorkflowAdvanceRequest, WorkflowTrigger
 from orchestrator.temporal.payloads import (
@@ -492,6 +493,52 @@ def test_process_handler_workflow_advance_activity_raises_terminal_application_e
     assert exc_info.value.non_retryable is True
 
 
+def test_process_handler_workflow_advance_activity_allows_explicit_no_persist_noop(monkeypatch):
+    monkeypatch.setattr(
+        "orchestrator.temporal.activities.handler_workflow.get_settings",
+        lambda: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        "orchestrator.temporal.activities.handler_workflow.create_session_factory",
+        lambda: lambda: _FakeSessionContextManager(
+            session=_FakeSession(
+                tenant=SimpleNamespace(tenant_id="tenant-a"),
+                workflow_type=SimpleNamespace(handler_key="jira_parent_feature"),
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        "orchestrator.temporal.activities.handler_workflow.get_workflow_type_by_handler_key",
+        lambda session, handler_key: session.workflow_type,
+    )
+    monkeypatch.setattr(
+        "orchestrator.temporal.activities.handler_workflow.execute_workflow_advance",
+        lambda **kwargs: WorkflowAdvanceOutcome(
+            handled=True,
+            reason="pm_parent_non_material_change",
+            requires_persisted_execution=False,
+        ),
+    )
+
+    payload = HandlerWorkflowAdvanceInput(
+        workflow_id="parent_planning:MAB-232",
+        workflow_handler_key="jira_parent_feature",
+        tenant_id="tenant-a",
+        project_id="project-a",
+        execution_key="MAB-232",
+        source_system="jira",
+        source_ref="MAB-232",
+    )
+
+    from orchestrator.temporal.activities.handler_workflow import process_handler_workflow_advance_activity
+
+    result = process_handler_workflow_advance_activity(payload)
+
+    assert result.handled is True
+    assert result.reason == "pm_parent_non_material_change"
+    assert result.status == "ignored"
+
+
 def test_retry_handler_workflow_operation_activity_dispatches_projectless_workflow(monkeypatch):
     workflow = SimpleNamespace(
         workflow_id="tenant_workflow:abc",
@@ -578,6 +625,9 @@ class _FakeSession:
         model_name = getattr(model, "__name__", "")
         if model_name == "Tenant":
             return self.tenant
+        return None
+
+    def commit(self):
         return None
 
 

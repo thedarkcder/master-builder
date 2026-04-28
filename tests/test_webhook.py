@@ -1000,6 +1000,10 @@ class JiraWebhookTests(JiraWebhookTestsHarness):
         with (
             patch("orchestrator.api.routes.webhook_discord_interactions._resolve_discord_interactions_public_key", return_value=b"\x01" * 32),
             patch("orchestrator.api.routes.webhook_discord_interactions._validate_discord_interaction_signature"),
+            patch(
+                "orchestrator.api.routes.webhook_discord_interactions._resolve_interaction_subject_scope",
+                return_value=("tenant-webhook", None, "discord_channel:tenant-webhook:discord-channel-1"),
+            ),
         ):
             response = self.client.post("/discord/interactions", json=payload)
 
@@ -1012,4 +1016,5 @@ class JiraWebhookTests(JiraWebhookTestsHarness):
                 select(WebhookJob).where(WebhookJob.transport == "discord_interaction")
             ).scalars().all()
         self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0].tenant_id, "tenant-webhook")
         self.assertIsNone(jobs[0].dedupe_key)

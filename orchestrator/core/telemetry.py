@@ -200,9 +200,13 @@ def current_trace_context() -> dict[str, str | None]:
 
 @contextmanager
 def telemetry_span(name: str, *, attributes: dict[str, Any] | None = None):
+    trace = None
     try:
         from opentelemetry import trace
     except ImportError:
+        pass
+
+    if trace is None:
         yield None
         return
 

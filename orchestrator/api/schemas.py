@@ -1119,6 +1119,7 @@ class WorkflowOperationAttemptRead(BaseModel):
 
 class WorkflowObservabilityEventRead(BaseModel):
     event_id: str
+    event_sequence: int | None = None
     source: Literal["audit", "telemetry"]
     level: str
     event_kind: str
@@ -1194,6 +1195,8 @@ class WorkflowOperationRead(BaseModel):
     label: str | None = None
     description: str | None = None
     required: bool = True
+    kind: str = "business"
+    after: list[str] = Field(default_factory=list)
     definition_only: bool = False
     target_system: str | None = None
     target_ref: str | None = None
@@ -1212,19 +1215,16 @@ class WorkflowRetryPolicyRead(BaseModel):
     backoff_coefficient: float = Field(default=1.0, ge=1.0)
 
 
-class WorkflowRetryPolicyUpdate(BaseModel):
-    manual_retry_enabled: bool = True
-    max_attempts: int = Field(default=1, ge=1)
-    initial_interval_seconds: int = Field(default=0, ge=0)
-    max_interval_seconds: int = Field(default=0, ge=0)
-    backoff_coefficient: float = Field(default=1.0, ge=1.0)
-
-
 class WorkflowTypeOperationRead(BaseModel):
     operation_type: str
     label: str
     description: str | None = None
     completion_required: bool = True
+    kind: str = "business"
+    after: list[str] = Field(default_factory=list)
+    required: bool = True
+    retryable: bool = False
+    graph_index: int = 0
     status: str | None = None
 
 
@@ -1297,11 +1297,6 @@ class WorkflowTypeDetailRead(BaseModel):
     execution_count: int = 0
     latest_execution_at: datetime | None = None
     recent_executions: list[WorkflowExecutionPreviewRead] = Field(default_factory=list)
-
-
-class WorkflowTypeUpdateRequest(BaseModel):
-    orchestration_backend: Literal["legacy", "temporal", "database"]
-    retry_policy: WorkflowRetryPolicyUpdate = Field(default_factory=WorkflowRetryPolicyUpdate)
 
 
 class WorkflowStatePathEntryRead(BaseModel):
@@ -1391,7 +1386,9 @@ class RunEventRead(BaseModel):
     recorded_at: datetime
 
 
-class RunLogEventRead(BaseModel):
+class LoggingPaneEventRead(BaseModel):
+    event_id: str
+    event_sequence: int | None = None
     run_id: str | None = None
     issue_key: str | None = None
     project_id: str | None = None

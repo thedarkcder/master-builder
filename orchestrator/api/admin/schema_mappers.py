@@ -26,8 +26,8 @@ from orchestrator.storage.models import (
     WorkflowExecution,
     WorkflowOperation,
     WorkflowOperationAttempt,
-    AuditEvent,
 )
+from orchestrator.core.product_events import ProductEvent
 
 
 def tenant_to_schema(tenant: Tenant) -> TenantRead:
@@ -92,7 +92,7 @@ def workflow_operation_attempt_to_schema(attempt: WorkflowOperationAttempt) -> W
     )
 
 
-def workflow_observability_event_to_schema(event: AuditEvent | dict) -> WorkflowObservabilityEventRead:
+def workflow_observability_event_to_schema(event: ProductEvent | dict) -> WorkflowObservabilityEventRead:
     if isinstance(event, dict):
         return WorkflowObservabilityEventRead(**event)
     payload = dict(event.payload_json or {})
@@ -106,7 +106,8 @@ def workflow_observability_event_to_schema(event: AuditEvent | dict) -> Workflow
         except ValueError:
             attempt = None
     return WorkflowObservabilityEventRead(
-        event_id=event.event_id,
+        event_id=f"audit:{event.event_sequence}",
+        event_sequence=event.event_sequence,
         source="audit",
         level=event.level,
         event_kind=event.event_kind,
@@ -115,7 +116,7 @@ def workflow_observability_event_to_schema(event: AuditEvent | dict) -> Workflow
         run_id=event.run_id,
         operation_id=event.operation_id,
         attempt_id=event.attempt_id,
-        agent_id=event.actor_id if event.actor_type == "agent" else None,
+        agent_id=str(payload.get("actor_id") or "").strip() if str(payload.get("actor_type") or "") == "agent" else None,
         invocation_id=str(payload.get("invocation_id") or "").strip() or None,
         stage=str(payload.get("stage") or "").strip() or None,
         attempt=attempt,
@@ -136,7 +137,9 @@ def workflow_operation_to_schema(
     required: bool,
     definition_only: bool,
     attempts: list[WorkflowOperationAttempt],
-    events: list[AuditEvent | dict] | None = None,
+    kind: str = "business",
+    after: list[str] | None = None,
+    events: list[ProductEvent | dict] | None = None,
     can_retry: bool = False,
     retry_unavailable_reason: str | None = None,
 ) -> WorkflowOperationRead:
@@ -148,6 +151,8 @@ def workflow_operation_to_schema(
         label=label,
         description=description,
         required=required,
+        kind=kind,
+        after=list(after or []),
         definition_only=definition_only,
         target_system=(operation.target_system if operation is not None else None),
         target_ref=(operation.target_ref if operation is not None else None),

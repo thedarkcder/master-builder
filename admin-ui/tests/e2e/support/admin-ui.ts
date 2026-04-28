@@ -10,7 +10,7 @@ import type {
   ProjectAutomationRecord,
   ProjectRecord,
   RunEventRecord,
-  RunLogEventRecord,
+  RuntimeLogEventRecord,
   RunRecord,
   RunStatus,
   WorkflowOperationRetryResponseRecord,
@@ -412,8 +412,9 @@ export function makeWorkflow(overrides: Partial<WorkflowRecord> = {}): WorkflowR
     workflow_id: baselineRun.workflow_id,
     tenant_id: baselineRun.tenant_id,
     project_id: baselineRun.project_id,
-    issue_key: baselineRun.issue_key,
-    issue_summary: baselineRun.issue_summary,
+    source_system: "jira",
+    source_ref: baselineRun.issue_key,
+    display_name: baselineRun.issue_summary,
     repo_url: baselineRun.repo_url,
     branch: baselineRun.branch,
     pr_url: baselineRun.pr_url,
@@ -437,6 +438,11 @@ export function makeWorkflow(overrides: Partial<WorkflowRecord> = {}): WorkflowR
           label: "Execute run attempt",
           description: "Dispatch the current run attempt through the central execution engine.",
           completion_required: true,
+          kind: "business",
+          after: [],
+          required: true,
+          retryable: true,
+          graph_index: 0,
           status: baselineRun.status,
         },
       ],
@@ -493,6 +499,8 @@ export function makeWorkflow(overrides: Partial<WorkflowRecord> = {}): WorkflowR
         label: "Execute run attempt",
         description: "Dispatch the current run attempt through the central execution engine.",
         required: true,
+        kind: "business",
+        after: [],
         definition_only: false,
         target_system: null,
         target_ref: null,
@@ -685,14 +693,15 @@ export function makeStageInvocationLogs(options: {
   startedAt: string;
   finishedAt?: string;
   codexSessionId?: string;
-}): RunLogEventRecord[] {
+}): RuntimeLogEventRecord[] {
   const runId = options.runId ?? "5de2cedf-b7ae-400c-a53c-3beecf078a51";
   const startedMessage = JSON.stringify({
     event_kind: "stage_invocation_started",
     codex_session_id: options.codexSessionId,
   });
-  const rows: RunLogEventRecord[] = [
+  const rows: RuntimeLogEventRecord[] = [
     {
+      event_id: `${options.invocationId}:started`,
       run_id: runId,
       issue_key: "GP-124",
       project_id: "route25-default",
@@ -710,6 +719,7 @@ export function makeStageInvocationLogs(options: {
   ];
   if (options.finishedAt) {
     rows.push({
+      event_id: `${options.invocationId}:finished`,
       run_id: runId,
       issue_key: "GP-124",
       project_id: "route25-default",
@@ -739,7 +749,7 @@ export async function mockRunDetailApis(
     run: RunRecord;
     workflow?: WorkflowRecord;
     events?: RunEventRecord[];
-    logs?: RunLogEventRecord[];
+    logs?: RuntimeLogEventRecord[];
     tokenTimeline?: TokenTimelineRecord;
     tenant?: TenantRecord;
     projects?: ProjectRecord[];
@@ -770,8 +780,9 @@ export async function mockRunDetailApis(
       workflow_id: options.run.workflow_id,
       tenant_id: options.run.tenant_id,
       project_id: options.run.project_id,
-      issue_key: options.run.issue_key,
-      issue_summary: options.run.issue_summary,
+      source_system: "jira",
+      source_ref: options.run.issue_key,
+      display_name: options.run.issue_summary,
       repo_url: options.run.repo_url,
       branch: options.run.branch,
       pr_url: options.run.pr_url,
@@ -944,8 +955,8 @@ export async function mockTenantWorkflowApis(
       workflow_id: `${primaryWorkflow.workflow_id}-retry`,
       tenant_id: tenantId,
       project_id: primaryWorkflow.project_id,
-      issue_key: primaryWorkflow.issue_key,
-      issue_summary: primaryWorkflow.issue_summary ?? primaryWorkflow.issue_key,
+      issue_key: primaryWorkflow.source_ref,
+      issue_summary: primaryWorkflow.display_name ?? primaryWorkflow.source_ref,
       created_at: "2026-04-17T12:40:00Z",
       started_at: null,
       finished_at: null,

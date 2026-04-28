@@ -1,4 +1,5 @@
 import os
+from dataclasses import replace
 from types import SimpleNamespace
 import unittest
 from unittest.mock import MagicMock, patch
@@ -365,6 +366,71 @@ class WorkerWebhookJobServiceTests(unittest.TestCase):
             self.assertEqual(session.get(WebhookJob, second.job_id).attempt_count, 1)
             build_result.assert_called_once()
 
+    def test_subject_batch_failure_marks_all_claimed_jobs_failed(self) -> None:
+        first_request = self._request()
+        second_request = replace(
+            first_request,
+            request_id="request-2",
+            dedupe_key="delivery-2",
+        )
+        with self.session_factory() as session:
+            first = enqueue_webhook_job(session, request=first_request).job
+            second = enqueue_webhook_job(session, request=second_request).job
+            session.commit()
+
+        with self.session_factory() as session:
+            with patch(
+                "orchestrator.core.worker.webhook_job_service._process_jira_subject_jobs",
+                side_effect=RuntimeError("atlassian auth failed"),
+            ):
+                processed = process_next_webhook_job(
+                    session=session,
+                    settings=self._settings(),
+                    owner_id="worker-1",
+                )
+
+            self.assertIsNotNone(processed)
+            first_persisted = session.get(WebhookJob, first.job_id)
+            second_persisted = session.get(WebhookJob, second.job_id)
+            self.assertIsNotNone(first_persisted)
+            self.assertIsNotNone(second_persisted)
+            assert first_persisted is not None
+            assert second_persisted is not None
+            self.assertEqual(first_persisted.status, "failed")
+            self.assertEqual(second_persisted.status, "failed")
+            self.assertEqual(first_persisted.last_error, "atlassian auth failed")
+            self.assertEqual(second_persisted.last_error, "atlassian auth failed")
+            self.assertIsNone(first_persisted.owner_id)
+            self.assertIsNone(second_persisted.owner_id)
+
+    def test_subject_batch_failure_stores_root_cause_for_wrapped_workflow_update(self) -> None:
+        root = ValueError("Event attempt_id must belong to the supplied operation_id")
+        terminal = RuntimeError("terminal_workflow_advance_error: Event attempt_id must belong to the supplied operation_id")
+        terminal.__cause__ = root
+        wrapper = RuntimeError("Workflow update failed")
+        wrapper.__cause__ = terminal
+        with self.session_factory() as session:
+            enqueued = enqueue_webhook_job(session, request=self._request()).job
+            session.commit()
+
+        with self.session_factory() as session:
+            with patch(
+                "orchestrator.core.worker.webhook_job_service._process_jira_subject_jobs",
+                side_effect=wrapper,
+            ):
+                processed = process_next_webhook_job(
+                    session=session,
+                    settings=self._settings(),
+                    owner_id="worker-1",
+                )
+
+            self.assertIsNotNone(processed)
+            persisted = session.get(WebhookJob, enqueued.job_id)
+            self.assertIsNotNone(persisted)
+            assert persisted is not None
+            self.assertEqual(persisted.status, "failed")
+            self.assertEqual(persisted.last_error, "Event attempt_id must belong to the supplied operation_id")
+
     def test_process_next_webhook_job_snapshots_job_context_before_rollback(self) -> None:
         class _BrokenJob:
             def __init__(self) -> None:
@@ -380,7 +446,14 @@ class WorkerWebhookJobServiceTests(unittest.TestCase):
                 return WEBHOOK_TRANSPORT_GITHUB
 
         broken_job = _BrokenJob()
-        claim = SimpleNamespace(acquired=True, job=broken_job)
+        claim = SimpleNamespace(
+            acquired=True,
+            batch=SimpleNamespace(
+                primary_job=broken_job,
+                related_jobs=(),
+                job_ids=("job-1",),
+            ),
+        )
         session = MagicMock()
 
         def _fail_processing(*, claimed_job, **_kwargs):  # noqa: ANN001
@@ -388,7 +461,7 @@ class WorkerWebhookJobServiceTests(unittest.TestCase):
             raise RuntimeError("flush failed")
 
         with (
-            patch("orchestrator.core.worker.webhook_job_service.claim_next_webhook_job", return_value=claim),
+            patch("orchestrator.core.worker.webhook_job_service.claim_next_webhook_subject_batch", return_value=claim),
             patch("orchestrator.core.worker.webhook_job_service._process_github_subject_jobs", side_effect=_fail_processing),
             patch(
                 "orchestrator.core.worker.webhook_job_service.mark_webhook_job_ids_failed",

@@ -27,6 +27,10 @@ from orchestrator.core.parent_feature_workflow.adapters import (
     _atlassian_oauth_context,
     _jira_adapter,
 )
+from orchestrator.core.parent_feature_workflow.operations import (
+    PARENT_OP_JIRA_CHILD_FANOUT,
+    PARENT_OP_JIRA_COMMENT_PROJECTION,
+)
 from orchestrator.core.jira_parent_child_sync_shared import (
     JiraParentChildSyncContext,
     JiraParentChildSyncResult,
@@ -51,8 +55,22 @@ from orchestrator.core.pm_interview_service import (
 from orchestrator.core.runtime_invocation import AgentInvocationContext
 from orchestrator.core.webhook_job_errors import RetryableWebhookJobError
 from orchestrator.core.workflow_runtime import WorkflowAdvanceRequest, WorkflowTrigger
-from orchestrator.core.workflow_execution_projection import WorkflowExecutionReference, WorkflowSourceReference
+from orchestrator.core.workflow_execution_projection import (
+    WorkflowExecutionProjection,
+    WorkflowExecutionReference,
+    WorkflowSourceReference,
+    classify_external_workflow_failure,
+    ensure_workflow_execution,
+)
 from orchestrator.core.workflow_handler_composition import build_installed_workflow_handler_registry
+from orchestrator.core.workflow_step_runner import (
+    WorkflowStepAttempt,
+    complete_workflow_step_attempt,
+    fail_workflow_step_attempt,
+    start_workflow_step_attempt,
+    wait_workflow_step_attempt,
+)
+from orchestrator.core.workflow_type_catalog import get_workflow_type
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +94,55 @@ def _jira_workflow_execution_reference(
             description=issue_description,
             attributes={"jira_issue_labels": list(issue_labels)},
         ),
+    )
+
+
+def _start_parent_workflow_step(
+    *,
+    session: Session,
+    context: JiraParentChildSyncContext,
+    parent_detail,
+    operation_type: str,
+) -> tuple[WorkflowExecutionProjection, WorkflowStepAttempt]:
+    workflow_type = get_workflow_type(session, workflow_type_key="parent_planning")
+    lifecycle = ensure_workflow_execution(
+        session=session,
+        workflow_type=workflow_type,
+        tenant_id=context.tenant_id,
+        project_id=context.project_id,
+        execution=_jira_workflow_execution_reference(
+            issue_key=parent_detail.key,
+            issue_summary=parent_detail.summary,
+            issue_description=parent_detail.description,
+            issue_labels=tuple(parent_detail.labels or ()),
+        ),
+        display_name=parent_detail.summary,
+        description=parent_detail.description,
+    )
+    return lifecycle, start_workflow_step_attempt(lifecycle=lifecycle, operation_type=operation_type)
+
+
+def _context_with_attempt(
+    *,
+    context: JiraParentChildSyncContext,
+    lifecycle: WorkflowExecutionProjection,
+    step: WorkflowStepAttempt,
+) -> JiraParentChildSyncContext:
+    return JiraParentChildSyncContext(
+        request_id=context.request_id,
+        tenant_id=context.tenant_id,
+        tenant=context.tenant,
+        project_id=context.project_id,
+        issue_key=context.issue_key,
+        issue_labels=list(context.issue_labels or []),
+        payload=dict(context.payload or {}),
+        webhook_event=context.webhook_event,
+        comment_command=context.comment_command,
+        comment_command_argument=context.comment_command_argument,
+        workflow_id=lifecycle.workflow.workflow_id,
+        operation_id=step.operation_id,
+        attempt=step.attempt_number,
+        attempt_id=step.attempt_id,
     )
 
 
@@ -234,6 +301,13 @@ def handle_engineering_clarification_command(
             extra={"webhook_event": context.webhook_event},
         )
     parent_detail = jira.get_issue_detail(issue_id_or_key=parent_issue_key)
+    lifecycle, projection_step = _start_parent_workflow_step(
+        session=session,
+        context=context,
+        parent_detail=parent_detail,
+        operation_type=PARENT_OP_JIRA_COMMENT_PROJECTION,
+    )
+    attempt_context = _context_with_attempt(context=context, lifecycle=lifecycle, step=projection_step)
     runtime = build_runtime_for_selector_fn(
         session=session,
         settings=settings,
@@ -260,163 +334,203 @@ def handle_engineering_clarification_command(
                 command="clarify",
                 stage="pm-translation",
                 working_dir=".",
-                workflow_id=context.workflow_id,
-                operation_id=context.operation_id,
-                attempt_id=context.attempt_id,
+                workflow_id=attempt_context.workflow_id,
+                operation_id=attempt_context.operation_id,
+                attempt=attempt_context.attempt,
+                attempt_id=attempt_context.attempt_id,
                 issue_key=child_detail.key,
+                db_session=session,
             ),
         )
     except CodexRuntimeError as exc:
+        fail_workflow_step_attempt(
+            lifecycle=lifecycle,
+            step=projection_step,
+            category=classify_external_workflow_failure(error=exc),
+            message=str(exc),
+        )
+        session.commit()
         return JiraParentChildSyncResult(
             handled=True,
             reason="clarification_translation_failed",
             extra={"error": str(exc), "webhook_event": context.webhook_event},
         )
+    except Exception as exc:  # noqa: BLE001
+        fail_workflow_step_attempt(
+            lifecycle=lifecycle,
+            step=projection_step,
+            category=classify_external_workflow_failure(error=exc),
+            message=str(exc),
+        )
+        session.commit()
+        raise
     classification = translation.classification
     stakeholder_question = translation.stakeholder_question or ""
     child_block_note = translation.child_block_note
     reason = translation.reason
-    if classification != "product_behavior" or not stakeholder_question:
-        comment_text = _engineering_decision_note(
-            question=question,
-            owner="Engineering child team",
-            approval_path="Child PR review and architecture review when boundaries or platform risk change",
-            rationale=reason or child_block_note,
-            status_line="Engineering owns this implementation decision. The parent PM brief does not reopen.",
-        )
-        _post_sync_note(
-            session=session,
-            tenant=context.tenant,
-            issue_key=child_detail.key,
-            settings=settings,
-            body=comment_text,
-            post_jira_comment_fn=post_jira_comment_fn,
-        )
-        return JiraParentChildSyncResult(
-            handled=True,
-            reason="clarification_not_product_behavior",
-            extra={
-                "classification": classification,
-                "detail_reason": reason,
-                "webhook_event": context.webhook_event,
-            },
-        )
+    try:
+        if classification != "product_behavior" or not stakeholder_question:
+            comment_text = _engineering_decision_note(
+                question=question,
+                owner="Engineering child team",
+                approval_path="Child PR review and architecture review when boundaries or platform risk change",
+                rationale=reason or child_block_note,
+                status_line="Engineering owns this implementation decision. The parent PM brief does not reopen.",
+            )
+            _post_sync_note(
+                session=session,
+                tenant=context.tenant,
+                issue_key=child_detail.key,
+                settings=settings,
+                body=comment_text,
+                post_jira_comment_fn=post_jira_comment_fn,
+            )
+            complete_workflow_step_attempt(
+                lifecycle=lifecycle,
+                step=projection_step,
+                summary="Engineering clarification was classified and answered on the child issue.",
+            )
+            session.commit()
+            return JiraParentChildSyncResult(
+                handled=True,
+                reason="clarification_not_product_behavior",
+                extra={
+                    "classification": classification,
+                    "detail_reason": reason,
+                    "webhook_event": context.webhook_event,
+                },
+            )
 
-    _update_issue_sync_label(
-        oauth=oauth,
-        issue_detail=child_detail,
-        target_label="sync-blocked",
-    )
-    existing_context = resolve_issue_followup_context(
-        session=session,
-        tenant_id=context.tenant_id,
-        issue_key=parent_issue_key,
-        context_type=FOLLOWUP_CONTEXT_ENGINEERING_CLARIFICATION,
-    )
-    metadata = dict(getattr(existing_context, "metadata_json", {}) or {})
-    existing_questions = metadata.get("questions")
-    question_entries = list(existing_questions) if isinstance(existing_questions, list) else []
-    question_entries.append(
-        {
-            "source_child_key": child_detail.key,
-            "original_question": question,
-            "stakeholder_question": stakeholder_question,
-            "requested_at": datetime.now(timezone.utc).isoformat(),
-        }
-    )
-    clarification_question_set = ClarificationQuestionSet.from_values(
-        [
-            {
-                "question": item.get("stakeholder_question"),
-                "source_ref": item.get("source_child_key"),
-            }
-            for item in question_entries
-        ]
-    )
-    affected_child_keys = {
-        *[str(value).strip().upper() for value in metadata.get("affected_child_keys", []) if str(value).strip()],
-        child_detail.key.upper(),
-    }
-    clarification_service = ParentPlanningClarificationService()
-    publication = clarification_service.ensure_active_clarification(
-        issue_key=parent_issue_key,
-        questions=clarification_question_set.questions,
-        publisher=JiraEngineeringClarificationPublisher(
+        _update_issue_sync_label(
+            oauth=oauth,
+            issue_detail=child_detail,
+            target_label="sync-blocked",
+        )
+        existing_context = resolve_issue_followup_context(
             session=session,
-            context=context,
-            settings=settings,
-            metadata={
-                **metadata,
-                "parent_issue_key": parent_issue_key,
-                "project_id": context.project_id,
-                "project_key": _project_key_for_issue(parent_issue_key),
-                "affected_child_keys": sorted(affected_child_keys),
-                "questions": question_entries,
-                "parent_updated": False,
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            },
-            create_jira_comment_fn=create_jira_comment_fn,
-        ),
-    )
-    session.commit()
-    posted_to_discord = True
-    if not publication.already_active:
-        _post_sync_note(
-            session=session,
-            tenant=context.tenant,
+            tenant_id=context.tenant_id,
             issue_key=parent_issue_key,
-            settings=settings,
-            body=(
-                f"Engineering needs a product clarification for child {child_detail.key}. "
-                f"Reply on this parent issue with the decision: {stakeholder_question}"
-            ),
-            post_jira_comment_fn=post_jira_comment_fn,
+            context_type=FOLLOWUP_CONTEXT_ENGINEERING_CLARIFICATION,
         )
-        posted_to_discord = _post_parent_brief_questions_to_discord(
-            session=session,
-            settings=settings,
-            tenant=context.tenant,
-            project_id=context.project_id,
-            parent_issue_key=parent_issue_key,
+        metadata = dict(getattr(existing_context, "metadata_json", {}) or {})
+        existing_questions = metadata.get("questions")
+        question_entries = list(existing_questions) if isinstance(existing_questions, list) else []
+        question_entries.append(
+            {
+                "source_child_key": child_detail.key,
+                "original_question": question,
+                "stakeholder_question": stakeholder_question,
+                "requested_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+        clarification_question_set = ClarificationQuestionSet.from_values(
+            [
+                {
+                    "question": item.get("stakeholder_question"),
+                    "source_ref": item.get("source_child_key"),
+                }
+                for item in question_entries
+            ]
+        )
+        affected_child_keys = {
+            *[str(value).strip().upper() for value in metadata.get("affected_child_keys", []) if str(value).strip()],
+            child_detail.key.upper(),
+        }
+        clarification_service = ParentPlanningClarificationService()
+        publication = clarification_service.ensure_active_clarification(
+            issue_key=parent_issue_key,
             questions=clarification_question_set.questions,
+            publisher=JiraEngineeringClarificationPublisher(
+                session=session,
+                context=attempt_context,
+                settings=settings,
+                metadata={
+                    **metadata,
+                    "parent_issue_key": parent_issue_key,
+                    "project_id": context.project_id,
+                    "project_key": _project_key_for_issue(parent_issue_key),
+                    "affected_child_keys": sorted(affected_child_keys),
+                    "questions": question_entries,
+                    "parent_updated": False,
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                },
+                create_jira_comment_fn=create_jira_comment_fn,
+            ),
         )
-        if not posted_to_discord:
+        session.commit()
+        posted_to_discord = True
+        if not publication.already_active:
             _post_sync_note(
                 session=session,
                 tenant=context.tenant,
                 issue_key=parent_issue_key,
                 settings=settings,
                 body=(
-                    "Discord PM follow-up could not be created for this clarification. "
-                    "Continue the decision on the parent Jira issue for now."
+                    f"Engineering needs a product clarification for child {child_detail.key}. "
+                    f"Reply on this parent issue with the decision: {stakeholder_question}"
                 ),
                 post_jira_comment_fn=post_jira_comment_fn,
             )
-    _post_sync_note(
-        session=session,
-        tenant=context.tenant,
-        issue_key=child_detail.key,
-        settings=settings,
-        body=_engineering_decision_note(
-            question=question,
-            owner="Product via parent PM interview",
-            approval_path=f"Parent feature {parent_issue_key} PM clarification thread",
-            rationale=reason or child_block_note or stakeholder_question,
-            status_line="Escalated to the parent PM thread because the answer changes product behavior or non-functional requirements.",
-        ),
-        post_jira_comment_fn=post_jira_comment_fn,
-    )
-    return JiraParentChildSyncResult(
-        handled=True,
-        reason="comment_command_clarify",
-        extra={
-            "classification": classification,
-            "parent_issue_key": parent_issue_key,
-            "affected_child_keys": sorted(affected_child_keys),
-            "stakeholder_question": stakeholder_question,
-            "webhook_event": context.webhook_event,
-        },
-    )
+            posted_to_discord = _post_parent_brief_questions_to_discord(
+                session=session,
+                settings=settings,
+                tenant=context.tenant,
+                project_id=context.project_id,
+                parent_issue_key=parent_issue_key,
+                questions=clarification_question_set.questions,
+            )
+            if not posted_to_discord:
+                _post_sync_note(
+                    session=session,
+                    tenant=context.tenant,
+                    issue_key=parent_issue_key,
+                    settings=settings,
+                    body=(
+                        "Discord PM follow-up could not be created for this clarification. "
+                        "Continue the decision on the parent Jira issue for now."
+                    ),
+                    post_jira_comment_fn=post_jira_comment_fn,
+                )
+        _post_sync_note(
+            session=session,
+            tenant=context.tenant,
+            issue_key=child_detail.key,
+            settings=settings,
+            body=_engineering_decision_note(
+                question=question,
+                owner="Product via parent PM interview",
+                approval_path=f"Parent feature {parent_issue_key} PM clarification thread",
+                rationale=reason or child_block_note or stakeholder_question,
+                status_line="Escalated to the parent PM thread because the answer changes product behavior or non-functional requirements.",
+            ),
+            post_jira_comment_fn=post_jira_comment_fn,
+        )
+        complete_workflow_step_attempt(
+            lifecycle=lifecycle,
+            step=projection_step,
+            summary="Engineering clarification was projected to the parent PM thread.",
+        )
+        session.commit()
+        return JiraParentChildSyncResult(
+            handled=True,
+            reason="comment_command_clarify",
+            extra={
+                "classification": classification,
+                "parent_issue_key": parent_issue_key,
+                "affected_child_keys": sorted(affected_child_keys),
+                "stakeholder_question": stakeholder_question,
+                "webhook_event": context.webhook_event,
+            },
+        )
+    except Exception as exc:  # noqa: BLE001
+        fail_workflow_step_attempt(
+            lifecycle=lifecycle,
+            step=projection_step,
+            category=classify_external_workflow_failure(error=exc),
+            message=str(exc),
+        )
+        session.commit()
+        raise
 
 
 def handle_engineering_clarification_reply(
@@ -477,6 +591,13 @@ def handle_engineering_clarification_reply(
         settings=settings,
     )
     parent_detail = jira.get_issue_detail(issue_id_or_key=context.issue_key)
+    lifecycle, fanout_step = _start_parent_workflow_step(
+        session=session,
+        context=context,
+        parent_detail=parent_detail,
+        operation_type=PARENT_OP_JIRA_CHILD_FANOUT,
+    )
+    attempt_context = _context_with_attempt(context=context, lifecycle=lifecycle, step=fanout_step)
     child_details = [
         jira.get_issue_detail(issue_id_or_key=child_key)
         for child_key in affected_child_keys
@@ -498,6 +619,9 @@ def handle_engineering_clarification_reply(
             allow_empty_children=True,
             scoped_project_keys=[_project_key_for_issue(context.issue_key)],
             codex_working_dir=".",
+            workflow_id=fanout_step.workflow_id,
+            operation_id=fanout_step.operation_id,
+            attempt_ref=fanout_step.ref,
         )
     except Exception as exc:  # noqa: BLE001
         logger.exception(
@@ -516,86 +640,113 @@ def handle_engineering_clarification_reply(
             body=f"Clarification reply was captured but parent/child refresh failed: {exc}",
             post_jira_comment_fn=post_jira_comment_fn,
         )
+        fail_workflow_step_attempt(
+            lifecycle=lifecycle,
+            step=fanout_step,
+            category=classify_external_workflow_failure(error=exc),
+            message=str(exc),
+        )
+        session.commit()
         return JiraParentChildSyncResult(
             handled=True,
             reason="engineering_clarification_refresh_failed",
             extra={"stale_child_keys": affected_child_keys, "webhook_event": context.webhook_event},
         )
 
-    seed_evaluation = ParentPlanningFanoutService().evaluate_seed_data(
-        seed_data=seed_data,
-        combine_child_updates_fn=_combined_child_updates,
-    )
-    if not seed_evaluation.completed:
-        _mark_issues_sync_blocked(oauth=oauth, issue_keys=[context.issue_key, *affected_child_keys])
-        metadata["parent_updated"] = bool(seed_data.get("updated_parent") or seed_data.get("created_parent"))
-        metadata["updated_at"] = datetime.now(timezone.utc).isoformat()
-        clarification_service = ParentPlanningClarificationService()
-        clarification_service.ensure_active_clarification(
+    try:
+        seed_evaluation = ParentPlanningFanoutService().evaluate_seed_data(
+            seed_data=seed_data,
+            combine_child_updates_fn=_combined_child_updates,
+        )
+        if not seed_evaluation.completed:
+            _mark_issues_sync_blocked(oauth=oauth, issue_keys=[context.issue_key, *affected_child_keys])
+            metadata["parent_updated"] = bool(seed_data.get("updated_parent") or seed_data.get("created_parent"))
+            metadata["updated_at"] = datetime.now(timezone.utc).isoformat()
+            clarification_service = ParentPlanningClarificationService()
+            clarification_service.ensure_active_clarification(
+                issue_key=context.issue_key,
+                questions=seed_evaluation.questions,
+                publisher=JiraEngineeringClarificationPublisher(
+                    session=session,
+                    context=attempt_context,
+                    settings=settings,
+                    metadata=metadata,
+                    create_jira_comment_fn=create_jira_comment_fn,
+                ),
+            )
+            wait_workflow_step_attempt(
+                lifecycle=lifecycle,
+                step=fanout_step,
+                summary="Engineering clarification reply requires more product clarification before child refresh can complete.",
+            )
+            session.commit()
+            return JiraParentChildSyncResult(
+                handled=True,
+                reason="engineering_clarification_still_open",
+                extra={
+                    "questions": ClarificationQuestionSet.from_values(seed_evaluation.questions).to_payload(),
+                    "stale_child_keys": affected_child_keys,
+                    "webhook_event": context.webhook_event,
+                },
+            )
+
+        close_followup_contexts(
+            session=session,
+            tenant_id=context.tenant_id,
+            context_type=FOLLOWUP_CONTEXT_ENGINEERING_CLARIFICATION,
             issue_key=context.issue_key,
-            questions=seed_evaluation.questions,
-            publisher=JiraEngineeringClarificationPublisher(
+        )
+        updated_children = seed_evaluation.updated_children
+        created_children = seed_evaluation.created_children
+        changed_children = seed_evaluation.changed_children
+        _post_sync_note(
+            session=session,
+            tenant=context.tenant,
+            issue_key=context.issue_key,
+            settings=settings,
+            body=(
+                "Clarification reply applied to the parent feature and engineering child tickets are current again. "
+                f"{'Refreshed children: ' + ', '.join(updated_children) + '.' if updated_children else ''} "
+                f"{'Created children: ' + ', '.join(created_children) + '.' if created_children else ''} "
+                f"{'No engineering child changes were required.' if not updated_children and not created_children else ''}"
+            ).strip(),
+            post_jira_comment_fn=post_jira_comment_fn,
+        )
+        for child_key in changed_children or affected_child_keys:
+            _post_sync_note(
                 session=session,
-                context=context,
+                tenant=context.tenant,
+                issue_key=child_key,
                 settings=settings,
-                metadata=metadata,
-                create_jira_comment_fn=create_jira_comment_fn,
-            ),
+                body=f"Product clarification from parent feature {context.issue_key} has been applied. Sync is current again.",
+                post_jira_comment_fn=post_jira_comment_fn,
+            )
+        complete_workflow_step_attempt(
+            lifecycle=lifecycle,
+            step=fanout_step,
+            summary="Engineering clarification reply refreshed the parent and child tickets.",
         )
         session.commit()
         return JiraParentChildSyncResult(
             handled=True,
-            reason="engineering_clarification_still_open",
+            reason="engineering_clarification_resolved",
             extra={
-                "questions": ClarificationQuestionSet.from_values(seed_evaluation.questions).to_payload(),
-                "stale_child_keys": affected_child_keys,
+                "parent_issue_key": context.issue_key,
+                "updated_children": changed_children,
+                "parent_revision": seed_data.get("parent_revision"),
+                "children_sync_status": seed_data.get("children_sync_status"),
                 "webhook_event": context.webhook_event,
             },
         )
-
-    close_followup_contexts(
-        session=session,
-        tenant_id=context.tenant_id,
-        context_type=FOLLOWUP_CONTEXT_ENGINEERING_CLARIFICATION,
-        issue_key=context.issue_key,
-    )
-    session.commit()
-    updated_children = seed_evaluation.updated_children
-    created_children = seed_evaluation.created_children
-    changed_children = seed_evaluation.changed_children
-    _post_sync_note(
-        session=session,
-        tenant=context.tenant,
-        issue_key=context.issue_key,
-        settings=settings,
-        body=(
-            "Clarification reply applied to the parent feature and engineering child tickets are current again. "
-            f"{'Refreshed children: ' + ', '.join(updated_children) + '.' if updated_children else ''} "
-            f"{'Created children: ' + ', '.join(created_children) + '.' if created_children else ''} "
-            f"{'No engineering child changes were required.' if not updated_children and not created_children else ''}"
-        ).strip(),
-        post_jira_comment_fn=post_jira_comment_fn,
-    )
-    for child_key in changed_children or affected_child_keys:
-        _post_sync_note(
-            session=session,
-            tenant=context.tenant,
-            issue_key=child_key,
-            settings=settings,
-            body=f"Product clarification from parent feature {context.issue_key} has been applied. Sync is current again.",
-            post_jira_comment_fn=post_jira_comment_fn,
+    except Exception as exc:  # noqa: BLE001
+        fail_workflow_step_attempt(
+            lifecycle=lifecycle,
+            step=fanout_step,
+            category=classify_external_workflow_failure(error=exc),
+            message=str(exc),
         )
-    return JiraParentChildSyncResult(
-        handled=True,
-        reason="engineering_clarification_resolved",
-        extra={
-            "parent_issue_key": context.issue_key,
-            "updated_children": changed_children,
-            "parent_revision": seed_data.get("parent_revision"),
-            "children_sync_status": seed_data.get("children_sync_status"),
-            "webhook_event": context.webhook_event,
-        },
-    )
+        session.commit()
+        raise
 
 
 def handle_pm_interview_reply(
@@ -669,6 +820,7 @@ def handle_pm_interview_reply(
                 operation_id=context.operation_id,
                 attempt_id=context.attempt_id,
                 issue_key=context.issue_key,
+                db_session=session,
             ),
             project_keys=[project_key],
             issues=[],

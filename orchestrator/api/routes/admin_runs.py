@@ -7,15 +7,15 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from orchestrator.api.admin.codex_logs_service import (
-    list_codex_log_events as list_codex_log_events_impl,
-    stream_codex_events_ndjson as stream_codex_events_ndjson_impl,
+from orchestrator.api.admin.runtime_logs_service import (
+    list_runtime_log_events as list_runtime_log_events_impl,
+    stream_runtime_events_ndjson as stream_runtime_events_ndjson_impl,
 )
 from orchestrator.api.admin.workflow_live_stream_service import (
     list_workflow_operation_live_events as list_workflow_operation_live_events_impl,
     stream_workflow_operation_live_events_ndjson as stream_workflow_operation_live_events_ndjson_impl,
 )
-from orchestrator.api.admin.run_event_stream_service import (
+from orchestrator.api.admin.run_logging_stream_service import (
     stream_run_events_ndjson as stream_run_events_ndjson_impl,
 )
 from orchestrator.api.admin.runs_query import build_runs_query as build_runs_query_impl
@@ -23,7 +23,7 @@ from orchestrator.api.admin.runs_service import (
     cancel_run_admin as cancel_run_admin_impl,
     get_run as get_run_impl,
     list_run_events as list_run_events_impl,
-    list_run_log_events as list_run_log_events_impl,
+    list_run_logging_pane_events as list_run_logging_pane_events_impl,
     list_runs as list_runs_impl,
 )
 from orchestrator.api.admin.schema_mappers import run_to_schema, workflow_to_schema
@@ -39,12 +39,11 @@ from orchestrator.api.admin.workflows_service import (
     list_workflow_types as list_workflow_types_impl,
     resume_workflow_execution as resume_workflow_execution_impl,
     retry_workflow_operation as retry_workflow_operation_impl,
-    update_workflow_type_detail as update_workflow_type_detail_impl,
 )
 from orchestrator.api.dependencies import get_session
 from orchestrator.api.schemas import (
     RunEventRead,
-    RunLogEventRead,
+    LoggingPaneEventRead,
     RunRead,
     WorkflowAttemptCreateRequest,
     WorkflowObservabilityEventRead,
@@ -54,7 +53,6 @@ from orchestrator.api.schemas import (
     WorkflowStepTranscriptRead,
     WorkflowTypeDetailRead,
     WorkflowTypeSummaryRead,
-    WorkflowTypeUpdateRequest,
 )
 from orchestrator.api.discord.ingress.seed_runtime import seed_issues_with_runtime
 from orchestrator.core.config import get_settings
@@ -67,16 +65,10 @@ from orchestrator.core.security import (
     require_authenticated_principal,
     require_tenant_workspace_access,
 )
-from orchestrator.storage.models import Run, Tenant, WorkflowExecution, WorkflowOperation
+from orchestrator.storage.models import Run, Tenant, WorkflowExecution, WorkflowOperation, WorkflowOperationAttempt
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 workflow_integration_router = WorkflowIntegrationRouter()
-
-try:
-    import psycopg
-except ImportError:  # pragma: no cover - dependency is required at runtime
-    psycopg = None
-
 
 @router.get("/runs", response_model=list[RunRead])
 def list_runs(
@@ -209,21 +201,6 @@ def get_workflow_type_detail(
     )
 
 
-@router.put("/workflow-types/{workflow_type_key}", response_model=WorkflowTypeDetailRead)
-def update_workflow_type_detail(
-    workflow_type_key: str,
-    payload: WorkflowTypeUpdateRequest,
-    _: str = Depends(require_admin),
-    session: Session = Depends(get_session),
-) -> WorkflowTypeDetailRead:
-    return update_workflow_type_detail_impl(
-        session=session,
-        workflow_type_key=workflow_type_key,
-        tenant_id=None,
-        payload=payload,
-    )
-
-
 @router.get("/workflows/{execution_id}", response_model=WorkflowRead)
 def get_workflow(
     execution_id: str,
@@ -244,7 +221,6 @@ def get_workflow(
         execution_id=execution_id,
         workflow_to_schema_fn=workflow_to_schema,
         run_to_schema_fn=run_to_schema,
-        integration_router=workflow_integration_router,
     )
 
 
@@ -373,11 +349,16 @@ def stream_workflow_operation_telemetry_events(
     operation = session.get(WorkflowOperation, operation_id)
     if operation is None or operation.workflow_id != workflow.workflow_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow operation not found")
+    normalized_attempt_id = str(attempt_id or "").strip() or None
+    if normalized_attempt_id is not None:
+        attempt = session.get(WorkflowOperationAttempt, normalized_attempt_id)
+        if attempt is None or attempt.operation_id != operation.operation_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow operation attempt not found")
     return StreamingResponse(
         stream_workflow_operation_live_events_ndjson_impl(
             operation=operation,
             settings=get_settings(),
-            attempt_id=attempt_id,
+            attempt_id=normalized_attempt_id,
         ),
         media_type="application/x-ndjson",
     )
@@ -574,7 +555,7 @@ def list_run_events(
     )
 
 
-@router.get("/runs/{run_id}/logs", response_model=list[RunLogEventRead])
+@router.get("/runs/{run_id}/logs", response_model=list[LoggingPaneEventRead])
 def list_run_logs(
     run_id: str,
     limit: int = Query(default=200, ge=1, le=1000),
@@ -582,17 +563,17 @@ def list_run_logs(
     before_event_id: str | None = Query(default=None),
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
-) -> list[RunLogEventRead]:
+) -> list[LoggingPaneEventRead]:
     if not principal.is_platform_super_admin:
         run = session.get(Run, run_id)
         if run is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
         require_tenant_workspace_access(principal=principal, tenant_id=run.tenant_id)
-    return list_run_log_events_impl(
+    return list_run_logging_pane_events_impl(
         session=session,
         run_id=run_id,
         run_model=Run,
-        run_log_schema_cls=RunLogEventRead,
+        logging_pane_schema_cls=LoggingPaneEventRead,
         limit=limit,
         before_recorded_at=before_recorded_at,
         before_event_id=before_event_id,
@@ -616,14 +597,13 @@ def stream_run_events(
             run_id=run_id,
             run_model=Run,
             settings=get_settings(),
-            psycopg_module=psycopg,
         ),
         media_type="application/x-ndjson",
     )
 
 
-@router.get("/codex/logs", response_model=list[RunLogEventRead])
-def list_codex_logs(
+@router.get("/runtime/logs", response_model=list[LoggingPaneEventRead])
+def list_runtime_logs(
     tenant_id: str | None = Query(default=None),
     project_id: str | None = Query(default=None),
     run_id: str | None = Query(default=None),
@@ -632,10 +612,10 @@ def list_codex_logs(
     limit: int = Query(default=500, ge=1, le=2000),
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
-) -> list[RunLogEventRead]:
-    return list_codex_log_events_impl(
+) -> list[LoggingPaneEventRead]:
+    return list_runtime_log_events_impl(
         session=session,
-        run_log_schema_cls=RunLogEventRead,
+        logging_pane_schema_cls=LoggingPaneEventRead,
         tenant_id=tenant_id,
         project_id=project_id,
         run_id=run_id,
@@ -645,8 +625,8 @@ def list_codex_logs(
     )
 
 
-@router.get("/codex/events/stream")
-def stream_codex_events(
+@router.get("/runtime/events/stream")
+def stream_runtime_events(
     tenant_id: str | None = Query(default=None),
     project_id: str | None = Query(default=None),
     run_id: str | None = Query(default=None),
@@ -656,10 +636,9 @@ def stream_codex_events(
     session: Session = Depends(get_session),
 ) -> StreamingResponse:
     return StreamingResponse(
-        stream_codex_events_ndjson_impl(
+        stream_runtime_events_ndjson_impl(
             session=session,
             settings=get_settings(),
-            psycopg_module=psycopg,
             tenant_id=tenant_id,
             project_id=project_id,
             run_id=run_id,

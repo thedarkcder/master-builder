@@ -78,7 +78,6 @@ def retry_workflow_operation(
         workflow=workflow,
         workflow_to_schema_fn=workflow_to_schema_fn,
         run_to_schema_fn=run_to_schema_fn,
-        integration_router=integration_router,
     )
     refreshed_attempts = workflow_operation_attempts(session=session, operation_id=operation.operation_id)
     latest_attempt = refreshed_attempts[0] if refreshed_attempts else None

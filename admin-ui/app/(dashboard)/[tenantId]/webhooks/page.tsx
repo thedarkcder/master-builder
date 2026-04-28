@@ -9,6 +9,7 @@ import { useAuth } from "@/components/auth-provider";
 import { DEFAULT_API_BASE_URL } from "@/lib/auth-constants";
 import { formatTimestamp } from "@/lib/datetime";
 import { Button } from "@/components/ui/button";
+import { useToast } from "@/components/ui/toast-provider";
 import {
   getJiraWebhookDiagnostics,
   getTenant,
@@ -32,6 +33,7 @@ type HealthStatus = {
 
 export default function TenantWebhooksPage() {
   const { credentials } = useAuth();
+  const { showToast } = useToast();
   const params = useParams<{ tenantId: string }>();
   const tenantId = params.tenantId;
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
@@ -118,10 +120,9 @@ export default function TenantWebhooksPage() {
     try {
       await navigator.clipboard.writeText(url);
       setCopiedKey(key);
-      setStatusLine(`Copied: ${url}`);
-      window.setTimeout(() => setCopiedKey((c) => (c === key ? null : c)), 1200);
+      showToast({ title: "Webhook URL copied", description: url, tone: "success" });
     } catch (error) {
-      setStatusLine(`Copy failed: ${(error as Error).message}`);
+      showToast({ title: "Webhook URL copy failed", description: (error as Error).message, tone: "error" });
     }
   }
 

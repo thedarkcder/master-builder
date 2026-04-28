@@ -4,14 +4,11 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import pytest
-
 from orchestrator.core.config import Settings
-from orchestrator.core.workflow_advance import InvalidWorkflowOperationRetryError
 from orchestrator.core.workflow_handler_composition import build_installed_workflow_handler_registry
 from orchestrator.core.workflow_operation_retry_use_case import retry_workflow_operation_with_registered_handler
 from orchestrator.storage.db import create_session_factory
-from orchestrator.storage.models import Project, Tenant, WorkflowExecution, WorkflowOperation
+from orchestrator.storage.models import Project, Tenant, WorkflowExecution, WorkflowOperation, WorkflowOperationAttempt
 from tests.test_support.db_harness import SqliteTemplateDbTestCase
 
 
@@ -150,13 +147,6 @@ class ParentWorkflowOperationRetryTests(SqliteTemplateDbTestCase):
                 patch(
                     "orchestrator.core.parent_feature_workflow.retry.resolve_parent_feature_brief",
                     return_value=SimpleNamespace(to_payload=lambda: {"objective": "Ship identity redesign"}),
-                ),
-                patch(
-                    "orchestrator.core.workflow_execution_status.list_workflow_type_operations",
-                    return_value=[
-                        SimpleNamespace(operation_type="jira_child_fanout", required=True),
-                        SimpleNamespace(operation_type="jira_comment_projection", required=False),
-                    ],
                 ),
                 patch(
                     "orchestrator.core.parent_feature_workflow.adapters._ParentBriefPlanner.plan_backlog_parent",
@@ -307,20 +297,32 @@ class ParentWorkflowOperationRetryTests(SqliteTemplateDbTestCase):
                     "orchestrator.core.parent_feature_workflow.adapters._ParentBriefPlanner.plan_backlog_parent",
                 ) as planner_mock,
             ):
-                with pytest.raises(InvalidWorkflowOperationRetryError) as excinfo:
-                    retry_workflow_operation_with_registered_handler(
-                        session=session,
-                        settings=settings,
-                        session_factory=session_factory,
-                        workflow=workflow,
-                        operation=fanout_operation,
-                        handler_registry=self._resolver(fake_router=fake_router),
-                    )
+                handle = retry_workflow_operation_with_registered_handler(
+                    session=session,
+                    settings=settings,
+                    session_factory=session_factory,
+                    workflow=workflow,
+                    operation=fanout_operation,
+                    handler_registry=self._resolver(fake_router=fake_router),
+                )
+                session.commit()
 
             session.refresh(workflow)
             session.refresh(fanout_operation)
+            attempts = (
+                session.query(WorkflowOperationAttempt)
+                .filter(WorkflowOperationAttempt.operation_id == fanout_operation.operation_id)
+                .order_by(WorkflowOperationAttempt.attempt_number)
+                .all()
+            )
 
+            assert handle.status == "failed"
             assert workflow.status == "failed"
             assert fanout_operation.status == "failed"
-            assert "No confirmed parent brief snapshot is available for MAB-216" in str(excinfo.value)
+            assert fanout_operation.summary == "No confirmed parent brief snapshot is available for MAB-216"
+            assert len(attempts) == 1
+            assert attempts[0].attempt_number == 1
+            assert attempts[0].status == "failed"
+            assert attempts[0].error_category == "missing_input"
+            assert attempts[0].error_message == "No confirmed parent brief snapshot is available for MAB-216"
             planner_mock.assert_not_called()

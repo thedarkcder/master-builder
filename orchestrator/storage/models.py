@@ -433,10 +433,10 @@ class AdminNotification(Base):
     )
 
     notification_id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    tenant_id: Mapped[str | None] = mapped_column(
+    tenant_id: Mapped[str] = mapped_column(
         String(128),
         ForeignKey("tenants.tenant_id", ondelete="CASCADE"),
-        nullable=True,
+        nullable=False,
         index=True,
     )
     project_id: Mapped[str | None] = mapped_column(
@@ -514,12 +514,7 @@ class WorkflowExecution(Base):
         index=True,
         default=lambda: uuid4().hex,
     )
-    workflow_type_key: Mapped[str] = mapped_column(
-        String(64),
-        ForeignKey("workflow_types.workflow_type_key", ondelete="RESTRICT"),
-        nullable=False,
-        index=True,
-    )
+    workflow_type_key: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     tenant_id: Mapped[str] = mapped_column(
         String(128),
         ForeignKey("tenants.tenant_id", ondelete="CASCADE"),
@@ -580,52 +575,6 @@ class WorkflowCheckpoint(Base):
     stage: Mapped[str | None] = mapped_column(String(32), nullable=True)
     payload_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     codex_session_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-
-
-class WorkflowType(Base):
-    __tablename__ = "workflow_types"
-    __table_args__ = (
-        CheckConstraint(
-            "orchestration_backend IN ('legacy', 'temporal', 'database')",
-            name="ck_workflow_types_orchestration_backend",
-        ),
-        UniqueConstraint("handler_key", name="uq_workflow_types_handler_key"),
-    )
-
-    workflow_type_key: Mapped[str] = mapped_column(String(64), primary_key=True)
-    system_key: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
-    handler_key: Mapped[str] = mapped_column(String(64), nullable=False)
-    orchestration_backend: Mapped[str] = mapped_column(String(32), nullable=False)
-    retry_policy_config_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
-    capabilities_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
-    lifecycle_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
-    label: Mapped[str] = mapped_column(String(255), nullable=False)
-    description: Mapped[str] = mapped_column(Text, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-
-
-class WorkflowTypeOperation(Base):
-    __tablename__ = "workflow_type_operations"
-    __table_args__ = (
-        Index("ix_workflow_type_operations_workflow_type_key", "workflow_type_key"),
-        UniqueConstraint("workflow_type_key", "operation_type", name="uq_workflow_type_operations_key_type"),
-        UniqueConstraint("workflow_type_key", "sort_order", name="uq_workflow_type_operations_key_order"),
-    )
-
-    operation_definition_id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    workflow_type_key: Mapped[str] = mapped_column(
-        String(64),
-        ForeignKey("workflow_types.workflow_type_key", ondelete="CASCADE"),
-        nullable=False,
-    )
-    operation_type: Mapped[str] = mapped_column(String(64), nullable=False)
-    label: Mapped[str] = mapped_column(String(255), nullable=False)
-    description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    sort_order: Mapped[int] = mapped_column(Integer, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
@@ -796,6 +745,7 @@ class WorkflowOperationAttempt(Base):
         Index("ix_workflow_operation_attempts_operation_id", "operation_id"),
         Index("ix_workflow_operation_attempts_status", "status"),
         UniqueConstraint("operation_id", "attempt_number", name="uq_workflow_operation_attempt_number"),
+        UniqueConstraint("operation_id", "attempt_id", name="uq_workflow_operation_attempt_identity"),
     )
 
     attempt_id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -815,68 +765,6 @@ class WorkflowOperationAttempt(Base):
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
-
-class AuditEvent(Base):
-    __tablename__ = "audit_events"
-    __table_args__ = (
-        Index("ix_audit_events_tenant_id_recorded_at", "tenant_id", "recorded_at"),
-        Index("ix_audit_events_project_id_recorded_at", "project_id", "recorded_at"),
-        Index("ix_audit_events_workflow_id_recorded_at", "workflow_id", "recorded_at"),
-        Index("ix_audit_events_run_id_recorded_at", "run_id", "recorded_at"),
-        Index("ix_audit_events_operation_id_recorded_at", "operation_id", "recorded_at"),
-        Index("ix_audit_events_event_kind", "event_kind"),
-        Index("ix_audit_events_level", "level"),
-    )
-
-    event_id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    tenant_id: Mapped[str] = mapped_column(
-        String(128),
-        ForeignKey("tenants.tenant_id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
-    project_id: Mapped[str | None] = mapped_column(
-        String(128),
-        ForeignKey("projects.project_id", ondelete="SET NULL"),
-        nullable=True,
-        index=True,
-    )
-    workflow_id: Mapped[str | None] = mapped_column(
-        String(64),
-        ForeignKey("workflow_executions.workflow_id", ondelete="CASCADE"),
-        nullable=True,
-        index=True,
-    )
-    run_id: Mapped[str | None] = mapped_column(
-        String(64),
-        ForeignKey("runs.run_id", ondelete="CASCADE"),
-        nullable=True,
-        index=True,
-    )
-    operation_id: Mapped[str | None] = mapped_column(
-        String(64),
-        ForeignKey("workflow_operations.operation_id", ondelete="CASCADE"),
-        nullable=True,
-        index=True,
-    )
-    attempt_id: Mapped[str | None] = mapped_column(
-        String(64),
-        ForeignKey("workflow_operation_attempts.attempt_id", ondelete="SET NULL"),
-        nullable=True,
-        index=True,
-    )
-    issue_key: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
-    actor_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    actor_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
-    source_component: Mapped[str] = mapped_column(String(128), nullable=False)
-    event_kind: Mapped[str] = mapped_column(String(64), nullable=False)
-    level: Mapped[str] = mapped_column(String(16), nullable=False)
-    correlation_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
-    trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
-    span_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
-    message: Mapped[str] = mapped_column(Text, nullable=False)
-    payload_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
-    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
 
 class PMInterviewCase(Base):
     __tablename__ = "pm_interview_cases"
@@ -1007,10 +895,10 @@ class WebhookJob(Base):
 
     job_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     transport: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
-    tenant_id: Mapped[str | None] = mapped_column(
+    tenant_id: Mapped[str] = mapped_column(
         String(128),
         ForeignKey("tenants.tenant_id", ondelete="CASCADE"),
-        nullable=True,
+        nullable=False,
         index=True,
     )
     project_id: Mapped[str | None] = mapped_column(
@@ -1126,136 +1014,6 @@ class AgentLifecycleEvent(Base):
     issue_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
     agent_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     event_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
-    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
-
-
-class RunLogEvent(Base):
-    __tablename__ = "run_log_events"
-
-    event_id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    tenant_id: Mapped[str] = mapped_column(
-        String(128),
-        ForeignKey("tenants.tenant_id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
-    project_id: Mapped[str | None] = mapped_column(
-        String(128),
-        ForeignKey("projects.project_id", ondelete="SET NULL"),
-        nullable=True,
-        index=True,
-    )
-    run_id: Mapped[str | None] = mapped_column(
-        String(64),
-        ForeignKey("runs.run_id", ondelete="CASCADE"),
-        nullable=True,
-        index=True,
-    )
-    issue_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    agent_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
-    invocation_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
-    channel: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
-    command: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
-    working_dir: Mapped[str | None] = mapped_column(String(1024), nullable=True)
-    stage: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
-    attempt: Mapped[int | None] = mapped_column(nullable=True)
-    stream: Mapped[str] = mapped_column(String(16), nullable=False)
-    message: Mapped[str] = mapped_column(Text, nullable=False)
-    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
-
-
-class RunStreamEvent(Base):
-    __tablename__ = "run_stream_events"
-    __table_args__ = (
-        Index("ix_run_stream_events_run_id_stream_offset", "run_id", "stream_offset"),
-        Index("ix_run_stream_events_tenant_id_stream_offset", "tenant_id", "stream_offset"),
-    )
-
-    stream_offset: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    event_kind: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
-    tenant_id: Mapped[str] = mapped_column(
-        String(128),
-        ForeignKey("tenants.tenant_id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
-    project_id: Mapped[str | None] = mapped_column(
-        String(128),
-        ForeignKey("projects.project_id", ondelete="SET NULL"),
-        nullable=True,
-        index=True,
-    )
-    run_id: Mapped[str | None] = mapped_column(
-        String(64),
-        ForeignKey("runs.run_id", ondelete="CASCADE"),
-        nullable=True,
-        index=True,
-    )
-    issue_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    agent_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
-    event_type: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
-    invocation_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
-    channel: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
-    command: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
-    working_dir: Mapped[str | None] = mapped_column(String(1024), nullable=True)
-    stage: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
-    attempt: Mapped[int | None] = mapped_column(nullable=True)
-    stream: Mapped[str | None] = mapped_column(String(16), nullable=True)
-    message: Mapped[str | None] = mapped_column(Text, nullable=True)
-    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
-
-
-class ObservabilityStreamEvent(Base):
-    __tablename__ = "observability_stream_events"
-    __table_args__ = (
-        Index("ix_observability_stream_events_tenant_id_stream_offset", "tenant_id", "stream_offset"),
-        Index("ix_observability_stream_events_operation_id_stream_offset", "operation_id", "stream_offset"),
-        Index("ix_observability_stream_events_attempt_id_stream_offset", "attempt_id", "stream_offset"),
-    )
-
-    stream_offset: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    tenant_id: Mapped[str] = mapped_column(
-        String(128),
-        ForeignKey("tenants.tenant_id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
-    project_id: Mapped[str | None] = mapped_column(
-        String(128),
-        ForeignKey("projects.project_id", ondelete="SET NULL"),
-        nullable=True,
-        index=True,
-    )
-    workflow_id: Mapped[str | None] = mapped_column(
-        String(64),
-        ForeignKey("workflow_executions.workflow_id", ondelete="CASCADE"),
-        nullable=True,
-        index=True,
-    )
-    run_id: Mapped[str | None] = mapped_column(
-        String(64),
-        ForeignKey("runs.run_id", ondelete="CASCADE"),
-        nullable=True,
-        index=True,
-    )
-    operation_id: Mapped[str | None] = mapped_column(
-        String(64),
-        ForeignKey("workflow_operations.operation_id", ondelete="CASCADE"),
-        nullable=True,
-        index=True,
-    )
-    attempt_id: Mapped[str | None] = mapped_column(
-        String(64),
-        ForeignKey("workflow_operation_attempts.attempt_id", ondelete="CASCADE"),
-        nullable=True,
-        index=True,
-    )
-    issue_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    event_kind: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
-    level: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
-    source_component: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
-    message: Mapped[str] = mapped_column(Text, nullable=False)
-    payload_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
 
 

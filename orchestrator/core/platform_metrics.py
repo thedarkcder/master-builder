@@ -29,9 +29,6 @@ class PlatformMetrics:
         self._api_request_errors_total: dict[tuple[str, str, str], int] = defaultdict(int)
         self._api_request_duration: dict[tuple[str, str], _HistogramState] = {}
         self._worker_failures_total: dict[str, int] = defaultdict(int)
-        self._log_broker_last_seen_offset: int = 0
-        self._log_broker_subscriber_count: int = 0
-        self._log_broker_redis_connected: int = 0
 
     def reset(self) -> None:
         with self._lock:
@@ -40,9 +37,6 @@ class PlatformMetrics:
             self._api_request_errors_total.clear()
             self._api_request_duration.clear()
             self._worker_failures_total.clear()
-            self._log_broker_last_seen_offset = 0
-            self._log_broker_subscriber_count = 0
-            self._log_broker_redis_connected = 0
 
     def record_api_request(self, *, method: str, route: str, status_code: int, duration_seconds: float) -> None:
         normalized_method = _normalize_method(method)
@@ -77,18 +71,6 @@ class PlatformMetrics:
         with self._lock:
             self._worker_failures_total[normalized_kind] += 1
 
-    def record_log_broker_state(
-        self,
-        *,
-        last_seen_offset: int,
-        subscriber_count: int,
-        redis_connected: bool,
-    ) -> None:
-        with self._lock:
-            self._log_broker_last_seen_offset = max(0, int(last_seen_offset))
-            self._log_broker_subscriber_count = max(0, int(subscriber_count))
-            self._log_broker_redis_connected = 1 if redis_connected else 0
-
     def render_prometheus(self) -> str:
         runtime = _runtime_metrics_snapshot(process_start_time_seconds=self._process_start_time_seconds)
         with self._lock:
@@ -96,9 +78,6 @@ class PlatformMetrics:
             api_request_errors = dict(self._api_request_errors_total)
             api_request_duration = dict(self._api_request_duration)
             worker_failures = dict(self._worker_failures_total)
-            log_broker_last_seen_offset = self._log_broker_last_seen_offset
-            log_broker_subscriber_count = self._log_broker_subscriber_count
-            log_broker_redis_connected = self._log_broker_redis_connected
 
         lines: list[str] = []
         lines.extend(
@@ -199,20 +178,6 @@ class PlatformMetrics:
         )
         for kind, value in sorted(worker_failures.items()):
             lines.append(f'master_builder_worker_failures_total{{kind="{_label_escape(kind)}"}} {value}')
-
-        lines.extend(
-            [
-                "# HELP master_builder_log_broker_last_seen_offset Latest stream offset observed by this API process.",
-                "# TYPE master_builder_log_broker_last_seen_offset gauge",
-                f"master_builder_log_broker_last_seen_offset {log_broker_last_seen_offset}",
-                "# HELP master_builder_log_broker_subscriber_count Active log stream subscribers for this API process.",
-                "# TYPE master_builder_log_broker_subscriber_count gauge",
-                f"master_builder_log_broker_subscriber_count {log_broker_subscriber_count}",
-                "# HELP master_builder_log_broker_redis_connected Whether the log broker is currently connected to Redis.",
-                "# TYPE master_builder_log_broker_redis_connected gauge",
-                f"master_builder_log_broker_redis_connected {log_broker_redis_connected}",
-            ]
-        )
 
         lines.append("")
         return "\n".join(lines)

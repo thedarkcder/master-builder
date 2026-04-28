@@ -9,6 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from orchestrator.core.audit_events import record_workflow_operation_audit_event
+from orchestrator.core.workflow_attempt_ref import WorkflowAttemptRef
 from orchestrator.core.workflow_operation_logging import emit_workflow_operation_log
 from orchestrator.storage.models import WorkflowOperation, WorkflowOperationAttempt
 
@@ -22,6 +23,15 @@ OPERATION_STATUS_COMPLETED = "completed"
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _attempt_ref(*, operation: WorkflowOperation, attempt: WorkflowOperationAttempt) -> WorkflowAttemptRef:
+    return WorkflowAttemptRef(
+        workflow_id=operation.workflow_id,
+        operation_id=operation.operation_id,
+        attempt_id=attempt.attempt_id,
+        number=attempt.attempt_number,
+    )
 
 
 @dataclass(frozen=True)
@@ -114,7 +124,7 @@ def start_workflow_operation_attempt(
     record_workflow_operation_audit_event(
         session,
         operation=operation,
-        attempt_id=attempt.attempt_id,
+        attempt_ref=_attempt_ref(operation=operation, attempt=attempt),
         source_component="workflow_operation_service",
         event_kind="attempt_started",
         level="info",
@@ -124,7 +134,7 @@ def start_workflow_operation_attempt(
     emit_workflow_operation_log(
         session,
         operation=operation,
-        attempt=attempt,
+        attempt_ref=_attempt_ref(operation=operation, attempt=attempt),
         event_type="workflow_operation_attempt_started",
         message=f"Started {operation.operation_type} attempt {next_attempt_number}.",
         metadata={"status": attempt.status},
@@ -150,7 +160,7 @@ def complete_workflow_operation(
     record_workflow_operation_audit_event(
         session,
         operation=operation,
-        attempt_id=attempt.attempt_id,
+        attempt_ref=_attempt_ref(operation=operation, attempt=attempt),
         source_component="workflow_operation_service",
         event_kind="attempt_completed",
         level="info",
@@ -160,7 +170,7 @@ def complete_workflow_operation(
     emit_workflow_operation_log(
         session,
         operation=operation,
-        attempt=attempt,
+        attempt_ref=_attempt_ref(operation=operation, attempt=attempt),
         event_type="workflow_operation_attempt_completed",
         message=summary or f"Completed {operation.operation_type}.",
         metadata={"status": attempt.status},
@@ -193,7 +203,7 @@ def fail_workflow_operation(
     record_workflow_operation_audit_event(
         session,
         operation=operation,
-        attempt_id=attempt.attempt_id,
+        attempt_ref=_attempt_ref(operation=operation, attempt=attempt),
         source_component="workflow_operation_service",
         event_kind="attempt_retry_scheduled" if scheduled_for_retry else "attempt_failed",
         level="warn" if scheduled_for_retry else "error",
@@ -209,7 +219,7 @@ def fail_workflow_operation(
     emit_workflow_operation_log(
         session,
         operation=operation,
-        attempt=attempt,
+        attempt_ref=_attempt_ref(operation=operation, attempt=attempt),
         event_type="workflow_operation_attempt_retry_scheduled" if scheduled_for_retry else "workflow_operation_attempt_failed",
         message=message,
         level=logging.WARNING if scheduled_for_retry else logging.ERROR,
@@ -244,7 +254,7 @@ def mark_workflow_operation_waiting_for_input(
     record_workflow_operation_audit_event(
         session,
         operation=operation,
-        attempt_id=attempt.attempt_id,
+        attempt_ref=_attempt_ref(operation=operation, attempt=attempt),
         source_component="workflow_operation_service",
         event_kind="waiting_for_input",
         level="info",
@@ -254,7 +264,7 @@ def mark_workflow_operation_waiting_for_input(
     emit_workflow_operation_log(
         session,
         operation=operation,
-        attempt=attempt,
+        attempt_ref=_attempt_ref(operation=operation, attempt=attempt),
         event_type="workflow_operation_waiting_for_input",
         message=summary,
         metadata={"status": attempt.status},

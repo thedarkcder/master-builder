@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import and_, desc, or_, select
+from sqlalchemy import desc, select
 from fastapi import HTTPException, status
 
+from orchestrator.core.logging_pane_events import list_run_logging_pane_events as list_run_logging_pane_events_core
 from orchestrator.core.runs import RunStateTransitionError, cancel_run as cancel_run_execution
-from orchestrator.storage.models import AgentLifecycleEvent, RunLogEvent
+from orchestrator.storage.models import AgentLifecycleEvent
 
 
 def _with_issue_url(payload, issue_url: str | None):  # noqa: ANN001
@@ -142,12 +143,12 @@ def list_run_events(*, session, run_id: str, run_model, run_event_schema_cls, li
     ]
 
 
-def list_run_log_events(
+def list_run_logging_pane_events(
     *,
     session,
     run_id: str,
     run_model,
-    run_log_schema_cls,
+    logging_pane_schema_cls,
     limit: int = 200,
     before_recorded_at: datetime | None = None,
     before_event_id: str | None = None,
@@ -155,40 +156,11 @@ def list_run_log_events(
     run = session.get(run_model, run_id)
     if run is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
-    query = select(RunLogEvent).where(RunLogEvent.run_id == run_id)
-    normalized_before_event_id = str(before_event_id or "").strip()
-    if before_recorded_at is not None:
-        if normalized_before_event_id:
-            query = query.where(
-                or_(
-                    RunLogEvent.recorded_at < before_recorded_at,
-                    and_(
-                        RunLogEvent.recorded_at == before_recorded_at,
-                        RunLogEvent.event_id < normalized_before_event_id,
-                    ),
-                )
-            )
-        else:
-            query = query.where(RunLogEvent.recorded_at < before_recorded_at)
-    query = query.order_by(desc(RunLogEvent.recorded_at), desc(RunLogEvent.event_id)).limit(
-        max(1, min(limit, 1000))
+    return list_run_logging_pane_events_core(
+        session=session,
+        run_id=run_id,
+        schema_cls=logging_pane_schema_cls,
+        limit=limit,
+        before_recorded_at=before_recorded_at,
+        before_event_id=before_event_id,
     )
-    log_rows = session.execute(query).scalars().all()
-    return [
-        run_log_schema_cls(
-            run_id=row.run_id,
-            issue_key=row.issue_key,
-            project_id=row.project_id,
-            agent_id=row.agent_id,
-            invocation_id=row.invocation_id,
-            channel=row.channel,
-            command=row.command,
-            working_dir=row.working_dir,
-            stage=row.stage,
-            attempt=row.attempt,
-            stream=row.stream,
-            message=row.message,
-            recorded_at=row.recorded_at,
-        )
-        for row in log_rows
-    ]

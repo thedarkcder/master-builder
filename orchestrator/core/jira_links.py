@@ -92,7 +92,10 @@ def workflow_execution_remote_link_spec(
     admin_ui_base_url: str,
     workflow: WorkflowExecution,
 ) -> JiraRemoteLinkSpec:
-    normalized_issue_key = str(getattr(workflow, "issue_key", "") or "").strip().upper()
+    normalized_source_system = str(getattr(workflow, "source_system", "") or "").strip().casefold()
+    if normalized_source_system != "jira":
+        raise ValueError("workflow execution Jira links require a Jira-sourced workflow")
+    normalized_issue_key = str(getattr(workflow, "source_ref", "") or "").strip().upper()
     normalized_execution_id = str(getattr(workflow, "execution_id", "") or "").strip()
     return JiraRemoteLinkSpec(
         relation_kind=JIRA_REMOTE_LINK_RELATION_WORKFLOW_EXECUTION,
