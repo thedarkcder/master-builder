@@ -45,7 +45,6 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["workflow_id"], ["workflow_executions.workflow_id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["run_id"], ["runs.run_id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["operation_id"], ["workflow_operations.operation_id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["attempt_id"], ["workflow_operation_attempts.attempt_id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("stream_offset"),
     )
     op.create_index(

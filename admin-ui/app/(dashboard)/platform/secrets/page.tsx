@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
+import { useToast } from "@/components/ui/toast-provider";
 import {
   deleteManagedSecret,
   listManagedSecrets,
@@ -33,6 +34,7 @@ function fromPlatformRef(ref: string): string {
 
 export default function SecretsPage() {
   const { credentials } = useAuth();
+  const { showToast } = useToast();
 
   const [items, setItems] = useState<ManagedSecretRecord[]>([]);
   const [loading, setLoading] = useState(false);
@@ -79,8 +81,9 @@ export default function SecretsPage() {
       setEditingSecretRef(null);
       setStatusLine("");
       await refresh();
+      showToast({ title: editingSecretRef ? "Secret updated" : "Secret saved", description: scopedRef, tone: "success" });
     } catch (error) {
-      setStatusLine(`Save failed: ${(error as Error).message}`);
+      showToast({ title: "Secret save failed", description: (error as Error).message, tone: "error" });
     } finally {
       setSaving(false);
     }
@@ -123,8 +126,9 @@ export default function SecretsPage() {
         setSecretValue("");
       }
       await refresh();
+      showToast({ title: "Secret deleted", description: secretRefToDelete, tone: "success" });
     } catch (error) {
-      setStatusLine(`Delete failed: ${(error as Error).message}`);
+      showToast({ title: "Secret delete failed", description: (error as Error).message, tone: "error" });
     } finally {
       setSaving(false);
     }

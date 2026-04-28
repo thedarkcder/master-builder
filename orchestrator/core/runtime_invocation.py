@@ -11,6 +11,8 @@ import time
 from typing import Callable
 from uuid import uuid4
 
+from sqlalchemy.orm import Session
+
 from orchestrator.core.codex_models import normalize_codex_reasoning_effort
 from orchestrator.core.audit_events import record_audit_event
 from orchestrator.core.config import get_settings
@@ -19,15 +21,15 @@ from orchestrator.core.knowledge_base import KnowledgeEmbeddingAccessMode, build
 from orchestrator.core.project_policy import resolve_effective_policy
 from orchestrator.core.codex_runtime import CodexRuntime, CodexRuntimeError
 from orchestrator.core.runtime_telemetry import build_runtime_log_sink
-from orchestrator.core.run_logs import extract_turn_completed_usage
-from orchestrator.core.run_logs import record_run_log_event, record_run_log_events_batch
+from orchestrator.core.logging_pane_events import emit_logging_pane_event, emit_logging_pane_events_batch
+from orchestrator.core.logging_pane_events import extract_turn_completed_usage
+from orchestrator.core.observability_stream import record_observability_stream_event
 from orchestrator.core.workflow.checkpoints import checkpoint_kind_for_stage, normalize_checkpoint_stage, upsert_workflow_checkpoint
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import Project, Run, Tenant
 
 logger = logging.getLogger(__name__)
 _LIVE_INVOCATION_LOGGER = logging.getLogger("orchestrator.runtime_invocation")
-_ERROR_MARKERS = ("error", "failed", "fatal", "exception", "traceback")
 _WORKFLOW_STAGE_PM = "pm"
 _WORKFLOW_EXECUTION_STAGES = {"dev", "test", "review"}
 _JSON_PARSE_ERROR_MARKERS = (
@@ -59,12 +61,7 @@ class AgentInvocationContext:
     reasoning_effort: str | None = None
     issue_description_chars: int | None = None
     codex_session_id: str | None = None
-
-
-@dataclass(frozen=True)
-class WorkflowAttemptRef:
-    number: int | None = None
-    attempt_id: str | None = None
+    db_session: Session | None = None
 
 
 class RuntimeInvocationError(RuntimeError):
@@ -98,11 +95,11 @@ class _AsyncRuntimeLogWriter:
     def __init__(self, *, max_queue_size: int = 2000) -> None:
         self._queue: Queue[_QueuedLogLine] = Queue(maxsize=max_queue_size)
         self._pending_counts: dict[str, int] = {}
+        self._pending_failures: dict[str, str] = {}
         self._pending_lock = threading.Lock()
         self._pending_cond = threading.Condition(self._pending_lock)
-        self._worker = threading.Thread(target=self._run, daemon=True, name="codex-log-writer")
+        self._worker = threading.Thread(target=self._run, daemon=True, name="runtime-log-writer")
         self._worker.start()
-        self._dropped = 0
         settings = get_settings()
         self._batch_size = max(
             1,
@@ -110,7 +107,7 @@ class _AsyncRuntimeLogWriter:
                 getattr(
                     settings,
                     "log_db_batch_size",
-                    getattr(settings, "codex_log_batch_size", 50),
+                    getattr(settings, "runtime_log_batch_size", 50),
                 )
             ),
         )
@@ -120,7 +117,7 @@ class _AsyncRuntimeLogWriter:
                 getattr(
                     settings,
                     "log_db_batch_flush_ms",
-                    getattr(settings, "codex_log_batch_flush_ms", 50),
+                    getattr(settings, "runtime_log_batch_flush_ms", 50),
                 )
             ),
         )
@@ -128,12 +125,12 @@ class _AsyncRuntimeLogWriter:
     def enqueue(self, *, context: AgentInvocationContext, stream: str, message: str) -> bool:
         invocation_id = str(context.invocation_id or "").strip()
         if not invocation_id:
-            return False
+            raise ValueError("Runtime log persistence requires invocation_id")
         item = _QueuedLogLine(context=context, stream=stream, message=message)
         with self._pending_cond:
             self._pending_counts[invocation_id] = self._pending_counts.get(invocation_id, 0) + 1
         try:
-            self._queue.put_nowait(item)
+            self._queue.put(item, timeout=5.0)
         except Full:
             with self._pending_cond:
                 current = self._pending_counts.get(invocation_id, 0)
@@ -142,10 +139,7 @@ class _AsyncRuntimeLogWriter:
                 else:
                     self._pending_counts[invocation_id] = current - 1
                 self._pending_cond.notify_all()
-            self._dropped += 1
-            if self._dropped % 100 == 1:
-                logger.warning("codex_log_queue_full dropped=%s", self._dropped)
-            return False
+            raise RuntimeError("Runtime log persistence queue is full")
         return True
 
     def flush_invocation(self, *, invocation_id: str, timeout_seconds: float = 3.0) -> None:
@@ -157,13 +151,17 @@ class _AsyncRuntimeLogWriter:
             while self._pending_counts.get(normalized_invocation_id, 0) > 0:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    logger.warning(
-                        "codex_log_flush_timeout invocation_id=%s pending=%s",
-                        normalized_invocation_id,
-                        self._pending_counts.get(normalized_invocation_id, 0),
+                    pending = self._pending_counts.get(normalized_invocation_id, 0)
+                    raise RuntimeError(
+                        f"Runtime log persistence flush timed out for invocation_id={normalized_invocation_id} "
+                        f"pending={pending}"
                     )
-                    return
                 self._pending_cond.wait(timeout=remaining)
+            failure = self._pending_failures.pop(normalized_invocation_id, None)
+            if failure is not None:
+                raise RuntimeError(
+                    f"Runtime log persistence failed for invocation_id={normalized_invocation_id}: {failure}"
+                )
 
     def _run(self) -> None:
         while True:
@@ -186,15 +184,25 @@ class _AsyncRuntimeLogWriter:
                 for queued in items
                 if str(queued.context.invocation_id or "").strip()
             }
+            grouped_items: dict[str, list[_QueuedLogLine]] = {invocation_id: [] for invocation_id in invocation_ids}
+            for queued in items:
+                invocation_id = str(queued.context.invocation_id or "").strip()
+                if invocation_id:
+                    grouped_items.setdefault(invocation_id, []).append(queued)
             try:
-                _persist_runtime_log_lines(items=items)
-            except Exception as exc:  # noqa: BLE001
-                logger.exception(
-                    "codex_log_persist_failed batch_size=%s invocation_count=%s error=%s",
-                    len(items),
-                    len(invocation_ids),
-                    exc,
-                )
+                for invocation_id, group in grouped_items.items():
+                    try:
+                        _persist_runtime_log_lines(items=group)
+                    except Exception as exc:  # noqa: BLE001
+                        failure_message = str(exc)
+                        logger.exception(
+                            "runtime_log_persist_failed invocation_id=%s batch_size=%s error=%s",
+                            invocation_id,
+                            len(group),
+                            exc,
+                        )
+                        with self._pending_cond:
+                            self._pending_failures[invocation_id] = failure_message
             finally:
                 with self._pending_cond:
                     for invocation_id in invocation_ids:
@@ -229,11 +237,6 @@ def _estimate_token_count(text: str) -> int:
     if not normalized:
         return 0
     return max(1, len(normalized) // 4)
-
-
-def _is_error_like(message: str) -> bool:
-    lowered = str(message or "").lower()
-    return any(marker in lowered for marker in _ERROR_MARKERS)
 
 
 def _collect_context_injection_metrics(*, working_dir: str) -> dict[str, int | bool]:
@@ -508,34 +511,46 @@ def _emit_invocation_event(
     tenant_id = str(context.tenant_id or "").strip()
     if not tenant_id:
         return
-    settings = get_settings()
-    session_factory = create_session_factory(database_url=settings.database_url)
+    message = str(payload.get("message") or "").strip() or event_kind.replace("_", " ")
     event_payload = {
-        "event_kind": event_kind,
-        "recorded_at": datetime.now(timezone.utc).isoformat(),
+        "invocation_id": str(context.invocation_id or "").strip() or None,
+        "channel": context.channel,
+        "command": context.command,
+        "working_dir": context.working_dir,
+        "stage": context.stage,
+        "attempt_id": context.attempt_id,
+        "attempt": context.attempt,
+        "stream": "system",
         **payload,
     }
-    try:
-        with session_factory() as session:
-            record_run_log_event(
-                session=session,
-                tenant_id=tenant_id,
-                project_id=context.project_id,
-                workflow_id=context.workflow_id,
-                operation_id=context.operation_id,
-                attempt_id=context.attempt_id,
-                run_id=context.run_id,
-                issue_key=context.issue_key,
-                agent_id=settings.agent_id,
-                invocation_id=str(context.invocation_id or "").strip(),
-                channel=context.channel,
-                command=f"{context.command}.{context.stage}",
-                working_dir=context.working_dir,
-                stage="telemetry",
-                attempt=context.attempt,
-                stream="system",
-                message=json.dumps(event_payload, sort_keys=True),
-            )
+    settings = get_settings()
+
+    def _record(session: Session) -> None:
+        row = record_observability_stream_event(
+            session,
+            tenant_id=tenant_id,
+            project_id=context.project_id,
+            workflow_id=context.workflow_id,
+            run_id=context.run_id,
+            operation_id=context.operation_id,
+            attempt_id=context.attempt_id,
+            issue_key=context.issue_key,
+            source_component="runtime_invocation",
+            event_kind=event_kind,
+            level="info",
+            message=message,
+            payload=event_payload,
+        )
+        if row is None:
+            raise RuntimeError("Runtime invocation event was not persisted")
+        if str(context.operation_id or "").strip() and event_kind in {
+            "stage_request",
+            "stage_response",
+            "tool_request",
+            "tool_result",
+            "stage_invocation_started",
+            "stage_invocation_finished",
+        }:
             record_audit_event(
                 session,
                 tenant_id=tenant_id,
@@ -550,26 +565,17 @@ def _emit_invocation_event(
                 source_component="runtime_invocation",
                 event_kind=event_kind,
                 level="info",
-                message=str(payload.get("message") or "").strip() or event_kind.replace("_", " "),
-                payload={
-                    "invocation_id": str(context.invocation_id or "").strip() or None,
-                    "stage": context.stage,
-                    "attempt_id": context.attempt_id,
-                    "attempt": context.attempt,
-                    "stream": "system",
-                    **payload,
-                },
+                message=message,
+                payload=event_payload,
             )
+
+    if context.db_session is not None:
+        _record(context.db_session)
+    else:
+        session_factory = create_session_factory(database_url=settings.database_url)
+        with session_factory() as session:
+            _record(session)
             session.commit()
-    except Exception as exc:  # noqa: BLE001
-        logger.debug(
-            "runtime_invocation_telemetry_event_skipped event_kind=%s tenant_id=%s run_id=%s error=%s",
-            event_kind,
-            tenant_id,
-            context.run_id,
-            exc,
-        )
-    message = str(payload.get("message") or "").strip() or event_kind.replace("_", " ")
     live_metadata: dict[str, object] = {
         "workflow_id": context.workflow_id,
         "operation_id": context.operation_id,
@@ -679,27 +685,6 @@ def _append_raw_log_line(
         logger.exception("codex_raw_log_write_failed path=%s", raw_path)
 
 
-def _should_persist_db_line(
-    *,
-    stream: str,
-    message: str,
-    line_index: int,
-    sample_every: int,
-    persist_turn_completed_usage: bool,
-) -> bool:
-    if stream == "system":
-        return True
-    if persist_turn_completed_usage and extract_turn_completed_usage(message) is not None:
-        return True
-    if _is_error_like(message):
-        return True
-    if line_index <= 20:
-        return True
-    if sample_every <= 0:
-        return False
-    return line_index % sample_every == 0
-
-
 def _enqueue_runtime_log_line(*, context: AgentInvocationContext, stream: str, message: str) -> None:
     writer = _get_log_writer()
     writer.enqueue(context=context, stream=stream, message=message)
@@ -759,6 +744,7 @@ def invoke_runtime_json_with_tools(
                 reasoning_effort=context.reasoning_effort,
                 issue_description_chars=context.issue_description_chars,
                 codex_session_id=resume_session_id,
+                db_session=context.db_session,
             ),
             system_prompt=system_prompt,
             user_prompt=current_user_prompt,
@@ -893,6 +879,7 @@ def _invoke_runtime_json_once(
         reasoning_effort=effective_reasoning_effort,
         issue_description_chars=context.issue_description_chars,
         codex_session_id=resume_session_id,
+        db_session=context.db_session,
     )
     sink_state = {
         "turn_context_events": 0,
@@ -1147,67 +1134,12 @@ def _combined_log_sink(
         ):
             sink_state["no_assistant_output_detected"] = True
             _append_raw_log_line(context=context, stream=stream, message=sanitized_message)
-        settings = get_settings()
-        sample_every = max(1, int(getattr(settings, "codex_db_log_sampling_interval", 100)))
-        persist_turn_completed_usage = bool(
-            getattr(settings, "codex_persist_turn_completed_usage", True)
-        )
-        if not _should_persist_db_line(
-            stream=stream,
-            message=message_text,
-            line_index=line_counter,
-            sample_every=sample_every,
-            persist_turn_completed_usage=persist_turn_completed_usage,
-        ):
-            if extra_on_log_line is not None:
-                extra_on_log_line(stream, message)
-            return
-        try:
-            _enqueue_runtime_log_line(context=context, stream=stream, message=sanitized_message)
-            sink_state["db_persisted_lines"] = int(sink_state.get("db_persisted_lines", 0)) + 1
-        except Exception as exc:  # noqa: BLE001
-            logger.exception(
-                "codex_log_persist_failed tenant_id=%s run_id=%s channel=%s command=%s stage=%s error=%s",
-                context.tenant_id,
-                context.run_id,
-                context.channel,
-                context.command,
-                context.stage,
-                exc,
-            )
+        _enqueue_runtime_log_line(context=context, stream=stream, message=sanitized_message)
+        sink_state["db_persisted_lines"] = int(sink_state.get("db_persisted_lines", 0)) + 1
         if extra_on_log_line is not None:
             extra_on_log_line(stream, message)
 
     return _sink
-
-
-def _persist_runtime_log_line(*, context: AgentInvocationContext, stream: str, message: str) -> None:
-    tenant_id = str(context.tenant_id or "").strip()
-    if not tenant_id:
-        return
-    settings = get_settings()
-    session_factory = create_session_factory(database_url=settings.database_url)
-    with session_factory() as session:
-        record_run_log_event(
-            session=session,
-            tenant_id=tenant_id,
-            project_id=context.project_id,
-            workflow_id=context.workflow_id,
-            operation_id=context.operation_id,
-            attempt_id=context.attempt_id,
-            run_id=context.run_id,
-            issue_key=context.issue_key,
-            agent_id=settings.agent_id,
-            invocation_id=str(context.invocation_id or "").strip(),
-            channel=context.channel,
-            command=f"{context.command}.{context.stage}",
-            working_dir=context.working_dir,
-            stage=context.stage,
-            attempt=context.attempt,
-            stream=stream,
-            message=message,
-        )
-        session.commit()
 
 
 def _persist_runtime_log_lines(*, items: list[_QueuedLogLine]) -> None:
@@ -1220,7 +1152,7 @@ def _persist_runtime_log_lines(*, items: list[_QueuedLogLine]) -> None:
         for item in items:
             tenant_id = str(item.context.tenant_id or "").strip()
             if not tenant_id:
-                continue
+                raise ValueError("Runtime log persistence requires tenant_id")
             batched_events.append(
                 {
                     "tenant_id": tenant_id,
@@ -1245,7 +1177,7 @@ def _persist_runtime_log_lines(*, items: list[_QueuedLogLine]) -> None:
             return
         if len(batched_events) == 1:
             single = batched_events[0]
-            record_run_log_event(
+            emit_logging_pane_event(
                 session=session,
                 tenant_id=str(single["tenant_id"]),
                 project_id=single["project_id"] if isinstance(single["project_id"], str) else None,
@@ -1265,7 +1197,7 @@ def _persist_runtime_log_lines(*, items: list[_QueuedLogLine]) -> None:
                 message=str(single["message"]),
             )
         else:
-            record_run_log_events_batch(
+            emit_logging_pane_events_batch(
                 session=session,
                 events=batched_events,
             )

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from types import SimpleNamespace
 from typing import Any
 
@@ -42,7 +43,8 @@ from orchestrator.core.pm_interview_service import (
     PM_INTERVIEW_STATUS_QUESTION_PENDING,
     normalize_parent_feature_brief_with_runtime,
 )
-from orchestrator.core.runtime_invocation import AgentInvocationContext, WorkflowAttemptRef
+from orchestrator.core.runtime_invocation import AgentInvocationContext
+from orchestrator.core.workflow_attempt_ref import WorkflowAttemptRef
 from orchestrator.core.specialist_planning import (
     PLANNING_STATE_COMPLETED,
     SpecialistPlanningRequest,
@@ -318,6 +320,24 @@ class _ParentBriefPlanner:
         self._context = context
         self._build_runtime_for_selector_fn = build_runtime_for_selector_fn
 
+    def with_attempt(
+        self,
+        *,
+        attempt_ref: WorkflowAttemptRef,
+    ) -> _ParentBriefPlanner:
+        return _ParentBriefPlanner(
+            session=self._session,
+            settings=self._settings,
+            context=replace(
+                self._context,
+                workflow_id=attempt_ref.require_workflow_id(),
+                operation_id=attempt_ref.require_operation_id(),
+                attempt=attempt_ref.number,
+                attempt_id=attempt_ref.require_attempt_id(),
+            ),
+            build_runtime_for_selector_fn=self._build_runtime_for_selector_fn,
+        )
+
     def resolve_product_brief(
         self,
         *,
@@ -333,6 +353,8 @@ class _ParentBriefPlanner:
             build_runtime_for_selector_fn=self._build_runtime_for_selector_fn,
             workflow_id=self._context.workflow_id,
             operation_id=self._context.operation_id,
+            attempt=self._context.attempt,
+            attempt_id=self._context.attempt_id,
             refresh=refresh,
         )
 
@@ -396,6 +418,23 @@ class _ParentChildSyncGateway:
         self._context = context
         self._seed_issues_with_runtime_fn = seed_issues_with_runtime_fn
 
+    def with_attempt(
+        self,
+        *,
+        attempt_ref: WorkflowAttemptRef,
+    ) -> _ParentChildSyncGateway:
+        return _ParentChildSyncGateway(
+            session=self._session,
+            context=replace(
+                self._context,
+                workflow_id=attempt_ref.require_workflow_id(),
+                operation_id=attempt_ref.require_operation_id(),
+                attempt=attempt_ref.number,
+                attempt_id=attempt_ref.require_attempt_id(),
+            ),
+            seed_issues_with_runtime_fn=self._seed_issues_with_runtime_fn,
+        )
+
     def seed_parent_backlog_children(
         self,
         *,
@@ -418,8 +457,10 @@ class _ParentChildSyncGateway:
             workflow_id=self._context.workflow_id,
             operation_id=self._context.operation_id,
             attempt_ref=WorkflowAttemptRef(
-                number=self._context.attempt,
+                workflow_id=self._context.workflow_id,
+                operation_id=self._context.operation_id,
                 attempt_id=self._context.attempt_id,
+                number=self._context.attempt,
             ),
         )
         return seed_data
@@ -449,8 +490,10 @@ class _ParentChildSyncGateway:
             workflow_id=self._context.workflow_id,
             operation_id=self._context.operation_id,
             attempt_ref=WorkflowAttemptRef(
-                number=self._context.attempt,
+                workflow_id=self._context.workflow_id,
+                operation_id=self._context.operation_id,
                 attempt_id=self._context.attempt_id,
+                number=self._context.attempt,
             ),
         )
         return seed_data
@@ -491,6 +534,8 @@ def _resolve_parent_product_brief(
     build_runtime_for_selector_fn,
     workflow_id: str | None = None,
     operation_id: str | None = None,
+    attempt: int | None = None,
+    attempt_id: str | None = None,
     refresh: bool = False,
 ) -> tuple[dict[str, object], list[object]]:
     canonical_brief = None if refresh else resolve_parent_feature_brief(
@@ -523,7 +568,10 @@ def _resolve_parent_product_brief(
             working_dir=".",
             workflow_id=workflow_id,
             operation_id=operation_id,
+            attempt=attempt,
+            attempt_id=attempt_id,
             issue_key=parent_detail.key,
+            db_session=session,
         ),
     )
     brief_payload = dict(normalization.get("brief") or {})

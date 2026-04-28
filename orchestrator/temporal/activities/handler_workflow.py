@@ -95,6 +95,14 @@ def process_handler_workflow_advance_activity(
         session.commit()
         workflow = session.get(WorkflowExecution, workflow_id)
         if workflow is None:
+            if not result.requires_persisted_execution:
+                return HandlerWorkflowAdvanceResult(
+                    handled=result.handled,
+                    reason=result.reason,
+                    status="ignored",
+                    active_run_id=None,
+                    last_error=None,
+                )
             raise RuntimeError(f"Workflow advance did not persist workflow execution {workflow_id}")
         status_payload = _workflow_status_payload(workflow=workflow)
         return HandlerWorkflowAdvanceResult(

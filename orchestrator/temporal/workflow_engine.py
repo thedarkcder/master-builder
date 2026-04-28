@@ -104,7 +104,7 @@ def _temporal_config_for_workflow(
             f"Workflow type {workflow_type.workflow_type_key} is not configured for the temporal engine"
         )
     binding = resolve_temporal_binding_for_handler(handler_key=workflow_type.handler_key)
-    retry_policy = normalize_workflow_retry_policy_config(workflow_type.retry_policy_config_json)
+    retry_policy = normalize_workflow_retry_policy_config(workflow_type.retry_policy.to_payload())
     temporal = {
         "workflow_execution_timeout_seconds": binding.workflow_execution_timeout_seconds,
         "workflow_run_timeout_seconds": binding.workflow_run_timeout_seconds,
@@ -155,7 +155,7 @@ def _temporal_config_for_workflow_type(
             f"Workflow type {workflow_type.workflow_type_key} is not configured for the temporal engine"
         )
     binding = resolve_temporal_binding_for_handler(handler_key=workflow_type.handler_key)
-    retry_policy = normalize_workflow_retry_policy_config(workflow_type.retry_policy_config_json)
+    retry_policy = normalize_workflow_retry_policy_config(workflow_type.retry_policy.to_payload())
     temporal = {
         "workflow_execution_timeout_seconds": binding.workflow_execution_timeout_seconds,
         "workflow_run_timeout_seconds": binding.workflow_run_timeout_seconds,

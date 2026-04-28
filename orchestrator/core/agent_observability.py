@@ -9,8 +9,8 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from orchestrator.core.audit_events import record_audit_event
-from orchestrator.core.log_event_bus import EVENT_KIND_AGENT_LIFECYCLE, register_stream_offsets
-from orchestrator.storage.models import AgentLifecycleEvent, Run, RunStreamEvent
+from orchestrator.core.logging_pane_events import emit_agent_lifecycle_log_event
+from orchestrator.storage.models import AgentLifecycleEvent, Run
 
 ALLOWED_AGENT_EVENTS = {
     "ISSUE_ASSIGNED",
@@ -164,27 +164,18 @@ def record_agent_lifecycle_event(
         payload={"event_type": normalized_event_type},
         recorded_at=timestamp,
     )
-    stream_row = RunStreamEvent(
-        event_kind=EVENT_KIND_AGENT_LIFECYCLE,
+    emit_agent_lifecycle_log_event(
+        session=session,
         tenant_id=normalized_tenant,
         project_id=normalized_project,
+        workflow_id=workflow_id,
         run_id=normalized_run,
         issue_key=str(issue_key or "").strip() or None,
         agent_id=normalized_agent,
         event_type=normalized_event_type,
-        invocation_id=None,
-        channel=None,
-        command=None,
-        working_dir=None,
-        stage=None,
-        attempt=None,
-        stream=None,
-        message=None,
         recorded_at=timestamp,
     )
-    session.add(stream_row)
     session.flush()
-    register_stream_offsets(session=session, rows=[stream_row])
 
 
 agent_observability_tracker = AgentObservabilityTracker()
@@ -218,23 +209,4 @@ def prune_agent_lifecycle_events(
         result = session.execute(delete(AgentLifecycleEvent).where(AgentLifecycleEvent.event_id.in_(cutoff_event_ids)))
         deleted += int(result.rowcount or 0)
 
-    ranked_stream = (
-        select(
-            RunStreamEvent.stream_offset,
-            func.row_number()
-            .over(
-                partition_by=RunStreamEvent.tenant_id,
-                order_by=RunStreamEvent.stream_offset.desc(),
-            )
-            .label("row_number"),
-        )
-        .where(RunStreamEvent.event_kind == EVENT_KIND_AGENT_LIFECYCLE)
-        .subquery()
-    )
-    cutoff_stream_ids = session.execute(
-        select(ranked_stream.c.stream_offset).where(ranked_stream.c.row_number > max(0, int(max_events_per_tenant)))
-    ).scalars().all()
-    if cutoff_stream_ids:
-        result = session.execute(delete(RunStreamEvent).where(RunStreamEvent.stream_offset.in_(cutoff_stream_ids)))
-        deleted += int(result.rowcount or 0)
     return deleted

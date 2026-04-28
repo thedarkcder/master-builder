@@ -11,6 +11,7 @@ import { useAuth } from "@/components/auth-provider";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { useToast } from "@/components/ui/toast-provider";
 import {
   getWorkflow,
   getWorkflowOperationAttemptAudit,
@@ -74,6 +75,10 @@ function impactLabel(required?: boolean): string {
   return required === false ? "Supporting" : "Must finish";
 }
 
+function isSupportingOperation(operation: WorkflowOperationRecord): boolean {
+  return ["side_effect", "notification", "integration"].includes(String(operation.kind || "").trim().toLowerCase());
+}
+
 function latestAttemptCategory(attempt: ReturnType<typeof latestAttempt>) {
   return attempt?.error_category?.trim().toLowerCase() || null;
 }
@@ -82,6 +87,7 @@ export default function TenantExecutionDetailPage() {
   const params = useParams<{ tenantId: string; workflowId: string }>();
   const router = useRouter();
   const { credentials, ready } = useAuth();
+  const { showToast } = useToast();
   const tenantId = decodeURIComponent(params.tenantId);
   const executionId = decodeURIComponent(params.workflowId);
 
@@ -154,8 +160,8 @@ export default function TenantExecutionDetailPage() {
           key: operation.operation_id,
           label: operation.label?.trim() || operation.operation_type,
           status: operation.status,
-          impact: impactLabel(operation.required),
-          completionRequired: operation.required,
+          impact: isSupportingOperation(operation) ? "Supporting" : impactLabel(operation.required),
+          completionRequired: !isSupportingOperation(operation),
           detail: attemptFailure(attempt) || (operation.status === "waiting_for_input" ? attemptStatusDetail(attempt) : null),
         };
       }),
@@ -339,10 +345,10 @@ export default function TenantExecutionDetailPage() {
     setRetrying(true);
     try {
       const nextRun = await resumeWorkflowExecution(credentials, workflow.execution_id);
-      setStatusLine(`Resume execution queued as run ${nextRun.run_id}. Redirecting to run detail.`);
+      showToast({ title: "Execution resume queued", description: `Run ${nextRun.run_id}`, tone: "success" });
       router.push(`/${encodeURIComponent(tenantId)}/runs/${encodeURIComponent(nextRun.run_id)}`);
     } catch (error) {
-      setStatusLine(`Failed to resume execution: ${(error as Error).message}`);
+      showToast({ title: "Execution resume failed", description: (error as Error).message, tone: "error" });
     } finally {
       setRetrying(false);
     }
@@ -370,11 +376,11 @@ export default function TenantExecutionDetailPage() {
         setSelectedAttemptId(retryResult.started_attempt.attempt_id);
         setAwaitingNewAttemptForOperationId(null);
       }
-      setStatusLine(`Retried ${operation.label?.trim() || operation.operation_type}.`);
+      showToast({ title: "Operation retry queued", description: operation.label?.trim() || operation.operation_type, tone: "success" });
     } catch (error) {
       setTelemetryLoading(false);
       setAwaitingNewAttemptForOperationId(null);
-      setStatusLine(`Failed to retry operation: ${(error as Error).message}`);
+      showToast({ title: "Operation retry failed", description: (error as Error).message, tone: "error" });
     } finally {
       setRetryingOperationId(null);
     }
@@ -582,7 +588,9 @@ export default function TenantExecutionDetailPage() {
                           <TableCell>
                             <StatusBadge status={operation.status} />
                           </TableCell>
-                          <TableCell className="text-sm text-muted-foreground">{impactLabel(operation.required)}</TableCell>
+                          <TableCell className="text-sm text-muted-foreground">
+                            {isSupportingOperation(operation) ? "Supporting" : impactLabel(operation.required)}
+                          </TableCell>
                           <TableCell className="text-sm text-muted-foreground">
                             {attempt ? (
                               <div className="space-y-1">

@@ -12,6 +12,7 @@ from orchestrator.core.workflow_execution_projection import (
     WorkflowExecutionProjection,
     WorkflowExecutionReference,
     ensure_workflow_execution,
+    workflow_execution_id,
 )
 from orchestrator.storage.models import WorkflowExecution, WorkflowOperation
 
@@ -39,34 +40,39 @@ class WorkflowAdvanceOutcome:
     handled: bool
     reason: str | None = None
     extra: dict[str, object] = field(default_factory=dict)
+    requires_persisted_execution: bool = True
 
 
 class WorkflowAdvanceLifecycle(Protocol):
+    def has_execution(self) -> bool:
+        ...
+
     def ensure_execution(self, *, display_name: str | None, description: object | None) -> None:
         ...
 
     def mark_running(self) -> None:
         ...
 
-    def set_operation_completed(self, *, operation_type: str, summary: str) -> None:
+    def start_operation_attempt(self, *, operation_type: str):
         ...
 
-    def mark_operation_completed(self, *, operation_type: str, summary: str) -> None:
+    def complete_started_operation(self, *, operation, attempt, summary: str) -> None:  # noqa: ANN001
         ...
 
-    def mark_operation_failed(
+    def fail_started_operation(
         self,
         *,
-        operation_type: str,
+        operation,  # noqa: ANN001
+        attempt,  # noqa: ANN001
         category: str,
         message: str,
     ) -> None:
         ...
 
-    def set_operation_waiting_for_input(self, *, operation_type: str, summary: str) -> None:
+    def wait_started_operation(self, *, operation, attempt, summary: str) -> None:  # noqa: ANN001
         ...
 
-    def mark_waiting_for_input(self, *, operation_type: str, summary: str) -> None:
+    def mark_workflow_waiting_for_input(self) -> None:
         ...
 
     def mark_completed_if_ready(self) -> None:
@@ -105,6 +111,13 @@ class DurableWorkflowLifecycle:
             )
         return self._projection
 
+    def has_execution(self) -> bool:
+        workflow_id = workflow_execution_id(
+            workflow_type_key=self._workflow_type.workflow_type_key,
+            execution_key=self._execution.key,
+        )
+        return self._session.get(WorkflowExecution, workflow_id) is not None
+
     def ensure_execution(self, *, display_name: str | None, description: object | None) -> None:
         self._display_name = display_name
         self._description = description
@@ -121,33 +134,42 @@ class DurableWorkflowLifecycle:
     def mark_running(self) -> None:
         self._ensure_projection().mark_running()
 
-    def set_operation_completed(self, *, operation_type: str, summary: str) -> None:
-        self._ensure_projection().set_operation_completed(operation_type=operation_type, summary=summary)
+    def start_operation_attempt(self, *, operation_type: str):
+        operation, attempt = self._ensure_projection().start_operation_attempt(operation_type=operation_type)
+        self._session.commit()
+        return operation, attempt
 
-    def mark_operation_completed(self, *, operation_type: str, summary: str) -> None:
-        self._ensure_projection().mark_operation_completed(operation_type=operation_type, summary=summary)
+    def complete_started_operation(self, *, operation, attempt, summary: str) -> None:  # noqa: ANN001
+        self._ensure_projection().complete_started_operation(operation=operation, attempt=attempt, summary=summary)
+        self._session.commit()
 
-    def mark_operation_failed(
+    def fail_started_operation(
         self,
         *,
-        operation_type: str,
+        operation,  # noqa: ANN001
+        attempt,  # noqa: ANN001
         category: str,
         message: str,
     ) -> None:
-        self._ensure_projection().mark_operation_failed(
-            operation_type=operation_type,
+        self._ensure_projection().fail_started_operation(
+            operation=operation,
+            attempt=attempt,
             category=category,
             message=message,
         )
+        self._session.commit()
 
-    def set_operation_waiting_for_input(self, *, operation_type: str, summary: str) -> None:
-        self._ensure_projection().set_operation_waiting_for_input(operation_type=operation_type, summary=summary)
+    def wait_started_operation(self, *, operation, attempt, summary: str) -> None:  # noqa: ANN001
+        self._ensure_projection().wait_started_operation(operation=operation, attempt=attempt, summary=summary)
+        self._session.commit()
 
-    def mark_waiting_for_input(self, *, operation_type: str, summary: str) -> None:
-        self._ensure_projection().mark_waiting_for_input(operation_type=operation_type, summary=summary)
+    def mark_workflow_waiting_for_input(self) -> None:
+        self._ensure_projection().mark_workflow_waiting_for_input()
+        self._session.commit()
 
     def mark_completed_if_ready(self) -> None:
         self._ensure_projection().mark_completed_if_ready()
+        self._session.commit()
 
 
 class WorkflowAdvanceHandler(Protocol):

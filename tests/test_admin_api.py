@@ -17,7 +17,8 @@ from orchestrator.core.config import get_settings
 from orchestrator.core.agent_observability import (
     record_agent_lifecycle_event,
 )
-from orchestrator.core.run_logs import record_run_log_event
+from orchestrator.core.logging_pane_events import emit_logging_pane_event
+from orchestrator.core.product_events import ProductEvent
 from orchestrator.core.secrets import encrypt_value
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.storage.db import create_session_factory
@@ -50,8 +51,6 @@ from orchestrator.storage.models import (
     WorkflowExecution,
     WorkflowOperation,
     WorkflowOperationAttempt,
-    AuditEvent,
-    WorkflowType,
     WorkerRuntimeAuthRequest,
     WorkerRuntimeState,
 )
@@ -59,6 +58,39 @@ from orchestrator.tools.github_app import InstallationRepository
 from orchestrator.tools.atlassian_oauth_models import AtlassianOAuthError
 from tests.test_support.admin_api_harness import AdminApiTestHarness
 from tests.workflow_test_support import add_workflow_attempt
+
+
+def _audit_event(
+    *,
+    sequence: int,
+    workflow_id: str,
+    operation_id: str | None,
+    attempt_id: str | None,
+    event_kind: str,
+    level: str,
+    message: str,
+    payload: dict[str, object],
+    recorded_at: datetime,
+    source_component: str = "workflow_operation_service",
+) -> ProductEvent:
+    return ProductEvent(
+        event_sequence=sequence,
+        event_id=f"event-{sequence}",
+        event_class="audit_evidence",
+        tenant_id="tenant-a",
+        project_id="tenant-a-default",
+        workflow_id=workflow_id,
+        run_id=None,
+        operation_id=operation_id,
+        attempt_id=attempt_id,
+        issue_key="MAB-215",
+        event_kind=event_kind,
+        level=level,
+        source_component=source_component,
+        message=message,
+        payload_json=payload,
+        recorded_at=recorded_at,
+    )
 
 
 class AdminApiTests(AdminApiTestHarness):
@@ -202,7 +234,7 @@ class AdminApiTests(AdminApiTestHarness):
             session.add(
                 AdminNotification(
                     notification_id="notify-jira-reauth",
-                    tenant_id=None,
+                    tenant_id="tenant-a",
                     project_id=None,
                     scope_type="jira_connection",
                     scope_id="conn-1",
@@ -214,7 +246,11 @@ class AdminApiTests(AdminApiTestHarness):
                     action_label="Reconnect Atlassian",
                     action_path=None,
                     fingerprint=notification_fingerprint_for(
-                        scope=AdminNotificationScope(scope_type="jira_connection", scope_id="conn-1"),
+                        scope=AdminNotificationScope(
+                            scope_type="jira_connection",
+                            scope_id="conn-1",
+                            tenant_id="tenant-a",
+                        ),
                         kind="reauth_required",
                         dedupe_key="reauth_required",
                     ),
@@ -1560,7 +1596,7 @@ class AdminApiTests(AdminApiTestHarness):
         self.assertEqual(list_response.status_code, 200, list_response.text)
         list_body = list_response.json()
         issue_execution = next(item for item in list_body if item["key"] == "issue_execution")
-        self.assertEqual(issue_execution["label"], "Issue Execution")
+        self.assertEqual(issue_execution["label"], "Issue execution")
         self.assertGreaterEqual(issue_execution["operation_count"], 1)
         self.assertEqual(issue_execution["execution_count"], 1)
 
@@ -1575,9 +1611,8 @@ class AdminApiTests(AdminApiTestHarness):
         self.assertEqual(detail_body["orchestration_backend"], "temporal")
         self.assertIn("manual_retry_enabled", detail_body["retry_policy"])
         self.assertTrue(detail_body["operations"][0]["completion_required"])
-        self.assertEqual(detail_body["lifecycle"]["state_path_kind"], "run")
-        self.assertIn("fresh", detail_body["lifecycle"]["execution_modes"])
-        self.assertIn("Retry failed operation", detail_body["lifecycle"]["conditional_paths"])
+        self.assertEqual(detail_body["operations"][0]["kind"], "business")
+        self.assertEqual(detail_body["operations"][0]["graph_index"], 0)
         self.assertEqual(detail_body["recent_executions"][0]["workflow_id"], "workflow-read-1")
         self.assertEqual(detail_body["recent_executions"][0]["waiting_on"], "human_input")
 
@@ -1595,12 +1630,9 @@ class AdminApiTests(AdminApiTestHarness):
             },
             auth=("admin", "secret"),
         )
-        self.assertEqual(update_response.status_code, 200, update_response.text)
-        updated_body = update_response.json()
-        self.assertEqual(updated_body["orchestration_backend"], "temporal")
-        self.assertEqual(updated_body["retry_policy"]["max_attempts"], 7)
+        self.assertEqual(update_response.status_code, 405, update_response.text)
 
-    def test_update_workflow_type_allows_temporal_backend_without_handler_binding_validation(self) -> None:
+    def test_update_workflow_type_endpoint_is_removed(self) -> None:
         payload = self._tenant_payload()
         self._insert_jira_connection(connection_id="conn-1")
         create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
@@ -1620,13 +1652,9 @@ class AdminApiTests(AdminApiTestHarness):
             },
             auth=("admin", "secret"),
         )
-        self.assertEqual(response.status_code, 200, response.text)
-        body = response.json()
-        self.assertEqual(body["key"], "parent_planning")
-        self.assertEqual(body["orchestration_backend"], "temporal")
-        self.assertEqual(body["retry_policy"]["max_attempts"], 3)
+        self.assertEqual(response.status_code, 405, response.text)
 
-    def test_get_workflow_includes_child_issue_links_for_parent_planning(self) -> None:
+    def test_get_workflow_reads_links_without_calling_jira(self) -> None:
         payload = self._tenant_payload()
         self._insert_jira_connection(connection_id="conn-1")
         create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
@@ -1665,31 +1693,23 @@ class AdminApiTests(AdminApiTestHarness):
             )
             session.commit()
 
-        fake_jira_adapter = SimpleNamespace(
-            list_child_issue_previews=lambda **_kwargs: [
-                SimpleNamespace(
-                    key="MAB-300",
-                    summary="Create tenant assurance boundary",
-                    status="To Do",
-                )
-            ]
-        )
         with patch.object(
             __import__("orchestrator.api.routes.admin_runs", fromlist=["workflow_integration_router"]).workflow_integration_router,
             "jira",
-            return_value=fake_jira_adapter,
-        ):
+            side_effect=AssertionError("workflow detail reads must not call Jira"),
+        ) as jira_adapter:
             response = self.client.get(
                 "/api/admin/workflows/wfexec-mab-215",
                 auth=("admin", "secret"),
             )
 
         self.assertEqual(response.status_code, 200, response.text)
+        jira_adapter.assert_not_called()
         body = response.json()
         links = body["links"]
         operation_types = [item["operation_type"] for item in body["operations"]]
         self.assertTrue(any(link["kind"] == "jira_issue" and link["ref"] == "MAB-215" for link in links))
-        self.assertTrue(any(link["kind"] == "child_issue" and link["ref"] == "MAB-300" for link in links))
+        self.assertFalse(any(link["kind"] == "child_issue" for link in links))
         self.assertEqual(
             operation_types,
             [
@@ -1908,36 +1928,29 @@ class AdminApiTests(AdminApiTestHarness):
                     finished_at=now,
                 )
             )
-            session.add(
-                AuditEvent(
-                    event_id="event-1",
-                    tenant_id="tenant-a",
-                    project_id="tenant-a-default",
+            audit_events = [
+                _audit_event(
+                    sequence=1,
                     workflow_id=workflow.workflow_id,
-                    run_id=None,
                     operation_id=operation.operation_id,
                     attempt_id="attempt-1",
-                    issue_key="MAB-215",
-                    actor_type=None,
-                    actor_id=None,
-                    source_component="workflow_operation_service",
-                    level="error",
                     event_kind="attempt_failed",
+                    level="error",
                     message='Failed to seed Jira issues: Jira API request failed (400): {"errorMessages":["CONTENT_LIMIT_EXCEEDED"],"errors":{}}',
-                    payload_json={"error_category": "content_limit"},
-                    correlation_id=None,
-                    trace_id=None,
-                    span_id=None,
+                    payload={"error_category": "content_limit"},
                     recorded_at=now,
                 )
-            )
+            ]
             session.commit()
 
         fake_jira_adapter = SimpleNamespace(list_child_issue_previews=lambda **_kwargs: [])
-        with patch.object(
-            __import__("orchestrator.api.routes.admin_runs", fromlist=["workflow_integration_router"]).workflow_integration_router,
-            "jira",
-            return_value=fake_jira_adapter,
+        with (
+            patch.object(
+                __import__("orchestrator.api.routes.admin_runs", fromlist=["workflow_integration_router"]).workflow_integration_router,
+                "jira",
+                return_value=fake_jira_adapter,
+            ),
+            patch("orchestrator.api.admin.workflow_queries.list_product_events", return_value=audit_events),
         ):
             response = self.client.get("/api/admin/workflows/wfexec-mab-215", auth=("admin", "secret"))
         self.assertEqual(response.status_code, 200, response.text)
@@ -1998,26 +2011,31 @@ class AdminApiTests(AdminApiTestHarness):
                 updated_at=now,
             )
             session.add(operation)
-            session.add(
-                AuditEvent(
-                    event_id="event-1",
-                    tenant_id="tenant-a",
-                    project_id="tenant-a-default",
+            attempt = WorkflowOperationAttempt(
+                attempt_id="attempt-3",
+                operation_id=operation.operation_id,
+                attempt_number=3,
+                status="failed",
+                error_category="content_limit",
+                error_message="Failed to seed Jira issues",
+                status_detail=None,
+                retryable=True,
+                next_retry_at=None,
+                created_at=now,
+                started_at=now,
+                finished_at=now,
+            )
+            session.add(attempt)
+            audit_events = [
+                _audit_event(
+                    sequence=1,
                     workflow_id=workflow.workflow_id,
-                    run_id=None,
                     operation_id=operation.operation_id,
-                    attempt_id=None,
-                    issue_key="MAB-215",
-                    actor_type=None,
-                    actor_id=None,
-                    source_component="workflow_operation_service",
+                    attempt_id=attempt.attempt_id,
                     event_kind="attempt_failed",
                     level="error",
-                    correlation_id=None,
-                    trace_id=None,
-                    span_id=None,
                     message="Failed to seed Jira issues",
-                    payload_json={
+                    payload={
                         "error_category": "content_limit",
                         "invocation_id": "inv-123",
                         "stage": "seed",
@@ -2026,13 +2044,14 @@ class AdminApiTests(AdminApiTestHarness):
                     },
                     recorded_at=now,
                 )
-            )
+            ]
             session.commit()
 
-        response = self.client.get(
-            "/api/admin/workflows/wfexec-mab-215/operations/operation-jira-child-fanout/audit",
-            auth=("admin", "secret"),
-        )
+        with patch("orchestrator.api.admin.workflow_events_service.list_product_events", return_value=audit_events):
+            response = self.client.get(
+                "/api/admin/workflows/wfexec-mab-215/operations/operation-jira-child-fanout/audit",
+                auth=("admin", "secret"),
+            )
         self.assertEqual(response.status_code, 200, response.text)
         body = response.json()
         self.assertEqual(len(body), 1)
@@ -2200,39 +2219,31 @@ class AdminApiTests(AdminApiTestHarness):
             )
             session.add(operation)
             session.add(attempt)
-            session.add(
-                AuditEvent(
-                    event_id="event-1",
-                    tenant_id="tenant-a",
-                    project_id="tenant-a-default",
+            audit_events = [
+                _audit_event(
+                    sequence=1,
                     workflow_id=workflow.workflow_id,
-                    run_id=None,
                     operation_id=operation.operation_id,
                     attempt_id=attempt.attempt_id,
-                    issue_key="MAB-215",
-                    actor_type=None,
-                    actor_id=None,
-                    source_component="runtime_invocation",
                     event_kind="stage_request",
                     level="info",
-                    correlation_id=None,
-                    trace_id=None,
-                    span_id=None,
                     message="Submitted runtime request.",
-                    payload_json={
+                    payload={
                         "attempt": 7,
                         "system_prompt": "You are the planner.",
                         "user_prompt": "Create or refresh engineering child tickets.",
                     },
                     recorded_at=now,
+                    source_component="runtime_invocation",
                 )
-            )
+            ]
             session.commit()
 
-        response = self.client.get(
-            "/api/admin/workflows/wfexec-mab-215/operations/operation-jira-child-fanout/transcript?source=audit",
-            auth=("admin", "secret"),
-        )
+        with patch("orchestrator.api.admin.workflow_events_service.list_product_events", return_value=audit_events):
+            response = self.client.get(
+                "/api/admin/workflows/wfexec-mab-215/operations/operation-jira-child-fanout/transcript?source=audit",
+                auth=("admin", "secret"),
+            )
         self.assertEqual(response.status_code, 200, response.text)
         body = response.json()
         self.assertEqual(body["operation_id"], "operation-jira-child-fanout")
@@ -2305,38 +2316,30 @@ class AdminApiTests(AdminApiTestHarness):
                 finished_at=now,
             )
             session.add_all([workflow, operation, attempt])
-            session.add(
-                AuditEvent(
-                    event_id="event-1",
-                    tenant_id="tenant-a",
-                    project_id="tenant-a-default",
+            audit_events = [
+                _audit_event(
+                    sequence=1,
                     workflow_id=workflow.workflow_id,
-                    run_id=None,
                     operation_id=operation.operation_id,
                     attempt_id=attempt.attempt_id,
-                    issue_key="MAB-215",
-                    actor_type=None,
-                    actor_id=None,
-                    source_component="runtime_invocation",
                     event_kind="stage_request",
                     level="info",
-                    correlation_id=None,
-                    trace_id=None,
-                    span_id=None,
                     message="Submitted runtime request.",
-                    payload_json={
+                    payload={
                         "attempt": 7,
                         "user_prompt": "Create or refresh engineering child tickets.",
                     },
                     recorded_at=now,
+                    source_component="runtime_invocation",
                 )
-            )
+            ]
             session.commit()
 
-        response = self.client.get(
-            "/api/admin/workflows/wfexec-mab-215/operations/operation-jira-child-fanout/attempts/attempt-7/audit",
-            auth=("admin", "secret"),
-        )
+        with patch("orchestrator.api.admin.workflow_events_service.list_product_events", return_value=audit_events):
+            response = self.client.get(
+                "/api/admin/workflows/wfexec-mab-215/operations/operation-jira-child-fanout/attempts/attempt-7/audit",
+                auth=("admin", "secret"),
+            )
         self.assertEqual(response.status_code, 200, response.text)
         body = response.json()
         self.assertEqual(body["attempt_id"], "attempt-7")
@@ -2380,36 +2383,28 @@ class AdminApiTests(AdminApiTestHarness):
                 updated_at=now,
             )
             session.add(workflow)
-            session.add(
-                AuditEvent(
-                    event_id="event-export-1",
-                    tenant_id="tenant-a",
-                    project_id="tenant-a-default",
+            audit_events = [
+                _audit_event(
+                    sequence=1,
                     workflow_id=workflow.workflow_id,
-                    run_id=None,
                     operation_id=None,
                     attempt_id=None,
-                    issue_key="MAB-215",
-                    actor_type=None,
-                    actor_id=None,
-                    source_component="workflow_runtime",
                     event_kind="execution_failed",
                     level="error",
-                    correlation_id="cid-1",
-                    trace_id="trace-1",
-                    span_id="span-1",
                     message="Execution failed",
-                    payload_json={"failure": "content_limit"},
+                    payload={"failure": "content_limit"},
                     recorded_at=now,
+                    source_component="workflow_runtime",
                 )
-            )
+            ]
             session.commit()
 
-        response = self.client.post(
-            "/api/admin/audit/export",
-            json={"tenant_id": "tenant-a", "execution_id": "parent_planning:MAB-215"},
-            auth=("admin", "secret"),
-        )
+        with patch("orchestrator.api.admin.audit_export_service.list_product_events", return_value=audit_events):
+            response = self.client.post(
+                "/api/admin/audit/export",
+                json={"tenant_id": "tenant-a", "execution_id": "parent_planning:MAB-215"},
+                auth=("admin", "secret"),
+            )
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.headers["content-type"].split(";")[0], "application/x-ndjson")
         rows = [json_module.loads(line) for line in response.text.splitlines() if line.strip()]
@@ -2711,11 +2706,8 @@ class AdminApiTests(AdminApiTestHarness):
         session_factory = create_session_factory(self.database_url)
         with session_factory() as session:
             workflow = session.get(WorkflowExecution, "workflow-terminal-backend-1")
-            workflow_type = session.get(WorkflowType, "issue_execution")
             assert workflow is not None
-            assert workflow_type is not None
             workflow.orchestration_backend = "legacy"
-            workflow_type.orchestration_backend = "temporal"
             session.commit()
 
         response = self.client.post(
@@ -3251,7 +3243,7 @@ class AdminApiTests(AdminApiTestHarness):
                 started_at=now,
             )
             session.flush()
-            record_run_log_event(
+            emit_logging_pane_event(
                 session=session,
                 tenant_id="tenant-a",
                 project_id="tenant-a-default",
@@ -3270,7 +3262,35 @@ class AdminApiTests(AdminApiTestHarness):
             )
             session.commit()
 
-        response = self.client.get("/api/admin/runs/run-log-1/logs", auth=("admin", "secret"))
+        runtime_event = ProductEvent(
+            event_sequence=1,
+            event_id="event-runtime",
+            event_class="execution_log",
+            tenant_id="tenant-a",
+            project_id="tenant-a-default",
+            workflow_id=None,
+            run_id="run-log-1",
+            operation_id=None,
+            attempt_id=None,
+            issue_key="TP-503",
+            event_kind="runtime_log",
+            level="info",
+            source_component="logging_pane",
+            message="hello from codex",
+            payload_json={
+                "agent_id": "worker-logs",
+                "invocation_id": "inv-run-log-1",
+                "channel": "worker",
+                "command": "workflow.dev",
+                "working_dir": "/tmp/repo",
+                "stage": "dev",
+                "attempt": 1,
+                "stream": "stdout",
+            },
+            recorded_at=now,
+        )
+        with patch("orchestrator.core.logging_pane_events.list_product_events", return_value=[runtime_event]):
+            response = self.client.get("/api/admin/runs/run-log-1/logs", auth=("admin", "secret"))
         self.assertEqual(response.status_code, 200)
         body = response.json()
         self.assertEqual(len(body), 1)
@@ -3304,7 +3324,7 @@ class AdminApiTests(AdminApiTestHarness):
                 started_at=now,
             )
             session.flush()
-            record_run_log_event(
+            emit_logging_pane_event(
                 session=session,
                 tenant_id="tenant-a",
                 project_id="tenant-a-default",
@@ -3321,7 +3341,7 @@ class AdminApiTests(AdminApiTestHarness):
                 message="line-1",
                 recorded_at=now - timedelta(seconds=2),
             )
-            record_run_log_event(
+            emit_logging_pane_event(
                 session=session,
                 tenant_id="tenant-a",
                 project_id="tenant-a-default",
@@ -3338,7 +3358,7 @@ class AdminApiTests(AdminApiTestHarness):
                 message="line-2",
                 recorded_at=now - timedelta(seconds=1),
             )
-            record_run_log_event(
+            emit_logging_pane_event(
                 session=session,
                 tenant_id="tenant-a",
                 project_id="tenant-a-default",
@@ -3357,18 +3377,69 @@ class AdminApiTests(AdminApiTestHarness):
             )
             session.commit()
 
-        first_page = self.client.get(
-            "/api/admin/runs/run-log-page/logs?limit=2",
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(first_page.status_code, 200)
-        first_body = first_page.json()
-        self.assertEqual([entry["message"] for entry in first_body], ["line-3", "line-2"])
+        def row(sequence: int, message: str, recorded_at: datetime) -> ProductEvent:
+            return ProductEvent(
+                event_sequence=sequence,
+                event_id=f"event-{sequence}",
+                event_class="execution_log",
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                workflow_id=None,
+                run_id="run-log-page",
+                operation_id=None,
+                attempt_id=None,
+                issue_key="TP-504",
+                event_kind="runtime_log",
+                level="info",
+                source_component="logging_pane",
+                message=message,
+                payload_json={
+                    "agent_id": "worker-logs",
+                    "invocation_id": "inv-run-log-page",
+                    "channel": "worker",
+                    "command": "workflow.dev",
+                    "working_dir": "/tmp/repo",
+                    "stage": "dev",
+                    "attempt": 1,
+                    "stream": "stdout",
+                },
+                recorded_at=recorded_at,
+            )
 
-        second_page = self.client.get(
-            f"/api/admin/runs/run-log-page/logs?limit=2&before_recorded_at={quote_plus(first_body[-1]['recorded_at'])}",
-            auth=("admin", "secret"),
-        )
+        rows = [
+            row(1, "line-1", now - timedelta(seconds=2)),
+            row(2, "line-2", now - timedelta(seconds=1)),
+            row(3, "line-3", now),
+        ]
+
+        def fake_list_logs(*, before=None, limit=500, newest_first=True, **_kwargs):
+            page_rows = sorted(rows, key=lambda item: (item.recorded_at, item.event_sequence), reverse=newest_first)
+            if before is not None and before.recorded_at is not None:
+                page_rows = [
+                    item
+                    for item in page_rows
+                    if item.recorded_at < before.recorded_at
+                    or (
+                        item.recorded_at == before.recorded_at
+                        and before.event_sequence is not None
+                        and item.event_sequence < before.event_sequence
+                    )
+                ]
+            return page_rows[:limit]
+
+        with patch("orchestrator.core.logging_pane_events.list_product_events", side_effect=fake_list_logs):
+            first_page = self.client.get(
+                "/api/admin/runs/run-log-page/logs?limit=2",
+                auth=("admin", "secret"),
+            )
+            self.assertEqual(first_page.status_code, 200)
+            first_body = first_page.json()
+            self.assertEqual([entry["message"] for entry in first_body], ["line-3", "line-2"])
+
+            second_page = self.client.get(
+                f"/api/admin/runs/run-log-page/logs?limit=2&before_recorded_at={quote_plus(first_body[-1]['recorded_at'])}",
+                auth=("admin", "secret"),
+            )
         self.assertEqual(second_page.status_code, 200)
         second_body = second_page.json()
         self.assertEqual([entry["message"] for entry in second_body], ["line-1"])
@@ -3383,8 +3454,68 @@ class AdminApiTests(AdminApiTestHarness):
         )
         self.assertEqual(create_tenant.status_code, 201)
         now = datetime.now(timezone.utc)
+        lifecycle_event = ProductEvent(
+            event_sequence=1,
+            event_id="event-lifecycle",
+            event_class="execution_log",
+            tenant_id="tenant-a",
+            project_id="tenant-a-default",
+            workflow_id=None,
+            run_id="run-events-stream",
+            operation_id=None,
+            attempt_id=None,
+            issue_key="TP-502",
+            event_kind="agent_lifecycle",
+            level="info",
+            source_component="agent_observability",
+            message="Agent lifecycle event: TASK_STARTED",
+            payload_json={"event_type": "TASK_STARTED", "agent_id": "worker-stream"},
+            recorded_at=now,
+        )
+        runtime_event = ProductEvent(
+            event_sequence=2,
+            event_id="event-runtime",
+            event_class="execution_log",
+            tenant_id="tenant-a",
+            project_id="tenant-a-default",
+            workflow_id=None,
+            run_id="run-events-stream",
+            operation_id=None,
+            attempt_id=None,
+            issue_key="TP-502",
+            event_kind="runtime_log",
+            level="info",
+            source_component="logging_pane",
+            message="live line",
+            payload_json={
+                "agent_id": "worker-stream",
+                "invocation_id": "inv-run-events-stream",
+                "channel": "worker",
+                "command": "workflow.dev",
+                "working_dir": "/tmp/repo",
+                "stage": "dev",
+                "attempt": 1,
+                "stream": "stdout",
+            },
+            recorded_at=now,
+        )
+
+        def fake_list_product_events(*, filters, **_kwargs):
+            event_kind = filters.get("event_kind")
+            if event_kind == "agent_lifecycle":
+                return [lifecycle_event]
+            if event_kind == "runtime_log":
+                return [runtime_event]
+            return []
+
+        fake_store = SimpleNamespace(execute=lambda *_args, **_kwargs: "")
         session_factory = create_session_factory(self.database_url)
-        with session_factory() as session:
+        with (
+            patch("orchestrator.core.product_events.event_store", return_value=fake_store),
+            patch("orchestrator.core.logging_pane_events.list_product_events", side_effect=fake_list_product_events),
+            patch("orchestrator.api.admin.run_logging_stream_service.list_logging_pane_events_after_sequence", return_value=[]),
+            session_factory() as session,
+        ):
             add_workflow_attempt(
                 session,
                 run_id="run-events-stream",
@@ -3409,7 +3540,7 @@ class AdminApiTests(AdminApiTestHarness):
                 agent_id="worker-stream",
                 recorded_at=now,
             )
-            record_run_log_event(
+            emit_logging_pane_event(
                 session=session,
                 tenant_id="tenant-a",
                 project_id="tenant-a-default",
@@ -3428,13 +3559,19 @@ class AdminApiTests(AdminApiTestHarness):
             )
             session.commit()
 
-        response = self.client.get("/api/admin/runs/run-events-stream/events/stream", auth=("admin", "secret"))
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.headers.get("content-type"), "application/x-ndjson")
-        self.assertIn("\"run_id\":\"run-events-stream\"", response.text)
-        self.assertIn("\"event_type\":\"TASK_STARTED\"", response.text)
-        self.assertIn("\"event_kind\":\"codex_log\"", response.text)
-        self.assertIn("\"message\":\"live line\"", response.text)
+            from orchestrator.api.admin.run_logging_stream_service import stream_run_events_ndjson
+
+            generator = stream_run_events_ndjson(
+                session=session,
+                run_id="run-events-stream",
+                run_model=Run,
+                settings=get_settings(),
+            )
+            body = next(generator) + next(generator)
+        self.assertIn("\"run_id\":\"run-events-stream\"", body)
+        self.assertIn("\"event_type\":\"TASK_STARTED\"", body)
+        self.assertIn("\"event_kind\":\"runtime_log\"", body)
+        self.assertIn("\"message\":\"live line\"", body)
 
     def test_stream_run_events_missing_run_returns_not_found(self) -> None:
         response = self.client.get("/api/admin/runs/run-missing/events/stream", auth=("admin", "secret"))

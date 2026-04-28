@@ -61,7 +61,86 @@ class MigrationTests(unittest.TestCase):
 
         duplicates = {revision_id: count for revision_id, count in Counter(revision_ids).items() if count > 1}
         self.assertEqual(duplicates, {})
-        self.assertEqual(script.get_heads(), ["20260424_0093"])
+        self.assertEqual(script.get_heads(), ["20260428_0096"])
+
+    def test_code_inferred_workflow_graph_migration_removes_db_authored_definitions(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            database_url = f"sqlite:///{Path(tmpdir) / 'workflow-code-graph.sqlite'}"
+            engine = create_engine(database_url)
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE workflow_types (
+                            workflow_type_key VARCHAR PRIMARY KEY,
+                            orchestration_backend VARCHAR NOT NULL
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE workflow_type_operations (
+                            workflow_type_key VARCHAR NOT NULL,
+                            operation_type VARCHAR NOT NULL,
+                            label VARCHAR NOT NULL
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE workflow_executions (
+                            workflow_id VARCHAR PRIMARY KEY,
+                            workflow_type_key VARCHAR NOT NULL
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        "INSERT INTO workflow_types (workflow_type_key, orchestration_backend) "
+                        "VALUES ('parent_planning', 'temporal')"
+                    )
+                )
+                connection.execute(
+                    text(
+                        "INSERT INTO workflow_type_operations (workflow_type_key, operation_type, label) "
+                        "VALUES ('parent_planning', 'brief_normalization', 'Brief normalization')"
+                    )
+                )
+                connection.execute(
+                    text(
+                        "INSERT INTO workflow_executions (workflow_id, workflow_type_key) "
+                        "VALUES ('parent_planning:MAB-233', 'parent_planning')"
+                    )
+                )
+
+            module = self._load_migration_module(
+                "20260428_0096_code_inferred_workflow_graph.py",
+                "migration_20260428_0096_code_inferred_workflow_graph",
+            )
+
+            def drop_table(table_name: str) -> None:
+                connection.execute(text(f"DROP TABLE {table_name}"))
+
+            with (
+                engine.begin() as connection,
+                patch.object(module.op, "get_bind", return_value=connection),
+                patch.object(module.op, "drop_table", side_effect=drop_table),
+            ):
+                module.upgrade()
+
+            inspector = inspect(engine)
+            self.assertNotIn("workflow_types", inspector.get_table_names())
+            self.assertNotIn("workflow_type_operations", inspector.get_table_names())
+            with engine.connect() as connection:
+                row = connection.execute(
+                    text("SELECT workflow_type_key FROM workflow_executions WHERE workflow_id = 'parent_planning:MAB-233'")
+                ).scalar_one()
+            self.assertEqual(row, "parent_planning")
 
     def test_projection_attempt_history_cleanup_removes_projection_only_attempt_rows(self) -> None:
         with TemporaryDirectory() as tmpdir:
@@ -204,7 +283,8 @@ class MigrationTests(unittest.TestCase):
                             stream_offset INTEGER PRIMARY KEY AUTOINCREMENT,
                             operation_id VARCHAR NULL,
                             attempt_id VARCHAR NULL,
-                            payload_json JSON NOT NULL
+                            payload_json JSON NOT NULL,
+                            recorded_at DATETIME NULL
                         )
                         """
                     )
@@ -884,110 +964,6 @@ class MigrationTests(unittest.TestCase):
             for expected_line in expected_lines:
                 self.assertIn(expected_line, contents)
 
-    def test_run_migrations_repairs_legacy_stream_only_0040_head(self) -> None:
-        with TemporaryDirectory() as tmp_dir:
-            database_url = f"sqlite:///{tmp_dir}/test.db"
-            self._alembic_upgrade(database_url, "20260323_0038")
-
-            engine = create_engine(database_url)
-            with engine.begin() as connection:
-                connection.execute(text("DELETE FROM alembic_version"))
-                connection.execute(text("INSERT INTO alembic_version(version_num) VALUES ('20260327_0040')"))
-                connection.execute(
-                    text(
-                        """
-                        CREATE TABLE run_stream_events (
-                            stream_offset INTEGER PRIMARY KEY,
-                            event_kind VARCHAR(32) NOT NULL,
-                            tenant_id VARCHAR(128) NOT NULL,
-                            project_id VARCHAR(128),
-                            run_id VARCHAR(64),
-                            issue_key VARCHAR(64),
-                            agent_id VARCHAR(128),
-                            event_type VARCHAR(64),
-                            invocation_id VARCHAR(64),
-                            channel VARCHAR(64),
-                            command VARCHAR(128),
-                            working_dir VARCHAR(1024),
-                            stage VARCHAR(64),
-                            attempt INTEGER,
-                            stream VARCHAR(16),
-                            message TEXT,
-                            recorded_at DATETIME NOT NULL
-                        )
-                        """
-                    )
-                )
-                for ddl in (
-                    "CREATE INDEX ix_run_stream_events_event_kind ON run_stream_events (event_kind)",
-                    "CREATE INDEX ix_run_stream_events_tenant_id ON run_stream_events (tenant_id)",
-                    "CREATE INDEX ix_run_stream_events_project_id ON run_stream_events (project_id)",
-                    "CREATE INDEX ix_run_stream_events_run_id ON run_stream_events (run_id)",
-                    "CREATE INDEX ix_run_stream_events_agent_id ON run_stream_events (agent_id)",
-                    "CREATE INDEX ix_run_stream_events_event_type ON run_stream_events (event_type)",
-                    "CREATE INDEX ix_run_stream_events_invocation_id ON run_stream_events (invocation_id)",
-                    "CREATE INDEX ix_run_stream_events_channel ON run_stream_events (channel)",
-                    "CREATE INDEX ix_run_stream_events_command ON run_stream_events (command)",
-                    "CREATE INDEX ix_run_stream_events_stage ON run_stream_events (stage)",
-                    "CREATE INDEX ix_run_stream_events_recorded_at ON run_stream_events (recorded_at)",
-                    "CREATE INDEX ix_run_stream_events_run_id_stream_offset ON run_stream_events (run_id, stream_offset)",
-                    "CREATE INDEX ix_run_stream_events_tenant_id_stream_offset ON run_stream_events (tenant_id, stream_offset)",
-                ):
-                    connection.execute(text(ddl))
-
-            run_migrations(database_url=database_url)
-
-            inspector = inspect(engine)
-            self.assertIn("tenant_users", inspector.get_table_names())
-            self.assertIn("tenant_user_discord_identities", inspector.get_table_names())
-            with engine.begin() as connection:
-                versions = connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
-            self.assertEqual(versions, ["20260424_0093"])
-
-    def test_run_migrations_repairs_legacy_stream_only_0039_head(self) -> None:
-        with TemporaryDirectory() as tmp_dir:
-            database_url = f"sqlite:///{tmp_dir}/test.db"
-            self._alembic_upgrade(database_url, "20260323_0038")
-
-            engine = create_engine(database_url)
-            with engine.begin() as connection:
-                connection.execute(text("DELETE FROM alembic_version"))
-                connection.execute(text("INSERT INTO alembic_version(version_num) VALUES ('20260327_0039')"))
-                connection.execute(
-                    text(
-                        """
-                        CREATE TABLE run_stream_events (
-                            stream_offset INTEGER PRIMARY KEY,
-                            event_kind VARCHAR(32) NOT NULL,
-                            tenant_id VARCHAR(128) NOT NULL,
-                            project_id VARCHAR(128),
-                            run_id VARCHAR(64),
-                            issue_key VARCHAR(64),
-                            agent_id VARCHAR(128),
-                            event_type VARCHAR(64),
-                            invocation_id VARCHAR(64),
-                            channel VARCHAR(64),
-                            command VARCHAR(128),
-                            working_dir VARCHAR(1024),
-                            stage VARCHAR(64),
-                            attempt INTEGER,
-                            stream VARCHAR(16),
-                            message TEXT,
-                            recorded_at DATETIME NOT NULL
-                        )
-                        """
-                    )
-                )
-
-            run_migrations(database_url=database_url)
-
-            inspector = inspect(engine)
-            self.assertIn("tenant_users", inspector.get_table_names())
-            self.assertIn("tenant_user_discord_identities", inspector.get_table_names())
-            with engine.begin() as connection:
-                versions = connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
-            self.assertEqual(versions, ["20260424_0093"])
-
     def test_run_migrations_repairs_stamp_when_schema_0045_but_version_0044(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             database_url = f"sqlite:///{tmp_dir}/test.db"
@@ -1000,7 +976,7 @@ class MigrationTests(unittest.TestCase):
 
             with engine.begin() as connection:
                 versions = connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
-            self.assertEqual(versions, ["20260424_0093"])
+            self.assertEqual(versions, ["20260424_0095"])
 
     def test_run_migrations_disables_alembic_logger_reconfiguration(self) -> None:
         fake_config = MagicMock()
@@ -1301,21 +1277,24 @@ class MigrationTests(unittest.TestCase):
                 },
             )
 
-    def test_run_migrations_accepts_database_stamped_with_merged_20260327_0043(self) -> None:
+    def test_postgres_event_transport_migration_drops_old_tables(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             database_url = f"sqlite:///{tmp_dir}/test.db"
-            run_migrations(database_url=database_url)
-
+            self._alembic_upgrade(database_url, "20260424_0093")
             engine = create_engine(database_url)
-            with engine.begin() as connection:
-                connection.execute(text("UPDATE alembic_version SET version_num = '20260327_0043'"))
+            before = set(inspect(engine).get_table_names())
+            self.assertIn("run_log_events", before)
+            self.assertIn("run_stream_events", before)
+            self.assertIn("audit_events", before)
+            self.assertIn("observability_stream_events", before)
 
-            run_migrations(database_url=database_url)
+            self._alembic_upgrade(database_url, "20260424_0095")
 
-            with engine.begin() as connection:
-                current_revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-
-            self.assertEqual(current_revision, "20260424_0093")
+            inspector = inspect(engine)
+            self.assertNotIn("run_log_events", inspector.get_table_names())
+            self.assertNotIn("run_stream_events", inspector.get_table_names())
+            self.assertNotIn("audit_events", inspector.get_table_names())
+            self.assertNotIn("observability_stream_events", inspector.get_table_names())
 
     def test_run_migrations_rejects_sqlite_without_test_opt_in(self) -> None:
         previous = os.environ.get("ORCHESTRATOR_ALLOW_SQLITE_FOR_TESTS")

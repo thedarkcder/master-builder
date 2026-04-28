@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
 import { useAuth } from "@/components/auth-provider";
+import { useToast } from "@/components/ui/toast-provider";
 import {
   createTenant,
   createTenantInvite,
@@ -54,6 +55,7 @@ function statusTone(statusLine: string): StatusTone {
 
 export function useTenantSetupController(stepKey: WizardStepKey) {
   const { credentials } = useAuth();
+  const { showToast } = useToast();
   const searchParams = useSearchParams();
   const router = useRouter();
 
@@ -241,7 +243,7 @@ export function useTenantSetupController(stepKey: WizardStepKey) {
       setStatusLine("");
       return created.tenant_id;
     } catch (error) {
-      setStatusLine(`Create failed: ${(error as Error).message}`);
+      showToast({ title: "Tenant create failed", description: (error as Error).message, tone: "error" });
       return null;
     } finally {
       setSaving(false);
@@ -455,7 +457,7 @@ export function useTenantSetupController(stepKey: WizardStepKey) {
       setStatusLine("");
       return true;
     } catch (error) {
-      setStatusLine(`Save failed: ${(error as Error).message}`);
+      showToast({ title: "Tenant setup save failed", description: (error as Error).message, tone: "error" });
       return false;
     } finally {
       setSaving(false);

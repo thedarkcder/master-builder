@@ -8,7 +8,6 @@ from sqlalchemy.orm import Session
 
 from orchestrator.core.workflow_execution_lifecycle import (
     apply_execution_for_dispatch_claim,
-    apply_execution_for_new_attempt,
     apply_execution_for_run_started,
     apply_execution_for_run_terminal,
 )
@@ -23,8 +22,9 @@ from orchestrator.core.workflow.execution_snapshot import SnapshotWorkflow
 from orchestrator.core.worker.stage_events import WorkerStageUpdate
 from orchestrator.core.workflow.runner import WorkflowResult, WorkflowStageCheckpoint
 from orchestrator.core.worker.run_disposition import resolve_run_disposition
+from orchestrator.core.worker.run_transition_service import RunOwnership
+from orchestrator.core.worker.run_transition_service import WorkerRunTransitionService
 from orchestrator.storage.models import Project, Run, WorkflowExecution
-from orchestrator.storage.run_queue_events import notify_run_enqueued
 
 RUN_STATUS_DISPATCHING = "dispatching"
 RUN_STATUS_RUNNING = "running"
@@ -72,6 +72,11 @@ def start_run(
         .where(
             Run.run_id == run.run_id,
             Run.status == expected_status,
+            *(
+                [Run.worker_service_instance_id == str(worker_service_instance_id or "").strip()]
+                if normalized_claim_id is not None and str(worker_service_instance_id or "").strip()
+                else []
+            ),
             *([Run.claim_id == normalized_claim_id] if normalized_claim_id is not None else []),
         )
         .values(
@@ -150,70 +155,23 @@ def promote_run_to_running(
     expected_worker_service_instance_id: str | None = None,
     expected_claim_id: str | None = None,
 ) -> Run | None:
-    refreshed_run = _refresh_owned_run(
-        session,
-        run=run,
+    ownership = RunOwnership.from_expected(
         expected_worker_service_instance_id=expected_worker_service_instance_id,
         expected_claim_id=expected_claim_id,
-        allow_statuses={RUN_STATUS_DISPATCHING},
     )
-    if not _run_is_owned_by(
-        run=refreshed_run,
-        expected_worker_service_instance_id=expected_worker_service_instance_id,
-        expected_claim_id=expected_claim_id,
+    WorkerRunTransitionService(session=session).require_owned_run(
+        run=run,
+        ownership=ownership,
         allow_statuses={RUN_STATUS_DISPATCHING},
-    ):
-        return refreshed_run
+        action="promote_run_to_running",
+    )
     return start_run(
         session,
-        run=refreshed_run,
+        run=run,
         expected_status=RUN_STATUS_DISPATCHING,
         worker_service_instance_id=expected_worker_service_instance_id,
         expected_claim_id=expected_claim_id,
     )
-
-
-def _refresh_owned_run(
-    session: Session,
-    *,
-    run: Run,
-    expected_worker_service_instance_id: str | None,
-    expected_claim_id: str | None,
-    allow_statuses: set[str],
-) -> Run:
-    session.refresh(run)
-    expected_owner = str(expected_worker_service_instance_id or "").strip()
-    if not expected_owner:
-        return run
-    if run.status not in allow_statuses:
-        return run
-    current_owner = str(run.worker_service_instance_id or "").strip()
-    if current_owner != expected_owner:
-        return run
-    normalized_claim_id = str(expected_claim_id or "").strip()
-    if normalized_claim_id and str(run.claim_id or "").strip() != normalized_claim_id:
-        return run
-    return run
-
-
-def _run_is_owned_by(
-    *,
-    run: Run,
-    expected_worker_service_instance_id: str | None,
-    expected_claim_id: str | None,
-    allow_statuses: set[str],
-) -> bool:
-    expected_owner = str(expected_worker_service_instance_id or "").strip()
-    if not expected_owner:
-        return True
-    if run.status not in allow_statuses:
-        return False
-    if str(run.worker_service_instance_id or "").strip() != expected_owner:
-        return False
-    normalized_claim_id = str(expected_claim_id or "").strip()
-    if normalized_claim_id:
-        return str(run.claim_id or "").strip() == normalized_claim_id
-    return True
 
 
 def resolve_project_for_run(session: Session, *, run: Run) -> Project | None:
@@ -259,30 +217,57 @@ def bind_run_project(session: Session, *, run: Run, project: Project) -> Run:
     return run
 
 
-def fail_guardrail_violation(session: Session, *, run: Run, error: str) -> Run:
+def fail_guardrail_violation(
+    session: Session,
+    *,
+    run: Run,
+    error: str,
+    expected_worker_service_instance_id: str | None = None,
+    expected_claim_id: str | None = None,
+) -> Run:
     return mark_run_terminal(
         session,
         run_id=run.run_id,
         terminal_status=RUN_STATUS_FAILED,
         last_error=f"Guardrail policy violation: {error}",
+        expected_worker_service_instance_id=expected_worker_service_instance_id,
+        expected_claim_id=expected_claim_id,
     )
 
 
-def fail_project_repository_checkout(session: Session, *, run: Run, error: str) -> Run:
+def fail_project_repository_checkout(
+    session: Session,
+    *,
+    run: Run,
+    error: str,
+    expected_worker_service_instance_id: str | None = None,
+    expected_claim_id: str | None = None,
+) -> Run:
     return mark_run_terminal(
         session,
         run_id=run.run_id,
         terminal_status=RUN_STATUS_FAILED,
         last_error=f"Project repository checkout failed: {error}",
+        expected_worker_service_instance_id=expected_worker_service_instance_id,
+        expected_claim_id=expected_claim_id,
     )
 
 
-def fail_project_repository_setup(session: Session, *, run: Run, error: str) -> Run:
+def fail_project_repository_setup(
+    session: Session,
+    *,
+    run: Run,
+    error: str,
+    expected_worker_service_instance_id: str | None = None,
+    expected_claim_id: str | None = None,
+) -> Run:
     return mark_run_terminal(
         session,
         run_id=run.run_id,
         terminal_status=RUN_STATUS_FAILED,
         last_error=f"Project repository setup failed: {error}",
+        expected_worker_service_instance_id=expected_worker_service_instance_id,
+        expected_claim_id=expected_claim_id,
     )
 
 
@@ -306,20 +291,17 @@ def finalize_cancelled_run(
     expected_worker_service_instance_id: str | None = None,
     expected_claim_id: str | None = None,
 ) -> Run:
-    run = _refresh_owned_run(
-        session,
-        run=run,
+    ownership = RunOwnership.from_expected(
         expected_worker_service_instance_id=expected_worker_service_instance_id,
         expected_claim_id=expected_claim_id,
-        allow_statuses={run.status},
     )
-    if not _run_is_owned_by(
+    transitions = WorkerRunTransitionService(session=session)
+    run = transitions.require_owned_run(
         run=run,
-        expected_worker_service_instance_id=expected_worker_service_instance_id,
-        expected_claim_id=expected_claim_id,
+        ownership=ownership,
         allow_statuses={run.status},
-    ):
-        return run
+        action="finalize_cancelled_run",
+    )
     snapshot = _load_or_init_snapshot(run.plan)
     snapshot.workflow = SnapshotWorkflow(
         outcome="blocked",
@@ -333,10 +315,7 @@ def finalize_cancelled_run(
     run.plan = snapshot.dump()
     if run.finished_at is None:
         run.finished_at = datetime.now(timezone.utc)
-    run.claim_id = None
-    run.dispatch_claimed_at = None
-    run.last_heartbeat_at = None
-    run.worker_service_instance_id = None
+    transitions.release_claim(run)
     apply_execution_for_run_terminal(
         session=session,
         run=run,
@@ -357,20 +336,17 @@ def finalize_workflow_result(
     expected_worker_service_instance_id: str | None = None,
     expected_claim_id: str | None = None,
 ) -> Run:
-    run = _refresh_owned_run(
-        session,
-        run=run,
+    ownership = RunOwnership.from_expected(
         expected_worker_service_instance_id=expected_worker_service_instance_id,
         expected_claim_id=expected_claim_id,
-        allow_statuses={RUN_STATUS_RUNNING},
     )
-    if not _run_is_owned_by(
+    transitions = WorkerRunTransitionService(session=session)
+    run = transitions.require_owned_run(
         run=run,
-        expected_worker_service_instance_id=expected_worker_service_instance_id,
-        expected_claim_id=expected_claim_id,
+        ownership=ownership,
         allow_statuses={RUN_STATUS_RUNNING},
-    ):
-        return run
+        action="finalize_workflow_result",
+    )
     snapshot = _load_or_init_snapshot(run.plan)
     snapshot.apply_execution_context(execution_context)
     snapshot.apply_workflow_result(
@@ -380,10 +356,7 @@ def finalize_workflow_result(
     run.plan = snapshot.dump()
     run.pr_url = workflow_result.pr_url
     run.finished_at = datetime.now(timezone.utc)
-    run.claim_id = None
-    run.dispatch_claimed_at = None
-    run.last_heartbeat_at = None
-    run.worker_service_instance_id = None
+    transitions.release_claim(run)
     disposition = resolve_run_disposition(workflow_result=workflow_result)
     run.status = disposition.status
     run.last_error = disposition.last_error
@@ -410,20 +383,17 @@ def requeue_workflow_result_for_capability(
     expected_worker_service_instance_id: str | None = None,
     expected_claim_id: str | None = None,
 ) -> Run:
-    run = _refresh_owned_run(
-        session,
-        run=run,
+    ownership = RunOwnership.from_expected(
         expected_worker_service_instance_id=expected_worker_service_instance_id,
         expected_claim_id=expected_claim_id,
-        allow_statuses={RUN_STATUS_RUNNING},
     )
-    if not _run_is_owned_by(
+    transitions = WorkerRunTransitionService(session=session)
+    run = transitions.require_owned_run(
         run=run,
-        expected_worker_service_instance_id=expected_worker_service_instance_id,
-        expected_claim_id=expected_claim_id,
+        ownership=ownership,
         allow_statuses={RUN_STATUS_RUNNING},
-    ):
-        return run
+        action="requeue_workflow_result_for_capability",
+    )
     snapshot = _load_or_init_snapshot(run.plan)
     snapshot.apply_execution_context(execution_context)
     snapshot.apply_workflow_result(
@@ -433,28 +403,8 @@ def requeue_workflow_result_for_capability(
     snapshot.workflow.requeue_target = required_worker_capability
     snapshot.context.execution_context["required_worker_label"] = required_worker_label
     run.plan = snapshot.dump()
-    run.status = "queued"
-    run.last_error = None
-    run.claim_id = None
     run.required_worker_capability = required_worker_capability
-    run.dispatch_claimed_at = None
-    run.started_at = None
-    run.last_heartbeat_at = None
-    run.finished_at = None
-    run.worker_service_instance_id = None
-    apply_execution_for_new_attempt(
-        session=session,
-        run=run,
-        latest_checkpoint_id=getattr(_workflow_for_run(session, run=run), "latest_checkpoint_id", None),
-        now=datetime.now(timezone.utc),
-    )
-    notify_run_enqueued(
-        session,
-        tenant_id=run.tenant_id,
-        project_id=run.project_id,
-        run_id=run.run_id,
-        issue_key=run.issue_key,
-    )
+    transitions.reset_for_new_attempt(run=run, now=datetime.now(timezone.utc))
     session.commit()
     session.refresh(run)
     return run
@@ -471,20 +421,17 @@ def requeue_workflow_result_for_stale_snapshot(
     expected_worker_service_instance_id: str | None = None,
     expected_claim_id: str | None = None,
 ) -> Run:
-    run = _refresh_owned_run(
-        session,
-        run=run,
+    ownership = RunOwnership.from_expected(
         expected_worker_service_instance_id=expected_worker_service_instance_id,
         expected_claim_id=expected_claim_id,
-        allow_statuses={RUN_STATUS_RUNNING},
     )
-    if not _run_is_owned_by(
+    transitions = WorkerRunTransitionService(session=session)
+    run = transitions.require_owned_run(
         run=run,
-        expected_worker_service_instance_id=expected_worker_service_instance_id,
-        expected_claim_id=expected_claim_id,
+        ownership=ownership,
         allow_statuses={RUN_STATUS_RUNNING},
-    ):
-        return run
+        action="requeue_workflow_result_for_stale_snapshot",
+    )
     snapshot = _load_or_init_snapshot(run.plan)
     snapshot.apply_execution_context(execution_context)
     snapshot.apply_workflow_result(
@@ -497,27 +444,7 @@ def requeue_workflow_result_for_stale_snapshot(
     snapshot.workflow.requeue_reason = error
     run.plan = snapshot.dump()
     run.pr_url = None
-    run.status = "queued"
-    run.last_error = None
-    run.claim_id = None
-    run.dispatch_claimed_at = None
-    run.started_at = None
-    run.last_heartbeat_at = None
-    run.finished_at = None
-    run.worker_service_instance_id = None
-    apply_execution_for_new_attempt(
-        session=session,
-        run=run,
-        latest_checkpoint_id=getattr(_workflow_for_run(session, run=run), "latest_checkpoint_id", None),
-        now=datetime.now(timezone.utc),
-    )
-    notify_run_enqueued(
-        session,
-        tenant_id=run.tenant_id,
-        project_id=run.project_id,
-        run_id=run.run_id,
-        issue_key=run.issue_key,
-    )
+    transitions.reset_for_new_attempt(run=run, now=datetime.now(timezone.utc))
     session.commit()
     session.refresh(run)
     return run
@@ -532,20 +459,17 @@ def requeue_run_for_repo_setup(
     expected_worker_service_instance_id: str | None = None,
     expected_claim_id: str | None = None,
 ) -> Run:
-    run = _refresh_owned_run(
-        session,
-        run=run,
+    ownership = RunOwnership.from_expected(
         expected_worker_service_instance_id=expected_worker_service_instance_id,
         expected_claim_id=expected_claim_id,
-        allow_statuses={RUN_STATUS_RUNNING},
     )
-    if not _run_is_owned_by(
+    transitions = WorkerRunTransitionService(session=session)
+    run = transitions.require_owned_run(
         run=run,
-        expected_worker_service_instance_id=expected_worker_service_instance_id,
-        expected_claim_id=expected_claim_id,
+        ownership=ownership,
         allow_statuses={RUN_STATUS_RUNNING},
-    ):
-        return run
+        action="requeue_run_for_repo_setup",
+    )
     snapshot = _load_or_init_snapshot(run.plan)
     attempts = snapshot.context.execution_context.get("repo_setup_attempts")
     try:
@@ -560,27 +484,7 @@ def requeue_run_for_repo_setup(
     snapshot.events.stage_updates = _normalize_stage_updates(stage_updates)
     run.plan = snapshot.dump()
     run.pr_url = None
-    run.status = "queued"
-    run.last_error = None
-    run.claim_id = None
-    run.dispatch_claimed_at = None
-    run.started_at = None
-    run.last_heartbeat_at = None
-    run.finished_at = None
-    run.worker_service_instance_id = None
-    apply_execution_for_new_attempt(
-        session=session,
-        run=run,
-        latest_checkpoint_id=getattr(_workflow_for_run(session, run=run), "latest_checkpoint_id", None),
-        now=datetime.now(timezone.utc),
-    )
-    notify_run_enqueued(
-        session,
-        tenant_id=run.tenant_id,
-        project_id=run.project_id,
-        run_id=run.run_id,
-        issue_key=run.issue_key,
-    )
+    transitions.reset_for_new_attempt(run=run, now=datetime.now(timezone.utc))
     session.commit()
     session.refresh(run)
     return run
@@ -595,20 +499,16 @@ def persist_stage_checkpoint(
     expected_worker_service_instance_id: str | None = None,
     expected_claim_id: str | None = None,
 ) -> Run:
-    run = _refresh_owned_run(
-        session,
-        run=run,
+    ownership = RunOwnership.from_expected(
         expected_worker_service_instance_id=expected_worker_service_instance_id,
         expected_claim_id=expected_claim_id,
-        allow_statuses={RUN_STATUS_RUNNING},
     )
-    if not _run_is_owned_by(
+    run = WorkerRunTransitionService(session=session).require_owned_run(
         run=run,
-        expected_worker_service_instance_id=expected_worker_service_instance_id,
-        expected_claim_id=expected_claim_id,
+        ownership=ownership,
         allow_statuses={RUN_STATUS_RUNNING},
-    ):
-        raise RuntimeError("Run ownership lost while persisting stage checkpoint")
+        action="persist_stage_checkpoint",
+    )
     snapshot = _load_or_init_snapshot(run.plan)
     snapshot.apply_stage_checkpoint(checkpoint)
     snapshot.apply_execution_context(execution_context)

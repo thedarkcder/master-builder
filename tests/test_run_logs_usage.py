@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from orchestrator.core.run_logs import extract_turn_completed_usage
+from orchestrator.core.logging_pane_events import extract_turn_completed_usage
 
 
 class RunLogsUsageTests(unittest.TestCase):

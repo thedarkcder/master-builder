@@ -50,7 +50,6 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["workflow_id"], ["workflow_executions.workflow_id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["run_id"], ["runs.run_id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["operation_id"], ["workflow_operations.operation_id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["attempt_id"], ["workflow_operation_attempts.attempt_id"], ondelete="SET NULL"),
         sa.PrimaryKeyConstraint("event_id"),
     )
     op.create_index("ix_audit_events_tenant_id_recorded_at", "audit_events", ["tenant_id", "recorded_at"], unique=False)

@@ -8,11 +8,19 @@ datasources:
     url: http://prometheus:9090
     isDefault: true
 
-  - name: Loki
-    uid: loki
-    type: loki
+  - name: ClickHouse
+    uid: clickhouse
+    type: grafana-clickhouse-datasource
     access: proxy
-    url: http://loki:3100
+    url: http://clickhouse:8123
+    jsonData:
+      defaultDatabase: master_builder
+      port: 8123
+      protocol: http
+      server: clickhouse
+      username: master_builder
+    secureJsonData:
+      password: master_builder
 
   - name: Tempo
     uid: tempo
@@ -20,7 +28,5 @@ datasources:
     access: proxy
     url: http://tempo:3200
     jsonData:
-      tracesToLogsV2:
-        datasourceUid: loki
       nodeGraph:
         enabled: true

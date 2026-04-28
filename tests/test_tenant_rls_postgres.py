@@ -11,8 +11,7 @@ from sqlalchemy.exc import DatabaseError
 
 from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.tenant_rls import (
-    build_rls_policies,
-    rls_protected_tables,
+    assert_live_tenant_rls_contract,
     set_platform_admin_rls_context,
     set_platform_system_rls_context,
     set_tenant_system_rls_context,
@@ -198,29 +197,8 @@ def test_postgres_catalog_has_forced_rls_and_required_policies() -> None:
     try:
         run_migrations(database_url=database_url)
         engine = create_engine(database_url, future=True)
-        expected_policies = {policy.policy_name for policy in build_rls_policies()}
         with engine.begin() as connection:
-            catalog_rows = connection.execute(
-                text(
-                    """
-                    SELECT relname, relrowsecurity, relforcerowsecurity
-                    FROM pg_class
-                    WHERE relname = ANY(:table_names)
-                    """
-                ),
-                {"table_names": list(rls_protected_tables())},
-            ).mappings().all()
-            assert {row["relname"] for row in catalog_rows} == set(rls_protected_tables())
-            assert all(row["relrowsecurity"] for row in catalog_rows)
-            assert all(row["relforcerowsecurity"] for row in catalog_rows)
-
-            policy_names = set(
-                connection.execute(
-                    text("SELECT policyname FROM pg_policies WHERE policyname = ANY(:policy_names)"),
-                    {"policy_names": list(expected_policies)},
-                ).scalars()
-            )
-            assert policy_names == expected_policies
+            assert_live_tenant_rls_contract(connection)
         engine.dispose()
     finally:
         _drop_database(database_url)

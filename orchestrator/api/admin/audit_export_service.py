@@ -3,35 +3,11 @@ from __future__ import annotations
 import json
 from collections.abc import Iterator
 
-from sqlalchemy import Select, and_, select
 from sqlalchemy.orm import Session
 
 from orchestrator.api.admin.schema_mappers import workflow_observability_event_to_schema
 from orchestrator.api.schemas import AuditEventExportRequest
-from orchestrator.storage.models import AuditEvent
-
-
-def _audit_event_query(*, request: AuditEventExportRequest) -> Select[tuple[AuditEvent]]:
-    filters = [AuditEvent.tenant_id == request.tenant_id]
-    if request.project_id:
-        filters.append(AuditEvent.project_id == request.project_id)
-    if request.execution_id:
-        filters.append(AuditEvent.workflow_id == request.execution_id)
-    if request.operation_id:
-        filters.append(AuditEvent.operation_id == request.operation_id)
-    if request.run_id:
-        filters.append(AuditEvent.run_id == request.run_id)
-    if request.issue_key:
-        filters.append(AuditEvent.issue_key == request.issue_key)
-    if request.recorded_after is not None:
-        filters.append(AuditEvent.recorded_at >= request.recorded_after)
-    if request.recorded_before is not None:
-        filters.append(AuditEvent.recorded_at <= request.recorded_before)
-    return (
-        select(AuditEvent)
-        .where(and_(*filters))
-        .order_by(AuditEvent.recorded_at.asc(), AuditEvent.event_id.asc())
-    )
+from orchestrator.core.product_events import list_product_events
 
 
 def iter_audit_event_export(
@@ -39,6 +15,24 @@ def iter_audit_event_export(
     session: Session,
     request: AuditEventExportRequest,
 ) -> Iterator[str]:
-    for event in session.execute(_audit_event_query(request=request)).scalars():
+    del session
+    filters = {
+        "tenant_id": request.tenant_id,
+        "project_id": request.project_id,
+        "workflow_id": request.execution_id,
+        "operation_id": request.operation_id,
+        "run_id": request.run_id,
+        "issue_key": request.issue_key,
+    }
+    for event in list_product_events(
+        event_class="audit_evidence",
+        filters=filters,
+        limit=2000,
+        newest_first=False,
+    ):
+        if request.recorded_after is not None and event.recorded_at < request.recorded_after:
+            continue
+        if request.recorded_before is not None and event.recorded_at > request.recorded_before:
+            continue
         payload = workflow_observability_event_to_schema(event).model_dump(mode="json")
         yield json.dumps(payload, sort_keys=True) + "\n"

@@ -49,8 +49,7 @@ from orchestrator.core.webhook_job_queue import (
     WEBHOOK_TRANSPORT_JIRA,
     WEBHOOK_TRANSPORT_PROJECT_AUTOMATION,
     WebhookJob,
-    claim_next_webhook_job,
-    claim_pending_jobs_for_subject,
+    claim_next_webhook_subject_batch,
     mark_webhook_job_ids_failed,
     mark_webhook_jobs_done,
     mark_webhook_jobs_failed,
@@ -60,6 +59,28 @@ from orchestrator.core.config import Settings
 from orchestrator.storage.models import Project, Tenant
 
 logger = logging.getLogger(__name__)
+
+_TEMPORAL_WRAPPER_ERROR_MESSAGES = {
+    "Workflow update failed",
+    "Activity task failed",
+}
+
+
+def _webhook_failure_message(error: Exception) -> str:
+    messages: list[str] = []
+    current: BaseException | None = error
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        message = str(current).strip()
+        if message:
+            messages.append(message)
+        current = current.__cause__ or current.__context__
+    for message in reversed(messages):
+        if message not in _TEMPORAL_WRAPPER_ERROR_MESSAGES:
+            return message
+    return messages[0] if messages else error.__class__.__name__
+
 
 def _rollback_job_session(
     session: Session,
@@ -455,52 +476,36 @@ def process_next_webhook_job(
     settings: Settings,
     owner_id: str,
 ) -> WebhookJob | None:
-    claim = claim_next_webhook_job(
+    claim = claim_next_webhook_subject_batch(
         session,
         owner_id=owner_id,
     )
-    if not claim.acquired or claim.job is None:
+    if not claim.acquired or claim.batch is None:
         return None
 
-    job = claim.job
+    batch = claim.batch
+    job = batch.primary_job
     job_transport = str(job.transport)
     job_tenant_id = str(job.tenant_id)
     job_subject_key = str(job.subject_key)
     job_id = str(job.job_id)
-    failed_job_ids: tuple[str, ...] = (job_id,)
-    additional_jobs: tuple[WebhookJob, ...] = ()
+    failed_job_ids = batch.job_ids
     try:
         if job.transport == WEBHOOK_TRANSPORT_JIRA:
-            additional_jobs = claim_pending_jobs_for_subject(
-                session,
-                transport=WEBHOOK_TRANSPORT_JIRA,
-                subject_key=job.subject_key,
-                owner_id=owner_id,
-                exclude_job_id=job.job_id,
-            )
-            failed_job_ids = (job_id, *(str(item.job_id) for item in additional_jobs))
             processed = _process_jira_subject_jobs(
                 session=session,
                 settings=settings,
                 owner_id=owner_id,
                 claimed_job=job,
-                related_jobs=additional_jobs,
+                related_jobs=batch.related_jobs,
             )
         elif job.transport == WEBHOOK_TRANSPORT_GITHUB:
-            additional_jobs = claim_pending_jobs_for_subject(
-                session,
-                transport=WEBHOOK_TRANSPORT_GITHUB,
-                subject_key=job.subject_key,
-                owner_id=owner_id,
-                exclude_job_id=job.job_id,
-            )
-            failed_job_ids = (job_id, *(str(item.job_id) for item in additional_jobs))
             processed = _process_github_subject_jobs(
                 session=session,
                 settings=settings,
                 owner_id=owner_id,
                 claimed_job=job,
-                related_jobs=additional_jobs,
+                related_jobs=batch.related_jobs,
             )
         elif job.transport == WEBHOOK_TRANSPORT_PROJECT_AUTOMATION:
             processed = _process_project_automation_job(
@@ -591,12 +596,12 @@ def process_next_webhook_job(
             job_tenant_id,
             job_subject_key,
             job_id,
-            exc,
+            _webhook_failure_message(exc),
         )
         failed_jobs = mark_webhook_job_ids_failed(
             session,
             job_ids=failed_job_ids,
             owner_id=owner_id,
-            error=str(exc),
+            error=_webhook_failure_message(exc),
         )
         return failed_jobs[0] if failed_jobs else None

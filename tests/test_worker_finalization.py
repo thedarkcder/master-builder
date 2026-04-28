@@ -52,7 +52,7 @@ class WorkflowFinalizationTests(unittest.TestCase):
             agent_id="worker-linux",
         )
 
-        with patch("orchestrator.core.worker.finalization.record_run_log_event"):
+        with patch("orchestrator.core.worker.finalization.emit_logging_pane_event"):
             plan = finalizer.finalize(
                 run=run,
                 workflow_result=workflow_result,
@@ -110,7 +110,7 @@ class WorkflowFinalizationTests(unittest.TestCase):
             agent_id="worker-linux",
         )
 
-        with patch("orchestrator.core.worker.finalization.record_run_log_event"):
+        with patch("orchestrator.core.worker.finalization.emit_logging_pane_event"):
             plan = finalizer.finalize(
                 run=run,
                 workflow_result=workflow_result,
@@ -173,11 +173,11 @@ class WorkflowFinalizationTests(unittest.TestCase):
 
         recorded_rows: list[dict[str, object]] = []
 
-        def _record_run_log_event(**kwargs: object) -> None:
+        def _emit_logging_pane_event(**kwargs: object) -> None:
             recorded_rows.append(dict(kwargs))
 
         with (
-            patch("orchestrator.core.worker.finalization.record_run_log_event", side_effect=_record_run_log_event),
+            patch("orchestrator.core.worker.finalization.emit_logging_pane_event", side_effect=_emit_logging_pane_event),
             patch("orchestrator.core.worker.finalization.publish_manual_pr_remediation_completion") as publish_completion,
         ):
             executor.execute(plan)
@@ -241,7 +241,7 @@ class WorkflowFinalizationTests(unittest.TestCase):
         )
 
         with (
-            patch("orchestrator.core.worker.finalization.record_run_log_event"),
+            patch("orchestrator.core.worker.finalization.emit_logging_pane_event"),
             patch(
                 "orchestrator.core.worker.finalization._emit_orchestrated_trace_logs",
                 side_effect=lambda **_: order.append("orchestration_trace"),

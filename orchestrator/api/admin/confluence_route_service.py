@@ -14,7 +14,6 @@ from orchestrator.tools.atlassian_oauth_models import (
     AtlassianOAuthError,
     AtlassianOAuthHttpError,
     ConfluencePage,
-    ConfluenceSpace,
 )
 
 CONFLUENCE_SPACE_READ_SCOPE = "read:space:confluence"
@@ -37,11 +36,19 @@ def _requires_reauth(exc: Exception) -> bool:
     return False
 
 
-def _emit_reauth_notification(*, session, connection) -> None:  # noqa: ANN001
+def _notification_scope(*, tenant_id: str, connection) -> AdminNotificationScope:  # noqa: ANN001
+    return AdminNotificationScope(
+        scope_type="jira_connection",
+        scope_id=connection.connection_id,
+        tenant_id=tenant_id,
+    )
+
+
+def _emit_reauth_notification(*, session, tenant_id: str, connection) -> None:  # noqa: ANN001
     emit_admin_notification(
         session=session,
         notification=AdminNotificationDraft(
-            scope=AdminNotificationScope(scope_type="jira_connection", scope_id=connection.connection_id),
+            scope=_notification_scope(tenant_id=tenant_id, connection=connection),
             source="atlassian_oauth",
             kind=ADMIN_NOTIFICATION_KIND_JIRA_CONNECTION_REAUTH_REQUIRED,
             detail=(
@@ -91,7 +98,7 @@ def list_confluence_spaces_for_tenant(
     refresh_atlassian_connection_tokens_fn,
     atlassian_oauth_client_fn,
 ):  # noqa: ANN001
-    _, connection = _resolve_connection_for_tenant(
+    tenant, connection = _resolve_connection_for_tenant(
         session=session,
         tenant_id=tenant_id,
         tenant_model=tenant_model,
@@ -106,7 +113,7 @@ def list_confluence_spaces_for_tenant(
         )
     except (ValueError, AtlassianOAuthError) as exc:
         if _requires_reauth(exc):
-            _emit_reauth_notification(session=session, connection=connection)
+            _emit_reauth_notification(session=session, tenant_id=tenant.tenant_id, connection=connection)
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Atlassian connection requires reauthentication.") from exc
         raise
     client = atlassian_oauth_client_fn(session=session, settings=settings)
@@ -116,7 +123,7 @@ def list_confluence_spaces_for_tenant(
     )
     resolve_admin_notification_state(
         session=session,
-        scope=AdminNotificationScope(scope_type="jira_connection", scope_id=connection.connection_id),
+        scope=_notification_scope(tenant_id=tenant.tenant_id, connection=connection),
         kind=ADMIN_NOTIFICATION_KIND_JIRA_CONNECTION_REAUTH_REQUIRED,
         dedupe_key="reauth_required",
     )
@@ -142,7 +149,7 @@ def list_confluence_pages_for_tenant(
     refresh_atlassian_connection_tokens_fn,
     atlassian_oauth_client_fn,
 ):  # noqa: ANN001
-    _, connection = _resolve_connection_for_tenant(
+    tenant, connection = _resolve_connection_for_tenant(
         session=session,
         tenant_id=tenant_id,
         tenant_model=tenant_model,
@@ -157,7 +164,7 @@ def list_confluence_pages_for_tenant(
         )
     except (ValueError, AtlassianOAuthError) as exc:
         if _requires_reauth(exc):
-            _emit_reauth_notification(session=session, connection=connection)
+            _emit_reauth_notification(session=session, tenant_id=tenant.tenant_id, connection=connection)
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Atlassian connection requires reauthentication.") from exc
         raise
     client = atlassian_oauth_client_fn(session=session, settings=settings)
@@ -183,7 +190,7 @@ def list_confluence_pages_for_tenant(
         pages.append(selected_page)
     resolve_admin_notification_state(
         session=session,
-        scope=AdminNotificationScope(scope_type="jira_connection", scope_id=connection.connection_id),
+        scope=_notification_scope(tenant_id=tenant.tenant_id, connection=connection),
         kind=ADMIN_NOTIFICATION_KIND_JIRA_CONNECTION_REAUTH_REQUIRED,
         dedupe_key="reauth_required",
     )

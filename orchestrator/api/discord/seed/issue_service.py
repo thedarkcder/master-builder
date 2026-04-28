@@ -19,7 +19,8 @@ from orchestrator.core.architecture_document_service import (
 )
 from orchestrator.core.audit_events import record_audit_event
 from orchestrator.core.jira_links import architecture_document_remote_link_spec
-from orchestrator.core.runtime_invocation import AgentInvocationContext, WorkflowAttemptRef
+from orchestrator.core.runtime_invocation import AgentInvocationContext
+from orchestrator.core.workflow_attempt_ref import WorkflowAttemptRef
 from orchestrator.core.workflow_operation_logging import emit_workflow_operation_log
 from orchestrator.storage.models import Project, Tenant, WorkflowOperation
 from orchestrator.tools.atlassian_oauth import JiraIssueCreateInput, JiraIssuePreview, AtlassianOAuthError
@@ -247,21 +248,26 @@ def _record_seed_operation_event(
     workflow_id: str | None,
     operation_id: str | None,
     issue_key: str | None,
-    attempt: int | None,
-    attempt_id: str | None,
+    attempt_ref: WorkflowAttemptRef | None,
     event_kind: str,
     message: str,
     payload: dict[str, Any] | None = None,
 ) -> None:
     normalized_tenant_id = str(tenant_id or "").strip()
     normalized_workflow_id = str(workflow_id or "").strip() or None
-    normalized_operation_id = str(operation_id or "").strip() or None
+    normalized_operation_id = attempt_ref.require_operation_id() if attempt_ref is not None else None
+    explicit_operation_id = str(operation_id or "").strip() or None
+    if explicit_operation_id is not None and explicit_operation_id != normalized_operation_id:
+        raise ValueError("Jira seed operation event operation_id does not match attempt_ref")
     if not normalized_tenant_id or not normalized_workflow_id or not normalized_operation_id:
         return
+    if attempt_ref is None:
+        raise ValueError("Jira seed operation events require attempt_ref")
+    normalized_attempt_id = attempt_ref.require_attempt_id()
     operation = session.get(WorkflowOperation, normalized_operation_id)
     if operation is None:
-        return
-    event_payload = {"attempt": attempt, **dict(payload or {})}
+        raise ValueError(f"Jira seed operation event references missing operation {normalized_operation_id}")
+    event_payload = {"attempt": attempt_ref.number, **dict(payload or {})}
     record_audit_event(
         session,
         tenant_id=normalized_tenant_id,
@@ -269,7 +275,7 @@ def _record_seed_operation_event(
         workflow_id=normalized_workflow_id,
         run_id=operation.run_id,
         operation_id=normalized_operation_id,
-        attempt_id=str(attempt_id or "").strip() or None,
+        attempt_id=normalized_attempt_id,
         issue_key=str(issue_key or "").strip() or None,
         actor_type="agent",
         actor_id="system",
@@ -282,12 +288,13 @@ def _record_seed_operation_event(
     emit_workflow_operation_log(
         session,
         operation=operation,
+        attempt_ref=attempt_ref,
         event_type=event_kind,
         message=message,
         metadata={
             **event_payload,
-            "attempt_id": str(attempt_id or "").strip() or None,
-            "attempt_number": attempt,
+            "attempt_id": normalized_attempt_id,
+            "attempt_number": attempt_ref.number,
         },
     )
 
@@ -448,6 +455,12 @@ def seed_issues_with_runtime(
     del build_seed_issue_description_fn
     attempt = attempt_ref.number if attempt_ref is not None else None
     attempt_id = attempt_ref.attempt_id if attempt_ref is not None else None
+    if attempt_ref is not None:
+        ref_operation_id = attempt_ref.require_operation_id()
+        explicit_operation_id = str(operation_id or "").strip() or None
+        if explicit_operation_id is not None and explicit_operation_id != ref_operation_id:
+            raise ValueError("Issue seeding operation_id does not match attempt_ref")
+        operation_id = ref_operation_id
     project_keys = tenant_project_keys_fn(session=session, tenant=tenant)
     normalized_scoped_project_keys = [
         str(value).strip().upper()
@@ -478,6 +491,7 @@ def seed_issues_with_runtime(
                 operation_id=operation_id,
                 attempt_id=attempt_id,
                 attempt=attempt,
+                db_session=session,
             ),
         )
     except codex_runtime_error_type as exc:
@@ -552,8 +566,7 @@ def seed_issues_with_runtime(
             workflow_id=workflow_id,
             operation_id=operation_id,
             issue_key=None,
-            attempt=attempt,
-            attempt_id=attempt_id,
+            attempt_ref=attempt_ref,
             event_kind="jira_parent_upsert_request",
             message="Submitting parent Jira issue upsert.",
             payload={
@@ -582,8 +595,7 @@ def seed_issues_with_runtime(
             workflow_id=workflow_id,
             operation_id=operation_id,
             issue_key=parent_issue_key,
-            attempt=attempt,
-            attempt_id=attempt_id,
+            attempt_ref=attempt_ref,
             event_kind="jira_parent_upsert_response",
             message="Parent Jira issue upsert completed.",
             payload={
@@ -636,8 +648,7 @@ def seed_issues_with_runtime(
                 workflow_id=workflow_id,
                 operation_id=operation_id,
                 issue_key=parent_issue_key,
-                attempt=attempt,
-                attempt_id=attempt_id,
+                attempt_ref=attempt_ref,
                 event_kind="jira_parent_update_request",
                 message="Submitting blocked-planning update for parent Jira issue.",
                 payload={
@@ -660,8 +671,7 @@ def seed_issues_with_runtime(
                 workflow_id=workflow_id,
                 operation_id=operation_id,
                 issue_key=parent_issue_key,
-                attempt=attempt,
-                attempt_id=attempt_id,
+                attempt_ref=attempt_ref,
                 event_kind="jira_parent_update_response",
                 message="Updated parent Jira issue after blocked planning.",
                 payload={
@@ -755,8 +765,7 @@ def seed_issues_with_runtime(
                 workflow_id=workflow_id,
                 operation_id=operation_id,
                 issue_key=parent_issue_key,
-                attempt=attempt,
-                attempt_id=attempt_id,
+                attempt_ref=attempt_ref,
                 event_kind="jira_child_upsert_request",
                 message=f"Submitting child Jira issue upsert for {child_issue.summary}.",
                 payload={
@@ -802,8 +811,7 @@ def seed_issues_with_runtime(
                 workflow_id=workflow_id,
                 operation_id=operation_id,
                 issue_key=child_key,
-                attempt=attempt,
-                attempt_id=attempt_id,
+                attempt_ref=attempt_ref,
                 event_kind="jira_child_upsert_response",
                 message=f"Child Jira issue upsert completed for {child_issue.summary}.",
                 payload={
@@ -836,8 +844,7 @@ def seed_issues_with_runtime(
             workflow_id=workflow_id,
             operation_id=operation_id,
             issue_key=parent_issue_key,
-            attempt=attempt,
-            attempt_id=attempt_id,
+            attempt_ref=attempt_ref,
             event_kind="jira_parent_update_request",
             message="Submitting final parent Jira issue update.",
             payload={
@@ -860,8 +867,7 @@ def seed_issues_with_runtime(
             workflow_id=workflow_id,
             operation_id=operation_id,
             issue_key=parent_issue_key,
-            attempt=attempt,
-            attempt_id=attempt_id,
+            attempt_ref=attempt_ref,
             event_kind="jira_parent_update_response",
             message="Updated parent Jira issue with final sync state.",
             payload={

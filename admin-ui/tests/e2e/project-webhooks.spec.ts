@@ -22,7 +22,6 @@ test("project webhooks allow retrying failed jobs from the queue", async ({ page
   });
 
   let retryRequestSeen = false;
-  let webhookFetchCount = 0;
 
   await seedAdminSession(page);
   await installBffApiMocks(page, [
@@ -55,9 +54,8 @@ test("project webhooks allow retrying failed jobs from the queue", async ({ page
       method: "GET",
       pathname: "/api/bff/api/admin/observability/webhook-jobs",
       handler: (route) => {
-        webhookFetchCount += 1;
         const items =
-          webhookFetchCount === 1
+          !retryRequestSeen
             ? [
                 {
                   job_id: "job-failed-1",
@@ -108,9 +106,9 @@ test("project webhooks allow retrying failed jobs from the queue", async ({ page
           limit: 25,
           offset: 0,
           summary: {
-            pending_count: webhookFetchCount === 1 ? 0 : 1,
+            pending_count: retryRequestSeen ? 1 : 0,
             processing_count: 0,
-            failed_count: webhookFetchCount === 1 ? 1 : 0,
+            failed_count: retryRequestSeen ? 0 : 1,
             done_count: 0,
           },
         });
@@ -149,11 +147,18 @@ test("project webhooks allow retrying failed jobs from the queue", async ({ page
 
   await expect(page.getByRole("heading", { name: "Webhook Queue" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Retry" })).toBeVisible();
+  await expect(page.getByRole("dialog", { name: "Webhook job details" })).toHaveCount(0);
 
-  await page.getByRole("button", { name: "Retry" }).click();
+  await page.getByTestId("webhook-job-row-job-failed-1").click();
+
+  const drawer = page.getByRole("dialog", { name: "Webhook job details" });
+  await expect(drawer).toContainText("Workflow Task in failed state.");
+  await expect(drawer).toContainText("request-1");
+
+  await drawer.getByRole("button", { name: "Retry" }).click();
 
   await expect(page.getByText("Retried webhook job job-failed-1.")).toBeVisible();
-  await expect(page.getByText("Pending")).toBeVisible();
+  await expect(page.getByTestId("webhook-job-row-job-failed-1")).toContainText("pending");
   await expect(page.getByText("Workflow Task in failed state.")).toHaveCount(0);
   expect(retryRequestSeen).toBe(true);
 });

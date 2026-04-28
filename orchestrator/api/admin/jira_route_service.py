@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi import HTTPException, status
+from sqlalchemy import select
 from orchestrator.api.schemas import JiraProjectRead
 from orchestrator.core.admin_notifications import (
     ADMIN_NOTIFICATION_KIND_JIRA_CONNECTION_REAUTH_REQUIRED,
@@ -9,6 +10,7 @@ from orchestrator.core.admin_notifications import (
     emit_admin_notification,
     resolve_admin_notification_state,
 )
+from orchestrator.storage.models import Tenant
 from orchestrator.tools.atlassian_oauth_models import AtlassianOAuthAuthRequiredError, AtlassianOAuthError, AtlassianOAuthHttpError
 
 
@@ -40,10 +42,16 @@ def list_jira_projects_for_connection(
     connection = session.get(atlassian_oauth_connection_model, connection_id)
     if connection is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Atlassian connection not found")
+    tenant = session.execute(
+        select(Tenant).where(Tenant.jira_config["connection_id"].as_string() == connection.connection_id)
+    ).scalar_one_or_none()
+    if tenant is None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Atlassian connection is not linked to a tenant")
 
     notification_scope = AdminNotificationScope(
         scope_type="jira_connection",
         scope_id=connection.connection_id,
+        tenant_id=tenant.tenant_id,
     )
     try:
         access_token = refresh_atlassian_connection_tokens_fn(

@@ -12,23 +12,19 @@ from orchestrator.api.admin.workflow_queries import (
     workflow_operations,
     workflow_runs,
 )
-from orchestrator.api.admin.workflow_type_read_model import workflow_operation_reads, workflow_supports_child_issue_links
+from orchestrator.api.admin.workflow_type_read_model import workflow_operation_reads
 from orchestrator.api.schemas import WorkflowLinkRead
-from orchestrator.core.config import get_settings
 from orchestrator.core.jira_links import tenant_jira_issue_url
-from orchestrator.storage.models import Project, Tenant, WorkflowCheckpoint, WorkflowExecution
+from orchestrator.storage.models import Tenant, WorkflowCheckpoint, WorkflowExecution
 
 
 def workflow_links(
     *,
     session,
     workflow: WorkflowExecution,
-    workflow_type,
     tenant: Tenant | None,
-    project: Project | None,
     followup_contexts: list,
     workflow_runs: list,
-    integration_router=None,
 ) -> list[WorkflowLinkRead]:  # noqa: ANN001
     links: list[WorkflowLinkRead] = []
     workflow_source_ref = str(workflow.source_ref or "").strip()
@@ -48,34 +44,6 @@ def workflow_links(
                 status=workflow.status,
             )
         )
-    if (
-        tenant is not None
-        and project is not None
-        and workflow_supports_child_issue_links(workflow_type=workflow_type)
-        and is_jira_workflow
-        and integration_router is not None
-        and str(project.jira_project_key or "").strip()
-    ):
-        jira_adapter = integration_router.jira(
-            session=session,
-            tenant=tenant,
-            settings=get_settings(),
-        )
-        child_previews = jira_adapter.list_child_issue_previews(
-            project_key=project.jira_project_key,
-            parent_issue_key=workflow_source_ref,
-        )
-        for child in child_previews:
-            child_url = tenant_jira_issue_url(session=session, tenant=tenant, issue_key=child.key)
-            links.append(
-                WorkflowLinkRead(
-                    kind="child_issue",
-                    label=child.summary,
-                    ref=child.key,
-                    url=child_url,
-                    status=child.status,
-                )
-            )
     if workflow.pr_url:
         links.append(
             WorkflowLinkRead(
@@ -116,7 +84,6 @@ def workflow_schema(
     workflow,
     workflow_to_schema_fn,
     run_to_schema_fn,
-    integration_router=None,
 ):  # noqa: ANN001
     latest_checkpoint = session.get(WorkflowCheckpoint, workflow.latest_checkpoint_id) if workflow.latest_checkpoint_id else None
     checkpoint_kinds = workflow_checkpoint_kinds(session=session, workflow_id=workflow.workflow_id)
@@ -142,7 +109,6 @@ def workflow_schema(
         runs=runs,
     )
     tenant = session.get(Tenant, workflow.tenant_id)
-    project = session.get(Project, workflow.project_id) if str(workflow.project_id or "").strip() else None
     followup_contexts = (
         active_followup_contexts(session=session, tenant_id=workflow.tenant_id, issue_key=workflow.source_ref)
         if str(workflow.source_system or "").strip() == "jira"
@@ -169,13 +135,10 @@ def workflow_schema(
         links=workflow_links(
             session=session,
             workflow=workflow,
-            workflow_type=workflow_type,
             tenant=tenant,
-            project=project,
             followup_contexts=followup_contexts,
             workflow_runs=runs,
-            integration_router=integration_router,
-        ),
+    ),
         operations=operation_reads,
     )
 

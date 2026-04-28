@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from unittest.mock import patch
 
 from orchestrator.core.workflow_operation_logging import emit_workflow_operation_log
+from orchestrator.core.workflow_attempt_ref import WorkflowAttemptRef
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import WorkflowExecution, WorkflowOperation, WorkflowOperationAttempt
 from tests.test_support.db_harness import SqliteTemplateDbTestCase
@@ -95,7 +96,12 @@ class WorkflowOperationLoggingTests(SqliteTemplateDbTestCase):
                 emit_workflow_operation_log(
                     session,
                     operation=operation,
-                    attempt=attempt,
+                    attempt_ref=WorkflowAttemptRef(
+                        workflow_id=operation.workflow_id,
+                        operation_id=operation.operation_id,
+                        attempt_id=attempt.attempt_id,
+                        number=attempt.attempt_number,
+                    ),
                     event_type="workflow_operation_attempt_failed",
                     message='Jira API request failed (400): {"errorMessages":["CONTENT_LIMIT_EXCEEDED"],"errors":{}}',
                     metadata={"status": "failed", "error_category": "content_limit"},
@@ -113,3 +119,68 @@ class WorkflowOperationLoggingTests(SqliteTemplateDbTestCase):
         assert extra["metadata"]["attempt_id"] == "attempt-3"
         assert extra["metadata"]["attempt_number"] == 3
         assert extra["metadata"]["error_category"] == "content_limit"
+
+    def test_emit_workflow_operation_log_requires_attempt_ref_operation_match(self) -> None:
+        now = datetime.now(timezone.utc)
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            session.add(
+                WorkflowExecution(
+                    workflow_id="parent_planning:MAB-216",
+                    execution_id="wfexec-mab-216",
+                    workflow_type_key="parent_planning",
+                    tenant_id="tenant-a",
+                    project_id="tenant-a-default",
+                    source_system="jira",
+                    source_ref="MAB-216",
+                    display_name="Identity and authorization v1 contract",
+                    source_description="Parent planning",
+                    repo_url=None,
+                    branch=None,
+                    pr_url=None,
+                    orchestration_backend="temporal",
+                    dedupe_scope="parent_planning",
+                    status="running",
+                    last_error=None,
+                    active_run_id=None,
+                    latest_checkpoint_id=None,
+                    source_workflow_id=None,
+                    source_run_id=None,
+                    created_at=now,
+                    started_at=now,
+                    finished_at=None,
+                    updated_at=now,
+                )
+            )
+            operation = WorkflowOperation(
+                operation_id="operation-jira-child-fanout",
+                workflow_id="parent_planning:MAB-216",
+                run_id=None,
+                operation_type="jira_child_fanout",
+                idempotency_key="jira-child-fanout:MAB-216",
+                status="running",
+                target_system="jira",
+                target_ref="MAB-216",
+                summary=None,
+                created_at=now,
+                started_at=now,
+                finished_at=None,
+                updated_at=now,
+            )
+            session.add(operation)
+            session.commit()
+
+            with self.assertRaisesRegex(ValueError, "operation_id does not match"):
+                emit_workflow_operation_log(
+                    session,
+                    operation=operation,
+                    attempt_ref=WorkflowAttemptRef(
+                        workflow_id=operation.workflow_id,
+                        operation_id="different-operation",
+                        attempt_id="attempt-1",
+                        number=1,
+                    ),
+                    event_type="workflow_operation_attempt_failed",
+                    message="missing attempt",
+                    metadata={},
+                )

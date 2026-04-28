@@ -6,7 +6,6 @@ from statistics import mean
 from fastapi import HTTPException, status
 from sqlalchemy import select
 
-from orchestrator.api.admin.token_usage_backfill import materialize_token_usage_for_scope
 from orchestrator.api.schemas import (
     TokenHeavyCommandRead,
     TokenIssueStageUsageRead,
@@ -179,29 +178,6 @@ def get_token_stage_diagnostics(
         only_retried=only_retried,
         only_with_test_stage=only_with_test_stage,
     )
-    if not rows:
-        materialize_token_usage_for_scope(
-            session=session,
-            tenant_id=tenant_id,
-            project_id=project_id,
-            issue_key=issue_key,
-            start_date=start_date,
-            end_date=end_date,
-        )
-        rows = _load_rows(
-            session=session,
-            tenant_id=tenant_id,
-            project_id=project_id,
-            issue_key=issue_key,
-            run_status=run_status,
-            stage=stage,
-            attempt=attempt,
-            model=model,
-            start_date=start_date,
-            end_date=end_date,
-            only_retried=only_retried,
-            only_with_test_stage=only_with_test_stage,
-        )
     run_ids = {str(row.run_id) for row in rows if row.run_id}
     run_records = {run.run_id: run for run in session.execute(select(Run).where(Run.run_id.in_(run_ids))).scalars().all()}
 

@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import builtins
 import unittest
 from unittest.mock import patch
 
+import pytest
+
 from orchestrator.core.runtime_telemetry import build_runtime_log_sink
+from orchestrator.core.telemetry import telemetry_span
 
 
 class RuntimeTelemetryTests(unittest.TestCase):
@@ -11,7 +15,8 @@ class RuntimeTelemetryTests(unittest.TestCase):
         captured_extras: list[dict[str, object]] = []
 
         def _capture_log(message: str, *, extra: dict[str, object]) -> None:
-            if message == "runtime_telemetry_line":
+            _ = message
+            if extra.get("event_type") == "runtime_log":
                 captured_extras.append(extra)
 
         sink = build_runtime_log_sink(
@@ -36,6 +41,24 @@ class RuntimeTelemetryTests(unittest.TestCase):
         self.assertNotIn("super-secret-value", rendered)
         self.assertNotIn("user@example.com", rendered)
         self.assertIn("[REDACTED]", rendered)
+
+
+def test_telemetry_span_without_opentelemetry_preserves_body_exception(monkeypatch: pytest.MonkeyPatch) -> None:
+    real_import = builtins.__import__
+
+    def _import_without_opentelemetry(name, globals=None, locals=None, fromlist=(), level=0):  # noqa: ANN001
+        if str(name).startswith("opentelemetry"):
+            raise ImportError("blocked optional opentelemetry import")
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", _import_without_opentelemetry)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        with telemetry_span("test"):
+            raise RuntimeError("real workflow failure")
+
+    assert str(exc_info.value) == "real workflow failure"
+    assert not isinstance(exc_info.value.__context__, ImportError)
 
 
 if __name__ == "__main__":

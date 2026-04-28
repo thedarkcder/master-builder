@@ -70,7 +70,7 @@ class AdminNotificationInput:
     title: str
     detail: str
     fingerprint: str
-    tenant_id: str | None = None
+    tenant_id: str
     project_id: str | None = None
     action_label: str | None = None
     action_path: str | None = None
@@ -143,13 +143,16 @@ def upsert_admin_notification(
     now_fn=utcnow,
 ) -> AdminNotification:
     now = now_fn()
+    normalized_tenant_id = str(notification.tenant_id or "").strip()
+    if not normalized_tenant_id:
+        raise ValueError("admin notifications require tenant_id")
     existing = session.execute(
         select(AdminNotification).where(AdminNotification.fingerprint == notification.fingerprint)
     ).scalar_one_or_none()
     if existing is None:
         row = AdminNotification(
             notification_id=f"notify-{uuid4().hex[:24]}",
-            tenant_id=notification.tenant_id,
+            tenant_id=normalized_tenant_id,
             project_id=notification.project_id,
             scope_type=notification.scope_type,
             scope_id=notification.scope_id,
@@ -174,7 +177,7 @@ def upsert_admin_notification(
         session.flush()
         return row
 
-    existing.tenant_id = notification.tenant_id
+    existing.tenant_id = normalized_tenant_id
     existing.project_id = notification.project_id
     existing.scope_type = notification.scope_type
     existing.scope_id = notification.scope_id

@@ -544,7 +544,7 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
         )
 
         self._assert_thread_delivery_with_ack(transport, DiscordSeedWithThreadAction)
-        self.assertEqual(transport.actions[0].questions, ["Which issue key?"])
+        self.assertEqual([question.question for question in transport.actions[0].questions], ["Which issue key?"])
 
     def test_ask_confirmation_rejects_non_owner(self) -> None:
         session = MagicMock()

@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from orchestrator.core.agent_observability import record_agent_lifecycle_event
 from orchestrator.core.config import Settings, get_settings
-from orchestrator.core.run_logs import record_run_log_event
+from orchestrator.core.logging_pane_events import emit_logging_pane_event
 from orchestrator.core.workflow_execution_lifecycle import apply_execution_failure
 from orchestrator.core.runs import RUN_STATUS_DISPATCHING, RUN_STATUS_FAILED, RUN_STATUS_RUNNING
 from orchestrator.storage.db import create_session_factory
@@ -146,7 +146,7 @@ def recover_stale_running_runs(
                 message=message,
                 now=recovered_at,
             )
-        record_run_log_event(
+        emit_logging_pane_event(
             session=session,
             tenant_id=row.tenant_id,
             project_id=row.project_id,

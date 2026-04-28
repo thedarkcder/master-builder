@@ -7,6 +7,7 @@ from unittest.mock import patch
 from orchestrator.core.knowledge_base import KnowledgeEmbeddingAccessMode
 from orchestrator.core.runtime_invocation import (
     AgentInvocationContext,
+    _AsyncRuntimeLogWriter,
     RuntimeJsonContractError,
     ToolBridgeExhaustedError,
     ToolBridgeProtocolError,
@@ -18,7 +19,18 @@ from orchestrator.core.codex_runtime import CodexRuntime, CodexRuntimeError
 
 
 class CodexInvocationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._emit_invocation_event_patcher = patch("orchestrator.core.runtime_invocation._emit_invocation_event")
+        self._emit_invocation_event_patcher.start()
+        self.addCleanup(self._emit_invocation_event_patcher.stop)
+
     class _Writer:
+        def enqueue(self, *, context, stream: str, message: str) -> bool:  # noqa: ANN001
+            _ = context
+            _ = stream
+            _ = message
+            return True
+
         def flush_invocation(self, *, invocation_id: str, timeout_seconds: float = 3.0) -> None:  # noqa: ARG002
             _ = invocation_id
             return None
@@ -92,6 +104,42 @@ class CodexInvocationTests(unittest.TestCase):
             any('"type":"turn.completed"' in message for message in persisted_messages),
             "turn.completed usage lines must bypass DB sampling",
         )
+
+    def test_async_runtime_log_writer_isolates_persistence_failures_by_invocation(self) -> None:
+        writer = _AsyncRuntimeLogWriter()
+        writer._batch_size = 100
+        writer._batch_flush_ms = 50
+        contexts = {
+            invocation_id: AgentInvocationContext(
+                channel="worker",
+                tenant_id="tenant-1",
+                project_id="proj-1",
+                command="policy",
+                stage="pm",
+                working_dir=".",
+                run_id=f"run-{invocation_id}",
+                invocation_id=invocation_id,
+            )
+            for invocation_id in ("bad", "good")
+        }
+        persisted_groups: list[list[str]] = []
+
+        def _persist_group(*, items):  # noqa: ANN001
+            invocation_ids = [str(item.context.invocation_id) for item in items]
+            persisted_groups.append(invocation_ids)
+            if invocation_ids == ["bad"]:
+                raise RuntimeError("bad invocation")
+
+        with patch("orchestrator.core.runtime_invocation._persist_runtime_log_lines", side_effect=_persist_group):
+            self.assertTrue(writer.enqueue(context=contexts["bad"], stream="stdout", message="bad line"))
+            self.assertTrue(writer.enqueue(context=contexts["good"], stream="stdout", message="good line"))
+
+            with self.assertRaisesRegex(RuntimeError, "bad invocation"):
+                writer.flush_invocation(invocation_id="bad")
+            writer.flush_invocation(invocation_id="good")
+
+        self.assertIn(["bad"], persisted_groups)
+        self.assertIn(["good"], persisted_groups)
 
     def test_invoke_runtime_json_captures_usage_from_turn_completed_log_line(self) -> None:
         def _request(  # noqa: ANN001
@@ -853,6 +901,7 @@ class CodexInvocationTests(unittest.TestCase):
 
     def test_invoke_runtime_json_preserves_operation_id_in_runtime_log_sink(self) -> None:
         captured: dict[str, object] = {}
+        live_lines: list[tuple[str | None, str | None, str]] = []
 
         class _Runtime:
             def run_json(self, **kwargs):  # noqa: ANN003
@@ -870,6 +919,7 @@ class CodexInvocationTests(unittest.TestCase):
             working_dir=".",
             workflow_id="parent_planning:MAB-215",
             operation_id="operation-jira-child-fanout",
+            attempt_id="attempt-1",
             run_id="run-1",
         )
 
@@ -877,12 +927,16 @@ class CodexInvocationTests(unittest.TestCase):
             captured.update(kwargs)
             return lambda _stream, _message: None
 
+        def _capture_live_line(*, context, stream: str, message: str) -> None:  # noqa: ANN001
+            _ = stream
+            live_lines.append((context.operation_id, context.attempt_id, message))
+
         with (
             patch("orchestrator.core.runtime_invocation._get_log_writer", return_value=self._Writer()),
             patch("orchestrator.core.runtime_invocation.build_runtime_log_sink", side_effect=_fake_sink),
             patch("orchestrator.core.runtime_invocation._emit_invocation_event"),
             patch("orchestrator.core.runtime_invocation._append_raw_log_line"),
-            patch("orchestrator.core.runtime_invocation._enqueue_runtime_log_line"),
+            patch("orchestrator.core.runtime_invocation._enqueue_runtime_log_line", side_effect=_capture_live_line),
         ):
             payload = invoke_runtime_json(
                 runtime=_Runtime(),  # type: ignore[arg-type]
@@ -894,6 +948,8 @@ class CodexInvocationTests(unittest.TestCase):
         self.assertEqual(payload, {"ok": True})
         self.assertEqual(captured["workflow_id"], "parent_planning:MAB-215")
         self.assertEqual(captured["operation_id"], "operation-jira-child-fanout")
+        self.assertEqual(captured["attempt_id"], "attempt-1")
+        self.assertEqual(live_lines, [("operation-jira-child-fanout", "attempt-1", "planning line")])
 
     def test_invoke_runtime_json_with_tools_preserves_operation_attempt_context_and_emits_tool_events(self) -> None:
         sink_contexts: list[tuple[str | None, str | None]] = []

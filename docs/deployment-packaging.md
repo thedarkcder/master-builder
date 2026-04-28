@@ -18,7 +18,7 @@ This document is the execution contract for infrastructure packaging across prov
   - `discord-live-voice`
   - `llama-cpp`
   - `postgres`
-  - `redis`
+  - `clickhouse`
 - Production excludes dev-only services by default:
   - `mailpit`
   - `tailscale`
@@ -32,7 +32,7 @@ This document is the execution contract for infrastructure packaging across prov
   - documented Compose deployment bundle
   - bootstrap script for fresh host provisioning
 - Data topology:
-  - local `postgres` and `redis` containers on the same host
+  - local `postgres` and `clickhouse` containers on the same host
   - persistent volumes mounted on host storage
 - Availability:
   - single node only
@@ -46,7 +46,7 @@ This document is the execution contract for infrastructure packaging across prov
   - ALB in front of API/UI entrypoints.
 - Data:
   - RDS PostgreSQL Multi-AZ
-  - ElastiCache Redis with automatic failover
+  - approved ClickHouse deployment for product logs and audit queries
 - Secrets and certs:
   - AWS Secrets Manager for secret material
   - ACM for TLS
@@ -61,7 +61,7 @@ This document is the execution contract for infrastructure packaging across prov
   - Cloud Run worker pools for long-running workers
 - Data:
   - Cloud SQL PostgreSQL with regional HA
-  - Memorystore Redis HA tier
+  - approved ClickHouse deployment for product logs and audit queries
 - Secrets and networking:
   - Secret Manager
   - VPC egress path for private service connectivity

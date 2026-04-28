@@ -267,6 +267,7 @@ def _extract_reply_matches(
             working_dir=working_dir,
             issue_key=issue_key,
             reasoning_effort="low",
+            db_session=session,
         ),
         system_prompt=render_prompt("policy/decision_reply_system.j2"),
         user_prompt=render_prompt(

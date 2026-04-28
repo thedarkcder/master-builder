@@ -5,6 +5,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from sqlalchemy import select
 
@@ -14,7 +15,7 @@ from orchestrator.core.worker.run_health import (
 )
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
-from orchestrator.storage.models import AgentLifecycleEvent, Run, RunLogEvent, Tenant, WorkflowExecution
+from orchestrator.storage.models import AgentLifecycleEvent, Run, Tenant, WorkflowExecution
 from tests.workflow_test_support import add_run_with_workflow, make_run
 
 
@@ -26,10 +27,15 @@ class WorkerRunHealthTests(unittest.TestCase):
         reset_db_engine_cache()
         run_migrations(database_url=self.database_url)
         self.session_factory = create_session_factory(database_url=self.database_url)
+        self._event_sql: list[str] = []
+        fake_store = SimpleNamespace(execute=lambda sql, **_kwargs: self._event_sql.append(sql) or "")
+        self._event_store_patch = patch("orchestrator.core.product_events.event_store", return_value=fake_store)
+        self._event_store_patch.start()
         self._seed_tenant()
 
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
+        self._event_store_patch.stop()
         reset_db_engine_cache()
 
     def _seed_tenant(self) -> None:
@@ -218,11 +224,10 @@ class WorkerRunHealthTests(unittest.TestCase):
             self.assertEqual(legacy_workflow.status, "failed")
             self.assertEqual(fresh_workflow.status, "running")
 
-            stale_logs = session.execute(
-                select(RunLogEvent).where(RunLogEvent.run_id == "run-stale-heartbeat")
-            ).scalars().all()
-            self.assertEqual(len(stale_logs), 1)
-            self.assertEqual(stale_logs[0].command, "workflow.stale_recovery")
+            stale_log_sql = "\n".join(self._event_sql)
+            self.assertIn("run-stale-heartbeat", stale_log_sql)
+            self.assertIn("runtime_log", stale_log_sql)
+            self.assertIn("workflow.stale_recovery", stale_log_sql)
 
             stale_events = session.execute(
                 select(AgentLifecycleEvent).where(AgentLifecycleEvent.run_id == "run-stale-heartbeat")

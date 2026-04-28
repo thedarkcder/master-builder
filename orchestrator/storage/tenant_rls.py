@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Iterable
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
@@ -17,111 +16,10 @@ class RLSPrincipalType(StrEnum):
     IDENTITY_AUTH = "identity_auth"
 
 
-TENANT_SCOPED_TABLES: tuple[str, ...] = (
-    "tenants",
-    "tenant_invites",
-    "projects",
-    "architecture_documents",
-    "project_installs",
-    "project_install_requests",
-    "project_automations",
-    "admin_notifications",
-    "workflow_executions",
-    "runs",
-    "run_human_input_requests",
-    "audit_events",
-    "pm_interview_cases",
-    "followup_contexts",
-    "tenant_run_claims",
-    "webhook_deliveries",
-    "webhook_jobs",
-    "pr_review_publications",
-    "repo_bootstrap_states",
-    "agent_lifecycle_events",
-    "run_log_events",
-    "run_stream_events",
-    "observability_stream_events",
-    "run_token_usage",
-    "knowledge_assets",
-    "knowledge_chunks",
-    "knowledge_facts",
-    "knowledge_sources",
-    "knowledge_jira_sync_project_states",
-    "decision_cases",
-    "decision_cycles",
-    "decision_answers",
-    "decision_evidence",
-    "decision_events",
-    "decision_effects_outbox",
-)
-
-TENANT_CHILD_TABLES: tuple[str, ...] = (
-    "project_automation_executions",
-    "workflow_checkpoints",
-    "workflow_operations",
-    "workflow_operation_attempts",
-)
-
-CUSTOM_RLS_TABLES: tuple[str, ...] = (
-    "atlassian_oauth_connections",
-    "managed_secrets",
-    "tenant_memberships",
-    "tenant_teams",
-    "tenant_team_memberships",
-)
-
-IDENTITY_GLOBAL_TABLES: tuple[str, ...] = (
-    "tenant_users",
-    "tenant_user_credentials",
-    "tenant_user_discord_identities",
-)
-
-PLATFORM_GLOBAL_TABLES: tuple[str, ...] = (
-    "platform_settings",
-    "workflow_types",
-    "workflow_type_operations",
-    "webhook_subject_claims",
-    "knowledge_jira_sync_runtime_states",
-    "discord_command_sync_runtime_states",
-    "worker_runtime_states",
-    "worker_runtime_auth_requests",
-)
-
-TENANT_CHILD_SCOPE_SQL: dict[str, str] = {
-    "project_automation_executions": (
-        "SELECT pa.tenant_id FROM project_automations pa "
-        "WHERE pa.automation_id = project_automation_executions.automation_id"
-    ),
-    "workflow_checkpoints": (
-        "SELECT we.tenant_id FROM workflow_executions we "
-        "WHERE we.workflow_id = workflow_checkpoints.workflow_id"
-    ),
-    "workflow_operations": (
-        "SELECT we.tenant_id FROM workflow_executions we "
-        "WHERE we.workflow_id = workflow_operations.workflow_id"
-    ),
-    "workflow_operation_attempts": (
-        "SELECT we.tenant_id FROM workflow_operations wo "
-        "JOIN workflow_executions we ON we.workflow_id = wo.workflow_id "
-        "WHERE wo.operation_id = workflow_operation_attempts.operation_id"
-    ),
-}
-
-
 @dataclass(frozen=True)
-class RLSPolicy:
+class RLSContractIssue:
     table_name: str
-    policy_name: str
-    using_expression: str
-    check_expression: str | None = None
-
-
-def tenant_owned_tables() -> tuple[str, ...]:
-    return TENANT_SCOPED_TABLES + TENANT_CHILD_TABLES + CUSTOM_RLS_TABLES
-
-
-def rls_protected_tables() -> tuple[str, ...]:
-    return tenant_owned_tables() + IDENTITY_GLOBAL_TABLES
+    issue: str
 
 
 def set_rls_context(
@@ -185,198 +83,142 @@ def set_tenant_system_rls_context(session: Session | Connection, *, tenant_id: s
     )
 
 
-def _quote_identifier(identifier: str) -> str:
-    if not identifier.replace("_", "").isalnum() or identifier[0].isdigit():
-        raise ValueError(f"Unsafe SQL identifier: {identifier}")
-    return f'"{identifier}"'
+def direct_tenant_table_names_from_metadata() -> tuple[str, ...]:
+    from orchestrator.storage.models import Base
 
-
-def _tenant_access_expression(row_tenant_sql: str) -> str:
-    return f"""(
-    current_setting('app.principal_type', true) IN ('platform_admin', 'platform_system')
-    OR (
-        current_setting('app.principal_type', true) = 'tenant_system'
-        AND NULLIF(current_setting('app.tenant_id', true), '') IS NOT NULL
-        AND {row_tenant_sql} = current_setting('app.tenant_id', true)
-    )
-    OR (
-        current_setting('app.principal_type', true) = 'tenant_user'
-        AND NULLIF(current_setting('app.user_id', true), '') IS NOT NULL
-        AND {row_tenant_sql} IN (
-            SELECT tm.tenant_id
-            FROM tenant_memberships tm
-            WHERE tm.user_id = current_setting('app.user_id', true)
-        )
-        AND (
-            NULLIF(current_setting('app.tenant_id', true), '') IS NULL
-            OR {row_tenant_sql} = current_setting('app.tenant_id', true)
-        )
-    )
-)"""
-
-
-def _direct_tenant_policy(table_name: str) -> RLSPolicy:
-    return RLSPolicy(
-        table_name=table_name,
-        policy_name=f"{table_name}_tenant_isolation",
-        using_expression=_tenant_access_expression(f"{_quote_identifier(table_name)}.tenant_id"),
-    )
-
-
-def _child_tenant_policy(table_name: str, tenant_scope_sql: str) -> RLSPolicy:
-    scoped_tenant = f"({tenant_scope_sql})"
-    return RLSPolicy(
-        table_name=table_name,
-        policy_name=f"{table_name}_tenant_isolation",
-        using_expression=_tenant_access_expression(scoped_tenant),
-    )
-
-
-def _custom_policies() -> tuple[RLSPolicy, ...]:
-    membership_policy = RLSPolicy(
-        table_name="tenant_memberships",
-        policy_name="tenant_memberships_tenant_isolation",
-        using_expression="""(
-    current_setting('app.principal_type', true) IN ('platform_admin', 'platform_system')
-    OR (
-        current_setting('app.principal_type', true) = 'tenant_system'
-        AND NULLIF(current_setting('app.tenant_id', true), '') IS NOT NULL
-        AND tenant_memberships.tenant_id = current_setting('app.tenant_id', true)
-    )
-    OR (
-        current_setting('app.principal_type', true) = 'tenant_user'
-        AND tenant_memberships.user_id = current_setting('app.user_id', true)
-        AND (
-            NULLIF(current_setting('app.tenant_id', true), '') IS NULL
-            OR tenant_memberships.tenant_id = current_setting('app.tenant_id', true)
-        )
-    )
-)""",
-    )
-    team_policy = RLSPolicy(
-        table_name="tenant_teams",
-        policy_name="tenant_teams_tenant_isolation",
-        using_expression=_tenant_access_expression("tenant_teams.tenant_id"),
-    )
-    team_membership_policy = RLSPolicy(
-        table_name="tenant_team_memberships",
-        policy_name="tenant_team_memberships_tenant_isolation",
-        using_expression="""(
-    current_setting('app.principal_type', true) IN ('platform_admin', 'platform_system')
-    OR EXISTS (
-        SELECT 1
-        FROM tenant_memberships tm
-        JOIN tenant_teams tt ON tt.tenant_id = tm.tenant_id
-        WHERE tm.membership_id = tenant_team_memberships.membership_id
-          AND tt.team_id = tenant_team_memberships.team_id
-          AND (
-              (
-                  current_setting('app.principal_type', true) = 'tenant_system'
-                  AND NULLIF(current_setting('app.tenant_id', true), '') IS NOT NULL
-                  AND tm.tenant_id = current_setting('app.tenant_id', true)
-              )
-              OR (
-                  current_setting('app.principal_type', true) = 'tenant_user'
-                  AND tm.user_id = current_setting('app.user_id', true)
-                  AND (
-                      NULLIF(current_setting('app.tenant_id', true), '') IS NULL
-                      OR tm.tenant_id = current_setting('app.tenant_id', true)
-                  )
-              )
-          )
-    )
-)""",
-    )
-    managed_secrets_policy = RLSPolicy(
-        table_name="managed_secrets",
-        policy_name="managed_secrets_tenant_isolation",
-        using_expression="""(
-    current_setting('app.principal_type', true) IN ('platform_admin', 'platform_system')
-    OR (
-        current_setting('app.principal_type', true) = 'tenant_system'
-        AND NULLIF(current_setting('app.tenant_id', true), '') IS NOT NULL
-        AND managed_secrets.secret_ref LIKE ('tenant/' || current_setting('app.tenant_id', true) || '/%')
-    )
-    OR (
-        current_setting('app.principal_type', true) = 'tenant_user'
-        AND NULLIF(current_setting('app.tenant_id', true), '') IS NOT NULL
-        AND managed_secrets.secret_ref LIKE ('tenant/' || current_setting('app.tenant_id', true) || '/%')
-        AND EXISTS (
-            SELECT 1
-            FROM tenant_memberships tm
-            WHERE tm.tenant_id = current_setting('app.tenant_id', true)
-              AND tm.user_id = current_setting('app.user_id', true)
-        )
-    )
-)""",
-    )
-    atlassian_oauth_policy = RLSPolicy(
-        table_name="atlassian_oauth_connections",
-        policy_name="atlassian_oauth_connections_tenant_isolation",
-        using_expression=f"""(
-    current_setting('app.principal_type', true) IN ('platform_admin', 'platform_system')
-    OR EXISTS (
-        SELECT 1
-        FROM tenants t
-        WHERE t.jira_config ->> 'connection_id' = atlassian_oauth_connections.connection_id
-          AND {_tenant_access_expression("t.tenant_id")}
-    )
-)""",
-    )
-    return (
-        atlassian_oauth_policy,
-        membership_policy,
-        team_policy,
-        team_membership_policy,
-        managed_secrets_policy,
-    )
-
-
-def _identity_policies() -> tuple[RLSPolicy, ...]:
-    owner_expression = """(
-    current_setting('app.principal_type', true) IN ('platform_admin', 'platform_system', 'identity_auth')
-    OR (
-        current_setting('app.principal_type', true) = 'tenant_user'
-        AND user_id = current_setting('app.user_id', true)
-    )
-)"""
     return tuple(
-        RLSPolicy(
-            table_name=table_name,
-            policy_name=f"{table_name}_identity_isolation",
-            using_expression=owner_expression,
+        sorted(
+            table_name
+            for table_name, table in Base.metadata.tables.items()
+            if "tenant_id" in table.columns
         )
-        for table_name in IDENTITY_GLOBAL_TABLES
     )
 
 
-def build_rls_policies() -> tuple[RLSPolicy, ...]:
-    direct = tuple(_direct_tenant_policy(table_name) for table_name in TENANT_SCOPED_TABLES)
-    children = tuple(
-        _child_tenant_policy(table_name, tenant_scope_sql)
-        for table_name, tenant_scope_sql in TENANT_CHILD_SCOPE_SQL.items()
+def nullable_tenant_id_tables_from_metadata() -> tuple[str, ...]:
+    from orchestrator.storage.models import Base
+
+    return tuple(
+        sorted(
+            table_name
+            for table_name, table in Base.metadata.tables.items()
+            if "tenant_id" in table.columns and table.columns["tenant_id"].nullable
+        )
     )
-    return direct + children + _custom_policies() + _identity_policies()
 
 
-def build_enable_rls_sql(table_names: Iterable[str]) -> tuple[str, ...]:
-    statements: list[str] = []
-    for table_name in table_names:
-        quoted_table = _quote_identifier(table_name)
-        statements.append(f"ALTER TABLE {quoted_table} ENABLE ROW LEVEL SECURITY")
-        statements.append(f"ALTER TABLE {quoted_table} FORCE ROW LEVEL SECURITY")
-    return tuple(statements)
+def direct_tenant_table_names_from_database(connection: Connection) -> tuple[str, ...]:
+    rows = connection.execute(
+        text(
+            """
+            SELECT table_name
+            FROM information_schema.columns
+            WHERE table_schema = current_schema()
+              AND column_name = 'tenant_id'
+              AND table_name NOT LIKE 'alembic_%'
+            ORDER BY table_name
+            """
+        )
+    ).scalars()
+    return tuple(rows)
 
 
-def build_policy_sql(policy: RLSPolicy) -> tuple[str, str]:
-    quoted_table = _quote_identifier(policy.table_name)
-    quoted_policy = _quote_identifier(policy.policy_name)
-    check_expression = policy.check_expression or policy.using_expression
-    return (
-        f"DROP POLICY IF EXISTS {quoted_policy} ON {quoted_table}",
-        f"""CREATE POLICY {quoted_policy}
-ON {quoted_table}
-FOR ALL
-USING {policy.using_expression}
-WITH CHECK {check_expression}""",
+def nullable_tenant_id_tables_from_database(connection: Connection) -> tuple[str, ...]:
+    rows = connection.execute(
+        text(
+            """
+            SELECT table_name
+            FROM information_schema.columns
+            WHERE table_schema = current_schema()
+              AND column_name = 'tenant_id'
+              AND is_nullable = 'YES'
+              AND table_name NOT LIKE 'alembic_%'
+            ORDER BY table_name
+            """
+        )
+    ).scalars()
+    return tuple(rows)
+
+
+def annotated_rls_protected_table_names_from_database(connection: Connection) -> tuple[str, ...]:
+    rows = connection.execute(
+        text(
+            """
+            SELECT c.relname
+            FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            JOIN pg_description d ON d.objoid = c.oid AND d.objsubid = 0
+            WHERE n.nspname = current_schema()
+              AND c.relkind IN ('r', 'p')
+              AND d.description LIKE '%tenant_rls:protected%'
+            ORDER BY c.relname
+            """
+        )
+    ).scalars()
+    return tuple(rows)
+
+
+def rls_protected_table_names_from_database(connection: Connection) -> tuple[str, ...]:
+    return tuple(
+        sorted(
+            set(direct_tenant_table_names_from_database(connection))
+            | set(annotated_rls_protected_table_names_from_database(connection))
+        )
     )
+
+
+def audit_live_tenant_rls_contract(connection: Connection) -> tuple[RLSContractIssue, ...]:
+    protected_tables = rls_protected_table_names_from_database(connection)
+    issues: list[RLSContractIssue] = [
+        RLSContractIssue(table_name=table_name, issue="tenant_id is nullable")
+        for table_name in nullable_tenant_id_tables_from_database(connection)
+    ]
+    if not protected_tables:
+        return tuple(issues)
+
+    catalog_rows = {
+        row["relname"]: row
+        for row in connection.execute(
+            text(
+                """
+                SELECT relname, relrowsecurity, relforcerowsecurity
+                FROM pg_class
+                WHERE relname = ANY(:table_names)
+                  AND relkind IN ('r', 'p')
+                """
+            ),
+            {"table_names": list(protected_tables)},
+        ).mappings()
+    }
+    policy_tables = set(
+        connection.execute(
+            text(
+                """
+                SELECT DISTINCT tablename
+                FROM pg_policies
+                WHERE schemaname = current_schema()
+                  AND tablename = ANY(:table_names)
+                """
+            ),
+            {"table_names": list(protected_tables)},
+        ).scalars()
+    )
+    for table_name in protected_tables:
+        row = catalog_rows.get(table_name)
+        if row is None:
+            issues.append(RLSContractIssue(table_name=table_name, issue="missing pg_class row"))
+            continue
+        if not row["relrowsecurity"]:
+            issues.append(RLSContractIssue(table_name=table_name, issue="RLS is not enabled"))
+        if not row["relforcerowsecurity"]:
+            issues.append(RLSContractIssue(table_name=table_name, issue="RLS is not forced"))
+        if table_name not in policy_tables:
+            issues.append(RLSContractIssue(table_name=table_name, issue="missing RLS policy"))
+    return tuple(issues)
+
+
+def assert_live_tenant_rls_contract(connection: Connection) -> None:
+    issues = audit_live_tenant_rls_contract(connection)
+    if issues:
+        detail = "; ".join(f"{issue.table_name}: {issue.issue}" for issue in issues)
+        raise RuntimeError(f"Tenant RLS contract failed: {detail}")

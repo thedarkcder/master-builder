@@ -9,6 +9,7 @@ import { useAuth } from "@/components/auth-provider";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { useToast } from "@/components/ui/toast-provider";
 import {
   createArchitectureDocument,
   getProject,
@@ -41,6 +42,7 @@ export function ProjectArchitectureDocumentsPage() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const { credentials } = useAuth();
+  const { showToast } = useToast();
 
   const [project, setProject] = useState<ProjectRecord | null>(null);
   const [documents, setDocuments] = useState<ArchitectureDocumentRecord[]>([]);
@@ -131,12 +133,12 @@ export function ProjectArchitectureDocumentsPage() {
       setCreateParentIssueKey("");
       setCreateIssueSummary("");
       setCreateTitle("");
-      setStatusLine("Architecture document created.");
+      showToast({ title: "Architecture document created", description: created.title, tone: "success" });
       router.replace(
         `/${encodeURIComponent(params.tenantId)}/projects/${encodeURIComponent(params.projectId)}/architecture?documentId=${encodeURIComponent(created.document_id)}`
       );
     } catch (error) {
-      setStatusLine(`Unable to create architecture document: ${(error as Error).message}`);
+      showToast({ title: "Architecture document create failed", description: (error as Error).message, tone: "error" });
     } finally {
       setBusy(false);
     }
@@ -161,9 +163,9 @@ export function ProjectArchitectureDocumentsPage() {
         }
       );
       await refreshDocuments(updated.document_id);
-      setStatusLine("Architecture document saved.");
+      showToast({ title: "Architecture document saved", description: updated.title, tone: "success" });
     } catch (error) {
-      setStatusLine(`Unable to save architecture document: ${(error as Error).message}`);
+      showToast({ title: "Architecture document save failed", description: (error as Error).message, tone: "error" });
     } finally {
       setBusy(false);
     }

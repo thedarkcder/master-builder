@@ -79,12 +79,12 @@ def test_recompute_workflow_status_marks_completion_from_required_operations(mon
         SimpleNamespace(operation_type="jira_child_fanout", status="completed", summary="done"),
     ]
     definitions = [
-        SimpleNamespace(operation_type="jira_parent_update", required=True),
-        SimpleNamespace(operation_type="jira_child_fanout", required=True),
+        SimpleNamespace(key="jira_parent_update", required=True),
+        SimpleNamespace(key="jira_child_fanout", required=True),
     ]
     monkeypatch.setattr(
-        "orchestrator.core.workflow_execution_status.list_workflow_type_operations",
-        lambda *args, **kwargs: definitions,
+        "orchestrator.core.workflow_execution_status.get_workflow_type",
+        lambda *args, **kwargs: SimpleNamespace(steps=definitions),
     )
 
     recompute_workflow_status(
@@ -105,12 +105,12 @@ def test_recompute_workflow_status_marks_failure_from_required_operation(monkeyp
         SimpleNamespace(operation_type="jira_child_fanout", status="failed", summary="content limit"),
     ]
     definitions = [
-        SimpleNamespace(operation_type="jira_parent_update", required=True),
-        SimpleNamespace(operation_type="jira_child_fanout", required=True),
+        SimpleNamespace(key="jira_parent_update", required=True),
+        SimpleNamespace(key="jira_child_fanout", required=True),
     ]
     monkeypatch.setattr(
-        "orchestrator.core.workflow_execution_status.list_workflow_type_operations",
-        lambda *args, **kwargs: definitions,
+        "orchestrator.core.workflow_execution_status.get_workflow_type",
+        lambda *args, **kwargs: SimpleNamespace(steps=definitions),
     )
 
     recompute_workflow_status(

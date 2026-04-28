@@ -15,7 +15,7 @@ from orchestrator.core.agent_runtime_resolver import build_runtime_for_selector
 from orchestrator.core.codex_agents import plan_pm_parent_issues_with_runtime, plan_seed_issues_with_runtime
 from orchestrator.core.codex_runtime import CodexRuntimeError
 from orchestrator.core.config import get_settings
-from orchestrator.core.runtime_invocation import WorkflowAttemptRef
+from orchestrator.core.workflow_attempt_ref import WorkflowAttemptRef
 
 ISSUE_KEY_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]+-\d+$")
 

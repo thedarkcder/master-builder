@@ -8,7 +8,7 @@ from sqlalchemy import select
 from orchestrator.core.codex_runtime import CodexRuntimeError
 from orchestrator.core.clarification_projection_service import clarification_state_fingerprint
 from orchestrator.core.runtime_payload_models import EngineeringClarificationPayload
-from orchestrator.storage.models import FollowupContext, PMInterviewCase
+from orchestrator.storage.models import FollowupContext, PMInterviewCase, WorkflowOperation, WorkflowOperationAttempt
 from orchestrator.tools.atlassian_oauth import JiraIssueDetail
 from tests.test_support.jira_webhook_harness import JiraWebhookHarness
 
@@ -198,6 +198,19 @@ class JiraParentClarificationFlowTests(JiraWebhookHarness):
         self.assertIsNotNone(context)
         assert context is not None
         self.assertEqual(context.status, "active")
+        with self.session_factory() as session:
+            operation = session.execute(
+                select(WorkflowOperation).where(
+                    WorkflowOperation.operation_type == "jira_comment_projection",
+                    WorkflowOperation.target_ref == "TP-950",
+                )
+            ).scalar_one()
+            attempt = session.execute(
+                select(WorkflowOperationAttempt).where(
+                    WorkflowOperationAttempt.operation_id == operation.operation_id,
+                )
+            ).scalar_one()
+        self.assertEqual(attempt.status, "completed")
 
     def test_webhook_parent_comment_resolves_engineering_clarification_and_closes_context(self) -> None:
         with self.session_factory() as session:
@@ -285,7 +298,7 @@ class JiraParentClarificationFlowTests(JiraWebhookHarness):
                         "children_sync_status": "children_current",
                     },
                 ),
-            ),
+            ) as seed_mock,
             patch("orchestrator.api.webhooks.jira_parent_child_sync.post_jira_comment", return_value=(True, None)) as comment_mock,
         ):
             response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
@@ -307,6 +320,20 @@ class JiraParentClarificationFlowTests(JiraWebhookHarness):
         self.assertIsNotNone(context)
         assert context is not None
         self.assertEqual(context.status, "closed")
+        seed_kwargs = seed_mock.call_args.kwargs
+        self.assertIsNotNone(seed_kwargs["workflow_id"])
+        self.assertIsNotNone(seed_kwargs["operation_id"])
+        self.assertIsNotNone(seed_kwargs["attempt_ref"])
+        self.assertIsNotNone(seed_kwargs["attempt_ref"].attempt_id)
+        with self.session_factory() as session:
+            operation = session.get(WorkflowOperation, seed_kwargs["operation_id"])
+            assert operation is not None
+            attempt = session.execute(
+                select(WorkflowOperationAttempt).where(
+                    WorkflowOperationAttempt.operation_id == operation.operation_id,
+                )
+            ).scalar_one()
+        self.assertEqual(attempt.status, "completed")
 
     def test_webhook_parent_comment_resolution_allows_new_child_creation(self) -> None:
         with self.session_factory() as session:

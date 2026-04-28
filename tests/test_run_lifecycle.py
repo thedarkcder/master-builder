@@ -87,7 +87,8 @@ class RunLifecycleTests(unittest.TestCase):
     def _get_workflow(self, session, *, issue_key: str, dedupe_scope: str = RUN_DEDUPE_SCOPE_ISSUE_EXECUTION):
         return session.query(WorkflowExecution).filter_by(
             tenant_id="tenant-runs",
-            issue_key=issue_key,
+            source_system="jira",
+            source_ref=issue_key,
             dedupe_scope=dedupe_scope,
         ).one_or_none()
 
@@ -274,6 +275,46 @@ class RunLifecycleTests(unittest.TestCase):
             with self.assertRaises(RunStateTransitionError):
                 mark_run_running(session, run_id=enqueue.run.run_id)
 
+    def test_worker_terminal_transition_requires_owner_and_claim(self) -> None:
+        with self.session_factory() as session:
+            enqueue = enqueue_run(
+                session,
+                tenant_id="tenant-runs",
+                project_id=None,
+                issue_key="TP-912",
+                precheck_outcome="ready_for_agent",
+            )
+            run = mark_run_running(session, run_id=enqueue.run.run_id)
+            run.worker_service_instance_id = "worker-a"
+            run.claim_id = "claim-a"
+            session.commit()
+
+            with self.assertRaises(RunStateTransitionError):
+                mark_run_terminal(
+                    session,
+                    run_id=enqueue.run.run_id,
+                    terminal_status=RUN_STATUS_FAILED,
+                    expected_worker_service_instance_id="worker-b",
+                    expected_claim_id="claim-a",
+                )
+            with self.assertRaises(RunStateTransitionError):
+                mark_run_terminal(
+                    session,
+                    run_id=enqueue.run.run_id,
+                    terminal_status=RUN_STATUS_FAILED,
+                    expected_worker_service_instance_id="worker-a",
+                    expected_claim_id="claim-b",
+                )
+
+            completed = mark_run_terminal(
+                session,
+                run_id=enqueue.run.run_id,
+                terminal_status=RUN_STATUS_SUCCEEDED,
+                expected_worker_service_instance_id="worker-a",
+                expected_claim_id="claim-a",
+            )
+            self.assertEqual(completed.status, RUN_STATUS_SUCCEEDED)
+
     def test_enqueue_creates_new_workflow_after_terminal_run(self) -> None:
         with self.session_factory() as session:
             first = enqueue_run(
@@ -303,11 +344,10 @@ class RunLifecycleTests(unittest.TestCase):
     def test_enqueue_applies_bootstrap_before_queue_notification(self) -> None:
         observed: dict[str, object] = {}
 
-        def capture_notification(session, *, tenant_id: str, project_id: str | None, run_id: str, issue_key: str):  # noqa: ANN001
+        def capture_notification(session, *, tenant_id: str, project_id: str | None, run_id: str):  # noqa: ANN001
             observed["tenant_id"] = tenant_id
             observed["project_id"] = project_id
             observed["run_id"] = run_id
-            observed["issue_key"] = issue_key
             staged_run = next(item for item in session.new if isinstance(item, Run))
             observed["plan"] = dict(staged_run.plan or {})
             observed["branch"] = staged_run.branch
@@ -341,7 +381,6 @@ class RunLifecycleTests(unittest.TestCase):
         self.assertTrue(result.enqueued)
         self.assertEqual(observed["tenant_id"], "tenant-runs")
         self.assertEqual(observed["project_id"], "tenant-runs-default")
-        self.assertEqual(observed["issue_key"], "TP-912")
         self.assertEqual(observed["run_id"], result.run.run_id)
         self.assertEqual(observed["branch"], "feature/TP-912")
         self.assertEqual(observed["pr_url"], "https://github.com/example/repo/pull/12")

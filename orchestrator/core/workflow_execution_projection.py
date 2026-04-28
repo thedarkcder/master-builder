@@ -20,8 +20,8 @@ from orchestrator.core.workflow_operation_service import (
     start_workflow_operation_attempt,
     upsert_workflow_operation,
 )
-from orchestrator.core.workflow_type_catalog import list_workflow_type_operations
-from orchestrator.storage.models import WorkflowExecution, WorkflowOperation, WorkflowOperationAttempt, WorkflowType
+from orchestrator.core.workflow_definition import WorkflowDefinition
+from orchestrator.storage.models import WorkflowExecution, WorkflowOperation, WorkflowOperationAttempt
 
 
 def _now() -> datetime:
@@ -100,20 +100,22 @@ def _normalize_source_description(source_description: object | None) -> str | No
 class WorkflowExecutionProjection:
     session: Session
     workflow: WorkflowExecution
+    workflow_type: WorkflowDefinition
 
     def ensure_operations(self) -> None:
-        for definition in list_workflow_type_operations(self.session, workflow_type_key=self.workflow.workflow_type_key):
+        for definition in self.workflow_type.steps:
             upsert_workflow_operation(
                 self.session,
                 workflow_id=self.workflow.workflow_id,
-                operation_type=definition.operation_type,
-                idempotency_key=f"workflow-definition:{definition.operation_type}",
-                target_system=_target_system_for_operation(definition.operation_type),
-                target_ref=self.workflow.source_ref if _target_system_for_operation(definition.operation_type) else None,
+                operation_type=definition.key,
+                idempotency_key=f"workflow-definition:{definition.key}",
+                target_system=_target_system_for_operation(definition.key),
+                target_ref=self.workflow.source_ref if _target_system_for_operation(definition.key) else None,
                 summary=definition.description,
             )
 
     def _operation(self, operation_type: str) -> WorkflowOperation:
+        self.workflow_type.step(operation_type)
         operation = self.session.execute(
             select(WorkflowOperation).where(
                 WorkflowOperation.workflow_id == self.workflow.workflow_id,
@@ -134,6 +136,9 @@ class WorkflowExecutionProjection:
 
     def mark_running(self) -> None:
         mark_workflow_running(workflow=self.workflow, now=_now())
+
+    def mark_workflow_waiting_for_input(self) -> None:
+        mark_workflow_waiting_for_input(workflow=self.workflow, now=_now())
 
     def start_operation_attempt(self, *, operation_type: str) -> tuple[WorkflowOperation, WorkflowOperationAttempt]:
         operation = self._operation(operation_type)
@@ -166,66 +171,20 @@ class WorkflowExecutionProjection:
         )
         mark_workflow_failed(workflow=self.workflow, message=message, now=_now())
 
-    def set_operation_waiting_for_input(self, *, operation_type: str, summary: str) -> None:
-        operation = self._operation(operation_type)
-        now = _now()
-        operation.status = "waiting_for_input"
-        operation.summary = summary
-        operation.started_at = operation.started_at or now
-        operation.finished_at = None
-        operation.updated_at = now
-        mark_workflow_waiting_for_input(workflow=self.workflow, now=now)
-
-    def set_operation_completed(self, *, operation_type: str, summary: str) -> None:
-        operation = self._operation(operation_type)
-        now = _now()
-        operation.status = "completed"
-        operation.summary = summary
-        operation.started_at = operation.started_at or now
-        operation.finished_at = now
-        operation.updated_at = now
-        self.mark_running()
-
-    def mark_waiting_for_input(self, *, operation_type: str, summary: str) -> None:
-        operation = self._operation(operation_type)
-        attempt = start_workflow_operation_attempt(self.session, operation=operation)
-        now = _now()
+    def wait_started_operation(
+        self,
+        *,
+        operation: WorkflowOperation,
+        attempt: WorkflowOperationAttempt,
+        summary: str,
+    ) -> None:
         mark_workflow_operation_waiting_for_input(
             self.session,
             operation=operation,
             attempt=attempt,
             summary=summary,
         )
-        mark_workflow_waiting_for_input(workflow=self.workflow, now=now)
-
-    def mark_operation_completed(self, *, operation_type: str, summary: str) -> None:
-        operation = self._operation(operation_type)
-        attempt = start_workflow_operation_attempt(self.session, operation=operation)
-        complete_workflow_operation(
-            self.session,
-            operation=operation,
-            attempt=attempt,
-            summary=summary,
-        )
-        self.mark_running()
-
-    def mark_operation_failed(
-        self,
-        *,
-        operation_type: str,
-        category: str,
-        message: str,
-    ) -> None:
-        operation = self._operation(operation_type)
-        attempt = start_workflow_operation_attempt(self.session, operation=operation)
-        fail_workflow_operation(
-            self.session,
-            operation=operation,
-            attempt=attempt,
-            category=category,
-            message=message,
-        )
-        mark_workflow_failed(workflow=self.workflow, message=message, now=_now())
+        mark_workflow_waiting_for_input(workflow=self.workflow, now=_now())
 
     def mark_completed_if_ready(self) -> None:
         recompute_workflow_status(session=self.session, workflow=self.workflow, now=_now())
@@ -234,7 +193,7 @@ class WorkflowExecutionProjection:
 def ensure_workflow_execution(
     *,
     session: Session,
-    workflow_type: WorkflowType,
+    workflow_type: WorkflowDefinition,
     tenant_id: str,
     project_id: str | None,
     execution: WorkflowExecutionReference,
@@ -286,7 +245,7 @@ def ensure_workflow_execution(
         workflow.orchestration_backend = workflow_type.orchestration_backend
         workflow.dedupe_scope = workflow_type.system_key
         workflow.updated_at = now
-    projection = WorkflowExecutionProjection(session=session, workflow=workflow)
+    projection = WorkflowExecutionProjection(session=session, workflow=workflow, workflow_type=workflow_type)
     projection.ensure_operations()
     projection.mark_running()
     return projection

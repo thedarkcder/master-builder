@@ -1,4 +1,7 @@
+import os
+from tempfile import TemporaryDirectory
 import unittest
+from datetime import datetime, timezone
 from unittest.mock import patch
 import json
 import pytest
@@ -11,6 +14,7 @@ from orchestrator.core.codex_agents import (
 )
 from orchestrator.core.runtime_invocation import AgentInvocationContext, RuntimeJsonContractError
 from orchestrator.core.codex_runtime import CodexRuntime, CodexRuntimeError
+from orchestrator.core.config import get_settings
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.core.workflow.runner import (
     DevResult,
@@ -20,6 +24,9 @@ from orchestrator.core.workflow.runner import (
     WorkflowRequest,
     WorkflowStageCheckpoint,
 )
+from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
+from orchestrator.storage.migrations import run_migrations
+from orchestrator.storage.models import Tenant
 
 
 class _RuntimeQueue:
@@ -39,6 +46,42 @@ class _RuntimeQueue:
 
 
 class CodexWorkflowAgentsTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._original_database_url = os.environ.get("ORCHESTRATOR_DATABASE_URL")
+        self.temp_dir = TemporaryDirectory()
+        self.database_url = f"sqlite:///{self.temp_dir.name}/codex_agents.db"
+        os.environ["ORCHESTRATOR_DATABASE_URL"] = self.database_url
+        get_settings.cache_clear()
+        reset_db_engine_cache()
+        run_migrations(database_url=self.database_url)
+        session_factory = create_session_factory(database_url=self.database_url)
+        with session_factory() as session:
+            now = datetime.now(timezone.utc)
+            session.add(
+                Tenant(
+                    tenant_id="tenant-1",
+                    name="Tenant 1",
+                    is_enabled=True,
+                    jira_config={},
+                    github_config={},
+                    repos_config={},
+                    policy_config={},
+                    discord_config=None,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.commit()
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+        if self._original_database_url is None:
+            os.environ.pop("ORCHESTRATOR_DATABASE_URL", None)
+        else:
+            os.environ["ORCHESTRATOR_DATABASE_URL"] = self._original_database_url
+        get_settings.cache_clear()
+        reset_db_engine_cache()
+
     def _request(self) -> WorkflowRequest:
         return WorkflowRequest(
             tenant_id="tenant-1",
@@ -697,7 +740,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         self.assertEqual(captured_logs[0]["message"], "line-1")
         self.assertEqual(captured_logs[1]["stream"], "stderr")
 
-    def test_stage_log_sink_survives_log_persist_failure(self) -> None:
+    def test_stage_log_sink_fails_when_log_persistence_fails(self) -> None:
         captured_logs: list[dict] = []
 
         def _request(_system: str, _user: str, _working_dir: str | None = None, _on_log_line=None) -> str:
@@ -717,10 +760,9 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             patch("orchestrator.core.codex_agents.render_prompt", side_effect=lambda template_name, **_: template_name),
             patch("orchestrator.core.runtime_invocation._enqueue_runtime_log_line", side_effect=RuntimeError("db down")),
         ):
-            plan = agents.pm(self._request(), 1, None, [], None, None, None)
-        self.assertEqual(plan.plan_steps, ["step1"])
-        self.assertEqual(len(captured_logs), 1)
-        self.assertEqual(captured_logs[0]["message"], "line-1")
+            with self.assertRaisesRegex(RuntimeError, "db down"):
+                agents.pm(self._request(), 1, None, [], None, None, None)
+        self.assertEqual(captured_logs, [])
 
     def test_voice_entry_router_rejects_invalid_lane_and_persona(self) -> None:
         runtime = CodexRuntime(

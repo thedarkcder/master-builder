@@ -8,8 +8,9 @@ from fastapi import HTTPException
 from orchestrator.api.discord.seed.draft_assembly import normalize_planning_package
 from orchestrator.api.discord.seed.issue_service import seed_issues_with_runtime, seed_parent_issues_with_runtime
 from orchestrator.core.architecture_document_service import ArchitectureDocumentGate
-from orchestrator.core.runtime_invocation import WorkflowAttemptRef
+from orchestrator.core.workflow_attempt_ref import WorkflowAttemptRef
 from orchestrator.core.runtime_payload_models import EngineeringSeedPlanPayload, PmParentSeedPlanPayload
+from orchestrator.storage.models import WorkflowExecution, WorkflowOperation, WorkflowOperationAttempt
 from orchestrator.tools.atlassian_oauth import JiraIssueCreateResult, AtlassianOAuthError
 from orchestrator.tools.atlassian_oauth_issue_service import MAX_JIRA_ADF_DOCUMENT_BYTES, _to_adf_description
 
@@ -298,8 +299,29 @@ def test_seed_issues_passes_typed_attempt_ref_into_invocation_context() -> None:
         captured_context = kwargs["invocation_context"]
         return _engineering_seed_plan()
 
+    workflow = SimpleNamespace(
+        workflow_id="wf-123",
+        execution_id="exec-123",
+        tenant_id="tenant-a",
+        project_id="project-a",
+        source_system="jira",
+        source_ref="GP-1",
+    )
+    operation = SimpleNamespace(
+        operation_id="op-456",
+        operation_type="jira_child_fanout",
+        workflow_id="wf-123",
+        run_id="run-123",
+    )
+    attempt = SimpleNamespace(attempt_id="attempt-789", operation_id="op-456", attempt_number=7)
+    session = MagicMock()
+    session.get.side_effect = lambda model, _identity: {
+        WorkflowOperation: operation,
+        WorkflowOperationAttempt: attempt,
+        WorkflowExecution: workflow,
+    }.get(model)
     seed_issues_with_runtime(
-        session=MagicMock(),
+        session=session,
         tenant=tenant,
         prompt_markdown="seed issues",
         scoped_project_id="project-a",
@@ -322,7 +344,12 @@ def test_seed_issues_passes_typed_attempt_ref_into_invocation_context() -> None:
         select_seed_match_fn=lambda **_kwargs: None,
         workflow_id="wf-123",
         operation_id="op-456",
-        attempt_ref=WorkflowAttemptRef(number=7, attempt_id="attempt-789"),
+        attempt_ref=WorkflowAttemptRef(
+            workflow_id="wf-123",
+            operation_id="op-456",
+            attempt_id="attempt-789",
+            number=7,
+        ),
     )
 
     assert captured_context is not None
