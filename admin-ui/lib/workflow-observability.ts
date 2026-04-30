@@ -5,6 +5,7 @@ import type {
   WorkflowTranscriptEntryRecord,
   WorkflowTranscriptSectionRecord,
 } from "@/lib/api";
+import { compareWorkflowObservabilityEvents } from "@/lib/workflow-event-order";
 
 function sectionForEvent(event: WorkflowObservabilityEventRecord): WorkflowTranscriptSectionRecord["kind"] | null {
   const kind = String(event.event_kind || "").trim().toLowerCase();
@@ -16,7 +17,9 @@ function sectionForEvent(event: WorkflowObservabilityEventRecord): WorkflowTrans
   if (
     kind === "workflow_operation_attempt_started" ||
     kind === "workflow_operation_attempt_retried" ||
-    kind === "workflow_operation_attempt_completed"
+    kind === "workflow_operation_attempt_completed" ||
+    kind === "workflow_operation_attempt_waiting_for_input" ||
+    kind === "workflow_operation_waiting_for_input"
   ) {
     return "summary";
   }
@@ -93,7 +96,7 @@ export function buildTelemetryAttemptView(
   };
   for (const event of events
     .filter((candidate) => candidate.attempt_id === attempt.attempt_id)
-    .sort((left, right) => new Date(left.recorded_at).getTime() - new Date(right.recorded_at).getTime())) {
+    .sort(compareWorkflowObservabilityEvents)) {
     const sectionKind = sectionForEvent(event);
     if (!sectionKind) continue;
     sectionEntries[sectionKind].push({

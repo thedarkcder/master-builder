@@ -9,23 +9,31 @@ from orchestrator.core.workflow_definition import (
     workflow_step,
 )
 
+ISSUE_EXECUTION_STEP_RUN_ATTEMPT_EXECUTION = "run_attempt_execution"
+ISSUE_EXECUTION_STEP_HUMAN_INPUT_RESUME = "human_input_resume"
+ISSUE_EXECUTION_STEP_JIRA_COMMENT_PROJECTION = "jira_comment_projection"
+ISSUE_EXECUTION_STEP_DISCORD_FOLLOWUP_PROJECTION = "discord_followup_projection"
+ISSUE_EXECUTION_STEP_NOTIFICATION_EMIT = "notification_emit"
+PR_REMEDIATION_STEP_RUN_ATTEMPT_EXECUTION = "run_attempt_execution"
+PR_REMEDIATION_STEP_HUMAN_INPUT_RESUME = "human_input_resume"
+PR_REMEDIATION_STEP_NOTIFICATION_EMIT = "notification_emit"
+
 
 class IssueExecutionWorkflow:
     @workflow_step(
-        key="run_attempt_execution",
+        key=ISSUE_EXECUTION_STEP_RUN_ATTEMPT_EXECUTION,
         label="Run attempt execution",
         kind=WorkflowStepKind.BUSINESS,
-        retryable=True,
         description="Execute the claimed development run.",
     )
     def run_attempt_execution(self) -> None:
         raise NotImplementedError
 
     @workflow_step(
-        key="human_input_resume",
+        key=ISSUE_EXECUTION_STEP_HUMAN_INPUT_RESUME,
         label="Human input resume",
         kind=WorkflowStepKind.HUMAN_GATE,
-        after="run_attempt_execution",
+        after=ISSUE_EXECUTION_STEP_RUN_ATTEMPT_EXECUTION,
         required=False,
         description="Resume a run after required human input is supplied.",
     )
@@ -33,10 +41,10 @@ class IssueExecutionWorkflow:
         raise NotImplementedError
 
     @workflow_step(
-        key="jira_comment_projection",
+        key=ISSUE_EXECUTION_STEP_JIRA_COMMENT_PROJECTION,
         label="Jira comment projection",
         kind=WorkflowStepKind.SIDE_EFFECT,
-        after="run_attempt_execution",
+        after=ISSUE_EXECUTION_STEP_RUN_ATTEMPT_EXECUTION,
         required=False,
         description="Publish run state back to Jira when needed.",
     )
@@ -44,10 +52,10 @@ class IssueExecutionWorkflow:
         raise NotImplementedError
 
     @workflow_step(
-        key="discord_followup_projection",
+        key=ISSUE_EXECUTION_STEP_DISCORD_FOLLOWUP_PROJECTION,
         label="Discord follow-up projection",
         kind=WorkflowStepKind.NOTIFICATION,
-        after="run_attempt_execution",
+        after=ISSUE_EXECUTION_STEP_RUN_ATTEMPT_EXECUTION,
         required=False,
         description="Publish run follow-up state to Discord when needed.",
     )
@@ -55,10 +63,10 @@ class IssueExecutionWorkflow:
         raise NotImplementedError
 
     @workflow_step(
-        key="notification_emit",
+        key=ISSUE_EXECUTION_STEP_NOTIFICATION_EMIT,
         label="Notification emit",
         kind=WorkflowStepKind.NOTIFICATION,
-        after="run_attempt_execution",
+        after=ISSUE_EXECUTION_STEP_RUN_ATTEMPT_EXECUTION,
         required=False,
         description="Emit user/admin notifications for run state.",
     )
@@ -68,20 +76,19 @@ class IssueExecutionWorkflow:
 
 class PrRemediationWorkflow:
     @workflow_step(
-        key="run_attempt_execution",
+        key=PR_REMEDIATION_STEP_RUN_ATTEMPT_EXECUTION,
         label="Run attempt execution",
         kind=WorkflowStepKind.BUSINESS,
-        retryable=True,
         description="Execute the claimed PR remediation run.",
     )
     def run_attempt_execution(self) -> None:
         raise NotImplementedError
 
     @workflow_step(
-        key="human_input_resume",
+        key=PR_REMEDIATION_STEP_HUMAN_INPUT_RESUME,
         label="Human input resume",
         kind=WorkflowStepKind.HUMAN_GATE,
-        after="run_attempt_execution",
+        after=PR_REMEDIATION_STEP_RUN_ATTEMPT_EXECUTION,
         required=False,
         description="Resume PR remediation after required human input is supplied.",
     )
@@ -89,10 +96,10 @@ class PrRemediationWorkflow:
         raise NotImplementedError
 
     @workflow_step(
-        key="notification_emit",
+        key=PR_REMEDIATION_STEP_NOTIFICATION_EMIT,
         label="Notification emit",
         kind=WorkflowStepKind.NOTIFICATION,
-        after="run_attempt_execution",
+        after=PR_REMEDIATION_STEP_RUN_ATTEMPT_EXECUTION,
         required=False,
         description="Emit user/admin notifications for PR remediation state.",
     )

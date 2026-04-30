@@ -5,11 +5,14 @@ import { cn } from "@/lib/utils";
 
 export type WorkflowFlowNode = {
   key: string;
+  operationType: string;
   label: string;
   status?: string | null;
   detail?: string | null;
   impact?: string | null;
   completionRequired?: boolean | null;
+  after?: string[];
+  supports?: string[];
 };
 
 type WorkflowFlowGroup = {
@@ -26,11 +29,25 @@ function nodeTone(status?: string | null): string {
   return "border-border bg-background";
 }
 
+function nonPending(node: WorkflowFlowNode | undefined): boolean {
+  const normalized = String(node?.status || "").trim().toLowerCase();
+  return Boolean(normalized && normalized !== "pending");
+}
+
 function groupNodes(nodes: WorkflowFlowNode[]): WorkflowFlowGroup[] {
-  const groups: WorkflowFlowGroup[] = [];
+  const mainNodes = nodes.filter((node) => node.completionRequired !== false);
+  const groups = mainNodes.map((node) => ({ main: node, supporting: [] as WorkflowFlowNode[] }));
+  const mainByType = new Map(groups.map((group) => [group.main.operationType, group]));
+
   for (const node of nodes) {
-    if (node.completionRequired === false && groups.length > 0) {
-      groups[groups.length - 1].supporting.push(node);
+    if (node.completionRequired !== false) {
+      continue;
+    }
+    const ownerTypes = [...(node.supports ?? []), ...(node.after ?? [])];
+    const directOwners = ownerTypes.map((ownerType) => mainByType.get(ownerType)).filter((group): group is WorkflowFlowGroup => Boolean(group));
+    const owner = directOwners.find((group) => nonPending(group.main)) ?? directOwners[0];
+    if (owner) {
+      owner.supporting.push(node);
       continue;
     }
     groups.push({ main: node, supporting: [] });
@@ -97,7 +114,7 @@ export function WorkflowFlowDiagram({
       <div className="px-1 py-1">
         <div className="flex flex-col gap-3">
           {groups.map((group, index) => (
-            <div key={group.main.key} className="flex flex-col gap-2">
+            <div key={group.main.key} className="flex flex-col gap-2" data-workflow-flow-group={group.main.operationType}>
               <div className="flex items-start gap-4">
                 <div className="min-w-0 flex-1">
                   {onNodeClick ? <FlowCardButton node={group.main} onClick={onNodeClick} /> : <FlowCard node={group.main} />}
@@ -105,7 +122,7 @@ export function WorkflowFlowDiagram({
                 {group.supporting.length ? (
                   <div className="w-72 space-y-2 pt-3">
                     {group.supporting.map((node) => (
-                      <div key={node.key} className="flex items-center gap-2">
+                      <div key={node.key} className="flex items-center gap-2" data-workflow-flow-node={node.operationType}>
                         <div className="h-px w-3 bg-border" />
                         <div className="h-1.5 w-1.5 rounded-full bg-border" />
                         <div className="min-w-0 flex-1">
@@ -136,13 +153,13 @@ export function WorkflowFlowDiagram({
     <div className="overflow-x-auto px-1 py-1">
       <div className="flex min-w-max items-start gap-3 pb-2">
         {groups.map((group, index) => (
-          <div key={group.main.key} className="flex items-start gap-3">
+          <div key={group.main.key} className="flex items-start gap-3" data-workflow-flow-group={group.main.operationType}>
             <div className="flex w-64 flex-col gap-2">
               {onNodeClick ? <FlowCardButton node={group.main} onClick={onNodeClick} /> : <FlowCard node={group.main} />}
               {group.supporting.length ? (
                 <div className="space-y-2 pl-4">
                   {group.supporting.map((node) => (
-                    <div key={node.key} className="flex items-center gap-2">
+                    <div key={node.key} className="flex items-center gap-2" data-workflow-flow-node={node.operationType}>
                       <div className="h-px w-3 bg-border" />
                       <div className="h-1.5 w-1.5 rounded-full bg-border" />
                       <div className="min-w-0 flex-1">

@@ -25,6 +25,7 @@ PLANNING_STATE_SECURITY = "security_planning"
 PLANNING_STATE_TEST = "test_planning"
 PLANNING_STATE_BLOCKED = "planning_blocked"
 PLANNING_STATE_COMPLETED = "planning_completed"
+SPECIALIST_STAGE_CONTRACT_ATTEMPTS = 2
 
 
 class RetryableSpecialistPlanningContractError(CodexRuntimeError):
@@ -160,6 +161,26 @@ def _json_dump(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True)
 
 
+def _contract_repair_user_prompt(
+    *,
+    original_user_prompt: str,
+    stage: _PlanningStageDefinition,
+    contract_error: str,
+    invalid_payload: dict[str, Any],
+) -> str:
+    return "\n\n".join(
+        (
+            original_user_prompt,
+            "CONTRACT REPAIR REQUIRED",
+            f"The previous {stage.role_label} response violated the required JSON contract.",
+            f"Schema error: {contract_error}",
+            "Return the full corrected JSON object only. Do not omit any required fields. Do not include markdown.",
+            "For every child_ticket_specs entry, acceptance_criteria, how_to_test, done_means, dependencies, risks, and labels must be arrays of strings. done_means must be a non-empty array of strings, not a single string.",
+            f"Previous invalid JSON: {_json_dump(invalid_payload)}",
+        )
+    )
+
+
 def _planning_stage_user_context(
     *,
     request: SpecialistPlanningRequest,
@@ -225,34 +246,59 @@ def _run_stage(
         stage.user_prompt_template,
         **_planning_stage_user_context(request=request, stage=stage, stage_session=stage_session),
     )
-    payload = stage_session.invoke_json(
-        system_prompt=system_prompt,
-        user_prompt=user_prompt,
+    contract_error: str | None = None
+    last_payload: dict[str, Any] | None = None
+    for attempt_number in range(1, SPECIALIST_STAGE_CONTRACT_ATTEMPTS + 1):
+        stage_user_prompt = user_prompt
+        if contract_error is not None and last_payload is not None:
+            stage_user_prompt = _contract_repair_user_prompt(
+                original_user_prompt=user_prompt,
+                stage=stage,
+                contract_error=contract_error,
+                invalid_payload=last_payload,
+            )
+        payload = stage_session.invoke_json(
+            system_prompt=system_prompt,
+            user_prompt=stage_user_prompt,
+        )
+        last_payload = payload
+        try:
+            return _parse_stage_payload(stage=stage, payload=payload)
+        except RuntimeError as exc:
+            contract_error = str(exc)
+            if attempt_number >= SPECIALIST_STAGE_CONTRACT_ATTEMPTS:
+                raise RetryableSpecialistPlanningContractError(contract_error) from exc
+    raise RetryableSpecialistPlanningContractError(
+        f"{stage.planning_state} payload contract retry exhausted without a parse result"
     )
-    try:
-        if stage.persona_id == "architect":
-            return ArchitectStageOutput.from_payload(
-                planning_state=stage.planning_state,
-                persona_id=stage.persona_id,
-                role_label=stage.role_label,
-                payload=payload,
-            )
-        if stage.persona_id == "security":
-            return SecurityStageOutput.from_payload(
-                planning_state=stage.planning_state,
-                persona_id=stage.persona_id,
-                role_label=stage.role_label,
-                payload=payload,
-            )
-        if stage.persona_id == "qa":
-            return TestingStageOutput.from_payload(
-                planning_state=stage.planning_state,
-                persona_id=stage.persona_id,
-                role_label=stage.role_label,
-                payload=payload,
-            )
-    except RuntimeError as exc:
-        raise RetryableSpecialistPlanningContractError(str(exc)) from exc
+
+
+def _parse_stage_payload(
+    *,
+    stage: _PlanningStageDefinition,
+    payload: dict[str, Any],
+) -> SpecialistPlanningStageResult:
+    if stage.persona_id == "architect":
+        return ArchitectStageOutput.from_payload(
+            planning_state=stage.planning_state,
+            persona_id=stage.persona_id,
+            role_label=stage.role_label,
+            payload=payload,
+        )
+    if stage.persona_id == "security":
+        return SecurityStageOutput.from_payload(
+            planning_state=stage.planning_state,
+            persona_id=stage.persona_id,
+            role_label=stage.role_label,
+            payload=payload,
+        )
+    if stage.persona_id == "qa":
+        return TestingStageOutput.from_payload(
+            planning_state=stage.planning_state,
+            persona_id=stage.persona_id,
+            role_label=stage.role_label,
+            payload=payload,
+        )
     raise CodexRuntimeError(f"Unsupported specialist planning persona '{stage.persona_id}'")
 
 

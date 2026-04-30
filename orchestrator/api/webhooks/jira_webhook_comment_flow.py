@@ -19,6 +19,7 @@ from orchestrator.api.webhooks.contracts import (
 from orchestrator.api.webhooks.jira_parent_child_sync import (
     handle_engineering_clarification_command,
     handle_engineering_clarification_reply,
+    handle_parent_planning_clarification_reply,
     handle_pm_interview_reply,
     is_system_generated_comment,
 )
@@ -325,6 +326,19 @@ def stage_handle_comment_engineering_clarification_reply(
     settings,  # noqa: ANN001
 ) -> dict | None:
     return handle_engineering_clarification_reply(
+        context=context,
+        session=session,
+        settings=settings,
+    )
+
+
+def stage_handle_comment_parent_planning_clarification_reply(
+    *,
+    context: JiraWebhookContext,
+    session: Session,
+    settings,  # noqa: ANN001
+) -> dict | None:
+    return handle_parent_planning_clarification_reply(
         context=context,
         session=session,
         settings=settings,

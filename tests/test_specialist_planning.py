@@ -228,6 +228,8 @@ class SpecialistPlanningTests(unittest.TestCase):
             if "architect" in prompt_name:
                 self.assertIn("mermaid_diagram", prompt_text)
                 self.assertIn("child_ticket_specs", prompt_text)
+                self.assertIn("done_means must never be a single string", prompt_text)
+                self.assertIn("acceptance_criteria, how_to_test, and done_means must be non-empty arrays of strings", prompt_text)
             if prompt_name in user_prompts:
                 self.assertIn('"type":"tool_request"', prompt_text)
                 self.assertIn('"type":"final_response"', prompt_text)
@@ -354,9 +356,94 @@ class SpecialistPlanningTests(unittest.TestCase):
         self.assertIn("Build the invite flow entry point", package["child_issues"][0]["delivery"])
         self.assertIn("Invite flow is available from Profile", package["child_issues"][0]["acceptance_criteria"][0])
 
-    def test_architect_stage_fails_fast_when_child_ticket_spec_is_missing_done_means(self) -> None:
+    def test_architect_stage_retries_contract_violation_and_uses_corrected_payload(self) -> None:
+        prompts: list[str] = []
+
+        def _invoke_runtime_json(*, context, system_prompt, user_prompt, runtime):  # noqa: ANN001
+            _ = (system_prompt, runtime)
+            prompts.append(user_prompt)
+            if context.stage == PLANNING_STATE_ENGINEERING and len(prompts) == 1:
+                return {
+                    "findings": ["Architecture should split invite creation from delivery"],
+                    "recommendations": ["Use a dedicated invite service"],
+                    "required_tasks": ["Build invite service"],
+                    "child_ticket_specs": [
+                        {
+                            "summary": "Create invite service",
+                            "capability": "Invite creation and delivery",
+                            "delivery": "Build the invite flow entry point and service so users can create and send app invites from Profile.",
+                            "expected_outcome": "Users can create and send invites without leaving Profile.",
+                            "acceptance_criteria": ["Invite flow is available from Profile"],
+                            "how_to_test": ["Run invite flow integration tests"],
+                            "done_means": [],
+                            "dependencies": [],
+                            "risks": [],
+                            "labels": ["engineering"],
+                        }
+                    ],
+                    "open_behavior_questions": [],
+                    "acceptance_impacts": ["Invite flow works from Profile"],
+                    "mermaid_diagram": "flowchart TD\n  Share[Share entry] --> InviteService[Invite service]",
+                }
+            if context.stage == PLANNING_STATE_ENGINEERING:
+                return {
+                    "findings": ["Architecture should split invite creation from delivery"],
+                    "recommendations": ["Use a dedicated invite service"],
+                    "required_tasks": ["Build invite service"],
+                    "child_ticket_specs": [
+                        {
+                            "summary": "Create invite service",
+                            "capability": "Invite creation and delivery",
+                            "delivery": "Build the invite flow entry point and service so users can create and send app invites from Profile.",
+                            "expected_outcome": "Users can create and send invites without leaving Profile.",
+                            "acceptance_criteria": ["Invite flow is available from Profile"],
+                            "how_to_test": ["Run invite flow integration tests"],
+                            "done_means": ["Invite service is implemented with end-to-end verification"],
+                            "dependencies": [],
+                            "risks": [],
+                            "labels": ["engineering"],
+                        }
+                    ],
+                    "open_behavior_questions": [],
+                    "acceptance_impacts": ["Invite flow works from Profile"],
+                    "mermaid_diagram": "flowchart TD\n  Share[Share entry] --> InviteService[Invite service]",
+                }
+            return {
+                "findings": [],
+                "recommendations": [],
+                "required_tasks": [],
+                "open_behavior_questions": [],
+                "acceptance_impacts": [],
+            }
+
+        with (
+            patch("orchestrator.core.specialist_planning.render_prompt", return_value="prompt"),
+            patch("orchestrator.core.runtime_stage_session.invoke_runtime_json", side_effect=_invoke_runtime_json),
+        ):
+            result = run_specialist_planning_fanout(
+                runtime=SimpleNamespace(),
+                request=self._request(),
+                runtime_for_selector=lambda _selector: SimpleNamespace(),
+            )
+
+        self.assertEqual(result.planning_state, PLANNING_STATE_COMPLETED)
+        self.assertEqual(
+            result.stages[0].child_ticket_specs[0].done_means,
+            ("Invite service is implemented with end-to-end verification",),
+        )
+        self.assertIn("CONTRACT REPAIR REQUIRED", prompts[1])
+        self.assertIn(
+            "engineering_planning child_ticket_specs[1] with empty done_means; expected a non-empty array of strings",
+            prompts[1],
+        )
+        self.assertIn("done_means must be a non-empty array of strings, not a single string", prompts[1])
+
+    def test_architect_stage_fails_hard_when_child_ticket_spec_repair_is_still_missing_done_means(self) -> None:
+        calls: list[str] = []
+
         def _invoke_runtime_json(*, context, system_prompt, user_prompt, runtime):  # noqa: ANN001
             _ = (system_prompt, user_prompt, runtime)
+            calls.append(context.stage)
             if context.stage == PLANNING_STATE_ENGINEERING:
                 return {
                     "findings": ["Architecture should split invite creation from delivery"],
@@ -394,13 +481,14 @@ class SpecialistPlanningTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(
                 RetryableSpecialistPlanningContractError,
-                "engineering_planning child_ticket_specs\\[1\\] without done_means",
+                "engineering_planning child_ticket_specs\\[1\\] with empty done_means",
             ):
                 run_specialist_planning_fanout(
                     runtime=SimpleNamespace(),
                     request=self._request(),
                     runtime_for_selector=lambda _selector: SimpleNamespace(),
                 )
+        self.assertEqual(calls, [PLANNING_STATE_ENGINEERING, PLANNING_STATE_ENGINEERING])
 
 
 if __name__ == "__main__":

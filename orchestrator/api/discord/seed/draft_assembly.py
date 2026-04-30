@@ -428,6 +428,22 @@ class EngineeringChildDraft:
     labels: list[str]
     requested_issue_key: str | None
 
+    def with_issue_type(self, issue_type: str) -> EngineeringChildDraft:
+        return EngineeringChildDraft(
+            summary=self.summary,
+            issue_type=issue_type,
+            capability=self.capability,
+            delivery=self.delivery,
+            expected_outcome=self.expected_outcome,
+            acceptance_criteria=list(self.acceptance_criteria),
+            dependencies=list(self.dependencies),
+            risks=list(self.risks),
+            how_to_test=list(self.how_to_test),
+            done_means=list(self.done_means),
+            labels=list(self.labels),
+            requested_issue_key=self.requested_issue_key,
+        )
+
     def to_jira_input(
         self,
         *,
@@ -492,6 +508,7 @@ def parse_engineering_seed_drafts(
     allow_empty_children: bool = False,
     pm_status: str | None = None,
     planning_package: dict[str, Any] | None = None,
+    required_child_issue_type: str | None = None,
 ) -> EngineeringSeedDraftSet:
     clarification_questions = _parse_questions(plan_payload.get("questions"))
     effective_pm_status = _normalized_status(pm_status or plan_payload.get("pm_status") or plan_payload.get("interview_status"))
@@ -518,6 +535,7 @@ def parse_engineering_seed_drafts(
         force_issue_keys=force_issue_keys,
         issue_key_pattern=issue_key_pattern,
         allow_empty_children=allow_empty_child_drafts,
+        required_child_issue_type=required_child_issue_type,
     )
     return EngineeringSeedDraftSet(
         parent_issue=parent_issue,
@@ -653,6 +671,7 @@ def _parse_engineering_children(
     force_issue_keys: list[str],
     issue_key_pattern,
     allow_empty_children: bool = False,
+    required_child_issue_type: str | None = None,
 ) -> list[EngineeringChildDraft]:  # noqa: ANN001
     if not isinstance(raw_children, list):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Codex did not return engineering_children")
@@ -701,10 +720,17 @@ def _parse_engineering_children(
                 detail=f"Engineering child {issue_index} is missing done_means",
             )
         raw_issue_type = _optional_string(issue_index=issue_index, field_name="issue_type", raw_value=item.get("issue_type"))
-        if raw_issue_type and raw_issue_type.strip().casefold() not in {"sub-task", "subtask"}:
+        if not raw_issue_type and required_child_issue_type:
+            raw_issue_type = required_child_issue_type
+        if not raw_issue_type:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=f"Engineering child {issue_index} must use Jira issue_type 'Sub-task'",
+                detail=f"Engineering child {issue_index} is missing Jira issue_type",
+            )
+        if raw_issue_type.strip().casefold() not in {"sub-task", "subtask"}:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Engineering child {issue_index} must use a Jira subtask issue type",
             )
         requested_issue_key = _normalize_issue_key(
             item.get("issue_key"),
@@ -717,7 +743,7 @@ def _parse_engineering_children(
         children.append(
             EngineeringChildDraft(
                 summary=summary[:90],
-                issue_type="Sub-task",
+                issue_type=raw_issue_type.strip(),
                 capability=_optional_string(issue_index=issue_index, field_name="capability", raw_value=item.get("capability")),
                 delivery=delivery,
                 expected_outcome=_optional_string(issue_index=issue_index, field_name="expected_outcome", raw_value=item.get("expected_outcome")),

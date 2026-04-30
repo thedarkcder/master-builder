@@ -17,6 +17,8 @@ from orchestrator.core.workflow_operation_service import (
     complete_workflow_operation,
     fail_workflow_operation,
     mark_workflow_operation_waiting_for_input,
+    OPERATION_STATUS_PENDING,
+    OPERATION_STATUS_RUNNING,
     start_workflow_operation_attempt,
     upsert_workflow_operation,
 )
@@ -96,6 +98,22 @@ def _normalize_source_description(source_description: object | None) -> str | No
     return str(source_description)
 
 
+def _descendant_operation_types(*, workflow_type: WorkflowDefinition, operation_type: str) -> set[str]:
+    normalized = str(operation_type or "").strip()
+    descendants: set[str] = set()
+    changed = True
+    while changed:
+        changed = False
+        for definition in workflow_type.steps:
+            if definition.key == normalized or definition.key in descendants:
+                continue
+            dependencies = {str(dependency or "").strip() for dependency in definition.after}
+            if normalized in dependencies or descendants.intersection(dependencies):
+                descendants.add(definition.key)
+                changed = True
+    return descendants
+
+
 @dataclass
 class WorkflowExecutionProjection:
     session: Session
@@ -114,24 +132,49 @@ class WorkflowExecutionProjection:
                 summary=definition.description,
             )
 
-    def _operation(self, operation_type: str) -> WorkflowOperation:
+    def _operation(
+        self,
+        operation_type: str,
+        *,
+        run_id: str | None = None,
+        idempotency_key: str | None = None,
+        target_system: str | None = None,
+        target_ref: str | None = None,
+        summary: str | None = None,
+    ) -> WorkflowOperation:
         self.workflow_type.step(operation_type)
+        normalized_idempotency_key = str(idempotency_key or "").strip() or f"workflow-definition:{operation_type}"
         operation = self.session.execute(
             select(WorkflowOperation).where(
                 WorkflowOperation.workflow_id == self.workflow.workflow_id,
-                WorkflowOperation.operation_type == operation_type,
+                WorkflowOperation.idempotency_key == normalized_idempotency_key,
             )
         ).scalar_one_or_none()
         if operation is None:
+            default_target_system = _target_system_for_operation(operation_type)
+            resolved_target_ref = (
+                target_ref
+                if target_ref is not None
+                else self.workflow.source_ref
+                if default_target_system
+                else None
+            )
             operation = upsert_workflow_operation(
                 self.session,
                 workflow_id=self.workflow.workflow_id,
                 operation_type=operation_type,
-                idempotency_key=f"workflow-definition:{operation_type}",
-                target_system=_target_system_for_operation(operation_type),
-                target_ref=self.workflow.source_ref if _target_system_for_operation(operation_type) else None,
-                summary=None,
+                idempotency_key=normalized_idempotency_key,
+                run_id=run_id,
+                target_system=target_system if target_system is not None else default_target_system,
+                target_ref=resolved_target_ref,
+                summary=summary,
             )
+        else:
+            operation.run_id = run_id or operation.run_id
+            operation.target_system = target_system or operation.target_system
+            operation.target_ref = target_ref or operation.target_ref
+            operation.summary = summary or operation.summary
+            operation.updated_at = _now()
         return operation
 
     def mark_running(self) -> None:
@@ -140,10 +183,53 @@ class WorkflowExecutionProjection:
     def mark_workflow_waiting_for_input(self) -> None:
         mark_workflow_waiting_for_input(workflow=self.workflow, now=_now())
 
-    def start_operation_attempt(self, *, operation_type: str) -> tuple[WorkflowOperation, WorkflowOperationAttempt]:
-        operation = self._operation(operation_type)
+    def start_operation_attempt(
+        self,
+        *,
+        operation_type: str,
+        run_id: str | None = None,
+        idempotency_key: str | None = None,
+        target_system: str | None = None,
+        target_ref: str | None = None,
+        summary: str | None = None,
+    ) -> tuple[WorkflowOperation, WorkflowOperationAttempt]:
+        self._invalidate_descendant_operations(operation_type=operation_type)
+        operation = self._operation(
+            operation_type,
+            run_id=run_id,
+            idempotency_key=idempotency_key,
+            target_system=target_system,
+            target_ref=target_ref,
+            summary=summary,
+        )
         attempt = start_workflow_operation_attempt(self.session, operation=operation)
+        self.mark_running()
+        self.session.commit()
         return operation, attempt
+
+    def _invalidate_descendant_operations(self, *, operation_type: str) -> None:
+        descendant_types = _descendant_operation_types(workflow_type=self.workflow_type, operation_type=operation_type)
+        if not descendant_types:
+            return
+        operations = self.session.execute(
+            select(WorkflowOperation).where(
+                WorkflowOperation.workflow_id == self.workflow.workflow_id,
+                WorkflowOperation.operation_type.in_(descendant_types),
+            )
+        ).scalars()
+        definitions = {definition.key: definition for definition in self.workflow_type.steps}
+        now = _now()
+        for operation in operations:
+            if str(operation.status or "").strip().lower() == OPERATION_STATUS_RUNNING:
+                raise RuntimeError(
+                    "Cannot start workflow operation "
+                    f"{operation_type}; dependent operation {operation.operation_type} is already running."
+                )
+            operation.status = OPERATION_STATUS_PENDING
+            operation.summary = definitions.get(operation.operation_type).description if operation.operation_type in definitions else None
+            operation.started_at = None
+            operation.finished_at = None
+            operation.updated_at = now
 
     def complete_started_operation(self, *, operation: WorkflowOperation, attempt: WorkflowOperationAttempt, summary: str) -> None:
         complete_workflow_operation(
@@ -153,6 +239,7 @@ class WorkflowExecutionProjection:
             summary=summary,
         )
         self.mark_completed_if_ready()
+        self.session.commit()
 
     def fail_started_operation(
         self,
@@ -170,6 +257,7 @@ class WorkflowExecutionProjection:
             message=message,
         )
         mark_workflow_failed(workflow=self.workflow, message=message, now=_now())
+        self.session.commit()
 
     def wait_started_operation(
         self,
@@ -185,6 +273,7 @@ class WorkflowExecutionProjection:
             summary=summary,
         )
         mark_workflow_waiting_for_input(workflow=self.workflow, now=_now())
+        self.session.commit()
 
     def mark_completed_if_ready(self) -> None:
         recompute_workflow_status(session=self.session, workflow=self.workflow, now=_now())
@@ -247,7 +336,6 @@ def ensure_workflow_execution(
         workflow.updated_at = now
     projection = WorkflowExecutionProjection(session=session, workflow=workflow, workflow_type=workflow_type)
     projection.ensure_operations()
-    projection.mark_running()
     return projection
 
 

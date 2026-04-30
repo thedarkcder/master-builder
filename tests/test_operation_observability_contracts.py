@@ -8,7 +8,8 @@ import pytest
 from orchestrator.core.audit_events import record_audit_event
 from orchestrator.core.observability_stream import record_observability_stream_event
 from orchestrator.core.product_events import list_product_events, reset_event_store_for_tests
-from orchestrator.core.runtime_invocation import AgentInvocationContext, _emit_invocation_event
+from orchestrator.core.runtime_invocation import AgentInvocationContext, _emit_invocation_event, invoke_runtime_json
+from orchestrator.core.workflow_step_runner import start_workflow_step_attempt
 from orchestrator.core.workflow_execution_projection import (
     WorkflowExecutionReference,
     WorkflowSourceReference,
@@ -16,7 +17,7 @@ from orchestrator.core.workflow_execution_projection import (
 )
 from orchestrator.storage.db import create_session_factory
 from orchestrator.core.workflow_type_catalog import get_workflow_type
-from orchestrator.storage.models import Run
+from orchestrator.storage.models import Project, Run, Tenant, WorkflowOperationAttempt
 from tests.test_support.db_harness import SqliteTemplateDbTestCase
 
 
@@ -156,6 +157,110 @@ class OperationObservabilityContractTests(SqliteTemplateDbTestCase):
         assert "run-scoped-1" in persisted_sql
         assert "stage_request" in persisted_sql
         assert "inv-run-scoped" in persisted_sql
+
+    def test_operation_runtime_log_lines_use_committed_attempt_identity(self) -> None:
+        session_factory = create_session_factory(self.database_url)
+        executed_sql: list[str] = []
+
+        class _FakeStore:
+            def execute(self, sql: str) -> str:
+                executed_sql.append(sql)
+                return ""
+
+        class _Runtime:
+            model = "test-model"
+            command = "test-runtime"
+
+            def run_json(self, **kwargs):  # noqa: ANN003
+                kwargs["on_log_line"]("stdout", "runtime line attached to uncommitted attempt")
+                return {"ok": True}
+
+        with pytest.MonkeyPatch.context() as monkeypatch:
+            monkeypatch.setattr(
+                "orchestrator.core.runtime_invocation.get_settings",
+                lambda: SimpleNamespace(database_url=self.database_url, agent_id="agent-test"),
+            )
+            monkeypatch.setattr("orchestrator.core.product_events.event_store", lambda: _FakeStore())
+            monkeypatch.setattr("orchestrator.core.product_events.publish_product_event_notification", lambda **_kwargs: None)
+            with session_factory() as session:
+                now = datetime.now(timezone.utc)
+                session.add_all(
+                    [
+                        Tenant(
+                            tenant_id="tenant-runtime",
+                            name="Tenant Runtime",
+                            is_enabled=True,
+                            jira_config={},
+                            github_config={},
+                            repos_config={},
+                            policy_config={},
+                            discord_config={},
+                            experience_config={},
+                            setup_state={},
+                            created_at=now,
+                            updated_at=now,
+                        ),
+                        Project(
+                            project_id="project-runtime",
+                            tenant_id="tenant-runtime",
+                            name="Project Runtime",
+                            github_repository="example/project-runtime",
+                            jira_project_key="MAB",
+                            policy_overrides={},
+                            environment={},
+                            secret_refs={},
+                            discord_config=None,
+                            is_archived=False,
+                            created_at=now,
+                            updated_at=now,
+                        ),
+                    ]
+                )
+                workflow_type = get_workflow_type(session, workflow_type_key="parent_planning")
+                projection = ensure_workflow_execution(
+                    session=session,
+                    workflow_type=workflow_type,
+                    tenant_id="tenant-runtime",
+                    project_id="project-runtime",
+                    execution=WorkflowExecutionReference(
+                        key="MAB-901",
+                        source=WorkflowSourceReference(source_system="jira", source_ref="MAB-901"),
+                    ),
+                    display_name="Operation runtime telemetry",
+                    description="Runtime invocation with operation attempt",
+                )
+                step = start_workflow_step_attempt(lifecycle=projection, operation_type="backlog_planning")
+                with session_factory() as observer_session:
+                    committed_attempt = observer_session.get(WorkflowOperationAttempt, step.attempt_id)
+                    assert committed_attempt is not None
+                    assert committed_attempt.status == "running"
+
+                payload = invoke_runtime_json(
+                    runtime=_Runtime(),  # type: ignore[arg-type]
+                    context=AgentInvocationContext(
+                        channel="system",
+                        tenant_id="tenant-runtime",
+                        project_id="project-runtime",
+                        command="pm",
+                        stage="engineering_planning",
+                        working_dir=".",
+                        workflow_id=step.workflow_id,
+                        operation_id=step.operation_id,
+                        attempt_id=step.attempt_id,
+                        attempt=step.attempt_number,
+                        invocation_id="inv-uncommitted-attempt",
+                        issue_key="MAB-901",
+                        db_session=session,
+                    ),
+                    system_prompt="system",
+                    user_prompt="user",
+                )
+
+        assert payload == {"ok": True}
+        persisted_sql = "\n".join(executed_sql)
+        assert "runtime line attached to uncommitted attempt" in persisted_sql
+        assert step.operation_id in persisted_sql
+        assert step.attempt_id in persisted_sql
 
     def test_clickhouse_naive_timestamp_is_returned_as_utc_aware_iso(self) -> None:
         class _FakeStore:

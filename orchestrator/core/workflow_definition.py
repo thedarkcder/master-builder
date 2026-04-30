@@ -19,6 +19,7 @@ class WorkflowStepDefinition:
     label: str
     kind: WorkflowStepKind
     after: tuple[str, ...] = ()
+    supports: tuple[str, ...] = ()
     required: bool = True
     retryable: bool = False
     description: str | None = None
@@ -80,22 +81,21 @@ def workflow_step(
     label: str,
     kind: WorkflowStepKind,
     after: str | Iterable[str] = (),
+    supports: str | Iterable[str] = (),
     required: bool = True,
     retryable: bool = False,
     description: str | None = None,
 ) -> Callable:
     if not isinstance(kind, WorkflowStepKind):
         raise ValueError("Workflow step kind must be a WorkflowStepKind enum value")
-    normalized_after: tuple[str, ...]
-    if isinstance(after, str):
-        normalized_after = (after,) if after.strip() else ()
-    else:
-        normalized_after = tuple(_normalize_key(value, field_name="step dependency") for value in after)
+    normalized_after = _normalize_key_tuple(after, field_name="step dependency")
+    normalized_supports = _normalize_key_tuple(supports, field_name="step support owner")
     definition = WorkflowStepDefinition(
         key=_normalize_key(key, field_name="step key"),
         label=_normalize_key(label, field_name="step label"),
         kind=kind,
         after=normalized_after,
+        supports=normalized_supports,
         required=required,
         retryable=retryable,
         description=str(description).strip() if description is not None and str(description).strip() else None,
@@ -107,6 +107,12 @@ def workflow_step(
         return fn
 
     return _decorate
+
+
+def _normalize_key_tuple(value: str | Iterable[str], *, field_name: str) -> tuple[str, ...]:
+    if isinstance(value, str):
+        return (_normalize_key(value, field_name=field_name),) if value.strip() else ()
+    return tuple(_normalize_key(item, field_name=field_name) for item in value)
 
 
 def infer_workflow_steps(workflow_cls: type) -> tuple[WorkflowStepDefinition, ...]:
@@ -131,6 +137,11 @@ def _topological_steps(discovered: list[WorkflowStepDefinition]) -> tuple[Workfl
         for dependency in definition.after:
             if dependency not in by_key:
                 raise ValueError(f"Workflow step {definition.key} depends on unknown step {dependency}")
+        for owner in definition.supports:
+            if owner not in by_key:
+                raise ValueError(f"Workflow step {definition.key} supports unknown step {owner}")
+            if owner == definition.key:
+                raise ValueError(f"Workflow step {definition.key} cannot support itself")
 
     ordered: list[WorkflowStepDefinition] = []
     visiting: set[str] = set()
@@ -158,6 +169,7 @@ def _topological_steps(discovered: list[WorkflowStepDefinition]) -> tuple[Workfl
             label=definition.label,
             kind=definition.kind,
             after=definition.after,
+            supports=definition.supports,
             required=definition.required,
             retryable=definition.retryable,
             description=definition.description,

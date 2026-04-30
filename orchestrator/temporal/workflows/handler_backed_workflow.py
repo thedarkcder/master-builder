@@ -33,7 +33,11 @@ class HandlerBackedWorkflow:
         self._activity_timeout_seconds: int = 7200
 
     @staticmethod
-    def _activity_retry_policy(payload: HandlerWorkflowAdvanceInput) -> RetryPolicy | None:
+    def _activity_retry_policy(
+        payload: HandlerWorkflowAdvanceInput | WorkflowOperationRetryInput,
+        *,
+        non_retryable_error_types: tuple[str, ...],
+    ) -> RetryPolicy | None:
         max_attempts = max(1, int(payload.retry_max_attempts or 1))
         if max_attempts <= 1:
             return None
@@ -44,7 +48,7 @@ class HandlerBackedWorkflow:
             maximum_interval=timedelta(seconds=max_interval_seconds),
             backoff_coefficient=max(1.0, float(payload.retry_backoff_coefficient or 1.0)),
             maximum_attempts=max_attempts,
-            non_retryable_error_types=("terminal_workflow_advance_error",),
+            non_retryable_error_types=non_retryable_error_types,
         )
 
     def _apply_advance_result(self, result: HandlerWorkflowAdvanceResult) -> None:
@@ -62,7 +66,10 @@ class HandlerBackedWorkflow:
             process_handler_workflow_advance_activity,
             payload,
             start_to_close_timeout=timedelta(seconds=self._activity_timeout_seconds),
-            retry_policy=self._activity_retry_policy(payload),
+            retry_policy=self._activity_retry_policy(
+                payload,
+                non_retryable_error_types=("terminal_workflow_advance_error",),
+            ),
         )
 
     async def _retry_operation(self, payload: WorkflowOperationRetryInput) -> WorkflowOperationRetryResult:
@@ -70,6 +77,10 @@ class HandlerBackedWorkflow:
             retry_handler_workflow_operation_activity,
             payload,
             start_to_close_timeout=timedelta(seconds=self._activity_timeout_seconds),
+            retry_policy=self._activity_retry_policy(
+                payload,
+                non_retryable_error_types=("terminal_workflow_operation_retry_error",),
+            ),
         )
 
     @workflow.run

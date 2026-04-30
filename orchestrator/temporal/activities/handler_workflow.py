@@ -14,6 +14,7 @@ from orchestrator.core.workflow_advance import (
 )
 from orchestrator.core.workflow_execution_projection import WorkflowExecutionReference, WorkflowSourceReference
 from orchestrator.core.workflow_operation_retry_use_case import retry_workflow_operation_with_registered_handler
+from orchestrator.core.workflow_operation_service import WorkflowOperationAttemptAlreadyRunningError
 from orchestrator.core.workflow_type_catalog import get_workflow_type_by_handler_key
 from orchestrator.runtime.installed_workflow_handlers import build_runtime_workflow_handler_registry
 from orchestrator.storage.db import create_session_factory
@@ -82,6 +83,7 @@ def process_handler_workflow_advance_activity(
                 resolve_advance_handler_fn=handler_registry.resolve_advance_handler,
             )
         except RetryableSpecialistPlanningContractError as exc:
+            session.commit()
             raise ApplicationError(
                 str(exc),
                 type="retryable_invalid_model_output",
@@ -135,7 +137,17 @@ def retry_handler_workflow_operation_activity(payload: WorkflowOperationRetryInp
                 operation=operation,
                 handler_registry=handler_registry,
             )
-        except (InvalidWorkflowOperationRetryError, UnsupportedWorkflowOperationRetryError) as exc:
+        except RetryableSpecialistPlanningContractError as exc:
+            session.commit()
+            raise ApplicationError(
+                str(exc),
+                type="retryable_invalid_model_output",
+            ) from exc
+        except (
+            InvalidWorkflowOperationRetryError,
+            UnsupportedWorkflowOperationRetryError,
+            WorkflowOperationAttemptAlreadyRunningError,
+        ) as exc:
             raise ApplicationError(
                 str(exc),
                 type="terminal_workflow_operation_retry_error",

@@ -19,6 +19,7 @@ from orchestrator.temporal.payloads import (
     HandlerWorkflowAdvanceResult,
     HumanInputResumeInput,
     WorkflowOperationRetryInput,
+    WorkflowOperationRetryResult,
 )
 from orchestrator.temporal.workflow_engine import TemporalWorkflowConfig, TemporalWorkflowEngine
 from orchestrator.temporal.workflows.development_team_run import DevelopmentTeamRunWorkflow
@@ -256,6 +257,91 @@ def test_temporal_engine_advances_handler_backed_workflow_through_temporal_updat
     assert captured["update_payload"].retry_backoff_coefficient == 2.0
 
 
+def test_temporal_engine_handler_retry_returns_after_update_is_accepted(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class _FakeHandle:
+        async def start_update(self, update_method, payload, *, wait_for_stage):
+            captured["update_method"] = update_method
+            captured["update_payload"] = payload
+            captured["wait_for_stage"] = wait_for_stage
+
+        async def execute_update(self, *_args, **_kwargs):
+            raise AssertionError("manual retry must not wait for operation completion")
+
+    class _FakeClient:
+        async def start_workflow(self, run_method, payload, **kwargs):
+            captured["run_method"] = run_method
+            captured["run_payload"] = payload
+            captured["start_kwargs"] = kwargs
+            return _FakeHandle()
+
+    async def _connect(_settings):
+        return _FakeClient()
+
+    config = TemporalWorkflowConfig(
+        workflow_defn=SimpleNamespace(run="workflow-run", retry_operation="workflow-retry"),
+        execution_mode="handler",
+        task_queue="custom-queue",
+        workflow_execution_timeout_seconds=111,
+        workflow_run_timeout_seconds=222,
+        activity_start_to_close_timeout_seconds=333,
+        human_input_resume_timeout_seconds=444,
+        retry_max_attempts=4,
+        retry_initial_interval_seconds=5,
+        retry_max_interval_seconds=30,
+        retry_backoff_coefficient=2.0,
+    )
+
+    monkeypatch.setattr("orchestrator.temporal.workflow_engine.connect_temporal_client", _connect)
+    monkeypatch.setattr(
+        "orchestrator.temporal.workflow_engine._temporal_config_for_workflow",
+        lambda **kwargs: config,
+    )
+    monkeypatch.setattr(
+        "orchestrator.temporal.workflow_engine.get_workflow_type",
+        lambda session, workflow_type_key: SimpleNamespace(handler_key="jira_parent_feature"),
+    )
+
+    engine = TemporalWorkflowEngine(
+        process_claimed_run_fn=lambda **kwargs: None,
+        build_runner_fn=lambda **kwargs: None,
+        runtime_kwargs_fn=lambda **kwargs: {},
+        workflow_handler_registry=None,
+    )
+    workflow = SimpleNamespace(
+        workflow_id="parent_planning:MAB-233",
+        workflow_type_key="parent_planning",
+    )
+    operation = SimpleNamespace(
+        operation_id="operation-backlog-planning",
+        operation_type="backlog_planning",
+        status="failed",
+    )
+
+    handle = engine.retry_workflow_operation(
+        session=SimpleNamespace(),
+        settings=SimpleNamespace(),
+        session_factory=SimpleNamespace(),
+        workflow=workflow,
+        operation=operation,
+    )
+
+    assert handle.operation_id == operation.operation_id
+    assert handle.workflow_id == workflow.workflow_id
+    assert handle.operation_type == operation.operation_type
+    assert handle.status == "failed"
+    assert captured["update_method"] == "workflow-retry"
+    assert captured["wait_for_stage"].name == "ACCEPTED"
+    payload = captured["update_payload"]
+    assert payload.workflow_id == workflow.workflow_id
+    assert payload.operation_id == operation.operation_id
+    assert payload.retry_max_attempts == 4
+    assert payload.retry_initial_interval_seconds == 5
+    assert payload.retry_max_interval_seconds == 30
+    assert payload.retry_backoff_coefficient == 2.0
+
+
 def test_handler_backed_workflow_advances_with_single_activity_input(monkeypatch):
     captured: dict[str, object] = {}
     workflow_defn = HandlerBackedWorkflow()
@@ -403,6 +489,50 @@ def test_handler_backed_workflow_advance_uses_retry_policy_from_payload(monkeypa
     assert retry_policy.maximum_interval == timedelta(seconds=30)
     assert retry_policy.backoff_coefficient == 2.0
     assert retry_policy.non_retryable_error_types == ("terminal_workflow_advance_error",)
+
+
+def test_handler_backed_workflow_operation_retry_uses_retry_policy_from_payload(monkeypatch):
+    captured: dict[str, object] = {}
+    workflow_defn = HandlerBackedWorkflow()
+    workflow_defn._activity_timeout_seconds = 321
+
+    async def _fake_execute_activity(fn, payload, *, start_to_close_timeout, retry_policy=None):  # noqa: ANN001
+        captured["fn"] = fn
+        captured["payload"] = payload
+        captured["timeout"] = start_to_close_timeout
+        captured["retry_policy"] = retry_policy
+        return WorkflowOperationRetryResult(
+            operation_id="operation-backlog-planning",
+            workflow_id="parent_planning:MAB-233",
+            operation_type="backlog_planning",
+            operation_status="running",
+            workflow_status="running",
+        )
+
+    monkeypatch.setattr(
+        "orchestrator.temporal.workflows.handler_backed_workflow.workflow.execute_activity",
+        _fake_execute_activity,
+    )
+
+    payload = WorkflowOperationRetryInput(
+        workflow_id="parent_planning:MAB-233",
+        operation_id="operation-backlog-planning",
+        retry_max_attempts=4,
+        retry_initial_interval_seconds=5,
+        retry_max_interval_seconds=30,
+        retry_backoff_coefficient=2.0,
+    )
+
+    result = asyncio.run(workflow_defn.retry_operation(payload))
+
+    assert result.operation_status == "running"
+    retry_policy = captured["retry_policy"]
+    assert retry_policy is not None
+    assert retry_policy.maximum_attempts == 4
+    assert retry_policy.initial_interval == timedelta(seconds=5)
+    assert retry_policy.maximum_interval == timedelta(seconds=30)
+    assert retry_policy.backoff_coefficient == 2.0
+    assert retry_policy.non_retryable_error_types == ("terminal_workflow_operation_retry_error",)
 
 
 def test_process_handler_workflow_advance_activity_raises_retryable_application_error(monkeypatch):
@@ -607,6 +737,67 @@ def test_retry_handler_workflow_operation_activity_dispatches_projectless_workfl
     assert result.operation_status == "retrying"
     assert captured["kwargs"]["handler_registry"] is registry
     assert captured["committed"] is True
+
+
+def test_retry_handler_workflow_operation_activity_raises_retryable_application_error(monkeypatch):
+    workflow = SimpleNamespace(
+        workflow_id="parent_planning:MAB-233",
+        workflow_type_key="parent_planning",
+        tenant_id="tenant-a",
+        project_id="project-a",
+        status="failed",
+        active_run_id=None,
+        last_error="operation failed",
+    )
+    operation = SimpleNamespace(
+        operation_id="operation-backlog-planning",
+        workflow_id=workflow.workflow_id,
+        operation_type="backlog_planning",
+    )
+    registry = SimpleNamespace(resolve_operation_retry_handler=lambda _handler_key: None)
+
+    class _RetrySession:
+        def get(self, model, key):
+            model_name = getattr(model, "__name__", "")
+            if model_name == "WorkflowExecution":
+                return workflow if key == workflow.workflow_id else None
+            if model_name == "WorkflowOperation":
+                return operation if key == operation.operation_id else None
+            raise AssertionError(f"Unexpected model lookup {model_name}")
+
+        def commit(self):
+            pass
+
+    monkeypatch.setattr(
+        "orchestrator.temporal.activities.handler_workflow.get_settings",
+        lambda: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        "orchestrator.temporal.activities.handler_workflow.create_session_factory",
+        lambda: lambda: _FakeSessionContextManager(session=_RetrySession()),
+    )
+    monkeypatch.setattr(
+        "orchestrator.temporal.activities.handler_workflow.build_runtime_workflow_handler_registry",
+        lambda **kwargs: registry,
+    )
+    monkeypatch.setattr(
+        "orchestrator.temporal.activities.handler_workflow.retry_workflow_operation_with_registered_handler",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            RetryableSpecialistPlanningContractError(
+                "Codex returned engineering_planning child_ticket_specs[1] without done_means"
+            )
+        ),
+    )
+
+    from orchestrator.temporal.activities.handler_workflow import retry_handler_workflow_operation_activity
+
+    with pytest.raises(ApplicationError) as exc_info:
+        retry_handler_workflow_operation_activity(
+            WorkflowOperationRetryInput(workflow_id=workflow.workflow_id, operation_id=operation.operation_id)
+        )
+
+    assert exc_info.value.type == "retryable_invalid_model_output"
+    assert exc_info.value.non_retryable is False
 
 
 def test_temporal_registry_includes_parent_planning_and_pr_remediation():

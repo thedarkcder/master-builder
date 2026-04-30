@@ -9,11 +9,16 @@ from temporalio import activity
 
 from orchestrator.core.config import get_settings
 from orchestrator.core.run_human_input_service import _resume_workflow_from_human_input_answer_legacy
-from orchestrator.core.workflow_operation_service import (
-    complete_workflow_operation,
-    fail_workflow_operation,
-    start_workflow_operation_attempt,
-    upsert_workflow_operation,
+from orchestrator.core.workflow_execution_projection import WorkflowExecutionProjection
+from orchestrator.core.workflow_step_runner import (
+    complete_workflow_step_attempt,
+    fail_workflow_step_attempt,
+    start_workflow_step_attempt,
+)
+from orchestrator.core.workflow_type_catalog import (
+    ISSUE_EXECUTION_STEP_HUMAN_INPUT_RESUME,
+    ISSUE_EXECUTION_STEP_RUN_ATTEMPT_EXECUTION,
+    get_workflow_type,
 )
 from orchestrator.core.worker.execution_service import build_run_process_kwargs
 from orchestrator.core.worker.run_lifecycle import claim_run_for_dispatch
@@ -72,17 +77,17 @@ def execute_claimed_run_activity(payload: DevelopmentTeamRunWorkflowInput) -> De
         if tenant is None:
             raise RuntimeError(f"Temporal run activity missing tenant {run.tenant_id}")
 
-        operation = upsert_workflow_operation(
-            session,
-            workflow_id=workflow.workflow_id,
+        workflow_type = get_workflow_type(session, workflow_type_key=workflow.workflow_type_key)
+        lifecycle = WorkflowExecutionProjection(session=session, workflow=workflow, workflow_type=workflow_type)
+        step = start_workflow_step_attempt(
+            lifecycle=lifecycle,
             run_id=run.run_id,
-            operation_type="run_attempt_execution",
+            operation_type=ISSUE_EXECUTION_STEP_RUN_ATTEMPT_EXECUTION,
             idempotency_key=f"run-attempt:{run.run_id}",
             target_system="workflow_engine",
             target_ref=run.run_id,
             summary=f"Execute run attempt {run.attempt_number}",
         )
-        attempt = start_workflow_operation_attempt(session, operation=operation)
         session.commit()
 
         try:
@@ -100,20 +105,18 @@ def execute_claimed_run_activity(payload: DevelopmentTeamRunWorkflowInput) -> De
             )
             if processed is None:
                 raise RuntimeError(f"Temporal run activity returned no run for workflow_id={workflow.workflow_id}")
-            complete_workflow_operation(
-                session,
-                operation=operation,
-                attempt=attempt,
+            complete_workflow_step_attempt(
+                lifecycle=lifecycle,
+                step=step,
                 summary=f"Run attempt {processed.run_id} finished with status {processed.status}",
             )
             session.commit()
             return _result_for_run(session=session, workflow_id=workflow.workflow_id, run=processed)
         except Exception as exc:  # noqa: BLE001
             logger.exception("temporal_run_execute_failed workflow_id=%s run_id=%s", workflow.workflow_id, run.run_id)
-            fail_workflow_operation(
-                session,
-                operation=operation,
-                attempt=attempt,
+            fail_workflow_step_attempt(
+                lifecycle=lifecycle,
+                step=step,
                 category="run_execution_failed",
                 message=str(exc),
             )
@@ -132,17 +135,17 @@ def resume_human_input_activity(payload: HumanInputResumeInput) -> DevelopmentTe
         workflow = session.get(WorkflowExecution, str(request.workflow_id))
         if workflow is None:
             raise RuntimeError(f"Temporal resume activity missing workflow {request.workflow_id}")
-        operation = upsert_workflow_operation(
-            session,
-            workflow_id=workflow.workflow_id,
+        workflow_type = get_workflow_type(session, workflow_type_key=workflow.workflow_type_key)
+        lifecycle = WorkflowExecutionProjection(session=session, workflow=workflow, workflow_type=workflow_type)
+        step = start_workflow_step_attempt(
+            lifecycle=lifecycle,
             run_id=request.source_run_id,
-            operation_type="human_input_resume",
+            operation_type=ISSUE_EXECUTION_STEP_HUMAN_INPUT_RESUME,
             idempotency_key=f"human-input-resume:{request.request_id}",
             target_system="workflow_engine",
             target_ref=request.request_id,
             summary="Resume workflow from human input",
         )
-        attempt = start_workflow_operation_attempt(session, operation=operation)
         session.commit()
 
         try:
@@ -177,10 +180,9 @@ def resume_human_input_activity(payload: HumanInputResumeInput) -> DevelopmentTe
             )
             if processed is None:
                 raise RuntimeError(f"Temporal resume activity returned no run for workflow_id={workflow.workflow_id}")
-            complete_workflow_operation(
-                session,
-                operation=operation,
-                attempt=attempt,
+            complete_workflow_step_attempt(
+                lifecycle=lifecycle,
+                step=step,
                 summary=f"Resumed run {processed.run_id} finished with status {processed.status}",
             )
             session.commit()
@@ -192,10 +194,9 @@ def resume_human_input_activity(payload: HumanInputResumeInput) -> DevelopmentTe
             )
         except Exception as exc:  # noqa: BLE001
             logger.exception("temporal_resume_execute_failed workflow_id=%s request_id=%s", workflow.workflow_id, request.request_id)
-            fail_workflow_operation(
-                session,
-                operation=operation,
-                attempt=attempt,
+            fail_workflow_step_attempt(
+                lifecycle=lifecycle,
+                step=step,
                 category="human_input_resume_failed",
                 message=str(exc),
             )

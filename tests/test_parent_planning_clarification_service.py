@@ -12,9 +12,16 @@ class _FakePublisher:
         self.has_active_calls: list[tuple[str, tuple[object, ...]]] = []
         self.publish_calls: list[tuple[str, tuple[object, ...]]] = []
 
-    def has_active_clarification(self, *, issue_key: str, questions):  # noqa: ANN001
+    def active_clarification_effects(self, *, issue_key: str, questions):  # noqa: ANN001
         self.has_active_calls.append((issue_key, tuple(questions)))
-        return self.already_active
+        if not self.already_active:
+            return None
+        return ClarificationPublishEffects(
+            state_recorded=True,
+            jira_comment_created=False,
+            discord_followup_created=False,
+            jira_comment_id="comment-existing",
+        )
 
     def publish_clarification(self, *, issue_key: str, questions):  # noqa: ANN001
         self.publish_calls.append((issue_key, tuple(questions)))
@@ -22,6 +29,7 @@ class _FakePublisher:
             state_recorded=True,
             jira_comment_created=True,
             discord_followup_created=False,
+            jira_comment_id="comment-created",
         )
 
 
@@ -45,6 +53,7 @@ def test_service_normalizes_questions_and_publishes_once() -> None:
     assert result.already_active is False
     assert result.state_recorded is True
     assert result.jira_comment_created is True
+    assert result.jira_comment_id == "comment-created"
     assert [question.to_payload() for question in result.questions] == [
         {
             "question": "What invitation TTL should v1 enforce for automatic expiry?",
@@ -68,6 +77,7 @@ def test_service_short_circuits_when_matching_clarification_is_already_active() 
 
     assert result.already_active is True
     assert result.state_recorded is True
+    assert result.jira_comment_id == "comment-existing"
     assert publisher.publish_calls == []
 
 
@@ -85,3 +95,23 @@ def test_service_builds_actionable_missing_input_message() -> None:
     assert "Answer the product clarification on Jira issue MAB-215" in message
     assert "- What invitation TTL should v1 enforce for automatic expiry?" in message
     assert "- What exact step-up freshness window should v1 use?" in message
+
+
+def test_service_rejects_waiting_state_without_questions() -> None:
+    service = ParentPlanningClarificationService()
+    publisher = _FakePublisher()
+
+    try:
+        service.ensure_waiting_clarification(
+            issue_key="MAB-215",
+            questions=[],
+            publisher=publisher,
+            context="Backlog planning",
+        )
+    except ValueError as exc:
+        assert str(exc) == "Backlog planning requires at least one clarification question"
+    else:
+        raise AssertionError("Waiting for input without clarification questions must fail")
+
+    assert publisher.has_active_calls == []
+    assert publisher.publish_calls == []

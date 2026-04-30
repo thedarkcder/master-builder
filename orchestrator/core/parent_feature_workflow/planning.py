@@ -88,12 +88,14 @@ class ParentFeaturePlanningWorkflow:
         reason: str | None = None,
         extra: dict[str, object] | None = None,
         requires_persisted_execution: bool | None = None,
+        failed: bool = False,
     ) -> WorkflowAdvanceOutcome:
         return WorkflowAdvanceOutcome(
             handled=handled,
             reason=reason,
             extra=dict(extra or {}),
             requires_persisted_execution=handled if requires_persisted_execution is None else requires_persisted_execution,
+            failed=failed,
         )
 
     @workflow_step(
@@ -101,8 +103,8 @@ class ParentFeaturePlanningWorkflow:
         label="Notification emit",
         kind=WorkflowStepKind.NOTIFICATION,
         after=PARENT_OP_BRIEF_NORMALIZATION,
+        supports=(PARENT_OP_BACKLOG_PLANNING, PARENT_OP_JIRA_CHILD_FANOUT),
         required=False,
-        retryable=False,
         description="Emit user/admin notifications tied to workflow failures or remediation.",
     )
     def _notification_emit_step_contract(self) -> None:
@@ -113,6 +115,7 @@ class ParentFeaturePlanningWorkflow:
         label="Jira parent update",
         kind=WorkflowStepKind.INTEGRATION,
         after=PARENT_OP_BRIEF_NORMALIZATION,
+        supports=(PARENT_OP_BACKLOG_PLANNING, PARENT_OP_JIRA_CHILD_FANOUT),
         required=False,
         retryable=True,
         description="Synchronize parent Jira issue metadata, labels, and architecture references.",
@@ -249,20 +252,14 @@ class ParentFeaturePlanningWorkflow:
             )
 
         if not fanout.completed:
-            return self._block_parent_brief(
-                context=context,
-                session=session,
-                settings=settings,
-                parent_detail=parent_detail,
-                lifecycle=lifecycle,
-                questions=fanout.questions,
-                body_prefix=(
-                    "Parent feature was created in backlog, but engineering child planning is blocked pending clarification."
-                ),
+            return self._outcome(
+                handled=True,
                 reason="pm_parent_issue_created_seed_blocked",
                 extra={
+                    "questions": ClarificationQuestionSet(questions=fanout.questions).to_payload(),
                     "parent_revision": fanout.seed_data.get("parent_revision"),
                     "children_sync_status": fanout.seed_data.get("children_sync_status"),
+                    "webhook_event": context.webhook_event,
                 },
             )
 
@@ -283,6 +280,8 @@ class ParentFeaturePlanningWorkflow:
             payload=context.payload,
             extract_changed_fields_fn=self._deps.extract_changed_fields_fn,
         )
+        if not lifecycle.has_execution():
+            return self._handle_issue_created(context=context, session=session, settings=settings, lifecycle=lifecycle)
         if not material_changed_fields:
             board_entry_target_status = self._deps.parent_board_entry_target_status_fn(
                 payload=context.payload,
@@ -295,8 +294,6 @@ class ParentFeaturePlanningWorkflow:
                     target_status=board_entry_target_status,
                     lifecycle=lifecycle,
                 )
-            if not lifecycle.has_execution():
-                return self._handle_issue_created(context=context, session=session, settings=settings, lifecycle=lifecycle)
             return self._outcome(
                 handled=True,
                 reason="pm_parent_non_material_change",
@@ -416,6 +413,7 @@ class ParentFeaturePlanningWorkflow:
                     "stale_child_keys": [detail.key for detail in child_details],
                     "webhook_event": context.webhook_event,
                 },
+                failed=True,
             )
 
         seed_evaluation = self._deps.fanout_service.evaluate_seed_data(
@@ -429,21 +427,13 @@ class ParentFeaturePlanningWorkflow:
                 issue_gateway=issue_gateway,
                 issue_keys=blocked_issue_keys,
             )
-            wait_workflow_step_attempt(
+            self._publish_clarification_then_wait_step(
                 lifecycle=lifecycle,
-                step=fanout_step,
-                summary="Parent planning is waiting for product clarification before child refresh can complete.",
-            )
-            if not issue_gateway.has_matching_active_pm_clarification_state(
-                parent_issue_key=context.issue_key,
+                blocking_step=fanout_step,
+                parent_detail=parent_detail,
                 questions=seed_evaluation.questions,
-            ):
-                self._ensure_clarification_with_projection_attempts(
-                    lifecycle=lifecycle,
-                    issue_key=context.issue_key,
-                    questions=seed_evaluation.questions,
-                    publisher=issue_gateway,
-                )
+                context="Engineering child refresh",
+            )
             return self._outcome(
                 handled=True,
                 reason="pm_parent_sync_blocked",
@@ -477,8 +467,8 @@ class ParentFeaturePlanningWorkflow:
         label="Child promotion",
         kind=WorkflowStepKind.INTEGRATION,
         after=PARENT_OP_JIRA_CHILD_FANOUT,
+        supports=PARENT_OP_JIRA_CHILD_FANOUT,
         required=False,
-        retryable=False,
         description="Promote backlog engineering child tickets onto the working board.",
     )
     def _handle_board_entry(
@@ -590,6 +580,10 @@ class ParentFeaturePlanningWorkflow:
     ) -> WorkflowAdvanceOutcome:
         _ = (session, settings, body_prefix)
         question_set = ClarificationQuestionSet(questions=questions)
+        required_questions = self._deps.clarification_service.require_questions_for_waiting_state(
+            questions=question_set.questions,
+            context="Parent planning",
+        )
         issue_gateway = self._deps.issue_gateway
         self._update_issue_sync_label_step(
             lifecycle=lifecycle,
@@ -600,14 +594,14 @@ class ParentFeaturePlanningWorkflow:
         self._ensure_clarification_with_projection_attempts(
             lifecycle=lifecycle,
             issue_key=parent_detail.key,
-            questions=question_set.questions,
+            questions=required_questions,
             publisher=issue_gateway,
         )
         lifecycle.mark_workflow_waiting_for_input()
         payload = dict(extra or {})
         payload.update(
             {
-                "questions": question_set.to_payload(),
+                "questions": ClarificationQuestionSet(questions=required_questions).to_payload(),
                 "webhook_event": context.webhook_event,
             }
         )
@@ -659,28 +653,31 @@ class ParentFeaturePlanningWorkflow:
         project_key = self._deps.project_key_for_issue_fn(context.issue_key)
         brief_payload = dict(context.payload.get("brief_payload") or {})
         next_questions = ClarificationQuestionSet.from_values(context.payload.get("next_questions", [])).questions
-        next_question_set = ClarificationQuestionSet(questions=next_questions)
         ready_to_write = bool(context.payload.get("ready_to_write"))
 
         if not ready_to_write:
+            required_questions = self._deps.clarification_service.require_questions_for_waiting_state(
+                questions=next_questions,
+                context="PM interview follow-up",
+            )
             self._update_issue_sync_label_step(
                 lifecycle=lifecycle,
                 issue_gateway=issue_gateway,
                 parent_detail=parent_detail,
                 target_label="sync-blocked",
             )
-            lifecycle.mark_workflow_waiting_for_input()
             publication = self._ensure_clarification_with_projection_attempts(
                 lifecycle=lifecycle,
                 issue_key=context.issue_key,
-                questions=next_question_set.questions,
+                questions=required_questions,
                 publisher=issue_gateway,
             )
+            lifecycle.mark_workflow_waiting_for_input()
             return self._outcome(
                 handled=True,
                 reason="pm_interview_still_open",
                 extra={
-                    "questions": next_question_set.to_payload(),
+                    "questions": ClarificationQuestionSet(questions=required_questions).to_payload(),
                     "comment_posted": publication.jira_comment_created,
                     "webhook_event": context.webhook_event,
                 },
@@ -745,18 +742,14 @@ class ParentFeaturePlanningWorkflow:
             )
 
         if not fanout.completed:
-            return self._block_parent_brief(
-                context=context,
-                session=session,
-                settings=settings,
-                parent_detail=parent_detail,
-                lifecycle=lifecycle,
-                questions=fanout.questions,
-                body_prefix="Backlog planning still needs clarification before child fanout can complete.",
+            return self._outcome(
+                handled=True,
                 reason="pm_interview_followup_planning_blocked",
                 extra={
+                    "questions": ClarificationQuestionSet(questions=fanout.questions).to_payload(),
                     "parent_revision": fanout.seed_data.get("parent_revision"),
                     "children_sync_status": fanout.seed_data.get("children_sync_status"),
+                    "webhook_event": context.webhook_event,
                 },
             )
 
@@ -805,7 +798,6 @@ class ParentFeaturePlanningWorkflow:
         label="PM brief",
         kind=WorkflowStepKind.HUMAN_GATE,
         required=True,
-        retryable=False,
         description="Normalize the parent issue into the product brief or pause for clarification.",
     )
     def _resolve_product_brief_step(
@@ -888,7 +880,7 @@ class ParentFeaturePlanningWorkflow:
         kind=WorkflowStepKind.BUSINESS,
         after=PARENT_OP_BRIEF_NORMALIZATION,
         required=True,
-        retryable=False,
+        retryable=True,
         description="Build the planning package that determines required engineering child tickets.",
     )
     @workflow_step(
@@ -939,10 +931,16 @@ class ParentFeaturePlanningWorkflow:
                 summary=planning_summary,
             )
         else:
-            wait_workflow_step_attempt(
+            self._publish_clarification_then_wait_step(
                 lifecycle=lifecycle,
-                step=planning_step,
-                summary="Backlog planning is waiting for product clarification.",
+                blocking_step=planning_step,
+                parent_detail=parent_detail,
+                questions=planning_questions,
+                context="Backlog planning",
+            )
+            return self._deps.fanout_service.blocked_planning_result(
+                planning_result=planning_result,
+                planning_package=planning_package,
             )
 
         fanout_step = start_workflow_step_attempt(lifecycle=lifecycle, operation_type=PARENT_OP_JIRA_CHILD_FANOUT)
@@ -987,21 +985,75 @@ class ParentFeaturePlanningWorkflow:
             )
             lifecycle.mark_completed_if_ready()
         else:
-            summary = (
-                "Backlog planning is waiting for product clarification before engineering child fanout can complete."
-                if planning_questions
-                else "Engineering child fanout is waiting for product clarification."
+            self._publish_clarification_then_wait_step(
+                lifecycle=lifecycle,
+                blocking_step=fanout_step,
+                parent_detail=parent_detail,
+                questions=fanout.questions,
+                context="Engineering child fanout",
             )
-            wait_workflow_step_attempt(lifecycle=lifecycle, step=fanout_step, summary=summary)
         return fanout
+
+    def _publish_clarification_then_wait_step(
+        self,
+        *,
+        lifecycle,
+        blocking_step,
+        parent_detail,
+        questions: tuple[ClarificationQuestion, ...],
+        context: str,
+    ) -> None:
+        required_questions = self._deps.clarification_service.require_questions_for_waiting_state(
+            questions=questions,
+            context=context,
+        )
+        issue_gateway = self._deps.issue_gateway
+        try:
+            self._update_issue_sync_label_step(
+                lifecycle=lifecycle,
+                issue_gateway=issue_gateway,
+                parent_detail=parent_detail,
+                target_label="sync-blocked",
+            )
+            publication = self._ensure_clarification_with_projection_attempts(
+                lifecycle=lifecycle,
+                issue_key=parent_detail.key,
+                questions=required_questions,
+                publisher=issue_gateway,
+            )
+        except Exception as exc:  # noqa: BLE001
+            fail_workflow_step_attempt(
+                lifecycle=lifecycle,
+                step=blocking_step,
+                category=classify_external_workflow_failure(error=exc),
+                message=str(exc),
+            )
+            raise
+        if not publication.jira_comment_id:
+            message = f"Jira clarification projection for {parent_detail.key} did not persist a comment id"
+            fail_workflow_step_attempt(
+                lifecycle=lifecycle,
+                step=blocking_step,
+                category="contract_violation",
+                message=message,
+            )
+            raise RuntimeError(message)
+        wait_workflow_step_attempt(
+            lifecycle=lifecycle,
+            step=blocking_step,
+            summary=self._deps.clarification_service.build_missing_input_message(
+                issue_key=parent_detail.key,
+                questions=required_questions,
+            ),
+        )
 
     @workflow_step(
         key=PARENT_OP_DISCORD_FOLLOWUP_PROJECTION,
         label="Discord follow-up projection",
         kind=WorkflowStepKind.NOTIFICATION,
         after=PARENT_OP_BRIEF_NORMALIZATION,
+        supports=(PARENT_OP_BACKLOG_PLANNING, PARENT_OP_JIRA_CHILD_FANOUT),
         required=False,
-        retryable=False,
         description="Publish clarification follow-up state to Discord.",
     )
     @workflow_step(
@@ -1009,8 +1061,8 @@ class ParentFeaturePlanningWorkflow:
         label="Jira comment projection",
         kind=WorkflowStepKind.NOTIFICATION,
         after=PARENT_OP_BRIEF_NORMALIZATION,
+        supports=(PARENT_OP_BACKLOG_PLANNING, PARENT_OP_JIRA_CHILD_FANOUT),
         required=False,
-        retryable=False,
         description="Publish clarification questions to Jira.",
     )
     def _ensure_clarification_with_projection_attempts(
@@ -1021,7 +1073,10 @@ class ParentFeaturePlanningWorkflow:
         questions: tuple[ClarificationQuestion, ...],
         publisher,
     ):
-        if publisher.has_active_clarification(issue_key=issue_key, questions=questions):
+        active_effects = publisher.active_clarification_effects(issue_key=issue_key, questions=questions)
+        if active_effects is not None:
+            if not active_effects.jira_comment_id:
+                raise RuntimeError(f"Active clarification for {issue_key} has no persisted Jira comment id")
             return self._deps.clarification_service.ensure_active_clarification(
                 issue_key=issue_key,
                 questions=questions,
@@ -1066,18 +1121,17 @@ class ParentFeaturePlanningWorkflow:
                 summary="Posted PM clarification follow-up to Discord.",
             )
         else:
-            missing_projection = True
             fail_workflow_step_attempt(
                 lifecycle=lifecycle,
                 step=discord_step,
                 category="contract_violation",
-                message=f"Discord clarification projection did not run for {issue_key}",
+                message=f"Optional Discord clarification projection did not run for {issue_key}",
             )
-        if publication.jira_comment_created:
+        if publication.jira_comment_id:
             complete_workflow_step_attempt(
                 lifecycle=lifecycle,
                 step=jira_step,
-                summary="Posted PM clarification questions to Jira.",
+                summary=f"Posted PM clarification questions to Jira comment {publication.jira_comment_id}.",
             )
         else:
             missing_projection = True
@@ -1118,4 +1172,5 @@ class ParentFeaturePlanningWorkflow:
             handled=True,
             reason=failure_reason,
             extra={"error": str(error), "webhook_event": context.webhook_event},
+            failed=True,
         )

@@ -791,6 +791,7 @@ export type WorkflowTypeOperationRecord = {
   completion_required: boolean;
   kind: string;
   after: string[];
+  supports: string[];
   required: boolean;
   retryable: boolean;
   graph_index: number;
@@ -986,6 +987,7 @@ export type WorkflowOperationRecord = {
   required?: boolean;
   kind: string;
   after: string[];
+  supports: string[];
   definition_only?: boolean;
   target_system: string | null;
   target_ref: string | null;
@@ -3017,12 +3019,15 @@ export async function streamWorkflowOperationTelemetryEvents(
   executionId: string,
   operationId: string,
   onEvent: (event: WorkflowObservabilityEventRecord) => void,
-  options: { attemptId?: string; signal?: AbortSignal } = {},
+  options: { attemptId?: string; afterEventSequence?: string; signal?: AbortSignal; onOpen?: () => void } = {},
 ): Promise<void> {
   void credentials;
   const query = new URLSearchParams();
   if (options.attemptId) {
     query.set("attempt_id", options.attemptId);
+  }
+  if (options.afterEventSequence) {
+    query.set("after_event_sequence", options.afterEventSequence);
   }
   const suffix = query.toString() ? `?${query.toString()}` : "";
   const response = await fetch(
@@ -3038,6 +3043,7 @@ export async function streamWorkflowOperationTelemetryEvents(
   if (!response.ok || !response.body) {
     throw new Error(`${response.status}: unable to open workflow telemetry stream`);
   }
+  options.onOpen?.();
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
@@ -3055,8 +3061,8 @@ export async function streamWorkflowOperationTelemetryEvents(
         if (line) {
           try {
             onEvent(JSON.parse(line) as WorkflowObservabilityEventRecord);
-          } catch {
-            // Ignore malformed stream lines.
+          } catch (error) {
+            throw new Error(`Malformed workflow telemetry stream event: ${(error as Error).message}`);
           }
         }
         newline = buffer.indexOf("\n");

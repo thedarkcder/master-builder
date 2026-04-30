@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { ArrowLeft, ExternalLink, MoreHorizontal, RefreshCw } from "lucide-react";
 
@@ -15,8 +15,6 @@ import { useToast } from "@/components/ui/toast-provider";
 import {
   getWorkflow,
   getWorkflowOperationAttemptAudit,
-  listWorkflowOperationAttemptTelemetryEvents,
-  listWorkflowOperationTelemetryEvents,
   resumeWorkflowExecution,
   retryWorkflowOperation,
   streamWorkflowOperationTelemetryEvents,
@@ -27,8 +25,11 @@ import {
   type WorkflowRecord,
 } from "@/lib/api";
 import { formatTimeAgo, formatTimestamp } from "@/lib/datetime";
+import { compareWorkflowObservabilityEvents } from "@/lib/workflow-event-order";
 import { buildTelemetryAttemptView } from "@/lib/workflow-observability";
 import { cn } from "@/lib/utils";
+
+const LIVE_TELEMETRY_EVENT_LIMIT = 1000;
 
 function latestAttempt(operation: WorkflowOperationRecord) {
   return [...operation.attempts].sort((left, right) => {
@@ -50,13 +51,7 @@ function mergeObservabilityEvents(
   for (const event of [...current, ...incoming]) {
     byId.set(event.event_id, event);
   }
-  return [...byId.values()].sort((left, right) => {
-    const timeDelta = new Date(left.recorded_at).getTime() - new Date(right.recorded_at).getTime();
-    if (timeDelta !== 0) {
-      return timeDelta;
-    }
-    return left.event_id.localeCompare(right.event_id);
-  });
+  return [...byId.values()].sort(compareWorkflowObservabilityEvents).slice(-LIVE_TELEMETRY_EVENT_LIMIT);
 }
 
 function attemptFailure(attempt: ReturnType<typeof latestAttempt>) {
@@ -76,11 +71,98 @@ function impactLabel(required?: boolean): string {
 }
 
 function isSupportingOperation(operation: WorkflowOperationRecord): boolean {
-  return ["side_effect", "notification", "integration"].includes(String(operation.kind || "").trim().toLowerCase());
+  return operation.required === false;
 }
 
 function latestAttemptCategory(attempt: ReturnType<typeof latestAttempt>) {
   return attempt?.error_category?.trim().toLowerCase() || null;
+}
+
+function isAttemptLifecycleEvent(event: WorkflowObservabilityEventRecord): boolean {
+  return [
+    "workflow_operation_attempt_started",
+    "workflow_operation_attempt_completed",
+    "workflow_operation_attempt_failed",
+    "workflow_operation_attempt_waiting_for_input",
+    "workflow_operation_waiting_for_input",
+    "workflow_operation_attempt_retried",
+  ].includes(String(event.event_kind || "").trim().toLowerCase());
+}
+
+function attemptStatusFromLifecycleEvent(event: WorkflowObservabilityEventRecord): WorkflowOperationAttemptRecord["status"] | null {
+  const kind = String(event.event_kind || "").trim().toLowerCase();
+  if (kind === "workflow_operation_attempt_started" || kind === "workflow_operation_attempt_retried") return "running";
+  if (kind === "workflow_operation_attempt_completed") return "completed";
+  if (kind === "workflow_operation_attempt_failed") return "failed";
+  if (kind === "workflow_operation_attempt_waiting_for_input" || kind === "workflow_operation_waiting_for_input") return "waiting_for_input";
+  return null;
+}
+
+function isTerminalAttemptStatus(status: string | null | undefined): boolean {
+  return ["completed", "failed", "waiting_for_input"].includes(String(status || "").trim().toLowerCase());
+}
+
+function mergeAttemptLifecycleEventIntoWorkflow(
+  workflow: WorkflowRecord,
+  operationId: string,
+  event: WorkflowObservabilityEventRecord,
+): WorkflowRecord {
+  if (!event.attempt_id || !isAttemptLifecycleEvent(event)) {
+    return workflow;
+  }
+  const eventAttemptId = event.attempt_id;
+  const nextStatus = attemptStatusFromLifecycleEvent(event);
+  if (!nextStatus) {
+    return workflow;
+  }
+  return {
+    ...workflow,
+    operations: workflow.operations.map((operation) => {
+      if (operation.operation_id !== operationId) {
+        return operation;
+      }
+      const payload = event.payload ?? {};
+      const attemptNumber =
+        typeof payload.attempt_number === "number"
+          ? payload.attempt_number
+          : typeof event.attempt === "number"
+            ? event.attempt
+            : Math.max(1, ...operation.attempts.map((attempt) => attempt.attempt_number));
+      const existingAttempt = operation.attempts.find((attempt) => attempt.attempt_id === eventAttemptId);
+      if (!existingAttempt) {
+        return operation;
+      }
+      if (existingAttempt.finished_at && new Date(event.recorded_at).getTime() <= new Date(existingAttempt.finished_at).getTime()) {
+        return operation;
+      }
+      if (isTerminalAttemptStatus(existingAttempt.status) && nextStatus === "running") {
+        return operation;
+      }
+      const nextAttempt: WorkflowOperationAttemptRecord = {
+        attempt_id: eventAttemptId,
+        attempt_number: existingAttempt.attempt_number ?? attemptNumber,
+        status: nextStatus,
+        error_category:
+          nextStatus === "failed" ? String(payload.error_category || existingAttempt.error_category || "").trim() || null : null,
+        error_message: nextStatus === "failed" ? event.message || existingAttempt.error_message || null : null,
+        status_detail: event.message || existingAttempt.status_detail || null,
+        retryable: existingAttempt.retryable ?? false,
+        next_retry_at: existingAttempt.next_retry_at ?? null,
+        started_at: existingAttempt.started_at ?? event.recorded_at,
+        finished_at: ["completed", "failed", "waiting_for_input"].includes(nextStatus)
+          ? event.recorded_at
+          : existingAttempt.finished_at ?? null,
+      };
+      const attempts = operation.attempts.map((attempt) => (attempt.attempt_id === eventAttemptId ? nextAttempt : attempt));
+      return {
+        ...operation,
+        status: nextStatus,
+        attempts,
+        summary: event.message || operation.summary,
+        can_retry: nextStatus === "failed" ? operation.can_retry : false,
+      };
+    }),
+  };
 }
 
 export default function TenantExecutionDetailPage() {
@@ -100,6 +182,7 @@ export default function TenantExecutionDetailPage() {
   const [linksMenuOpen, setLinksMenuOpen] = useState(false);
   const [selectedOperationId, setSelectedOperationId] = useState<string | null>(null);
   const [selectedAttemptId, setSelectedAttemptId] = useState<string | null>(null);
+  const [attemptSelectionMode, setAttemptSelectionMode] = useState<"follow_latest" | "pinned">("follow_latest");
   const [observabilityView, setObservabilityView] = useState<"telemetry" | "audit">("telemetry");
   const [telemetryEvents, setTelemetryEvents] = useState<WorkflowObservabilityEventRecord[]>([]);
   const [auditAttempt, setAuditAttempt] = useState<WorkflowStepAttemptTranscriptRecord | null>(null);
@@ -109,6 +192,22 @@ export default function TenantExecutionDetailPage() {
   const [telemetryRefreshNonce, setTelemetryRefreshNonce] = useState(0);
   const [auditRefreshNonce, setAuditRefreshNonce] = useState(0);
   const [awaitingNewAttemptForOperationId, setAwaitingNewAttemptForOperationId] = useState<string | null>(null);
+  const attemptSelectionModeRef = useRef(attemptSelectionMode);
+  const awaitingNewAttemptForOperationIdRef = useRef(awaitingNewAttemptForOperationId);
+  const workflowRef = useRef<WorkflowRecord | null>(workflow);
+  const workflowRefreshesByAttemptRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    attemptSelectionModeRef.current = attemptSelectionMode;
+  }, [attemptSelectionMode]);
+
+  useEffect(() => {
+    awaitingNewAttemptForOperationIdRef.current = awaitingNewAttemptForOperationId;
+  }, [awaitingNewAttemptForOperationId]);
+
+  useEffect(() => {
+    workflowRef.current = workflow;
+  }, [workflow]);
 
   const loadWorkflow = useCallback(async () => {
     if (!credentials) return;
@@ -140,6 +239,7 @@ export default function TenantExecutionDetailPage() {
     () => workflow?.operations.find((operation) => operation.operation_id === selectedOperationId) ?? null,
     [selectedOperationId, workflow?.operations],
   );
+  const selectedTelemetryOperationId = selectedOperation?.operation_id ?? null;
   const selectedOperationAttempts = useMemo(
     () => (selectedOperation ? sortAttempts(selectedOperation.attempts) : []),
     [selectedOperation],
@@ -152,44 +252,48 @@ export default function TenantExecutionDetailPage() {
     () => (selectedAttempt ? buildTelemetryAttemptView(selectedAttempt, telemetryEvents) : null),
     [selectedAttempt, telemetryEvents],
   );
+  const activeOperations = useMemo(
+    () => (workflow?.operations ?? []).filter((operation) => ["running", "retrying", "waiting_for_input"].includes(operation.status)),
+    [workflow?.operations],
+  );
+  const activeBlockingOperations = useMemo(() => {
+    const activeOperationTypes = new Set(activeOperations.map((operation) => operation.operation_type));
+    return activeOperations.filter((operation) => !operation.after.some((dependency) => activeOperationTypes.has(dependency)));
+  }, [activeOperations]);
+  const currentWorkSummary = useMemo(() => {
+    if (!workflow) return "—";
+    const running = activeBlockingOperations.filter((operation) => ["running", "retrying"].includes(operation.status));
+    if (running.length > 0) {
+      return `Running ${running.map((operation) => operation.label?.trim() || operation.operation_type).join(", ")}`;
+    }
+    const waiting = activeBlockingOperations.filter((operation) => operation.status === "waiting_for_input");
+    if (waiting.length > 0) {
+      return `Waiting on ${waiting.map((operation) => operation.label?.trim() || operation.operation_type).join(", ")}`;
+    }
+    return workflow.failure_reason?.trim() || workflow.next_step?.trim() || "No active operation.";
+  }, [activeBlockingOperations, workflow]);
   const flowNodes = useMemo(
     () =>
       (workflow?.operations ?? []).map((operation) => {
         const attempt = latestAttempt(operation);
         return {
           key: operation.operation_id,
+          operationType: operation.operation_type,
           label: operation.label?.trim() || operation.operation_type,
           status: operation.status,
           impact: isSupportingOperation(operation) ? "Supporting" : impactLabel(operation.required),
           completionRequired: !isSupportingOperation(operation),
+          after: operation.after,
+          supports: operation.supports,
           detail: attemptFailure(attempt) || (operation.status === "waiting_for_input" ? attemptStatusDetail(attempt) : null),
         };
       }),
     [workflow?.operations],
   );
 
-  const refreshWorkflowAttemptState = useCallback(
-    async (operationId: string, attemptId: string) => {
-      if (!credentials) {
-        return;
-      }
-      try {
-        const payload = await getWorkflow(credentials, executionId);
-        setWorkflow(payload);
-        const operation = payload.operations.find((candidate) => candidate.operation_id === operationId) ?? null;
-        if (operation?.attempts.some((attempt) => attempt.attempt_id === attemptId)) {
-          setSelectedAttemptId(attemptId);
-          setAwaitingNewAttemptForOperationId((current) => (current === operationId ? null : current));
-        }
-      } catch (error) {
-        setObservabilityError(`Failed to refresh attempts: ${(error as Error).message}`);
-      }
-    },
-    [credentials, executionId],
-  );
-
   const openOperationDrawer = useCallback((operation: WorkflowOperationRecord) => {
     setSelectedOperationId(operation.operation_id);
+    setAttemptSelectionMode("follow_latest");
     setSelectedAttemptId(latestAttempt(operation)?.attempt_id ?? null);
     setAwaitingNewAttemptForOperationId(null);
     setObservabilityView("telemetry");
@@ -205,6 +309,14 @@ export default function TenantExecutionDetailPage() {
       setSelectedAttemptId(null);
       return;
     }
+    if (attemptSelectionMode === "follow_latest") {
+      if (awaitingNewAttemptForOperationId === selectedOperation.operation_id && selectedOperationAttempts.length === 0) {
+        setSelectedAttemptId(null);
+        return;
+      }
+      setSelectedAttemptId(selectedOperationAttempts[0]?.attempt_id ?? null);
+      return;
+    }
     if (selectedAttemptId && selectedOperationAttempts.some((attempt) => attempt.attempt_id === selectedAttemptId)) {
       return;
     }
@@ -213,49 +325,26 @@ export default function TenantExecutionDetailPage() {
       return;
     }
     setSelectedAttemptId(selectedOperationAttempts[0]?.attempt_id ?? null);
-  }, [awaitingNewAttemptForOperationId, selectedAttemptId, selectedOperation, selectedOperationAttempts]);
+  }, [attemptSelectionMode, awaitingNewAttemptForOperationId, selectedAttemptId, selectedOperation, selectedOperationAttempts]);
 
   useEffect(() => {
     setTelemetryEvents([]);
     setAuditAttempt(null);
-  }, [selectedAttemptId, selectedOperationId]);
+  }, [selectedOperationId]);
 
   useEffect(() => {
-    if (!selectedOperation || !credentials || !workflow || observabilityView !== "telemetry") {
+    setAuditAttempt(null);
+  }, [selectedAttemptId]);
+
+  useEffect(() => {
+    const operationId = selectedTelemetryOperationId;
+    if (!operationId || !credentials || observabilityView !== "telemetry") {
       return;
     }
     let disposed = false;
     const controller = new AbortController();
-    const operationId = selectedOperation.operation_id;
-    const activeAttemptId = selectedAttemptId;
     setTelemetryLoading(true);
     setObservabilityError(null);
-
-    const loadSnapshot = async () => {
-      try {
-        const snapshot = activeAttemptId
-          ? await listWorkflowOperationAttemptTelemetryEvents(
-              credentials,
-              workflow.execution_id,
-              operationId,
-              activeAttemptId,
-              { limit: 500 },
-            )
-          : await listWorkflowOperationTelemetryEvents(credentials, workflow.execution_id, operationId, { limit: 500 });
-        if (disposed) {
-          return;
-        }
-        setTelemetryEvents(snapshot);
-      } catch (error) {
-        if (!disposed) {
-          setObservabilityError(`Failed to load live telemetry: ${(error as Error).message}`);
-        }
-      } finally {
-        if (!disposed) {
-          setTelemetryLoading(false);
-        }
-      }
-    };
 
     const handleEvent = (event: WorkflowObservabilityEventRecord) => {
       if (disposed) {
@@ -263,26 +352,51 @@ export default function TenantExecutionDetailPage() {
       }
       setTelemetryLoading(false);
       setTelemetryEvents((current) => mergeObservabilityEvents(current, [event]));
+      if (isAttemptLifecycleEvent(event) && event.attempt_id) {
+        setWorkflow((current) => (current ? mergeAttemptLifecycleEventIntoWorkflow(current, operationId, event) : current));
+      }
+      if (event.event_kind === "workflow_operation_attempt_started" && event.attempt_id) {
+        const startedAttemptId = event.attempt_id;
+        const attemptKnown = workflowRef.current?.operations
+          .find((operation) => operation.operation_id === operationId)
+          ?.attempts.some((attempt) => attempt.attempt_id === startedAttemptId) ?? false;
+        if (!attemptKnown && !workflowRefreshesByAttemptRef.current.has(startedAttemptId)) {
+          workflowRefreshesByAttemptRef.current.add(startedAttemptId);
+          void loadWorkflow().finally(() => {
+            workflowRefreshesByAttemptRef.current.delete(startedAttemptId);
+          });
+        }
+      }
+      if (attemptSelectionModeRef.current === "follow_latest" && isAttemptLifecycleEvent(event) && event.attempt_id) {
+        if (event.event_kind === "workflow_operation_attempt_started") {
+          setSelectedAttemptId(event.attempt_id);
+        }
+        setAwaitingNewAttemptForOperationId((current) => (current === operationId ? null : current));
+        return;
+      }
       if (
-        !activeAttemptId &&
-        awaitingNewAttemptForOperationId === operationId &&
+        awaitingNewAttemptForOperationIdRef.current === operationId &&
         event.event_kind === "workflow_operation_attempt_started" &&
         event.attempt_id
       ) {
-        void refreshWorkflowAttemptState(operationId, event.attempt_id);
+        setSelectedAttemptId(event.attempt_id);
+        setAwaitingNewAttemptForOperationId(null);
       }
     };
 
-    void loadSnapshot();
-    void streamWorkflowOperationTelemetryEvents(credentials, workflow.execution_id, operationId, handleEvent, {
-      attemptId: activeAttemptId ?? undefined,
+    void streamWorkflowOperationTelemetryEvents(credentials, executionId, operationId, handleEvent, {
       signal: controller.signal,
+      onOpen: () => {
+        if (!disposed) {
+          setTelemetryLoading(false);
+        }
+      },
     }).catch((error) => {
-      if (disposed || controller.signal.aborted) {
-        return;
-      }
-      setObservabilityError(`Failed to stream live telemetry: ${(error as Error).message}`);
-      setTelemetryLoading(false);
+        if (disposed || controller.signal.aborted) {
+          return;
+        }
+        setObservabilityError(`Failed to stream live telemetry: ${(error as Error).message}`);
+        setTelemetryLoading(false);
     });
 
     return () => {
@@ -290,14 +404,12 @@ export default function TenantExecutionDetailPage() {
       controller.abort();
     };
   }, [
-    awaitingNewAttemptForOperationId,
     credentials,
+    executionId,
     observabilityView,
-    refreshWorkflowAttemptState,
-    selectedAttemptId,
-    selectedOperation,
+    selectedTelemetryOperationId,
     telemetryRefreshNonce,
-    workflow,
+    loadWorkflow,
   ]);
 
   useEffect(() => {
@@ -359,6 +471,7 @@ export default function TenantExecutionDetailPage() {
       return;
     }
     setSelectedOperationId(operation.operation_id);
+    setAttemptSelectionMode("follow_latest");
     setSelectedAttemptId(null);
     setAwaitingNewAttemptForOperationId(operation.operation_id);
     setObservabilityView("telemetry");
@@ -484,7 +597,7 @@ export default function TenantExecutionDetailPage() {
                 <StatusBadge status={workflow.current_state} />
               </div>
               <p className="mt-2 text-xs text-muted-foreground">
-                {workflow.waiting_on ? `Waiting on ${workflow.waiting_on.replace(/_/g, " ")}.` : workflow.failure_reason?.trim() || "No execution-level failure recorded."}
+                {currentWorkSummary}
               </p>
             </div>
             <div className="rounded-2xl border bg-background p-4">
@@ -542,8 +655,8 @@ export default function TenantExecutionDetailPage() {
                     <p className="text-muted-foreground">{workflow.current_state}</p>
                   </div>
                   <div>
-                    <p className="font-medium">Waiting on</p>
-                    <p className="text-muted-foreground">{workflow.waiting_on?.replace(/_/g, " ") || "—"}</p>
+                    <p className="font-medium">Current work</p>
+                    <p className="text-muted-foreground">{currentWorkSummary}</p>
                   </div>
                   <div>
                     <p className="font-medium">Failure</p>
@@ -657,7 +770,10 @@ export default function TenantExecutionDetailPage() {
             operationLabel={selectedOperation?.label?.trim() || selectedOperation?.operation_type || "Step"}
             attempts={selectedOperationAttempts}
             selectedAttemptId={selectedAttemptId}
-            onSelectAttemptId={setSelectedAttemptId}
+            onSelectAttemptId={(attemptId) => {
+              setAttemptSelectionMode(attemptId ? "pinned" : "follow_latest");
+              setSelectedAttemptId(attemptId);
+            }}
             activeView={observabilityView}
             onViewChange={setObservabilityView}
             onRefresh={() => {
@@ -670,6 +786,7 @@ export default function TenantExecutionDetailPage() {
             onClose={() => {
               setSelectedOperationId(null);
               setSelectedAttemptId(null);
+              setAttemptSelectionMode("follow_latest");
               setAwaitingNewAttemptForOperationId(null);
               setTelemetryEvents([]);
               setAuditAttempt(null);

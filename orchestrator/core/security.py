@@ -24,6 +24,7 @@ from orchestrator.core.tenant_access import (
     normalize_permission_key,
 )
 from orchestrator.api.dependencies import get_session
+from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import (
     Tenant,
     TenantMembership,
@@ -197,6 +198,32 @@ def require_authenticated_principal(
     bearer_credentials: HTTPAuthorizationCredentials | None = Depends(bearer_auth),
     basic_credentials: HTTPBasicCredentials | None = Depends(basic_auth),
     session: Session = Depends(get_session),
+) -> AuthenticatedPrincipal:
+    return _authenticate_principal(
+        bearer_credentials=bearer_credentials,
+        basic_credentials=basic_credentials,
+        session=session,
+    )
+
+
+def require_authenticated_stream_principal(
+    bearer_credentials: HTTPAuthorizationCredentials | None = Depends(bearer_auth),
+    basic_credentials: HTTPBasicCredentials | None = Depends(basic_auth),
+) -> AuthenticatedPrincipal:
+    session_factory = create_session_factory()
+    with session_factory() as session:
+        return _authenticate_principal(
+            bearer_credentials=bearer_credentials,
+            basic_credentials=basic_credentials,
+            session=session,
+        )
+
+
+def _authenticate_principal(
+    *,
+    bearer_credentials: HTTPAuthorizationCredentials | None,
+    basic_credentials: HTTPBasicCredentials | None,
+    session: Session,
 ) -> AuthenticatedPrincipal:
     settings = get_settings()
 

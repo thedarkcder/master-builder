@@ -20,6 +20,7 @@ from orchestrator.core.agent_observability import (
 from orchestrator.core.logging_pane_events import emit_logging_pane_event
 from orchestrator.core.product_events import ProductEvent
 from orchestrator.core.secrets import encrypt_value
+from orchestrator.core.workflow_operation_service import WorkflowOperationAttemptAlreadyRunningError
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import (
@@ -1714,12 +1715,12 @@ class AdminApiTests(AdminApiTestHarness):
             operation_types,
             [
                 "brief_normalization",
-                "jira_parent_update",
-                "jira_comment_projection",
-                "discord_followup_projection",
                 "backlog_planning",
+                "discord_followup_projection",
                 "jira_child_fanout",
                 "jira_child_promotion",
+                "jira_comment_projection",
+                "jira_parent_update",
                 "notification_emit",
             ],
         )
@@ -1861,6 +1862,102 @@ class AdminApiTests(AdminApiTestHarness):
         self.assertEqual(body["started_attempt"]["attempt_id"], "attempt-2")
         self.assertEqual(body["started_attempt"]["attempt_number"], 2)
         self.assertIsNone(workflow_body["failure_reason"])
+
+    def test_retry_workflow_operation_returns_conflict_for_running_attempt(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201)
+
+        now = datetime.now(timezone.utc)
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            workflow = WorkflowExecution(
+                workflow_id="parent_planning:MAB-234",
+                execution_id="wfexec-mab-234",
+                workflow_type_key="parent_planning",
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                source_system="jira",
+                source_ref="MAB-234",
+                display_name="Duplicate running retry",
+                source_description="Parent planning",
+                repo_url="https://github.com/example/repo",
+                branch=None,
+                pr_url=None,
+                orchestration_backend="temporal",
+                dedupe_scope="parent_planning",
+                status="failed",
+                last_error="Previous retry is still active",
+                active_run_id=None,
+                latest_checkpoint_id=None,
+                source_workflow_id=None,
+                source_run_id=None,
+                created_at=now,
+                started_at=now,
+                finished_at=None,
+                updated_at=now,
+            )
+            operation = WorkflowOperation(
+                operation_id="operation-backlog-planning-running",
+                workflow_id=workflow.workflow_id,
+                run_id=None,
+                operation_type="backlog_planning",
+                idempotency_key="workflow-definition:backlog_planning",
+                status="failed",
+                target_system="jira",
+                target_ref="MAB-234",
+                summary="Previous retry is still active",
+                created_at=now,
+                started_at=now,
+                finished_at=now,
+                updated_at=now,
+            )
+            session.add(workflow)
+            session.add(operation)
+            session.add(
+                WorkflowOperationAttempt(
+                    attempt_id="attempt-1",
+                    operation_id=operation.operation_id,
+                    attempt_number=1,
+                    status="failed",
+                    error_category="external_failure",
+                    error_message="Previous retry failed.",
+                    retryable=True,
+                    next_retry_at=None,
+                    created_at=now,
+                    started_at=now,
+                    finished_at=now,
+                )
+            )
+            session.commit()
+
+        class _FakeRuntime:
+            def retry_operation(self, *, workflow, operation):  # noqa: ANN001
+                del workflow, operation
+                raise WorkflowOperationAttemptAlreadyRunningError(
+                    "Workflow operation backlog_planning already has running attempt 2 (attempt-running)."
+                )
+
+        fake_jira_adapter = SimpleNamespace(list_child_issue_previews=lambda **_kwargs: [])
+        with (
+            patch(
+                "orchestrator.api.admin.workflow_operation_retry_service.build_workflow_runtime",
+                return_value=_FakeRuntime(),
+            ),
+            patch.object(
+                __import__("orchestrator.api.routes.admin_runs", fromlist=["workflow_integration_router"]).workflow_integration_router,
+                "jira",
+                return_value=fake_jira_adapter,
+            ),
+        ):
+            response = self.client.post(
+                "/api/admin/workflows/wfexec-mab-234/operations/operation-backlog-planning-running/retry",
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertIn("already has running attempt 2", response.json()["detail"])
 
     def test_get_workflow_includes_operation_events(self) -> None:
         payload = self._tenant_payload()
@@ -2152,6 +2249,92 @@ class AdminApiTests(AdminApiTestHarness):
         self.assertEqual(body[0]["message"], "Creating Jira child ticket payload.")
         self.assertEqual(body[0]["operation_id"], "operation-jira-child-fanout")
         list_live_events.assert_called_once()
+
+    def test_stream_workflow_operation_attempt_telemetry_passes_numeric_cursor(self) -> None:
+        payload = self._tenant_payload()
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201)
+
+        now = datetime.now(timezone.utc)
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            workflow = WorkflowExecution(
+                workflow_id="parent_planning:MAB-236",
+                execution_id="wfexec-mab-236",
+                workflow_type_key="parent_planning",
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                source_system="jira",
+                source_ref="MAB-236",
+                display_name="Telemetry stream cursor regression",
+                source_description="Parent planning",
+                repo_url=None,
+                branch=None,
+                pr_url=None,
+                orchestration_backend="temporal",
+                dedupe_scope="parent_planning",
+                status="running",
+                last_error=None,
+                active_run_id=None,
+                latest_checkpoint_id=None,
+                source_workflow_id=None,
+                source_run_id=None,
+                created_at=now,
+                started_at=now,
+                finished_at=None,
+                updated_at=now,
+            )
+            operation = WorkflowOperation(
+                operation_id="operation-backlog-planning",
+                workflow_id=workflow.workflow_id,
+                run_id=None,
+                operation_type="backlog_planning",
+                idempotency_key="workflow-definition:backlog_planning",
+                status="running",
+                target_system="jira",
+                target_ref="MAB-236",
+                summary=None,
+                created_at=now,
+                started_at=now,
+                finished_at=None,
+                updated_at=now,
+            )
+            attempt = WorkflowOperationAttempt(
+                attempt_id="attempt-backlog-planning-5",
+                operation_id=operation.operation_id,
+                attempt_number=5,
+                status="running",
+                error_category=None,
+                error_message=None,
+                retryable=True,
+                next_retry_at=None,
+                created_at=now,
+                started_at=now,
+                finished_at=None,
+            )
+            session.add_all([workflow, operation, attempt])
+            session.commit()
+
+        def _stream_events(*, operation_id, attempt_id, after_event_sequence, **_kwargs):  # noqa: ANN001
+            self.assertEqual(operation_id, "operation-backlog-planning")
+            self.assertEqual(attempt_id, "attempt-backlog-planning-5")
+            self.assertEqual(after_event_sequence, 11719001157677308259)
+            self.assertIsInstance(after_event_sequence, int)
+            return iter(['{"event_sequence":11719001157677308260}\n'])
+
+        with patch(
+            "orchestrator.api.routes.admin_runs.stream_workflow_operation_live_events_ndjson_impl",
+            side_effect=_stream_events,
+        ):
+            response = self.client.get(
+                "/api/admin/workflows/wfexec-mab-236/operations/operation-backlog-planning"
+                "/attempts/attempt-backlog-planning-5/telemetry/stream"
+                "?after_event_sequence=11719001157677308259",
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.text, '{"event_sequence":11719001157677308260}\n')
 
     def test_get_workflow_operation_transcript_groups_attempts(self) -> None:
         payload = self._tenant_payload()

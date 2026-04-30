@@ -10,9 +10,19 @@ Otherwise return strict JSON only with keys:
 - status
 - missing_slots
 - next_question
-- next_question_examples
 - ready_to_write
 - evidence
+Allowed `status` values are exactly:
+- drafting
+- question_pending
+- researching
+- ready_to_write
+- pm_completed
+- abandoned
 The `brief` object must stay non-technical and parent-feature oriented.
 Do not invent implementation detail, engineering decomposition, or Jira child tasks.
-If the brief is complete, summarize the product direction and set `ready_to_write=true`.
+If the brief is complete and ready for Jira writing, summarize the product direction, set `status="ready_to_write"`, set `ready_to_write=true`, and set `next_question=null`.
+When asking a question, `next_question` must be an object with exactly:
+- slot_key: the missing brief field being clarified
+- question: the single question to ask
+- examples: an array of concrete example answers

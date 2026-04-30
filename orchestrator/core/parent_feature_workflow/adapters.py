@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import replace
 from types import SimpleNamespace
 from typing import Any
@@ -8,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from orchestrator.core.architecture_document_service import ArchitectureDocumentService
 from orchestrator.core.clarification_questions import ClarificationQuestion
-from orchestrator.core.clarification_projection_service import has_matching_active_clarification_state
+from orchestrator.core.clarification_projection_service import matching_active_jira_clarification_evidence_id
 from orchestrator.core.followup_context_service import FOLLOWUP_CONTEXT_PM_INTERVIEW
 from orchestrator.core.jira_links import (
     architecture_document_remote_link_spec,
@@ -30,10 +31,12 @@ from orchestrator.core.jira_parent_child_sync_shared import (
     fanout_completion_note as _fanout_completion_note,
     pm_interview_jira_reply_scope as _pm_interview_jira_reply_scope,
     pm_interview_jira_transport as _pm_interview_jira_transport,
+    extract_created_comment_id as _extract_created_comment_id,
     question_text as _question_text,
     sync_completion_note as _sync_completion_note,
 )
 from orchestrator.core.parent_feature_brief_store import (
+    parent_planning_clarification_history,
     persist_parent_feature_brief_snapshot,
     resolve_parent_feature_brief,
 )
@@ -54,6 +57,9 @@ from orchestrator.core.specialist_planning import (
 from orchestrator.core.workflow_execution_projection import resolve_latest_workflow_execution_by_source
 from orchestrator.storage.models import Project
 from orchestrator.tools.atlassian_oauth import JiraIssueDetail
+
+logger = logging.getLogger(__name__)
+
 
 class _JiraParentIssueGateway:
     def __init__(
@@ -209,15 +215,23 @@ class _JiraParentIssueGateway:
         )
         return created_comment, error
 
-    def has_active_clarification(
+    def active_clarification_effects(
         self,
         *,
         issue_key: str,
         questions: tuple[ClarificationQuestion, ...],
-    ) -> bool:
-        return self.has_matching_active_pm_clarification_state(
+    ) -> ClarificationPublishEffects | None:
+        jira_comment_id = self.matching_active_pm_jira_comment_id(
             parent_issue_key=issue_key,
             questions=questions,
+        )
+        if jira_comment_id is None:
+            return None
+        return ClarificationPublishEffects(
+            state_recorded=True,
+            jira_comment_created=False,
+            discord_followup_created=False,
+            jira_comment_id=jira_comment_id,
         )
 
     def publish_clarification(
@@ -226,10 +240,6 @@ class _JiraParentIssueGateway:
         issue_key: str,
         questions: tuple[ClarificationQuestion, ...],
     ) -> ClarificationPublishEffects:
-        posted_to_discord = self.post_parent_brief_questions(
-            parent_issue_key=issue_key,
-            questions=questions,
-        )
         created_comment, error = self.post_parent_brief_questions_jira(
             parent_issue_key=issue_key,
             questions=questions,
@@ -238,20 +248,36 @@ class _JiraParentIssueGateway:
             raise RuntimeError(
                 f"Jira clarification projection failed for {issue_key}: {error or 'comment was not created'}"
             )
+        jira_comment_id = _extract_created_comment_id(created_comment)
+        if not jira_comment_id:
+            raise RuntimeError(f"Jira clarification projection for {issue_key} did not return a comment id")
         jira_comment_created = error is None and created_comment is not None
+        posted_to_discord = False
+        try:
+            posted_to_discord = self.post_parent_brief_questions(
+                parent_issue_key=issue_key,
+                questions=questions,
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "optional_discord_clarification_projection_failed issue_key=%s",
+                issue_key,
+                exc_info=True,
+            )
         return ClarificationPublishEffects(
             state_recorded=True,
             jira_comment_created=jira_comment_created,
             discord_followup_created=posted_to_discord,
+            jira_comment_id=jira_comment_id,
         )
 
-    def has_matching_active_pm_clarification_state(
+    def matching_active_pm_jira_comment_id(
         self,
         *,
         parent_issue_key: str,
         questions: tuple[ClarificationQuestion, ...],
-    ) -> bool:
-        return has_matching_active_clarification_state(
+    ) -> str | None:
+        return matching_active_jira_clarification_evidence_id(
             session=self._session,
             tenant_id=self._context.tenant_id,
             issue_key=parent_issue_key,
@@ -387,7 +413,11 @@ class _ParentBriefPlanner:
                 related_issues=(),
                 status_counts={parent_detail.status: 1},
                 github_context={},
-                conversation_history=(),
+                conversation_history=parent_planning_clarification_history(
+                    session=self._session,
+                    tenant_id=self._context.tenant_id,
+                    parent_issue_key=parent_detail.key,
+                ),
                 working_dir=".",
                 workflow_id=self._context.workflow_id,
                 operation_id=self._context.operation_id,

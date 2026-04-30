@@ -8,11 +8,13 @@ from typing import Literal
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
+from hashlib import blake2b
 
 from sqlalchemy.orm import Session
 
 from orchestrator.core.config import get_settings
 from orchestrator.core.guardrails import redact_sensitive_text
+from orchestrator.core.product_event_notifications import publish_product_event_notification
 from orchestrator.storage.models import WorkflowOperationAttempt
 
 EventClass = Literal["execution_log", "audit_evidence", "system_log"]
@@ -56,6 +58,13 @@ def _as_utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
+
+
+def _event_sequence(*, event_id: str, recorded_at: datetime) -> int:
+    timestamp = int(_as_utc(recorded_at).timestamp() * 1_000_000)
+    digest = blake2b(event_id.encode("utf-8"), digest_size=8).digest()
+    suffix = int.from_bytes(digest, "big") % 100_000
+    return timestamp * 100_000 + suffix
 
 
 def _normalize_payload(payload: dict | None) -> dict[str, object]:
@@ -304,7 +313,7 @@ def record_product_event(
     if not str(tenant_id or "").strip() or not normalized_message or not str(event_kind or "").strip():
         raise ValueError("Product events require tenant_id, event_kind, and message")
     row = ProductEvent(
-        event_sequence=0,
+        event_sequence=_event_sequence(event_id=normalized_event_id, recorded_at=timestamp),
         event_id=normalized_event_id,
         event_class=event_class,
         tenant_id=str(tenant_id or "").strip(),
@@ -323,16 +332,25 @@ def record_product_event(
     )
     table_name = "audit_evidence_events" if event_class == "audit_evidence" else "execution_log_events"
     event_store().execute(_insert_sql(table_name=table_name, row=row))
+    publish_product_event_notification(
+        event_class=event_class,
+        event_sequence=row.event_sequence,
+        tenant_id=row.tenant_id,
+        workflow_id=row.workflow_id,
+        run_id=row.run_id,
+        operation_id=row.operation_id,
+        attempt_id=row.attempt_id,
+    )
     return row
 
 
 def _insert_sql(*, table_name: str, row: ProductEvent) -> str:
     return f"""
         INSERT INTO {table_name} (
-            event_id, event_class, tenant_id, project_id, workflow_id, run_id, operation_id, attempt_id,
+            event_sequence, event_id, event_class, tenant_id, project_id, workflow_id, run_id, operation_id, attempt_id,
             issue_key, event_kind, level, source_component, message, payload_json, recorded_at
         ) VALUES (
-            {_quote_sql(row.event_id)}, {_quote_sql(row.event_class)}, {_quote_sql(row.tenant_id)},
+            {int(row.event_sequence)}, {_quote_sql(row.event_id)}, {_quote_sql(row.event_class)}, {_quote_sql(row.tenant_id)},
             {_quote_sql(row.project_id)}, {_quote_sql(row.workflow_id)}, {_quote_sql(row.run_id)},
             {_quote_sql(row.operation_id)}, {_quote_sql(row.attempt_id)}, {_quote_sql(row.issue_key)},
             {_quote_sql(row.event_kind)}, {_quote_sql(row.level)}, {_quote_sql(row.source_component)},

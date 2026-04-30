@@ -11,13 +11,17 @@ Return strict JSON only with keys:
 - open_behavior_questions
 - acceptance_impacts
 findings must be concrete validation observations.
+findings must be an array of strings.
 recommendations must be test and verification recommendations only.
+recommendations must be an array of strings.
 required_tasks must be behavior-first functional requirement slices with a verification focus, not internal implementation chores.
+required_tasks must be an array of strings.
 open_behavior_questions must contain only product-safe questions for unresolved behavior or non-functional decisions.
 Each open_behavior_questions entry must be an object with:
 - question
 - why_it_matters
 acceptance_impacts must describe observable effects on the parent acceptance criteria.
+acceptance_impacts must be an array of strings.
 If you ask a question, keep it narrow and include a short example in the question text.
 why_it_matters must explain why the missing answer changes verification scope, regression coverage, or release confidence.
 If no behavior ambiguity remains, open_behavior_questions must be an empty array.

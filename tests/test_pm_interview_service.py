@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
+from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 from types import SimpleNamespace
@@ -28,6 +29,7 @@ from orchestrator.core.pm_interview_service import (
     upsert_pm_interview_case,
 )
 from orchestrator.core.parent_feature_brief_store import (
+    parent_planning_clarification_history,
     persist_parent_feature_brief_snapshot,
     resolve_parent_feature_brief,
     resolve_parent_feature_case,
@@ -348,6 +350,60 @@ class PMInterviewServiceTests(unittest.TestCase):
         self.assertEqual(brief.user_value, "Legacy value")
         self.assertEqual(brief.acceptance_criteria, ())
 
+    def test_parent_planning_clarification_history_includes_stored_jira_answers(self) -> None:
+        now = datetime.now(timezone.utc)
+        with self.session_factory() as session:
+            session.add(
+                FollowupContext(
+                    context_id="ctx-parent-plan-answer",
+                    tenant_id="example",
+                    project_id="example-default",
+                    context_type="parent_planning_clarification",
+                    status="closed",
+                    channel_id=None,
+                    thread_channel_id=None,
+                    root_message_id="22805",
+                    issue_key="TP-501",
+                    request_id="parent-planning-clarification:TP-501",
+                    run_id=None,
+                    metadata_json={
+                        "jira_comment_id": "22805",
+                        "answer_comment_id": "22862",
+                        "answer_text": "Recovery grants expire after 1 hour.",
+                        "questions": [{"question": "What recovery expiry should v1 use?"}],
+                    },
+                    created_at=now,
+                    updated_at=now,
+                    closed_at=now,
+                )
+            )
+            session.commit()
+
+        with self.session_factory() as session:
+            history = parent_planning_clarification_history(
+                session=session,
+                tenant_id="example",
+                parent_issue_key="TP-501",
+            )
+
+        self.assertEqual(
+            history,
+            (
+                {
+                    "role": "system",
+                    "kind": "parent_planning_clarification_questions",
+                    "source_ref": "22805",
+                    "questions": [{"question": "What recovery expiry should v1 use?"}],
+                },
+                {
+                    "role": "user",
+                    "kind": "parent_planning_clarification_answer",
+                    "source_ref": "22862",
+                    "answer": "Recovery grants expire after 1 hour.",
+                },
+            ),
+        )
+
     def test_persist_parent_feature_brief_snapshot_stores_parent_brief_record(self) -> None:
         with self.session_factory() as session:
             row = persist_parent_feature_brief_snapshot(
@@ -374,7 +430,7 @@ class PMInterviewServiceTests(unittest.TestCase):
         self.assertEqual(stored.notes_json["source"], "jira_parent_brief_normalization")
         self.assertTrue(stored.notes_json["parent_brief_snapshot"])
 
-    def test_resolve_parent_feature_brief_excludes_incomplete_snapshots_even_with_include_incomplete(self) -> None:
+    def test_resolve_parent_feature_brief_include_incomplete_returns_draft_snapshot(self) -> None:
         with self.session_factory() as session:
             persist_parent_feature_brief_snapshot(
                 session=session,
@@ -405,7 +461,10 @@ class PMInterviewServiceTests(unittest.TestCase):
             )
 
         self.assertIsNone(completed_only)
-        self.assertIsNone(latest_any_status)
+        self.assertIsNotNone(latest_any_status)
+        assert latest_any_status is not None
+        self.assertEqual(latest_any_status.objective, "Needs clarification")
+        self.assertEqual(latest_any_status.user_value, "Still incomplete")
 
     def test_resolve_parent_feature_brief_include_incomplete_returns_draft_case_only(self) -> None:
         with self.session_factory() as session:
@@ -700,10 +759,48 @@ class PMInterviewServiceTests(unittest.TestCase):
         self.assertEqual(payload["missing_slots"], ["user_value", "acceptance_criteria"])
         self.assertIn("discord/pm_interview_system.j2", captured)
         user_kwargs = captured["discord/pm_interview_user.j2"]
+        prompt_root = Path(__file__).resolve().parents[1] / "orchestrator" / "prompts" / "discord"
+        self.assertIn(
+            "Allowed `status` values are exactly:",
+            (prompt_root / "pm_interview_system.j2").read_text(),
+        )
+        user_prompt_template = (prompt_root / "pm_interview_user.j2").read_text()
+        self.assertIn('status="ready_to_write"', user_prompt_template)
+        self.assertIn("Do not use unlisted status words", user_prompt_template)
+        self.assertIn("Do not return `next_question` as a plain string", user_prompt_template)
+        self.assertIn("slot_key", (prompt_root / "pm_interview_system.j2").read_text())
         self.assertIn("current_question_examples_json", user_kwargs)
         self.assertTrue(json.loads(user_kwargs["current_question_examples_json"]))
         self.assertIn("brief_json", user_kwargs)
         self.assertEqual(json.loads(user_kwargs["brief_json"])["objective"], "Share the app with friends")
+
+    def test_plan_pm_interview_with_runtime_reports_invalid_status_value(self) -> None:
+        with patch(
+            "orchestrator.core.pm_interview_service._invoke_discord_json_maybe_tools",
+            return_value={
+                "message": "The brief is complete.",
+                "brief": {"objective": "Share the app with friends"},
+                "ready_to_write": True,
+                "status": "completed",
+                "next_question": None,
+            },
+        ):
+            with self.assertRaisesRegex(
+                CodexRuntimeError,
+                "invalid status 'completed'",
+            ):
+                plan_pm_interview_with_runtime(
+                    runtime=SimpleNamespace(),
+                    request_text="create a share feature",
+                    brief={"objective": "Share the app with friends"},
+                    evidence=[],
+                    missing_slots=[],
+                    current_question=None,
+                    project_keys=["TP"],
+                    issues=[],
+                    status_counts={},
+                    invocation_context=SimpleNamespace(),
+                )
 
     def test_plan_pm_interview_with_runtime_requires_explicit_next_question_when_incomplete(self) -> None:
         with patch(

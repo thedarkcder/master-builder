@@ -152,10 +152,18 @@ def _require_planning_string_tuple_field(
     field_name: str,
     raw_value: object,
 ) -> tuple[str, ...]:
+    if not isinstance(raw_value, list):
+        raise RuntimeError(
+            f"Codex returned {planning_state} child_ticket_specs[{issue_index}] "
+            f"with invalid {field_name}; expected a non-empty array of strings"
+        )
     values = _normalized_string_tuple(raw_value)
     if values:
         return values
-    raise RuntimeError(f"Codex returned {planning_state} child_ticket_specs[{issue_index}] without {field_name}")
+    raise RuntimeError(
+        f"Codex returned {planning_state} child_ticket_specs[{issue_index}] "
+        f"with empty {field_name}; expected a non-empty array of strings"
+    )
 
 
 @dataclass(frozen=True)
@@ -516,8 +524,12 @@ class PMInterviewPlanPayload:
             raise RuntimeError("PM interview returned non-object payload")
         brief = _require_dict(payload, "brief", context="PM interview payload")
         status = _require_string(payload, "status", context="PM interview payload").lower()
-        if status not in {"drafting", "question_pending", "researching", "ready_to_write", "pm_completed", "abandoned"}:
-            raise RuntimeError("PM interview payload has invalid status")
+        allowed_statuses = {"drafting", "question_pending", "researching", "ready_to_write", "pm_completed", "abandoned"}
+        if status not in allowed_statuses:
+            raise RuntimeError(
+                "PM interview payload has invalid status "
+                f"{status!r}; expected one of: {', '.join(sorted(allowed_statuses))}"
+            )
         ready_to_write = payload.get("ready_to_write")
         if not isinstance(ready_to_write, bool):
             raise RuntimeError("PM interview payload missing ready_to_write")

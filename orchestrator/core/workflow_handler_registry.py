@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from orchestrator.core.workflow_advance import WorkflowAdvanceHandler, WorkflowOperationRetryHandler
+from orchestrator.core.workflow_advance import (
+    WorkflowAdvanceHandler,
+    WorkflowOperationRetryCapability,
+    WorkflowOperationRetryHandler,
+)
 
 
 @dataclass(frozen=True)
@@ -23,6 +27,15 @@ class WorkflowHandlerRegistry:
         if handler is None:
             raise LookupError(f"No workflow operation retry handler is registered for {handler_key}")
         return handler
+
+    def operation_retry_capabilities(
+        self,
+        *,
+        handler_key: str,
+        workflow_type,  # noqa: ANN001
+    ) -> tuple[WorkflowOperationRetryCapability, ...]:
+        handler = self.resolve_operation_retry_handler(handler_key)
+        return handler.operation_retry_capabilities(workflow_type)
 
 
 def build_workflow_handler_registry(

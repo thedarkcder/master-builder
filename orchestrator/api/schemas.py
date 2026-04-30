@@ -1197,6 +1197,7 @@ class WorkflowOperationRead(BaseModel):
     required: bool = True
     kind: str = "business"
     after: list[str] = Field(default_factory=list)
+    supports: list[str] = Field(default_factory=list)
     definition_only: bool = False
     target_system: str | None = None
     target_ref: str | None = None
@@ -1222,6 +1223,7 @@ class WorkflowTypeOperationRead(BaseModel):
     completion_required: bool = True
     kind: str = "business"
     after: list[str] = Field(default_factory=list)
+    supports: list[str] = Field(default_factory=list)
     required: bool = True
     retryable: bool = False
     graph_index: int = 0

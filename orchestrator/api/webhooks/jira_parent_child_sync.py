@@ -25,6 +25,7 @@ from orchestrator.core.workflow_runtime import build_workflow_runtime
 from orchestrator.core.parent_feature_workflow.flows import (
     handle_engineering_clarification_command as handle_engineering_clarification_command_service,
     handle_engineering_clarification_reply as handle_engineering_clarification_reply_service,
+    handle_parent_planning_clarification_reply as handle_parent_planning_clarification_reply_service,
     handle_pm_interview_reply as handle_pm_interview_reply_service,
     handle_parent_feature_sync as handle_parent_feature_sync_service,
 )
@@ -67,6 +68,9 @@ def _webhook_response_from_result(
 ) -> dict | None:
     if not result.handled:
         return None
+    if result.failed:
+        error = str(result.extra.get("error") or result.reason or "Jira parent workflow failed").strip()
+        raise RuntimeError(error)
     return jira_webhook_response(
         context,
         enqueued=False,
@@ -135,6 +139,27 @@ def handle_engineering_clarification_reply(
         post_jira_comment_fn=post_jira_comment,
         create_jira_comment_fn=create_jira_comment,
         extract_jira_comment_text_fn=extract_jira_comment_text,
+    )
+    return _webhook_response_from_result(context=context, result=result)
+
+
+def handle_parent_planning_clarification_reply(
+    *,
+    context: JiraWebhookContext,
+    session: Session,
+    settings,  # noqa: ANN001
+) -> dict | None:
+    result = handle_parent_planning_clarification_reply_service(
+        context=_build_service_context(context=context),
+        session=session,
+        settings=settings,
+        integration_router=_build_workflow_integration_router(),
+        seed_issues_with_runtime_fn=seed_issues_with_runtime,
+        post_jira_comment_fn=post_jira_comment,
+        create_jira_comment_fn=create_jira_comment,
+        extract_jira_comment_text_fn=extract_jira_comment_text,
+        extract_jira_comment_id_fn=extract_jira_comment_id,
+        build_runtime_for_selector_fn=build_runtime_for_selector,
     )
     return _webhook_response_from_result(context=context, result=result)
 

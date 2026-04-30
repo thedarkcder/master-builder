@@ -1,5 +1,6 @@
 Stage: discord-issues-seed
 Allowed Jira project keys: {{ allowed_project_keys_json }}
+Jira issue types available for create by project key: {{ project_issue_types_json }}
 Markdown spec:
 {{ prompt_markdown }}
 
@@ -7,8 +8,9 @@ Output contract:
 - parent_issue must stay feature/behavior based and non-technical.
 - engineering_children must hold the technical implementation breakdown.
 - project_key must be one of allowed_project_keys.
-- parent_issue.issue_type should auto-size by scope: Epic for multi-story initiatives, otherwise Story, Feature, Task, or Issue.
-- engineering_children.issue_type should prefer Sub-task when the work is clearly a child implementation ticket; otherwise use Task.
+- Every parent_issue.issue_type and engineering_children.issue_type must exactly match one issue type listed for the selected project in "Jira issue types available for create by project key".
+- For parent_issue.issue_type, choose the best available type for the selected project. Use Epic only for initiative-scale work.
+- For engineering_children.issue_type, prefer Sub-task/Subtask when that exact type is available for the selected project and the work is clearly a child implementation ticket; otherwise use another listed implementation issue type such as Task.
 - labels should be short normalized tokens when present.
 - parent_issue.open_questions must be stakeholder-safe and non-technical.
 - engineering_children.how_to_test must include concrete validation actions.

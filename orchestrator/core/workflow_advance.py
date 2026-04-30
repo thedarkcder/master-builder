@@ -41,9 +41,29 @@ class WorkflowAdvanceOutcome:
     reason: str | None = None
     extra: dict[str, object] = field(default_factory=dict)
     requires_persisted_execution: bool = True
+    failed: bool = False
+
+
+@dataclass(frozen=True)
+class WorkflowOperationRetryCapability:
+    operation_type: str
+
+
+@dataclass(frozen=True)
+class WorkflowOperationRetryRequest:
+    session: Session
+    settings: Settings
+    session_factory: sessionmaker[Session]
+    workflow_type: Any
+    workflow: WorkflowExecution
+    operation: WorkflowOperation
 
 
 class WorkflowAdvanceLifecycle(Protocol):
+    @property
+    def workflow_type(self):
+        ...
+
     def has_execution(self) -> bool:
         ...
 
@@ -53,7 +73,16 @@ class WorkflowAdvanceLifecycle(Protocol):
     def mark_running(self) -> None:
         ...
 
-    def start_operation_attempt(self, *, operation_type: str):
+    def start_operation_attempt(
+        self,
+        *,
+        operation_type: str,
+        run_id: str | None = None,
+        idempotency_key: str | None = None,
+        target_system: str | None = None,
+        target_ref: str | None = None,
+        summary: str | None = None,
+    ):
         ...
 
     def complete_started_operation(self, *, operation, attempt, summary: str) -> None:  # noqa: ANN001
@@ -98,6 +127,10 @@ class DurableWorkflowLifecycle:
         self._description: object | None = execution.source.description
         self._projection: WorkflowExecutionProjection | None = None
 
+    @property
+    def workflow_type(self):
+        return self._workflow_type
+
     def _ensure_projection(self) -> WorkflowExecutionProjection:
         if self._projection is None:
             self._projection = ensure_workflow_execution(
@@ -134,8 +167,24 @@ class DurableWorkflowLifecycle:
     def mark_running(self) -> None:
         self._ensure_projection().mark_running()
 
-    def start_operation_attempt(self, *, operation_type: str):
-        operation, attempt = self._ensure_projection().start_operation_attempt(operation_type=operation_type)
+    def start_operation_attempt(
+        self,
+        *,
+        operation_type: str,
+        run_id: str | None = None,
+        idempotency_key: str | None = None,
+        target_system: str | None = None,
+        target_ref: str | None = None,
+        summary: str | None = None,
+    ):
+        operation, attempt = self._ensure_projection().start_operation_attempt(
+            operation_type=operation_type,
+            run_id=run_id,
+            idempotency_key=idempotency_key,
+            target_system=target_system,
+            target_ref=target_ref,
+            summary=summary,
+        )
         self._session.commit()
         return operation, attempt
 
@@ -186,15 +235,13 @@ class WorkflowAdvanceHandler(Protocol):
 
 
 class WorkflowOperationRetryHandler(Protocol):
+    def operation_retry_capabilities(self, workflow_type) -> tuple[WorkflowOperationRetryCapability, ...]:  # noqa: ANN001
+        ...
+
     def retry_operation(
         self,
         *,
-        session: Session,
-        settings: Settings,
-        session_factory: sessionmaker[Session],
-        workflow_type,
-        workflow: WorkflowExecution,
-        operation: WorkflowOperation,
+        request: WorkflowOperationRetryRequest,
     ) -> WorkflowOperationHandle:
         ...
 
@@ -244,10 +291,12 @@ def execute_workflow_operation_retry(
     workflow_type = get_workflow_type(session, workflow_type_key=workflow.workflow_type_key)
     handler = resolve_operation_retry_handler_fn(str(workflow_type.handler_key or "").strip())
     return handler.retry_operation(
-        session=session,
-        settings=settings,
-        session_factory=session_factory,
-        workflow_type=workflow_type,
-        workflow=workflow,
-        operation=operation,
+        request=WorkflowOperationRetryRequest(
+            session=session,
+            settings=settings,
+            session_factory=session_factory,
+            workflow_type=workflow_type,
+            workflow=workflow,
+            operation=operation,
+        )
     )

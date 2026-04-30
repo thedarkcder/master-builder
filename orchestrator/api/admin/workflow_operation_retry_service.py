@@ -17,6 +17,7 @@ from orchestrator.core.workflow_advance import (
     UnsupportedWorkflowOperationRetryError,
 )
 from orchestrator.core.workflow_handler_composition import build_installed_workflow_handler_registry
+from orchestrator.core.workflow_operation_service import WorkflowOperationAttemptAlreadyRunningError
 from orchestrator.core.workflow_runtime import build_workflow_runtime
 from orchestrator.core.worker.execution_service import build_run_process_kwargs
 from orchestrator.core.worker.process_service import process_claimed_run
@@ -49,6 +50,7 @@ def retry_workflow_operation(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Workflow operation has no attempt history to retry")
     if str(latest_attempt.status or "").strip().lower() not in {"failed", "retrying"}:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Workflow operation is not in a failed state")
+    previous_latest_attempt_id = str(latest_attempt.attempt_id or "").strip()
 
     handler_registry = build_installed_workflow_handler_registry(
         integration_router=integration_router,
@@ -70,7 +72,11 @@ def retry_workflow_operation(
     )
     try:
         runtime.retry_operation(workflow=workflow, operation=operation)
-    except (InvalidWorkflowOperationRetryError, UnsupportedWorkflowOperationRetryError) as exc:
+    except (
+        InvalidWorkflowOperationRetryError,
+        UnsupportedWorkflowOperationRetryError,
+        WorkflowOperationAttemptAlreadyRunningError,
+    ) as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     session.commit()
     refreshed_workflow = workflow_schema(
@@ -81,7 +87,12 @@ def retry_workflow_operation(
     )
     refreshed_attempts = workflow_operation_attempts(session=session, operation_id=operation.operation_id)
     latest_attempt = refreshed_attempts[0] if refreshed_attempts else None
+    started_attempt = (
+        latest_attempt
+        if latest_attempt is not None and str(latest_attempt.attempt_id or "").strip() != previous_latest_attempt_id
+        else None
+    )
     return WorkflowOperationRetryRead(
         workflow=refreshed_workflow,
-        started_attempt=(workflow_operation_attempt_to_schema(latest_attempt) if latest_attempt is not None else None),
+        started_attempt=(workflow_operation_attempt_to_schema(started_attempt) if started_attempt is not None else None),
     )
