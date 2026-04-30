@@ -61,7 +61,100 @@ class MigrationTests(unittest.TestCase):
 
         duplicates = {revision_id: count for revision_id, count in Counter(revision_ids).items() if count > 1}
         self.assertEqual(duplicates, {})
-        self.assertEqual(script.get_heads(), ["20260428_0096"])
+        self.assertEqual(script.get_heads(), ["20260430_0098"])
+
+    def test_optional_discord_projection_status_repair_migration(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            database_url = f"sqlite:///{Path(tmpdir) / 'discord-projection-repair.sqlite'}"
+            engine = create_engine(database_url)
+            with engine.begin() as connection:
+                connection.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"))
+                connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('20260428_0097')"))
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE workflow_operations (
+                            operation_id VARCHAR PRIMARY KEY,
+                            operation_type VARCHAR NOT NULL,
+                            status VARCHAR NOT NULL,
+                            summary TEXT,
+                            finished_at DATETIME,
+                            updated_at DATETIME
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE workflow_operation_attempts (
+                            attempt_id VARCHAR PRIMARY KEY,
+                            operation_id VARCHAR NOT NULL,
+                            attempt_number INTEGER NOT NULL,
+                            status VARCHAR NOT NULL,
+                            error_category VARCHAR,
+                            error_message TEXT,
+                            status_detail TEXT,
+                            retryable BOOLEAN NOT NULL,
+                            next_retry_at DATETIME,
+                            finished_at DATETIME
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO workflow_operations (
+                            operation_id, operation_type, status, summary, finished_at, updated_at
+                        )
+                        VALUES (
+                            'operation-discord', 'discord_followup_projection', 'failed',
+                            'Optional Discord clarification projection did not run for MAB-243',
+                            NULL, '2026-04-30 09:29:04'
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO workflow_operation_attempts (
+                            attempt_id, operation_id, attempt_number, status, error_category, error_message,
+                            status_detail, retryable, next_retry_at, finished_at
+                        )
+                        VALUES (
+                            'attempt-discord-3', 'operation-discord', 3, 'failed', 'contract_violation',
+                            'Optional Discord clarification projection did not run for MAB-243',
+                            'old failure', 1, NULL, '2026-04-30 09:29:04'
+                        )
+                        """
+                    )
+                )
+
+            self._alembic_upgrade(database_url, "20260430_0098")
+
+            with engine.connect() as connection:
+                operation = connection.execute(
+                    text("SELECT status, summary FROM workflow_operations WHERE operation_id = 'operation-discord'")
+                ).one()
+                attempt = connection.execute(
+                    text(
+                        """
+                        SELECT status, error_category, error_message, status_detail, retryable
+                        FROM workflow_operation_attempts
+                        WHERE attempt_id = 'attempt-discord-3'
+                        """
+                    )
+                ).one()
+
+            self.assertEqual(operation.status, "completed")
+            self.assertEqual(operation.summary, "Optional Discord clarification follow-up was not created.")
+            self.assertEqual(attempt.status, "completed")
+            self.assertIsNone(attempt.error_category)
+            self.assertIsNone(attempt.error_message)
+            self.assertIsNone(attempt.status_detail)
+            self.assertFalse(attempt.retryable)
 
     def test_code_inferred_workflow_graph_migration_removes_db_authored_definitions(self) -> None:
         with TemporaryDirectory() as tmpdir:
