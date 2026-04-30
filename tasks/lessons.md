@@ -1,5 +1,6 @@
 2026-04-21
 
+- Optional notification integrations such as Discord or Slack must have a terminal non-blocking operation result. Do not mark the workflow operation failed just because an optional notification was not created; keep required delivery semantics on the primary human-response channel such as Jira.
 - Parent planning clarifications and engineering child clarifications are different contracts. Do not store backlog-planning questions in an engineering-child context, and never mark a Jira reply handled if the context cannot identify a real continuation operation.
 - Workflow retryability must be modeled as executable capability records, not as UI metadata booleans plus executor branching. The read model, API retry endpoint, and executor must consume the same typed retry capability/request contract so a step cannot display Retry unless an operation handler actually owns it.
 - When a workflow path turns model/planner questions into `waiting_for_input`, do not let each caller separately decide publication, operation status, and summary text. Route the transition through one clarification boundary that requires real questions, publishes or confirms the active follow-up first, then marks the operation waiting.
