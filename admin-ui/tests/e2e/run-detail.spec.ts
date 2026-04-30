@@ -63,6 +63,36 @@ test("renders checkpoint-backed failed-after-dev runs with separate execution an
   await expect(page.getByText("PR created and code pushed.", { exact: true })).toBeVisible({ timeout: 15000 });
 });
 
+test("keeps one run event stream while active run logs arrive", async ({ page }) => {
+  const run = makeRun({
+    status: "running",
+  });
+  const streamLogs = makeStageInvocationLogs({
+    runId: run.run_id,
+    stage: "dev",
+    invocationId: "dev-live-stream",
+    command: "stage.dev",
+    startedAt: "2026-03-27T17:00:00Z",
+  });
+  let streamRequests = 0;
+
+  await seedAdminSession(page);
+  await mockRunDetailApis(page, {
+    run,
+    logs: [],
+    streamEvents: streamLogs,
+    onRunEventStreamRequest: () => {
+      streamRequests += 1;
+    },
+  });
+
+  await page.goto(`/runs/${run.run_id}/agents`);
+
+  await expect(page.getByText("Loading run details...")).toHaveCount(0, { timeout: 15000 });
+  await expect.poll(() => streamRequests, { timeout: 15000 }).toBe(1);
+  expect(streamRequests).toBe(1);
+});
+
 test("marks a finished stage without a checkpoint as interrupted on terminal runs", async ({ page }) => {
   const run = makeRun({
     plan: makeExecutionSnapshotPlan({
