@@ -11,7 +11,10 @@ from orchestrator.core.observability_stream import (
     observability_stream_event_to_payload,
 )
 from orchestrator.core.product_events import list_product_events_after_sequence
-from orchestrator.core.product_event_notifications import open_product_event_listener
+from orchestrator.core.product_event_notifications import (
+    current_product_event_notification_marker,
+    wait_for_product_event_notification,
+)
 from orchestrator.storage.models import WorkflowOperationAttempt
 
 
@@ -54,35 +57,35 @@ def stream_workflow_operation_live_events_ndjson(
     if attempt_id:
         filters["attempt_id"] = attempt_id
 
-    with open_product_event_listener() as listener:
-        if cursor == 0:
-            snapshot_rows = build_observability_snapshot_query(
-                operation_id=normalized_operation_id,
-                attempt_id=attempt_id,
-                limit=max(1, min(int(getattr(settings, "logging_pane_initial_log_limit", 200)), 1000)),
-            )
-            cursor = max((int(row.event_sequence) for row in snapshot_rows), default=0)
-            for row in snapshot_rows:
-                yield encode_stream_row(row)
-
-        rows = list_product_events_after_sequence(
-            event_class="execution_log",
-            filters=filters,
-            after_sequence=cursor,
-            limit=500,
+    notification_marker = current_product_event_notification_marker()
+    if cursor == 0:
+        snapshot_rows = build_observability_snapshot_query(
+            operation_id=normalized_operation_id,
+            attempt_id=attempt_id,
+            limit=max(1, min(int(getattr(settings, "logging_pane_initial_log_limit", 200)), 1000)),
         )
-        for row in rows:
+        cursor = max((int(row.event_sequence) for row in snapshot_rows), default=0)
+        for row in snapshot_rows:
             yield encode_stream_row(row)
-        if rows:
-            cursor = max(int(row.event_sequence) for row in rows)
 
+    rows = list_product_events_after_sequence(
+        event_class="execution_log",
+        filters=filters,
+        after_sequence=cursor,
+        limit=500,
+    )
+    for row in rows:
+        yield encode_stream_row(row)
+    if rows:
+        cursor = max(int(row.event_sequence) for row in rows)
+
+    while True:
+        next_marker = wait_for_product_event_notification(marker=notification_marker, timeout_seconds=25)
+        if next_marker <= notification_marker:
+            yield "\n"
+            continue
+        notification_marker = next_marker
         while True:
-            received = False
-            for _notification in listener.notifies(timeout=25, stop_after=1):
-                received = True
-            if not received:
-                yield "\n"
-                continue
             rows = list_product_events_after_sequence(
                 event_class="execution_log",
                 filters=filters,
@@ -93,3 +96,5 @@ def stream_workflow_operation_live_events_ndjson(
                 yield encode_stream_row(row)
             if rows:
                 cursor = max(int(row.event_sequence) for row in rows)
+            if len(rows) < 500:
+                break
