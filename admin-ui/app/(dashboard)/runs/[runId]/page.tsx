@@ -19,7 +19,6 @@ import {
   getTokenTimeline,
   listRunEvents,
   listRunLogs,
-  streamRunEvents,
   type RunEventRecord,
   type RuntimeLogEventRecord,
   type RunRecord,
@@ -29,6 +28,7 @@ import {
 } from "@/lib/api";
 import { formatTimeAgo, formatTimestamp } from "@/lib/datetime";
 import { buildRunDetailPath, resolveRunRouteContext } from "@/lib/dashboard-paths";
+import { useRunEventStream } from "@/hooks/use-run-event-stream";
 
 type InvocationTelemetry = {
   event_kind: string;
@@ -151,22 +151,6 @@ function toStringList(value: unknown): string[] {
   }
   return value.map((item) => String(item ?? "").trim()).filter((item) => item.length > 0);
 }
-
-function isAbortLikeError(error: unknown): boolean {
-  const message = (error as Error)?.message?.toLowerCase() ?? "";
-  return message.includes("aborted");
-}
-
-function statusFromLifecycleEvent(eventType: string): RunRecord["status"] | null {
-  if (eventType === "TASK_COMPLETED") {
-    return "succeeded";
-  }
-  if (eventType === "RUN_FAILED" || eventType === "TASK_FAILED") {
-    return "failed";
-  }
-  return null;
-}
-
 
 function parseTelemetryPayload(message: string): InvocationTelemetry | null {
   try {
@@ -697,61 +681,54 @@ export default function RunDetailPage() {
     }
   }, [ready, credentials, loadRun]);
 
-  useEffect(() => {
-    if (!run || !credentials) {
-      return;
-    }
-    if (run.status !== "queued" && run.status !== "running") {
-      return;
-    }
-    const controller = new AbortController();
-    void streamRunEvents(
-      credentials,
-      params.runId,
-      (event) => {
-        if ((event as { event_kind?: string }).event_kind === "run_log" || "message" in event) {
-          const logEvent = event as RuntimeLogEventRecord;
-          setLogs((prev) => {
-            const nextKey = logEntryIdentity(logEvent);
-            if (prev.some((entry) => logEntryIdentity(entry) === nextKey)) {
-              return prev;
-            }
-            const next = [...prev, logEvent];
-            return dedupeRunLogs(next).slice(-800);
-          });
-        } else {
-          const lifecycleEvent = event as RunEventRecord;
-          setEvents((prev) => {
-            if (
-              prev.some(
-                (entry) =>
-                  entry.event_type === lifecycleEvent.event_type &&
-                  entry.recorded_at === lifecycleEvent.recorded_at &&
-                  entry.agent_id === lifecycleEvent.agent_id
-              )
-            ) {
-              return prev;
-            }
-            const next = [...prev, lifecycleEvent];
-            return next.slice(-200);
-          });
-          const nextStatus = statusFromLifecycleEvent(lifecycleEvent.event_type);
-          if (nextStatus) {
-            setRun((prev) => (prev ? { ...prev, status: nextStatus } : prev));
-          }
-        }
-      },
-      controller.signal
-    ).catch((error) => {
-      if (controller.signal.aborted || isAbortLikeError(error)) {
-        return;
+  const runStatus = run?.status ?? null;
+  const runId = run?.run_id ?? null;
+
+  const handleStreamLogEvent = useCallback((logEvent: RuntimeLogEventRecord) => {
+    setLogs((prev) => {
+      const nextKey = logEntryIdentity(logEvent);
+      if (prev.some((entry) => logEntryIdentity(entry) === nextKey)) {
+        return prev;
       }
-      setStatusLine(`Run event stream closed: ${(error as Error).message}`);
+      const next = [...prev, logEvent];
+      return dedupeRunLogs(next).slice(-800);
     });
-    return () => {
-      controller.abort();
-    };
-  }, [run, credentials, params.runId, loadRun]);
+  }, []);
+
+  const handleStreamLifecycleEvent = useCallback((lifecycleEvent: RunEventRecord) => {
+    setEvents((prev) => {
+      if (
+        prev.some(
+          (entry) =>
+            entry.event_type === lifecycleEvent.event_type &&
+            entry.recorded_at === lifecycleEvent.recorded_at &&
+            entry.agent_id === lifecycleEvent.agent_id,
+        )
+      ) {
+        return prev;
+      }
+      const next = [...prev, lifecycleEvent];
+      return next.slice(-200);
+    });
+  }, []);
+
+  const handleStreamStatusChange = useCallback((nextStatus: RunRecord["status"]) => {
+    setRun((prev) => (prev && prev.status !== nextStatus ? { ...prev, status: nextStatus } : prev));
+  }, []);
+
+  const handleStreamError = useCallback((message: string) => {
+    setStatusLine(`Run event stream closed: ${message}`);
+  }, []);
+
+  useRunEventStream({
+    credentials,
+    runId,
+    runStatus,
+    onLogEvent: handleStreamLogEvent,
+    onLifecycleEvent: handleStreamLifecycleEvent,
+    onStatusChange: handleStreamStatusChange,
+    onError: handleStreamError,
+  });
 
   async function handleForceRerun() {
     if (!credentials || !run) {
