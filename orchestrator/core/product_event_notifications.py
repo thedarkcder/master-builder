@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
+from collections.abc import Callable
 
 try:
     import psycopg
@@ -18,6 +19,10 @@ logger = logging.getLogger(__name__)
 
 _publisher_lock = threading.Lock()
 _publisher_conn = None
+_listener_condition = threading.Condition()
+_listener_thread: threading.Thread | None = None
+_listener_generation = 0
+_listener_stop = threading.Event()
 
 
 def _postgres_dsn() -> str:
@@ -89,3 +94,54 @@ def open_product_event_listener():
     conn = psycopg.connect(_postgres_dsn(), autocommit=True)
     conn.execute(f'LISTEN "{PRODUCT_EVENT_NOTIFY_CHANNEL}"')
     return conn
+
+
+def _advance_listener_generation() -> None:
+    global _listener_generation
+    with _listener_condition:
+        _listener_generation += 1
+        _listener_condition.notify_all()
+
+
+def _listener_loop(listener_factory: Callable = open_product_event_listener) -> None:
+    while not _listener_stop.is_set():
+        try:
+            with listener_factory() as conn:
+                while not _listener_stop.is_set():
+                    received = False
+                    for _notification in conn.notifies(timeout=25, stop_after=1):
+                        received = True
+                    if received:
+                        _advance_listener_generation()
+        except Exception:
+            logger.exception("product_event_listener_failed")
+            _advance_listener_generation()
+            _listener_stop.wait(timeout=1.0)
+
+
+def _ensure_listener_thread() -> None:
+    global _listener_thread
+    with _listener_condition:
+        if _listener_thread is not None and _listener_thread.is_alive():
+            return
+        _listener_stop.clear()
+        _listener_thread = threading.Thread(
+            target=_listener_loop,
+            name="product-event-listener",
+            daemon=True,
+        )
+        _listener_thread.start()
+
+
+def current_product_event_notification_marker() -> int:
+    _ensure_listener_thread()
+    with _listener_condition:
+        return _listener_generation
+
+
+def wait_for_product_event_notification(*, marker: int, timeout_seconds: float) -> int:
+    _ensure_listener_thread()
+    with _listener_condition:
+        if _listener_generation <= marker:
+            _listener_condition.wait_for(lambda: _listener_generation > marker, timeout=timeout_seconds)
+        return _listener_generation

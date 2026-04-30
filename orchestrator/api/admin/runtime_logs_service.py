@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from threading import Event
 
+from orchestrator.core.product_event_notifications import (
+    current_product_event_notification_marker,
+    wait_for_product_event_notification,
+)
 from orchestrator.core.logging_pane_events import (
     build_runtime_logging_stream_snapshot_query,
     encode_logging_pane_stream_row,
@@ -53,6 +56,7 @@ def stream_runtime_events_ndjson(
         command=command,
         limit=500,
     )
+    notification_marker = current_product_event_notification_marker()
     cursor = max((int(row.event_sequence) for row in rows), default=0)
     for row in rows:
         payload = encode_logging_pane_stream_row(row)
@@ -65,21 +69,27 @@ def stream_runtime_events_ndjson(
         "project_id": project_id,
         "run_id": run_id,
     }
-    poll_seconds = max(0.1, int(getattr(settings, "event_stream_poll_ms", 500)) / 1000.0)
-    stop = Event()
-    while not stop.wait(timeout=poll_seconds):
-        streamed_rows = list_logging_pane_events_after_sequence(
-            filters=filters,
-            after_sequence=cursor,
-            limit=500,
-        )
-        for row in streamed_rows:
-            if channel and str(row.payload_json.get("channel") or "") != channel:
-                continue
-            if command and str(row.payload_json.get("command") or "") != command:
-                continue
-            payload = encode_logging_pane_stream_row(row)
-            if payload is not None:
-                yield payload
-        if streamed_rows:
-            cursor = max(int(row.event_sequence) for row in streamed_rows)
+    while True:
+        next_marker = wait_for_product_event_notification(marker=notification_marker, timeout_seconds=25)
+        if next_marker <= notification_marker:
+            yield "\n"
+            continue
+        notification_marker = next_marker
+        while True:
+            streamed_rows = list_logging_pane_events_after_sequence(
+                filters=filters,
+                after_sequence=cursor,
+                limit=500,
+            )
+            for row in streamed_rows:
+                if channel and str(row.payload_json.get("channel") or "") != channel:
+                    continue
+                if command and str(row.payload_json.get("command") or "") != command:
+                    continue
+                payload = encode_logging_pane_stream_row(row)
+                if payload is not None:
+                    yield payload
+            if streamed_rows:
+                cursor = max(int(row.event_sequence) for row in streamed_rows)
+            if len(streamed_rows) < 500:
+                break

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from threading import Event
 
 from fastapi import HTTPException, status
 
@@ -9,6 +8,10 @@ from orchestrator.core.logging_pane_events import (
     build_run_logging_stream_snapshot_query,
     encode_logging_pane_stream_row,
     list_logging_pane_events_after_sequence,
+)
+from orchestrator.core.product_event_notifications import (
+    current_product_event_notification_marker,
+    wait_for_product_event_notification,
 )
 
 
@@ -31,23 +34,30 @@ def stream_run_events_ndjson(
         initial_event_limit=initial_event_limit,
         initial_log_limit=initial_log_limit,
     )
+    notification_marker = current_product_event_notification_marker()
     cursor = max((int(row.event_sequence) for row in snapshot_rows), default=0)
     for row in snapshot_rows:
         payload = encode_logging_pane_stream_row(row)
         if payload is not None:
             yield payload
 
-    poll_seconds = max(0.1, int(getattr(settings, "event_stream_poll_ms", 500)) / 1000.0)
-    stop = Event()
-    while not stop.wait(timeout=poll_seconds):
-        rows = list_logging_pane_events_after_sequence(
-            filters={"run_id": run_id},
-            after_sequence=cursor,
-            limit=500,
-        )
-        for row in rows:
-            payload = encode_logging_pane_stream_row(row)
-            if payload is not None:
-                yield payload
-        if rows:
-            cursor = max(int(row.event_sequence) for row in rows)
+    while True:
+        next_marker = wait_for_product_event_notification(marker=notification_marker, timeout_seconds=25)
+        if next_marker <= notification_marker:
+            yield "\n"
+            continue
+        notification_marker = next_marker
+        while True:
+            rows = list_logging_pane_events_after_sequence(
+                filters={"run_id": run_id},
+                after_sequence=cursor,
+                limit=500,
+            )
+            for row in rows:
+                payload = encode_logging_pane_stream_row(row)
+                if payload is not None:
+                    yield payload
+            if rows:
+                cursor = max(int(row.event_sequence) for row in rows)
+            if len(rows) < 500:
+                break
