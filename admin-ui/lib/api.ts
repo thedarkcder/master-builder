@@ -1,4 +1,17 @@
 import { DEFAULT_API_BASE_URL } from "@/lib/auth-constants";
+import { parseResponseBody, readNdjsonStream, request, stringifyErrorDetail, type Credentials } from "@/lib/api/http";
+import type { RunRecord } from "@/lib/api/run-events";
+export type { Credentials } from "@/lib/api/http";
+export {
+  cancelRun,
+  getRun,
+  listRunEvents,
+  listRunLogs,
+  listRuns,
+  RUN_STATUSES,
+  streamRunEvents,
+} from "@/lib/api/run-events";
+export type { RunEventRecord, RunRecord, RunStatus, RuntimeLogEventRecord } from "@/lib/api/run-events";
 
 export type JiraConfig = {
   connection_id: string | null;
@@ -705,43 +718,6 @@ export type ReadyGatePreviewRecord = {
   guidance: string;
 };
 
-export const RUN_STATUSES = [
-  "queued",
-  "running",
-  "succeeded",
-  "failed",
-  "blocked",
-  "cancelled",
-] as const;
-
-export type RunStatus = (typeof RUN_STATUSES)[number];
-
-export type RunRecord = {
-  run_id: string;
-  workflow_id: string;
-  attempt_number: number;
-  parent_run_id: string | null;
-  entry_mode: string;
-  entry_stage: string | null;
-  entry_checkpoint_id: string | null;
-  tenant_id: string;
-  project_id: string | null;
-  issue_key: string;
-  issue_summary: string | null;
-  issue_url: string | null;
-  repo_url: string | null;
-  branch: string | null;
-  pr_url: string | null;
-  status: RunStatus;
-  waiting_for_input: boolean;
-  pending_input_request_id: string | null;
-  last_error: string | null;
-  created_at: string;
-  started_at: string | null;
-  finished_at: string | null;
-  plan: Record<string, unknown> | null;
-};
-
 export type WorkflowRecord = {
   execution_id: string;
   workflow_id: string;
@@ -1001,33 +977,6 @@ export type WorkflowOperationRecord = {
 export type WorkflowAttemptCreatePayload = {
   mode: "fresh" | "restart" | "resume";
   checkpoint_kind?: "pm" | "execution";
-};
-
-export type RunEventRecord = {
-  event_type: string;
-  run_id: string;
-  issue_key: string | null;
-  project_id: string | null;
-  agent_id: string;
-  recorded_at: string;
-};
-
-export type RuntimeLogEventRecord = {
-  event_id: string;
-  event_sequence?: number | null;
-  run_id: string;
-  issue_key: string | null;
-  project_id: string | null;
-  agent_id: string;
-  invocation_id?: string | null;
-  channel?: string | null;
-  command?: string | null;
-  working_dir: string | null;
-  stage: string;
-  attempt: number | null;
-  stream: string;
-  message: string;
-  recorded_at: string;
 };
 
 export type TokenTimelineTurnRecord = {
@@ -1336,10 +1285,6 @@ export type DiscordAllowlistApprovalResult = {
   notified: boolean;
 };
 
-export type Credentials = {
-  apiBaseUrl: string;
-};
-
 export type MembershipRecord = {
   membership_id: string;
   tenant_id: string;
@@ -1524,87 +1469,6 @@ export type TenantUserPasswordChangePayload = {
 export type TenantUserProfileUpdatePayload = {
   full_name: string;
 };
-
-function parseResponseBody(text: string): unknown {
-  if (!text) {
-    return null;
-  }
-
-  try {
-    return JSON.parse(text);
-  } catch {
-    return { detail: text };
-  }
-}
-
-function stringifyErrorDetail(detail: unknown): string {
-  if (typeof detail === "string") {
-    return detail;
-  }
-  if (Array.isArray(detail)) {
-    const messages = detail
-      .map((item) => {
-        if (typeof item === "string") {
-          return item;
-        }
-        if (item && typeof item === "object") {
-          const record = item as { msg?: unknown; loc?: unknown };
-          const message = typeof record.msg === "string" ? record.msg : null;
-          const location = Array.isArray(record.loc)
-            ? record.loc
-                .map((part) => String(part))
-                .filter(Boolean)
-                .join(".")
-            : null;
-          if (message && location) {
-            return `${location}: ${message}`;
-          }
-          return message;
-        }
-        return null;
-      })
-      .filter((value): value is string => Boolean(value));
-    if (messages.length > 0) {
-      return messages.join("; ");
-    }
-  }
-  if (detail && typeof detail === "object") {
-    try {
-      return JSON.stringify(detail);
-    } catch {
-      return "Unexpected error";
-    }
-  }
-  return "Unexpected error";
-}
-
-async function request<T>(
-  credentials: Credentials,
-  path: string,
-  init?: RequestInit
-): Promise<T> {
-  void credentials;
-  const response = await fetch(`/api/bff${path}`, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers ?? {})
-    }
-  });
-
-  const text = await response.text();
-  const body = parseResponseBody(text);
-
-  if (!response.ok) {
-    const detail =
-      typeof body === "object" && body && "detail" in body
-        ? stringifyErrorDetail((body as { detail: unknown }).detail)
-        : response.statusText;
-    throw new Error(`${response.status}: ${detail}`);
-  }
-
-  return body as T;
-}
 
 export async function verifyAdminCredentials(credentials: Credentials): Promise<void> {
   await request<{ username: string }>(credentials, "/api/admin/auth/me");
@@ -2726,56 +2590,6 @@ export function retryWebhookJob(
   );
 }
 
-export function listRuns(
-  credentials: Credentials,
-  params: {
-    tenantId?: string;
-    projectId?: string;
-    status?: RunStatus;
-    issue?: string;
-    prState?: "none" | "has_value";
-    from?: string;
-    to?: string;
-    limit?: number;
-    offset?: number;
-  }
-): Promise<RunRecord[]> {
-  const query = new URLSearchParams();
-  if (params.tenantId) {
-    query.set("tenant_id", params.tenantId);
-  }
-  if (params.projectId) {
-    query.set("project_id", params.projectId);
-  }
-  if (params.status) {
-    query.set("status", params.status);
-  }
-  if (params.issue) {
-    query.set("issue", params.issue);
-  }
-  if (params.prState) {
-    query.set("pr_state", params.prState);
-  }
-  if (params.from) {
-    query.set("from", params.from);
-  }
-  if (params.to) {
-    query.set("to", params.to);
-  }
-  if (typeof params.limit === "number") {
-    query.set("limit", String(params.limit));
-  }
-  if (typeof params.offset === "number") {
-    query.set("offset", String(params.offset));
-  }
-  const suffix = query.toString() ? `?${query.toString()}` : "";
-  return request<RunRecord[]>(credentials, `/api/admin/runs${suffix}`);
-}
-
-export function getRun(credentials: Credentials, runId: string): Promise<RunRecord> {
-  return request<RunRecord>(credentials, `/api/admin/runs/${encodeURIComponent(runId)}`);
-}
-
 export function getWorkflow(credentials: Credentials, executionId: string): Promise<WorkflowRecord> {
   return request<WorkflowRecord>(credentials, `/api/admin/workflows/${encodeURIComponent(executionId)}`);
 }
@@ -2877,50 +2691,6 @@ export function retryWorkflowOperation(
     {
       method: "POST",
     }
-  );
-}
-
-export function cancelRun(credentials: Credentials, runId: string): Promise<RunRecord> {
-  return request<RunRecord>(credentials, `/api/admin/runs/${encodeURIComponent(runId)}/cancel`, {
-    method: "POST"
-  });
-}
-
-export function listRunEvents(
-  credentials: Credentials,
-  runId: string,
-  params: { limit?: number } = {}
-): Promise<RunEventRecord[]> {
-  const query = new URLSearchParams();
-  if (params.limit) {
-    query.set("limit", String(params.limit));
-  }
-  const suffix = query.toString() ? `?${query.toString()}` : "";
-  return request<RunEventRecord[]>(
-    credentials,
-    `/api/admin/runs/${encodeURIComponent(runId)}/events${suffix}`
-  );
-}
-
-export function listRunLogs(
-  credentials: Credentials,
-  runId: string,
-  params: { limit?: number; beforeRecordedAt?: string; beforeEventId?: string } = {}
-): Promise<RuntimeLogEventRecord[]> {
-  const query = new URLSearchParams();
-  if (params.limit) {
-    query.set("limit", String(params.limit));
-  }
-  if (params.beforeRecordedAt) {
-    query.set("before_recorded_at", params.beforeRecordedAt);
-  }
-  if (params.beforeEventId) {
-    query.set("before_event_id", params.beforeEventId);
-  }
-  const suffix = query.toString() ? `?${query.toString()}` : "";
-  return request<RuntimeLogEventRecord[]>(
-    credentials,
-    `/api/admin/runs/${encodeURIComponent(runId)}/logs${suffix}`
   );
 }
 
@@ -3044,33 +2814,10 @@ export async function streamWorkflowOperationTelemetryEvents(
     throw new Error(`${response.status}: unable to open workflow telemetry stream`);
   }
   options.onOpen?.();
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-      buffer += decoder.decode(value, { stream: true });
-      let newline = buffer.indexOf("\n");
-      while (newline >= 0) {
-        const line = buffer.slice(0, newline).trim();
-        buffer = buffer.slice(newline + 1);
-        if (line) {
-          try {
-            onEvent(JSON.parse(line) as WorkflowObservabilityEventRecord);
-          } catch (error) {
-            throw new Error(`Malformed workflow telemetry stream event: ${(error as Error).message}`);
-          }
-        }
-        newline = buffer.indexOf("\n");
-      }
-    }
-  } finally {
-    reader.releaseLock();
-  }
+  await readNdjsonStream<WorkflowObservabilityEventRecord>(response, onEvent, {
+    signal: options.signal,
+    malformedMessage: "Malformed workflow telemetry stream event",
+  });
 }
 
 export async function streamWorkflowOperationAttemptTelemetryEvents(
@@ -3334,53 +3081,6 @@ export function getTokenStageDiagnosticsCompare(
     credentials,
     `/api/admin/tenants/${encodeURIComponent(params.tenant_id)}/token-stage-diagnostics-compare${suffix}`
   );
-}
-
-export async function streamRunEvents(
-  credentials: Credentials,
-  runId: string,
-  onEvent: (event: RunEventRecord | (RuntimeLogEventRecord & { event_kind?: string })) => void,
-  signal?: AbortSignal
-): Promise<void> {
-  void credentials;
-  const response = await fetch(`/api/bff/api/admin/runs/${encodeURIComponent(runId)}/events/stream`, {
-    method: "GET",
-    headers: {
-      Accept: "application/x-ndjson"
-    },
-    signal
-  });
-  if (!response.ok || !response.body) {
-    throw new Error(`${response.status}: unable to open run event stream`);
-  }
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-      buffer += decoder.decode(value, { stream: true });
-      let newline = buffer.indexOf("\n");
-      while (newline >= 0) {
-        const line = buffer.slice(0, newline).trim();
-        buffer = buffer.slice(newline + 1);
-        if (line) {
-          try {
-            const payload = JSON.parse(line) as RunEventRecord;
-            onEvent(payload);
-          } catch {
-            // Ignore malformed stream lines.
-          }
-        }
-        newline = buffer.indexOf("\n");
-      }
-    }
-  } finally {
-    reader.releaseLock();
-  }
 }
 
 export function listManagedSecrets(credentials: Credentials): Promise<ManagedSecretRecord[]> {
