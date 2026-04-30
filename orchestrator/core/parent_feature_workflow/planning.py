@@ -1121,11 +1121,10 @@ class ParentFeaturePlanningWorkflow:
                 summary="Posted PM clarification follow-up to Discord.",
             )
         else:
-            fail_workflow_step_attempt(
+            complete_workflow_step_attempt(
                 lifecycle=lifecycle,
                 step=discord_step,
-                category="contract_violation",
-                message=f"Optional Discord clarification projection did not run for {issue_key}",
+                summary=f"Optional Discord clarification follow-up was not created for {issue_key}.",
             )
         if publication.jira_comment_id:
             complete_workflow_step_attempt(

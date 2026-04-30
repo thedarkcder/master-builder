@@ -1807,7 +1807,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
         status_by_type = {operation.operation_type: operation.status for operation in operations}
         self.assertEqual(status_by_type["brief_normalization"], "waiting_for_input")
         self.assertEqual(status_by_type["jira_comment_projection"], "completed")
-        self.assertEqual(status_by_type["discord_followup_projection"], "failed")
+        self.assertEqual(status_by_type["discord_followup_projection"], "completed")
 
     def test_webhook_pm_parent_issue_created_planning_block_waits_without_discord_projection(self) -> None:
         payload = self._jira_issue_payload(issue_key="TP-987C", labels=["pm-parent"], status_name="Backlog")
@@ -1949,7 +1949,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
         status_by_type = {operation.operation_type: operation.status for operation in operations}
         self.assertEqual(status_by_type["backlog_planning"], "waiting_for_input")
         self.assertEqual(status_by_type["jira_comment_projection"], "completed")
-        self.assertEqual(status_by_type["discord_followup_projection"], "failed")
+        self.assertEqual(status_by_type["discord_followup_projection"], "completed")
 
     def test_webhook_pm_parent_issue_created_seed_failure_records_failed_execution_operation(self) -> None:
         payload = self._jira_issue_payload(issue_key="TP-987D", labels=["pm-parent"], status_name="Backlog")
