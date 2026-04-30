@@ -311,8 +311,8 @@ export function ExecutionObservabilityDrawer({
                     </p>
                   ) : null}
 
-                  {renderedAttempt?.sections.map((section) => (
-                    <section key={section.kind} className="space-y-3">
+                  {renderedAttempt?.sections.map((section, sectionIndex) => (
+                    <section key={`${section.kind}-${section.label}-${sectionIndex}`} className="space-y-3">
                       <div className="flex items-center justify-between gap-2">
                         <h3 className="text-sm font-semibold">{section.label}</h3>
                         <span className="text-xs text-muted-foreground">

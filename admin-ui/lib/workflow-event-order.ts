@@ -20,15 +20,15 @@ export function compareWorkflowObservabilityEvents(
   left: WorkflowObservabilityEventRecord,
   right: WorkflowObservabilityEventRecord,
 ): number {
-  const timeDelta = new Date(left.recorded_at).getTime() - new Date(right.recorded_at).getTime();
-  if (timeDelta !== 0) {
-    return timeDelta;
-  }
-
   const leftSequence = workflowEventSequenceFromId(left.event_id);
   const rightSequence = workflowEventSequenceFromId(right.event_id);
   if (leftSequence !== null && rightSequence !== null && leftSequence !== rightSequence) {
     return leftSequence < rightSequence ? -1 : 1;
+  }
+
+  const timeDelta = new Date(left.recorded_at).getTime() - new Date(right.recorded_at).getTime();
+  if (timeDelta !== 0) {
+    return timeDelta;
   }
 
   return left.event_id.localeCompare(right.event_id);
