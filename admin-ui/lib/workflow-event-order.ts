@@ -20,6 +20,12 @@ export function compareWorkflowObservabilityEvents(
   left: WorkflowObservabilityEventRecord,
   right: WorkflowObservabilityEventRecord,
 ): number {
+  const leftEventSequence = typeof left.event_sequence === "number" ? left.event_sequence : null;
+  const rightEventSequence = typeof right.event_sequence === "number" ? right.event_sequence : null;
+  if (leftEventSequence !== null && rightEventSequence !== null && leftEventSequence !== rightEventSequence) {
+    return leftEventSequence - rightEventSequence;
+  }
+
   const leftSequence = workflowEventSequenceFromId(left.event_id);
   const rightSequence = workflowEventSequenceFromId(right.event_id);
   if (leftSequence !== null && rightSequence !== null && leftSequence !== rightSequence) {
