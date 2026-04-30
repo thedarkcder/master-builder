@@ -43,17 +43,19 @@ function titleForEvent(
   event: WorkflowObservabilityEventRecord,
   sectionKind: WorkflowTranscriptSectionRecord["kind"],
 ): string {
+  const stageLabel = String(event.stage || event.payload?.stage || "").trim();
+  const stagePrefix = stageLabel ? `${stageLabel.replace(/_/g, " ")} · ` : "";
   if (sectionKind === "prompts") {
-    if (event.event_kind === "stage_request") return "Runtime request";
-    if (event.event_kind === "stage_response") return "Runtime response";
+    if (event.event_kind === "stage_request") return `${stagePrefix}Runtime request`;
+    if (event.event_kind === "stage_response") return `${stagePrefix}Runtime response`;
   }
   if (sectionKind === "tool_calls") {
     const toolName = String(event.payload?.tool_name || "").trim();
-    return toolName || event.event_kind.replace(/_/g, " ");
+    return `${stagePrefix}${toolName || event.event_kind.replace(/_/g, " ")}`;
   }
   if (sectionKind === "summary") return "Attempt lifecycle";
   if (sectionKind === "outcome") return String(event.level || "").toLowerCase() === "error" ? "Attempt failure" : "Attempt outcome";
-  return event.event_kind.replace(/_/g, " ");
+  return `${stagePrefix}${event.event_kind.replace(/_/g, " ")}`;
 }
 
 function durationMs(attempt: WorkflowOperationAttemptRecord): number | null {
@@ -81,25 +83,34 @@ const SECTION_ORDER: WorkflowTranscriptSectionRecord["kind"][] = [
   "outcome",
 ];
 
+function invocationGroupForEvent(event: WorkflowObservabilityEventRecord): { key: string; label: string } {
+  const stage = String(event.stage || event.payload?.stage || "").trim();
+  const invocationId = String(event.invocation_id || event.payload?.invocation_id || "").trim();
+  const key = invocationId || stage || "runtime";
+  const stageLabel = stage ? stage.replace(/_/g, " ") : "unscoped runtime";
+  const suffix = invocationId ? ` · ${invocationId.slice(0, 8)}` : "";
+  return { key, label: `Runtime · ${stageLabel}${suffix}` };
+}
+
 export function buildTelemetryAttemptView(
   attempt: WorkflowOperationAttemptRecord,
   events: WorkflowObservabilityEventRecord[],
 ): WorkflowStepAttemptTranscriptRecord {
-  const sectionEntries: Record<WorkflowTranscriptSectionRecord["kind"], WorkflowTranscriptEntryRecord[]> = {
+  const sectionEntries: Record<Exclude<WorkflowTranscriptSectionRecord["kind"], "runtime">, WorkflowTranscriptEntryRecord[]> = {
     summary: [],
-    runtime: [],
     prompts: [],
     tool_calls: [],
     external_requests: [],
     external_responses: [],
     outcome: [],
   };
+  const runtimeSections = new Map<string, WorkflowTranscriptSectionRecord>();
   for (const event of events
     .filter((candidate) => candidate.attempt_id === attempt.attempt_id)
     .sort(compareWorkflowObservabilityEvents)) {
     const sectionKind = sectionForEvent(event);
     if (!sectionKind) continue;
-    sectionEntries[sectionKind].push({
+    const entry = {
       entry_id: event.event_id,
       recorded_at: event.recorded_at,
       level: event.level,
@@ -107,7 +118,33 @@ export function buildTelemetryAttemptView(
       message: event.message,
       source_component: event.source_component,
       payload: event.payload ?? {},
-    });
+    };
+    if (sectionKind === "runtime") {
+      const group = invocationGroupForEvent(event);
+      const section = runtimeSections.get(group.key) ?? {
+        kind: "runtime" as const,
+        label: group.label,
+        entries: [],
+      };
+      section.entries.push(entry);
+      runtimeSections.set(group.key, section);
+      continue;
+    }
+    sectionEntries[sectionKind].push(entry);
+  }
+  const sections: WorkflowTranscriptSectionRecord[] = [];
+  for (const kind of SECTION_ORDER) {
+    if (kind === "runtime") {
+      sections.push(...runtimeSections.values());
+      continue;
+    }
+    if (sectionEntries[kind].length > 0) {
+      sections.push({
+        kind,
+        label: SECTION_LABELS[kind],
+        entries: sectionEntries[kind],
+      });
+    }
   }
 
   return {
@@ -121,10 +158,6 @@ export function buildTelemetryAttemptView(
     failure_message: attempt.error_message,
     status_detail: attempt.status_detail,
     recommended_next_action: null,
-    sections: SECTION_ORDER.filter((kind) => sectionEntries[kind].length > 0).map((kind) => ({
-      kind,
-      label: SECTION_LABELS[kind],
-      entries: sectionEntries[kind],
-    })),
+    sections,
   };
 }

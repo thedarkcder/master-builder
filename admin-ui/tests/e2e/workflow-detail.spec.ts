@@ -211,7 +211,7 @@ test("shows workflow definitions and retries a failed execution operation", asyn
     telemetryEventsByOperationId: {
       "operation-jira-child-fanout": [
         {
-          event_id: "telemetry-stage-request",
+          event_id: "telemetry:1",
           source: "telemetry",
           level: "info",
           event_kind: "stage_request",
@@ -231,7 +231,51 @@ test("shows workflow definitions and retries a failed execution operation", asyn
           recorded_at: "2026-04-17T12:23:00Z",
         },
         {
-          event_id: "telemetry-jira-request",
+          event_id: "telemetry:2",
+          event_sequence: 2,
+          source: "telemetry",
+          level: "info",
+          event_kind: "runtime_log",
+          message: "Runtime line from seed invocation.",
+          source_component: "runtime_invocation",
+          run_id: null,
+          operation_id: "operation-jira-child-fanout",
+          attempt_id: "attempt-1",
+          agent_id: null,
+          invocation_id: "inv-seed-1",
+          stage: "seed",
+          attempt: 1,
+          stream: "stdout",
+          payload: {
+            invocation_id: "inv-seed-1",
+            stage: "seed",
+          },
+          recorded_at: "2026-04-17T12:23:01Z",
+        },
+        {
+          event_id: "telemetry:3",
+          event_sequence: 3,
+          source: "telemetry",
+          level: "info",
+          event_kind: "runtime_log",
+          message: "Runtime line from validation invocation.",
+          source_component: "runtime_invocation",
+          run_id: null,
+          operation_id: "operation-jira-child-fanout",
+          attempt_id: "attempt-1",
+          agent_id: null,
+          invocation_id: "inv-validation-1",
+          stage: "validation",
+          attempt: 1,
+          stream: "stdout",
+          payload: {
+            invocation_id: "inv-validation-1",
+            stage: "validation",
+          },
+          recorded_at: "2026-04-17T12:23:02Z",
+        },
+        {
+          event_id: "telemetry:4",
           source: "telemetry",
           level: "info",
           event_kind: "jira_child_upsert_request",
@@ -251,7 +295,7 @@ test("shows workflow definitions and retries a failed execution operation", asyn
           recorded_at: "2026-04-17T12:23:10Z",
         },
         {
-          event_id: "telemetry-outcome",
+          event_id: "telemetry:5",
           source: "telemetry",
           level: "error",
           event_kind: "attempt_failed",
@@ -273,7 +317,7 @@ test("shows workflow definitions and retries a failed execution operation", asyn
           recorded_at: "2026-04-17T12:23:30Z",
         },
         {
-          event_id: "telemetry-retry-runtime-line",
+          event_id: "telemetry:6",
           source: "telemetry",
           level: "info",
           event_kind: "runtime_log",
@@ -381,6 +425,8 @@ test("shows workflow definitions and retries a failed execution operation", asyn
   await expect(page.getByRole("button", { name: "Auto-scroll on" })).toBeVisible();
   await expect(page.getByRole("button", { name: /Attempt 1/i })).toBeVisible();
   await expect(page.getByText("Attempt 1").last()).toBeVisible();
+  await expect(page.getByText("Runtime · seed · inv-seed")).toBeVisible();
+  await expect(page.getByText("Runtime · validation · inv-vali")).toBeVisible();
   await expect(page.getByText("Prompts")).toBeVisible();
   await expect(page.getByText("External requests")).toBeVisible();
   expect(telemetrySnapshotRequests).toBe(0);
