@@ -240,6 +240,52 @@ def _project_available_issue_types(*, oauth: dict[str, Any], project_key: str) -
     return issue_types
 
 
+def _project_issue_types_by_key(*, oauth: dict[str, Any], project_keys: list[str]) -> dict[str, list[str]]:
+    issue_types_by_key: dict[str, list[str]] = {}
+    for project_key in project_keys:
+        normalized_project_key = str(project_key).strip().upper()
+        if not normalized_project_key:
+            continue
+        issue_types_by_key[normalized_project_key] = _project_available_issue_types(
+            oauth=oauth,
+            project_key=normalized_project_key,
+        )
+    if not issue_types_by_key:
+        raise AtlassianOAuthError("Jira issue type discovery returned no project issue type catalogs")
+    return issue_types_by_key
+
+
+def _require_available_issue_type(*, issue_type: str, available_issue_types: list[str], summary: str) -> str:
+    normalized_issue_type = str(issue_type or "").strip()
+    if not normalized_issue_type:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Issue '{summary}' is missing Jira issue_type",
+        )
+    by_exact = {str(value).strip(): str(value).strip() for value in available_issue_types if str(value).strip()}
+    if normalized_issue_type in by_exact:
+        return by_exact[normalized_issue_type]
+    normalized_alias = normalized_issue_type.replace("-", "").replace(" ", "").casefold()
+    if normalized_alias == "subtask":
+        for available_issue_type in available_issue_types:
+            available_value = str(available_issue_type).strip()
+            if available_value.replace("-", "").replace(" ", "").casefold() == "subtask":
+                return available_value
+    available = ", ".join(available_issue_types)
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=f"Issue '{summary}' requested unavailable Jira issue_type '{normalized_issue_type}'; available issue types: {available}",
+    )
+
+
+def _matching_subtask_issue_type(*, available_issue_types: list[str]) -> str | None:
+    for available_issue_type in available_issue_types:
+        available_value = str(available_issue_type).strip()
+        if available_value.replace("-", "").replace(" ", "").casefold() == "subtask":
+            return available_value
+    return None
+
+
 def _record_seed_operation_event(
     *,
     session,
@@ -474,12 +520,27 @@ def seed_issues_with_runtime(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tenant has no Jira project keys")
 
     settings = get_settings_fn()
+    oauth = _resolve_seed_oauth_context(
+        session=session,
+        tenant=tenant,
+        settings=settings,
+        tenant_atlassian_oauth_context_fn=tenant_atlassian_oauth_context_fn,
+    )
+    browse_base_url = str(oauth["connection"].site_url or "").strip().rstrip("/")
+    try:
+        project_issue_types_by_key = _project_issue_types_by_key(oauth=oauth, project_keys=project_keys)
+    except (ValueError, TypeError, AttributeError, AtlassianOAuthError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Failed to seed Jira issues: {exc}",
+        ) from exc
     runtime = build_runtime_fn(session=session, settings=settings)
     try:
         plan_payload = plan_seed_issues_with_runtime_fn(
             runtime=runtime,
             prompt_markdown=prompt_markdown,
             allowed_project_keys=project_keys,
+            project_issue_types_by_key=project_issue_types_by_key,
             invocation_context=AgentInvocationContext(
                 channel="discord",
                 tenant_id=tenant.tenant_id,
@@ -508,6 +569,12 @@ def seed_issues_with_runtime(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Issue seeding runtime selected unsupported Jira project key '{project_key}'",
         )
+    available_issue_types = project_issue_types_by_key.get(project_key)
+    if available_issue_types is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Issue seeding runtime selected project key '{project_key}' without discovered Jira issue types",
+        )
 
     normalized_force_issue_keys = [str(value).strip().upper() for value in (force_issue_keys or []) if str(value).strip()]
     draft_set = parse_engineering_seed_drafts(
@@ -517,6 +584,7 @@ def seed_issues_with_runtime(
         allow_empty_children=allow_empty_children,
         pm_status=pm_status,
         planning_package=planning_package,
+        required_child_issue_type=_matching_subtask_issue_type(available_issue_types=available_issue_types),
     )
     clarification_questions = draft_set.clarification_questions
     effective_pm_status = draft_set.pm_status
@@ -532,20 +600,6 @@ def seed_issues_with_runtime(
     architecture_blocked = False
     architecture_labels = list(parent_issue.labels)
 
-    oauth = _resolve_seed_oauth_context(
-        session=session,
-        tenant=tenant,
-        settings=settings,
-        tenant_atlassian_oauth_context_fn=tenant_atlassian_oauth_context_fn,
-    )
-    browse_base_url = str(oauth["connection"].site_url or "").strip().rstrip("/")
-    try:
-        available_issue_types = _project_available_issue_types(oauth=oauth, project_key=project_key)
-    except (ValueError, TypeError, AttributeError, AtlassianOAuthError) as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Failed to seed Jira issues: {exc}",
-        ) from exc
     parent_issue = parent_issue.with_issue_type(parent_issue.normalized_issue_type(
         engineering_children=engineering_children,
         available_issue_types=available_issue_types,
@@ -749,6 +803,13 @@ def seed_issues_with_runtime(
         stale_child_keys: list[str] = []
         final_sync_status = "sync_blocked" if clarification_questions else "children_current"
         for child_issue in engineering_children:
+            child_issue = child_issue.with_issue_type(
+                _require_available_issue_type(
+                    issue_type=child_issue.issue_type,
+                    available_issue_types=available_issue_types,
+                    summary=child_issue.summary,
+                )
+            )
             child_input = child_issue.to_jira_input(
                 parent_issue_key=parent_issue_key,
                 parent_summary=parent_issue.summary,
@@ -995,12 +1056,27 @@ def seed_parent_issues_with_runtime(
         settings=settings,
         pm_interview_notes_json=pm_interview_notes_json,
     )
+    oauth = _resolve_seed_oauth_context(
+        session=session,
+        tenant=tenant,
+        settings=settings,
+        tenant_atlassian_oauth_context_fn=tenant_atlassian_oauth_context_fn,
+    )
+    browse_base_url = str(oauth["connection"].site_url or "").strip().rstrip("/")
+    try:
+        project_issue_types_by_key = _project_issue_types_by_key(oauth=oauth, project_keys=project_keys)
+    except (ValueError, TypeError, AttributeError, AtlassianOAuthError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Failed to seed Jira issues: {exc}",
+        ) from exc
     runtime = build_runtime_fn(session=session, settings=settings)
     try:
         plan_payload = plan_pm_parent_issues_with_runtime_fn(
             runtime=runtime,
             prompt_markdown=prompt_markdown,
             allowed_project_keys=project_keys,
+            project_issue_types_by_key=project_issue_types_by_key,
             invocation_context=AgentInvocationContext(
                 channel="discord",
                 tenant_id=tenant.tenant_id,
@@ -1024,6 +1100,12 @@ def seed_parent_issues_with_runtime(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"PM parent seeding runtime selected unsupported Jira project key '{project_key}'",
         )
+    available_issue_types = project_issue_types_by_key.get(project_key)
+    if available_issue_types is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"PM parent seeding runtime selected project key '{project_key}' without discovered Jira issue types",
+        )
 
     normalized_force_issue_keys = [str(value).strip().upper() for value in (force_issue_keys or []) if str(value).strip()]
     draft_set = parse_parent_seed_drafts(
@@ -1035,21 +1117,6 @@ def seed_parent_issues_with_runtime(
     clarification_questions = draft_set.clarification_questions
     effective_pm_status = draft_set.pm_status
     parent_issues = draft_set.parent_issues
-
-    oauth = _resolve_seed_oauth_context(
-        session=session,
-        tenant=tenant,
-        settings=settings,
-        tenant_atlassian_oauth_context_fn=tenant_atlassian_oauth_context_fn,
-    )
-    browse_base_url = str(oauth["connection"].site_url or "").strip().rstrip("/")
-    try:
-        available_issue_types = _project_available_issue_types(oauth=oauth, project_key=project_key)
-    except (ValueError, TypeError, AttributeError, AtlassianOAuthError) as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Failed to seed Jira issues: {exc}",
-        ) from exc
 
     try:
         all_project_issues = _project_issue_catalog(oauth=oauth, project_key=project_key)

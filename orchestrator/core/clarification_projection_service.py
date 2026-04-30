@@ -124,6 +124,53 @@ def has_matching_active_clarification_state(
     return existing_fingerprint == clarification_state_fingerprint(questions=normalized_questions.questions)
 
 
+def jira_comment_evidence_id(followup_context: FollowupContext | None) -> str | None:
+    if followup_context is None:
+        return None
+    metadata = dict(getattr(followup_context, "metadata_json", {}) or {})
+    for key in ("jira_comment_id", "created_comment_id"):
+        value = str(metadata.get(key) or "").strip()
+        if value:
+            return value
+    root_message_id = str(getattr(followup_context, "root_message_id", "") or "").strip()
+    return root_message_id or None
+
+
+def matching_active_jira_clarification_evidence_id(
+    *,
+    session: Session,
+    tenant_id: str,
+    issue_key: str,
+    context_type: str,
+    questions: tuple[object, ...] | list[object],
+    transport: str | None = None,
+    reply_scope: str | None = None,
+) -> str | None:
+    followup_context = resolve_active_clarification_context(
+        session=session,
+        tenant_id=tenant_id,
+        issue_key=issue_key,
+        context_type=context_type,
+        transport=transport,
+        reply_scope=reply_scope,
+    )
+    if followup_context is None:
+        return None
+    metadata = dict(getattr(followup_context, "metadata_json", {}) or {})
+    normalized_questions = _question_set(questions)
+    existing_fingerprint = str(metadata.get("question_state_fingerprint") or "").strip()
+    if not existing_fingerprint:
+        existing_questions = ClarificationQuestionSet.from_values(
+            metadata.get("questions") if isinstance(metadata.get("questions"), list) else ()
+        )
+        if not existing_questions:
+            return None
+        existing_fingerprint = clarification_state_fingerprint(questions=existing_questions.questions)
+    if existing_fingerprint != clarification_state_fingerprint(questions=normalized_questions.questions):
+        return None
+    return jira_comment_evidence_id(followup_context)
+
+
 def upsert_clarification_projection(
     *,
     session: Session,

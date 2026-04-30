@@ -1680,7 +1680,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
         self.assertEqual(status_by_type["jira_comment_projection"], "completed")
         self.assertEqual(status_by_type["discord_followup_projection"], "completed")
 
-    def test_webhook_pm_parent_issue_created_fails_when_discord_followup_projection_fails(self) -> None:
+    def test_webhook_pm_parent_issue_created_waits_when_optional_discord_projection_fails(self) -> None:
         payload = self._jira_issue_payload(issue_key="TP-987A", labels=["pm-parent"], status_name="Backlog")
         payload["webhookEvent"] = "jira:issue_created"
         payload["issue"]["fields"]["reporter"] = {"accountId": "jira-user-987A", "displayName": "Casey Reporter"}
@@ -1777,11 +1777,11 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
         self._assert_jira_issue_event_queued(response, issue_key="TP-987A")
         self.assertIsNotNone(processed)
         assert processed is not None
-        self.assertEqual(processed.status, "failed")
+        self.assertEqual(processed.status, "done")
         seed_mock.assert_not_called()
         run_flow_mock.assert_not_called()
         self.assertEqual(len(oauth_context.client.replaced_labels), 1)
-        create_comment_mock.assert_not_called()
+        create_comment_mock.assert_called_once()
         with self.session_factory() as session:
             followups = session.execute(
                 select(FollowupContext).where(
@@ -1793,12 +1793,23 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
             snapshot = session.execute(
                 select(PMInterviewCase).where(PMInterviewCase.request_id == "parent-brief:TP-987A")
             ).scalars().first()
-        self.assertEqual(followups, [])
+            workflow = session.get(WorkflowExecution, "parent_planning:TP-987A")
+            self.assertIsNotNone(workflow)
+            assert workflow is not None
+            operations = session.execute(
+                select(WorkflowOperation).where(WorkflowOperation.workflow_id == workflow.workflow_id)
+            ).scalars().all()
+        self.assertEqual(len(followups), 1)
         self.assertIsNotNone(snapshot)
         assert snapshot is not None
         self.assertEqual(snapshot.status, PM_INTERVIEW_STATUS_QUESTION_PENDING)
+        self.assertEqual(workflow.status, "waiting_for_input")
+        status_by_type = {operation.operation_type: operation.status for operation in operations}
+        self.assertEqual(status_by_type["brief_normalization"], "waiting_for_input")
+        self.assertEqual(status_by_type["jira_comment_projection"], "completed")
+        self.assertEqual(status_by_type["discord_followup_projection"], "failed")
 
-    def test_webhook_pm_parent_issue_created_planning_block_fails_without_discord_projection(self) -> None:
+    def test_webhook_pm_parent_issue_created_planning_block_waits_without_discord_projection(self) -> None:
         payload = self._jira_issue_payload(issue_key="TP-987C", labels=["pm-parent"], status_name="Backlog")
         payload["webhookEvent"] = "jira:issue_created"
         payload["issue"]["fields"]["reporter"] = {"accountId": "jira-user-987C", "displayName": "Casey Reporter"}
@@ -1923,10 +1934,22 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
         self._assert_jira_issue_event_queued(response, issue_key="TP-987C")
         self.assertIsNotNone(processed)
         assert processed is not None
-        self.assertEqual(processed.status, "failed")
-        seed_mock.assert_called_once()
+        self.assertEqual(processed.status, "done")
+        seed_mock.assert_not_called()
         run_flow_mock.assert_not_called()
-        create_comment_mock.assert_not_called()
+        create_comment_mock.assert_called_once()
+        with self.session_factory() as session:
+            workflow = session.get(WorkflowExecution, "parent_planning:TP-987C")
+            self.assertIsNotNone(workflow)
+            assert workflow is not None
+            operations = session.execute(
+                select(WorkflowOperation).where(WorkflowOperation.workflow_id == workflow.workflow_id)
+            ).scalars().all()
+        self.assertEqual(workflow.status, "waiting_for_input")
+        status_by_type = {operation.operation_type: operation.status for operation in operations}
+        self.assertEqual(status_by_type["backlog_planning"], "waiting_for_input")
+        self.assertEqual(status_by_type["jira_comment_projection"], "completed")
+        self.assertEqual(status_by_type["discord_followup_projection"], "failed")
 
     def test_webhook_pm_parent_issue_created_seed_failure_records_failed_execution_operation(self) -> None:
         payload = self._jira_issue_payload(issue_key="TP-987D", labels=["pm-parent"], status_name="Backlog")
@@ -2031,7 +2054,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
         self._assert_jira_issue_event_queued(response, issue_key="TP-987D")
         self.assertIsNotNone(processed)
         assert processed is not None
-        self.assertEqual(processed.status, "done")
+        self.assertEqual(processed.status, "failed")
         run_flow_mock.assert_not_called()
         with self.session_factory() as session:
             workflow = session.get(WorkflowExecution, "parent_planning:TP-987D")
@@ -2443,6 +2466,27 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
             access_token="tok",
             connection=SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
         )
+        with self.session_factory() as session:
+            workflow_type = get_workflow_type(session, workflow_type_key="parent_planning")
+            ensure_workflow_execution(
+                session=session,
+                workflow_type=workflow_type,
+                tenant_id="tenant-webhook",
+                project_id="tenant-webhook-default",
+                execution=WorkflowExecutionReference(
+                    key="TP-987C",
+                    source=WorkflowSourceReference(
+                        source_system="jira",
+                        source_ref="TP-987C",
+                        display_name="Identity redesign",
+                        description="Existing parent planning execution",
+                    ),
+                ),
+                display_name="Identity redesign",
+                description="Existing parent planning execution",
+            )
+            session.commit()
+
         with (
             patch("orchestrator.core.worker.webhook_job_service.tenant_atlassian_oauth_context", return_value=oauth_context),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_atlassian_oauth_context", return_value=oauth_context),

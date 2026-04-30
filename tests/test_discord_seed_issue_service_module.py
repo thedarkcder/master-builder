@@ -162,6 +162,11 @@ def _adf_text(value: object) -> str:
 
 def test_seed_issues_scopes_allowed_project_keys() -> None:
     tenant = SimpleNamespace(tenant_id="tenant-a")
+
+    class _FakeClient(_JiraMetadataClientMixin):
+        def list_project_issue_types_for_create(self, **_kwargs):  # type: ignore[no-untyped-def]
+            return ["Task"]
+
     with __import__("pytest").raises(HTTPException) as exc_ctx:
         seed_issues_with_runtime(
             session=MagicMock(),
@@ -179,7 +184,11 @@ def test_seed_issues_scopes_allowed_project_keys() -> None:
             codex_runtime_error_type=RuntimeError,
             build_seed_issue_description_fn=lambda **_kwargs: "",
             issue_key_pattern=__import__("re").compile(r"^[A-Z]+-\d+$"),
-            tenant_atlassian_oauth_context_fn=lambda **_kwargs: {},
+            tenant_atlassian_oauth_context_fn=lambda **_kwargs: {
+                "client": _FakeClient(),
+                "access_token": "token",
+                "connection": SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
+            },
             select_seed_match_fn=lambda **_kwargs: None,
         )
     assert exc_ctx.value.status_code == 409
@@ -210,7 +219,7 @@ def test_seed_issues_creates_parent_and_engineering_child() -> None:
 
     class _FakeClient(_JiraMetadataClientMixin):
         def list_project_issue_types_for_create(self, **_kwargs):  # type: ignore[no-untyped-def]
-            return ["Epic", "Story", "Task", "Issue"]
+            return ["Epic", "Story", "Task", "Subtask"]
 
         def search_issues_by_jql(self, **_kwargs):  # type: ignore[no-untyped-def]
             return []
@@ -264,17 +273,18 @@ def test_seed_issues_creates_parent_and_engineering_child() -> None:
     assert data["created_issue_keys"] == ["GP-1", "GP-2"]
     assert data["children_sync_status"] == "children_current"
     assert created[0].issue_type == "Story"
-    assert created[1].issue_type == "Sub-task"
+    assert created[1].issue_type == "Subtask"
     assert created[1].parent_issue_key == "GP-1"
 
 
 def test_seed_issues_passes_typed_attempt_ref_into_invocation_context() -> None:
     tenant = SimpleNamespace(tenant_id="tenant-a")
     captured_context = None
+    captured_issue_types = None
 
     class _FakeClient(_JiraMetadataClientMixin):
         def list_project_issue_types_for_create(self, **_kwargs):  # type: ignore[no-untyped-def]
-            return ["Epic", "Story", "Task", "Issue"]
+            return ["Epic", "Story", "Task", "Subtask", "Issue"]
 
         def search_issues_by_jql(self, **_kwargs):  # type: ignore[no-untyped-def]
             return []
@@ -295,8 +305,9 @@ def test_seed_issues_passes_typed_attempt_ref_into_invocation_context() -> None:
 
 
     def _plan_seed_issues_with_runtime_fn(**kwargs):  # noqa: ANN001
-        nonlocal captured_context
+        nonlocal captured_context, captured_issue_types
         captured_context = kwargs["invocation_context"]
+        captured_issue_types = kwargs["project_issue_types_by_key"]
         return _engineering_seed_plan()
 
     workflow = SimpleNamespace(
@@ -357,6 +368,7 @@ def test_seed_issues_passes_typed_attempt_ref_into_invocation_context() -> None:
     assert captured_context.operation_id == "op-456"
     assert captured_context.attempt == 7
     assert captured_context.attempt_id == "attempt-789"
+    assert captured_issue_types == {"GP": ["Epic", "Story", "Task", "Subtask", "Issue"]}
 
 
 def test_seed_issues_fails_when_subtasks_are_unavailable() -> None:
@@ -413,9 +425,9 @@ def test_seed_issues_fails_when_subtasks_are_unavailable() -> None:
         )
 
     assert exc_ctx.value.status_code == 409
-    assert "does not support subtasks" in str(exc_ctx.value.detail)
+    assert "requested unavailable Jira issue_type 'Sub-task'" in str(exc_ctx.value.detail)
     assert created[0].summary == "Improve checkout recovery"
-    assert created[1].issue_type == "Sub-task"
+    assert len(created) == 1
 
 
 def test_seed_issues_with_incomplete_oauth_context_returns_controlled_502() -> None:
@@ -451,7 +463,7 @@ def test_seed_issues_keeps_explicit_parent_issue_type_at_project_supported_story
 
     class _FakeClient(_JiraMetadataClientMixin):
         def list_project_issue_types_for_create(self, **_kwargs):  # type: ignore[no-untyped-def]
-            return ["Story", "Task", "Issue"]
+            return ["Story", "Task", "Sub-task", "Issue"]
 
         def search_issues_by_jql(self, **_kwargs):  # type: ignore[no-untyped-def]
             return []
@@ -505,7 +517,7 @@ def test_seed_issues_keeps_single_behavior_parent_at_story_when_multiple_childre
 
     class _FakeClient(_JiraMetadataClientMixin):
         def list_project_issue_types_for_create(self, **_kwargs):  # type: ignore[no-untyped-def]
-            return ["Epic", "Story", "Task"]
+            return ["Epic", "Story", "Task", "Sub-task"]
 
         def search_issues_by_jql(self, **_kwargs):  # type: ignore[no-untyped-def]
             return []
@@ -558,7 +570,7 @@ def test_seed_issues_writes_explicit_epic_parent_issue_type_for_initiative_scope
 
     class _FakeClient(_JiraMetadataClientMixin):
         def list_project_issue_types_for_create(self, **_kwargs):  # type: ignore[no-untyped-def]
-            return ["Epic", "Story", "Task"]
+            return ["Epic", "Story", "Task", "Sub-task"]
 
         def search_issues_by_jql(self, **_kwargs):  # type: ignore[no-untyped-def]
             return []
@@ -696,7 +708,7 @@ def test_seed_issues_blocks_children_until_planning_completes_and_keeps_parent_p
 
     class _FakeClient(_JiraMetadataClientMixin):
         def list_project_issue_types_for_create(self, **_kwargs):  # type: ignore[no-untyped-def]
-            return ["Epic", "Story", "Task", "Issue"]
+            return ["Epic", "Story", "Task", "Subtask", "Issue"]
 
         def search_issues_by_jql(self, **_kwargs):  # type: ignore[no-untyped-def]
             return []
@@ -759,7 +771,7 @@ def test_seed_issues_merges_planning_package_context_into_child_ticket_descripti
 
     class _FakeClient(_JiraMetadataClientMixin):
         def list_project_issue_types_for_create(self, **_kwargs):  # type: ignore[no-untyped-def]
-            return ["Epic", "Story", "Task", "Issue"]
+            return ["Epic", "Story", "Task", "Subtask", "Issue"]
 
         def search_issues_by_jql(self, **_kwargs):  # type: ignore[no-untyped-def]
             return []
@@ -803,7 +815,6 @@ def test_seed_issues_merges_planning_package_context_into_child_ticket_descripti
             child_issues=[
                 {
                     "summary": "Merge planning package into Jira child draft",
-                    "issue_type": "Sub-task",
                     "capability": "Planning package handoff",
                     "delivery": "Build the Jira child drafting path so specialist planning context is carried into each engineering child issue.",
                     "expected_outcome": "Engineering child issues include the planning package context they need to execute.",
@@ -821,6 +832,7 @@ def test_seed_issues_merges_planning_package_context_into_child_ticket_descripti
     assert data["children_sync_status"] == "children_current"
     assert data["created_children"] == ["GP-2"]
     assert len(created) == 2
+    assert created[1].issue_type == "Subtask"
     child_description = _adf_text(created[1].description)
     assert "What to Build" in child_description
     assert "Expected Outcome" in child_description
@@ -837,7 +849,7 @@ def test_seed_issues_truncates_large_jira_descriptions_before_write() -> None:
 
     class _FakeClient(_JiraMetadataClientMixin):
         def list_project_issue_types_for_create(self, **_kwargs):  # type: ignore[no-untyped-def]
-            return ["Epic", "Story", "Task", "Issue"]
+            return ["Epic", "Story", "Task", "Sub-task", "Issue"]
 
         def search_issues_by_jql(self, **_kwargs):  # type: ignore[no-untyped-def]
             return []
@@ -941,7 +953,7 @@ def test_seed_issues_blocks_child_fanout_when_architecture_document_is_still_dra
 
     class _FakeClient(_JiraMetadataClientMixin):
         def list_project_issue_types_for_create(self, **_kwargs):  # type: ignore[no-untyped-def]
-            return ["Epic", "Story", "Task", "Issue"]
+            return ["Epic", "Story", "Task", "Sub-task", "Issue"]
 
         def search_issues_by_jql(self, **_kwargs):  # type: ignore[no-untyped-def]
             return []

@@ -37,12 +37,28 @@ class WorkflowStepAttempt:
         return self.attempt.attempt_id
 
 
-def start_workflow_step_attempt(*, lifecycle, operation_type: str) -> WorkflowStepAttempt:  # noqa: ANN001
+def start_workflow_step_attempt(
+    *,
+    lifecycle,  # noqa: ANN001
+    operation_type: str,
+    run_id: str | None = None,
+    idempotency_key: str | None = None,
+    target_system: str | None = None,
+    target_ref: str | None = None,
+    summary: str | None = None,
+) -> WorkflowStepAttempt:
     workflow_type = getattr(lifecycle, "workflow_type", None)
     if workflow_type is None or not hasattr(workflow_type, "step"):
         raise ValueError("Workflow step attempts require a code-defined workflow definition")
     workflow_type.step(operation_type)
-    operation, attempt = lifecycle.start_operation_attempt(operation_type=operation_type)
+    operation, attempt = lifecycle.start_operation_attempt(
+        operation_type=operation_type,
+        run_id=run_id,
+        idempotency_key=idempotency_key,
+        target_system=target_system,
+        target_ref=target_ref,
+        summary=summary,
+    )
     return WorkflowStepAttempt(operation=operation, attempt=attempt)
 
 

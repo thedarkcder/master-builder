@@ -24,11 +24,11 @@ from orchestrator.temporal.payloads import (
     HandlerWorkflowAdvanceResult,
     HumanInputResumeInput,
     WorkflowOperationRetryInput,
-    WorkflowOperationRetryResult,
 )
 from orchestrator.temporal.workflow_registry import resolve_temporal_binding_for_handler
 
 try:  # pragma: no cover - exercised when temporal backend is enabled
+    from temporalio.client import WorkflowUpdateStage
     from temporalio.exceptions import WorkflowAlreadyStartedError
 except ImportError as exc:  # pragma: no cover - exercised when temporal backend is enabled
     raise RuntimeError("Temporal backend requires temporalio to be installed") from exc
@@ -411,7 +411,7 @@ class TemporalWorkflowEngine:
     ) -> WorkflowOperationHandle:
         config = _temporal_config_for_workflow(session=session, workflow=workflow, settings=settings)
         if config.execution_mode == "handler":
-            async def _retry() -> WorkflowOperationRetryResult:
+            async def _retry() -> None:
                 client = await connect_temporal_client(settings)
                 workflow_type = get_workflow_type(session, workflow_type_key=workflow.workflow_type_key)
                 handle = await _ensure_handler_workflow_handle(
@@ -420,20 +420,25 @@ class TemporalWorkflowEngine:
                     workflow_id=workflow.workflow_id,
                     workflow_handler_key=str(workflow_type.handler_key or "").strip(),
                 )
-                return await handle.execute_update(
+                await handle.start_update(
                     config.workflow_defn.retry_operation,
                     WorkflowOperationRetryInput(
                         workflow_id=workflow.workflow_id,
                         operation_id=operation.operation_id,
+                        retry_max_attempts=config.retry_max_attempts,
+                        retry_initial_interval_seconds=config.retry_initial_interval_seconds,
+                        retry_max_interval_seconds=config.retry_max_interval_seconds,
+                        retry_backoff_coefficient=config.retry_backoff_coefficient,
                     ),
+                    wait_for_stage=WorkflowUpdateStage.ACCEPTED,
                 )
 
-            result = _run_sync(_retry())
+            _run_sync(_retry())
             return WorkflowOperationHandle(
-                operation_id=result.operation_id,
-                workflow_id=result.workflow_id,
-                operation_type=result.operation_type,
-                status=result.operation_status,
+                operation_id=operation.operation_id,
+                workflow_id=workflow.workflow_id,
+                operation_type=operation.operation_type,
+                status=operation.status,
             )
         if self._workflow_handler_registry is None:
             raise RuntimeError("Workflow operation retry handler registry is not configured")

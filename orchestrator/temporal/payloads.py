@@ -51,7 +51,7 @@ class HandlerWorkflowAdvanceInput:
     source_system: str
     source_ref: str
     source_display_name: str | None = None
-    source_description: object | None = None
+    source_description: Any | None = None
     source_attributes: dict[str, Any] | None = None
     payload: dict[str, Any] | None = None
     trigger_event: str | None = None
@@ -75,6 +75,10 @@ class HandlerWorkflowAdvanceResult:
 class WorkflowOperationRetryInput:
     workflow_id: str
     operation_id: str
+    retry_max_attempts: int = 1
+    retry_initial_interval_seconds: int = 0
+    retry_max_interval_seconds: int = 0
+    retry_backoff_coefficient: float = 1.0
 
 
 @dataclass(frozen=True)

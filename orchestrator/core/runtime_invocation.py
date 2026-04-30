@@ -686,8 +686,43 @@ def _append_raw_log_line(
 
 
 def _enqueue_runtime_log_line(*, context: AgentInvocationContext, stream: str, message: str) -> None:
+    if context.db_session is not None:
+        _persist_runtime_log_line_with_session(session=context.db_session, context=context, stream=stream, message=message)
+        return
     writer = _get_log_writer()
     writer.enqueue(context=context, stream=stream, message=message)
+
+
+def _persist_runtime_log_line_with_session(
+    *,
+    session: Session,
+    context: AgentInvocationContext,
+    stream: str,
+    message: str,
+) -> None:
+    tenant_id = str(context.tenant_id or "").strip()
+    if not tenant_id:
+        raise ValueError("Runtime log persistence requires tenant_id")
+    settings = get_settings()
+    emit_logging_pane_event(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=str(context.project_id or "").strip() or None,
+        workflow_id=str(context.workflow_id or "").strip() or None,
+        operation_id=str(context.operation_id or "").strip() or None,
+        attempt_id=str(context.attempt_id or "").strip() or None,
+        run_id=str(context.run_id or "").strip() or None,
+        issue_key=str(context.issue_key or "").strip() or None,
+        agent_id=str(settings.agent_id),
+        invocation_id=str(context.invocation_id or "").strip() or None,
+        channel=str(context.channel or "").strip() or None,
+        command=f"{context.command}.{context.stage}",
+        working_dir=str(context.working_dir or "").strip() or None,
+        stage=str(context.stage),
+        attempt=context.attempt,
+        stream=str(stream),
+        message=str(message),
+    )
 
 
 def invoke_runtime_json(

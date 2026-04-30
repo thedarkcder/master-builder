@@ -60,6 +60,7 @@ test("shows workflow definitions and retries a failed execution operation", asyn
           completion_required: true,
           kind: "integration",
           after: ["backlog_planning"],
+          supports: [],
           required: true,
           retryable: true,
           graph_index: 5,
@@ -104,6 +105,7 @@ test("shows workflow definitions and retries a failed execution operation", asyn
         required: true,
         kind: "integration",
         after: ["backlog_planning"],
+        supports: [],
         definition_only: false,
         status: "failed",
         target_system: "jira",
@@ -202,6 +204,7 @@ test("shows workflow definitions and retries a failed execution operation", asyn
 
   let retriedOperation: { workflowId: string; operationId: string } | null = null;
   let resumedExecution = false;
+  let telemetrySnapshotRequests = 0;
   await mockTenantWorkflowApis(page, {
     workflows: [workflow],
     retriedWorkflowResponse: retriedWorkflow,
@@ -269,6 +272,26 @@ test("shows workflow definitions and retries a failed execution operation", asyn
           },
           recorded_at: "2026-04-17T12:23:30Z",
         },
+        {
+          event_id: "telemetry-retry-runtime-line",
+          source: "telemetry",
+          level: "info",
+          event_kind: "runtime_log",
+          message: "Retry runtime log line attached to attempt 2.",
+          source_component: "logging_pane",
+          run_id: null,
+          operation_id: "operation-jira-child-fanout",
+          attempt_id: "attempt-2",
+          agent_id: null,
+          invocation_id: "inv-retry",
+          stage: "seed",
+          attempt: 2,
+          stream: "stdout",
+          payload: {
+            stream: "stdout",
+          },
+          recorded_at: "2026-04-17T12:40:01Z",
+        },
       ],
     },
     auditTranscriptByOperationId: {
@@ -321,6 +344,9 @@ test("shows workflow definitions and retries a failed execution operation", asyn
     onRetryOperation: (payload) => {
       retriedOperation = payload;
     },
+    onTelemetrySnapshotRequest: () => {
+      telemetrySnapshotRequests += 1;
+    },
   });
 
   await page.goto("/route25/workflows");
@@ -348,10 +374,16 @@ test("shows workflow definitions and retries a failed execution operation", asyn
   await page.getByRole("button", { name: "Fan out engineering child tickets" }).click();
   await expect(page.getByRole("heading", { name: "Fan out engineering child tickets" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Live telemetry" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Auto-scroll on" })).toBeVisible();
+  await page.getByRole("button", { name: "Auto-scroll on" }).click();
+  await expect(page.getByRole("button", { name: "Auto-scroll off" })).toBeVisible();
+  await page.getByRole("button", { name: "Auto-scroll off" }).click();
+  await expect(page.getByRole("button", { name: "Auto-scroll on" })).toBeVisible();
   await expect(page.getByRole("button", { name: /Attempt 1/i })).toBeVisible();
   await expect(page.getByText("Attempt 1").last()).toBeVisible();
   await expect(page.getByText("Prompts")).toBeVisible();
   await expect(page.getByText("External requests")).toBeVisible();
+  expect(telemetrySnapshotRequests).toBe(0);
   await page.getByRole("button", { name: "Audit history" }).click();
   await expect(page.getByText("Retry engineering child fanout after reducing Jira payload size.").first()).toBeVisible();
   await expect(page.getByText("Outcome")).toBeVisible();
@@ -371,7 +403,9 @@ test("shows workflow definitions and retries a failed execution operation", asyn
   });
   await expect(page.getByRole("button", { name: /Attempt 2/i })).toBeVisible();
   await expect(page.getByText("running").last()).toBeVisible();
+  await expect(page.getByText("Retry runtime log line attached to attempt 2.")).toBeVisible();
   expect(resumedExecution).toBe(false);
+  await page.getByLabel("Dismiss notification").click();
   await page.getByRole("button", { name: "Close", exact: true }).click();
   await page.getByRole("button", { name: "Links" }).click();
   await expect(page.getByText("Create tenant assurance boundary")).toBeVisible();
@@ -380,6 +414,230 @@ test("shows workflow definitions and retries a failed execution operation", asyn
   await page.getByRole("button", { name: "Execution path" }).click();
   await expect(page.getByRole("button", { name: "Execution path" })).toBeVisible();
   await expect(page.getByText("Fan out engineering child tickets").first()).toBeVisible();
+});
+
+test("shows the new live retry attempt when retry submission returns before started_attempt is available", async ({ page }) => {
+  await seedAdminSession(page);
+
+  const operationId = "workflow-retry-accepted:run_attempt_execution";
+  const attempt1 = {
+    attempt_id: "attempt-1",
+    attempt_number: 1,
+    status: "failed",
+    error_category: "external_failure",
+    error_message: "Previous attempt failed.",
+    status_detail: null,
+    retryable: true,
+    next_retry_at: null,
+    started_at: "2026-04-28T20:00:00Z",
+    finished_at: "2026-04-28T20:01:00Z",
+  };
+  const attempt2 = {
+    attempt_id: "attempt-2",
+    attempt_number: 2,
+    status: "running",
+    error_category: null,
+    error_message: null,
+    status_detail: null,
+    retryable: false,
+    next_retry_at: null,
+    started_at: "2026-04-28T20:02:00Z",
+    finished_at: null,
+  };
+  const operation = {
+    operation_id: operationId,
+    run_id: null,
+    operation_type: "run_attempt_execution",
+    status: "failed",
+    label: "Execute run attempt",
+    description: "Dispatch the current run attempt through the central execution engine.",
+    required: true,
+    kind: "business",
+    after: [],
+    supports: [],
+    definition_only: false,
+    target_system: null,
+    target_ref: null,
+    summary: "Previous attempt failed.",
+    can_retry: true,
+    retry_unavailable_reason: null,
+    attempts: [attempt1],
+    events: [],
+  };
+  const workflow = makeWorkflow({
+    execution_id: "wfexec-retry-accepted",
+    workflow_id: "workflow-retry-accepted",
+    tenant_id: "route25",
+    project_id: "route25-default",
+    status: "failed",
+    current_state: "failed",
+    failure_reason: "Previous attempt failed.",
+    operations: [operation],
+  });
+  const retriedWorkflow = {
+    ...workflow,
+    status: "running",
+    current_state: "running",
+    failure_reason: null,
+    operations: [
+      {
+        ...operation,
+        status: "running",
+        summary: "Started run_attempt_execution attempt 2.",
+        can_retry: false,
+        attempts: [attempt1, attempt2],
+      },
+    ],
+  };
+
+  await mockTenantWorkflowApis(page, {
+    workflows: [workflow],
+    retriedWorkflowResponse: retriedWorkflow,
+    retriedOperationStartedAttempt: null,
+    telemetryEventsByOperationId: {
+      [operationId]: [
+        {
+          event_id: "attempt-2-started",
+          event_sequence: 2,
+          source: "telemetry",
+          level: "info",
+          event_kind: "workflow_operation_attempt_started",
+          message: "Started run_attempt_execution attempt 2.",
+          source_component: "workflow_operation_service",
+          run_id: null,
+          operation_id: operationId,
+          attempt_id: "attempt-2",
+          agent_id: null,
+          invocation_id: null,
+          stage: null,
+          attempt: 2,
+          stream: "system",
+          payload: { attempt_number: 2, status: "running" },
+          recorded_at: "2026-04-28T20:02:00Z",
+        },
+      ],
+    },
+  });
+
+  await page.goto("/route25/executions/wfexec-retry-accepted");
+  await page.getByRole("button", { name: "Step details" }).click();
+  await page.getByRole("button", { name: "Retry step" }).click();
+
+  await expect(page.getByRole("button", { name: /Attempt 2/i })).toBeVisible();
+  await expect(page.getByText("Started run_attempt_execution attempt 2.")).toBeVisible();
+});
+
+test("groups supporting workflow steps under their declared owning operation", async ({ page }) => {
+  await seedAdminSession(page);
+
+  const workflow = makeWorkflow({
+    execution_id: "wfexec-mab-supporting",
+    workflow_id: "parent_planning:MAB-233",
+    tenant_id: "route25",
+    project_id: "route25-default",
+    source_system: "jira",
+    source_ref: "MAB-233",
+    display_name: "Parent planning support grouping",
+    status: "failed",
+    current_state: "failed",
+    failure_reason: "Codex returned engineering_planning child_ticket_specs[1] without done_means",
+    operations: [
+      {
+        operation_id: "operation-backlog-planning",
+        run_id: null,
+        operation_type: "backlog_planning",
+        status: "failed",
+        label: "Backlog planning",
+        description: "Build the planning package.",
+        required: true,
+        kind: "business",
+        after: ["brief_normalization"],
+        supports: [],
+        definition_only: false,
+        target_system: "jira",
+        target_ref: "MAB-233",
+        summary: "Codex returned engineering_planning child_ticket_specs[1] without done_means",
+        can_retry: true,
+        retry_unavailable_reason: null,
+        attempts: [],
+        events: [],
+      },
+      {
+        operation_id: "operation-jira-child-fanout",
+        run_id: null,
+        operation_type: "jira_child_fanout",
+        status: "pending",
+        label: "Engineering child fanout",
+        description: "Create or refresh engineering child tickets.",
+        required: true,
+        kind: "integration",
+        after: ["backlog_planning"],
+        supports: [],
+        definition_only: false,
+        target_system: "jira",
+        target_ref: "MAB-233",
+        summary: null,
+        can_retry: false,
+        retry_unavailable_reason: "Operation has not started yet.",
+        attempts: [],
+        events: [],
+      },
+      {
+        operation_id: "operation-jira-comment-projection",
+        run_id: null,
+        operation_type: "jira_comment_projection",
+        status: "completed",
+        label: "Jira comment projection",
+        description: "Publish clarification questions to Jira.",
+        required: false,
+        kind: "notification",
+        after: ["brief_normalization"],
+        supports: ["backlog_planning", "jira_child_fanout"],
+        definition_only: false,
+        target_system: "jira",
+        target_ref: "MAB-233",
+        summary: "Posted clarification questions to Jira.",
+        can_retry: false,
+        retry_unavailable_reason: "Manual retry is disabled by the workflow definition.",
+        attempts: [],
+        events: [],
+      },
+      {
+        operation_id: "operation-jira-parent-update",
+        run_id: null,
+        operation_type: "jira_parent_update",
+        status: "completed",
+        label: "Jira parent update",
+        description: "Synchronize parent Jira issue metadata.",
+        required: false,
+        kind: "integration",
+        after: ["brief_normalization"],
+        supports: ["backlog_planning", "jira_child_fanout"],
+        definition_only: false,
+        target_system: "jira",
+        target_ref: "MAB-233",
+        summary: "Parent metadata synced.",
+        can_retry: false,
+        retry_unavailable_reason: null,
+        attempts: [],
+        events: [],
+      },
+    ],
+  });
+
+  await mockTenantWorkflowApis(page, { workflows: [workflow] });
+
+  await page.goto("/route25/executions/wfexec-mab-supporting");
+  await page.getByRole("button", { name: "Execution path" }).click();
+
+  const backlogGroup = page.locator('[data-workflow-flow-group="backlog_planning"]');
+  const fanoutGroup = page.locator('[data-workflow-flow-group="jira_child_fanout"]');
+  await expect(backlogGroup.getByText("Backlog planning")).toBeVisible();
+  await expect(backlogGroup.getByText("Jira comment projection")).toBeVisible();
+  await expect(backlogGroup.getByText("Jira parent update")).toBeVisible();
+  await expect(fanoutGroup.getByText("Engineering child fanout")).toBeVisible();
+  await expect(fanoutGroup.getByText("Jira comment projection")).toHaveCount(0);
+  await expect(fanoutGroup.getByText("Jira parent update")).toHaveCount(0);
 });
 
 test("keeps retry available for missing-input workflow failures", async ({ page }) => {
@@ -435,6 +693,7 @@ test("keeps retry available for missing-input workflow failures", async ({ page 
           completion_required: true,
           kind: "integration",
           after: ["backlog_planning"],
+          supports: [],
           required: true,
           retryable: true,
           graph_index: 5,
@@ -478,6 +737,7 @@ test("keeps retry available for missing-input workflow failures", async ({ page 
         required: true,
         kind: "integration",
         after: ["backlog_planning"],
+        supports: [],
         definition_only: false,
         status: "failed",
         target_system: "jira",

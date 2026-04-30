@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 import logging
 from uuid import uuid4
 
-from sqlalchemy import func, select
+from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session
 
 from orchestrator.core.audit_events import record_workflow_operation_audit_event
@@ -19,6 +19,10 @@ OPERATION_STATUS_WAITING_FOR_INPUT = "waiting_for_input"
 OPERATION_STATUS_RETRYING = "retrying"
 OPERATION_STATUS_FAILED = "failed"
 OPERATION_STATUS_COMPLETED = "completed"
+
+
+class WorkflowOperationAttemptAlreadyRunningError(RuntimeError):
+    pass
 
 
 def _now() -> datetime:
@@ -93,6 +97,21 @@ def start_workflow_operation_attempt(
     *,
     operation: WorkflowOperation,
 ) -> WorkflowOperationAttempt:
+    running_attempt = session.execute(
+        select(WorkflowOperationAttempt)
+        .where(
+            WorkflowOperationAttempt.operation_id == operation.operation_id,
+            WorkflowOperationAttempt.status == OPERATION_STATUS_RUNNING,
+        )
+        .order_by(desc(WorkflowOperationAttempt.attempt_number))
+        .limit(1)
+    ).scalar_one_or_none()
+    if running_attempt is not None:
+        raise WorkflowOperationAttemptAlreadyRunningError(
+            "Workflow operation "
+            f"{operation.operation_type} already has running attempt {running_attempt.attempt_number} "
+            f"({running_attempt.attempt_id})."
+        )
     next_attempt_number = int(
         session.execute(
             select(func.max(WorkflowOperationAttempt.attempt_number)).where(
@@ -265,7 +284,7 @@ def mark_workflow_operation_waiting_for_input(
         session,
         operation=operation,
         attempt_ref=_attempt_ref(operation=operation, attempt=attempt),
-        event_type="workflow_operation_waiting_for_input",
+        event_type="workflow_operation_attempt_waiting_for_input",
         message=summary,
         metadata={"status": attempt.status},
     )

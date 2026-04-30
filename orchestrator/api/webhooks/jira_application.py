@@ -300,6 +300,19 @@ def _process_jira_webhook_context(
     if comment_plan.content is not None:
         return JiraWebhookPlan(content=comment_plan.content)
 
+    if context.comment_command is not None:
+        run_plan = plan_jira_run_flow(
+            context=context,
+            session=session,
+            settings=settings,
+            evaluate_jira_trigger_state_fn=evaluate_jira_trigger_state,
+            jira_webhook_response_fn=jira_webhook_response,
+        )
+        return JiraWebhookPlan(
+            content=run_plan.content,
+            actions=run_plan.actions,
+        )
+
     if context.project is None:
         logger.info(
             "jira_webhook_ignored request_id=%s tenant_id=%s issue_key=%s reason=project_not_mapped",

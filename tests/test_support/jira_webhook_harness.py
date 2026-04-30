@@ -21,6 +21,7 @@ from orchestrator.core.webhook_health import reset_webhook_health_tracker_for_te
 from orchestrator.core.worker.webhook_job_service import process_next_webhook_job
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from tests.test_support.db_harness import SqliteTemplateApiTestCase
+from tests.test_support.workflow_runtime_harness import build_local_workflow_runtime, skip_product_event_notification
 
 
 class JiraWebhookHarness(SqliteTemplateApiTestCase):
@@ -143,6 +144,16 @@ class JiraWebhookHarness(SqliteTemplateApiTestCase):
             side_effect=self._evaluate_precheck_decision_with_labels,
         )
         self._default_precheck_decision_patch.start()
+        self._event_notify_patch = patch(
+            "orchestrator.core.product_events.publish_product_event_notification",
+            skip_product_event_notification,
+        )
+        self._event_notify_patch.start()
+        self._workflow_runtime_patch = patch(
+            "orchestrator.api.webhooks.jira_parent_child_sync.build_workflow_runtime",
+            build_local_workflow_runtime,
+        )
+        self._workflow_runtime_patch.start()
 
     def tearDown(self) -> None:
         self._cleanup_test_database()
@@ -155,6 +166,8 @@ class JiraWebhookHarness(SqliteTemplateApiTestCase):
         reset_webhook_health_tracker_for_tests()
         self._default_pre_run_check_patch.stop()
         self._default_precheck_decision_patch.stop()
+        self._event_notify_patch.stop()
+        self._workflow_runtime_patch.stop()
 
     def _evaluate_precheck_decision_with_labels(
         self,

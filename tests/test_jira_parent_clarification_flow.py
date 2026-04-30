@@ -8,7 +8,15 @@ from sqlalchemy import select
 from orchestrator.core.codex_runtime import CodexRuntimeError
 from orchestrator.core.clarification_projection_service import clarification_state_fingerprint
 from orchestrator.core.runtime_payload_models import EngineeringClarificationPayload
-from orchestrator.storage.models import FollowupContext, PMInterviewCase, WorkflowOperation, WorkflowOperationAttempt
+from orchestrator.core.workflow_advance import execute_workflow_advance
+from orchestrator.core.workflow_execution_projection import (
+    WorkflowExecutionReference,
+    WorkflowSourceReference,
+    ensure_workflow_execution,
+)
+from orchestrator.core.workflow_operation_service import WorkflowOperationHandle
+from orchestrator.core.workflow_type_catalog import get_workflow_type
+from orchestrator.storage.models import FollowupContext, PMInterviewCase, Project, WorkflowOperation, WorkflowOperationAttempt
 from orchestrator.tools.atlassian_oauth import JiraIssueDetail
 from tests.test_support.jira_webhook_harness import JiraWebhookHarness
 
@@ -171,6 +179,7 @@ class JiraParentClarificationFlowTests(JiraWebhookHarness):
             patch("orchestrator.core.jira_parent_child_sync_publishers.resolve_platform_secret_ref", return_value="discord-token"),
             patch("orchestrator.core.jira_parent_child_sync_publishers.DiscordApiClient") as discord_client_cls,
             patch("orchestrator.api.webhooks.jira_parent_child_sync.post_jira_comment", return_value=(True, None)) as comment_mock,
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.create_jira_comment", return_value=({"id": "jira-comment-950"}, None)),
         ):
             discord_client = discord_client_cls.return_value
             discord_client.post_message.return_value = {"id": "discord-msg-1"}
@@ -189,11 +198,15 @@ class JiraParentClarificationFlowTests(JiraWebhookHarness):
         self.assertIn("customer see", discord_client.post_message.call_args.kwargs["content"])
         with self.session_factory() as session:
             context = session.execute(
-                select(FollowupContext).where(
+                select(FollowupContext)
+                .where(
                     FollowupContext.tenant_id == "tenant-webhook",
                     FollowupContext.issue_key == "TP-950",
                     FollowupContext.context_type == "engineering_clarification",
+                    FollowupContext.status == "active",
                 )
+                .order_by(FollowupContext.updated_at.desc())
+                .limit(1)
             ).scalar_one_or_none()
         self.assertIsNotNone(context)
         assert context is not None
@@ -334,6 +347,452 @@ class JiraParentClarificationFlowTests(JiraWebhookHarness):
                 )
             ).scalar_one()
         self.assertEqual(attempt.status, "completed")
+
+    def test_webhook_parent_planning_clarification_reply_resumes_child_fanout_continuation(self) -> None:
+        now = datetime.now(timezone.utc)
+        with self.session_factory() as session:
+            project = session.execute(
+                select(Project).where(Project.tenant_id == "tenant-webhook")
+            ).scalar_one()
+            workflow_type = get_workflow_type(session, workflow_type_key="parent_planning")
+            lifecycle = ensure_workflow_execution(
+                session=session,
+                workflow_type=workflow_type,
+                tenant_id="tenant-webhook",
+                project_id=project.project_id,
+                execution=WorkflowExecutionReference(
+                    key="TP-990",
+                    source=WorkflowSourceReference(
+                        source_system="jira",
+                        source_ref="TP-990",
+                        display_name="Identity controls",
+                        description="Parent planning needs answers",
+                    ),
+                ),
+                display_name="Identity controls",
+                description="Parent planning needs answers",
+            )
+            operation = session.execute(
+                select(WorkflowOperation).where(
+                    WorkflowOperation.workflow_id == lifecycle.workflow.workflow_id,
+                    WorkflowOperation.operation_type == "backlog_planning",
+                )
+            ).scalar_one()
+            operation.operation_id = "operation-backlog-tp-990"
+            operation.status = "waiting_for_input"
+            operation.target_ref = "TP-990"
+            operation.summary = "Waiting for product clarification."
+            operation.started_at = now
+            operation.finished_at = now
+            operation.updated_at = now
+            session.add(
+                FollowupContext(
+                    context_id="ctx-parent-planning-990",
+                    tenant_id="tenant-webhook",
+                    project_id=project.project_id,
+                    context_type="parent_planning_clarification",
+                    status="active",
+                    channel_id=None,
+                    thread_channel_id=None,
+                    root_message_id="22805",
+                    issue_key="TP-990",
+                    request_id="parent-planning-clarification:TP-990",
+                    run_id=None,
+                    metadata_json={
+                        "blocked_operation_type": "backlog_planning",
+                        "jira_comment_id": "22805",
+                        "questions": [{"question": "What recovery expiry should v1 use?"}],
+                    },
+                    created_at=now,
+                    updated_at=now,
+                    closed_at=None,
+                )
+            )
+            session.commit()
+
+        payload = self._jira_issue_payload(issue_key="TP-990", labels=["pm-parent"], status_name="To Do")
+        payload["webhookEvent"] = "comment_created"
+        payload["comment"] = {
+            "id": "22862",
+            "parentId": "22805",
+            "author": {"accountId": "jira-user-990"},
+            "body": {
+                "type": "doc",
+                "version": 1,
+                "content": [
+                    {
+                        "type": "paragraph",
+                        "content": [{"type": "text", "text": "Recovery grants expire after 1 hour."}],
+                    }
+                ],
+            },
+        }
+
+        class _FakeClient(_JiraMetadataClientMixin):
+            def _get_issue_detail(self, issue_key: str):  # noqa: ANN003
+                return JiraIssueDetail(
+                    key=issue_key,
+                    summary="Identity controls",
+                    status="To Do",
+                    description="Objective\nIdentity controls",
+                    labels=["pm-parent", "sync-blocked"],
+                )
+
+        oauth_context = SimpleNamespace(
+            client=_FakeClient(),
+            access_token="tok",
+            connection=SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
+        )
+        planner_result = SimpleNamespace(planning_state="planning_completed", open_behavior_questions=())
+        with (
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_atlassian_oauth_context", return_value=oauth_context),
+            patch(
+                "orchestrator.core.parent_feature_workflow.retry.resolve_parent_feature_brief",
+                return_value=SimpleNamespace(to_payload=lambda: {"objective": "Identity controls"}),
+            ),
+            patch(
+                "orchestrator.core.parent_feature_workflow.adapters._ParentBriefPlanner.plan_backlog_parent",
+                return_value=(planner_result, {"planning": "package"}),
+            ) as planner_mock,
+            patch(
+                "orchestrator.api.webhooks.jira_parent_child_sync.seed_issues_with_runtime",
+                return_value=(
+                    "updated",
+                    {
+                        "updated_parent": "TP-990",
+                        "updated_children": ["TP-991"],
+                        "created_children": [],
+                        "changed_children": ["TP-991"],
+                        "requires_input": False,
+                        "parent_revision": "rev-990",
+                        "children_sync_status": "children_current",
+                    },
+                ),
+            ) as seed_mock,
+        ):
+            response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+            processed = self._process_one_webhook_job()
+
+        self._assert_jira_issue_event_queued(response, issue_key="TP-990")
+        self.assertIsNotNone(processed)
+        assert processed is not None
+        self.assertEqual(processed.status, "done")
+        planner_mock.assert_called_once()
+        seed_mock.assert_called_once()
+        with self.session_factory() as session:
+            context = session.execute(
+                select(FollowupContext).where(FollowupContext.context_id == "ctx-parent-planning-990")
+            ).scalar_one()
+            backlog_operation = session.get(WorkflowOperation, "operation-backlog-tp-990")
+            fanout_operation = session.execute(
+                select(WorkflowOperation).where(
+                    WorkflowOperation.workflow_id == "parent_planning:TP-990",
+                    WorkflowOperation.operation_type == "jira_child_fanout",
+                )
+            ).scalar_one()
+            backlog_attempts = (
+                session.query(WorkflowOperationAttempt)
+                .filter(WorkflowOperationAttempt.operation_id == "operation-backlog-tp-990")
+                .order_by(WorkflowOperationAttempt.attempt_number)
+                .all()
+            )
+            fanout_attempts = (
+                session.query(WorkflowOperationAttempt)
+                .filter(WorkflowOperationAttempt.operation_id == fanout_operation.operation_id)
+                .order_by(WorkflowOperationAttempt.attempt_number)
+                .all()
+            )
+        self.assertEqual(context.status, "closed")
+        self.assertEqual(context.metadata_json["answer_text"], "Recovery grants expire after 1 hour.")
+        assert backlog_operation is not None
+        self.assertEqual(backlog_operation.status, "completed")
+        self.assertEqual(fanout_operation.status, "completed")
+        self.assertEqual(backlog_attempts[-1].status, "completed")
+        self.assertEqual(fanout_attempts[-1].status, "completed")
+
+    def test_parent_planning_reply_keeps_context_active_when_continuation_returns_running(self) -> None:
+        now = datetime.now(timezone.utc)
+        with self.session_factory() as session:
+            project = session.execute(
+                select(Project).where(Project.tenant_id == "tenant-webhook")
+            ).scalar_one()
+            workflow_type = get_workflow_type(session, workflow_type_key="parent_planning")
+            lifecycle = ensure_workflow_execution(
+                session=session,
+                workflow_type=workflow_type,
+                tenant_id="tenant-webhook",
+                project_id=project.project_id,
+                execution=WorkflowExecutionReference(
+                    key="TP-991",
+                    source=WorkflowSourceReference(
+                        source_system="jira",
+                        source_ref="TP-991",
+                        display_name="Identity controls",
+                        description="Parent planning needs answers",
+                    ),
+                ),
+                display_name="Identity controls",
+                description="Parent planning needs answers",
+            )
+            backlog_operation = session.execute(
+                select(WorkflowOperation).where(
+                    WorkflowOperation.workflow_id == lifecycle.workflow.workflow_id,
+                    WorkflowOperation.operation_type == "backlog_planning",
+                )
+            ).scalar_one()
+            backlog_operation.status = "waiting_for_input"
+            backlog_operation.target_ref = "TP-991"
+            backlog_operation.summary = "Waiting for product clarification."
+            backlog_operation.started_at = now
+            backlog_operation.finished_at = now
+            backlog_operation.updated_at = now
+            fanout_operation = session.execute(
+                select(WorkflowOperation).where(
+                    WorkflowOperation.workflow_id == lifecycle.workflow.workflow_id,
+                    WorkflowOperation.operation_type == "jira_child_fanout",
+                )
+            ).scalar_one()
+            session.add(
+                FollowupContext(
+                    context_id="ctx-parent-planning-running-continuation",
+                    tenant_id="tenant-webhook",
+                    project_id=project.project_id,
+                    context_type="parent_planning_clarification",
+                    status="active",
+                    channel_id=None,
+                    thread_channel_id=None,
+                    root_message_id="22805",
+                    issue_key="TP-991",
+                    request_id="parent-planning-clarification:TP-991",
+                    run_id=None,
+                    metadata_json={
+                        "blocked_operation_type": "backlog_planning",
+                        "jira_comment_id": "22805",
+                        "questions": [{"question": "What retry visibility should operators see?"}],
+                    },
+                    created_at=now,
+                    updated_at=now,
+                    closed_at=None,
+                )
+            )
+            session.commit()
+            fanout_operation_id = fanout_operation.operation_id
+
+        payload = self._jira_issue_payload(issue_key="TP-991", labels=["pm-parent"], status_name="To Do")
+        payload["webhookEvent"] = "comment_created"
+        payload["comment"] = {
+            "id": "22864",
+            "parentId": "22805",
+            "author": {"accountId": "jira-user-991"},
+            "body": {
+                "type": "doc",
+                "version": 1,
+                "content": [
+                    {
+                        "type": "paragraph",
+                        "content": [{"type": "text", "text": "Operators see redacted retry telemetry."}],
+                    }
+                ],
+            },
+        }
+
+        with patch(
+            "orchestrator.core.parent_feature_workflow.flows.retry_workflow_operation_with_registered_handler",
+            return_value=WorkflowOperationHandle(
+                operation_id=fanout_operation_id,
+                workflow_id="parent_planning:TP-991",
+                operation_type="jira_child_fanout",
+                status="running",
+            ),
+        ):
+            response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+            processed = self._process_one_webhook_job()
+
+        self._assert_jira_issue_event_queued(response, issue_key="TP-991")
+        self.assertIsNotNone(processed)
+        assert processed is not None
+        self.assertEqual(processed.status, "failed")
+        self.assertIn("reply context cannot be closed", processed.last_error or "")
+        with self.session_factory() as session:
+            context = session.get(FollowupContext, "ctx-parent-planning-running-continuation")
+        assert context is not None
+        self.assertEqual(context.status, "active")
+        self.assertEqual(context.metadata_json["answer_text"], "Operators see redacted retry telemetry.")
+
+    def test_parent_planning_reply_keeps_new_wait_context_active_after_continuation(self) -> None:
+        now = datetime.now(timezone.utc)
+        original_questions = [{"question": "What retry visibility should operators see?"}]
+        next_questions = [{"question": "What raw telemetry retention window should apply?"}]
+        with self.session_factory() as session:
+            project = session.execute(
+                select(Project).where(Project.tenant_id == "tenant-webhook")
+            ).scalar_one()
+            workflow_type = get_workflow_type(session, workflow_type_key="parent_planning")
+            lifecycle = ensure_workflow_execution(
+                session=session,
+                workflow_type=workflow_type,
+                tenant_id="tenant-webhook",
+                project_id=project.project_id,
+                execution=WorkflowExecutionReference(
+                    key="TP-992",
+                    source=WorkflowSourceReference(
+                        source_system="jira",
+                        source_ref="TP-992",
+                        display_name="Identity controls",
+                        description="Parent planning needs answers",
+                    ),
+                ),
+                display_name="Identity controls",
+                description="Parent planning needs answers",
+            )
+            backlog_operation = session.execute(
+                select(WorkflowOperation).where(
+                    WorkflowOperation.workflow_id == lifecycle.workflow.workflow_id,
+                    WorkflowOperation.operation_type == "backlog_planning",
+                )
+            ).scalar_one()
+            backlog_operation.status = "waiting_for_input"
+            backlog_operation.target_ref = "TP-992"
+            backlog_operation.summary = "Waiting for product clarification."
+            backlog_operation.started_at = now
+            backlog_operation.finished_at = now
+            backlog_operation.updated_at = now
+            fanout_operation = session.execute(
+                select(WorkflowOperation).where(
+                    WorkflowOperation.workflow_id == lifecycle.workflow.workflow_id,
+                    WorkflowOperation.operation_type == "jira_child_fanout",
+                )
+            ).scalar_one()
+            session.add(
+                FollowupContext(
+                    context_id="ctx-parent-planning-next-wait",
+                    tenant_id="tenant-webhook",
+                    project_id=project.project_id,
+                    context_type="parent_planning_clarification",
+                    status="active",
+                    channel_id=None,
+                    thread_channel_id=None,
+                    root_message_id="22805",
+                    issue_key="TP-992",
+                    request_id="parent-planning-clarification:TP-992",
+                    run_id=None,
+                    metadata_json={
+                        "blocked_operation_type": "backlog_planning",
+                        "jira_comment_id": "22805",
+                        "question_state_fingerprint": clarification_state_fingerprint(questions=original_questions),
+                        "questions": original_questions,
+                    },
+                    created_at=now,
+                    updated_at=now,
+                    closed_at=None,
+                )
+            )
+            session.commit()
+            fanout_operation_id = fanout_operation.operation_id
+
+        payload = self._jira_issue_payload(issue_key="TP-992", labels=["pm-parent"], status_name="To Do")
+        payload["webhookEvent"] = "comment_created"
+        payload["comment"] = {
+            "id": "22865",
+            "parentId": "22805",
+            "author": {"accountId": "jira-user-992"},
+            "body": {
+                "type": "doc",
+                "version": 1,
+                "content": [
+                    {
+                        "type": "paragraph",
+                        "content": [{"type": "text", "text": "Operators see redacted retry telemetry."}],
+                    }
+                ],
+            },
+        }
+
+        def _continue_to_new_wait(*, session, **_kwargs):  # noqa: ANN001
+            context = session.get(FollowupContext, "ctx-parent-planning-next-wait")
+            assert context is not None
+            metadata = dict(context.metadata_json or {})
+            metadata["questions"] = next_questions
+            metadata["question_state_fingerprint"] = clarification_state_fingerprint(questions=next_questions)
+            context.metadata_json = metadata
+            return WorkflowOperationHandle(
+                operation_id=fanout_operation_id,
+                workflow_id="parent_planning:TP-992",
+                operation_type="jira_child_fanout",
+                status="waiting_for_input",
+            )
+
+        with patch(
+            "orchestrator.core.parent_feature_workflow.flows.retry_workflow_operation_with_registered_handler",
+            side_effect=_continue_to_new_wait,
+        ):
+            response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+            processed = self._process_one_webhook_job()
+
+        self._assert_jira_issue_event_queued(response, issue_key="TP-992")
+        self.assertIsNotNone(processed)
+        assert processed is not None
+        self.assertEqual(processed.status, "done")
+        with self.session_factory() as session:
+            context = session.get(FollowupContext, "ctx-parent-planning-next-wait")
+        assert context is not None
+        self.assertEqual(context.status, "active")
+        self.assertEqual(context.metadata_json["questions"], next_questions)
+        self.assertEqual(context.metadata_json["answer_text"], "Operators see redacted retry telemetry.")
+
+    def test_webhook_parent_engineering_clarification_without_children_fails_job(self) -> None:
+        now = datetime.now(timezone.utc)
+        with self.session_factory() as session:
+            session.add(
+                FollowupContext(
+                    context_id="ctx-invalid-engineering-clarify",
+                    tenant_id="tenant-webhook",
+                    project_id="project-1",
+                    context_type="engineering_clarification",
+                    status="active",
+                    channel_id=None,
+                    thread_channel_id=None,
+                    root_message_id="22805",
+                    issue_key="TP-991",
+                    request_id="engineering-clarification:TP-991",
+                    run_id=None,
+                    metadata_json={
+                        "source": "workflow_operation_retry",
+                        "questions": [{"question": "What recovery expiry should v1 use?"}],
+                    },
+                    created_at=now,
+                    updated_at=now,
+                    closed_at=None,
+                )
+            )
+            session.commit()
+
+        payload = self._jira_issue_payload(issue_key="TP-991", labels=["pm-parent"], status_name="To Do")
+        payload["webhookEvent"] = "comment_created"
+        payload["comment"] = {
+            "id": "22863",
+            "parentId": "22805",
+            "author": {"accountId": "jira-user-991"},
+            "body": {
+                "type": "doc",
+                "version": 1,
+                "content": [
+                    {
+                        "type": "paragraph",
+                        "content": [{"type": "text", "text": "Recovery grants expire after 1 hour."}],
+                    }
+                ],
+            },
+        }
+
+        response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+        processed = self._process_one_webhook_job()
+
+        self._assert_jira_issue_event_queued(response, issue_key="TP-991")
+        self.assertIsNotNone(processed)
+        assert processed is not None
+        self.assertEqual(processed.status, "failed")
+        self.assertIn("missing affected_child_keys", processed.last_error or "")
 
     def test_webhook_parent_comment_resolution_allows_new_child_creation(self) -> None:
         with self.session_factory() as session:
@@ -669,9 +1128,25 @@ class JiraParentClarificationFlowTests(JiraWebhookHarness):
             access_token="tok",
             connection=SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
         )
+
+        def _build_local_workflow_runtime(**runtime_kwargs):  # noqa: ANN003
+            class _Runtime:
+                def advance(self, *, request):  # noqa: ANN003
+                    workflow_type = get_workflow_type(runtime_kwargs["session"], workflow_type_key="parent_planning")
+                    return execute_workflow_advance(
+                        session=runtime_kwargs["session"],
+                        settings=runtime_kwargs["settings"],
+                        workflow_type=workflow_type,
+                        request=request,
+                        resolve_advance_handler_fn=runtime_kwargs["resolve_advance_handler_fn"],
+                    )
+
+            return _Runtime()
+
         with (
             patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_atlassian_oauth_context", return_value=oauth_context),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.build_runtime_for_selector", return_value=object()),
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.build_workflow_runtime", side_effect=_build_local_workflow_runtime),
             patch(
                 "orchestrator.core.pm_interview_followup_service.plan_pm_interview_with_runtime",
                 return_value={
@@ -804,6 +1279,145 @@ class JiraParentClarificationFlowTests(JiraWebhookHarness):
         continue_mock.assert_not_called()
         seed_mock.assert_not_called()
 
+    def test_webhook_parent_pm_reply_replay_resumes_waiting_brief_gate_after_followup_closed(self) -> None:
+        now = datetime.now(timezone.utc)
+        with self.session_factory() as session:
+            workflow_type = get_workflow_type(session, workflow_type_key="parent_planning")
+            projection = ensure_workflow_execution(
+                session=session,
+                workflow_type=workflow_type,
+                tenant_id="tenant-webhook",
+                project_id="project-1",
+                execution=WorkflowExecutionReference(
+                    key="TP-980R",
+                    source=WorkflowSourceReference(
+                        source_system="jira",
+                        source_ref="TP-980R",
+                        display_name="Identity redesign",
+                        description="Loose parent description",
+                        attributes={"jira_issue_labels": ["pm-parent", "sync-blocked"]},
+                    ),
+                ),
+                display_name="Identity redesign",
+                description="Loose parent description",
+            )
+            operation, attempt = projection.start_operation_attempt(operation_type="brief_normalization")
+            projection.wait_started_operation(
+                operation=operation,
+                attempt=attempt,
+                summary="PM clarification required.",
+            )
+            session.add(
+                PMInterviewCase(
+                    case_id="pm-case-980r",
+                    tenant_id="tenant-webhook",
+                    project_id="project-1",
+                    request_id="pm-request-980r",
+                    parent_issue_key="TP-980R",
+                    source_kind="jira_parent",
+                    status="pm_completed",
+                    channel_id="jira-parent-sync",
+                    thread_channel_id=None,
+                    root_message_id=None,
+                    owner_user_id="jira-user-980r",
+                    source_text="Identity redesign parent",
+                    brief_json={
+                        "objective": "Tenant identity redesign",
+                        "user_value": "Admins can manage identity safely",
+                        "target_user": "Tenant admins",
+                        "acceptance_criteria": ["Invitations can be sent", "Audit retention is enforced"],
+                        "scope_in": ["Tenant identity", "Invitation TTL"],
+                        "scope_out": ["SSO overhaul"],
+                        "ui_references": ["Admin settings"],
+                        "constraints": ["90 day retention window"],
+                        "risks": ["Audit export misuse"],
+                        "success_outcomes": ["Admins can export audit logs within policy"],
+                        "recommendation": "Proceed with planning.",
+                        "open_questions": [],
+                        "next_steps": [],
+                    },
+                    evidence_json=[
+                        {
+                            "evidence_id": "2013",
+                            "evidence_type": "human_reply",
+                            "source_ref": "2013",
+                            "summary": "jira_comment follow-up reply",
+                            "content": "Use a 90 day audit retention window in v1.",
+                            "metadata": {"source_transport": "jira_comment"},
+                            "captured_at": now.isoformat(),
+                        }
+                    ],
+                    question_history_json=[],
+                    current_question_json={},
+                    next_question_json={},
+                    missing_slots_json=[],
+                    notes_json={"source": "jira_pm_interview_reply"},
+                    created_at=now,
+                    updated_at=now,
+                    closed_at=now,
+                )
+            )
+            session.commit()
+
+        payload = self._jira_issue_payload(issue_key="TP-980R", labels=["pm-parent", "sync-blocked"], status_name="To Do")
+        payload["webhookEvent"] = "comment_created"
+        payload["comment"] = {
+            "id": 2013,
+            "author": {"accountId": "jira-user-980r"},
+            "body": {
+                "type": "doc",
+                "version": 1,
+                "content": [
+                    {
+                        "type": "paragraph",
+                        "content": [{"type": "text", "text": "Use a 90 day audit retention window in v1."}],
+                    }
+                ],
+            },
+        }
+
+        class _FakeClient(_JiraMetadataClientMixin):
+            def _get_issue_detail(self, issue_id_or_key: str):  # noqa: ANN003
+                return JiraIssueDetail(
+                    key="TP-980R",
+                    summary="Identity redesign",
+                    status="To Do",
+                    description="Loose parent description",
+                    labels=["pm-parent", "sync-blocked"],
+                )
+
+        class _Runtime:
+            def __init__(self) -> None:
+                self.requests = []
+
+            def advance(self, *, request=None, **kwargs):  # noqa: ANN003
+                self.requests.append(request)
+                assert request.payload["_mb_pm_interview_followup"] is True
+                assert request.payload["ready_to_write"] is True
+                assert "90 day retention window" in str(request.payload["brief_payload"])
+                return SimpleNamespace(handled=True, reason="pm_interview_followup_resolved", extra={})
+
+        runtime = _Runtime()
+        oauth_context = SimpleNamespace(
+            client=_FakeClient(),
+            access_token="tok",
+            connection=SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
+        )
+        with (
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_atlassian_oauth_context", return_value=oauth_context),
+            patch("orchestrator.core.parent_feature_workflow.flows.continue_pm_interview_from_followup") as continue_mock,
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.build_workflow_runtime", return_value=runtime),
+        ):
+            response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+            processed = self._process_one_webhook_job()
+
+        self._assert_jira_issue_event_queued(response, issue_key="TP-980R")
+        self.assertIsNotNone(processed)
+        assert processed is not None
+        self.assertEqual(processed.status, "done")
+        continue_mock.assert_not_called()
+        self.assertEqual(len(runtime.requests), 1)
+
     def test_webhook_parent_pm_reply_posts_planning_blocker_after_pm_completion(self) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
@@ -933,9 +1547,25 @@ class JiraParentClarificationFlowTests(JiraWebhookHarness):
             access_token="tok",
             connection=SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
         )
+
+        def _build_local_workflow_runtime(**runtime_kwargs):  # noqa: ANN003
+            class _Runtime:
+                def advance(self, *, request):  # noqa: ANN003
+                    workflow_type = get_workflow_type(runtime_kwargs["session"], workflow_type_key="parent_planning")
+                    return execute_workflow_advance(
+                        session=runtime_kwargs["session"],
+                        settings=runtime_kwargs["settings"],
+                        workflow_type=workflow_type,
+                        request=request,
+                        resolve_advance_handler_fn=runtime_kwargs["resolve_advance_handler_fn"],
+                    )
+
+            return _Runtime()
+
         with (
             patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_atlassian_oauth_context", return_value=oauth_context),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.build_runtime_for_selector", return_value=object()),
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.build_workflow_runtime", side_effect=_build_local_workflow_runtime),
             patch(
                 "orchestrator.core.pm_interview_followup_service.plan_pm_interview_with_runtime",
                 return_value={
@@ -992,7 +1622,7 @@ class JiraParentClarificationFlowTests(JiraWebhookHarness):
         self.assertIsNotNone(processed)
         assert processed is not None
         self.assertEqual(processed.status, "done")
-        seed_mock.assert_called_once()
+        seed_mock.assert_not_called()
         create_comment_mock.assert_called_once()
 
     def test_webhook_parent_pm_reply_posts_next_jira_question_when_more_detail_is_needed(self) -> None:
@@ -1125,9 +1755,36 @@ class JiraParentClarificationFlowTests(JiraWebhookHarness):
             access_token="tok",
             connection=SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
         )
+
+        def _build_local_workflow_runtime(
+            *,
+            session,
+            settings,
+            process_claimed_run_fn,
+            build_runner_fn,
+            runtime_kwargs_fn,
+            resolve_advance_handler_fn,
+            workflow_handler_registry,
+        ):  # noqa: ANN001, ANN202
+            del process_claimed_run_fn, build_runner_fn, runtime_kwargs_fn, workflow_handler_registry
+
+            class _Runtime:
+                def advance(self, *, request):  # noqa: ANN001, ANN202
+                    workflow_type = get_workflow_type(session, workflow_type_key="parent_planning")
+                    return execute_workflow_advance(
+                        session=session,
+                        settings=settings,
+                        workflow_type=workflow_type,
+                        request=request,
+                        resolve_advance_handler_fn=resolve_advance_handler_fn,
+                    )
+
+            return _Runtime()
+
         with (
             patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_atlassian_oauth_context", return_value=oauth_context),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.build_runtime_for_selector", return_value=object()),
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.build_workflow_runtime", side_effect=_build_local_workflow_runtime),
             patch(
                 "orchestrator.core.pm_interview_followup_service.plan_pm_interview_with_runtime",
                 return_value={

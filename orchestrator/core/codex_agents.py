@@ -811,6 +811,7 @@ def plan_seed_issues_with_runtime(
     runtime: CodexRuntime,
     prompt_markdown: str,
     allowed_project_keys: list[str],
+    project_issue_types_by_key: dict[str, list[str]],
     invocation_context: AgentInvocationContext,
 ) -> EngineeringSeedPlanPayload:
     payload = invoke_runtime_json(
@@ -820,6 +821,7 @@ def plan_seed_issues_with_runtime(
         user_prompt=render_prompt(
             "discord/issues_seed_user.j2",
             allowed_project_keys_json=json.dumps(allowed_project_keys),
+            project_issue_types_json=json.dumps(project_issue_types_by_key, sort_keys=True),
             prompt_markdown=prompt_markdown,
         ),
     )
@@ -834,6 +836,7 @@ def plan_pm_parent_issues_with_runtime(
     runtime: CodexRuntime,
     prompt_markdown: str,
     allowed_project_keys: list[str],
+    project_issue_types_by_key: dict[str, list[str]],
     invocation_context: AgentInvocationContext,
 ) -> PmParentSeedPlanPayload:
     payload = invoke_runtime_json(
@@ -843,6 +846,7 @@ def plan_pm_parent_issues_with_runtime(
         user_prompt=render_prompt(
             "discord/pm_seed_batch_user.j2",
             allowed_project_keys_json=json.dumps(allowed_project_keys),
+            project_issue_types_json=json.dumps(project_issue_types_by_key, sort_keys=True),
             prompt_markdown=prompt_markdown,
         ),
     )

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { Button } from "@/components/ui/button";
@@ -25,7 +25,27 @@ function statusTone(status: string): string {
   if (normalized === "completed") return "border-emerald-300 bg-emerald-50 text-emerald-700";
   if (normalized === "running" || normalized === "retrying") return "border-blue-300 bg-blue-50 text-blue-700";
   if (normalized === "waiting_for_input") return "border-amber-300 bg-amber-50 text-amber-700";
+  if (normalized === "superseded") return "border-slate-300 bg-slate-50 text-slate-600";
   return "border-slate-300 bg-slate-50 text-slate-700";
+}
+
+function statusLabel(status: string): string {
+  return String(status || "unknown").replace(/_/g, " ");
+}
+
+function latestAttemptNumber(attempts: WorkflowOperationAttemptRecord[]): number {
+  return Math.max(0, ...attempts.map((attempt) => attempt.attempt_number));
+}
+
+function displayStatusForAttempt(
+  attempt: WorkflowOperationAttemptRecord,
+  options: { latestNumber: number },
+): string {
+  const normalized = String(attempt.status || "").trim().toLowerCase();
+  if (normalized === "waiting_for_input" && attempt.attempt_number < options.latestNumber) {
+    return "superseded";
+  }
+  return normalized || "unknown";
 }
 
 function attemptDuration(attempt: WorkflowOperationAttemptRecord): number | null {
@@ -71,6 +91,9 @@ export function ExecutionObservabilityDrawer({
   error: string | null;
 }) {
   const [mounted, setMounted] = useState(false);
+  const [autoScrollTelemetry, setAutoScrollTelemetry] = useState(true);
+  const contentScrollRef = useRef<HTMLDivElement | null>(null);
+  const telemetryBottomRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     setMounted(true);
@@ -81,9 +104,36 @@ export function ExecutionObservabilityDrawer({
     () => attempts.find((attempt) => attempt.attempt_id === selectedAttemptId) ?? null,
     [attempts, selectedAttemptId],
   );
+  const latestNumber = useMemo(() => latestAttemptNumber(attempts), [attempts]);
+  const selectedDisplayStatus = selectedPersistedAttempt
+    ? displayStatusForAttempt(selectedPersistedAttempt, { latestNumber })
+    : "unknown";
   const renderedAttempt = activeView === "telemetry" ? telemetryAttempt : auditAttempt;
   const loading = activeView === "telemetry" ? telemetryLoading : auditLoading;
   const nextAction = activeView === "audit" ? auditAttempt?.recommended_next_action?.trim() || null : null;
+  const renderedEntryCount = useMemo(
+    () => renderedAttempt?.sections.reduce((total, section) => total + section.entries.length, 0) ?? 0,
+    [renderedAttempt],
+  );
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    setAutoScrollTelemetry(true);
+  }, [open, selectedAttemptId]);
+
+  useEffect(() => {
+    if (!open || activeView !== "telemetry" || !autoScrollTelemetry) {
+      return;
+    }
+    const scrollContainer = contentScrollRef.current;
+    if (scrollContainer) {
+      scrollContainer.scrollTop = scrollContainer.scrollHeight;
+      return;
+    }
+    telemetryBottomRef.current?.scrollIntoView({ block: "end" });
+  }, [activeView, autoScrollTelemetry, open, renderedEntryCount, selectedAttemptId]);
 
   if (!open || !mounted) {
     return null;
@@ -109,6 +159,16 @@ export function ExecutionObservabilityDrawer({
               {nextAction ? <p className="text-sm text-muted-foreground">{nextAction}</p> : null}
             </div>
             <div className="flex items-center gap-2">
+              {activeView === "telemetry" ? (
+                <Button
+                  variant={autoScrollTelemetry ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setAutoScrollTelemetry((enabled) => !enabled)}
+                  aria-pressed={autoScrollTelemetry}
+                >
+                  {autoScrollTelemetry ? "Auto-scroll on" : "Auto-scroll off"}
+                </Button>
+              ) : null}
               <Button variant="outline" size="sm" onClick={onRefresh} disabled={loading}>
                 Refresh
               </Button>
@@ -161,6 +221,7 @@ export function ExecutionObservabilityDrawer({
                 ) : null}
                 {attempts.map((attempt) => {
                   const selected = selectedAttemptId === attempt.attempt_id;
+                  const displayStatus = displayStatusForAttempt(attempt, { latestNumber });
                   return (
                     <button
                       key={attempt.attempt_id}
@@ -173,12 +234,18 @@ export function ExecutionObservabilityDrawer({
                     >
                       <div className="flex items-center justify-between gap-2">
                         <span className="text-sm font-semibold">Attempt {attempt.attempt_number}</span>
-                        <span className={cn("rounded-full border px-2 py-0.5 text-[11px] font-medium", statusTone(attempt.status))}>
-                          {attempt.status.replace(/_/g, " ")}
+                        <span className={cn("rounded-full border px-2 py-0.5 text-[11px] font-medium", statusTone(displayStatus))}>
+                          {statusLabel(displayStatus)}
                         </span>
                       </div>
                       <p className="mt-1 text-xs text-muted-foreground" title={attempt.finished_at ? formatTimestamp(attempt.finished_at) : undefined}>
-                        {attempt.finished_at ? formatTimeAgo(attempt.finished_at) : attempt.started_at ? "In progress" : "Waiting to start"}
+                        {displayStatus === "superseded"
+                          ? "Superseded by a newer attempt"
+                          : attempt.finished_at
+                            ? formatTimeAgo(attempt.finished_at)
+                            : attempt.started_at
+                              ? "In progress"
+                              : "Waiting to start"}
                       </p>
                     </button>
                   );
@@ -186,7 +253,7 @@ export function ExecutionObservabilityDrawer({
               </div>
             </div>
 
-            <div className="min-h-0 overflow-y-auto px-6 py-4">
+            <div ref={contentScrollRef} data-testid="execution-observability-content" className="min-h-0 overflow-y-auto px-6 py-4">
               {error ? <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p> : null}
               {loading ? <p className="rounded-xl border px-4 py-3 text-sm text-muted-foreground">Loading…</p> : null}
               {!loading && !selectedPersistedAttempt && waitingForNewAttempt ? (
@@ -199,8 +266,8 @@ export function ExecutionObservabilityDrawer({
                   <section className="rounded-xl border bg-muted/20 p-4">
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="text-base font-semibold">Attempt {selectedPersistedAttempt.attempt_number}</span>
-                      <span className={cn("rounded-full border px-2 py-0.5 text-xs font-medium", statusTone(selectedPersistedAttempt.status))}>
-                        {selectedPersistedAttempt.status.replace(/_/g, " ")}
+                      <span className={cn("rounded-full border px-2 py-0.5 text-xs font-medium", statusTone(selectedDisplayStatus))}>
+                        {statusLabel(selectedDisplayStatus)}
                       </span>
                     </div>
                     <div className="mt-3 grid gap-3 text-sm md:grid-cols-2">
@@ -229,7 +296,7 @@ export function ExecutionObservabilityDrawer({
                         </p>
                         <p className="mt-1">
                           {activeView === "telemetry"
-                            ? selectedPersistedAttempt.status.replace(/_/g, " ")
+                            ? statusLabel(selectedDisplayStatus)
                             : nextAction || "—"}
                         </p>
                       </div>
@@ -278,6 +345,7 @@ export function ExecutionObservabilityDrawer({
                       </div>
                     </section>
                   ))}
+                  {activeView === "telemetry" ? <div ref={telemetryBottomRef} data-testid="execution-observability-bottom" aria-hidden="true" /> : null}
                 </div>
               ) : null}
             </div>

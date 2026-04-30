@@ -28,6 +28,10 @@ Each child_ticket_specs entry must be an object with:
 - dependencies
 - risks
 - labels
+summary, capability, delivery, and expected_outcome must be non-empty strings.
+acceptance_criteria, how_to_test, and done_means must be non-empty arrays of strings.
+dependencies, risks, and labels must be arrays of strings; use an empty array only when there is truly nothing to record.
+done_means must never be a single string.
 Each child ticket must read like a candid build spec for one coherent user/system capability.
 Do not emit placeholder or definition tickets such as "Define ..." or "Investigate ...".
 Do not use process language such as "Deliver the behavior slice" or "Implement the functional requirement".

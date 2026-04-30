@@ -63,8 +63,10 @@ from orchestrator.core.security import (
     AuthenticatedPrincipal,
     require_admin,
     require_authenticated_principal,
+    require_authenticated_stream_principal,
     require_tenant_workspace_access,
 )
+from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import Run, Tenant, WorkflowExecution, WorkflowOperation, WorkflowOperationAttempt
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -334,31 +336,35 @@ def stream_workflow_operation_telemetry_events(
     execution_id: str,
     operation_id: str,
     attempt_id: str | None = Query(default=None),
-    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
-    session: Session = Depends(get_session),
+    after_event_sequence: int | None = Query(default=None, ge=0),
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_stream_principal),
 ):
-    workflow = session.execute(
-        select(WorkflowExecution)
-        .where(WorkflowExecution.execution_id == execution_id)
-        .limit(1)
-    ).scalar_one_or_none()
-    if workflow is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow not found")
-    if not principal.is_platform_super_admin:
-        require_tenant_workspace_access(principal=principal, tenant_id=workflow.tenant_id)
-    operation = session.get(WorkflowOperation, operation_id)
-    if operation is None or operation.workflow_id != workflow.workflow_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow operation not found")
     normalized_attempt_id = str(attempt_id or "").strip() or None
-    if normalized_attempt_id is not None:
-        attempt = session.get(WorkflowOperationAttempt, normalized_attempt_id)
-        if attempt is None or attempt.operation_id != operation.operation_id:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow operation attempt not found")
+    session_factory = create_session_factory()
+    with session_factory() as session:
+        workflow = session.execute(
+            select(WorkflowExecution)
+            .where(WorkflowExecution.execution_id == execution_id)
+            .limit(1)
+        ).scalar_one_or_none()
+        if workflow is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow not found")
+        if not principal.is_platform_super_admin:
+            require_tenant_workspace_access(principal=principal, tenant_id=workflow.tenant_id)
+        operation = session.get(WorkflowOperation, operation_id)
+        if operation is None or operation.workflow_id != workflow.workflow_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow operation not found")
+        normalized_operation_id = operation.operation_id
+        if normalized_attempt_id is not None:
+            attempt = session.get(WorkflowOperationAttempt, normalized_attempt_id)
+            if attempt is None or attempt.operation_id != normalized_operation_id:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow operation attempt not found")
     return StreamingResponse(
         stream_workflow_operation_live_events_ndjson_impl(
-            operation=operation,
+            operation_id=normalized_operation_id,
             settings=get_settings(),
             attempt_id=normalized_attempt_id,
+            after_event_sequence=after_event_sequence,
         ),
         media_type="application/x-ndjson",
     )
@@ -369,15 +375,15 @@ def stream_workflow_operation_attempt_telemetry_events(
     execution_id: str,
     operation_id: str,
     attempt_id: str,
-    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
-    session: Session = Depends(get_session),
+    after_event_sequence: int | None = Query(default=None, ge=0),
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_stream_principal),
 ):
     return stream_workflow_operation_telemetry_events(
         execution_id=execution_id,
         operation_id=operation_id,
         attempt_id=attempt_id,
+        after_event_sequence=after_event_sequence,
         principal=principal,
-        session=session,
     )
 
 

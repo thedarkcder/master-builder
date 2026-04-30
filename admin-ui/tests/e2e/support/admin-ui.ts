@@ -14,6 +14,7 @@ import type {
   RunRecord,
   RunStatus,
   WorkflowOperationRetryResponseRecord,
+  WorkflowOperationAttemptRecord,
   WorkflowRecord,
   WorkflowAttemptCreatePayload,
   AuthenticatedPrincipalRecord,
@@ -440,6 +441,7 @@ export function makeWorkflow(overrides: Partial<WorkflowRecord> = {}): WorkflowR
           completion_required: true,
           kind: "business",
           after: [],
+          supports: [],
           required: true,
           retryable: true,
           graph_index: 0,
@@ -501,6 +503,7 @@ export function makeWorkflow(overrides: Partial<WorkflowRecord> = {}): WorkflowR
         required: true,
         kind: "business",
         after: [],
+        supports: [],
         definition_only: false,
         target_system: null,
         target_ref: null,
@@ -907,7 +910,9 @@ export async function mockTenantWorkflowApis(
     onResumeExecution?: () => void;
     onRetryOperation?: (payload: { workflowId: string; operationId: string }) => void;
     retriedWorkflowResponse?: WorkflowRecord;
+    retriedOperationStartedAttempt?: WorkflowOperationAttemptRecord | null;
     telemetryEventsByOperationId?: Record<string, unknown[]>;
+    onTelemetrySnapshotRequest?: (payload: { operationId: string; attemptId?: string }) => void;
     auditEventsByOperationId?: Record<string, unknown[]>;
     telemetryTranscriptByOperationId?: Record<string, unknown>;
     auditTranscriptByOperationId?: Record<string, unknown>;
@@ -1044,7 +1049,10 @@ export async function mockTenantWorkflowApis(
         options.onRetryOperation?.({ workflowId: executionId, operationId });
         currentWorkflow = options.retriedWorkflowResponse ?? currentWorkflow;
         const retriedOperation = currentWorkflow.operations.find((candidate) => candidate.operation_id === operationId);
-        const startedAttempt = [...(retriedOperation?.attempts ?? [])].sort((left, right) => right.attempt_number - left.attempt_number)[0] ?? null;
+        const startedAttempt =
+          options.retriedOperationStartedAttempt !== undefined
+            ? options.retriedOperationStartedAttempt
+            : [...(retriedOperation?.attempts ?? [])].sort((left, right) => right.attempt_number - left.attempt_number)[0] ?? null;
         await fulfillJson(route, {
           workflow: currentWorkflow,
           started_attempt: startedAttempt,
@@ -1078,6 +1086,8 @@ export async function mockTenantWorkflowApis(
       handler: (route, url) => {
         const segments = url.pathname.split("/");
         const operationId = decodeURIComponent(segments.at(-4) ?? "");
+        const attemptId = decodeURIComponent(segments.at(-2) ?? "");
+        options.onTelemetrySnapshotRequest?.({ operationId, attemptId });
         return fulfillJson(route, options.telemetryEventsByOperationId?.[operationId] ?? []);
       },
     },
@@ -1086,18 +1096,24 @@ export async function mockTenantWorkflowApis(
       pathname: /^\/api\/bff\/api\/admin\/workflows\/[^/]+\/operations\/[^/]+\/telemetry(?:\?.*)?$/,
       handler: (route, url) => {
         const operationId = decodeURIComponent(url.pathname.split("/").at(-2) ?? "");
+        options.onTelemetrySnapshotRequest?.({ operationId });
         return fulfillJson(route, options.telemetryEventsByOperationId?.[operationId] ?? []);
       },
     },
     {
       method: "GET",
       pathname: /^\/api\/bff\/api\/admin\/workflows\/[^/]+\/operations\/[^/]+\/telemetry\/stream(?:\?.*)?$/,
-      handler: (route) =>
-        route.fulfill({
+      handler: (route, url) => {
+        const operationId = decodeURIComponent(url.pathname.split("/").at(-3) ?? "");
+        const lines = (options.telemetryEventsByOperationId?.[operationId] ?? [])
+          .map((event) => JSON.stringify(event))
+          .join("\n");
+        return route.fulfill({
           status: 200,
           contentType: "application/x-ndjson",
-          body: "",
-        }),
+          body: lines ? `${lines}\n` : "",
+        });
+      },
     },
     {
       method: "GET",

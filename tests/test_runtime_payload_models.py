@@ -144,7 +144,10 @@ def test_precheck_message_payload_rejects_invalid_questions_type() -> None:
 
 
 def test_child_ticket_spec_payload_requires_done_means() -> None:
-    with pytest.raises(RuntimeError, match="engineering_planning child_ticket_specs\\[1\\] without done_means"):
+    with pytest.raises(
+        RuntimeError,
+        match="engineering_planning child_ticket_specs\\[1\\] with empty done_means; expected a non-empty array of strings",
+    ):
         ChildTicketSpecPayload.from_payload(
             planning_state="engineering_planning",
             issue_index=1,

@@ -18,8 +18,8 @@ function impactLabel(completionRequired: boolean): string {
   return completionRequired ? "Must finish" : "Supporting";
 }
 
-function isSupportingKind(kind: string): boolean {
-  return ["side_effect", "notification", "integration"].includes(String(kind || "").trim().toLowerCase());
+function isSupportingOperation(operation: WorkflowTypeDetailRecord["operations"][number]): boolean {
+  return operation.completion_required === false;
 }
 
 export default function TenantWorkflowTypeDetailPage() {
@@ -56,10 +56,13 @@ export default function TenantWorkflowTypeDetailPage() {
     () =>
       (workflowType?.operations ?? []).map((operation) => ({
         key: operation.operation_type,
+        operationType: operation.operation_type,
         label: operation.label,
         detail: null,
-        impact: isSupportingKind(operation.kind) ? "Supporting" : impactLabel(operation.completion_required),
-        completionRequired: !isSupportingKind(operation.kind),
+        impact: isSupportingOperation(operation) ? "Supporting" : impactLabel(operation.completion_required),
+        completionRequired: !isSupportingOperation(operation),
+        after: operation.after,
+        supports: operation.supports,
       })),
     [workflowType?.operations],
   );

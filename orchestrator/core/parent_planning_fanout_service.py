@@ -80,6 +80,11 @@ class ParentPlanningFanoutService:
             product_brief=product_brief,
             project_key=project_key,
         )
+        if planning_result.planning_state != PLANNING_STATE_COMPLETED:
+            return self.blocked_planning_result(
+                planning_result=planning_result,
+                planning_package=planning_package,
+            )
         try:
             seed_data = child_sync_gateway.seed_parent_backlog_children(
                 parent_detail=parent_detail,
@@ -104,6 +109,29 @@ class ParentPlanningFanoutService:
             seed_evaluation=seed_evaluation,
         )
         return result
+
+    def blocked_planning_result(
+        self,
+        *,
+        planning_result,
+        planning_package: dict[str, Any],
+    ) -> ParentPlanningFanoutResult:
+        seed_evaluation = self.evaluate_seed_data(
+            seed_data={
+                "requires_input": True,
+                "updated_children": [],
+                "created_children": [],
+                "changed_children": [],
+                "questions": [],
+            },
+            combine_child_updates_fn=lambda *, seed_data: ([], [], []),
+            planning_result=planning_result,
+        )
+        return ParentPlanningFanoutResult(
+            planning_result=planning_result,
+            planning_package=planning_package,
+            seed_evaluation=seed_evaluation,
+        )
 
     def evaluate_seed_data(
         self,

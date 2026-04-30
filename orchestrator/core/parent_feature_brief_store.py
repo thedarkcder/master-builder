@@ -7,7 +7,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestrator.core.clarification_projection_service import resolve_active_clarification_context
-from orchestrator.core.followup_context_service import FOLLOWUP_CONTEXT_PM_INTERVIEW
+from orchestrator.core.followup_context_service import (
+    FOLLOWUP_CONTEXT_PARENT_PLANNING_CLARIFICATION,
+    FOLLOWUP_CONTEXT_PM_INTERVIEW,
+)
 from orchestrator.core.pm_interview_service import (
     PM_INTERVIEW_STATUS_DRAFTING,
     PM_INTERVIEW_PARENT_BRIEF_CHANNEL_ID,
@@ -21,7 +24,7 @@ from orchestrator.core.pm_interview_service import (
     normalize_pm_interview_brief,
     upsert_pm_interview_case,
 )
-from orchestrator.storage.models import PMInterviewCase
+from orchestrator.storage.models import FollowupContext, PMInterviewCase
 
 
 _PM_INTERVIEW_CLARIFICATION_STATUSES = frozenset(
@@ -141,6 +144,12 @@ def resolve_parent_feature_brief_readiness(
             parent_issue_key=normalized_parent_issue_key,
         ).where(PMInterviewCase.status == PM_INTERVIEW_STATUS_PM_COMPLETED)
     ).scalars().first()
+    draft_snapshot_row = session.execute(
+        _parent_feature_snapshot_stmt(
+            tenant_id=normalized_tenant_id,
+            parent_issue_key=normalized_parent_issue_key,
+        ).where(PMInterviewCase.status.in_(_PM_INTERVIEW_DRAFT_STATUSES))
+    ).scalars().first()
     primary_case = session.execute(
         _primary_parent_feature_case_stmt(
             tenant_id=normalized_tenant_id,
@@ -165,6 +174,10 @@ def resolve_parent_feature_brief_readiness(
         if primary_case is not None and pm_interview_status in _PM_INTERVIEW_DRAFT_STATUSES
         else None
     )
+    if draft_brief is None and draft_snapshot_row is not None:
+        draft_brief = _brief_without_open_questions(
+            normalize_pm_interview_brief(getattr(draft_snapshot_row, "brief_json", None) or None)
+        )
 
     clarification_open = False
     clarification_questions: tuple[str, ...] = ()
@@ -202,6 +215,52 @@ def resolve_parent_feature_brief(
     if include_incomplete:
         return readiness.draft_brief
     return None
+
+
+def parent_planning_clarification_history(
+    *,
+    session: Session,
+    tenant_id: str,
+    parent_issue_key: str,
+) -> tuple[dict[str, Any], ...]:
+    normalized_tenant_id = _normalized_text(tenant_id)
+    normalized_parent_issue_key = _normalized_text(parent_issue_key).upper()
+    if not normalized_tenant_id or not normalized_parent_issue_key:
+        return ()
+    rows = session.execute(
+        select(FollowupContext)
+        .where(
+            FollowupContext.tenant_id == normalized_tenant_id,
+            FollowupContext.issue_key == normalized_parent_issue_key,
+            FollowupContext.context_type == FOLLOWUP_CONTEXT_PARENT_PLANNING_CLARIFICATION,
+        )
+        .order_by(FollowupContext.created_at.asc(), FollowupContext.updated_at.asc())
+    ).scalars().all()
+    history: list[dict[str, Any]] = []
+    for row in rows:
+        metadata = dict(getattr(row, "metadata_json", {}) or {})
+        questions = metadata.get("questions") if isinstance(metadata.get("questions"), list) else []
+        answer_text = str(metadata.get("answer_text") or "").strip()
+        answer_comment_id = str(metadata.get("answer_comment_id") or "").strip()
+        if questions:
+            history.append(
+                {
+                    "role": "system",
+                    "kind": "parent_planning_clarification_questions",
+                    "source_ref": str(metadata.get("jira_comment_id") or "").strip() or None,
+                    "questions": questions,
+                }
+            )
+        if answer_text:
+            history.append(
+                {
+                    "role": "user",
+                    "kind": "parent_planning_clarification_answer",
+                    "source_ref": answer_comment_id or None,
+                    "answer": answer_text,
+                }
+            )
+    return tuple(history)
 
 
 def resolve_parent_feature_case(

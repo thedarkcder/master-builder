@@ -68,6 +68,7 @@ class JiraParentChildSyncResult:
     handled: bool
     reason: str | None = None
     extra: dict[str, object] = field(default_factory=dict)
+    failed: bool = False
 
 
 def jira_sync_result_from_advance_result(
@@ -84,6 +85,7 @@ def jira_sync_result_from_advance_result(
         handled=result.handled,
         reason=result.reason,
         extra=dict(result.extra or {}),
+        failed=result.failed,
     )
 
 

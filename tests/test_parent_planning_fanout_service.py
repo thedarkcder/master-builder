@@ -20,8 +20,10 @@ class _Planner:
 class _ChildSyncGateway:
     def __init__(self, *, seed_data: dict[str, object]) -> None:
         self.seed_data = seed_data
+        self.seed_calls = 0
 
     def seed_parent_backlog_children(self, **_kwargs):  # noqa: ANN003
+        self.seed_calls += 1
         return self.seed_data
 
     def combined_child_updates(self, *, seed_data: dict[str, object]):
@@ -57,6 +59,7 @@ def test_parent_planning_fanout_service_returns_completed_result() -> None:
 
 
 def test_parent_planning_fanout_service_requires_questions_for_blocked_result() -> None:
+    child_sync_gateway = _ChildSyncGateway(seed_data={"requires_input": True, "questions": []})
     with pytest.raises(RuntimeError, match="blocked but did not return clarification questions"):
         ParentPlanningFanoutService().plan_and_seed(
             parent_detail=SimpleNamespace(key="MAB-229"),
@@ -66,11 +69,13 @@ def test_parent_planning_fanout_service_requires_questions_for_blocked_result() 
                 planning_result=SimpleNamespace(planning_state="planning_needs_clarification", open_behavior_questions=()),
                 planning_package={"child_ticket_specs": []},
             ),
-            child_sync_gateway=_ChildSyncGateway(seed_data={"requires_input": True, "questions": []}),
+            child_sync_gateway=child_sync_gateway,
         )
+    assert child_sync_gateway.seed_calls == 0
 
 
 def test_parent_planning_fanout_service_returns_blocking_questions() -> None:
+    child_sync_gateway = _ChildSyncGateway(seed_data={"requires_input": True, "questions": []})
     result = ParentPlanningFanoutService().plan_and_seed(
         parent_detail=SimpleNamespace(key="MAB-229"),
         product_brief={"objective": "Create child tickets"},
@@ -87,11 +92,13 @@ def test_parent_planning_fanout_service_returns_blocking_questions() -> None:
             ),
             planning_package={"child_ticket_specs": []},
         ),
-        child_sync_gateway=_ChildSyncGateway(seed_data={"requires_input": True, "questions": []}),
+        child_sync_gateway=child_sync_gateway,
     )
 
     assert result.completed is False
+    assert result.changed_children == []
     assert result.questions[0].question == "What audit retention window should v1 support?"
+    assert child_sync_gateway.seed_calls == 0
 
 
 def test_parent_planning_fanout_service_evaluates_refresh_seed_data() -> None:

@@ -189,6 +189,8 @@ def _section_for_event(event: WorkflowObservabilityEventRead) -> str | None:
         "workflow_operation_attempt_started",
         "workflow_operation_attempt_retried",
         "workflow_operation_attempt_completed",
+        "workflow_operation_attempt_waiting_for_input",
+        "workflow_operation_waiting_for_input",
     }:
         return "summary"
     if kind in {"workflow_operation_attempt_failed", "attempt_failed"}:

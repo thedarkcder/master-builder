@@ -25,6 +25,7 @@ from orchestrator.api.schemas import (
 )
 from orchestrator.core.product_events import ProductEvent
 from orchestrator.core.workflow_definition import WorkflowDefinition, WorkflowStepDefinition
+from orchestrator.core.workflow_handler_composition import installed_operation_retry_capabilities
 from orchestrator.core.workflow_type_catalog import get_workflow_type, list_workflow_types
 from orchestrator.storage.models import WorkflowExecution, WorkflowOperation, WorkflowOperationAttempt
 
@@ -52,8 +53,21 @@ def operation_status_by_type(*, operations: list[WorkflowOperation]) -> dict[str
     }
 
 
-def _workflow_type_read(*, workflow_type: WorkflowDefinition, operations: list[WorkflowOperation] | None = None) -> WorkflowTypeRead:
+def _workflow_type_read(
+    *,
+    workflow_type: WorkflowDefinition,
+    operations: list[WorkflowOperation] | None = None,
+    executable_retry_operation_types: frozenset[str] | None = None,
+) -> WorkflowTypeRead:
     status_by_type = operation_status_by_type(operations=operations or [])
+    executable_retry_types = (
+        frozenset(
+            capability.operation_type
+            for capability in installed_operation_retry_capabilities(workflow_type=workflow_type)
+        )
+        if executable_retry_operation_types is None
+        else executable_retry_operation_types
+    )
     operation_reads = [
         WorkflowTypeOperationRead(
             operation_type=definition.key,
@@ -62,8 +76,9 @@ def _workflow_type_read(*, workflow_type: WorkflowDefinition, operations: list[W
             completion_required=bool(definition.required),
             kind=definition.kind.value,
             after=list(definition.after),
+            supports=list(definition.supports),
             required=bool(definition.required),
-            retryable=bool(definition.retryable),
+            retryable=bool(definition.retryable and definition.key in executable_retry_types),
             graph_index=definition.graph_index,
             status=(status_by_type[definition.key].status if definition.key in status_by_type else _default_operation_status(definition.key, None)),
         )
@@ -102,6 +117,10 @@ def workflow_operation_reads(
     workflow_type = get_workflow_type(session, workflow_type_key=workflow.workflow_type_key)
     status_by_type = operation_status_by_type(operations=operations)
     definitions_by_key = _definition_by_key(workflow_type)
+    executable_retry_types = frozenset(
+        capability.operation_type
+        for capability in installed_operation_retry_capabilities(workflow_type=workflow_type)
+    )
 
     def operation_retry_state(
         *,
@@ -116,11 +135,17 @@ def workflow_operation_reads(
             return False, "Operation has no attempt history to retry."
         if not definition.retryable:
             return False, "Manual retry is disabled by the workflow definition."
+        if definition.key not in executable_retry_types:
+            return False, "No executable retry handler is registered for this operation."
         if str(latest_attempt.status or "").strip().lower() not in {"failed", "retrying"}:
             return False, "Latest attempt is not in a failed state."
         return True, None
 
-    workflow_type_read = _workflow_type_read(workflow_type=workflow_type, operations=operations)
+    workflow_type_read = _workflow_type_read(
+        workflow_type=workflow_type,
+        operations=operations,
+        executable_retry_operation_types=executable_retry_types,
+    )
     operation_reads: list[WorkflowOperationRead] = []
     for definition in workflow_type.steps:
         current = status_by_type.get(definition.key)
@@ -144,6 +169,7 @@ def workflow_operation_reads(
                 retry_unavailable_reason=retry_unavailable_reason,
                 kind=definition.kind.value,
                 after=list(definition.after),
+                supports=list(definition.supports),
             )
         )
 

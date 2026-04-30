@@ -9,7 +9,8 @@ from sqlalchemy.orm import Session
 
 from orchestrator.core.clarification_projection_service import (
     ClarificationProjectionSpec,
-    has_matching_active_clarification_state,
+    jira_comment_evidence_id,
+    matching_active_jira_clarification_evidence_id,
     upsert_clarification_projection,
 )
 from orchestrator.core.clarification_questions import ClarificationQuestion, ClarificationQuestionSet
@@ -37,6 +38,8 @@ from orchestrator.tools.discord_api import DiscordApiClient, DiscordApiError
 from orchestrator.tools.atlassian_oauth import JiraIssueDetail
 
 logger = logging.getLogger(__name__)
+
+DISCORD_MESSAGE_CONTENT_LIMIT = 2000
 
 
 def update_issue_sync_label(
@@ -206,6 +209,7 @@ def persist_parent_brief_jira_followup(
                 "questions": ClarificationQuestionSet(questions=questions).to_payload(),
                 "source": "jira_parent_brief_normalization",
                 "pm_request_id": str(getattr(interview_case, "request_id", "") or "").strip() or pm_request_id,
+                "jira_comment_id": posted_comment_id,
             },
         ),
     )
@@ -389,6 +393,50 @@ def format_parent_brief_questions_for_discord(
     ).strip()
 
 
+def chunk_discord_message_content(
+    content: str,
+    *,
+    limit: int = DISCORD_MESSAGE_CONTENT_LIMIT,
+) -> tuple[str, ...]:
+    normalized_content = content.strip()
+    if not normalized_content:
+        raise ValueError("Discord message content cannot be empty")
+    if limit < 1:
+        raise ValueError("Discord message content limit must be positive")
+
+    chunks: list[str] = []
+    current = ""
+    for line in normalized_content.splitlines():
+        candidate = line if not current else f"{current}\n{line}"
+        if len(candidate) <= limit:
+            current = candidate
+            continue
+        if current:
+            chunks.append(current)
+            current = ""
+        while len(line) > limit:
+            chunks.append(line[:limit])
+            line = line[limit:]
+        current = line
+    if current:
+        chunks.append(current)
+    if not chunks:
+        raise ValueError("Discord message content cannot be empty")
+    return tuple(chunks)
+
+
+def post_discord_message_content(
+    *,
+    client: DiscordApiClient,
+    channel_id: str,
+    content: str,
+) -> list[dict]:
+    responses: list[dict] = []
+    for chunk in chunk_discord_message_content(content):
+        responses.append(client.post_message(channel_id=channel_id, content=chunk))
+    return responses
+
+
 def post_parent_brief_questions_to_discord(
     *,
     session: Session,
@@ -445,7 +493,7 @@ def post_parent_brief_questions_to_discord(
         posted_root_message_id = None
         thread_channel_id = existing_thread_channel_id
         if thread_channel_id:
-            client.post_message(channel_id=thread_channel_id, content=message)
+            post_discord_message_content(client=client, channel_id=thread_channel_id, content=message)
         else:
             posted = client.post_message(
                 channel_id=root_channel_id,
@@ -477,10 +525,7 @@ def post_parent_brief_questions_to_discord(
                 project_discord_config["ask_thread_by_message_id"] = dict(list(ask_message_map.items())[-500:])
                 project.discord_config = project_discord_config
                 project.updated_at = datetime.now(timezone.utc)
-            client.post_message(
-                channel_id=thread_channel_id,
-                content=message,
-            )
+            post_discord_message_content(client=client, channel_id=thread_channel_id, content=message)
     except (DiscordApiError, ValueError) as exc:
         logger.warning(
             "jira_parent_brief_question_discord_post_failed tenant_id=%s parent_issue_key=%s channel_id=%s",
@@ -559,18 +604,26 @@ class JiraEngineeringClarificationPublisher:
         self._metadata = dict(metadata)
         self._create_jira_comment_fn = create_jira_comment_fn
 
-    def has_active_clarification(
+    def active_clarification_effects(
         self,
         *,
         issue_key: str,
         questions: tuple[ClarificationQuestion, ...],
-    ) -> bool:
-        return has_matching_active_clarification_state(
+    ) -> ClarificationPublishEffects | None:
+        jira_comment_id = matching_active_jira_clarification_evidence_id(
             session=self._session,
             tenant_id=self._context.tenant_id,
             issue_key=issue_key,
             context_type=FOLLOWUP_CONTEXT_ENGINEERING_CLARIFICATION,
             questions=questions,
+        )
+        if jira_comment_id is None:
+            return None
+        return ClarificationPublishEffects(
+            state_recorded=True,
+            jira_comment_created=False,
+            discord_followup_created=False,
+            jira_comment_id=jira_comment_id,
         )
 
     def publish_clarification(
@@ -594,7 +647,8 @@ class JiraEngineeringClarificationPublisher:
         )
         created_comment = None
         error = None
-        if not projection.already_projected:
+        jira_comment_id = jira_comment_evidence_id(projection.followup_context)
+        if not jira_comment_id:
             created_comment, error = post_engineering_clarification_questions_to_jira(
                 session=self._session,
                 tenant=self._context.tenant,
@@ -605,8 +659,11 @@ class JiraEngineeringClarificationPublisher:
                 create_jira_comment_fn=self._create_jira_comment_fn,
             )
             if error is None and created_comment is not None:
+                jira_comment_id = extract_created_comment_id(created_comment)
+                if not jira_comment_id:
+                    raise RuntimeError(f"Jira engineering clarification projection for {issue_key} did not return a comment id")
                 metadata = dict(projection.metadata)
-                metadata["jira_comment_id"] = extract_created_comment_id(created_comment)
+                metadata["jira_comment_id"] = jira_comment_id
                 upsert_followup_context(
                     session=self._session,
                     tenant_id=self._context.tenant_id,
@@ -617,9 +674,13 @@ class JiraEngineeringClarificationPublisher:
                     request_id=f"engineering-clarification:{issue_key}",
                     metadata=metadata,
                 )
+        if not jira_comment_id:
+            message = error or f"Jira engineering clarification projection did not create a comment for {issue_key}"
+            raise RuntimeError(message)
         jira_comment_created = error is None and created_comment is not None
         return ClarificationPublishEffects(
             state_recorded=True,
             jira_comment_created=jira_comment_created,
             discord_followup_created=False,
+            jira_comment_id=jira_comment_id,
         )
