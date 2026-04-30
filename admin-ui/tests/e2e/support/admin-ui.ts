@@ -757,6 +757,8 @@ export async function mockRunDetailApis(
     tenant?: TenantRecord;
     projects?: ProjectRecord[];
     nextAttemptResponse?: RunRecord;
+    streamEvents?: Array<RunEventRecord | RuntimeLogEventRecord>;
+    onRunEventStreamRequest?: () => void;
     onCreateAttempt?: (payload: WorkflowAttemptCreatePayload) => void;
     onCancelRun?: () => void;
   },
@@ -858,6 +860,21 @@ export async function mockRunDetailApis(
       method: "GET",
       pathname: /^\/api\/bff\/api\/admin\/runs\/[^/]+\/logs$/,
       handler: (route) => fulfillJson(route, options.logs ?? []),
+    },
+    {
+      method: "GET",
+      pathname: /^\/api\/bff\/api\/admin\/runs\/[^/]+\/events\/stream$/,
+      handler: (route) => {
+        options.onRunEventStreamRequest?.();
+        const lines = (options.streamEvents ?? [])
+          .map((event) => JSON.stringify(event))
+          .join("\n");
+        return route.fulfill({
+          status: 200,
+          contentType: "application/x-ndjson",
+          body: lines ? `${lines}\n` : "",
+        });
+      },
     },
     {
       method: "GET",
