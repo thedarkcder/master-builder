@@ -8,7 +8,9 @@ import pytest
 
 from orchestrator.core.clarification_questions import ClarificationQuestion
 from orchestrator.core.config import Settings
-from orchestrator.core.parent_feature_workflow.retry import _ParentWorkflowPlanningClarificationPublisher
+from orchestrator.core.parent_feature_workflow.retry_support import (
+    ParentWorkflowPlanningClarificationPublisher,
+)
 from orchestrator.core.specialist_planning import PLANNING_STATE_COMPLETED, RetryableSpecialistPlanningContractError
 from orchestrator.core.workflow_handler_composition import build_installed_workflow_handler_registry
 from orchestrator.core.workflow_operation_service import WorkflowOperationAttemptAlreadyRunningError
@@ -22,22 +24,8 @@ from tests.test_support.db_harness import SqliteTemplateDbTestCase
 class ParentWorkflowOperationRetryTests(SqliteTemplateDbTestCase):
     def setUp(self) -> None:
         self.database_url = self._prepare_test_database(name_prefix="parent-workflow-operation-retry")
-        self._executed_product_event_sql: list[str] = []
-
-        class _FakeEventStore:
-            def execute(inner_self, sql: str) -> str:  # noqa: ANN001
-                del inner_self
-                self._executed_product_event_sql.append(sql)
-                return ""
-
-        self._event_store_patcher = patch("orchestrator.core.product_events.event_store", lambda: _FakeEventStore())
-        self._event_notify_patcher = patch("orchestrator.core.product_events.publish_product_event_notification", lambda **_kwargs: None)
-        self._event_store_patcher.start()
-        self._event_notify_patcher.start()
 
     def tearDown(self) -> None:
-        self._event_notify_patcher.stop()
-        self._event_store_patcher.stop()
         self._cleanup_test_database()
 
     def _resolver(self, *, fake_router: object):
@@ -139,11 +127,11 @@ class ParentWorkflowOperationRetryTests(SqliteTemplateDbTestCase):
                 ),
             )
             fake_router = SimpleNamespace(jira=lambda **_kwargs: fake_jira_adapter)
-            planner_result = SimpleNamespace(planning_state=PLANNING_STATE_COMPLETED, open_behavior_questions=())
+            planner_result = SimpleNamespace(planning_state=PLANNING_STATE_COMPLETED, product_escalations=())
 
             with (
                 patch(
-                    "orchestrator.core.parent_feature_workflow.retry.resolve_parent_feature_brief",
+                    "orchestrator.core.parent_feature_workflow.retry_handlers.backlog_planning.resolve_parent_feature_brief",
                     return_value=SimpleNamespace(to_payload=lambda: {"objective": "Retry backlog planning"}),
                 ),
                 patch(
@@ -195,6 +183,180 @@ class ParentWorkflowOperationRetryTests(SqliteTemplateDbTestCase):
             assert len(fanout_attempts) == 1
             assert fanout_attempts[0].status == "completed"
             planner_mock.assert_called_once()
+
+    def test_jira_child_fanout_retry_starts_selected_operation_attempt(self) -> None:
+        now = datetime.now(timezone.utc)
+        session_factory = create_session_factory(self.database_url)
+        settings = Settings(database_url=self.database_url)
+
+        with session_factory() as session:
+            tenant = Tenant(
+                tenant_id="tenant-fanout-retry",
+                name="Tenant Fanout Retry",
+                is_enabled=True,
+                jira_config={},
+                github_config={},
+                repos_config={},
+                policy_config={},
+                discord_config={},
+                experience_config={},
+                setup_state={},
+                created_at=now,
+                updated_at=now,
+            )
+            project = Project(
+                project_id="project-fanout-retry",
+                tenant_id="tenant-fanout-retry",
+                name="Project Fanout Retry",
+                github_repository="example/project-fanout-retry",
+                jira_project_key="MAB",
+                policy_overrides={},
+                environment={},
+                secret_refs={},
+                discord_config=None,
+                is_archived=False,
+                created_at=now,
+                updated_at=now,
+            )
+            workflow = WorkflowExecution(
+                workflow_id="parent_planning:MAB-245",
+                execution_id="wfexec-mab-245",
+                workflow_type_key="parent_planning",
+                tenant_id="tenant-fanout-retry",
+                project_id="project-fanout-retry",
+                source_system="jira",
+                source_ref="MAB-245",
+                display_name="Fanout retry",
+                source_description="Parent planning",
+                repo_url=None,
+                branch=None,
+                pr_url=None,
+                orchestration_backend="legacy",
+                dedupe_scope="parent_planning",
+                status="failed",
+                last_error="Fanout failed",
+                active_run_id=None,
+                latest_checkpoint_id=None,
+                source_workflow_id=None,
+                source_run_id=None,
+                created_at=now,
+                started_at=now,
+                finished_at=None,
+                updated_at=now,
+            )
+            backlog_operation = WorkflowOperation(
+                operation_id="operation-backlog-completed",
+                workflow_id=workflow.workflow_id,
+                run_id=None,
+                operation_type="backlog_planning",
+                idempotency_key="workflow-definition:backlog_planning",
+                status="completed",
+                target_system="jira",
+                target_ref="MAB-245",
+                summary="Backlog planning completed.",
+                created_at=now,
+                started_at=now,
+                finished_at=now,
+                updated_at=now,
+            )
+            fanout_operation = WorkflowOperation(
+                operation_id="operation-fanout-failed",
+                workflow_id=workflow.workflow_id,
+                run_id=None,
+                operation_type="jira_child_fanout",
+                idempotency_key="workflow-definition:jira_child_fanout",
+                status="failed",
+                target_system="jira",
+                target_ref="MAB-245",
+                summary="Fanout failed.",
+                created_at=now,
+                started_at=now,
+                finished_at=now,
+                updated_at=now,
+            )
+            session.add_all([tenant, project, workflow, backlog_operation, fanout_operation])
+            session.add(
+                WorkflowOperationAttempt(
+                    attempt_id="attempt-backlog-1",
+                    operation_id=backlog_operation.operation_id,
+                    attempt_number=1,
+                    status="completed",
+                    retryable=False,
+                    next_retry_at=None,
+                    created_at=now,
+                    started_at=now,
+                    finished_at=now,
+                )
+            )
+            session.add(
+                WorkflowOperationAttempt(
+                    attempt_id="attempt-fanout-1",
+                    operation_id=fanout_operation.operation_id,
+                    attempt_number=1,
+                    status="failed",
+                    error_category="external_failure",
+                    error_message="Fanout failed.",
+                    retryable=True,
+                    next_retry_at=None,
+                    created_at=now,
+                    started_at=now,
+                    finished_at=now,
+                )
+            )
+            session.commit()
+
+            fake_jira_adapter = SimpleNamespace(
+                get_issue_detail=lambda **_kwargs: SimpleNamespace(
+                    key="MAB-245",
+                    summary="Fanout retry",
+                    description="Parent planning",
+                    labels=["pm-parent"],
+                    status="To Do",
+                ),
+            )
+            fake_router = SimpleNamespace(jira=lambda **_kwargs: fake_jira_adapter)
+            planner_result = SimpleNamespace(planning_state=PLANNING_STATE_COMPLETED, product_escalations=())
+
+            with (
+                patch(
+                    "orchestrator.core.parent_feature_workflow.retry_handlers.jira_child_fanout.resolve_parent_feature_brief",
+                    return_value=SimpleNamespace(to_payload=lambda: {"objective": "Retry fanout"}),
+                ),
+                patch(
+                    "orchestrator.core.parent_feature_workflow.adapters._ParentBriefPlanner.plan_backlog_parent",
+                    return_value=(planner_result, {"planning": "package"}),
+                ),
+            ):
+                handle = retry_workflow_operation_with_registered_handler(
+                    session=session,
+                    settings=settings,
+                    session_factory=session_factory,
+                    workflow=workflow,
+                    operation=fanout_operation,
+                    handler_registry=self._resolver(fake_router=fake_router),
+                )
+                session.commit()
+
+            backlog_attempts = (
+                session.query(WorkflowOperationAttempt)
+                .filter(WorkflowOperationAttempt.operation_id == backlog_operation.operation_id)
+                .order_by(WorkflowOperationAttempt.attempt_number)
+                .all()
+            )
+            fanout_attempts = (
+                session.query(WorkflowOperationAttempt)
+                .filter(WorkflowOperationAttempt.operation_id == fanout_operation.operation_id)
+                .order_by(WorkflowOperationAttempt.attempt_number)
+                .all()
+            )
+
+            assert handle.operation_type == "jira_child_fanout"
+            assert fanout_operation.status == "completed"
+            assert [attempt.attempt_number for attempt in backlog_attempts] == [1]
+            assert [(attempt.attempt_number, attempt.status) for attempt in fanout_attempts] == [
+                (1, "failed"),
+                (2, "completed"),
+            ]
 
     def test_backlog_planning_retry_propagates_retryable_model_contract_errors(self) -> None:
         now = datetime.now(timezone.utc)
@@ -287,7 +449,7 @@ class ParentWorkflowOperationRetryTests(SqliteTemplateDbTestCase):
 
             with (
                 patch(
-                    "orchestrator.core.parent_feature_workflow.retry.resolve_parent_feature_brief",
+                    "orchestrator.core.parent_feature_workflow.retry_handlers.backlog_planning.resolve_parent_feature_brief",
                     return_value=SimpleNamespace(to_payload=lambda: {"objective": "Retry backlog planning"}),
                 ),
                 patch(
@@ -426,7 +588,7 @@ class ParentWorkflowOperationRetryTests(SqliteTemplateDbTestCase):
             fake_router = SimpleNamespace(jira=lambda **_kwargs: fake_jira_adapter)
             planner_result = SimpleNamespace(
                 planning_state="planning_blocked",
-                open_behavior_questions=(
+                product_escalations=(
                     {
                         "question": "Which broken-link reasons require immediate session revocation?",
                         "why_it_matters": "This changes session safety coverage.",
@@ -436,7 +598,7 @@ class ParentWorkflowOperationRetryTests(SqliteTemplateDbTestCase):
 
             with (
                 patch(
-                    "orchestrator.core.parent_feature_workflow.retry.resolve_parent_feature_brief",
+                    "orchestrator.core.parent_feature_workflow.retry_handlers.backlog_planning.resolve_parent_feature_brief",
                     return_value=SimpleNamespace(to_payload=lambda: {"objective": "Retry backlog planning"}),
                 ),
                 patch(
@@ -444,7 +606,7 @@ class ParentWorkflowOperationRetryTests(SqliteTemplateDbTestCase):
                     return_value=(planner_result, {"planning": "package"}),
                 ) as planner_mock,
                 patch(
-                    "orchestrator.core.parent_feature_workflow.retry._post_engineering_clarification_questions_to_jira",
+                    "orchestrator.core.parent_feature_workflow.retry_support.post_pm_product_clarification_questions_to_jira",
                     return_value=({"id": "comment-456"}, None),
                 ) as post_comment_mock,
             ):
@@ -463,7 +625,9 @@ class ParentWorkflowOperationRetryTests(SqliteTemplateDbTestCase):
 
             assert handle.status == "waiting_for_input"
             assert backlog_operation.status == "waiting_for_input"
-            assert "Which broken-link reasons require immediate session revocation?" in (backlog_operation.summary or "")
+            assert "Which broken-link reasons require immediate session revocation?" in (
+                backlog_operation.summary or ""
+            )
             assert comment_operation.status == "completed"
             assert "comment-456" in (comment_operation.summary or "")
             planner_mock.assert_called_once()
@@ -559,22 +723,18 @@ class ParentWorkflowOperationRetryTests(SqliteTemplateDbTestCase):
             fake_router = SimpleNamespace(jira=lambda **_kwargs: fake_jira_adapter)
             planner_result = SimpleNamespace(
                 planning_state="planning_blocked",
-                open_behavior_questions=(),
+                product_escalations=(),
             )
 
             with (
                 patch(
-                    "orchestrator.core.parent_feature_workflow.retry.resolve_parent_feature_brief",
+                    "orchestrator.core.parent_feature_workflow.retry_handlers.backlog_planning.resolve_parent_feature_brief",
                     return_value=SimpleNamespace(to_payload=lambda: {"objective": "Retry backlog planning"}),
                 ),
                 patch(
                     "orchestrator.core.parent_feature_workflow.adapters._ParentBriefPlanner.plan_backlog_parent",
                     return_value=(planner_result, {"planning": "package"}),
                 ),
-                patch(
-                    "orchestrator.core.parent_feature_workflow.retry._post_engineering_clarification_questions_to_jira",
-                    return_value=({"id": "comment-456"}, None),
-                ) as post_comment_mock,
             ):
                 handle = retry_workflow_operation_with_registered_handler(
                     session=session,
@@ -600,7 +760,6 @@ class ParentWorkflowOperationRetryTests(SqliteTemplateDbTestCase):
             assert len(attempts) == 1
             assert attempts[0].status == "failed"
             assert attempts[0].error_category == "contract_violation"
-            post_comment_mock.assert_not_called()
 
     def test_engineering_clarification_projection_fails_without_jira_comment_id(self) -> None:
         now = datetime.now(timezone.utc)
@@ -691,7 +850,7 @@ class ParentWorkflowOperationRetryTests(SqliteTemplateDbTestCase):
                 del session, tenant, issue_key, comment, settings
                 return {}, None
 
-            publisher = _ParentWorkflowPlanningClarificationPublisher(
+            publisher = ParentWorkflowPlanningClarificationPublisher(
                 session=session,
                 settings=settings,
                 tenant=tenant,
@@ -823,18 +982,21 @@ class ParentWorkflowOperationRetryTests(SqliteTemplateDbTestCase):
             fake_router = SimpleNamespace(jira=lambda **_kwargs: fake_jira_adapter)
             planner_result = SimpleNamespace(
                 planning_state="planning_blocked",
-                open_behavior_questions=(
+                product_escalations=(
                     {
                         "question": "What invitation TTL should v1 enforce for automatic expiry?",
                         "why_it_matters": "This changes link validity and account recovery behavior.",
                     },
-                    "What audit retention window must exports support in v1?",
+                    {
+                        "question": "What audit retention window must exports support in v1?",
+                        "why_it_matters": "This changes export retention promises.",
+                    },
                 ),
             )
 
             with (
                 patch(
-                    "orchestrator.core.parent_feature_workflow.retry.resolve_parent_feature_brief",
+                    "orchestrator.core.parent_feature_workflow.retry_handlers.jira_child_fanout.resolve_parent_feature_brief",
                     return_value=SimpleNamespace(to_payload=lambda: {"objective": "Ship identity redesign"}),
                 ),
                 patch(
@@ -846,7 +1008,7 @@ class ParentWorkflowOperationRetryTests(SqliteTemplateDbTestCase):
                     return_value={"requires_input": True, "questions": []},
                 ),
                 patch(
-                    "orchestrator.core.parent_feature_workflow.retry._post_engineering_clarification_questions_to_jira",
+                    "orchestrator.core.parent_feature_workflow.retry_support.post_pm_product_clarification_questions_to_jira",
                     return_value=({"id": "comment-123"}, None),
                 ) as post_comment_mock,
             ):
@@ -863,21 +1025,12 @@ class ParentWorkflowOperationRetryTests(SqliteTemplateDbTestCase):
             session.refresh(workflow)
             session.refresh(fanout_operation)
             session.refresh(comment_operation)
-            backlog_operation = (
-                session.query(WorkflowOperation)
-                .filter(
-                    WorkflowOperation.workflow_id == workflow.workflow_id,
-                    WorkflowOperation.operation_type == "backlog_planning",
-                )
-                .one()
-            )
 
-            assert handle.operation_type == "backlog_planning"
+            assert handle.operation_type == "jira_child_fanout"
             assert handle.status == "waiting_for_input"
             assert workflow.status == "waiting_for_input"
-            assert backlog_operation.status == "waiting_for_input"
-            assert fanout_operation.status == "pending"
-            assert fanout_operation.summary == "Create or refresh the engineering child tickets implied by the confirmed parent brief."
+            assert fanout_operation.status == "waiting_for_input"
+            assert "What invitation TTL should v1 enforce" in (fanout_operation.summary or "")
             assert comment_operation.status == "completed"
             assert "comment-123" in (comment_operation.summary or "")
             planner_mock.assert_called_once()
@@ -887,7 +1040,10 @@ class ParentWorkflowOperationRetryTests(SqliteTemplateDbTestCase):
                     "question": "What invitation TTL should v1 enforce for automatic expiry?",
                     "why_it_matters": "This changes link validity and account recovery behavior.",
                 },
-                {"question": "What audit retention window must exports support in v1?"},
+                {
+                    "question": "What audit retention window must exports support in v1?",
+                    "why_it_matters": "This changes export retention promises.",
+                },
             ]
 
     def test_jira_child_fanout_retry_requires_confirmed_parent_brief_snapshot(self) -> None:
@@ -980,7 +1136,7 @@ class ParentWorkflowOperationRetryTests(SqliteTemplateDbTestCase):
 
             with (
                 patch(
-                    "orchestrator.core.parent_feature_workflow.retry.resolve_parent_feature_brief",
+                    "orchestrator.core.parent_feature_workflow.retry_handlers.jira_child_fanout.resolve_parent_feature_brief",
                     return_value=None,
                 ),
                 patch(
@@ -1122,14 +1278,14 @@ class ParentWorkflowOperationRetryTests(SqliteTemplateDbTestCase):
 
             with (
                 patch(
-                    "orchestrator.core.parent_feature_workflow.retry.resolve_parent_feature_brief",
+                    "orchestrator.core.parent_feature_workflow.retry_handlers.backlog_planning.resolve_parent_feature_brief",
                     return_value=SimpleNamespace(to_payload=lambda: {"objective": "Retry backlog planning"}),
                 ),
                 patch("orchestrator.core.parent_feature_workflow.adapters._ParentBriefPlanner.plan_backlog_parent") as planner_mock,
             ):
                 with self.assertRaisesRegex(
                     WorkflowOperationAttemptAlreadyRunningError,
-                    "already has running attempt 1",
+                    "already has active attempt 1",
                 ):
                     retry_workflow_operation_with_registered_handler(
                         session=session,

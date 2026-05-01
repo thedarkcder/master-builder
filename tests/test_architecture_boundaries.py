@@ -93,6 +93,33 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             msg=f"Runtime-abstracted modules must use domain/runtime names, not vendor names: {violations}",
         )
 
+    def test_specialist_planning_does_not_restore_pm_internal_resolution_contract(self) -> None:
+        banned_tokens = {
+            "pm_" + "internal_resolution",
+            "internal_" + "decisions",
+            "open_" + "behavior_questions",
+            "stakeholder_" + "escalation_recommendations",
+        }
+        roots = [
+            ORCHESTRATOR_ROOT / "core",
+            ORCHESTRATOR_ROOT / "prompts",
+        ]
+        violations: list[str] = []
+        for root in roots:
+            for module_path in sorted(root.rglob("*")):
+                if module_path.suffix not in {".py", ".j2"}:
+                    continue
+                source = module_path.read_text(encoding="utf-8")
+                for token in banned_tokens:
+                    if token in source:
+                        violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{token}")
+
+        self.assertEqual(
+            violations,
+            [],
+            msg=f"Specialist planning must use technical_decisions/product_escalations only: {violations}",
+        )
+
     def test_atlassian_admin_surface_is_split_by_provider_capability(self) -> None:
         stale_module = ORCHESTRATOR_ROOT / "api" / "routes" / "admin_atlassian.py"
         self.assertFalse(
@@ -544,6 +571,112 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             violations,
             [],
             msg=f"Parent operation names leaked into workflow infrastructure: {violations}",
+        )
+
+    def test_issue_fanout_is_not_owned_by_discord_ingress_modules(self) -> None:
+        stale_modules = [
+            ROOT / "orchestrator" / "api" / "discord" / "ingress" / "seed_runtime.py",
+            ROOT / "orchestrator" / "api" / "discord" / "seed" / "issue_service.py",
+            ROOT / "orchestrator" / "api" / "discord" / "seed" / "draft_assembly.py",
+            ROOT / "orchestrator" / "api" / "discord" / "seed" / "description.py",
+            ROOT / "orchestrator" / "api" / "discord" / "seed" / "matching.py",
+        ]
+        self.assertEqual(
+            [path.relative_to(ROOT).as_posix() for path in stale_modules if path.exists()],
+            [],
+            msg="Issue fanout must live in core/runtime, not Discord ingress/seed modules.",
+        )
+        forbidden_prefixes = {
+            "orchestrator.api.discord.ingress.seed_runtime",
+            "orchestrator.api.discord.seed.issue_service",
+            "orchestrator.api.discord.seed.draft_assembly",
+            "orchestrator.api.discord.seed.description",
+            "orchestrator.api.discord.seed.matching",
+        }
+        violations: list[str] = []
+        for module_path in sorted(ORCHESTRATOR_ROOT.rglob("*.py")):
+            for module_name in _imported_modules(module_path):
+                if module_name in forbidden_prefixes:
+                    violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{module_name}")
+        self.assertEqual(
+            violations,
+            [],
+            msg=f"Discord-owned issue fanout imports found: {violations}",
+        )
+
+    def test_product_event_streams_use_shared_stream_primitive(self) -> None:
+        stream_modules = [
+            ROOT / "orchestrator" / "api" / "admin" / "workflow_live_stream_service.py",
+            ROOT / "orchestrator" / "api" / "admin" / "run_logging_stream_service.py",
+            ROOT / "orchestrator" / "api" / "admin" / "runtime_logs_service.py",
+        ]
+        for module_path in stream_modules:
+            source = module_path.read_text(encoding="utf-8")
+            self.assertIn("stream_product_event_rows", source)
+            self.assertNotIn("wait_for_product_event_notification", source)
+            self.assertNotIn("current_product_event_notification_marker", source)
+
+    def test_product_events_facade_does_not_own_storage_writer_or_streaming(self) -> None:
+        product_events_source = (ROOT / "orchestrator" / "core" / "product_events.py").read_text(encoding="utf-8")
+        forbidden_tokens = [
+            "urlopen",
+            "Request(",
+            "_insert_sql",
+            "_where_clause",
+            "publish_product_event_notification",
+            "wait_for_product_event_notification",
+            "current_product_event_notification_marker",
+            "WorkflowOperationAttempt",
+        ]
+        violations = [token for token in forbidden_tokens if token in product_events_source]
+        self.assertEqual(
+            violations,
+            [],
+            msg=f"product_events.py must remain a thin facade over repository/writer/stream services: {violations}",
+        )
+        repository_source = (ROOT / "orchestrator" / "core" / "product_event_repository.py").read_text(encoding="utf-8")
+        writer_source = (ROOT / "orchestrator" / "core" / "product_event_writer.py").read_text(encoding="utf-8")
+        stream_source = (ROOT / "orchestrator" / "core" / "product_event_stream.py").read_text(encoding="utf-8")
+        self.assertIn("class ProductEventRepository", repository_source)
+        self.assertIn("class ClickHouseProductEventRepository", repository_source)
+        self.assertIn("class ProductEventWriter", writer_source)
+        self.assertIn("class ProductEventStream", stream_source)
+
+    def test_admin_runs_route_is_not_the_composition_root(self) -> None:
+        source = (ROOT / "orchestrator" / "api" / "routes" / "admin_runs.py").read_text(encoding="utf-8")
+        forbidden_imports = [
+            "orchestrator.api.admin.runtime_logs_service",
+            "orchestrator.api.admin.workflow_live_stream_service",
+            "orchestrator.api.admin.run_logging_stream_service",
+            "orchestrator.api.admin.runs_query",
+            "orchestrator.api.admin.runs_service",
+            "orchestrator.api.admin.schema_mappers",
+            "orchestrator.api.admin.workflows_service",
+            "orchestrator.runtime.issue_fanout",
+            "orchestrator.core.agent_runtime_resolver",
+            "orchestrator.core.jira_links",
+            "orchestrator.core.workflow_integration_router",
+            "orchestrator.storage.models",
+            "select(",
+        ]
+        violations = [token for token in forbidden_imports if token in source]
+        self.assertEqual(
+            violations,
+            [],
+            msg=f"admin_runs.py must validate web concerns and delegate to admin use cases, not compose concrete services: {violations}",
+        )
+        self.assertIn("runs_workflows_use_cases", source)
+
+    def test_run_human_input_resume_does_not_use_private_legacy_entrypoint(self) -> None:
+        banned_token = "_resume_workflow_from_human_input_answer_legacy"
+        violations = []
+        for module_path in sorted(ORCHESTRATOR_ROOT.rglob("*.py")):
+            if banned_token in module_path.read_text(encoding="utf-8"):
+                violations.append(module_path.relative_to(ROOT).as_posix())
+        self.assertEqual(
+            violations,
+            [],
+            msg=f"Human-input resume must use explicit use-case entrypoints, not private legacy symbols: {violations}",
         )
 
     def test_core_modules_do_not_import_api_routes_outside_allowlist(self) -> None:

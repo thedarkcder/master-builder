@@ -386,6 +386,22 @@ class JiraParentClarificationFlowTests(JiraWebhookHarness):
             operation.finished_at = now
             operation.updated_at = now
             session.add(
+                WorkflowOperationAttempt(
+                    attempt_id="attempt-backlog-tp-990",
+                    operation_id=operation.operation_id,
+                    attempt_number=1,
+                    status="waiting_for_input",
+                    started_at=now,
+                    finished_at=now,
+                    status_detail="Waiting for product clarification.",
+                    error_category=None,
+                    error_message=None,
+                    retryable=True,
+                    next_retry_at=None,
+                    created_at=now,
+                )
+            )
+            session.add(
                 FollowupContext(
                     context_id="ctx-parent-planning-990",
                     tenant_id="tenant-webhook",
@@ -443,11 +459,11 @@ class JiraParentClarificationFlowTests(JiraWebhookHarness):
             access_token="tok",
             connection=SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
         )
-        planner_result = SimpleNamespace(planning_state="planning_completed", open_behavior_questions=())
+        planner_result = SimpleNamespace(planning_state="planning_completed", product_escalations=())
         with (
             patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_atlassian_oauth_context", return_value=oauth_context),
             patch(
-                "orchestrator.core.parent_feature_workflow.retry.resolve_parent_feature_brief",
+                "orchestrator.core.parent_feature_workflow.retry_handlers.jira_child_fanout.resolve_parent_feature_brief",
                 return_value=SimpleNamespace(to_payload=lambda: {"objective": "Identity controls"}),
             ),
             patch(
@@ -1173,7 +1189,7 @@ class JiraParentClarificationFlowTests(JiraWebhookHarness):
             ),
             patch(
                 "orchestrator.core.parent_feature_workflow.adapters._ParentBriefPlanner.plan_backlog_parent",
-                return_value=(SimpleNamespace(planning_state="planning_completed", open_behavior_questions=()), {"planning": "package"}),
+                return_value=(SimpleNamespace(planning_state="planning_completed", product_escalations=()), {"planning": "package"}),
             ),
             patch(
                 "orchestrator.api.webhooks.jira_parent_child_sync.seed_issues_with_runtime",
@@ -1591,7 +1607,18 @@ class JiraParentClarificationFlowTests(JiraWebhookHarness):
             ),
             patch(
                 "orchestrator.core.parent_feature_workflow.adapters._ParentBriefPlanner.plan_backlog_parent",
-                return_value=(SimpleNamespace(planning_state="planning_blocked", open_behavior_questions=("Where should the user start this flow?",)), {"planning": "package"}),
+                return_value=(
+                    SimpleNamespace(
+                        planning_state="planning_blocked",
+                        product_escalations=(
+                            {
+                                "question": "Where should the user start this flow?",
+                                "why_it_matters": "The answer changes the user-visible entry point.",
+                            },
+                        ),
+                    ),
+                    {"planning": "package"},
+                ),
             ),
             patch(
                 "orchestrator.api.webhooks.jira_parent_child_sync.seed_issues_with_runtime",

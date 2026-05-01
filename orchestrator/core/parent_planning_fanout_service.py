@@ -160,9 +160,11 @@ class ParentPlanningFanoutService:
         seed_data: dict[str, Any],
     ) -> tuple[ClarificationQuestion, ...]:
         if planning_result is not None:
-            questions = ClarificationQuestionSet.from_values(
-                getattr(planning_result, "open_behavior_questions", ()) or ()
-            )
+            product_escalation_questions: list[object] = []
+            for escalation in getattr(planning_result, "product_escalations", ()) or ():
+                to_question = getattr(escalation, "to_clarification_question", None)
+                product_escalation_questions.append(to_question() if callable(to_question) else escalation)
+            questions = ClarificationQuestionSet.from_values(product_escalation_questions)
             if questions:
                 return questions.questions
         return ClarificationQuestionSet.from_values(list(seed_data.get("questions", []) or [])).questions

@@ -5,14 +5,37 @@ from unittest.mock import MagicMock, patch
 
 from fastapi import HTTPException
 
-from orchestrator.api.discord.seed.draft_assembly import normalize_planning_package
-from orchestrator.api.discord.seed.issue_service import seed_issues_with_runtime, seed_parent_issues_with_runtime
+from orchestrator.core.issue_fanout.draft_assembly import normalize_planning_package
+from orchestrator.core.issue_fanout.service import seed_issues_with_runtime, seed_parent_issues_with_runtime
 from orchestrator.core.architecture_document_service import ArchitectureDocumentGate
 from orchestrator.core.workflow_attempt_ref import WorkflowAttemptRef
 from orchestrator.core.runtime_payload_models import EngineeringSeedPlanPayload, PmParentSeedPlanPayload
 from orchestrator.storage.models import WorkflowExecution, WorkflowOperation, WorkflowOperationAttempt
 from orchestrator.tools.atlassian_oauth import JiraIssueCreateResult, AtlassianOAuthError
 from orchestrator.tools.atlassian_oauth_issue_service import MAX_JIRA_ADF_DOCUMENT_BYTES, _to_adf_description
+
+
+def _technical_decision() -> dict[str, object]:
+    return {
+        "decision_id": "planning-package-handoff",
+        "area": "architecture",
+        "question": "How should specialist planning context reach Jira child drafts?",
+        "options": [
+            {
+                "option_id": "planning-package",
+                "title": "Planning package",
+                "description": "Carry specialist context through the planning package into child descriptions.",
+                "benefits": ["Keeps Jira child creation deterministic"],
+                "risks": ["Large descriptions need truncation safeguards"],
+                "rejected_reason": "",
+            }
+        ],
+        "selected_option_id": "planning-package",
+        "rationale": "The planning package is the handoff contract used by Jira fanout.",
+        "evidence": ["The seed service consumes planning_package"],
+        "confidence": "high",
+        "product_impact": "none",
+    }
 
 
 class _JiraMetadataClientMixin:
@@ -120,7 +143,8 @@ def _planning_package(*, planning_state: str, child_issues: list[dict] | None = 
                         "labels": ["engineering"],
                     }
                 ],
-                "open_behavior_questions": [],
+                "technical_decisions": [_technical_decision()],
+                "product_escalations": [],
                 "acceptance_impacts": ["Parent stays PM-only until planning completes."],
                 "mermaid_diagram": "flowchart TD\n  Parent[Parent brief] --> Planner[Planning runtime]",
             },
@@ -128,14 +152,16 @@ def _planning_package(*, planning_state: str, child_issues: list[dict] | None = 
                 "findings": ["Security review must be explicit."],
                 "recommendations": ["Keep sensitive data out of the parent brief."],
                 "required_tasks": ["Add security verification child"],
-                "open_behavior_questions": [],
+                "technical_decisions": [_technical_decision()],
+                "product_escalations": [],
                 "acceptance_impacts": ["Security tasks should stay technical."],
             },
             "testing": {
                 "findings": ["Test coverage must prove the gate."],
                 "recommendations": ["Add regression coverage for the handoff."],
                 "required_tasks": ["Add planning-to-Jira regression tests"],
-                "open_behavior_questions": [],
+                "technical_decisions": [_technical_decision()],
+                "product_escalations": [],
                 "acceptance_impacts": ["Child creation waits for planning completion."],
             },
         },
@@ -195,19 +221,21 @@ def test_seed_issues_scopes_allowed_project_keys() -> None:
     assert "unsupported Jira project key 'YANA'" in str(exc_ctx.value.detail)
 
 
-def test_normalize_planning_package_accepts_structured_stage_questions() -> None:
+def test_normalize_planning_package_accepts_structured_product_escalations() -> None:
     package = _planning_package(planning_state="planning_completed")
-    package["specialist_outputs"]["testing"]["open_behavior_questions"] = [
+    package["specialist_outputs"]["testing"]["product_escalations"] = [
         {
             "question": "Which browsers must the regression suite cover in v1?",
             "why_it_matters": "QA needs a stable compatibility target.",
+            "related_decision_ids": [],
         }
     ]
 
     normalized = normalize_planning_package(package)
 
     assert any(
-        "Testing Open behavior questions: Which browsers must the regression suite cover in v1?"
+        "Testing Product escalations: Which browsers must the regression suite cover in v1? "
+        "Why it matters: QA needs a stable compatibility target."
         == line
         for line in normalized.specialist_summary
     )
@@ -425,7 +453,7 @@ def test_seed_issues_fails_when_subtasks_are_unavailable() -> None:
         )
 
     assert exc_ctx.value.status_code == 409
-    assert "requested unavailable Jira issue_type 'Sub-task'" in str(exc_ctx.value.detail)
+    assert "Story parent GP-10 requires a Jira subtask issue type" in str(exc_ctx.value.detail)
     assert created[0].summary == "Improve checkout recovery"
     assert len(created) == 1
 
@@ -618,6 +646,10 @@ def test_seed_issues_writes_explicit_epic_parent_issue_type_for_initiative_scope
 
     assert data["created_parent"] == "GP-1"
     assert created[0].issue_type == "Epic"
+    assert created[1].issue_type == "Story"
+    assert created[1].parent_issue_key == "GP-1"
+    assert created[2].issue_type == "Story"
+    assert created[2].parent_issue_key == "GP-1"
 
 
 def test_seed_parent_issues_rejects_incomplete_pm_status_before_jira_write() -> None:
@@ -899,7 +931,8 @@ def test_seed_issues_truncates_large_jira_descriptions_before_write() -> None:
                     "findings": [huge_line, huge_line, huge_line],
                     "recommendations": [huge_line, huge_line],
                     "required_tasks": [huge_line],
-                    "open_behavior_questions": [],
+                    "technical_decisions": [_technical_decision()],
+                    "product_escalations": [],
                     "acceptance_impacts": [huge_line],
                     "mermaid_diagram": "flowchart TD\n" + ("A-->B\n" * 5000),
                 },
@@ -907,14 +940,16 @@ def test_seed_issues_truncates_large_jira_descriptions_before_write() -> None:
                     "findings": [huge_line],
                     "recommendations": [huge_line],
                     "required_tasks": [],
-                    "open_behavior_questions": [],
+                    "technical_decisions": [_technical_decision()],
+                    "product_escalations": [],
                     "acceptance_impacts": [huge_line],
                 },
                 "testing": {
                     "findings": [huge_line],
                     "recommendations": [huge_line],
                     "required_tasks": [huge_line],
-                    "open_behavior_questions": [],
+                    "technical_decisions": [_technical_decision()],
+                    "product_escalations": [],
                     "acceptance_impacts": [huge_line],
                 },
             },
@@ -969,7 +1004,7 @@ def test_seed_issues_blocks_child_fanout_when_architecture_document_is_still_dra
     payload = _seed_payload()
     payload["parent_issue"]["labels"] = ["product", "architecture-required"]
     with patch(
-        "orchestrator.api.discord.seed.issue_service._architecture_gate_for_parent_issue",
+        "orchestrator.core.issue_fanout.service._architecture_gate_for_parent_issue",
         return_value=(
             ArchitectureDocumentGate(
                 required=True,

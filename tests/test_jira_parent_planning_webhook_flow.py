@@ -7,7 +7,8 @@ import pytest
 from sqlalchemy import select
 
 from orchestrator.api.webhooks.jira_application import JiraWebhookPlan
-from orchestrator.api.discord.seed.description import build_parent_feature_description
+from orchestrator.core.clarification_questions import ClarificationQuestion
+from orchestrator.core.issue_fanout.description import build_parent_feature_description
 from orchestrator.core.followup_context_service import FOLLOWUP_CONTEXT_PM_INTERVIEW, upsert_followup_context
 from orchestrator.core.pm_interview_service import PM_INTERVIEW_STATUS_QUESTION_PENDING
 from orchestrator.core.parent_feature_brief_store import persist_parent_feature_brief_snapshot
@@ -147,119 +148,82 @@ class _JiraMetadataClientMixin:
         return {}
 
 
-class _CollectingProductEventStore:
-    def __init__(self) -> None:
-        self.executed_sql: list[str] = []
-
-    def execute(self, sql: str, **_kwargs) -> str:  # noqa: ANN001
-        self.executed_sql.append(sql)
-        return ""
-
-    def query_events(self, _sql: str):  # noqa: ANN001
-        return []
-
-
-class _TraceRuntime:
-    command = "trace-runtime"
-    model = "trace-model"
-
-    def __init__(self, responses: list[dict[str, object]]) -> None:
-        self._responses = list(responses)
-        self.calls: list[dict[str, object]] = []
-
-    def run_json(
-        self,
-        *,
-        system_prompt: str,
-        user_prompt: str,
-        working_dir: str | None = None,
-        on_log_line=None,  # noqa: ANN001
-        reasoning_effort: str | None = None,
-        model_override: str | None = None,
-        resume_session_id: str | None = None,
-        on_session_id=None,  # noqa: ANN001
-        on_usage=None,  # noqa: ANN001
-    ) -> dict[str, object]:
-        call_index = len(self.calls) + 1
-        self.calls.append(
+def _completed_specialist_planning_result(
+    *,
+    summary: str = "Implement tenant authorization evaluator",
+    finding: str = "Identity and authorization need one execution plan.",
+    recommendation: str = "Seed engineering child tickets from the parent brief.",
+    acceptance_impact: str = "Access enforcement must be consistent.",
+) -> SimpleNamespace:
+    technical_decision = {
+        "decision_id": "tenant-authorization-plan",
+        "area": "architecture",
+        "question": "How should the implementation plan enforce access consistently?",
+        "options": [
             {
-                "system_prompt": system_prompt,
-                "user_prompt": user_prompt,
-                "working_dir": working_dir,
-                "reasoning_effort": reasoning_effort,
-                "model_override": model_override,
-                "resume_session_id": resume_session_id,
+                "option_id": "shared-evaluator",
+                "title": "Shared evaluator",
+                "description": "Route all access checks through one evaluator.",
+                "benefits": ["Consistent enforcement"],
+                "risks": ["Requires clear ownership"],
+                "rejected_reason": "",
             }
-        )
-        if on_session_id is not None:
-            on_session_id(f"trace-session-{call_index}")
-        if on_usage is not None:
-            on_usage({"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15})
-        if on_log_line is not None:
-            on_log_line("stdout", f"trace runtime call {call_index} started")
-            on_log_line(
-                "stdout",
-                '{"type":"turn.completed","input_tokens":10,"cached_input_tokens":0,"output_tokens":5}',
-            )
-        if not self._responses:
-            raise AssertionError("Trace runtime received more calls than expected")
-        return self._responses.pop(0)
-
-
-def _trace_runtime_responses() -> list[dict[str, object]]:
+        ],
+        "selected_option_id": "shared-evaluator",
+        "rationale": "A shared evaluator best matches the parent authorization brief.",
+        "evidence": [finding],
+        "confidence": "high",
+        "product_impact": "none",
+    }
     child_spec = {
-        "summary": "Implement tenant authorization evaluator",
-        "capability": "Tenant authorization",
-        "delivery": "Build a single tenant authorization evaluator.",
-        "expected_outcome": "Tenant access decisions are consistent.",
-        "acceptance_criteria": ["Tenant authorization is enforced consistently."],
-        "how_to_test": ["Run evaluator contract tests."],
-        "done_means": ["Evaluator is used by protected paths."],
+        "summary": summary,
+        "capability": summary,
+        "delivery": f"Build {summary}.",
+        "expected_outcome": f"{summary} is delivered.",
+        "acceptance_criteria": [acceptance_impact],
+        "how_to_test": [f"Verify {summary}."],
+        "done_means": [f"{summary} is complete."],
         "dependencies": [],
         "risks": [],
         "labels": ["engineering"],
     }
-    return [
-        {
-            "brief": {
-                "objective": "Build one identity and authorization model.",
-                "user_value": "Admins can manage access consistently.",
-                "acceptance_criteria": ["Tenant authorization is enforced consistently."],
-                "scope_in": ["Tenant authorization"],
-                "scope_out": ["Billing permissions are not changed."],
-                "constraints": ["Existing valid access must continue to work during rollout."],
-                "risks": ["Inconsistent tenant checks could expose data across tenants."],
-                "success_outcomes": ["Access decisions are consistent."],
-                "recommendation": "Seed engineering child tickets.",
-                "open_questions": [],
-                "next_steps": ["Create implementation slices."],
-            },
-            "open_questions": [],
-        },
-        {
-            "findings": ["Identity and authorization need one execution plan."],
-            "recommendations": ["Seed engineering child tickets from the parent brief."],
-            "required_tasks": ["Implement tenant authorization evaluator"],
-            "child_ticket_specs": [child_spec],
-            "open_behavior_questions": [],
-            "acceptance_impacts": ["Access enforcement must be consistent."],
-            "mermaid_diagram": "flowchart TD\n  Parent[Parent brief] --> Auth[Authorization evaluator]",
-        },
-        {
-            "findings": ["Authorization decisions must be auditable."],
-            "recommendations": ["Keep policy evaluation explicit."],
-            "required_tasks": ["Add authorization audit evidence"],
-            "open_behavior_questions": [],
-            "acceptance_impacts": ["Access enforcement remains explainable."],
-        },
-        {
-            "findings": ["Contract tests should cover allowed and denied access."],
-            "recommendations": ["Add regression tests for tenant boundaries."],
-            "required_tasks": ["Add tenant boundary tests"],
-            "open_behavior_questions": [],
-            "acceptance_impacts": ["Access enforcement is testable."],
-        },
-    ]
+    payload = {
+        "planning_state": "planning_completed",
+        "required_tasks": [summary],
+        "findings": [finding],
+        "recommendations": [recommendation],
+        "child_ticket_specs": [child_spec],
+        "technical_decisions": [technical_decision],
+        "product_escalations": [],
+        "acceptance_impacts": [acceptance_impact],
+    }
+    return SimpleNamespace(
+        planning_state="planning_completed",
+        required_tasks=(summary,),
+        findings=(finding,),
+        recommendations=(recommendation,),
+        acceptance_impacts=(acceptance_impact,),
+        technical_decisions=(),
+        product_escalations=(),
+        architecture_summary=(recommendation,),
+        architecture_diagram="",
+        stages=(
+            SimpleNamespace(
+                planning_state="engineering_planning",
+                persona_id="architect",
+                to_payload=lambda: {
+                    "findings": [finding],
+                    "recommendations": [recommendation],
+                    "required_tasks": [summary],
+                    "child_ticket_specs": [child_spec],
+                    "technical_decisions": [technical_decision],
+                    "product_escalations": [],
+                    "acceptance_impacts": [acceptance_impact],
+                },
+            ),
+        ),
+        to_payload=lambda: dict(payload),
+    )
 
 
 class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
@@ -351,7 +315,8 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                     findings=("Issue needs PM decomposition before execution.",),
                     recommendations=("Seed engineering child tickets from the parent brief.",),
                     acceptance_impacts=("Parent planning should happen automatically in backlog.",),
-                    open_behavior_questions=(),
+                    technical_decisions=(),
+                    product_escalations=(),
                     architecture_summary=("Seed engineering child tickets from the parent brief.",),
                     architecture_diagram="",
                     stages=(
@@ -376,7 +341,8 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                                         "labels": ["engineering"],
                                     }
                                 ],
-                                "open_behavior_questions": [],
+                                "technical_decisions": [],
+                                "product_escalations": [],
                                 "acceptance_impacts": ["Parent planning should happen automatically in backlog."],
                             },
                         ),
@@ -649,7 +615,8 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                     findings=("Backlog board placement should drive intake routing.",),
                     recommendations=("Reuse board-location checks for PM routing.",),
                     acceptance_impacts=("Board backlog issues still seed children.",),
-                    open_behavior_questions=(),
+                    technical_decisions=(),
+                    product_escalations=(),
                     architecture_summary=("Reuse board-location checks for PM routing.",),
                     architecture_diagram="",
                     stages=(
@@ -674,7 +641,8 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                                         "labels": ["engineering"],
                                     }
                                 ],
-                                "open_behavior_questions": [],
+                                "technical_decisions": [],
+                                "product_escalations": [],
                                 "acceptance_impacts": ["Board backlog issues still seed children."],
                             },
                         ),
@@ -767,6 +735,15 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                 return_value={"brief": normalized_brief, "open_questions": []},
             ),
             patch(
+                "orchestrator.core.parent_feature_workflow.adapters.run_specialist_planning_fanout",
+                return_value=_completed_specialist_planning_result(
+                    summary="Update retry UI",
+                    finding="Checkout retry changes need child refresh.",
+                    recommendation="Refresh engineering child tickets from the updated parent brief.",
+                    acceptance_impact="Users can retry checkout successfully after a transient failure.",
+                ),
+            ),
+            patch(
                 "orchestrator.api.webhooks.jira_parent_child_sync.seed_issues_with_runtime",
                 return_value=(
                     "synced",
@@ -851,6 +828,15 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
             patch(
                 "orchestrator.core.parent_feature_workflow.adapters.normalize_parent_feature_brief_with_runtime",
                 return_value={"brief": normalized_brief, "open_questions": []},
+            ),
+            patch(
+                "orchestrator.core.parent_feature_workflow.adapters.run_specialist_planning_fanout",
+                return_value=_completed_specialist_planning_result(
+                    summary="Refresh retry UI",
+                    finding="No engineering child delta is required.",
+                    recommendation="Keep existing child tickets current.",
+                    acceptance_impact="Users can retry checkout successfully after a transient failure.",
+                ),
             ),
             patch(
                 "orchestrator.api.webhooks.jira_parent_child_sync.seed_issues_with_runtime",
@@ -975,7 +961,8 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                     findings=("Identity and authorization need one execution plan.",),
                     recommendations=("Seed engineering child tickets from the parent brief.",),
                     acceptance_impacts=("Access enforcement must be consistent.",),
-                    open_behavior_questions=(),
+                    technical_decisions=(),
+                    product_escalations=(),
                     architecture_summary=("Centralize tenant authorization.",),
                     architecture_diagram="",
                     stages=(
@@ -1000,7 +987,8 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                                         "labels": ["engineering"],
                                     }
                                 ],
-                                "open_behavior_questions": [],
+                                "technical_decisions": [],
+                                "product_escalations": [],
                                 "acceptance_impacts": ["Access enforcement must be consistent."],
                             },
                         ),
@@ -1024,7 +1012,8 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                                 "labels": ["engineering"],
                             }
                         ],
-                        "open_behavior_questions": [],
+                        "technical_decisions": [],
+                        "product_escalations": [],
                     },
                 ),
             ),
@@ -1054,96 +1043,6 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
         with self.session_factory() as session:
             workflow = session.get(WorkflowExecution, "parent_planning:TP-955")
         self.assertIsNotNone(workflow)
-
-    def test_pm_parent_webhook_trace_persists_attempt_before_runtime_live_logs(self) -> None:
-        payload = self._jira_issue_payload(issue_key="TP-957", labels=["pm-parent"], status_name="To Do")
-        payload["changelog"] = {"items": [{"field": "labels", "fromString": "", "toString": "pm-parent"}]}
-
-        class _FakeClient(_JiraMetadataClientMixin):
-            def _get_issue_detail(self, issue_id_or_key: str):
-                return JiraIssueDetail(
-                    key=str(issue_id_or_key),
-                    summary="Identity redesign",
-                    status="To Do",
-                    description="Build one identity and authorization model.",
-                    labels=["pm-parent"],
-                )
-
-        oauth_context = SimpleNamespace(
-            client=_FakeClient(),
-            access_token="tok",
-            connection=SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
-        )
-        runtime = _TraceRuntime(_trace_runtime_responses())
-        product_event_store = _CollectingProductEventStore()
-
-        with (
-            patch("orchestrator.core.product_events.event_store", return_value=product_event_store),
-            patch("orchestrator.core.worker.webhook_job_service.tenant_atlassian_oauth_context", return_value=oauth_context),
-            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_atlassian_oauth_context", return_value=oauth_context),
-            patch("orchestrator.api.webhooks.jira_application.tenant_atlassian_oauth_context", return_value=oauth_context),
-            patch(
-                "orchestrator.api.webhooks.jira_parent_child_sync.build_runtime_for_selector",
-                return_value=runtime,
-            ),
-            patch(
-                "orchestrator.api.webhooks.jira_parent_child_sync.seed_issues_with_runtime",
-                return_value=(
-                    "synced",
-                    {
-                        "updated_parent": "TP-957",
-                        "updated_children": [],
-                        "created_children": ["TP-958"],
-                        "requires_input": False,
-                        "parent_revision": "rev-957",
-                        "children_sync_status": "children_current",
-                    },
-                ),
-            ) as seed_mock,
-        ):
-            response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
-            processed = self._process_one_webhook_job()
-
-        self._assert_jira_issue_event_queued(response, issue_key="TP-957")
-        self.assertIsNotNone(processed)
-        assert processed is not None
-        self.assertEqual(processed.status, "done")
-        self.assertEqual(len(runtime.calls), 4)
-        seed_mock.assert_called_once()
-        seed_attempt_ref = seed_mock.call_args.kwargs["attempt_ref"]
-        self.assertEqual(seed_attempt_ref.require_workflow_id(), "parent_planning:TP-957")
-
-        with self.session_factory() as session:
-            workflow = session.get(WorkflowExecution, "parent_planning:TP-957")
-            self.assertIsNotNone(workflow)
-            operations = {
-                operation.operation_type: operation
-                for operation in session.execute(
-                    select(WorkflowOperation).where(WorkflowOperation.workflow_id == "parent_planning:TP-957")
-                ).scalars()
-            }
-            for operation_type in (
-                "brief_normalization",
-                "jira_parent_update",
-                "backlog_planning",
-                "jira_child_fanout",
-            ):
-                self.assertIn(operation_type, operations)
-                attempts = session.execute(
-                    select(WorkflowOperationAttempt).where(
-                        WorkflowOperationAttempt.operation_id == operations[operation_type].operation_id
-                    )
-                ).scalars().all()
-                self.assertEqual(len(attempts), 1)
-                self.assertEqual(attempts[0].status, "completed")
-            self.assertEqual(seed_attempt_ref.require_operation_id(), operations["jira_child_fanout"].operation_id)
-
-        event_sql = "\n".join(product_event_store.executed_sql)
-        self.assertIn("stage_request", event_sql)
-        self.assertIn("stage_response", event_sql)
-        self.assertIn("runtime_log", event_sql)
-        self.assertIn("brief_normalization", event_sql)
-        self.assertIn(seed_attempt_ref.require_attempt_id(), event_sql)
 
     def test_webhook_pm_parent_transition_to_todo_promotes_backlog_engineering_children(self) -> None:
         payload = self._jira_issue_payload(issue_key="TP-980", labels=["pm-parent"], status_name="To Do")
@@ -1294,7 +1193,8 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                     findings=("Seed/runtime boundary is implementation-specific.",),
                     recommendations=("Promote runtime selection into the adapter layer.",),
                     acceptance_impacts=("Parent issue should include architecture context.",),
-                    open_behavior_questions=(),
+                    technical_decisions=(),
+                    product_escalations=(),
                     architecture_summary=(
                         "Promote runtime selection into the adapter layer.",
                         "Parent issue should include architecture context.",
@@ -1322,7 +1222,8 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                                         "labels": ["engineering"],
                                     }
                                 ],
-                                "open_behavior_questions": [],
+                                "technical_decisions": [],
+                                "product_escalations": [],
                                 "acceptance_impacts": ["Parent issue should include architecture context."],
                                 "mermaid_diagram": "flowchart TD\n  Parent[Parent issue] --> Planner[Planning runtime]",
                             },
@@ -1334,7 +1235,8 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                                 "findings": ["No additional security blockers."],
                                 "recommendations": ["Keep Jira payloads free of secrets."],
                                 "required_tasks": [],
-                                "open_behavior_questions": [],
+                                "technical_decisions": [],
+                                "product_escalations": [],
                                 "acceptance_impacts": ["Backlog planning remains safe to run automatically."],
                             },
                         ),
@@ -1345,7 +1247,8 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                                 "findings": ["Regression coverage is required."],
                                 "recommendations": ["Cover parent backlog planning and fanout."],
                                 "required_tasks": ["Add architect Mermaid output"],
-                                "open_behavior_questions": [],
+                                "technical_decisions": [],
+                                "product_escalations": [],
                                 "acceptance_impacts": ["Parent planning remains deterministic."],
                             },
                         ),
@@ -1489,7 +1392,8 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                     findings=(),
                     recommendations=(),
                     acceptance_impacts=(),
-                    open_behavior_questions=(),
+                    technical_decisions=(),
+                    product_escalations=(),
                     architecture_summary=(),
                     architecture_diagram=None,
                     stages=(),
@@ -1892,16 +1796,18 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                     findings=(),
                     recommendations=(),
                     acceptance_impacts=(),
-                    open_behavior_questions=(
-                        {
-                            "id": "Q-1",
-                            "question": "What is the required user-visible behavior when a broken identity link is detected for a still-active sensitive session?",
-                            "why_it_matters": "This defines the recovery and assurance contract.",
-                        },
-                        {
-                            "id": "Q-2",
-                            "question": "What cooldown or rate-limit behavior should users see on repeated auth-initiation attempts?",
-                        },
+                    technical_decisions=(),
+                    product_escalations=(
+                        ClarificationQuestion(
+                            question="What is the required user-visible behavior when a broken identity link is detected for a still-active sensitive session?",
+                            why_it_matters="This defines the recovery and assurance contract.",
+                            question_id="Q-1",
+                        ),
+                        ClarificationQuestion(
+                            question="What cooldown or rate-limit behavior should users see on repeated auth-initiation attempts?",
+                            why_it_matters="This defines a user-visible abuse-control behavior.",
+                            question_id="Q-2",
+                        ),
                     ),
                     architecture_summary=(),
                     architecture_diagram="",
@@ -2033,7 +1939,8 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                     findings=(),
                     recommendations=(),
                     acceptance_impacts=(),
-                    open_behavior_questions=(),
+                    technical_decisions=(),
+                    product_escalations=(),
                     architecture_summary=(),
                     architecture_diagram="",
                     stages=(),

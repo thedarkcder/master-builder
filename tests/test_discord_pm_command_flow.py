@@ -58,7 +58,7 @@ class DiscordPmCommandFlowTests(DiscordCommandApiTestHarness):
                 },
             ) as plan_mock,
             patch(
-                "orchestrator.api.discord.ingress.seed_runtime.seed_parent_issues_with_runtime",
+                "orchestrator.runtime.issue_fanout.seed_parent_issues_with_runtime",
                 side_effect=AssertionError("Incomplete PM interview should not seed Jira"),
             ) as seed_mock,
         ):
@@ -99,7 +99,8 @@ class DiscordPmCommandFlowTests(DiscordCommandApiTestHarness):
             findings=("Telemetry coverage must be explicit.",),
             recommendations=("Keep the first cut focused on customer-visible recovery.",),
             acceptance_impacts=("Acceptance criteria must mention fallback UX.",),
-            open_behavior_questions=(),
+            technical_decisions=(),
+            product_escalations=(),
             architecture_summary=(
                 "Split telemetry and UX work.",
                 "One child ticket per implementation slice.",
@@ -127,7 +128,8 @@ class DiscordPmCommandFlowTests(DiscordCommandApiTestHarness):
                                 "labels": ["engineering"],
                             }
                         ],
-                        "open_behavior_questions": [],
+                        "technical_decisions": [],
+                        "product_escalations": [],
                         "acceptance_impacts": ["Telemetry needs explicit coverage."],
                         "mermaid_diagram": "flowchart TD\n  Parent[Parent brief] --> Child[Engineering child]",
                     },
@@ -139,7 +141,8 @@ class DiscordPmCommandFlowTests(DiscordCommandApiTestHarness):
                         "findings": ["Protect retry events from abuse."],
                         "recommendations": ["Add misuse checks."],
                         "required_tasks": ["Add fallback UX validation"],
-                        "open_behavior_questions": [],
+                        "technical_decisions": [],
+                        "product_escalations": [],
                         "acceptance_impacts": ["Security validation is required."],
                     },
                 ),
@@ -150,7 +153,8 @@ class DiscordPmCommandFlowTests(DiscordCommandApiTestHarness):
                         "findings": ["Regression coverage is required."],
                         "recommendations": ["Automate the failure-recovery path."],
                         "required_tasks": [],
-                        "open_behavior_questions": [],
+                        "technical_decisions": [],
+                        "product_escalations": [],
                         "acceptance_impacts": ["Tests should cover visible recovery."],
                     },
                 ),
@@ -190,7 +194,7 @@ class DiscordPmCommandFlowTests(DiscordCommandApiTestHarness):
                 },
             ) as plan_mock,
             patch(
-                "orchestrator.api.discord.ingress.seed_runtime.seed_parent_issues_with_runtime",
+                "orchestrator.runtime.issue_fanout.seed_parent_issues_with_runtime",
                 return_value=(
                     "PM parent issue upsert complete. Created 1: TP-501. Updated 0: none.",
                     {
@@ -207,7 +211,7 @@ class DiscordPmCommandFlowTests(DiscordCommandApiTestHarness):
                 return_value=planning_result,
             ) as planning_mock,
             patch(
-                "orchestrator.api.discord.ingress.seed_runtime.seed_issues_with_runtime",
+                "orchestrator.runtime.issue_fanout.seed_issues_with_runtime",
                 return_value=(
                     "Issue upsert complete. Parent: TP-501. Created 2: TP-502, TP-503.",
                     {
@@ -282,7 +286,7 @@ class DiscordPmCommandFlowTests(DiscordCommandApiTestHarness):
                         "ready_to_write": True,
                     },
                 ),
-                patch("orchestrator.api.discord.ingress.seed_runtime.seed_parent_issues_with_runtime") as seed_mock,
+                patch("orchestrator.runtime.issue_fanout.seed_parent_issues_with_runtime") as seed_mock,
             ):
                 command_response = execute_discord_command(
                     tenant_id=self.tenant_id,

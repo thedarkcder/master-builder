@@ -15,7 +15,40 @@ from orchestrator.core.runtime_payload_models import (
     RuntimeMessagePayload,
     PrecheckMessagePayload,
     PrecheckPolicyPayload,
+    ProductEscalationPayload,
+    TechnicalDecisionPayload,
 )
+
+
+def _technical_decision_payload() -> dict[str, object]:
+    return {
+        "decision_id": "decision-1",
+        "area": "architecture",
+        "question": "Postgres RLS or app-layer authorization?",
+        "options": [
+            {
+                "option_id": "rls",
+                "title": "Postgres RLS",
+                "description": "Enforce tenant visibility in the database.",
+                "benefits": ["Database-owned isolation"],
+                "risks": ["Requires migration discipline"],
+                "rejected_reason": "",
+            },
+            {
+                "option_id": "app-only",
+                "title": "Application-only authorization",
+                "description": "Apply tenant filters only in application queries.",
+                "benefits": ["Simpler migrations"],
+                "risks": ["One missing filter leaks data"],
+                "rejected_reason": "It does not provide a database backstop.",
+            },
+        ],
+        "selected_option_id": "rls",
+        "rationale": "Tenant isolation must be enforced below application code.",
+        "evidence": ["Tenant-scoped tables contain sensitive workflow data"],
+        "confidence": "high",
+        "product_impact": "none",
+    }
 
 
 def test_precheck_policy_payload_requires_reason_and_recommendation() -> None:
@@ -191,10 +224,50 @@ def test_architect_stage_output_payload_rejects_missing_child_ticket_specs() -> 
                 "findings": ["Invite creation needs a service boundary"],
                 "recommendations": ["Create invite service"],
                 "required_tasks": ["Build invite service"],
-                "open_behavior_questions": [],
+                "technical_decisions": [_technical_decision_payload()],
+                "product_escalations": [],
                 "acceptance_impacts": ["Invite flow works"],
             },
         )
+
+
+def test_technical_decision_payload_round_trips_selected_recommendation() -> None:
+    payload = TechnicalDecisionPayload.from_payload(
+        _technical_decision_payload(),
+        context="engineering_planning technical_decisions[1]",
+    )
+
+    assert payload.selected_option_id == "rls"
+    assert payload.confidence == "high"
+    assert payload.product_impact == "none"
+    assert payload.to_payload()["options"][0]["option_id"] == "rls"
+
+
+def test_technical_decision_payload_rejects_unknown_selected_option() -> None:
+    raw_payload = _technical_decision_payload()
+    raw_payload["selected_option_id"] = "missing"
+
+    with pytest.raises(RuntimeError, match="selected_option_id does not match"):
+        TechnicalDecisionPayload.from_payload(
+            raw_payload,
+            context="engineering_planning technical_decisions[1]",
+        )
+
+
+def test_product_escalation_payload_converts_to_clarification_question() -> None:
+    escalation = ProductEscalationPayload.from_payload(
+        {
+            "question": "Should customers see this as a compliance promise?",
+            "why_it_matters": "The answer changes acceptance criteria.",
+            "related_decision_ids": ["decision-1"],
+        },
+        context="security_planning product_escalations[1]",
+    )
+
+    question = escalation.to_clarification_question()
+    assert question.question == "Should customers see this as a compliance promise?"
+    assert question.why_it_matters == "The answer changes acceptance criteria."
+    assert escalation.to_payload()["related_decision_ids"] == ["decision-1"]
 
 
 def test_design_planning_payload_rejects_malformed_tool_call() -> None:
