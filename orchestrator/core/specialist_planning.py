@@ -7,7 +7,6 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from orchestrator.core.clarification_questions import ClarificationQuestion, ClarificationQuestionSet
 from orchestrator.core.runtime_invocation import AgentInvocationContext
 from orchestrator.core.codex_runtime import CodexRuntimeError
 from orchestrator.core.prompt_templates import render_prompt
@@ -15,7 +14,9 @@ from orchestrator.core.runtime_payload_models import (
     ArchitectStageOutputPayload,
     ChildTicketSpecPayload,
     PlanningStageOutputPayload,
+    ProductEscalationPayload,
     SecurityStageOutputPayload,
+    TechnicalDecisionPayload,
     TestingStageOutputPayload,
 )
 from orchestrator.core.runtime_stage_session import RuntimeStageSession
@@ -53,6 +54,8 @@ class SpecialistPlanningRequest:
 
 
 ChildTicketSpec = ChildTicketSpecPayload
+ProductEscalation = ProductEscalationPayload
+TechnicalDecision = TechnicalDecisionPayload
 PlanningStageOutput = PlanningStageOutputPayload
 ArchitectStageOutput = ArchitectStageOutputPayload
 SecurityStageOutput = SecurityStageOutputPayload
@@ -68,7 +71,8 @@ class SpecialistPlanningResult:
     findings: tuple[str, ...]
     recommendations: tuple[str, ...]
     required_tasks: tuple[str, ...]
-    open_behavior_questions: tuple[ClarificationQuestion, ...]
+    technical_decisions: tuple[TechnicalDecision, ...]
+    product_escalations: tuple[ProductEscalation, ...]
     acceptance_impacts: tuple[str, ...]
     blocked_stage_states: tuple[str, ...]
     block_reason: str | None
@@ -82,7 +86,8 @@ class SpecialistPlanningResult:
             "findings": list(self.findings),
             "recommendations": list(self.recommendations),
             "required_tasks": list(self.required_tasks),
-            "open_behavior_questions": [question.to_payload() for question in self.open_behavior_questions],
+            "technical_decisions": [decision.to_payload() for decision in self.technical_decisions],
+            "product_escalations": [escalation.to_payload() for escalation in self.product_escalations],
             "acceptance_impacts": list(self.acceptance_impacts),
             "blocked_stage_states": list(self.blocked_stage_states),
             "block_reason": self.block_reason,
@@ -149,12 +154,38 @@ def _merge_unique(*sequences: Iterable[str]) -> tuple[str, ...]:
     return tuple(merged)
 
 
-def _merge_unique_questions(
-    *sequences: Iterable[ClarificationQuestion],
-) -> tuple[ClarificationQuestion, ...]:
-    return ClarificationQuestionSet.from_values(
-        question for sequence in sequences for question in sequence
-    ).questions
+def _merge_unique_decisions(
+    *sequences: Iterable[TechnicalDecision],
+) -> tuple[TechnicalDecision, ...]:
+    merged: list[TechnicalDecision] = []
+    seen: set[str] = set()
+    for sequence in sequences:
+        for decision in sequence:
+            key = decision.decision_id
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(decision)
+    return tuple(merged)
+
+
+def _merge_unique_escalations(
+    *sequences: Iterable[ProductEscalation],
+) -> tuple[ProductEscalation, ...]:
+    merged: list[ProductEscalation] = []
+    seen: set[tuple[str, str, tuple[str, ...]]] = set()
+    for sequence in sequences:
+        for escalation in sequence:
+            key = (
+                escalation.question,
+                escalation.why_it_matters,
+                escalation.related_decision_ids,
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(escalation)
+    return tuple(merged)
 
 
 def _json_dump(value: object) -> str:
@@ -175,7 +206,7 @@ def _contract_repair_user_prompt(
             f"The previous {stage.role_label} response violated the required JSON contract.",
             f"Schema error: {contract_error}",
             "Return the full corrected JSON object only. Do not omit any required fields. Do not include markdown.",
-            "For every child_ticket_specs entry, acceptance_criteria, how_to_test, done_means, dependencies, risks, and labels must be arrays of strings. done_means must be a non-empty array of strings, not a single string.",
+            "Every stage must return technical_decisions and product_escalations arrays. For every child_ticket_specs entry, acceptance_criteria, how_to_test, done_means, dependencies, risks, and labels must be arrays of strings. done_means must be a non-empty array of strings, not a single string.",
             f"Previous invalid JSON: {_json_dump(invalid_payload)}",
         )
     )
@@ -346,6 +377,8 @@ def build_runtime_seed_planning_package(
         "planning_state": result.planning_state,
         "specialist_outputs": stage_payloads,
         "child_issues": child_issues,
+        "technical_decisions": [decision.to_payload() for decision in result.technical_decisions],
+        "product_escalations": [escalation.to_payload() for escalation in result.product_escalations],
     }
     if result.architecture_summary:
         payload["architecture_summary"] = list(result.architecture_summary)
@@ -377,18 +410,21 @@ def run_specialist_planning_fanout(
     blocked_stage_states = tuple(
         stage_result.planning_state for stage_result in stage_results if stage_result.blocked
     )
-    open_behavior_questions = _merge_unique_questions(
-        *(stage_result.open_behavior_questions for stage_result in stage_results)
+    technical_decisions = _merge_unique_decisions(
+        *(stage_result.technical_decisions for stage_result in stage_results)
+    )
+    product_escalations = _merge_unique_escalations(
+        *(stage_result.product_escalations for stage_result in stage_results)
     )
     planning_state = (
-        PLANNING_STATE_BLOCKED if blocked_stage_states or open_behavior_questions else PLANNING_STATE_COMPLETED
+        PLANNING_STATE_BLOCKED if blocked_stage_states or product_escalations else PLANNING_STATE_COMPLETED
     )
     block_reason = None
     if planning_state == PLANNING_STATE_BLOCKED:
         block_reason = "; ".join(
-            f"{stage_result.planning_state}: {stage_result.open_behavior_questions[0].question}"
+            f"{stage_result.planning_state}: {stage_result.product_escalations[0].question}"
             for stage_result in stage_results
-            if stage_result.blocked and stage_result.open_behavior_questions
+            if stage_result.blocked and stage_result.product_escalations
         )
     architect_stage = next((stage for stage in stage_results if isinstance(stage, ArchitectStageOutput)), None)
     architecture_summary = ()
@@ -407,7 +443,8 @@ def run_specialist_planning_fanout(
         findings=_merge_unique(*(stage_result.findings for stage_result in stage_results)),
         recommendations=_merge_unique(*(stage_result.recommendations for stage_result in stage_results)),
         required_tasks=_merge_unique(*(stage_result.required_tasks for stage_result in stage_results)),
-        open_behavior_questions=open_behavior_questions,
+        technical_decisions=technical_decisions,
+        product_escalations=product_escalations,
         acceptance_impacts=_merge_unique(*(stage_result.acceptance_impacts for stage_result in stage_results)),
         blocked_stage_states=blocked_stage_states,
         block_reason=block_reason,

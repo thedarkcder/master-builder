@@ -73,6 +73,7 @@ from orchestrator.core.workflow_execution_projection import (
 )
 from orchestrator.core.workflow_handler_composition import build_installed_workflow_handler_registry
 from orchestrator.core.workflow_operation_retry_use_case import retry_workflow_operation_with_registered_handler
+from orchestrator.core.workflow_operation_service import complete_workflow_operation
 from orchestrator.core.workflow_step_runner import (
     WorkflowStepAttempt,
     complete_workflow_step_attempt,
@@ -82,7 +83,7 @@ from orchestrator.core.workflow_step_runner import (
 )
 from orchestrator.core.workflow_type_catalog import get_workflow_type, get_workflow_type_by_handler_key
 from orchestrator.storage.db import create_session_factory
-from orchestrator.storage.models import FollowupContext, PMInterviewCase, WorkflowExecution, WorkflowOperation
+from orchestrator.storage.models import FollowupContext, PMInterviewCase, WorkflowExecution, WorkflowOperation, WorkflowOperationAttempt
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +105,31 @@ def _close_answered_parent_planning_context_if_current(
     followup_context.status = CLOSED_FOLLOWUP_CONTEXT_STATUS
     followup_context.closed_at = datetime.now(timezone.utc)
     followup_context.updated_at = followup_context.closed_at
+
+
+def _complete_answered_backlog_planning_operation(
+    *,
+    session: Session,
+    workflow: WorkflowExecution,
+) -> None:
+    backlog_operation = _parent_planning_blocked_operation(
+        session=session,
+        workflow=workflow,
+        operation_type=PARENT_OP_BACKLOG_PLANNING,
+    )
+    latest_attempt = session.execute(
+        select(WorkflowOperationAttempt)
+        .where(WorkflowOperationAttempt.operation_id == backlog_operation.operation_id)
+        .order_by(desc(WorkflowOperationAttempt.attempt_number))
+    ).scalars().first()
+    if latest_attempt is None:
+        raise RuntimeError("Answered backlog planning operation has no persisted attempt to complete")
+    complete_workflow_operation(
+        session,
+        operation=backlog_operation,
+        attempt=latest_attempt,
+        summary="Backlog planning resumed after stakeholder clarification.",
+    )
 
 
 def _jira_workflow_execution_reference(
@@ -694,6 +720,11 @@ def handle_parent_planning_clarification_reply(
         raise RuntimeError(
             "Parent planning clarification continuation returned running; "
             "reply context cannot be closed until the continuation reaches a durable state"
+        )
+    if blocked_operation_type == PARENT_OP_BACKLOG_PLANNING and str(handle.status or "").strip().lower() == "completed":
+        _complete_answered_backlog_planning_operation(
+            session=session,
+            workflow=workflow,
         )
     _close_answered_parent_planning_context_if_current(
         session=session,

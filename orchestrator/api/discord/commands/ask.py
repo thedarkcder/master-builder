@@ -740,8 +740,13 @@ def dispatch_ask_command(
                     notes={"planning_state": planning_state},
                 )
                 interview_case.status = PM_INTERVIEW_STATUS_PM_COMPLETED
-            elif planning_result.open_behavior_questions:
-                planning_questions = ClarificationQuestionSet.from_values(planning_result.open_behavior_questions)
+            elif planning_result.product_escalations:
+                planning_questions = ClarificationQuestionSet.from_values(
+                    escalation.to_clarification_question()
+                    if callable(getattr(escalation, "to_clarification_question", None))
+                    else escalation
+                    for escalation in planning_result.product_escalations
+                )
                 interview_case.status = "question_pending"
                 interview_case.current_question_json = {
                     "slot_key": "planning",

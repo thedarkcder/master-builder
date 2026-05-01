@@ -40,7 +40,7 @@ def test_parent_planning_fanout_service_returns_completed_result() -> None:
         product_brief={"objective": "Create child tickets"},
         project_key="MAB",
         planner=_Planner(
-            planning_result=SimpleNamespace(planning_state=PLANNING_STATE_COMPLETED, open_behavior_questions=()),
+            planning_result=SimpleNamespace(planning_state=PLANNING_STATE_COMPLETED, product_escalations=()),
             planning_package={"child_ticket_specs": []},
         ),
         child_sync_gateway=_ChildSyncGateway(
@@ -66,7 +66,7 @@ def test_parent_planning_fanout_service_requires_questions_for_blocked_result() 
             product_brief={"objective": "Create child tickets"},
             project_key="MAB",
             planner=_Planner(
-                planning_result=SimpleNamespace(planning_state="planning_needs_clarification", open_behavior_questions=()),
+                planning_result=SimpleNamespace(planning_state="planning_needs_clarification", product_escalations=()),
                 planning_package={"child_ticket_specs": []},
             ),
             child_sync_gateway=child_sync_gateway,
@@ -83,10 +83,10 @@ def test_parent_planning_fanout_service_returns_blocking_questions() -> None:
         planner=_Planner(
             planning_result=SimpleNamespace(
                 planning_state="planning_needs_clarification",
-                open_behavior_questions=[
+                product_escalations=[
                     {
                         "question": "What audit retention window should v1 support?",
-                        "kind": "product",
+                        "why_it_matters": "The answer changes product commitments.",
                     }
                 ],
             ),

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
-from orchestrator.core.clarification_questions import ClarificationQuestion, ClarificationQuestionSet
+from orchestrator.core.clarification_questions import ClarificationQuestion
 
 
 class PlannerGateStatus(str, Enum):
@@ -651,6 +651,144 @@ class ChildTicketSpecPayload:
 
 
 @dataclass(frozen=True)
+class TechnicalDecisionOptionPayload:
+    option_id: str
+    title: str
+    description: str
+    benefits: tuple[str, ...]
+    risks: tuple[str, ...]
+    rejected_reason: str | None = None
+
+    @classmethod
+    def from_payload(cls, payload: object, *, context: str) -> TechnicalDecisionOptionPayload:
+        if not isinstance(payload, dict):
+            raise RuntimeError(f"{context} must be an object")
+        return cls(
+            option_id=_require_string(payload, "option_id", context=context),
+            title=_require_string(payload, "title", context=context),
+            description=_require_string(payload, "description", context=context),
+            benefits=_require_string_tuple(payload, "benefits", context=context),
+            risks=_require_string_tuple(payload, "risks", context=context),
+            rejected_reason=_require_optional_string(payload, "rejected_reason"),
+        )
+
+    def to_payload(self) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "option_id": self.option_id,
+            "title": self.title,
+            "description": self.description,
+            "benefits": list(self.benefits),
+            "risks": list(self.risks),
+        }
+        if self.rejected_reason:
+            payload["rejected_reason"] = self.rejected_reason
+        return payload
+
+
+@dataclass(frozen=True)
+class TechnicalDecisionPayload:
+    decision_id: str
+    area: str
+    question: str
+    options: tuple[TechnicalDecisionOptionPayload, ...]
+    selected_option_id: str
+    rationale: str
+    evidence: tuple[str, ...]
+    confidence: str
+    product_impact: str
+
+    @classmethod
+    def from_payload(cls, payload: object, *, context: str) -> TechnicalDecisionPayload:
+        if not isinstance(payload, dict):
+            raise RuntimeError(f"{context} must be an object")
+        raw_options = _require_dict_list(payload, "options", context=context)
+        options = tuple(
+            TechnicalDecisionOptionPayload.from_payload(raw_option, context=f"{context} options[{index}]")
+            for index, raw_option in enumerate(raw_options, start=1)
+        )
+        if not options:
+            raise RuntimeError(f"{context} missing options")
+        selected_option_id = _require_string(payload, "selected_option_id", context=context)
+        if selected_option_id not in {option.option_id for option in options}:
+            raise RuntimeError(f"{context} selected_option_id does not match an option_id")
+        confidence = _require_string(payload, "confidence", context=context).lower()
+        if confidence not in {"high", "medium", "low"}:
+            raise RuntimeError(f"{context} has invalid confidence")
+        product_impact = _require_string(payload, "product_impact", context=context).lower()
+        if product_impact not in {
+            "none",
+            "product_behavior",
+            "scope",
+            "acceptance_criteria",
+            "compliance",
+            "rollout",
+            "user_visible_semantics",
+        }:
+            raise RuntimeError(f"{context} has invalid product_impact")
+        return cls(
+            decision_id=_require_string(payload, "decision_id", context=context),
+            area=_require_string(payload, "area", context=context),
+            question=_require_string(payload, "question", context=context),
+            options=options,
+            selected_option_id=selected_option_id,
+            rationale=_require_string(payload, "rationale", context=context),
+            evidence=_require_string_tuple(payload, "evidence", context=context),
+            confidence=confidence,
+            product_impact=product_impact,
+        )
+
+    def to_payload(self) -> dict[str, object]:
+        return {
+            "decision_id": self.decision_id,
+            "area": self.area,
+            "question": self.question,
+            "options": [option.to_payload() for option in self.options],
+            "selected_option_id": self.selected_option_id,
+            "rationale": self.rationale,
+            "evidence": list(self.evidence),
+            "confidence": self.confidence,
+            "product_impact": self.product_impact,
+        }
+
+
+@dataclass(frozen=True)
+class ProductEscalationPayload:
+    question: str
+    why_it_matters: str
+    related_decision_ids: tuple[str, ...] = ()
+
+    @classmethod
+    def from_payload(cls, payload: object, *, context: str) -> ProductEscalationPayload:
+        if not isinstance(payload, dict):
+            raise RuntimeError(f"{context} must be an object")
+        return cls(
+            question=_require_string(payload, "question", context=context),
+            why_it_matters=_require_string(payload, "why_it_matters", context=context),
+            related_decision_ids=_optional_string_tuple(
+                payload,
+                "related_decision_ids",
+                context=context,
+            ),
+        )
+
+    def to_payload(self) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "question": self.question,
+            "why_it_matters": self.why_it_matters,
+        }
+        if self.related_decision_ids:
+            payload["related_decision_ids"] = list(self.related_decision_ids)
+        return payload
+
+    def to_clarification_question(self) -> ClarificationQuestion:
+        return ClarificationQuestion(
+            question=self.question,
+            why_it_matters=self.why_it_matters,
+            source_ref="product_escalation",
+        )
+
+
+@dataclass(frozen=True)
 class PlanningStageOutputPayload:
     __test__ = False
     planning_state: str
@@ -658,12 +796,13 @@ class PlanningStageOutputPayload:
     role_label: str
     findings: tuple[str, ...]
     recommendations: tuple[str, ...]
-    open_behavior_questions: tuple[ClarificationQuestion, ...]
+    technical_decisions: tuple[TechnicalDecisionPayload, ...]
+    product_escalations: tuple[ProductEscalationPayload, ...]
     acceptance_impacts: tuple[str, ...]
 
     @property
     def blocked(self) -> bool:
-        return bool(self.open_behavior_questions)
+        return bool(self.product_escalations)
 
     @classmethod
     def _base_from_payload(
@@ -676,16 +815,32 @@ class PlanningStageOutputPayload:
     ) -> dict[str, object]:
         if not isinstance(payload, dict):
             raise RuntimeError(f"Codex did not return a {planning_state} JSON object")
-        raw_questions = payload.get("open_behavior_questions")
-        if not isinstance(raw_questions, list):
-            raise RuntimeError(f"{planning_state} missing open_behavior_questions")
+        raw_technical_decisions = payload.get("technical_decisions")
+        if not isinstance(raw_technical_decisions, list):
+            raise RuntimeError(f"{planning_state} missing technical_decisions")
+        raw_product_escalations = payload.get("product_escalations")
+        if not isinstance(raw_product_escalations, list):
+            raise RuntimeError(f"{planning_state} missing product_escalations")
         return {
             "planning_state": planning_state,
             "persona_id": persona_id,
             "role_label": role_label,
             "findings": _require_string_tuple(payload, "findings", context=f"{planning_state} payload"),
             "recommendations": _require_string_tuple(payload, "recommendations", context=f"{planning_state} payload"),
-            "open_behavior_questions": ClarificationQuestionSet.from_values(raw_questions).questions,
+            "technical_decisions": tuple(
+                TechnicalDecisionPayload.from_payload(
+                    raw_decision,
+                    context=f"{planning_state} technical_decisions[{index}]",
+                )
+                for index, raw_decision in enumerate(raw_technical_decisions, start=1)
+            ),
+            "product_escalations": tuple(
+                ProductEscalationPayload.from_payload(
+                    raw_escalation,
+                    context=f"{planning_state} product_escalations[{index}]",
+                )
+                for index, raw_escalation in enumerate(raw_product_escalations, start=1)
+            ),
             "acceptance_impacts": _require_string_tuple(
                 payload,
                 "acceptance_impacts",
@@ -701,7 +856,8 @@ class PlanningStageOutputPayload:
             "blocked": self.blocked,
             "findings": list(self.findings),
             "recommendations": list(self.recommendations),
-            "open_behavior_questions": [question.to_payload() for question in self.open_behavior_questions],
+            "technical_decisions": [decision.to_payload() for decision in self.technical_decisions],
+            "product_escalations": [escalation.to_payload() for escalation in self.product_escalations],
             "acceptance_impacts": list(self.acceptance_impacts),
         }
 

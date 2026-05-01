@@ -21,6 +21,46 @@ from orchestrator.core.specialist_planning import (
 )
 
 
+def _technical_decision(decision_id: str = "decision-1") -> dict[str, object]:
+    return {
+        "decision_id": decision_id,
+        "area": "architecture",
+        "question": "How should invite links be generated and verified?",
+        "options": [
+            {
+                "option_id": "signed-token",
+                "title": "Signed invite token",
+                "description": "Generate a signed token with expiry and verify it server-side.",
+                "benefits": ["Tamper-resistant", "Works without exposing raw user IDs"],
+                "risks": ["Requires key rotation discipline"],
+                "rejected_reason": "",
+            },
+            {
+                "option_id": "plain-id",
+                "title": "Plain invite identifier",
+                "description": "Use a database identifier directly in the invite link.",
+                "benefits": ["Simple to implement"],
+                "risks": ["Enumeration risk", "Leaks implementation details"],
+                "rejected_reason": "The security risk is not justified for invite links.",
+            },
+        ],
+        "selected_option_id": "signed-token",
+        "rationale": "Signed expiring tokens satisfy the brief without exposing raw identifiers.",
+        "evidence": ["Parent brief requires share links", "Security stage requires spoofing protection"],
+        "confidence": "high",
+        "product_impact": "none",
+    }
+
+
+def _stage_contract(**extra: object) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "technical_decisions": [_technical_decision()],
+        "product_escalations": [],
+    }
+    payload.update(extra)
+    return payload
+
+
 class SpecialistPlanningTests(unittest.TestCase):
     def _request(self) -> SpecialistPlanningRequest:
         return SpecialistPlanningRequest(
@@ -64,7 +104,7 @@ class SpecialistPlanningTests(unittest.TestCase):
         def _invoke_runtime_json(*, context, system_prompt, user_prompt, runtime):  # noqa: ANN001
             _ = (system_prompt, user_prompt, runtime)
             if context.stage == PLANNING_STATE_ENGINEERING:
-                return {
+                return _stage_contract(**{
                     "findings": ["Architecture should split invite creation from delivery"],
                     "recommendations": ["Use a dedicated invite service"],
                     "required_tasks": ["Build invite service", "Persist invite state"],
@@ -82,25 +122,22 @@ class SpecialistPlanningTests(unittest.TestCase):
                             "labels": ["engineering"],
                         }
                     ],
-                    "open_behavior_questions": [],
                     "acceptance_impacts": ["Invite flow works from Profile"],
                     "mermaid_diagram": "flowchart TD\n  Share[Share entry] --> InviteService[Invite service]",
-                }
+                })
             if context.stage == PLANNING_STATE_SECURITY:
-                return {
+                return _stage_contract(**{
                     "findings": ["Invite links should not reveal raw user IDs"],
                     "recommendations": ["Sign links and verify expiry"],
                     "required_tasks": ["Add signed invite tokens"],
-                    "open_behavior_questions": [],
                     "acceptance_impacts": ["Unauthorized reuse is blocked"],
-                }
-            return {
+                })
+            return _stage_contract(**{
                 "findings": ["Need coverage for expired and malformed links"],
                 "recommendations": ["Add regression tests for both cases"],
                 "required_tasks": ["Add expired-link test", "Add malformed-link test"],
-                "open_behavior_questions": [],
                 "acceptance_impacts": ["Acceptance criteria remain testable"],
-            }
+            })
 
         with (
             patch("orchestrator.core.specialist_planning.render_prompt", side_effect=_render_prompt),
@@ -133,7 +170,8 @@ class SpecialistPlanningTests(unittest.TestCase):
         self.assertIn("Use a dedicated invite service", result.recommendations)
         self.assertIn("Add signed invite tokens", result.required_tasks)
         self.assertIn("Invite flow works from Profile", result.acceptance_impacts)
-        self.assertEqual(result.open_behavior_questions, ())
+        self.assertEqual(result.product_escalations, ())
+        self.assertTrue(result.technical_decisions)
         self.assertIsNone(result.block_reason)
         self.assertEqual(
             result.architecture_summary,
@@ -154,37 +192,39 @@ class SpecialistPlanningTests(unittest.TestCase):
         self.assertEqual(user_prompt_context["parent_issue_key"], "PM-42")
         self.assertIn("Let users share the app with friends", user_prompt_context["product_brief_json"])
 
-    def test_open_questions_block_planning_but_still_run_all_stages(self) -> None:
+    def test_product_escalations_block_planning_but_still_run_all_stages(self) -> None:
         request = self._request()
 
         def _invoke_runtime_json(*, context, system_prompt, user_prompt, runtime):  # noqa: ANN001
             _ = (system_prompt, user_prompt, runtime)
             if context.stage == PLANNING_STATE_ENGINEERING:
-                return {
+                return _stage_contract(**{
                     "findings": ["Architecture is straightforward"],
                     "recommendations": ["Proceed with a service boundary"],
                     "required_tasks": ["Add invite service"],
                     "child_ticket_specs": [],
-                    "open_behavior_questions": [],
                     "acceptance_impacts": ["Share entry point exists"],
-                }
+                })
             if context.stage == PLANNING_STATE_SECURITY:
-                return {
+                return _stage_contract(**{
                     "findings": ["Share target is unclear"],
                     "recommendations": ["Clarify whether this is invite, referral, or social share"],
                     "required_tasks": [],
-                    "open_behavior_questions": [
-                        "Is this a simple invite link or a referral system? Examples: invite-only link, reward-based referral."
+                    "product_escalations": [
+                        {
+                            "question": "Is this a simple invite link or a referral system? Examples: invite-only link, reward-based referral.",
+                            "why_it_matters": "The answer changes product behavior and abuse controls.",
+                            "related_decision_ids": ["decision-1"],
+                        }
                     ],
                     "acceptance_impacts": ["Security model depends on the share type"],
-                }
-            return {
+                })
+            return _stage_contract(**{
                 "findings": ["Testing depends on the share type"],
                 "recommendations": ["Hold test automation until the share behavior is clarified"],
                 "required_tasks": ["Draft negative-path test matrix"],
-                "open_behavior_questions": [],
                 "acceptance_impacts": ["Validation scope depends on the share type"],
-            }
+            })
 
         with (
             patch("orchestrator.core.specialist_planning.render_prompt", return_value="prompt"),
@@ -198,7 +238,7 @@ class SpecialistPlanningTests(unittest.TestCase):
         self.assertTrue(result.stages[1].blocked)
         self.assertIn(
             "Is this a simple invite link or a referral system?",
-            result.open_behavior_questions[0].question,
+            result.product_escalations[0].question,
         )
         self.assertIn("security_planning", result.block_reason or "")
         self.assertIn("Share entry point exists", result.acceptance_impacts)
@@ -223,7 +263,11 @@ class SpecialistPlanningTests(unittest.TestCase):
             self.assertIn("findings", prompt_text)
             self.assertIn("recommendations", prompt_text)
             self.assertIn("required_tasks", prompt_text)
-            self.assertIn("open_behavior_questions", prompt_text)
+            self.assertIn("technical_decisions", prompt_text)
+            self.assertIn("product_escalations", prompt_text)
+            self.assertNotIn("open_behavior_questions", prompt_text)
+            self.assertNotIn("internal_decisions", prompt_text)
+            self.assertNotIn("stakeholder_escalation_recommendations", prompt_text)
             self.assertIn("acceptance_impacts", prompt_text)
             if "architect" in prompt_name:
                 self.assertIn("mermaid_diagram", prompt_text)
@@ -253,15 +297,14 @@ class SpecialistPlanningTests(unittest.TestCase):
             captured["stages"].append(context.stage)
             captured["user_prompt"] = user_prompt
             captured["allowed_tools"] = set(allowed_tools)
-            return {
+            return _stage_contract(**{
                 "findings": [],
                 "recommendations": [],
                 "required_tasks": [],
                 "child_ticket_specs": [] if context.stage == PLANNING_STATE_ENGINEERING else None,
-                "open_behavior_questions": [],
                 "acceptance_impacts": [],
                 "mermaid_diagram": "",
-            }
+            })
 
         with (
             patch("orchestrator.core.specialist_planning.render_prompt", side_effect=_render_prompt),
@@ -288,7 +331,7 @@ class SpecialistPlanningTests(unittest.TestCase):
         def _invoke_runtime_json(*, context, system_prompt, user_prompt, runtime):  # noqa: ANN001
             _ = (system_prompt, user_prompt, runtime)
             if context.stage == PLANNING_STATE_ENGINEERING:
-                return {
+                return _stage_contract(**{
                     "findings": ["Architecture should split invite creation from delivery"],
                     "recommendations": ["Use a dedicated invite service"],
                     "required_tasks": ["Build invite service"],
@@ -306,25 +349,22 @@ class SpecialistPlanningTests(unittest.TestCase):
                             "labels": ["engineering"],
                         }
                     ],
-                    "open_behavior_questions": [],
                     "acceptance_impacts": ["Invite flow works from Profile"],
                     "mermaid_diagram": "flowchart TD\n  Share[Share entry] --> InviteService[Invite service]",
-                }
+                })
             if context.stage == PLANNING_STATE_SECURITY:
-                return {
+                return _stage_contract(**{
                     "findings": ["Signed links prevent spoofing"],
                     "recommendations": ["Verify expiry and signature server-side"],
                     "required_tasks": ["Add signed invite tokens"],
-                    "open_behavior_questions": [],
                     "acceptance_impacts": ["Unauthorized reuse is blocked"],
-                }
-            return {
+                })
+            return _stage_contract(**{
                 "findings": ["Need malformed-link coverage"],
                 "recommendations": ["Add regression tests"],
                 "required_tasks": ["Add malformed-link test"],
-                "open_behavior_questions": [],
                 "acceptance_impacts": ["Acceptance criteria remain testable"],
-            }
+            })
 
         with (
             patch("orchestrator.core.specialist_planning.render_prompt", return_value="prompt"),
@@ -363,7 +403,7 @@ class SpecialistPlanningTests(unittest.TestCase):
             _ = (system_prompt, runtime)
             prompts.append(user_prompt)
             if context.stage == PLANNING_STATE_ENGINEERING and len(prompts) == 1:
-                return {
+                return _stage_contract(**{
                     "findings": ["Architecture should split invite creation from delivery"],
                     "recommendations": ["Use a dedicated invite service"],
                     "required_tasks": ["Build invite service"],
@@ -381,12 +421,11 @@ class SpecialistPlanningTests(unittest.TestCase):
                             "labels": ["engineering"],
                         }
                     ],
-                    "open_behavior_questions": [],
                     "acceptance_impacts": ["Invite flow works from Profile"],
                     "mermaid_diagram": "flowchart TD\n  Share[Share entry] --> InviteService[Invite service]",
-                }
+                })
             if context.stage == PLANNING_STATE_ENGINEERING:
-                return {
+                return _stage_contract(**{
                     "findings": ["Architecture should split invite creation from delivery"],
                     "recommendations": ["Use a dedicated invite service"],
                     "required_tasks": ["Build invite service"],
@@ -404,17 +443,15 @@ class SpecialistPlanningTests(unittest.TestCase):
                             "labels": ["engineering"],
                         }
                     ],
-                    "open_behavior_questions": [],
                     "acceptance_impacts": ["Invite flow works from Profile"],
                     "mermaid_diagram": "flowchart TD\n  Share[Share entry] --> InviteService[Invite service]",
-                }
-            return {
+                })
+            return _stage_contract(**{
                 "findings": [],
                 "recommendations": [],
                 "required_tasks": [],
-                "open_behavior_questions": [],
                 "acceptance_impacts": [],
-            }
+            })
 
         with (
             patch("orchestrator.core.specialist_planning.render_prompt", return_value="prompt"),
@@ -445,7 +482,7 @@ class SpecialistPlanningTests(unittest.TestCase):
             _ = (system_prompt, user_prompt, runtime)
             calls.append(context.stage)
             if context.stage == PLANNING_STATE_ENGINEERING:
-                return {
+                return _stage_contract(**{
                     "findings": ["Architecture should split invite creation from delivery"],
                     "recommendations": ["Use a dedicated invite service"],
                     "required_tasks": ["Build invite service"],
@@ -463,17 +500,15 @@ class SpecialistPlanningTests(unittest.TestCase):
                             "labels": ["engineering"],
                         }
                     ],
-                    "open_behavior_questions": [],
                     "acceptance_impacts": ["Invite flow works from Profile"],
                     "mermaid_diagram": "flowchart TD\n  Share[Share entry] --> InviteService[Invite service]",
-                }
-            return {
+                })
+            return _stage_contract(**{
                 "findings": [],
                 "recommendations": [],
                 "required_tasks": [],
-                "open_behavior_questions": [],
                 "acceptance_impacts": [],
-            }
+            })
 
         with (
             patch("orchestrator.core.specialist_planning.render_prompt", return_value="prompt"),

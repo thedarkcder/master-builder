@@ -27,6 +27,29 @@ def test_run_stage_preserves_attempt_id_in_invocation_context(monkeypatch) -> No
                 "findings": [],
                 "recommendations": [],
                 "required_tasks": [],
+                "technical_decisions": [
+                    {
+                        "decision_id": "workflow-child-visibility",
+                        "area": "architecture",
+                        "question": "How should child workflow visibility be represented?",
+                        "options": [
+                            {
+                                "option_id": "operation-state",
+                                "title": "Operation state",
+                                "description": "Expose visibility from workflow operation state.",
+                                "benefits": ["Uses durable workflow state"],
+                                "risks": ["Requires operation metadata discipline"],
+                                "rejected_reason": "",
+                            }
+                        ],
+                        "selected_option_id": "operation-state",
+                        "rationale": "The workflow operation already owns child execution visibility.",
+                        "evidence": ["This test exercises workflow operation attempt context"],
+                        "confidence": "high",
+                        "product_impact": "none",
+                    }
+                ],
+                "product_escalations": [],
                 "child_ticket_specs": [
                     {
                         "summary": "Build child workflow",
@@ -41,7 +64,6 @@ def test_run_stage_preserves_attempt_id_in_invocation_context(monkeypatch) -> No
                         "labels": [],
                     }
                 ],
-                "open_behavior_questions": [],
                 "acceptance_impacts": [],
             }
 

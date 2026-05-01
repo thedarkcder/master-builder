@@ -50,7 +50,7 @@ class PmInterviewFlowTests(DiscordCommandApiTestHarness):
                 },
             ),
             patch(
-                "orchestrator.api.discord.ingress.seed_runtime.seed_parent_issues_with_runtime",
+                "orchestrator.runtime.issue_fanout.seed_parent_issues_with_runtime",
                 new=MagicMock(side_effect=AssertionError("PM interview should not seed Jira before completion")),
             ) as seed_mock,
         ):
@@ -94,7 +94,8 @@ class PmInterviewFlowTests(DiscordCommandApiTestHarness):
                         "labels": ["engineering"],
                     }
                 ],
-                "open_behavior_questions": [],
+                "technical_decisions": [],
+                "product_escalations": [],
                 "acceptance_impacts": ["Needs entry points in onboarding and profile."],
                 "mermaid_diagram": "flowchart TD\n  Parent[Parent brief] --> Child[Engineering child]",
             },
@@ -107,7 +108,8 @@ class PmInterviewFlowTests(DiscordCommandApiTestHarness):
                 "findings": ["The link flow needs abuse controls."],
                 "recommendations": ["Enforce rate limiting."],
                 "required_tasks": ["Add share-link verification"],
-                "open_behavior_questions": [],
+                "technical_decisions": [],
+                "product_escalations": [],
                 "acceptance_impacts": ["Security checks must be covered in acceptance."],
             },
         )
@@ -119,7 +121,8 @@ class PmInterviewFlowTests(DiscordCommandApiTestHarness):
                 "findings": ["Regression coverage is required."],
                 "recommendations": ["Cover repeat-share misuse."],
                 "required_tasks": [],
-                "open_behavior_questions": [],
+                "technical_decisions": [],
+                "product_escalations": [],
                 "acceptance_impacts": ["Tests should prove the visible share outcome."],
             },
         )
@@ -129,7 +132,8 @@ class PmInterviewFlowTests(DiscordCommandApiTestHarness):
             findings=("Share flows need abuse checks.",),
             recommendations=("Keep the first version link-only.",),
             acceptance_impacts=("Acceptance criteria should cover store fallback.",),
-            open_behavior_questions=(),
+            technical_decisions=(),
+            product_escalations=(),
             architecture_summary=(
                 "Break the work into onboarding and profile slices.",
                 "Use one child ticket per implementation slice.",
@@ -173,7 +177,7 @@ class PmInterviewFlowTests(DiscordCommandApiTestHarness):
                 },
             ),
             patch(
-                "orchestrator.api.discord.ingress.seed_runtime.seed_parent_issues_with_runtime",
+                "orchestrator.runtime.issue_fanout.seed_parent_issues_with_runtime",
                 return_value=(
                     "PM parent issue upsert complete. Created 1: TP-501. Updated 0: none.",
                     {
@@ -190,7 +194,7 @@ class PmInterviewFlowTests(DiscordCommandApiTestHarness):
                 return_value=planning_result,
             ) as planning_mock,
             patch(
-                "orchestrator.api.discord.ingress.seed_runtime.seed_issues_with_runtime",
+                "orchestrator.runtime.issue_fanout.seed_issues_with_runtime",
                 return_value=(
                     "Issue upsert complete. Parent: TP-501. Created 2: TP-502, TP-503.",
                     {

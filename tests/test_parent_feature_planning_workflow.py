@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import patch
-
 from orchestrator.core.parent_feature_workflow.planning import ParentFeaturePlanningWorkflow, ParentFeaturePlanningWorkflowDeps
+from orchestrator.core.clarification_questions import ClarificationQuestion
 from orchestrator.core.parent_planning_clarification_service import ClarificationPublishEffects, ParentPlanningClarificationService
 from orchestrator.core.parent_planning_fanout_service import ParentPlanningFanoutService
 from orchestrator.core.workflow_execution_projection import (
@@ -18,22 +17,49 @@ from tests.test_support.db_harness import SqliteTemplateDbTestCase
 
 
 class _FakeBriefPlanner:
-    def __init__(self, *, planning_result, planning_package: dict[str, object]) -> None:
-        self.planning_result = planning_result
-        self.planning_package = planning_package
+    def __init__(self, *, planning_results) -> None:  # noqa: ANN001
+        self.planning_results = list(planning_results)
+        self.attempt_refs: list[object] = []
+        self.product_briefs: list[dict[str, object]] = []
+
+    def with_attempt(self, *, attempt_ref):  # noqa: ANN001
+        self.attempt_refs.append(attempt_ref)
+        return self
+
+    def plan_backlog_parent(self, **kwargs):  # noqa: ANN003
+        self.product_briefs.append(dict(kwargs.get("product_brief") or {}))
+        if not self.planning_results:
+            raise AssertionError("Unexpected backlog planning call")
+        return self.planning_results.pop(0)
+
+
+class _FakeChildSyncGateway:
+    def with_attempt(self, *, attempt_ref):  # noqa: ANN001
+        raise AssertionError(f"Child fanout should not start while backlog planning is blocked: {attempt_ref}")
+
+    def combined_child_updates(self, *, seed_data: dict[str, object]):
+        return (
+            list(seed_data.get("updated_children", [])),
+            list(seed_data.get("created_children", [])),
+            list(seed_data.get("changed_children", [])),
+        )
+
+
+class _FakeCompletingChildSyncGateway:
+    def __init__(self) -> None:
         self.attempt_refs: list[object] = []
 
     def with_attempt(self, *, attempt_ref):  # noqa: ANN001
         self.attempt_refs.append(attempt_ref)
         return self
 
-    def plan_backlog_parent(self, **_kwargs):  # noqa: ANN003
-        return self.planning_result, self.planning_package
-
-
-class _FakeChildSyncGateway:
-    def with_attempt(self, *, attempt_ref):  # noqa: ANN001
-        raise AssertionError(f"Child fanout should not start while backlog planning is blocked: {attempt_ref}")
+    def seed_parent_backlog_children(self, **_kwargs):  # noqa: ANN003
+        return {
+            "requires_input": False,
+            "updated_children": ["MAB-242"],
+            "created_children": [],
+            "changed_children": ["MAB-242"],
+        }
 
     def combined_child_updates(self, *, seed_data: dict[str, object]):
         return (
@@ -68,23 +94,11 @@ class ParentFeaturePlanningWorkflowTests(SqliteTemplateDbTestCase):
     def setUp(self) -> None:
         self.database_url = self._prepare_test_database(name_prefix="parent-feature-planning-workflow")
         self.session_factory = create_session_factory(self.database_url)
-        self._event_store_patch = patch(
-            "orchestrator.core.product_events.event_store",
-            return_value=type("FakeEventStore", (), {"execute": lambda _self, _sql, **_kwargs: ""})(),
-        )
-        self._event_notify_patch = patch(
-            "orchestrator.core.product_events.publish_product_event_notification",
-            lambda **_kwargs: None,
-        )
-        self._event_store_patch.start()
-        self._event_notify_patch.start()
 
     def tearDown(self) -> None:
-        self._event_notify_patch.stop()
-        self._event_store_patch.stop()
         self._cleanup_test_database()
 
-    def test_backlog_planning_waits_only_after_jira_projection_records_comment_id(self) -> None:
+    def test_backlog_planning_waits_only_for_product_escalation_and_records_jira_comment_id(self) -> None:
         with self.session_factory() as session:
             workflow_type = get_workflow_type(session, workflow_type_key="parent_planning")
             lifecycle = ensure_workflow_execution(
@@ -106,11 +120,20 @@ class ParentFeaturePlanningWorkflowTests(SqliteTemplateDbTestCase):
             )
             issue_gateway = _FakeIssueGateway()
             planner = _FakeBriefPlanner(
-                planning_result=SimpleNamespace(
-                    planning_state="planning_needs_clarification",
-                    open_behavior_questions=("What audit window should customers see?",),
-                ),
-                planning_package={"planning": "package"},
+                planning_results=[
+                    (
+                        SimpleNamespace(
+                            planning_state="planning_needs_clarification",
+                            product_escalations=(
+                                ClarificationQuestion(
+                                    question="What audit window should customers see?",
+                                    why_it_matters="The answer changes product commitments.",
+                                ),
+                            ),
+                        ),
+                        {"planning": "package"},
+                    )
+                ],
             )
             workflow = ParentFeaturePlanningWorkflow(
                 deps=ParentFeaturePlanningWorkflowDeps(
@@ -129,8 +152,17 @@ class ParentFeaturePlanningWorkflowTests(SqliteTemplateDbTestCase):
             )
 
             fanout = workflow._plan_and_seed_with_attempts(
+                session=session,
+                settings=SimpleNamespace(),
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
                 lifecycle=lifecycle,
-                parent_detail=SimpleNamespace(key="MAB-241", labels=["pm-parent"]),
+                parent_detail=SimpleNamespace(
+                    key="MAB-241",
+                    summary="Backlog question projection",
+                    description="Planning needs product input",
+                    labels=["pm-parent"],
+                ),
                 product_brief={"objective": "Plan backlog"},
                 project_key="MAB",
                 planning_summary="Backlog planning completed.",
@@ -155,6 +187,8 @@ class ParentFeaturePlanningWorkflowTests(SqliteTemplateDbTestCase):
             self.assertFalse(fanout.completed)
             self.assertEqual(issue_gateway.label_updates, ["MAB-241:sync-blocked"])
             self.assertEqual(issue_gateway.published_questions[0][0], "MAB-241")
+            self.assertEqual(issue_gateway.published_questions[0][1][0].question, "What audit window should customers see?")
+            self.assertNotIn("pm_internal_resolution", operations)
             self.assertEqual(operations["jira_comment_projection"].status, "completed")
             self.assertIn("jira-comment-1", operations["jira_comment_projection"].summary or "")
             self.assertEqual(operations["backlog_planning"].status, "waiting_for_input")
@@ -166,3 +200,91 @@ class ParentFeaturePlanningWorkflowTests(SqliteTemplateDbTestCase):
                 attempts["jira_comment_projection"][-1].finished_at,
                 attempts["backlog_planning"][-1].finished_at,
             )
+
+    def test_backlog_planning_with_technical_decision_completes_without_jira_comment(self) -> None:
+        with self.session_factory() as session:
+            workflow_type = get_workflow_type(session, workflow_type_key="parent_planning")
+            lifecycle = ensure_workflow_execution(
+                session=session,
+                workflow_type=workflow_type,
+                tenant_id="tenant-b",
+                project_id="tenant-b-default",
+                execution=WorkflowExecutionReference(
+                    key="MAB-242",
+                    source=WorkflowSourceReference(
+                        source_system="jira",
+                        source_ref="MAB-242",
+                        display_name="Internal PM resolution",
+                        description="Planning question can be answered internally",
+                    ),
+                ),
+                display_name="Internal PM resolution",
+                description="Planning question can be answered internally",
+            )
+            issue_gateway = _FakeIssueGateway()
+            planner = _FakeBriefPlanner(
+                planning_results=[
+                    (
+                        SimpleNamespace(
+                            planning_state="planning_completed",
+                            product_escalations=(),
+                            technical_decisions=(
+                                {
+                                    "decision_id": "audit-window-storage",
+                                    "selected_option_id": "platform-policy",
+                                    "rationale": "Use the existing product brief audit policy.",
+                                },
+                            ),
+                        ),
+                        {"planning": "completed-package"},
+                    ),
+                ],
+            )
+            workflow = ParentFeaturePlanningWorkflow(
+                deps=ParentFeaturePlanningWorkflowDeps(
+                    issue_gateway=issue_gateway,
+                    brief_planner=planner,
+                    child_sync_gateway=_FakeCompletingChildSyncGateway(),
+                    clarification_service=ParentPlanningClarificationService(),
+                    fanout_service=ParentPlanningFanoutService(),
+                    workflow_type=workflow_type,
+                    project_key_for_issue_fn=lambda _issue_key: "MAB",
+                    extract_changed_fields_fn=lambda **_kwargs: [],
+                    extract_status_transition_fn=lambda **_kwargs: (None, None),
+                    material_parent_changed_fields_fn=lambda **_kwargs: [],
+                    parent_board_entry_target_status_fn=lambda **_kwargs: None,
+                )
+            )
+
+            fanout = workflow._plan_and_seed_with_attempts(
+                session=session,
+                settings=SimpleNamespace(),
+                tenant_id="tenant-b",
+                project_id="tenant-b-default",
+                lifecycle=lifecycle,
+                parent_detail=SimpleNamespace(
+                    key="MAB-242",
+                    summary="Internal PM resolution",
+                    description="Planning question can be answered internally",
+                    labels=["pm-parent"],
+                ),
+                product_brief={"objective": "Plan backlog"},
+                project_key="MAB",
+                planning_summary="Backlog planning completed.",
+                fanout_summary="Child fanout completed.",
+            )
+            session.commit()
+
+            operations = {
+                operation.operation_type: operation
+                for operation in session.query(WorkflowOperation)
+                .filter(WorkflowOperation.workflow_id == lifecycle.workflow.workflow_id)
+                .all()
+            }
+
+            self.assertTrue(fanout.completed)
+            self.assertEqual(issue_gateway.published_questions, [])
+            self.assertEqual(len(planner.product_briefs), 1)
+            self.assertNotIn("pm_internal_resolution", operations)
+            self.assertEqual(operations["backlog_planning"].status, "completed")
+            self.assertEqual(operations["jira_child_fanout"].status, "completed")
