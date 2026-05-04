@@ -21,5 +21,7 @@ Structured tool bridge:
 Use tools/context first.
 Record verification decisions as technical_decisions with options, tradeoffs, selected recommendation, rationale, evidence, confidence, and product impact.
 Only create pm_decision_requests for PM-owned product/buildability ambiguity. Do not create stakeholder questions.
-Return strict JSON only with keys: findings, recommendations, technical_decisions, required_tasks, pm_decision_requests, and acceptance_impacts.
-findings, recommendations, required_tasks, and acceptance_impacts must be arrays of strings only. Do not put objects in these arrays.
+
+Specialist output contract:
+Return JSON matching this domain model:
+{{ domain_model | tojson(indent=2) }}

@@ -54,10 +54,10 @@ class PmPlan:
     acceptance_criteria: list[str]
     risks: list[str]
     outcome: StageOutcome = "continue"
-    next_stage: str = "dev"
-    execution_worker_capability: str = "linux"
+    next_stage: Literal["dev", "test"] = "dev"
+    execution_worker_capability: Literal["linux", "macos"] = "linux"
     blocker_message: str | None = None
-    requeue_target: str | None = None
+    requeue_target: Literal["linux", "macos"] | None = None
     requeue_reason: str | None = None
     resolved_prerequisites: list[str] = field(default_factory=list)
     unresolved_prerequisites: list[str] = field(default_factory=list)

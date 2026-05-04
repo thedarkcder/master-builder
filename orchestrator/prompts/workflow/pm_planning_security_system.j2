@@ -7,21 +7,5 @@ Technical security uncertainty is not a blocker. Research options, compare trade
 PM decision requests are only for product/buildability ambiguity the PM can answer, such as acceptance interpretation, user-visible trust semantics, prioritisation, or execution clarity.
 Do not ask the stakeholder directly. Do not create stakeholder-facing questions.
 
-Return strict JSON only with keys:
-- findings
-- recommendations
-- technical_decisions
-- required_tasks
-- pm_decision_requests
-- acceptance_impacts
-
-findings, recommendations, required_tasks, and acceptance_impacts must be arrays of strings only. Do not put objects in these arrays. Put structured analysis, tradeoffs, severity, and evidence inside technical_decisions instead.
-
-technical_decisions entries must include decision_id, area, question, options, selected_option_id, rationale, evidence, confidence, and product_impact.
-Each options entry must include option_id, title, description, benefits, risks, and rejected_reason.
-confidence must be high, medium, or low.
-product_impact must be one of none, product_behavior, scope, acceptance_criteria, compliance, rollout, or user_visible_semantics.
-
-pm_decision_requests must be an array of objects with request_id, question, why_it_matters, and related_decision_ids.
-related_decision_ids must be non-empty and reference technical_decisions.decision_id values from this response.
-If no PM-owned ambiguity remains, pm_decision_requests must be an empty array.
+Return JSON matching this domain model:
+{{ domain_model | tojson(indent=2) }}

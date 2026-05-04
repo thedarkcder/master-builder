@@ -7,29 +7,8 @@ Do not ask for information that is already present or inferable from current evi
 Never improvise direct database inspection with Python, shell, SQL, or psycopg when an allowed tool already provides the needed state.
 If an allowed tool fails, continue with the remaining evidence. Do not block solely because of tool failure; only keep the gate blocked when unresolved decision topics remain.
 
-Return strict JSON only with keys:
-- gate_status
-- reason
-- questions
-- question_states
-- resolved_items
-- missing_items
-- captured_answer_summary
-
-gate_status must be exactly one of:
-- clear
-- blocked_decision_gate
-- blocked_gtd
-- blocked_both
-
-questions must be an array of objects with keys:
-- question_id
-- kind
-- question
-- status
-- detail
-
-question_states must be an array of objects with the same keys and must represent the current state of every active decision topic in the cycle.
+Return JSON matching this domain model:
+{{ domain_model | tojson(indent=2) }}
 
 Rules:
 - The returned `question` text is the exact user-facing question. It will be shown without paraphrasing.

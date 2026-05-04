@@ -13,7 +13,7 @@ from orchestrator.core.decision.reply_service import unresolved_question_feedbac
 from orchestrator.core.decision.types import DecisionClassification
 from orchestrator.core.prompt_templates import render_prompt
 from orchestrator.core.runtime.invocation import AgentInvocationContext, invoke_runtime_json
-from orchestrator.core.runtime.payload_models import PrecheckMessagePayload
+from orchestrator.core.runtime.payload_models import PrecheckMessage
 
 
 @dataclass(frozen=True)
@@ -71,7 +71,7 @@ def build_runtime_precheck_message(
             missing_slots_json=json.dumps(missing_slots),
         ),
     )
-    parsed_payload = PrecheckMessagePayload.from_payload(payload)
+    parsed_payload = PrecheckMessage.from_payload(payload)
     return parsed_payload.message, list(parsed_payload.questions)
 
 

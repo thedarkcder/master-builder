@@ -45,10 +45,10 @@ class WorkerExecutionServiceTests(unittest.TestCase):
 
         self.assertIs(result, claimed_run)
         self.assertEqual(
-            process_claimed_mock.call_args.kwargs["selection"].run.run_id,
+            process_claimed_mock.call_args.kwargs["selection"].claimed_run.run.run_id,
             "run-1",
         )
         self.assertEqual(
-            process_claimed_mock.call_args.kwargs["selection"].run.claim_id,
+            process_claimed_mock.call_args.kwargs["selection"].claimed_run.claim_id,
             "claim-1",
         )

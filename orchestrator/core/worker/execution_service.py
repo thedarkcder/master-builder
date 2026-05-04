@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from types import SimpleNamespace
 
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import sessionmaker
@@ -19,6 +20,7 @@ from orchestrator.core.worker.process_service import (
     process_next_queued_run as _process_next_queued_run_impl,
 )
 from orchestrator.core.worker.queue_selector import claim_next_queued_run
+from orchestrator.core.worker.queue_selector import ClaimedRun
 from orchestrator.core.worker.run_health import (
     WorkerRunHeartbeatController,
     worker_service_instance_id_for_mode,
@@ -164,6 +166,30 @@ def process_claimed_run_with_dependencies(
             send_discord_message_fn=send_discord_message_fn,
         ),
     )
+    if str(getattr(workflow, "orchestration_backend", "") or "").strip().lower() == "legacy":
+        return _process_claimed_run_impl(
+            session=session,
+            runner=runner,
+            settings=settings,
+            selection=SimpleNamespace(
+                claimed_run=ClaimedRun(
+                    run=claimed_run,
+                    tenant=tenant,
+                    project=None,
+                    effective_policy={},
+                    run_id=claimed_run.run_id,
+                    claim_id=expected_claim_id,
+                    worker_service_instance_id=expected_owner,
+                    status=RUN_STATUS_DISPATCHING,
+                ),
+                terminal_run=None,
+            ),
+            **build_run_process_kwargs(
+                session=session,
+                settings=settings,
+                send_discord_message_fn=send_discord_message_fn,
+            ),
+        )
     result = runtime.start_execution(
         workflow=workflow,
         run=claimed_run,

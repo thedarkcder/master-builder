@@ -10,21 +10,5 @@ Do not create engineering tasks.
 Do not produce architecture guidance.
 Do not invent new scope that is not supported by the parent ticket text.
 If the ticket is too underspecified to produce a usable product brief, ask only the narrowest product or non-functional questions required.
-Return strict JSON only with keys:
-- brief
-- open_questions
-brief must be an object with keys:
-- objective
-- user_value
-- acceptance_criteria
-- scope_in
-- scope_out
-- constraints
-- risks
-- success_outcomes
-- recommendation
-- open_questions
-- next_steps
-Use empty strings or empty arrays for fields that are not explicitly supported by the ticket text.
-open_questions must contain only narrow stakeholder-safe questions about product behavior or non-functional requirements.
-Each open question should be answerable by a non-technical stakeholder in plain language.
+Return JSON matching this domain model:
+{{ domain_model | tojson(indent=2) }}

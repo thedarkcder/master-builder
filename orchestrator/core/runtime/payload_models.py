@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from typing import ClassVar, Literal
 
 from orchestrator.core.clarification.questions import ClarificationQuestion
 
@@ -167,7 +168,12 @@ def _require_planning_string_tuple_field(
 
 
 @dataclass(frozen=True)
-class DecisionPlannerQuestionPayload:
+class DecisionPlannerQuestion:
+    __prompt_field_enums__: ClassVar[dict[str, tuple[str, ...]]] = {
+        "kind": ("decision_gate", "gtd"),
+        "status": ("open", "answered", "accepted"),
+    }
+
     question_id: str
     kind: str
     question: str
@@ -175,7 +181,7 @@ class DecisionPlannerQuestionPayload:
     detail: str | None
 
     @classmethod
-    def from_payload(cls, payload: object, *, default_kind: str, context: str) -> DecisionPlannerQuestionPayload:
+    def from_payload(cls, payload: object, *, default_kind: str, context: str) -> DecisionPlannerQuestion:
         if not isinstance(payload, dict):
             raise RuntimeError(f"{context} must be an object")
         question_id = str(payload.get("question_id") or "").strip()
@@ -201,17 +207,17 @@ class DecisionPlannerQuestionPayload:
 
 
 @dataclass(frozen=True)
-class DecisionPlannerPayload:
+class DecisionPlanner:
     gate_status: PlannerGateStatus
     reason: str
-    questions: tuple[DecisionPlannerQuestionPayload, ...]
-    question_states: tuple[DecisionPlannerQuestionPayload, ...]
+    questions: tuple[DecisionPlannerQuestion, ...]
+    question_states: tuple[DecisionPlannerQuestion, ...]
     resolved_items: tuple[str, ...]
     missing_items: tuple[str, ...]
     captured_answer_summary: str | None
 
     @classmethod
-    def from_payload(cls, payload: object, *, classification: str) -> DecisionPlannerPayload:
+    def from_payload(cls, payload: object, *, classification: str) -> DecisionPlanner:
         if not isinstance(payload, dict):
             raise RuntimeError("Decision planner returned non-object payload")
         try:
@@ -233,7 +239,7 @@ class DecisionPlannerPayload:
         if not isinstance(raw_question_states, list):
             raise RuntimeError("Decision planner returned invalid question_states")
         questions = tuple(
-            DecisionPlannerQuestionPayload.from_payload(
+            DecisionPlannerQuestion.from_payload(
                 raw_item,
                 default_kind=default_kind,
                 context=f"Decision planner questions[{index}]",
@@ -241,7 +247,7 @@ class DecisionPlannerPayload:
             for index, raw_item in enumerate(raw_questions, start=1)
         )
         question_states = tuple(
-            DecisionPlannerQuestionPayload.from_payload(
+            DecisionPlannerQuestion.from_payload(
                 raw_item,
                 default_kind=default_kind,
                 context=f"Decision planner question_states[{index}]",
@@ -269,7 +275,72 @@ class DecisionPlannerPayload:
 
 
 @dataclass(frozen=True)
-class PrecheckPolicyPayload:
+class DecisionGate:
+    triggered: bool
+    reason: str
+    missing_sections: tuple[str, ...]
+    questions: tuple[str, ...]
+    recommendation: str
+    tags: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class GoodToDo:
+    valid: bool
+    missing_criteria: tuple[str, ...]
+    clarification_questions: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class DecisionReplyAnswer:
+    question_id: str
+    status: Literal["ignored", "answered", "accepted"]
+    answer: str
+    notes: str
+
+
+@dataclass(frozen=True)
+class DecisionReply:
+    answers: tuple[DecisionReplyAnswer, ...]
+
+
+@dataclass(frozen=True)
+class PrecheckPolicy:
+    __prompt_field_aliases__: ClassVar[dict[str, str]] = {
+        "decision_gate_triggered": "triggered",
+        "decision_gate_reason": "reason",
+        "decision_gate_missing_sections": "missing_sections",
+        "decision_gate_questions": "questions",
+        "decision_gate_recommendation": "recommendation",
+        "decision_gate_tags": "tags",
+    }
+    __prompt_field_enums__: ClassVar[dict[str, tuple[str, ...]]] = {
+        "decision_gate_missing_sections": (
+            "objective",
+            "scope",
+            "acceptance_criteria",
+            "how_to_test",
+            "nfr_intent",
+            "reliability_security_constraints",
+            "out_of_scope",
+            "rollout_constraints",
+            "decision_owner",
+            "dependencies_and_risks",
+        ),
+        "gtd_missing_criteria": (
+            "objective",
+            "scope",
+            "acceptance_criteria",
+            "how_to_test",
+            "nfr_intent",
+            "reliability_security_constraints",
+            "out_of_scope",
+            "rollout_constraints",
+            "decision_owner",
+            "dependencies_and_risks",
+        ),
+    }
+
     decision_gate_triggered: bool
     decision_gate_reason: str
     decision_gate_missing_sections: tuple[str, ...]
@@ -281,7 +352,7 @@ class PrecheckPolicyPayload:
     gtd_clarification_questions: tuple[str, ...]
 
     @classmethod
-    def from_payload(cls, payload: object) -> PrecheckPolicyPayload:
+    def from_payload(cls, payload: object) -> PrecheckPolicy:
         if not isinstance(payload, dict):
             raise RuntimeError("Codex precheck policy evaluation returned non-object payload")
         decision_gate_reason = str(payload.get("reason") or "").strip()
@@ -327,13 +398,13 @@ class PrecheckPolicyPayload:
 
 
 @dataclass(frozen=True)
-class PrecheckMessagePayload:
+class PrecheckMessage:
     message: str
     questions: tuple[str, ...]
-    classification: str
+    classification: Literal["decision_gate", "gtd", "both", "clear"]
 
     @classmethod
-    def from_payload(cls, payload: object) -> PrecheckMessagePayload:
+    def from_payload(cls, payload: object) -> PrecheckMessage:
         if not isinstance(payload, dict):
             raise RuntimeError("Precheck message payload is not an object")
         message = str(payload.get("message") or "").strip()
@@ -351,14 +422,14 @@ class PrecheckMessagePayload:
 
 
 @dataclass(frozen=True)
-class VoiceEntryRoutePayload:
-    lane: str
-    persona: str
+class VoiceEntryRoute:
+    lane: Literal["ask", "interview"]
+    persona: Literal["pm", "architect", "engineer", "qa", "security"]
     confidence: float
     reason: str
 
     @classmethod
-    def from_payload(cls, payload: object) -> VoiceEntryRoutePayload:
+    def from_payload(cls, payload: object) -> VoiceEntryRoute:
         if not isinstance(payload, dict):
             raise RuntimeError("Voice entry router returned non-object payload")
         lane = _require_string(payload, "lane", context="Voice entry router payload").lower()
@@ -380,13 +451,13 @@ class VoiceEntryRoutePayload:
 
 
 @dataclass(frozen=True)
-class JiraIssueIntakeRoutePayload:
-    route: str
+class JiraIssueIntakeRoute:
+    route: Literal["pm_parent", "engineering_child", "unclear"]
     reason: str
-    confidence: str
+    confidence: Literal["high", "medium", "low"]
 
     @classmethod
-    def from_payload(cls, payload: object) -> JiraIssueIntakeRoutePayload:
+    def from_payload(cls, payload: object) -> JiraIssueIntakeRoute:
         if not isinstance(payload, dict):
             raise RuntimeError("Jira issue intake routing returned non-object payload")
         route = _require_string(payload, "route", context="Jira issue intake routing payload").lower()
@@ -400,14 +471,14 @@ class JiraIssueIntakeRoutePayload:
 
 
 @dataclass(frozen=True)
-class EngineeringClarificationPayload:
-    classification: str
+class EngineeringClarification:
+    classification: Literal["product_behavior", "technical_implementation"]
     stakeholder_question: str | None
     child_block_note: str
     reason: str
 
     @classmethod
-    def from_payload(cls, payload: object) -> EngineeringClarificationPayload:
+    def from_payload(cls, payload: object) -> EngineeringClarification:
         if not isinstance(payload, dict):
             raise RuntimeError("Engineering clarification returned non-object payload")
         classification = _require_string(payload, "classification", context="Engineering clarification payload").lower()
@@ -431,13 +502,13 @@ class EngineeringClarificationPayload:
 
 
 @dataclass(frozen=True)
-class AskIntentPayload:
-    mode: str
+class AskIntent:
+    mode: Literal["answer", "command"]
     summary: str
     command: str | None
 
     @classmethod
-    def from_payload(cls, payload: object) -> AskIntentPayload:
+    def from_payload(cls, payload: object) -> AskIntent:
         if not isinstance(payload, dict):
             raise RuntimeError("Ask intent returned non-object payload")
         mode = _require_string(payload, "mode", context="Ask intent payload").lower()
@@ -456,11 +527,11 @@ class AskIntentPayload:
 
 
 @dataclass(frozen=True)
-class RuntimeMessagePayload:
+class RuntimeMessage:
     message: str
 
     @classmethod
-    def from_payload(cls, payload: object, *, context: str) -> RuntimeMessagePayload:
+    def from_payload(cls, payload: object, *, context: str) -> RuntimeMessage:
         if not isinstance(payload, dict):
             raise RuntimeError(f"{context} must be an object")
         return cls(message=_require_string(payload, "message", context=context))
@@ -470,11 +541,11 @@ class RuntimeMessagePayload:
 
 
 @dataclass(frozen=True)
-class RuntimeMessageBriefPayload(RuntimeMessagePayload):
+class RuntimeMessageBrief(RuntimeMessage):
     brief: dict[str, object]
 
     @classmethod
-    def from_payload(cls, payload: object, *, context: str) -> RuntimeMessageBriefPayload:
+    def from_payload(cls, payload: object, *, context: str) -> RuntimeMessageBrief:
         if not isinstance(payload, dict):
             raise RuntimeError(f"{context} must be an object")
         return cls(
@@ -487,13 +558,173 @@ class RuntimeMessageBriefPayload(RuntimeMessagePayload):
 
 
 @dataclass(frozen=True)
-class PMInterviewQuestionPayload:
+class RepoSetup:
+    outcome: Literal["ready", "retryable_failure", "terminal_failure"]
+    execution_repo_dir: str | None
+    execution_branch: str | None
+    workspace_key: str | None
+    actions_taken: tuple[str, ...]
+    failure_reason: str | None
+
+
+@dataclass(frozen=True)
+class PRReady:
+    ready: bool
+    state: Literal[
+        "ready",
+        "missing_review_summary",
+        "missing_review_sections",
+        "missing_checks",
+        "pending_checks",
+        "failing_checks",
+        "blocked",
+    ]
+    reason: str
+    missing_workflows: tuple[str, ...]
+    pending_workflows: tuple[str, ...]
+    failing_workflows: tuple[str, ...]
+    missing_review_sections: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class PRReviewFinding:
+    severity: Literal["low", "medium", "high", "critical"]
+    message: str
+    path: str | None
+    line: int | None
+    suggestion: str | None
+
+
+@dataclass(frozen=True)
+class PRReviewFindings:
+    state: str
+    summary: str
+    findings: tuple[PRReviewFinding, ...]
+
+
+@dataclass(frozen=True)
+class WorkerCapabilityRequirement:
+    required_worker_capability: Literal["linux", "macos"]
+    rationale: str
+
+
+@dataclass(frozen=True)
+class StandupPersonaSegment:
+    persona_id: str
+    text: str
+
+
+@dataclass(frozen=True)
+class StandupVoiceBrief:
+    summary: str
+    persona_segments: tuple[StandupPersonaSegment, ...]
+
+
+@dataclass(frozen=True)
+class RetroVoiceBrief:
+    transcript: str
+    summary: str
+
+
+@dataclass(frozen=True)
+class PMBrief:
+    objective: str
+    user_value: str
+    acceptance_criteria: tuple[str, ...]
+    scope_in: tuple[str, ...]
+    scope_out: tuple[str, ...]
+    constraints: tuple[str, ...]
+    risks: tuple[str, ...]
+    success_outcomes: tuple[str, ...]
+    recommendation: str
+    open_questions: tuple[str, ...]
+    next_steps: tuple[str, ...]
+
+    @classmethod
+    def from_payload(cls, payload: object, *, context: str) -> PMBrief:
+        if not isinstance(payload, dict):
+            raise RuntimeError(f"{context} must be an object")
+        return cls(
+            objective=_require_string(payload, "objective", context=context),
+            user_value=_require_string(payload, "user_value", context=context),
+            acceptance_criteria=_require_string_tuple(payload, "acceptance_criteria", context=context),
+            scope_in=_require_string_tuple(payload, "scope_in", context=context),
+            scope_out=_require_string_tuple(payload, "scope_out", context=context),
+            constraints=_require_string_tuple(payload, "constraints", context=context),
+            risks=_require_string_tuple(payload, "risks", context=context),
+            success_outcomes=_require_string_tuple(payload, "success_outcomes", context=context),
+            recommendation=_require_string(payload, "recommendation", context=context),
+            open_questions=_require_string_tuple(payload, "open_questions", context=context),
+            next_steps=_require_string_tuple(payload, "next_steps", context=context),
+        )
+
+    def to_payload(self) -> dict[str, object]:
+        return {
+            "objective": self.objective,
+            "user_value": self.user_value,
+            "acceptance_criteria": list(self.acceptance_criteria),
+            "scope_in": list(self.scope_in),
+            "scope_out": list(self.scope_out),
+            "constraints": list(self.constraints),
+            "risks": list(self.risks),
+            "success_outcomes": list(self.success_outcomes),
+            "recommendation": self.recommendation,
+            "open_questions": list(self.open_questions),
+            "next_steps": list(self.next_steps),
+        }
+
+
+@dataclass(frozen=True)
+class PMMessageBrief:
+    message: str
+    brief: PMBrief
+
+    @classmethod
+    def from_payload(cls, payload: object, *, context: str) -> PMMessageBrief:
+        if not isinstance(payload, dict):
+            raise RuntimeError(f"{context} must be an object")
+        return cls(
+            message=_require_string(payload, "message", context=context),
+            brief=PMBrief.from_payload(payload.get("brief"), context=f"{context} brief"),
+        )
+
+    def to_payload(self) -> dict[str, object]:
+        return {"message": self.message, "brief": self.brief.to_payload()}
+
+
+@dataclass(frozen=True)
+class ParentFeatureBriefNormalization:
+    brief: PMBrief
+    open_questions: tuple[str, ...]
+
+    @classmethod
+    def from_payload(cls, payload: object) -> ParentFeatureBriefNormalization:
+        if not isinstance(payload, dict):
+            raise RuntimeError("Parent feature brief normalization returned non-object payload")
+        return cls(
+            brief=PMBrief.from_payload(payload.get("brief"), context="Parent feature normalized brief"),
+            open_questions=_require_string_tuple(
+                payload,
+                "open_questions",
+                context="Parent feature brief normalization payload",
+            ),
+        )
+
+    def to_payload(self) -> dict[str, object]:
+        return {
+            "brief": self.brief.to_payload(),
+            "open_questions": list(self.open_questions),
+        }
+
+
+@dataclass(frozen=True)
+class PMInterviewQuestion:
     slot_key: str
     question: str
     examples: tuple[str, ...]
 
     @classmethod
-    def from_payload(cls, payload: object, *, context: str) -> PMInterviewQuestionPayload:
+    def from_payload(cls, payload: object, *, context: str) -> PMInterviewQuestion:
         if not isinstance(payload, dict):
             raise RuntimeError(f"{context} must be an object")
         return cls(
@@ -511,18 +742,20 @@ class PMInterviewQuestionPayload:
 
 
 @dataclass(frozen=True)
-class PMInterviewPlanPayload:
+class PMInterviewPlan:
     message: str
-    brief: dict[str, object]
-    status: str
+    brief: PMBrief
+    status: Literal["drafting", "question_pending", "researching", "ready_to_write", "pm_completed", "abandoned"]
+    missing_slots: tuple[str, ...]
     ready_to_write: bool
-    next_question: PMInterviewQuestionPayload | None
+    evidence: tuple[dict[str, object], ...]
+    next_question: PMInterviewQuestion | None
 
     @classmethod
-    def from_payload(cls, payload: object) -> PMInterviewPlanPayload:
+    def from_payload(cls, payload: object) -> PMInterviewPlan:
         if not isinstance(payload, dict):
             raise RuntimeError("PM interview returned non-object payload")
-        brief = _require_dict(payload, "brief", context="PM interview payload")
+        brief = PMBrief.from_payload(payload.get("brief"), context="PM interview brief")
         status = _require_string(payload, "status", context="PM interview payload").lower()
         allowed_statuses = {"drafting", "question_pending", "researching", "ready_to_write", "pm_completed", "abandoned"}
         if status not in allowed_statuses:
@@ -539,7 +772,7 @@ class PMInterviewPlanPayload:
         elif isinstance(raw_next_question, str):
             raise RuntimeError("PM interview next_question must be an object")
         else:
-            next_question = PMInterviewQuestionPayload.from_payload(
+            next_question = PMInterviewQuestion.from_payload(
                 raw_next_question,
                 context="PM interview next_question",
             )
@@ -547,25 +780,29 @@ class PMInterviewPlanPayload:
             raise RuntimeError("PM interview payload missing next_question for incomplete brief")
         return cls(
             message=_require_string(payload, "message", context="PM interview payload"),
-            brief=dict(brief),
+            brief=brief,
             status=status,
+            missing_slots=_require_string_tuple(payload, "missing_slots", context="PM interview payload"),
             ready_to_write=ready_to_write,
+            evidence=tuple(_require_dict_list(payload, "evidence", context="PM interview payload")),
             next_question=next_question,
         )
 
     def to_payload(self) -> dict[str, object]:
         return {
             "message": self.message,
-            "brief": dict(self.brief),
+            "brief": self.brief.to_payload(),
             "status": self.status,
+            "missing_slots": list(self.missing_slots),
             "ready_to_write": self.ready_to_write,
+            "evidence": [dict(item) for item in self.evidence],
             "next_question": self.next_question.to_payload() if self.next_question is not None else None,
             "next_question_examples": list(self.next_question.examples) if self.next_question is not None else [],
         }
 
 
 @dataclass(frozen=True)
-class ChildTicketSpecPayload:
+class ChildTicketSpec:
     summary: str
     capability: str
     delivery: str
@@ -584,7 +821,7 @@ class ChildTicketSpecPayload:
         planning_state: str,
         issue_index: int,
         raw_value: object,
-    ) -> ChildTicketSpecPayload:
+    ) -> ChildTicketSpec:
         if not isinstance(raw_value, dict):
             raise RuntimeError(f"Codex returned invalid {planning_state} child_ticket_specs[{issue_index}] item type")
         return cls(
@@ -651,7 +888,7 @@ class ChildTicketSpecPayload:
 
 
 @dataclass(frozen=True)
-class TechnicalDecisionOptionPayload:
+class TechnicalDecisionOption:
     option_id: str
     title: str
     description: str
@@ -660,7 +897,7 @@ class TechnicalDecisionOptionPayload:
     rejected_reason: str | None = None
 
     @classmethod
-    def from_payload(cls, payload: object, *, context: str) -> TechnicalDecisionOptionPayload:
+    def from_payload(cls, payload: object, *, context: str) -> TechnicalDecisionOption:
         if not isinstance(payload, dict):
             raise RuntimeError(f"{context} must be an object")
         return cls(
@@ -686,24 +923,24 @@ class TechnicalDecisionOptionPayload:
 
 
 @dataclass(frozen=True)
-class TechnicalDecisionPayload:
+class TechnicalDecision:
     decision_id: str
     area: str
     question: str
-    options: tuple[TechnicalDecisionOptionPayload, ...]
+    options: tuple[TechnicalDecisionOption, ...]
     selected_option_id: str
     rationale: str
     evidence: tuple[str, ...]
-    confidence: str
-    product_impact: str
+    confidence: Literal["high", "medium", "low"]
+    product_impact: Literal["none", "product_behavior", "scope", "acceptance_criteria", "compliance", "rollout", "user_visible_semantics"]
 
     @classmethod
-    def from_payload(cls, payload: object, *, context: str) -> TechnicalDecisionPayload:
+    def from_payload(cls, payload: object, *, context: str) -> TechnicalDecision:
         if not isinstance(payload, dict):
             raise RuntimeError(f"{context} must be an object")
         raw_options = _require_dict_list(payload, "options", context=context)
         options = tuple(
-            TechnicalDecisionOptionPayload.from_payload(raw_option, context=f"{context} options[{index}]")
+            TechnicalDecisionOption.from_payload(raw_option, context=f"{context} options[{index}]")
             for index, raw_option in enumerate(raw_options, start=1)
         )
         if not options:
@@ -752,14 +989,14 @@ class TechnicalDecisionPayload:
 
 
 @dataclass(frozen=True)
-class PMDecisionRequestPayload:
+class PMDecisionRequest:
     request_id: str
     question: str
     why_it_matters: str
     related_decision_ids: tuple[str, ...]
 
     @classmethod
-    def from_payload(cls, payload: object, *, context: str) -> PMDecisionRequestPayload:
+    def from_payload(cls, payload: object, *, context: str) -> PMDecisionRequest:
         if not isinstance(payload, dict):
             raise RuntimeError(f"{context} must be an object")
         related_decision_ids = _require_string_tuple(payload, "related_decision_ids", context=context)
@@ -782,15 +1019,21 @@ class PMDecisionRequestPayload:
 
 
 @dataclass(frozen=True)
-class StakeholderEscalationPayload:
+class StakeholderEscalation:
     escalation_id: str
     question: str
     why_it_matters: str
-    business_impact_area: str
+    business_impact_area: Literal[
+        "business_outcome",
+        "risk_compliance",
+        "timeline_delivery",
+        "team_impact",
+        "customer_business_impact",
+    ]
     source_pm_decision_request_ids: tuple[str, ...]
 
     @classmethod
-    def from_payload(cls, payload: object, *, context: str) -> StakeholderEscalationPayload:
+    def from_payload(cls, payload: object, *, context: str) -> StakeholderEscalation:
         if not isinstance(payload, dict):
             raise RuntimeError(f"{context} must be an object")
         business_impact_area = _require_string(payload, "business_impact_area", context=context).lower()
@@ -831,7 +1074,7 @@ class StakeholderEscalationPayload:
 
 
 @dataclass(frozen=True)
-class PMDecisionResolutionPayload:
+class PMDecisionResolution:
     request_id: str
     answer: str
     rationale: str
@@ -839,7 +1082,7 @@ class PMDecisionResolutionPayload:
     planning_context_delta: dict[str, object]
 
     @classmethod
-    def from_payload(cls, payload: object, *, context: str) -> PMDecisionResolutionPayload:
+    def from_payload(cls, payload: object, *, context: str) -> PMDecisionResolution:
         if not isinstance(payload, dict):
             raise RuntimeError(f"{context} must be an object")
         raw_delta = payload.get("planning_context_delta")
@@ -866,9 +1109,9 @@ class PMDecisionResolutionPayload:
 
 
 @dataclass(frozen=True)
-class PMDecisionResolutionSetPayload:
-    resolved_decisions: tuple[PMDecisionResolutionPayload, ...]
-    stakeholder_escalations: tuple[StakeholderEscalationPayload, ...]
+class PMDecisionResolutionSet:
+    resolved_decisions: tuple[PMDecisionResolution, ...]
+    stakeholder_escalations: tuple[StakeholderEscalation, ...]
     updated_planning_context: dict[str, object]
 
     @classmethod
@@ -878,19 +1121,19 @@ class PMDecisionResolutionSetPayload:
         *,
         expected_request_ids: tuple[str, ...],
         context: str,
-    ) -> PMDecisionResolutionSetPayload:
+    ) -> PMDecisionResolutionSet:
         if not isinstance(payload, dict):
             raise RuntimeError(f"{context} must be an object")
         known_request_ids = set(expected_request_ids)
         resolutions = tuple(
-            PMDecisionResolutionPayload.from_payload(raw_resolution, context=f"{context} resolved_decisions[{index}]")
+            PMDecisionResolution.from_payload(raw_resolution, context=f"{context} resolved_decisions[{index}]")
             for index, raw_resolution in enumerate(
                 _require_dict_list(payload, "resolved_decisions", context=context),
                 start=1,
             )
         )
         stakeholder_escalations = tuple(
-            StakeholderEscalationPayload.from_payload(
+            StakeholderEscalation.from_payload(
                 raw_escalation,
                 context=f"{context} stakeholder_escalations[{index}]",
             )
@@ -938,15 +1181,22 @@ class PMDecisionResolutionSetPayload:
 
 
 @dataclass(frozen=True)
-class PlanningStageOutputPayload:
+class PlanningStageOutput:
     __test__ = False
+    __prompt_include_fields__: ClassVar[tuple[str, ...]] = (
+        "findings",
+        "recommendations",
+        "technical_decisions",
+        "pm_decision_requests",
+        "acceptance_impacts",
+    )
     planning_state: str
     persona_id: str
     role_label: str
     findings: tuple[str, ...]
     recommendations: tuple[str, ...]
-    technical_decisions: tuple[TechnicalDecisionPayload, ...]
-    pm_decision_requests: tuple[PMDecisionRequestPayload, ...]
+    technical_decisions: tuple[TechnicalDecision, ...]
+    pm_decision_requests: tuple[PMDecisionRequest, ...]
     acceptance_impacts: tuple[str, ...]
 
     @property
@@ -973,7 +1223,7 @@ class PlanningStageOutputPayload:
         if not isinstance(raw_pm_decision_requests, list):
             raise RuntimeError(f"{planning_state} missing pm_decision_requests")
         technical_decisions = tuple(
-            TechnicalDecisionPayload.from_payload(
+            TechnicalDecision.from_payload(
                 raw_decision,
                 context=f"{planning_state} technical_decisions[{index}]",
             )
@@ -988,7 +1238,7 @@ class PlanningStageOutputPayload:
             )
         known_decision_ids = set(decision_ids)
         pm_decision_requests = tuple(
-            PMDecisionRequestPayload.from_payload(
+            PMDecisionRequest.from_payload(
                 raw_request,
                 context=f"{planning_state} pm_decision_requests[{index}]",
             )
@@ -1043,10 +1293,21 @@ class PlanningStageOutputPayload:
 
 
 @dataclass(frozen=True)
-class ArchitectStageOutputPayload(PlanningStageOutputPayload):
+class ArchitectStageOutput(PlanningStageOutput):
     __test__ = False
+    __prompt_model_name__: ClassVar[str] = "ArchitectStageOutput"
+    __prompt_include_fields__: ClassVar[tuple[str, ...]] = (
+        "findings",
+        "recommendations",
+        "technical_decisions",
+        "required_tasks",
+        "child_ticket_specs",
+        "pm_decision_requests",
+        "acceptance_impacts",
+        "mermaid_diagram",
+    )
     required_tasks: tuple[str, ...]
-    child_ticket_specs: tuple[ChildTicketSpecPayload, ...]
+    child_ticket_specs: tuple[ChildTicketSpec, ...]
     mermaid_diagram: str | None = None
 
     @classmethod
@@ -1057,7 +1318,7 @@ class ArchitectStageOutputPayload(PlanningStageOutputPayload):
         persona_id: str,
         role_label: str,
         payload: object,
-    ) -> ArchitectStageOutputPayload:
+    ) -> ArchitectStageOutput:
         if not isinstance(payload, dict):
             raise RuntimeError(f"Codex did not return a {planning_state} JSON object")
         base = cls._base_from_payload(
@@ -1070,7 +1331,7 @@ class ArchitectStageOutputPayload(PlanningStageOutputPayload):
         if not isinstance(raw_child_specs, list):
             raise RuntimeError(f"{planning_state} missing child_ticket_specs")
         child_ticket_specs = tuple(
-            ChildTicketSpecPayload.from_payload(
+            ChildTicketSpec.from_payload(
                 planning_state=planning_state,
                 issue_index=issue_index,
                 raw_value=raw_item,
@@ -1094,8 +1355,17 @@ class ArchitectStageOutputPayload(PlanningStageOutputPayload):
 
 
 @dataclass(frozen=True)
-class SecurityStageOutputPayload(PlanningStageOutputPayload):
+class SecurityStageOutput(PlanningStageOutput):
     __test__ = False
+    __prompt_model_name__: ClassVar[str] = "SpecialistStageOutput"
+    __prompt_include_fields__: ClassVar[tuple[str, ...]] = (
+        "findings",
+        "recommendations",
+        "technical_decisions",
+        "required_tasks",
+        "pm_decision_requests",
+        "acceptance_impacts",
+    )
     required_tasks: tuple[str, ...]
 
     @classmethod
@@ -1106,7 +1376,7 @@ class SecurityStageOutputPayload(PlanningStageOutputPayload):
         persona_id: str,
         role_label: str,
         payload: object,
-    ) -> SecurityStageOutputPayload:
+    ) -> SecurityStageOutput:
         base = cls._base_from_payload(
             planning_state=planning_state,
             persona_id=persona_id,
@@ -1127,17 +1397,17 @@ class SecurityStageOutputPayload(PlanningStageOutputPayload):
 
 
 @dataclass(frozen=True)
-class TestingStageOutputPayload(SecurityStageOutputPayload):
+class TestingStageOutput(SecurityStageOutput):
     __test__ = False
 
 
 @dataclass(frozen=True)
-class PMToolCallPayload:
+class PMToolCall:
     tool: str
     arguments: dict[str, object]
 
     @classmethod
-    def from_payload(cls, payload: object, *, context: str) -> PMToolCallPayload:
+    def from_payload(cls, payload: object, *, context: str) -> PMToolCall:
         if not isinstance(payload, dict):
             raise RuntimeError(f"{context} has invalid tool_calls item")
         tool = _require_string(payload, "tool", context=f"{context} tool_calls item")
@@ -1154,16 +1424,16 @@ class PMToolCallPayload:
 
 
 @dataclass(frozen=True)
-class DesignPlanningPayload:
+class DesignPlanning:
     selected_plugin_id: str
     decision_state: str
     stage_artifacts: dict[str, object]
     stage_open_questions: tuple[str, ...]
-    tool_calls: tuple[PMToolCallPayload, ...]
+    tool_calls: tuple[PMToolCall, ...]
     message: str
 
     @classmethod
-    def from_payload(cls, payload: object) -> DesignPlanningPayload:
+    def from_payload(cls, payload: object) -> DesignPlanning:
         if not isinstance(payload, dict):
             raise RuntimeError("Design planning returned non-object payload")
         selected_plugin_id = _require_string(payload, "selected_plugin_id", context="Design planning payload").lower()
@@ -1178,7 +1448,7 @@ class DesignPlanningPayload:
         if not isinstance(raw_tool_calls, list):
             raise RuntimeError("Design planning payload missing tool_calls")
         tool_calls = tuple(
-            PMToolCallPayload.from_payload(raw_item, context="Design planning payload")
+            PMToolCall.from_payload(raw_item, context="Design planning payload")
             for raw_item in raw_tool_calls
         )
         message = _require_string(payload, "message", context="Design planning payload")
@@ -1219,7 +1489,7 @@ def _require_seed_list(payload: dict[str, object], key: str, *, context: str) ->
 
 
 @dataclass(frozen=True)
-class ParentSeedIssuePayload:
+class ParentSeedIssue:
     summary: str
     issue_type: str
     objective: str
@@ -1237,7 +1507,7 @@ class ParentSeedIssuePayload:
     issue_key: str | None = None
 
     @classmethod
-    def from_payload(cls, payload: object, *, context: str) -> ParentSeedIssuePayload:
+    def from_payload(cls, payload: object, *, context: str) -> ParentSeedIssue:
         if not isinstance(payload, dict):
             raise RuntimeError(f"{context} must be an object")
         return cls(
@@ -1281,7 +1551,7 @@ class ParentSeedIssuePayload:
 
 
 @dataclass(frozen=True)
-class EngineeringSeedChildPayload:
+class EngineeringSeedChild:
     summary: str
     issue_type: str
     capability: str
@@ -1296,7 +1566,7 @@ class EngineeringSeedChildPayload:
     issue_key: str | None = None
 
     @classmethod
-    def from_payload(cls, payload: object, *, issue_index: int) -> EngineeringSeedChildPayload:
+    def from_payload(cls, payload: object, *, issue_index: int) -> EngineeringSeedChild:
         context = f"Issue seeding engineering_children[{issue_index}]"
         if not isinstance(payload, dict):
             raise RuntimeError(f"{context} must be an object")
@@ -1335,14 +1605,14 @@ class EngineeringSeedChildPayload:
 
 
 @dataclass(frozen=True)
-class EngineeringSeedPlanPayload:
+class EngineeringSeedPlan:
     project_key: str
-    parent_issue: ParentSeedIssuePayload
-    engineering_children: tuple[EngineeringSeedChildPayload, ...]
+    parent_issue: ParentSeedIssue
+    engineering_children: tuple[EngineeringSeedChild, ...]
     questions: tuple[str, ...]
 
     @classmethod
-    def from_payload(cls, payload: object) -> EngineeringSeedPlanPayload:
+    def from_payload(cls, payload: object) -> EngineeringSeedPlan:
         if not isinstance(payload, dict):
             raise RuntimeError("Issue seeding returned non-object payload")
         raw_children = payload.get("engineering_children")
@@ -1350,12 +1620,12 @@ class EngineeringSeedPlanPayload:
             raise RuntimeError("Issue seeding payload missing engineering_children")
         return cls(
             project_key=_require_string(payload, "project_key", context="Issue seeding payload").upper(),
-            parent_issue=ParentSeedIssuePayload.from_payload(
+            parent_issue=ParentSeedIssue.from_payload(
                 payload.get("parent_issue"),
                 context="Issue seeding parent_issue",
             ),
             engineering_children=tuple(
-                EngineeringSeedChildPayload.from_payload(raw_child, issue_index=issue_index)
+                EngineeringSeedChild.from_payload(raw_child, issue_index=issue_index)
                 for issue_index, raw_child in enumerate(raw_children, start=1)
             ),
             questions=tuple(_require_string_list(payload, "questions", context="Issue seeding payload")),
@@ -1371,13 +1641,13 @@ class EngineeringSeedPlanPayload:
 
 
 @dataclass(frozen=True)
-class PmParentSeedPlanPayload:
+class PmParentSeedPlan:
     project_key: str
-    issues: tuple[ParentSeedIssuePayload, ...]
+    issues: tuple[ParentSeedIssue, ...]
     questions: tuple[str, ...]
 
     @classmethod
-    def from_payload(cls, payload: object) -> PmParentSeedPlanPayload:
+    def from_payload(cls, payload: object) -> PmParentSeedPlan:
         if not isinstance(payload, dict):
             raise RuntimeError("PM parent seeding returned non-object payload")
         raw_issues = payload.get("issues")
@@ -1386,7 +1656,7 @@ class PmParentSeedPlanPayload:
         return cls(
             project_key=_require_string(payload, "project_key", context="PM parent seeding payload").upper(),
             issues=tuple(
-                ParentSeedIssuePayload.from_payload(
+                ParentSeedIssue.from_payload(
                     raw_issue,
                     context=f"PM parent seeding issues[{issue_index}]",
                 )

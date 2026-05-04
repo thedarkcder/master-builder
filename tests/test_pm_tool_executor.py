@@ -4,14 +4,14 @@ import unittest
 from unittest.mock import patch
 
 from orchestrator.core.pm.tool_executor import execute_pm_tool_calls
-from orchestrator.core.runtime.payload_models import PMToolCallPayload
+from orchestrator.core.runtime.payload_models import PMToolCall
 
 
 class PmToolExecutorTests(unittest.TestCase):
     def test_rejects_unknown_tools(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "PM tool call uses unknown tool"):
             execute_pm_tool_calls(
-                tool_calls=[PMToolCallPayload(tool="unknown.tool", arguments={"x": 1})],
+                tool_calls=[PMToolCall(tool="unknown.tool", arguments={"x": 1})],
                 tenant_id="t1",
                 project_id="p1",
             )
@@ -23,7 +23,7 @@ class PmToolExecutorTests(unittest.TestCase):
             return_value=fake,
         ) as call:
             outputs = execute_pm_tool_calls(
-                tool_calls=[PMToolCallPayload(tool="stitch.synthesize_screen", arguments={"prompt": "hero layout"})],
+                tool_calls=[PMToolCall(tool="stitch.synthesize_screen", arguments={"prompt": "hero layout"})],
                 tenant_id="t1",
                 project_id="p1",
             )

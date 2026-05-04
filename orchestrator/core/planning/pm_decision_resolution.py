@@ -10,9 +10,9 @@ from orchestrator.core.parent_feature_workflow.operations import PARENT_WU_PM_DE
 from orchestrator.core.prompt_templates import render_prompt
 from orchestrator.core.runtime.invocation import AgentInvocationContext, invoke_runtime_json
 from orchestrator.core.runtime.payload_models import (
-    PMDecisionRequestPayload,
-    PMDecisionResolutionSetPayload,
-    TechnicalDecisionPayload,
+    PMDecisionRequest,
+    PMDecisionResolutionSet,
+    TechnicalDecision,
 )
 from orchestrator.core.runtime.runtime import CodexRuntime, CodexRuntimeError
 from orchestrator.core.workflow.work_units import run_work_unit, workflow_work_unit_input_fingerprint
@@ -32,8 +32,8 @@ class PMDecisionResolutionRequest:
     parent_description: str
     product_brief: dict[str, Any]
     planning_package: dict[str, Any]
-    technical_decisions: tuple[TechnicalDecisionPayload, ...]
-    pm_decision_requests: tuple[PMDecisionRequestPayload, ...]
+    technical_decisions: tuple[TechnicalDecision, ...]
+    pm_decision_requests: tuple[PMDecisionRequest, ...]
     conversation_history: tuple[dict[str, Any], ...]
     workflow_id: str | None
     operation_id: str | None
@@ -49,10 +49,10 @@ class PMDecisionResolutionService:
         settings: Any | None,
         runtime: CodexRuntime,
         request: PMDecisionResolutionRequest,
-    ) -> PMDecisionResolutionSetPayload:
+    ) -> PMDecisionResolutionSet:
         _ = (session, settings)
         if not request.pm_decision_requests:
-            return PMDecisionResolutionSetPayload(
+            return PMDecisionResolutionSet(
                 resolved_decisions=(),
                 stakeholder_escalations=(),
                 updated_planning_context={},
@@ -68,7 +68,7 @@ class PMDecisionResolutionService:
         if attempt is None:
             raise RuntimeError(f"Workflow operation attempt {request.attempt_id} is missing for PM decision resolution")
 
-        def _execute() -> PMDecisionResolutionSetPayload:
+        def _execute() -> PMDecisionResolutionSet:
             return self._invoke_runtime(runtime=runtime, session=session, request=request)
 
         input_payload = {
@@ -91,7 +91,7 @@ class PMDecisionResolutionService:
             input_payload=input_payload,
             execute=lambda _context: _execute(),
             serialize=lambda result: result.to_payload(),
-            deserialize=lambda payload: PMDecisionResolutionSetPayload.from_payload(
+            deserialize=lambda payload: PMDecisionResolutionSet.from_payload(
                 payload,
                 expected_request_ids=tuple(pm_request.request_id for pm_request in request.pm_decision_requests),
                 context="PM decision resolution stored payload",
@@ -104,7 +104,7 @@ class PMDecisionResolutionService:
         runtime: CodexRuntime,
         session: Session | None,
         request: PMDecisionResolutionRequest,
-    ) -> PMDecisionResolutionSetPayload:
+    ) -> PMDecisionResolutionSet:
         invocation_context = AgentInvocationContext(
             channel="system",
             tenant_id=request.tenant_id,
@@ -142,7 +142,7 @@ class PMDecisionResolutionService:
             ),
         )
         try:
-            return PMDecisionResolutionSetPayload.from_payload(
+            return PMDecisionResolutionSet.from_payload(
                 payload,
                 expected_request_ids=tuple(pm_request.request_id for pm_request in request.pm_decision_requests),
                 context="PM decision resolution payload",

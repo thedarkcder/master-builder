@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 from types import SimpleNamespace
@@ -28,6 +27,7 @@ from orchestrator.core.pm.interview_service import (
     resolve_pm_interview_case_match,
     upsert_pm_interview_case,
 )
+from orchestrator.core.prompt_domain_models import prompt_domain_model_for_template
 from orchestrator.core.projects.parent_feature_brief_store import (
     parent_planning_clarification_history,
     persist_parent_feature_brief_snapshot,
@@ -55,6 +55,22 @@ except ModuleNotFoundError:  # pragma: no cover - local test runner path quirk
 
 
 pytestmark = pytest.mark.contract
+
+
+def _complete_pm_brief_payload(*, objective: str = "Share the app with friends") -> dict[str, object]:
+    return {
+        "objective": objective,
+        "user_value": "Tenant admins can invite teammates with less friction.",
+        "acceptance_criteria": ["Users can start the intended flow."],
+        "scope_in": ["Core user journey"],
+        "scope_out": [],
+        "constraints": [],
+        "risks": [],
+        "success_outcomes": ["Stakeholder can validate the feature outcome."],
+        "recommendation": "Continue PM interview until acceptance is clear.",
+        "open_questions": [],
+        "next_steps": [],
+    }
 
 
 class PMInterviewServiceTests(unittest.TestCase):
@@ -723,9 +739,11 @@ class PMInterviewServiceTests(unittest.TestCase):
                 "orchestrator.core.pm.interview_service._invoke_discord_json_maybe_tools",
                 return_value={
                     "message": "What user group?",
-                    "brief": {"objective": "Share the app with friends"},
+                    "brief": _complete_pm_brief_payload(),
                     "status": PM_INTERVIEW_STATUS_QUESTION_PENDING,
+                    "missing_slots": ["user_value", "acceptance_criteria"],
                     "ready_to_write": False,
+                    "evidence": [],
                     "next_question": {
                         "slot_key": "user_value",
                         "question": "What user group should this support first?",
@@ -759,16 +777,12 @@ class PMInterviewServiceTests(unittest.TestCase):
         self.assertEqual(payload["missing_slots"], ["user_value", "acceptance_criteria"])
         self.assertIn("discord/pm_interview_system.j2", captured)
         user_kwargs = captured["discord/pm_interview_user.j2"]
-        prompt_root = Path(__file__).resolve().parents[1] / "orchestrator" / "prompts" / "discord"
-        self.assertIn(
-            "Allowed `status` values are exactly:",
-            (prompt_root / "pm_interview_system.j2").read_text(),
-        )
-        user_prompt_template = (prompt_root / "pm_interview_user.j2").read_text()
-        self.assertIn('status="ready_to_write"', user_prompt_template)
-        self.assertIn("Do not use unlisted status words", user_prompt_template)
-        self.assertIn("Do not return `next_question` as a plain string", user_prompt_template)
-        self.assertIn("slot_key", (prompt_root / "pm_interview_system.j2").read_text())
+        domain_model = prompt_domain_model_for_template("discord/pm_interview_system.j2") or {}
+        self.assertEqual(domain_model["name"], "PMInterviewPlan")
+        self.assertIn("status", str(domain_model))
+        self.assertIn("ready_to_write", str(domain_model))
+        self.assertIn("next_question", str(domain_model))
+        self.assertIn("slot_key", str(domain_model))
         self.assertIn("current_question_examples_json", user_kwargs)
         self.assertTrue(json.loads(user_kwargs["current_question_examples_json"]))
         self.assertIn("brief_json", user_kwargs)
@@ -779,9 +793,11 @@ class PMInterviewServiceTests(unittest.TestCase):
             "orchestrator.core.pm.interview_service._invoke_discord_json_maybe_tools",
             return_value={
                 "message": "The brief is complete.",
-                "brief": {"objective": "Share the app with friends"},
+                "brief": _complete_pm_brief_payload(),
                 "ready_to_write": True,
                 "status": "completed",
+                "missing_slots": [],
+                "evidence": [],
                 "next_question": None,
             },
         ):
@@ -807,9 +823,11 @@ class PMInterviewServiceTests(unittest.TestCase):
             "orchestrator.core.pm.interview_service._invoke_discord_json_maybe_tools",
             return_value={
                 "message": "I still need one more product clarification.",
-                "brief": {"objective": "Share the app with friends"},
+                "brief": _complete_pm_brief_payload(),
                 "ready_to_write": False,
                 "status": PM_INTERVIEW_STATUS_QUESTION_PENDING,
+                "missing_slots": ["user_value"],
+                "evidence": [],
             },
         ):
             with self.assertRaisesRegex(

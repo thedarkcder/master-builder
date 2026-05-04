@@ -12,7 +12,7 @@ from orchestrator.core.issue_fanout.description import (
     build_engineering_child_description,
     build_parent_feature_description,
 )
-from orchestrator.core.runtime.payload_models import TechnicalDecisionPayload
+from orchestrator.core.runtime.payload_models import TechnicalDecision
 from orchestrator.tools.atlassian_oauth import JiraIssueCreateInput
 
 _MAX_ENGINEERING_CHILDREN = 12
@@ -143,7 +143,7 @@ def _parse_questions(raw_questions: object) -> list[str]:
 class PlanningPackageDraft:
     planning_state: str
     specialist_summary: list[str]
-    technical_decisions: list[TechnicalDecisionPayload]
+    technical_decisions: list[TechnicalDecision]
     architecture_summary: list[str]
     architecture_diagram: str | None
     child_issues: list[dict[str, Any]]
@@ -182,7 +182,7 @@ def _string_list_from_stage(*, stage_name: str, field_name: str, raw_value: obje
     return values
 
 
-def _technical_decisions_from_stage(*, stage_name: str, raw_value: object) -> list[TechnicalDecisionPayload]:
+def _technical_decisions_from_stage(*, stage_name: str, raw_value: object) -> list[TechnicalDecision]:
     if raw_value is None:
         return []
     if not isinstance(raw_value, list):
@@ -193,7 +193,7 @@ def _technical_decisions_from_stage(*, stage_name: str, raw_value: object) -> li
                 "(expected list of technical decision records)"
             ),
         )
-    decisions: list[TechnicalDecisionPayload] = []
+    decisions: list[TechnicalDecision] = []
     for index, entry in enumerate(raw_value, start=1):
         if not isinstance(entry, dict):
             raise HTTPException(
@@ -202,7 +202,7 @@ def _technical_decisions_from_stage(*, stage_name: str, raw_value: object) -> li
             )
         try:
             decisions.append(
-                TechnicalDecisionPayload.from_payload(
+                TechnicalDecision.from_payload(
                     entry,
                     context=f"Planning package stage '{stage_name}' technical_decisions[{index}]",
                 )
@@ -212,8 +212,8 @@ def _technical_decisions_from_stage(*, stage_name: str, raw_value: object) -> li
     return decisions
 
 
-def _merge_technical_decisions(*decision_groups: list[TechnicalDecisionPayload]) -> list[TechnicalDecisionPayload]:
-    decisions: list[TechnicalDecisionPayload] = []
+def _merge_technical_decisions(*decision_groups: list[TechnicalDecision]) -> list[TechnicalDecision]:
+    decisions: list[TechnicalDecision] = []
     seen: set[str] = set()
     for group in decision_groups:
         for decision in group:
@@ -269,7 +269,7 @@ def normalize_planning_package(raw_planning_package: object) -> PlanningPackageD
         child_issues = []
     planning_state = _normalized_status(raw_planning_package.get("planning_state") or raw_planning_package.get("state"))
     summary_lines: list[str] = []
-    technical_decision_groups: list[list[TechnicalDecisionPayload]] = []
+    technical_decision_groups: list[list[TechnicalDecision]] = []
     raw_top_level_technical_decisions = raw_planning_package.get("technical_decisions")
     if raw_top_level_technical_decisions is not None:
         technical_decision_groups.append(
@@ -505,7 +505,7 @@ class EngineeringChildDraft:
         parent_revision: str,
         sync_status: str,
         specialist_summary: list[str] | None = None,
-        technical_decisions: list[TechnicalDecisionPayload] | None = None,
+        technical_decisions: list[TechnicalDecision] | None = None,
         planning_state: str | None = None,
         pm_status: str | None = None,
     ) -> JiraIssueCreateInput:

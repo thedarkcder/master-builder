@@ -39,7 +39,7 @@ class CoreRunsEdgeTests(unittest.TestCase):
         session.get.side_effect = fake_get
 
         with self.assertRaises(RunStateTransitionError):
-            with patch("orchestrator.core.runs._resolve_required_runtime_kinds", return_value=["codex_cli"]):
+            with patch("orchestrator.core.runs.service._resolve_required_runtime_kinds", return_value=["codex_cli"]):
                 enqueue_run(
                     session,
                     tenant_id="tenant-a",
@@ -51,10 +51,10 @@ class CoreRunsEdgeTests(unittest.TestCase):
     def test_enqueue_raises_when_concurrency_limit_reached_without_active_run(self) -> None:
         session = MagicMock()
         with (
-            patch("orchestrator.core.runs._active_workflow_for_issue", return_value=None),
-            patch("orchestrator.core.runs._active_run_count_for_tenant", return_value=1),
-            patch("orchestrator.core.runs._first_active_run_for_tenant", return_value=None),
-            patch("orchestrator.core.runs._resolve_required_runtime_kinds", return_value=["codex_cli"]),
+            patch("orchestrator.core.runs.service._active_workflow_for_issue", return_value=None),
+            patch("orchestrator.core.runs.service._active_run_count_for_tenant", return_value=1),
+            patch("orchestrator.core.runs.service._first_active_run_for_tenant", return_value=None),
+            patch("orchestrator.core.runs.service._resolve_required_runtime_kinds", return_value=["codex_cli"]),
         ):
             with self.assertRaises(RunStateTransitionError):
                 enqueue_run(
@@ -69,10 +69,10 @@ class CoreRunsEdgeTests(unittest.TestCase):
         session = MagicMock()
         session.commit.side_effect = IntegrityError("stmt", {}, Exception("db"))
         with (
-            patch("orchestrator.core.runs._active_workflow_for_issue", return_value=None),
-            patch("orchestrator.core.runs._active_run_count_for_tenant", return_value=0),
-            patch("orchestrator.core.runs.notify_run_enqueued"),
-            patch("orchestrator.core.runs._resolve_required_runtime_kinds", return_value=["codex_cli"]),
+            patch("orchestrator.core.runs.service._active_workflow_for_issue", return_value=None),
+            patch("orchestrator.core.runs.service._active_run_count_for_tenant", return_value=0),
+            patch("orchestrator.core.runs.service.notify_run_enqueued"),
+            patch("orchestrator.core.runs.service._resolve_required_runtime_kinds", return_value=["codex_cli"]),
         ):
             with self.assertRaises(RunStateTransitionError):
                 enqueue_run(
@@ -98,8 +98,8 @@ class CoreRunsEdgeTests(unittest.TestCase):
 
         session.get.side_effect = fake_get
         with (
-            patch("orchestrator.core.runs.notify_run_enqueued"),
-            patch("orchestrator.core.runs._resolve_required_runtime_kinds", return_value=["codex_cli"]),
+            patch("orchestrator.core.runs.service.notify_run_enqueued"),
+            patch("orchestrator.core.runs.service._resolve_required_runtime_kinds", return_value=["codex_cli"]),
         ):
             result = enqueue_run(
                 session,
@@ -116,10 +116,10 @@ class CoreRunsEdgeTests(unittest.TestCase):
         session = MagicMock()
         session.commit.side_effect = IntegrityError("stmt", {}, Exception("db"))
         with (
-            patch("orchestrator.core.runs._active_workflow_for_issue", return_value=None),
-            patch("orchestrator.core.runs._active_run_count_for_tenant", return_value=0),
-            patch("orchestrator.core.runs.notify_run_enqueued"),
-            patch("orchestrator.core.runs._resolve_required_runtime_kinds", return_value=["codex_cli"]),
+            patch("orchestrator.core.runs.service._active_workflow_for_issue", return_value=None),
+            patch("orchestrator.core.runs.service._active_run_count_for_tenant", return_value=0),
+            patch("orchestrator.core.runs.service.notify_run_enqueued"),
+            patch("orchestrator.core.runs.service._resolve_required_runtime_kinds", return_value=["codex_cli"]),
         ):
             with self.assertRaises(RunStateTransitionError):
                 enqueue_run(
@@ -135,11 +135,11 @@ class CoreRunsEdgeTests(unittest.TestCase):
         session.commit.side_effect = IntegrityError("stmt", {}, Exception("db"))
         limited_run = SimpleNamespace(run_id="run-limited")
         with (
-            patch("orchestrator.core.runs._active_workflow_for_issue", return_value=None),
-            patch("orchestrator.core.runs._active_run_count_for_tenant", side_effect=[0, 1]),
-            patch("orchestrator.core.runs._first_active_run_for_tenant", return_value=limited_run),
-            patch("orchestrator.core.runs.notify_run_enqueued"),
-            patch("orchestrator.core.runs._resolve_required_runtime_kinds", return_value=["codex_cli"]),
+            patch("orchestrator.core.runs.service._active_workflow_for_issue", return_value=None),
+            patch("orchestrator.core.runs.service._active_run_count_for_tenant", side_effect=[0, 1]),
+            patch("orchestrator.core.runs.service._first_active_run_for_tenant", return_value=limited_run),
+            patch("orchestrator.core.runs.service.notify_run_enqueued"),
+            patch("orchestrator.core.runs.service._resolve_required_runtime_kinds", return_value=["codex_cli"]),
         ):
             result = enqueue_run(
                 session,
@@ -159,10 +159,10 @@ class CoreRunsEdgeTests(unittest.TestCase):
         session.add.side_effect = added_rows.append
 
         with (
-            patch("orchestrator.core.runs._active_workflow_for_issue", return_value=None),
-            patch("orchestrator.core.runs._active_run_count_for_tenant", return_value=0),
-            patch("orchestrator.core.runs.notify_run_enqueued"),
-            patch("orchestrator.core.runs._resolve_required_runtime_kinds", return_value=["codex_cli"]),
+            patch("orchestrator.core.runs.service._active_workflow_for_issue", return_value=None),
+            patch("orchestrator.core.runs.service._active_run_count_for_tenant", return_value=0),
+            patch("orchestrator.core.runs.service.notify_run_enqueued"),
+            patch("orchestrator.core.runs.service._resolve_required_runtime_kinds", return_value=["codex_cli"]),
         ):
             result = enqueue_run(
                 session,
@@ -196,10 +196,10 @@ class CoreRunsEdgeTests(unittest.TestCase):
         bootstrap_plan = snapshot.dump()
 
         with (
-            patch("orchestrator.core.runs._active_workflow_for_issue", return_value=None),
-            patch("orchestrator.core.runs._active_run_count_for_tenant", return_value=0),
-            patch("orchestrator.core.runs.notify_run_enqueued"),
-            patch("orchestrator.core.runs._resolve_required_runtime_kinds", return_value=["codex_cli"]),
+            patch("orchestrator.core.runs.service._active_workflow_for_issue", return_value=None),
+            patch("orchestrator.core.runs.service._active_run_count_for_tenant", return_value=0),
+            patch("orchestrator.core.runs.service.notify_run_enqueued"),
+            patch("orchestrator.core.runs.service._resolve_required_runtime_kinds", return_value=["codex_cli"]),
         ):
             result = enqueue_run(
                 session,
@@ -235,9 +235,9 @@ class CoreRunsEdgeTests(unittest.TestCase):
         session = MagicMock()
 
         with (
-            patch("orchestrator.core.runs._active_workflow_for_issue", return_value=None),
-            patch("orchestrator.core.runs._active_run_count_for_tenant", return_value=0),
-            patch("orchestrator.core.runs._resolve_required_runtime_kinds", return_value=["codex_cli"]),
+            patch("orchestrator.core.runs.service._active_workflow_for_issue", return_value=None),
+            patch("orchestrator.core.runs.service._active_run_count_for_tenant", return_value=0),
+            patch("orchestrator.core.runs.service._resolve_required_runtime_kinds", return_value=["codex_cli"]),
             self.assertRaises(RunStateTransitionError),
         ):
             enqueue_run(

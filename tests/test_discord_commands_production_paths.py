@@ -24,7 +24,7 @@ from orchestrator.core.decision.types import (
 )
 from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.precheck.pre_run_check import PreRunCheckResult
-from orchestrator.core.runtime.payload_models import AskIntentPayload
+from orchestrator.core.runtime.payload_models import AskIntent
 from orchestrator.core.platform.secrets import encrypt_value
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.models import AtlassianOAuthConnection, Project, Tenant
@@ -599,7 +599,7 @@ class DiscordCommandProductionPathTests(SqliteTemplateDbTestCase):
             patch("orchestrator.api.discord.commands.ask.build_runtime_for_selector", return_value=runtime),
             patch(
                 "orchestrator.api.discord.commands.ask.plan_discord_ask_intent_with_runtime",
-                return_value=AskIntentPayload(mode="answer", summary="Scoped answer", command=None),
+                return_value=AskIntent(mode="answer", summary="Scoped answer", command=None),
             ),
             patch("orchestrator.api.discord.ask.context.tenant_atlassian_oauth_context", return_value=fake_oauth),
             patch("orchestrator.api.discord.ask.context._refresh_atlassian_connection_tokens", return_value="access-token"),

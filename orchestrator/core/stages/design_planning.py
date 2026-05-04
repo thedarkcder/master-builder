@@ -9,7 +9,7 @@ from orchestrator.core.runtime.agent_runtime_resolver import build_runtime_for_s
 from orchestrator.core.runtime.runtime import CodexRuntimeError
 from orchestrator.core.pm.plugin_catalog import plugin_catalog_payload, tool_catalog_payload
 from orchestrator.core.prompt_templates import render_prompt
-from orchestrator.core.runtime.payload_models import DesignPlanningPayload
+from orchestrator.core.runtime.payload_models import DesignPlanning
 from orchestrator.core.runtime.invocation import AgentInvocationContext, invoke_runtime_json
 
 
@@ -28,7 +28,7 @@ def invoke_stage_design_planning_llm(
     stage_artifacts: dict[str, Any],
     stage_open_questions: list[str],
     stage_tool_outputs: list[dict[str, Any]],
-) -> DesignPlanningPayload:
+) -> DesignPlanning:
     runtime = build_runtime_for_selector(
         session=session,
         settings=settings,
@@ -64,6 +64,6 @@ def invoke_stage_design_planning_llm(
         ),
     )
     try:
-        return DesignPlanningPayload.from_payload(payload)
+        return DesignPlanning.from_payload(payload)
     except RuntimeError as exc:
         raise CodexRuntimeError(str(exc)) from exc

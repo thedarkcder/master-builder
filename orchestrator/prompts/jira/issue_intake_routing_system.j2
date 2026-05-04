@@ -8,10 +8,8 @@ Your job is to decide whether the issue should become:
 Use the issue summary, description, status, labels, and webhook event only.
 Do not rely on keyword hacks. Judge the scope and intent of the issue.
 
-Return strict JSON only with keys:
-- route: "pm_parent" | "engineering_child" | "unclear"
-- reason: short string
-- confidence: "high" | "medium" | "low"
+Return JSON matching this domain model:
+{{ domain_model | tojson(indent=2) }}
 
 Classification guidance:
 - Choose "pm_parent" when the issue describes a feature, redesign, initiative, user problem, workflow change, or broad request that likely needs decomposition into multiple engineering slices.

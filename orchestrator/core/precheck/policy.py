@@ -9,7 +9,7 @@ from orchestrator.core.config import get_settings
 from orchestrator.core.decision.gate import DecisionGateResult
 from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.prompt_templates import render_prompt
-from orchestrator.core.runtime.payload_models import PrecheckPolicyPayload
+from orchestrator.core.runtime.payload_models import PrecheckPolicy
 
 
 @dataclass(frozen=True)
@@ -57,7 +57,7 @@ def evaluate_precheck_policy(
     except CodexRuntimeError as exc:
         raise RuntimeError(f"Codex precheck policy evaluation failed: {exc}") from exc
 
-    parsed_payload = PrecheckPolicyPayload.from_payload(payload)
+    parsed_payload = PrecheckPolicy.from_payload(payload)
 
     decision_gate = DecisionGateResult(
         triggered=parsed_payload.decision_gate_triggered,

@@ -13,7 +13,7 @@ from orchestrator.core.runtime.agents import _invoke_discord_json_maybe_tools
 from orchestrator.core.runtime.invocation import AgentInvocationContext
 from orchestrator.core.runtime.runtime import CodexRuntime, CodexRuntimeError
 from orchestrator.core.prompt_templates import render_prompt
-from orchestrator.core.runtime.payload_models import PMInterviewPlanPayload
+from orchestrator.core.runtime.payload_models import PMInterviewPlan
 from orchestrator.core.runtime.stage_session import RuntimeStageSession
 from orchestrator.storage.models import PMInterviewCase
 
@@ -842,12 +842,12 @@ def plan_pm_interview_with_runtime(
         max_tool_hops=10,
     )
     try:
-        parsed_payload = PMInterviewPlanPayload.from_payload(payload)
+        parsed_payload = PMInterviewPlan.from_payload(payload)
     except RuntimeError as exc:
         raise CodexRuntimeError(str(exc)) from exc
 
     normalized_payload = parsed_payload.to_payload()
-    normalized_payload["brief"] = normalize_pm_interview_brief(parsed_payload.brief).to_payload()
+    normalized_payload["brief"] = normalize_pm_interview_brief(parsed_payload.brief.to_payload()).to_payload()
     normalized_payload["missing_slots"] = list(missing_slots)
     normalized_payload["evidence"] = normalized_evidence
     return normalized_payload

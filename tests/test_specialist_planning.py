@@ -19,6 +19,9 @@ from orchestrator.core.planning.specialist import (
     build_runtime_seed_planning_package,
     run_specialist_planning_fanout,
 )
+from orchestrator.core.planning.specialist.models import PLANNING_STAGES
+from orchestrator.core.prompt_domain_models import prompt_domain_model_for_template
+from orchestrator.core.prompt_templates import render_prompt
 
 
 def _technical_decision(decision_id: str = "decision-1") -> dict[str, object]:
@@ -186,10 +189,12 @@ class SpecialistPlanningTests(unittest.TestCase):
         self.assertTrue(prompts)
         first_prompt_name, first_prompt_context = prompts[0]
         self.assertEqual(first_prompt_name, "workflow/pm_planning_architect_system.j2")
-        self.assertEqual(first_prompt_context, {})
+        self.assertIn("domain_model", first_prompt_context)
+        self.assertEqual(first_prompt_context["domain_model"]["name"], "ArchitectStageOutput")
         user_prompt_name, user_prompt_context = prompts[1]
         self.assertEqual(user_prompt_name, "workflow/pm_planning_architect_user.j2")
         self.assertEqual(user_prompt_context["parent_issue_key"], "PM-42")
+        self.assertEqual(user_prompt_context["domain_model"], first_prompt_context["domain_model"])
         self.assertIn("Let users share the app with friends", user_prompt_context["product_brief_json"])
 
     def test_pm_decision_requests_block_planning_but_still_run_all_stages(self) -> None:
@@ -248,44 +253,58 @@ class SpecialistPlanningTests(unittest.TestCase):
         from pathlib import Path
 
         prompts_dir = Path(__file__).resolve().parents[1] / "orchestrator" / "prompts" / "workflow"
-        system_prompts = (
-            "pm_planning_architect_system.j2",
-            "pm_planning_security_system.j2",
-            "pm_planning_tester_system.j2",
-        )
-        user_prompts = (
-            "pm_planning_architect_user.j2",
-            "pm_planning_security_user.j2",
-            "pm_planning_tester_user.j2",
-        )
-        for prompt_name in (*system_prompts, *user_prompts):
-            prompt_text = (prompts_dir / prompt_name).read_text(encoding="utf-8")
-            self.assertIn("Return strict JSON only with keys", prompt_text)
-            self.assertIn("findings", prompt_text)
-            self.assertIn("recommendations", prompt_text)
-            self.assertIn("technical_decisions", prompt_text)
-            self.assertIn("pm_decision_requests", prompt_text)
-            self.assertIn("findings, recommendations", prompt_text)
-            self.assertIn("arrays of strings only", prompt_text)
-            self.assertNotIn("open_behavior_questions", prompt_text)
-            self.assertNotIn("internal_decisions", prompt_text)
-            self.assertNotIn("stakeholder_escalation_recommendations", prompt_text)
-            self.assertIn("acceptance_impacts", prompt_text)
-            if prompt_name in system_prompts or prompt_name in user_prompts:
+        user_context = {
+            "parent_issue_key": "PM-42",
+            "parent_summary": "Share the app with friends",
+            "parent_description": "Let users share invite links.",
+            "product_brief_json": "{}",
+            "project_keys_json": "[]",
+            "related_issues_json": "[]",
+            "status_counts_json": "{}",
+            "github_context_json": "{}",
+            "conversation_history_json": "[]",
+            "governed_tools_json": "[]",
+            "native_tools_json": "[]",
+        }
+        for stage in PLANNING_STAGES:
+            domain_model = prompt_domain_model_for_template(stage.system_prompt_template)
+            self.assertIsNotNone(domain_model)
+            system_prompt = render_prompt(stage.system_prompt_template, domain_model=domain_model)
+            user_prompt = render_prompt(
+                stage.user_prompt_template,
+                domain_model=domain_model,
+                **user_context,
+            )
+            raw_system = (prompts_dir / stage.system_prompt_template.removeprefix("workflow/")).read_text(
+                encoding="utf-8"
+            )
+            raw_user = (prompts_dir / stage.user_prompt_template.removeprefix("workflow/")).read_text(
+                encoding="utf-8"
+            )
+            self.assertIn("{{ domain_model", raw_system)
+            self.assertIn("{{ domain_model", raw_user)
+            for prompt_text in (system_prompt, user_prompt):
+                self.assertIn(str(domain_model["name"]), prompt_text)
+                self.assertIn("Return JSON matching this domain model", prompt_text)
+                self.assertIn("findings", prompt_text)
+                self.assertIn("recommendations", prompt_text)
+                self.assertIn("technical_decisions", prompt_text)
+                self.assertIn("pm_decision_requests", prompt_text)
+                self.assertNotIn("open_behavior_questions", prompt_text)
+                self.assertNotIn("internal_decisions", prompt_text)
+                self.assertNotIn("stakeholder_escalation_recommendations", prompt_text)
+                self.assertIn("acceptance_impacts", prompt_text)
                 self.assertIn("required_tasks", prompt_text)
-            if "architect" in prompt_name:
-                self.assertIn("required_tasks", prompt_text)
+            if stage.persona_id == "architect":
+                prompt_text = "\n".join((system_prompt, user_prompt))
                 self.assertIn("mermaid_diagram", prompt_text)
                 self.assertIn("child_ticket_specs", prompt_text)
-                self.assertIn("done_means must never be a single string", prompt_text)
-                self.assertIn("acceptance_criteria, how_to_test, and done_means must be non-empty arrays of strings", prompt_text)
-            if prompt_name in user_prompts:
-                self.assertIn('"type":"tool_request"', prompt_text)
-                self.assertIn('"type":"final_response"', prompt_text)
-                self.assertIn("Allowed governed tools for this stage", prompt_text)
-                self.assertIn("Native Codex tools available directly in this runtime", prompt_text)
-            else:
-                self.assertIn('When the user message includes "Allowed governed tools" and "Native Codex tools" sections', prompt_text)
+                self.assertIn("done_means", prompt_text)
+            self.assertIn('"type":"tool_request"', user_prompt)
+            self.assertIn('"type":"final_response"', user_prompt)
+            self.assertIn("Allowed governed tools for this stage", user_prompt)
+            self.assertIn("Native Codex tools available directly in this runtime", user_prompt)
+            self.assertIn('When the user message includes "Allowed governed tools" and "Native Codex tools" sections', system_prompt)
 
     def test_fanout_uses_tool_bridge_when_session_and_settings_present(self) -> None:
         request = self._request()
@@ -478,7 +497,9 @@ class SpecialistPlanningTests(unittest.TestCase):
             "engineering_planning child_ticket_specs[1] with empty done_means; expected a non-empty array of strings",
             prompts[1],
         )
-        self.assertIn("done_means must be a non-empty array of strings, not a single string", prompts[1])
+        self.assertIn("Domain model JSON", prompts[1])
+        self.assertIn("ArchitectStageOutput", prompts[1])
+        self.assertIn("done_means", prompts[1])
 
     def test_stage_preserves_multiple_pm_decision_requests_for_same_decision_set(self) -> None:
         prompts: list[str] = []
@@ -584,7 +605,9 @@ class SpecialistPlanningTests(unittest.TestCase):
         self.assertIn("Email verification boundary affects account takeover risk.", result.findings)
         self.assertEqual(security_calls, 2)
         self.assertIn("CONTRACT REPAIR REQUIRED", prompts[2])
-        self.assertIn("findings, recommendations, and acceptance_impacts as arrays of strings only", prompts[2])
+        self.assertIn("Domain model JSON", prompts[2])
+        self.assertIn("SpecialistStageOutput", prompts[2])
+        self.assertIn("findings", prompts[2])
 
     def test_architect_stage_fails_hard_when_child_ticket_spec_repair_is_still_missing_done_means(self) -> None:
         calls: list[str] = []

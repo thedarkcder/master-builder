@@ -357,7 +357,7 @@ class RunLifecycleTests(unittest.TestCase):
             observed["entry_checkpoint_id"] = staged_run.entry_checkpoint_id
 
         with self.session_factory() as session:
-            with patch("orchestrator.core.runs.notify_run_enqueued", side_effect=capture_notification):
+            with patch("orchestrator.core.runs.service.notify_run_enqueued", side_effect=capture_notification):
                 result = enqueue_run(
                     session,
                     tenant_id="tenant-runs",

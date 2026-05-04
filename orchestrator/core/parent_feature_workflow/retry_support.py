@@ -25,7 +25,6 @@ from orchestrator.core.parent_feature_workflow.dependencies import ParentFeature
 from orchestrator.core.parent_feature_workflow.operations import (
     PARENT_OP_JIRA_CHILD_FANOUT,
     PARENT_OP_JIRA_COMMENT_PROJECTION,
-    PARENT_OP_PM_DECISION_RESOLUTION,
 )
 from orchestrator.core.planning.decision_records import PlanningDecisionRecordStore
 from orchestrator.core.projects.parent_planning_clarification_service import (

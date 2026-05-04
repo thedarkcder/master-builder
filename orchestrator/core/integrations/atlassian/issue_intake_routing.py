@@ -3,7 +3,7 @@ from __future__ import annotations
 from orchestrator.core.runtime.runtime import CodexRuntime, CodexRuntimeError
 from orchestrator.core.prompt_templates import render_prompt
 from orchestrator.core.runtime.invocation import AgentInvocationContext, invoke_runtime_json
-from orchestrator.core.runtime.payload_models import JiraIssueIntakeRoutePayload
+from orchestrator.core.runtime.payload_models import JiraIssueIntakeRoute
 
 
 def classify_jira_issue_intake_with_runtime(
@@ -16,7 +16,7 @@ def classify_jira_issue_intake_with_runtime(
     issue_labels: list[str] | tuple[str, ...],
     webhook_event: str | None,
     invocation_context: AgentInvocationContext,
-) -> JiraIssueIntakeRoutePayload:
+) -> JiraIssueIntakeRoute:
     payload = invoke_runtime_json(
         runtime=runtime,
         context=invocation_context,
@@ -32,6 +32,6 @@ def classify_jira_issue_intake_with_runtime(
         ),
     )
     try:
-        return JiraIssueIntakeRoutePayload.from_payload(payload)
+        return JiraIssueIntakeRoute.from_payload(payload)
     except RuntimeError as exc:
         raise CodexRuntimeError(str(exc)) from exc

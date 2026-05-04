@@ -14,6 +14,7 @@ from orchestrator.core.planning.specialist.models import (
     SpecialistPlanningRequest,
     SpecialistPlanningStageResult,
 )
+from orchestrator.core.prompt_domain_models import prompt_domain_model_for_template
 from orchestrator.core.prompt_templates import render_prompt
 from orchestrator.core.runtime.invocation import AgentInvocationContext
 from orchestrator.core.runtime.stage_session import RuntimeStageSession
@@ -29,6 +30,7 @@ def _contract_repair_user_prompt(
     *,
     original_user_prompt: str,
     stage: PlanningStageDefinition,
+    domain_model: dict[str, object],
     contract_error: str,
     invalid_payload: dict[str, Any],
 ) -> str:
@@ -39,10 +41,7 @@ def _contract_repair_user_prompt(
             f"The previous {stage.role_label} response violated the required JSON contract.",
             f"Schema error: {contract_error}",
             "Return the full corrected JSON object only. Do not omit any required fields. Do not include markdown.",
-            "Every stage must return findings, recommendations, and acceptance_impacts as arrays of strings only. Do not put objects in those arrays. Put structured analysis in technical_decisions.",
-            "Security and QA stages must return required_tasks as an array of strings only. Architect stages must return required_tasks as an array of strings only.",
-            "Every stage must return technical_decisions and pm_decision_requests arrays. For every child_ticket_specs entry, acceptance_criteria, how_to_test, done_means, dependencies, risks, and labels must be arrays of strings. done_means must be a non-empty array of strings, not a single string.",
-            "Every pm_decision_requests entry must include request_id, question, why_it_matters, and non-empty related_decision_ids that reference existing technical_decisions.decision_id values.",
+            f"Domain model JSON: {_json_dump(domain_model)}",
             f"Previous invalid JSON: {_json_dump(invalid_payload)}",
         )
     )
@@ -53,6 +52,7 @@ def _planning_stage_user_context(
     request: SpecialistPlanningRequest,
     stage: PlanningStageDefinition,
     stage_session: RuntimeStageSession,
+    domain_model: dict[str, object],
 ) -> dict[str, object]:
     return {
         "parent_issue_key": request.parent_issue_key,
@@ -67,6 +67,7 @@ def _planning_stage_user_context(
         "stage_state": stage.planning_state,
         "persona_id": stage.persona_id,
         "role_label": stage.role_label,
+        "domain_model": domain_model,
         **stage_session.tooling.governed_native_prompt_context(),
     }
 
@@ -113,10 +114,18 @@ class SpecialistPlanningStageRunner:
             settings=settings,
             issue_key=request.parent_issue_key,
         )
-        system_prompt = render_prompt(stage.system_prompt_template)
+        domain_model = prompt_domain_model_for_template(stage.system_prompt_template)
+        if domain_model is None:
+            raise RuntimeError(f"No domain model registered for {stage.system_prompt_template}")
+        system_prompt = render_prompt(stage.system_prompt_template, domain_model=domain_model)
         user_prompt = render_prompt(
             stage.user_prompt_template,
-            **_planning_stage_user_context(request=request, stage=stage, stage_session=stage_session),
+            **_planning_stage_user_context(
+                request=request,
+                stage=stage,
+                stage_session=stage_session,
+                domain_model=domain_model,
+            ),
         )
         def _invoke() -> SpecialistPlanningStageResult:
             return self._invoke_until_contract_valid(
@@ -124,6 +133,7 @@ class SpecialistPlanningStageRunner:
                 stage=stage,
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
+                domain_model=domain_model,
             )
 
         if request.operation_id or request.attempt_id:
@@ -178,6 +188,7 @@ class SpecialistPlanningStageRunner:
         stage: PlanningStageDefinition,
         system_prompt: str,
         user_prompt: str,
+        domain_model: dict[str, object],
     ) -> SpecialistPlanningStageResult:
         contract_error: str | None = None
         last_payload: dict[str, Any] | None = None
@@ -187,6 +198,7 @@ class SpecialistPlanningStageRunner:
                 stage_user_prompt = _contract_repair_user_prompt(
                     original_user_prompt=user_prompt,
                     stage=stage,
+                    domain_model=domain_model,
                     contract_error=contract_error,
                     invalid_payload=last_payload,
                 )

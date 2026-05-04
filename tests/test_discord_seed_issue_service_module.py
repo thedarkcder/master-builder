@@ -10,7 +10,7 @@ from orchestrator.core.issue_fanout.draft_assembly import normalize_planning_pac
 from orchestrator.core.issue_fanout.service import seed_issues_with_runtime, seed_parent_issues_with_runtime
 from orchestrator.core.projects.architecture_document_service import ArchitectureDocumentGate
 from orchestrator.core.workflow.attempt_ref import WorkflowAttemptRef
-from orchestrator.core.runtime.payload_models import EngineeringSeedPlanPayload, PmParentSeedPlanPayload
+from orchestrator.core.runtime.payload_models import EngineeringSeedPlan, PmParentSeedPlan
 from orchestrator.storage.models import WorkflowExecution, WorkflowOperation, WorkflowOperationAttempt
 from orchestrator.tools.atlassian_oauth import JiraIssueCreateResult, AtlassianOAuthError
 from orchestrator.tools.atlassian_oauth_issue_service import MAX_JIRA_ADF_DOCUMENT_BYTES, _to_adf_description
@@ -105,14 +105,14 @@ def _seed_payload(*, project_key: str = "GP", parent_issue_type: str = "Story", 
     }
 
 
-def _engineering_seed_plan(*, project_key: str = "GP", parent_issue_type: str = "Story", child_count: int = 1) -> EngineeringSeedPlanPayload:
-    return EngineeringSeedPlanPayload.from_payload(
+def _engineering_seed_plan(*, project_key: str = "GP", parent_issue_type: str = "Story", child_count: int = 1) -> EngineeringSeedPlan:
+    return EngineeringSeedPlan.from_payload(
         _seed_payload(project_key=project_key, parent_issue_type=parent_issue_type, child_count=child_count)
     )
 
 
-def _pm_parent_seed_plan(*, project_key: str = "GP", parent_issue_type: str = "Story") -> PmParentSeedPlanPayload:
-    return PmParentSeedPlanPayload.from_payload(
+def _pm_parent_seed_plan(*, project_key: str = "GP", parent_issue_type: str = "Story") -> PmParentSeedPlan:
+    return PmParentSeedPlan.from_payload(
         {
             "project_key": project_key,
             "issues": [_seed_payload(parent_issue_type=parent_issue_type)["parent_issue"]],
@@ -371,7 +371,12 @@ def test_seed_issues_passes_typed_attempt_ref_into_invocation_context() -> None:
         workflow_id="wf-123",
         run_id="run-123",
     )
-    attempt = SimpleNamespace(attempt_id="attempt-789", operation_id="op-456", attempt_number=7)
+    attempt = SimpleNamespace(
+        attempt_id="attempt-789",
+        operation_id="op-456",
+        attempt_number=7,
+        status="completed",
+    )
     session = MagicMock()
     session.get.side_effect = lambda model, _identity: {
         WorkflowOperation: operation,
@@ -651,7 +656,7 @@ def test_seed_issues_writes_explicit_epic_parent_issue_type_for_initiative_scope
         tenant_project_keys_fn=lambda **_kwargs: ["GP"],
         get_settings_fn=lambda: SimpleNamespace(),
         build_runtime_fn=lambda **_kwargs: object(),
-        plan_seed_issues_with_runtime_fn=lambda **_kwargs: EngineeringSeedPlanPayload.from_payload(payload),
+        plan_seed_issues_with_runtime_fn=lambda **_kwargs: EngineeringSeedPlan.from_payload(payload),
         codex_runtime_error_type=RuntimeError,
         build_seed_issue_description_fn=lambda **_kwargs: {},
         issue_key_pattern=__import__("re").compile(r"^[A-Z]+-\d+$"),
@@ -1053,7 +1058,7 @@ def test_seed_issues_blocks_child_fanout_when_architecture_document_is_still_dra
             tenant_project_keys_fn=lambda **_kwargs: ["GP"],
             get_settings_fn=lambda: SimpleNamespace(),
             build_runtime_fn=lambda **_kwargs: object(),
-            plan_seed_issues_with_runtime_fn=lambda **_kwargs: EngineeringSeedPlanPayload.from_payload(payload),
+            plan_seed_issues_with_runtime_fn=lambda **_kwargs: EngineeringSeedPlan.from_payload(payload),
             codex_runtime_error_type=RuntimeError,
             build_seed_issue_description_fn=lambda **_kwargs: {},
             issue_key_pattern=__import__("re").compile(r"^[A-Z]+-\d+$"),

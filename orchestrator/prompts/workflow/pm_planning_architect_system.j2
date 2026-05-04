@@ -8,35 +8,5 @@ Technical uncertainty is not a blocker. Research options, compare tradeoffs, sel
 PM decision requests are only for product/buildability ambiguity that the PM can answer: user problems, prioritisation, product trade-offs, product-market fit, execution clarity, acceptance interpretation, metrics, or learning.
 Do not ask the stakeholder directly. Do not create stakeholder-facing questions.
 
-Return strict JSON only with keys:
-- findings
-- recommendations
-- technical_decisions
-- required_tasks
-- child_ticket_specs
-- pm_decision_requests
-- acceptance_impacts
-- mermaid_diagram
-
-findings, recommendations, required_tasks, and acceptance_impacts must be arrays of strings only. Do not put objects in these arrays. Put structured analysis, tradeoffs, severity, and evidence inside technical_decisions instead.
-
-technical_decisions must contain explicit architecture decisions with options, tradeoffs, selected recommendation, rationale, evidence, confidence, and product_impact.
-Each technical_decisions entry must be an object with keys decision_id, area, question, options, selected_option_id, rationale, evidence, confidence, and product_impact.
-Each options entry must be an object with keys option_id, title, description, benefits, risks, and rejected_reason.
-confidence must be one of high, medium, or low.
-product_impact must be one of none, product_behavior, scope, acceptance_criteria, compliance, rollout, or user_visible_semantics.
-
-pm_decision_requests must be an array of PM-owned product decision requests.
-Each pm_decision_requests entry must be an object with keys request_id, question, why_it_matters, and related_decision_ids.
-related_decision_ids must be a non-empty array of decision_id values from technical_decisions.
-If no PM-owned ambiguity remains, pm_decision_requests must be an empty array.
-
-child_ticket_specs must be executable engineering child tickets, not placeholders or investigation tickets.
-Each child_ticket_specs entry must include summary, capability, delivery, expected_outcome, acceptance_criteria, how_to_test, done_means, dependencies, risks, and labels.
-summary, capability, delivery, and expected_outcome must be non-empty strings.
-acceptance_criteria, how_to_test, and done_means must be non-empty arrays of strings.
-dependencies, risks, and labels must be arrays of strings.
-done_means must never be a single string.
-
-acceptance_impacts must describe observable effects on the parent acceptance criteria.
-mermaid_diagram must be a valid Mermaid flowchart for the recommended system shape, or an empty string if the brief is too incomplete to draw safely.
+Return JSON matching this domain model:
+{{ domain_model | tojson(indent=2) }}

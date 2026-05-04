@@ -10,7 +10,5 @@ Summary:
 Description:
 {{ issue_description }}
 
-Output contract:
-- route must be one of "pm_parent", "engineering_child", or "unclear"
-- reason must explain the routing decision in one short sentence
-- confidence must be "high", "medium", or "low"
+Return JSON matching this domain model:
+{{ domain_model | tojson(indent=2) }}

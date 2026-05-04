@@ -5,9 +5,9 @@ from orchestrator.core.parent_feature_workflow.planning import ParentFeaturePlan
 from orchestrator.core.projects.parent_planning_clarification_service import ClarificationPublishEffects, ParentPlanningClarificationService
 from orchestrator.core.projects.parent_planning_fanout_service import ParentPlanningFanoutService
 from orchestrator.core.runtime.payload_models import (
-    PMDecisionRequestPayload,
-    PMDecisionResolutionPayload,
-    StakeholderEscalationPayload,
+    PMDecisionRequest,
+    PMDecisionResolution,
+    StakeholderEscalation,
 )
 from orchestrator.core.workflow.execution_projection import (
     WorkflowExecutionReference,
@@ -135,7 +135,7 @@ class ParentFeaturePlanningWorkflowTests(SqliteTemplateDbTestCase):
                         SimpleNamespace(
                             planning_state="planning_needs_clarification",
                             pm_decision_requests=(
-                                PMDecisionRequestPayload(
+                                PMDecisionRequest(
                                     request_id="pm-audit-window",
                                     question="What audit window should customers see?",
                                     why_it_matters="The answer changes product commitments.",
@@ -151,7 +151,7 @@ class ParentFeaturePlanningWorkflowTests(SqliteTemplateDbTestCase):
                 SimpleNamespace(
                     resolved_decisions=(),
                     stakeholder_escalations=(
-                        StakeholderEscalationPayload(
+                        StakeholderEscalation(
                             escalation_id="stakeholder-audit-window",
                             question="What audit window should customers see?",
                             why_it_matters="The answer changes product commitments.",
@@ -343,7 +343,7 @@ class ParentFeaturePlanningWorkflowTests(SqliteTemplateDbTestCase):
                         SimpleNamespace(
                             planning_state="planning_needs_clarification",
                             pm_decision_requests=(
-                                PMDecisionRequestPayload(
+                                PMDecisionRequest(
                                     request_id="pm-email-verification",
                                     question="What counts as verified email for acceptance?",
                                     why_it_matters="The PM owns acceptance semantics.",
@@ -366,7 +366,7 @@ class ParentFeaturePlanningWorkflowTests(SqliteTemplateDbTestCase):
             planner.pm_resolutions.append(
                 SimpleNamespace(
                     resolved_decisions=(
-                        PMDecisionResolutionPayload(
+                        PMDecisionResolution(
                             request_id="pm-email-verification",
                             answer="Use in-product email verification before security-sensitive matching.",
                             rationale="This is acceptance interpretation, not a stakeholder business decision.",

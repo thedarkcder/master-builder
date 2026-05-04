@@ -3,23 +3,39 @@ from __future__ import annotations
 import pytest
 
 from orchestrator.core.runtime.payload_models import (
-    ArchitectStageOutputPayload,
-    ChildTicketSpecPayload,
-    DecisionPlannerPayload,
-    DesignPlanningPayload,
-    EngineeringSeedPlanPayload,
+    ArchitectStageOutput,
+    ChildTicketSpec,
+    DecisionPlanner,
+    DesignPlanning,
+    EngineeringSeedPlan,
     PlannerGateStatus,
-    PmParentSeedPlanPayload,
-    PMDecisionRequestPayload,
-    PMDecisionResolutionSetPayload,
-    PMInterviewPlanPayload,
-    RuntimeMessageBriefPayload,
-    RuntimeMessagePayload,
-    PrecheckMessagePayload,
-    PrecheckPolicyPayload,
-    StakeholderEscalationPayload,
-    TechnicalDecisionPayload,
+    PmParentSeedPlan,
+    PMDecisionRequest,
+    PMDecisionResolutionSet,
+    PMInterviewPlan,
+    RuntimeMessageBrief,
+    RuntimeMessage,
+    PrecheckMessage,
+    PrecheckPolicy,
+    StakeholderEscalation,
+    TechnicalDecision,
 )
+
+
+def _pm_brief_payload() -> dict[str, object]:
+    return {
+        "objective": "Improve reliability",
+        "user_value": "Operators trust failed work recovery.",
+        "acceptance_criteria": ["Retries are visible."],
+        "scope_in": ["Workflow retry visibility"],
+        "scope_out": [],
+        "constraints": [],
+        "risks": [],
+        "success_outcomes": ["Fewer stuck executions"],
+        "recommendation": "Proceed with bounded retry evidence.",
+        "open_questions": [],
+        "next_steps": [],
+    }
 
 
 def _technical_decision_payload() -> dict[str, object]:
@@ -54,7 +70,7 @@ def _technical_decision_payload() -> dict[str, object]:
 
 
 def test_precheck_policy_payload_requires_reason_and_recommendation() -> None:
-    payload = PrecheckPolicyPayload.from_payload(
+    payload = PrecheckPolicy.from_payload(
         {
             "triggered": False,
             "reason": "Decision Gate not required",
@@ -73,7 +89,7 @@ def test_precheck_policy_payload_requires_reason_and_recommendation() -> None:
 
 def test_precheck_policy_payload_rejects_invalid_gtd_without_questions() -> None:
     with pytest.raises(RuntimeError, match="invalid GTD result"):
-        PrecheckPolicyPayload.from_payload(
+        PrecheckPolicy.from_payload(
             {
                 "triggered": False,
                 "reason": "Decision Gate not required",
@@ -89,7 +105,7 @@ def test_precheck_policy_payload_rejects_invalid_gtd_without_questions() -> None
 
 
 def test_decision_planner_payload_normalizes_questions_and_states() -> None:
-    payload = DecisionPlannerPayload.from_payload(
+    payload = DecisionPlanner.from_payload(
         {
             "gate_status": "blocked_decision_gate",
             "reason": "Need owner decision",
@@ -109,7 +125,7 @@ def test_decision_planner_payload_normalizes_questions_and_states() -> None:
 
 def test_decision_planner_payload_rejects_invalid_question_status() -> None:
     with pytest.raises(RuntimeError, match="Decision planner question has invalid status"):
-        DecisionPlannerPayload.from_payload(
+        DecisionPlanner.from_payload(
             {
                 "gate_status": "blocked_decision_gate",
                 "reason": "Need owner decision",
@@ -126,7 +142,7 @@ def test_decision_planner_payload_rejects_invalid_question_status() -> None:
 
 def test_decision_planner_payload_rejects_non_object_question() -> None:
     with pytest.raises(RuntimeError, match="Decision planner questions\\[1\\] must be an object"):
-        DecisionPlannerPayload.from_payload(
+        DecisionPlanner.from_payload(
             {
                 "gate_status": "blocked_decision_gate",
                 "reason": "Need owner decision",
@@ -141,7 +157,7 @@ def test_decision_planner_payload_rejects_non_object_question() -> None:
 
 def test_precheck_policy_payload_rejects_invalid_missing_sections_type() -> None:
     with pytest.raises(RuntimeError, match="missing_sections has invalid list"):
-        PrecheckPolicyPayload.from_payload(
+        PrecheckPolicy.from_payload(
             {
                 "triggered": False,
                 "reason": "Decision Gate not required",
@@ -158,7 +174,7 @@ def test_precheck_policy_payload_rejects_invalid_missing_sections_type() -> None
 
 def test_precheck_message_payload_rejects_invalid_classification() -> None:
     with pytest.raises(RuntimeError, match="invalid classification"):
-        PrecheckMessagePayload.from_payload(
+        PrecheckMessage.from_payload(
             {
                 "message": "Need clarification",
                 "questions": [],
@@ -169,7 +185,7 @@ def test_precheck_message_payload_rejects_invalid_classification() -> None:
 
 def test_precheck_message_payload_rejects_invalid_questions_type() -> None:
     with pytest.raises(RuntimeError, match="Precheck message payload questions has invalid list"):
-        PrecheckMessagePayload.from_payload(
+        PrecheckMessage.from_payload(
             {
                 "message": "Need clarification",
                 "questions": "none",
@@ -183,7 +199,7 @@ def test_child_ticket_spec_payload_requires_done_means() -> None:
         RuntimeError,
         match="engineering_planning child_ticket_specs\\[1\\] with empty done_means; expected a non-empty array of strings",
     ):
-        ChildTicketSpecPayload.from_payload(
+        ChildTicketSpec.from_payload(
             planning_state="engineering_planning",
             issue_index=1,
             raw_value={
@@ -200,7 +216,7 @@ def test_child_ticket_spec_payload_requires_done_means() -> None:
 
 def test_child_ticket_spec_payload_rejects_invalid_optional_lists() -> None:
     with pytest.raises(RuntimeError, match="Child ticket spec payload has invalid dependencies"):
-        ChildTicketSpecPayload.from_payload(
+        ChildTicketSpec.from_payload(
             planning_state="engineering_planning",
             issue_index=1,
             raw_value={
@@ -218,7 +234,7 @@ def test_child_ticket_spec_payload_rejects_invalid_optional_lists() -> None:
 
 def test_architect_stage_output_payload_rejects_missing_child_ticket_specs() -> None:
     with pytest.raises(RuntimeError, match="engineering_planning missing child_ticket_specs"):
-        ArchitectStageOutputPayload.from_payload(
+        ArchitectStageOutput.from_payload(
             planning_state="engineering_planning",
             persona_id="architect",
             role_label="Architect",
@@ -234,7 +250,7 @@ def test_architect_stage_output_payload_rejects_missing_child_ticket_specs() -> 
 
 
 def test_technical_decision_payload_round_trips_selected_recommendation() -> None:
-    payload = TechnicalDecisionPayload.from_payload(
+    payload = TechnicalDecision.from_payload(
         _technical_decision_payload(),
         context="engineering_planning technical_decisions[1]",
     )
@@ -250,14 +266,14 @@ def test_technical_decision_payload_rejects_unknown_selected_option() -> None:
     raw_payload["selected_option_id"] = "missing"
 
     with pytest.raises(RuntimeError, match="selected_option_id does not match"):
-        TechnicalDecisionPayload.from_payload(
+        TechnicalDecision.from_payload(
             raw_payload,
             context="engineering_planning technical_decisions[1]",
         )
 
 
 def test_pm_decision_request_payload_requires_related_decision_ids() -> None:
-    request = PMDecisionRequestPayload.from_payload(
+    request = PMDecisionRequest.from_payload(
         {
             "request_id": "pm-decision-1",
             "question": "Should customers see this as an acceptance promise?",
@@ -273,7 +289,7 @@ def test_pm_decision_request_payload_requires_related_decision_ids() -> None:
 
 def test_pm_decision_request_payload_rejects_empty_related_decision_ids() -> None:
     with pytest.raises(RuntimeError, match="missing related_decision_ids"):
-        PMDecisionRequestPayload.from_payload(
+        PMDecisionRequest.from_payload(
             {
                 "request_id": "pm-decision-1",
                 "question": "Should customers see this as an acceptance promise?",
@@ -286,7 +302,7 @@ def test_pm_decision_request_payload_rejects_empty_related_decision_ids() -> Non
 
 def test_stage_payload_rejects_pm_decision_request_unknown_decision_id() -> None:
     with pytest.raises(RuntimeError, match="references unknown related_decision_ids missing-decision"):
-        ArchitectStageOutputPayload.from_payload(
+        ArchitectStageOutput.from_payload(
             planning_state="engineering_planning",
             persona_id="architect",
             role_label="Architect",
@@ -311,7 +327,7 @@ def test_stage_payload_rejects_pm_decision_request_unknown_decision_id() -> None
 
 
 def test_stage_payload_keeps_multiple_pm_decision_requests_for_same_decision_set() -> None:
-    payload = ArchitectStageOutputPayload.from_payload(
+    payload = ArchitectStageOutput.from_payload(
         planning_state="engineering_planning",
         persona_id="architect",
         role_label="Architect",
@@ -347,7 +363,7 @@ def test_stage_payload_keeps_multiple_pm_decision_requests_for_same_decision_set
 
 
 def test_stakeholder_escalation_payload_converts_to_clarification_question() -> None:
-    escalation = StakeholderEscalationPayload.from_payload(
+    escalation = StakeholderEscalation.from_payload(
         {
             "escalation_id": "stakeholder-1",
             "question": "Does this create a regulated compliance promise?",
@@ -365,7 +381,7 @@ def test_stakeholder_escalation_payload_converts_to_clarification_question() -> 
 
 def test_pm_decision_resolution_set_rejects_unknown_request_ids() -> None:
     with pytest.raises(RuntimeError, match="references unknown request_id"):
-        PMDecisionResolutionSetPayload.from_payload(
+        PMDecisionResolutionSet.from_payload(
             {
                 "resolved_decisions": [],
                 "stakeholder_escalations": [
@@ -386,7 +402,7 @@ def test_pm_decision_resolution_set_rejects_unknown_request_ids() -> None:
 
 def test_design_planning_payload_rejects_malformed_tool_call() -> None:
     with pytest.raises(RuntimeError, match="Design planning payload has invalid tool_calls item"):
-        DesignPlanningPayload.from_payload(
+        DesignPlanning.from_payload(
             {
                 "selected_plugin_id": "design",
                 "decision_state": "pending",
@@ -400,7 +416,7 @@ def test_design_planning_payload_rejects_malformed_tool_call() -> None:
 
 def test_engineering_seed_plan_payload_rejects_child_missing_done_means() -> None:
     with pytest.raises(RuntimeError, match="Issue seeding engineering_children\\[1\\] missing done_means"):
-        EngineeringSeedPlanPayload.from_payload(
+        EngineeringSeedPlan.from_payload(
             {
                 "project_key": "TP",
                 "parent_issue": {
@@ -440,7 +456,7 @@ def test_engineering_seed_plan_payload_rejects_child_missing_done_means() -> Non
 
 def test_pm_parent_seed_plan_payload_rejects_issue_missing_scope_in() -> None:
     with pytest.raises(RuntimeError, match="PM parent seeding issues\\[1\\] missing scope_in"):
-        PmParentSeedPlanPayload.from_payload(
+        PmParentSeedPlan.from_payload(
             {
                 "project_key": "TP",
                 "issues": [
@@ -467,37 +483,41 @@ def test_pm_parent_seed_plan_payload_rejects_issue_missing_scope_in() -> None:
 
 def test_pm_interview_plan_payload_rejects_incomplete_without_next_question() -> None:
     with pytest.raises(RuntimeError, match="PM interview payload missing next_question for incomplete brief"):
-        PMInterviewPlanPayload.from_payload(
-            {
-                "message": "Need more detail.",
-                "brief": {"objective": "Improve reliability"},
-                "status": "question_pending",
-                "ready_to_write": False,
-            }
-        )
+        PMInterviewPlan.from_payload(
+                {
+                    "message": "Need more detail.",
+                    "brief": _pm_brief_payload(),
+                    "status": "question_pending",
+                    "missing_slots": ["user_value"],
+                    "ready_to_write": False,
+                    "evidence": [],
+                }
+            )
 
 
 def test_pm_interview_plan_payload_rejects_string_next_question() -> None:
     with pytest.raises(RuntimeError, match="PM interview next_question must be an object"):
-        PMInterviewPlanPayload.from_payload(
-            {
-                "message": "Need more detail.",
-                "brief": {"objective": "Improve reliability"},
-                "status": "question_pending",
-                "ready_to_write": False,
-                "next_question": "What outcome should this deliver?",
-            }
-        )
+        PMInterviewPlan.from_payload(
+                {
+                    "message": "Need more detail.",
+                    "brief": _pm_brief_payload(),
+                    "status": "question_pending",
+                    "missing_slots": ["user_value"],
+                    "ready_to_write": False,
+                    "evidence": [],
+                    "next_question": "What outcome should this deliver?",
+                }
+            )
 
 
 def test_runtime_message_payload_rejects_missing_message() -> None:
     with pytest.raises(RuntimeError, match="Ask answer payload missing message"):
-        RuntimeMessagePayload.from_payload({}, context="Ask answer payload")
+        RuntimeMessage.from_payload({}, context="Ask answer payload")
 
 
 def test_runtime_message_brief_payload_requires_brief_object() -> None:
     with pytest.raises(RuntimeError, match="Voice room persona payload missing brief"):
-        RuntimeMessageBriefPayload.from_payload(
+        RuntimeMessageBrief.from_payload(
             {"message": "The main risk is attachment churn."},
             context="Voice room persona payload",
         )

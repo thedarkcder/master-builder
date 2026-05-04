@@ -3,6 +3,7 @@ import os
 import unittest
 from collections import Counter
 from datetime import datetime, timezone
+from base64 import urlsafe_b64encode
 import importlib.util
 from tempfile import TemporaryDirectory
 from pathlib import Path
@@ -1831,7 +1832,7 @@ class MigrationTests(unittest.TestCase):
 
     def test_project_secret_migration_moves_existing_refs_to_project_managed_secrets(self) -> None:
         previous_key = os.environ.get("ORCHESTRATOR_SECRETS_ENCRYPTION_KEY")
-        encryption_key = "REMOVED_PRIVATE_CREDENTIAL"
+        encryption_key = urlsafe_b64encode(b"0123456789abcdef0123456789abcdef").decode("ascii")
         try:
             os.environ["ORCHESTRATOR_SECRETS_ENCRYPTION_KEY"] = encryption_key
             get_settings.cache_clear()

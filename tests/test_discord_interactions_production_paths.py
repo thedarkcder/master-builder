@@ -16,7 +16,7 @@ from fastapi.testclient import TestClient
 from orchestrator.api.main import create_app
 from orchestrator.core.config import get_settings
 from orchestrator.core.platform.secret_service import platform_secret_service
-from orchestrator.core.runtime.payload_models import AskIntentPayload
+from orchestrator.core.runtime.payload_models import AskIntent
 from orchestrator.core.platform.secrets import encrypt_value
 from orchestrator.core.worker.webhook_job_service import process_next_webhook_job
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
@@ -327,7 +327,7 @@ class DiscordInteractionsProductionPathTests(unittest.TestCase):
             ),
             patch(
                 "orchestrator.api.discord.commands.ask.plan_discord_ask_intent_with_runtime",
-                return_value=AskIntentPayload(mode="answer", summary="Board answer", command=None),
+                return_value=AskIntent(mode="answer", summary="Board answer", command=None),
             ),
             patch(
                 "orchestrator.api.discord.commands.ask.answer_board_question_with_runtime",
