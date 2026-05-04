@@ -7,15 +7,14 @@ import pytest
 from sqlalchemy import select
 
 from orchestrator.api.webhooks.jira_application import JiraWebhookPlan
-from orchestrator.core.clarification.questions import ClarificationQuestion
 from orchestrator.core.issue_fanout.description import build_parent_feature_description
 from orchestrator.core.pm.followup_context_service import FOLLOWUP_CONTEXT_PM_INTERVIEW, upsert_followup_context
 from orchestrator.core.pm.interview_service import PM_INTERVIEW_STATUS_QUESTION_PENDING
 from orchestrator.core.projects.parent_feature_brief_store import persist_parent_feature_brief_snapshot
 from orchestrator.core.runtime.payload_models import (
-    JiraIssueIntakeRoutePayload,
-    PMDecisionRequestPayload,
-    StakeholderEscalationPayload,
+    JiraIssueIntakeRoute,
+    PMDecisionRequest,
+    StakeholderEscalation,
 )
 from orchestrator.core.workflow.execution_projection import (
     WorkflowExecutionReference,
@@ -292,7 +291,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
             patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_atlassian_oauth_context", return_value=oauth_context),
             patch(
                 "orchestrator.api.webhooks.jira_application.classify_jira_issue_intake_with_runtime",
-                return_value=JiraIssueIntakeRoutePayload(
+                return_value=JiraIssueIntakeRoute(
                     route="pm_parent",
                     reason="Needs PM breakdown",
                     confidence="high",
@@ -360,6 +359,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                             },
                         ),
                     ),
+                    to_payload=lambda: {"planning_state": "planning_completed"},
                 ),
             ),
             patch(
@@ -425,7 +425,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
             patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_atlassian_oauth_context", return_value=oauth_context),
             patch(
                 "orchestrator.api.webhooks.jira_application.classify_jira_issue_intake_with_runtime",
-                return_value=JiraIssueIntakeRoutePayload(
+                return_value=JiraIssueIntakeRoute(
                     route="engineering_child",
                     reason="Already implementation scoped",
                     confidence="high",
@@ -518,7 +518,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
             patch("orchestrator.core.worker.webhook_job_service.tenant_atlassian_oauth_context", return_value=oauth_context),
             patch(
                 "orchestrator.api.webhooks.jira_application.classify_jira_issue_intake_with_runtime",
-                return_value=JiraIssueIntakeRoutePayload(
+                return_value=JiraIssueIntakeRoute(
                     route="pm_parent",
                     reason="Needs PM breakdown",
                     confidence="high",
@@ -592,7 +592,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
             ),
             patch(
                 "orchestrator.api.webhooks.jira_application.classify_jira_issue_intake_with_runtime",
-                return_value=JiraIssueIntakeRoutePayload(
+                return_value=JiraIssueIntakeRoute(
                     route="pm_parent",
                     reason="Still a parent feature in backlog",
                     confidence="high",
@@ -660,6 +660,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                             },
                         ),
                     ),
+                    to_payload=lambda: {"planning_state": "planning_completed"},
                 ),
             ),
             patch(
@@ -1266,6 +1267,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                             },
                         ),
                     ),
+                    to_payload=lambda: {"planning_state": "planning_completed"},
                 ),
             ),
             patch(
@@ -1411,6 +1413,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                     architecture_summary=(),
                     architecture_diagram=None,
                     stages=(),
+                    to_payload=lambda: {"planning_state": "planning_completed"},
                 ),
             ) as planning_mock,
             patch(
@@ -1839,13 +1842,13 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                     acceptance_impacts=(),
                     technical_decisions=(),
                     pm_decision_requests=(
-                        PMDecisionRequestPayload(
+                        PMDecisionRequest(
                             request_id="pm-broken-link-behavior",
                             question="What is the required user-visible behavior when a broken identity link is detected for a still-active sensitive session?",
                             why_it_matters="This defines the recovery and assurance contract.",
                             related_decision_ids=("broken-link-behavior",),
                         ),
-                        PMDecisionRequestPayload(
+                        PMDecisionRequest(
                             request_id="pm-auth-rate-limit",
                             question="What cooldown or rate-limit behavior should users see on repeated auth-initiation attempts?",
                             why_it_matters="This defines a user-visible abuse-control behavior.",
@@ -1855,6 +1858,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                     architecture_summary=(),
                     architecture_diagram="",
                     stages=(),
+                    to_payload=lambda: {"planning_state": "planning_needs_clarification"},
                 ),
             ),
             patch(
@@ -1878,7 +1882,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                 return_value=SimpleNamespace(
                     resolved_decisions=(),
                     stakeholder_escalations=(
-                        StakeholderEscalationPayload(
+                        StakeholderEscalation(
                             escalation_id="stakeholder-auth-behavior",
                             question="What is the required user-visible behavior when a broken identity link is detected for a still-active sensitive session?",
                             why_it_matters="This defines the recovery and assurance contract.",
@@ -2012,6 +2016,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                     architecture_summary=(),
                     architecture_diagram="",
                     stages=(),
+                    to_payload=lambda: {"planning_state": "planning_completed"},
                 ),
             ),
             patch(

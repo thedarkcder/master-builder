@@ -6,7 +6,7 @@ from orchestrator.core.issue_fanout.description import (
     build_engineering_child_description,
     build_parent_feature_description,
 )
-from orchestrator.core.runtime.payload_models import TechnicalDecisionPayload
+from orchestrator.core.runtime.payload_models import TechnicalDecision
 from orchestrator.tools.atlassian_oauth_issue_service import (
     MAX_JIRA_ADF_DOCUMENT_BYTES,
     _to_adf_description,
@@ -38,8 +38,8 @@ def _flatten_text(value: object) -> str:
     return ""
 
 
-def _technical_decision() -> TechnicalDecisionPayload:
-    return TechnicalDecisionPayload.from_payload(
+def _technical_decision() -> TechnicalDecision:
+    return TechnicalDecision.from_payload(
         {
             "decision_id": "auth-boundary",
             "area": "security",

@@ -4,14 +4,5 @@ Jira issue types available for create by project key: {{ project_issue_types_jso
 Markdown brief:
 {{ prompt_markdown }}
 
-Output contract:
-- issues must stay feature or behavior based and non-technical.
-- project_key must be one of allowed_project_keys.
-- Every issue_type must exactly match one issue type listed for the selected project in "Jira issue types available for create by project key".
-- Choose the best available issue_type for the selected project. Use Epic only for initiative-scale work.
-- scope_in and scope_out must be concrete and non-overlapping.
-- acceptance_criteria must describe externally visible behavior, not implementation.
-- ui_references should mention design references or clearly state when none are needed.
-- labels should be short normalized tokens when present.
-- questions must be stakeholder-safe and non-technical.
-- when reseeding existing work, set issue_key if explicitly known from source context.
+Return JSON matching this domain model:
+{{ domain_model | tojson(indent=2) }}

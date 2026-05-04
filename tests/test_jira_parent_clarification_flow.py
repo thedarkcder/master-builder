@@ -8,9 +8,9 @@ from sqlalchemy import select
 from orchestrator.core.runtime.runtime import CodexRuntimeError
 from orchestrator.core.clarification.projection_service import clarification_state_fingerprint
 from orchestrator.core.runtime.payload_models import (
-    EngineeringClarificationPayload,
-    PMDecisionRequestPayload,
-    StakeholderEscalationPayload,
+    EngineeringClarification,
+    PMDecisionRequest,
+    StakeholderEscalation,
 )
 from orchestrator.core.workflow.advance import execute_workflow_advance
 from orchestrator.core.workflow.execution_projection import (
@@ -159,7 +159,7 @@ class JiraParentClarificationFlowTests(JiraWebhookHarness):
             patch("orchestrator.api.webhooks.jira_parent_child_sync.build_runtime_for_selector", return_value=object()),
             patch(
                 "orchestrator.api.webhooks.jira_parent_child_sync.classify_engineering_clarification_with_runtime",
-                return_value=EngineeringClarificationPayload(
+                return_value=EngineeringClarification(
                     classification="product_behavior",
                     stakeholder_question="When checkout retry succeeds after a recovery, what should the customer see?",
                     child_block_note="Need a PM decision on the customer-facing outcome.",
@@ -1618,7 +1618,7 @@ class JiraParentClarificationFlowTests(JiraWebhookHarness):
                     SimpleNamespace(
                         planning_state="planning_blocked",
                         pm_decision_requests=(
-                            PMDecisionRequestPayload(
+                            PMDecisionRequest(
                                 request_id="pm-entry-point",
                                 question="Where should the user start this flow?",
                                 why_it_matters="The answer changes the user-visible entry point.",
@@ -1634,7 +1634,7 @@ class JiraParentClarificationFlowTests(JiraWebhookHarness):
                 return_value=SimpleNamespace(
                     resolved_decisions=(),
                     stakeholder_escalations=(
-                        StakeholderEscalationPayload(
+                        StakeholderEscalation(
                             escalation_id="stakeholder-entry-point",
                             question="Where should the user start this flow?",
                             why_it_matters="The answer changes the user-visible entry point.",

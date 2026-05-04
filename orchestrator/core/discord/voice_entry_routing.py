@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from orchestrator.core.runtime.agent_runtime_resolver import build_runtime_for_selector
 from orchestrator.core.runtime.agents import route_voice_entry_with_runtime
 from orchestrator.core.runtime.invocation import AgentInvocationContext
-from orchestrator.core.runtime.payload_models import VoiceEntryRoutePayload
+from orchestrator.core.runtime.payload_models import VoiceEntryRoute
 from orchestrator.core.runtime.runtime import CodexRuntimeError
 from orchestrator.core.config import Settings
 from orchestrator.storage.models import Tenant
@@ -27,7 +27,7 @@ def route_discord_voice_entry(
     entry_source: str,
     history: list[dict[str, Any]] | None = None,
     room_context: dict[str, Any] | None = None,
-) -> VoiceEntryRoutePayload:
+) -> VoiceEntryRoute:
     """LLM router for voice note / live voice entry; returns lane, persona, confidence, reason."""
     runtime = build_runtime_for_selector(
         session=session,

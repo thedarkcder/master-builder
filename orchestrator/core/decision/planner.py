@@ -6,7 +6,7 @@ import json
 from orchestrator.core.runtime.invocation import AgentInvocationContext
 from orchestrator.core.runtime.runtime import CodexRuntimeError, build_codex_runtime
 from orchestrator.core.prompt_templates import render_prompt
-from orchestrator.core.runtime.payload_models import DecisionPlannerPayload, PlannerGateStatus
+from orchestrator.core.runtime.payload_models import DecisionPlanner, PlannerGateStatus
 from orchestrator.core.runtime.stage_session import RuntimeStageSession
 from orchestrator.storage.models import DecisionCase, DecisionCycle, Project, Tenant
 
@@ -92,7 +92,7 @@ def plan_decision_questions(
     except CodexRuntimeError as exc:
         raise RuntimeError(f"Decision planner failed: {exc}") from exc
 
-    parsed_payload = DecisionPlannerPayload.from_payload(payload, classification=classification)
+    parsed_payload = DecisionPlanner.from_payload(payload, classification=classification)
     return DecisionPlannerResult(
         gate_status=parsed_payload.gate_status,
         reason=parsed_payload.reason,

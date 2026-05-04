@@ -6,10 +6,10 @@ from uuid import uuid4
 from sqlalchemy.orm import Session
 
 from orchestrator.core.runtime.payload_models import (
-    PMDecisionRequestPayload,
-    PMDecisionResolutionPayload,
-    StakeholderEscalationPayload,
-    TechnicalDecisionPayload,
+    PMDecisionRequest,
+    PMDecisionResolution,
+    StakeholderEscalation,
+    TechnicalDecision,
 )
 from orchestrator.storage.models import PlanningDecisionRecord
 
@@ -33,7 +33,7 @@ class PlanningDecisionRecordStore:
         source_attempt_id: str | None,
         parent_issue_key: str,
         source_stage: str | None,
-        decisions: tuple[TechnicalDecisionPayload, ...],
+        decisions: tuple[TechnicalDecision, ...],
     ) -> None:
         for decision in decisions:
             self._upsert(
@@ -60,7 +60,7 @@ class PlanningDecisionRecordStore:
         source_attempt_id: str | None,
         parent_issue_key: str,
         source_stage: str | None,
-        requests: tuple[PMDecisionRequestPayload, ...],
+        requests: tuple[PMDecisionRequest, ...],
     ) -> None:
         for request in requests:
             self._upsert(
@@ -86,7 +86,7 @@ class PlanningDecisionRecordStore:
         source_operation_id: str | None,
         source_attempt_id: str | None,
         parent_issue_key: str,
-        resolutions: tuple[PMDecisionResolutionPayload, ...],
+        resolutions: tuple[PMDecisionResolution, ...],
     ) -> None:
         for resolution in resolutions:
             self._upsert(
@@ -112,7 +112,7 @@ class PlanningDecisionRecordStore:
         source_operation_id: str | None,
         source_attempt_id: str | None,
         parent_issue_key: str,
-        escalations: tuple[StakeholderEscalationPayload, ...],
+        escalations: tuple[StakeholderEscalation, ...],
     ) -> None:
         for escalation in escalations:
             self._upsert(

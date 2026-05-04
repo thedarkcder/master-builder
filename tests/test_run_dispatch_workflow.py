@@ -82,6 +82,9 @@ def _deps(**overrides) -> RunDispatchWorkflowDeps:
             promote_run_to_running_fn=MagicMock(),
             workflow_request_for_run_fn=MagicMock(),
             fail_guardrail_violation_fn=MagicMock(),
+            ensure_project_repository_checkout_fn=MagicMock(),
+            fail_project_repository_checkout_fn=MagicMock(),
+            fail_project_repository_setup_fn=MagicMock(),
             finalize_cancelled_run_fn=MagicMock(),
             finalize_workflow_result_fn=MagicMock(),
             persist_stage_checkpoint_fn=MagicMock(),
@@ -140,6 +143,9 @@ class RunDispatchWorkflowTests(unittest.TestCase):
                 promote_run_to_running_fn=MagicMock(return_value=None),
                 workflow_request_for_run_fn=MagicMock(),
                 fail_guardrail_violation_fn=fail_guardrail_violation_fn,
+                ensure_project_repository_checkout_fn=MagicMock(),
+                fail_project_repository_checkout_fn=MagicMock(),
+                fail_project_repository_setup_fn=MagicMock(),
                 finalize_cancelled_run_fn=MagicMock(),
                 finalize_workflow_result_fn=MagicMock(),
                 persist_stage_checkpoint_fn=MagicMock(),
@@ -162,10 +168,15 @@ class RunDispatchWorkflowTests(unittest.TestCase):
             deps=deps,
         ).execute(
             selection=SimpleNamespace(
-                run=run,
-                tenant=tenant,
-                project=project,
-                effective_policy={"allow_jira_transitions": True},
+                claimed_run=SimpleNamespace(
+                    run=run,
+                    tenant=tenant,
+                    project=project,
+                    effective_policy={"allow_jira_transitions": True},
+                    run_id=run.run_id,
+                    claim_id=run.claim_id,
+                    worker_service_instance_id=run.worker_service_instance_id,
+                ),
                 terminal_run=None,
             ),
         )
@@ -175,6 +186,8 @@ class RunDispatchWorkflowTests(unittest.TestCase):
             session,
             run=run,
             error="Claimed run could not transition from dispatching to running",
+            expected_worker_service_instance_id="node-a:1234",
+            expected_claim_id="claim-1",
         )
 
     def test_execute_promotes_before_request_build(self) -> None:
@@ -235,6 +248,9 @@ class RunDispatchWorkflowTests(unittest.TestCase):
                     )
                 ),
                 fail_guardrail_violation_fn=MagicMock(),
+                ensure_project_repository_checkout_fn=MagicMock(),
+                fail_project_repository_checkout_fn=MagicMock(),
+                fail_project_repository_setup_fn=MagicMock(),
                 finalize_cancelled_run_fn=MagicMock(),
                 finalize_workflow_result_fn=MagicMock(
                     return_value=SimpleNamespace(
@@ -277,10 +293,14 @@ class RunDispatchWorkflowTests(unittest.TestCase):
             deps=deps,
         ).execute(
             selection=SimpleNamespace(
-                run=run,
-                tenant=tenant,
-                project=None,
-                effective_policy={"allow_jira_transitions": False},
+                claimed_run=SimpleNamespace(
+                    run=run,
+                    tenant=tenant,
+                    project=None,
+                    effective_policy={"allow_jira_transitions": False},
+                    worker_service_instance_id=run.worker_service_instance_id,
+                    claim_id=run.claim_id,
+                ),
                 terminal_run=None,
             ),
         )

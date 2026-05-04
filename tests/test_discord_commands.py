@@ -7,7 +7,7 @@ from fastapi import HTTPException
 from orchestrator.api.discord.ingress.executor import execute_discord_command
 from orchestrator.api.discord.shared.state import store_seed_followup_context
 from orchestrator.api.schemas import DiscordCommandRequest
-from orchestrator.core.runtime.payload_models import AskIntentPayload
+from orchestrator.core.runtime.payload_models import AskIntent
 from orchestrator.storage.models import Tenant
 from orchestrator.tools.atlassian_oauth import JiraIssuePreview
 from tests.test_support.discord_command_api_harness import DiscordCommandApiTestHarness
@@ -37,7 +37,7 @@ class DiscordCommandApiTests(DiscordCommandApiTestHarness):
             ) as search_mock,
             patch(
                 "orchestrator.api.discord.commands.ask.plan_discord_ask_intent_with_runtime",
-                return_value=AskIntentPayload(mode="answer", summary="answer", command=None),
+                return_value=AskIntent(mode="answer", summary="answer", command=None),
             ),
             patch("orchestrator.api.discord.commands.ask.answer_board_question_with_runtime", return_value="Scoped answer"),
         ):
@@ -118,7 +118,7 @@ class DiscordCommandApiTests(DiscordCommandApiTestHarness):
             patch("orchestrator.api.discord.ingress.ask_runtime.collect_ask_context_with_history_context", side_effect=_collect_stub),
             patch(
                 "orchestrator.api.discord.commands.ask.plan_discord_ask_intent_with_runtime",
-                return_value=AskIntentPayload(mode="answer", summary="answer", command=None),
+                return_value=AskIntent(mode="answer", summary="answer", command=None),
             ),
             patch("orchestrator.api.discord.commands.ask.answer_board_question_with_runtime", return_value="Board answer"),
         ):
@@ -157,7 +157,7 @@ class DiscordCommandApiTests(DiscordCommandApiTestHarness):
             ),
             patch(
                 "orchestrator.api.discord.commands.ask.plan_discord_ask_intent_with_runtime",
-                return_value=AskIntentPayload(mode="answer", summary="answer", command=None),
+                return_value=AskIntent(mode="answer", summary="answer", command=None),
             ),
             patch(
                 "orchestrator.api.discord.commands.ask.answer_board_question_with_runtime",

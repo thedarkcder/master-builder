@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+from unittest.mock import patch
 
 from orchestrator.core.parent_feature_workflow.child_fanout_execution import (
     ChildFanoutExecutionError,
@@ -11,7 +12,7 @@ from orchestrator.core.parent_feature_workflow.child_fanout_execution import (
 )
 from orchestrator.core.projects.parent_planning_fanout_service import ParentPlanningFanoutService
 from orchestrator.core.planning.specialist import PLANNING_STATE_COMPLETED
-from orchestrator.core.runtime.payload_models import PMDecisionRequestPayload
+from orchestrator.core.runtime.payload_models import PMDecisionRequest
 from orchestrator.core.workflow.step_runner import WorkflowStepAttempt
 
 
@@ -44,6 +45,7 @@ class _AttemptAwareChildSyncGateway(_ChildSyncGateway):
 
 class _Lifecycle:
     def __init__(self) -> None:
+        self.session = object()
         self.completed = []
         self.failed = []
 
@@ -74,7 +76,7 @@ def test_parent_planning_fanout_service_returns_blocking_questions() -> None:
         planning_result=SimpleNamespace(
             planning_state="planning_needs_clarification",
             pm_decision_requests=[
-                PMDecisionRequestPayload(
+                PMDecisionRequest(
                     request_id="pm-audit-retention",
                     question="What audit retention window should v1 support?",
                     why_it_matters="The answer changes product commitments.",
@@ -118,32 +120,11 @@ def test_child_fanout_executor_uses_started_attempt_contract() -> None:
         }
     )
 
-    result = execute_child_fanout_step(
-        request=ChildFanoutExecutionInput(
-            lifecycle=lifecycle,
-            step=_step_attempt(),
-            child_sync_gateway=gateway,
-            fanout_service=ParentPlanningFanoutService(),
-            parent_detail=SimpleNamespace(key="MAB-229"),
-            project_key="MAB",
-            planning_result=SimpleNamespace(planning_state=PLANNING_STATE_COMPLETED, pm_decision_requests=()),
-            planning_package={"planning_state": PLANNING_STATE_COMPLETED},
-            completion_summary="Fanout complete.",
-        )
-    )
-
-    assert result.completed is True
-    assert gateway.seed_calls == 1
-    assert gateway.attempt_refs[0].attempt_id == "attempt-1"
-    assert lifecycle.completed[0][2] == "Fanout complete."
-
-
-def test_child_fanout_executor_fails_attempt_when_seed_contract_is_invalid() -> None:
-    lifecycle = _Lifecycle()
-    gateway = _AttemptAwareChildSyncGateway(seed_data={"requires_input": True, "questions": []})
-
-    with pytest.raises(ChildFanoutExecutionError, match="blocked but did not return clarification questions"):
-        execute_child_fanout_step(
+    with patch(
+        "orchestrator.core.parent_feature_workflow.child_fanout_execution.run_work_unit",
+        side_effect=lambda _session, **kwargs: kwargs["execute"](None),
+    ):
+        result = execute_child_fanout_step(
             request=ChildFanoutExecutionInput(
                 lifecycle=lifecycle,
                 step=_step_attempt(),
@@ -156,5 +137,34 @@ def test_child_fanout_executor_fails_attempt_when_seed_contract_is_invalid() -> 
                 completion_summary="Fanout complete.",
             )
         )
+
+    assert result.completed is True
+    assert gateway.seed_calls == 1
+    assert gateway.attempt_refs[0].attempt_id == "attempt-1"
+    assert lifecycle.completed[0][2] == "Fanout complete."
+
+
+def test_child_fanout_executor_fails_attempt_when_seed_contract_is_invalid() -> None:
+    lifecycle = _Lifecycle()
+    gateway = _AttemptAwareChildSyncGateway(seed_data={"requires_input": True, "questions": []})
+
+    with patch(
+        "orchestrator.core.parent_feature_workflow.child_fanout_execution.run_work_unit",
+        side_effect=lambda _session, **kwargs: kwargs["execute"](None),
+    ):
+        with pytest.raises(ChildFanoutExecutionError, match="blocked but did not return clarification questions"):
+            execute_child_fanout_step(
+                request=ChildFanoutExecutionInput(
+                    lifecycle=lifecycle,
+                    step=_step_attempt(),
+                    child_sync_gateway=gateway,
+                    fanout_service=ParentPlanningFanoutService(),
+                    parent_detail=SimpleNamespace(key="MAB-229"),
+                    project_key="MAB",
+                    planning_result=SimpleNamespace(planning_state=PLANNING_STATE_COMPLETED, pm_decision_requests=()),
+                    planning_package={"planning_state": PLANNING_STATE_COMPLETED},
+                    completion_summary="Fanout complete.",
+                )
+            )
 
     assert lifecycle.failed[0][2] == "contract_violation"

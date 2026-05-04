@@ -11,18 +11,5 @@ GitHub context: {{ github_context_json }}
 Recent conversation context: {{ history_json }}
 Issues (sample): {{ issues_json }}
 
-Output contract:
-- `status` must be one of: drafting, question_pending, researching, ready_to_write, pm_completed, abandoned.
-- Use `status="question_pending"` when asking another question.
-- Use `status="ready_to_write"` when the brief is complete from this turn and ready for Jira writing.
-- Do not use unlisted status words such as complete, completed, done, ready, or needs_clarification.
-- `next_question` must be null when `ready_to_write=true`.
-- When `ready_to_write=false`, `next_question` must be an object: {"slot_key": "...", "question": "...", "examples": ["...", "..."]}.
-- Do not return `next_question` as a plain string.
-- Ask one question only when information is missing.
-- Include examples directly under the question.
-- Prefer the smallest missing product decision first.
-- Reuse evidence, files, links, or discovered product context before asking again.
-- Keep the response product-first and parent-feature oriented.
-- Do not include implementation details or child-ticket planning.
-- Return the updated brief in JSON form.
+Return JSON matching this domain model:
+{{ domain_model | tojson(indent=2) }}

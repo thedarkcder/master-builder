@@ -14,13 +14,13 @@ from orchestrator.core.runtime.runtime import CodexRuntime, CodexRuntimeError
 from orchestrator.core.discord.personas import get_voice_room_persona_definition
 from orchestrator.core.prompt_templates import render_prompt
 from orchestrator.core.runtime.payload_models import (
-    AskIntentPayload,
-    EngineeringClarificationPayload,
-    EngineeringSeedPlanPayload,
-    PmParentSeedPlanPayload,
-    RuntimeMessageBriefPayload,
-    RuntimeMessagePayload,
-    VoiceEntryRoutePayload,
+    AskIntent,
+    EngineeringClarification,
+    EngineeringSeedPlan,
+    PMMessageBrief,
+    PmParentSeedPlan,
+    RuntimeMessage,
+    VoiceEntryRoute,
 )
 from orchestrator.core.runtime.stage_session import (
     RuntimeStageSession,
@@ -605,7 +605,7 @@ def answer_board_question_with_runtime(
         max_tool_hops=8,
     )
     try:
-        return RuntimeMessagePayload.from_payload(payload, context="Ask answer payload").message
+        return RuntimeMessage.from_payload(payload, context="Ask answer payload").message
     except RuntimeError as exc:
         raise CodexRuntimeError(str(exc)) from exc
 
@@ -643,7 +643,7 @@ def answer_pm_question_with_runtime(
         ),
     )
     try:
-        return RuntimeMessageBriefPayload.from_payload(payload, context="PM answer payload").to_payload()
+        return PMMessageBrief.from_payload(payload, context="PM answer payload").to_payload()
     except RuntimeError as exc:
         raise CodexRuntimeError(str(exc)) from exc
 
@@ -659,7 +659,7 @@ def classify_engineering_clarification_with_runtime(
     child_description: str,
     question: str,
     invocation_context: AgentInvocationContext,
-) -> EngineeringClarificationPayload:
+) -> EngineeringClarification:
     payload = invoke_runtime_json(
         runtime=runtime,
         context=invocation_context,
@@ -676,7 +676,7 @@ def classify_engineering_clarification_with_runtime(
         ),
     )
     try:
-        return EngineeringClarificationPayload.from_payload(payload)
+        return EngineeringClarification.from_payload(payload)
     except RuntimeError as exc:
         raise CodexRuntimeError(str(exc)) from exc
 
@@ -691,7 +691,7 @@ def route_voice_entry_with_runtime(
     room_context: dict | None = None,
     sqlalchemy_session: Session | None = None,
     settings: Any | None = None,
-) -> VoiceEntryRoutePayload:
+) -> VoiceEntryRoute:
     """Route voice transcript to ask vs interview (strict JSON from agent runtime)."""
     normalized_history = history if isinstance(history, list) else []
     user_prompt = render_prompt(
@@ -712,7 +712,7 @@ def route_voice_entry_with_runtime(
         max_tool_hops=6,
     )
     try:
-        return VoiceEntryRoutePayload.from_payload(payload)
+        return VoiceEntryRoute.from_payload(payload)
     except RuntimeError as exc:
         raise CodexRuntimeError(str(exc)) from exc
 
@@ -768,7 +768,7 @@ def answer_voice_room_persona_with_runtime(
         max_tool_hops=6,
     )
     try:
-        return RuntimeMessageBriefPayload.from_payload(payload, context="Voice room persona payload").to_payload()
+        return PMMessageBrief.from_payload(payload, context="Voice room persona payload").to_payload()
     except RuntimeError as exc:
         raise CodexRuntimeError(str(exc)) from exc
 
@@ -783,7 +783,7 @@ def plan_discord_ask_intent_with_runtime(
     invocation_context: AgentInvocationContext,
     history: list[dict] | None = None,
     github_context: dict | None = None,
-) -> AskIntentPayload:
+) -> AskIntent:
     normalized_history: list[dict] = []
     normalized_github_context = github_context or {}
     payload = invoke_runtime_json(
@@ -801,7 +801,7 @@ def plan_discord_ask_intent_with_runtime(
         ),
     )
     try:
-        return AskIntentPayload.from_payload(payload)
+        return AskIntent.from_payload(payload)
     except RuntimeError as exc:
         raise CodexRuntimeError(str(exc)) from exc
 
@@ -813,7 +813,7 @@ def plan_seed_issues_with_runtime(
     allowed_project_keys: list[str],
     project_issue_types_by_key: dict[str, list[str]],
     invocation_context: AgentInvocationContext,
-) -> EngineeringSeedPlanPayload:
+) -> EngineeringSeedPlan:
     payload = invoke_runtime_json(
         runtime=runtime,
         context=invocation_context,
@@ -826,7 +826,7 @@ def plan_seed_issues_with_runtime(
         ),
     )
     try:
-        return EngineeringSeedPlanPayload.from_payload(payload)
+        return EngineeringSeedPlan.from_payload(payload)
     except RuntimeError as exc:
         raise CodexRuntimeError(str(exc)) from exc
 
@@ -838,7 +838,7 @@ def plan_pm_parent_issues_with_runtime(
     allowed_project_keys: list[str],
     project_issue_types_by_key: dict[str, list[str]],
     invocation_context: AgentInvocationContext,
-) -> PmParentSeedPlanPayload:
+) -> PmParentSeedPlan:
     payload = invoke_runtime_json(
         runtime=runtime,
         context=invocation_context,
@@ -851,6 +851,6 @@ def plan_pm_parent_issues_with_runtime(
         ),
     )
     try:
-        return PmParentSeedPlanPayload.from_payload(payload)
+        return PmParentSeedPlan.from_payload(payload)
     except RuntimeError as exc:
         raise CodexRuntimeError(str(exc)) from exc

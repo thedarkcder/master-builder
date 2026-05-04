@@ -17,6 +17,7 @@ from sqlalchemy.exc import OperationalError as SQLAlchemyOperationalError
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import WorkerRuntimeState
+from orchestrator.core.worker import run_dispatch as run_dispatch_module
 from orchestrator.core.worker.queue_selector import QueueClaimabilityProbe, QueueClaimabilityReason
 from tests.workflow_test_support import add_workflow_attempt
 
@@ -352,7 +353,7 @@ class WorkerTests(unittest.TestCase):
             session,
             run_id="run-123",
             terminal_status="failed",
-            last_error=worker_module._CHILD_DISPATCH_STUCK_ERROR,
+            last_error=run_dispatch_module.CHILD_DISPATCH_STUCK_ERROR,
             expected_worker_service_instance_id="node-a:1234",
             expected_claim_id="claim-123",
         )
@@ -570,7 +571,7 @@ class WorkerTests(unittest.TestCase):
                 worker_module,
                 "_claim_next_run_once",
                 side_effect=[
-                    worker_module.ClaimedRunDispatch(
+                    run_dispatch_module.ClaimedRunDispatch(
                         run_id="run-1",
                         claim_id="claim-1",
                         worker_service_instance_id="node-a:1234",
@@ -778,7 +779,7 @@ class WorkerTests(unittest.TestCase):
                 worker_module,
                 "_claim_next_run_once",
                 side_effect=[
-                    worker_module.ClaimedRunDispatch(
+                    run_dispatch_module.ClaimedRunDispatch(
                         run_id="run-claimed",
                         claim_id="claim-claimed",
                         worker_service_instance_id="node-a:1234",
@@ -908,7 +909,7 @@ class WorkerTests(unittest.TestCase):
                 "_claim_next_run_once",
                 side_effect=[
                     recovery_error,
-                    worker_module.ClaimedRunDispatch(
+                    run_dispatch_module.ClaimedRunDispatch(
                         run_id="run-claimed",
                         claim_id="claim-claimed",
                         worker_service_instance_id="node-a:1234",
@@ -1233,7 +1234,7 @@ class WorkerTests(unittest.TestCase):
                 worker_module,
                 "_claim_next_run_once",
                 side_effect=[
-                    worker_module.ClaimedRunDispatch(
+                    run_dispatch_module.ClaimedRunDispatch(
                         run_id="run-claimed",
                         claim_id="claim-claimed",
                         worker_service_instance_id="node-a:1234",
@@ -1444,7 +1445,7 @@ class WorkerTests(unittest.TestCase):
                 worker_module,
                 "_claim_next_run_once",
                 side_effect=[
-                    worker_module.ClaimedRunDispatch(
+                    run_dispatch_module.ClaimedRunDispatch(
                         run_id="run-1",
                         claim_id="claim-1",
                         worker_service_instance_id="node-a:1234",
@@ -1544,7 +1545,7 @@ class WorkerTests(unittest.TestCase):
                 worker_module,
                 "_claim_next_run_once",
                 side_effect=[
-                    worker_module.ClaimedRunDispatch(
+                    run_dispatch_module.ClaimedRunDispatch(
                         run_id="run-1",
                         claim_id="claim-1",
                         worker_service_instance_id="node-a:1234",
@@ -1665,14 +1666,14 @@ class WorkerTests(unittest.TestCase):
                 worker_module,
                 "_claim_next_run_once",
                 side_effect=[
-                    worker_module.ClaimedRunDispatch(
+                    run_dispatch_module.ClaimedRunDispatch(
                         run_id="run-1",
                         claim_id="claim-1",
                         worker_service_instance_id="node-a:1234",
                         tenant_id="tenant-1",
                         issue_key="GP-1",
                     ),
-                    worker_module.ClaimedRunDispatch(
+                    run_dispatch_module.ClaimedRunDispatch(
                         run_id="run-2",
                         claim_id="claim-2",
                         worker_service_instance_id="node-a:1234",
@@ -1778,14 +1779,14 @@ class WorkerTests(unittest.TestCase):
                 worker_module,
                 "_claim_next_run_once",
                 side_effect=[
-                    worker_module.ClaimedRunDispatch(
+                    run_dispatch_module.ClaimedRunDispatch(
                         run_id="run-1",
                         claim_id="claim-1",
                         worker_service_instance_id="node-a:1234",
                         tenant_id="tenant-1",
                         issue_key="GP-1",
                     ),
-                    worker_module.ClaimedRunDispatch(
+                    run_dispatch_module.ClaimedRunDispatch(
                         run_id="run-2",
                         claim_id="claim-2",
                         worker_service_instance_id="node-a:1234",
@@ -1881,7 +1882,7 @@ class WorkerTests(unittest.TestCase):
             patch.object(
                 worker_module,
                 "_claim_next_run_once",
-                return_value=worker_module.ClaimedRunDispatch(
+                return_value=run_dispatch_module.ClaimedRunDispatch(
                     run_id="run-1",
                     claim_id="claim-1",
                     worker_service_instance_id="node-a:1234",

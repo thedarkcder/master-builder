@@ -10,13 +10,13 @@ from orchestrator.core.planning.specialist.constants import (
     PLANNING_STATE_TEST,
 )
 from orchestrator.core.runtime.payload_models import (
-    ArchitectStageOutputPayload,
-    ChildTicketSpecPayload,
-    PMDecisionRequestPayload,
-    PlanningStageOutputPayload,
-    SecurityStageOutputPayload,
-    TechnicalDecisionPayload,
-    TestingStageOutputPayload,
+    ArchitectStageOutput,
+    ChildTicketSpec,
+    PMDecisionRequest,
+    PlanningStageOutput,
+    SecurityStageOutput,
+    TechnicalDecision,
+    TestingStageOutput,
 )
 
 
@@ -45,15 +45,21 @@ class SpecialistPlanningRequest:
     work_unit_keys_by_stage: dict[str, str] = field(default_factory=dict)
 
 
-ChildTicketSpec = ChildTicketSpecPayload
-PMDecisionRequest = PMDecisionRequestPayload
-TechnicalDecision = TechnicalDecisionPayload
-PlanningStageOutput = PlanningStageOutputPayload
-ArchitectStageOutput = ArchitectStageOutputPayload
-SecurityStageOutput = SecurityStageOutputPayload
-TestingStageOutput = TestingStageOutputPayload
+SpecialistPlanningStageResult = ArchitectStageOutput | SecurityStageOutput | TestingStageOutput
 
-SpecialistPlanningStageResult = ArchitectStageOutputPayload | SecurityStageOutputPayload | TestingStageOutputPayload
+__all__ = [
+    "ArchitectStageOutput",
+    "ChildTicketSpec",
+    "PlanningStageOutput",
+    "PMDecisionRequest",
+    "RetryableSpecialistPlanningContractError",
+    "SecurityStageOutput",
+    "SpecialistPlanningRequest",
+    "SpecialistPlanningResult",
+    "SpecialistPlanningStageResult",
+    "TechnicalDecision",
+    "TestingStageOutput",
+]
 
 
 @dataclass(frozen=True)

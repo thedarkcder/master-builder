@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from orchestrator.core.runtime.payload_models import TechnicalDecisionPayload
+from orchestrator.core.runtime.payload_models import TechnicalDecision
 
 _ELLIPSIS = "..."
 
@@ -93,7 +93,7 @@ def _bullet_list(items: list[str]) -> dict:
     }
 
 
-def _technical_decision_lines(technical_decisions: list[TechnicalDecisionPayload] | None) -> list[str]:
+def _technical_decision_lines(technical_decisions: list[TechnicalDecision] | None) -> list[str]:
     lines: list[str] = []
     for decision in technical_decisions or []:
         selected_option = next(
@@ -240,7 +240,7 @@ def build_engineering_child_description(
     done_means: list[str],
     dependencies_and_risks: list[str],
     specialist_summary: list[str] | None = None,
-    technical_decisions: list[TechnicalDecisionPayload] | None = None,
+    technical_decisions: list[TechnicalDecision] | None = None,
     planning_state: str | None = None,
 ) -> dict:
     bounded_delivery = (

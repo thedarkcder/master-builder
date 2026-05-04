@@ -431,12 +431,6 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 path="/api/admin/workflow-types/issue_execution?tenant_id=route25",
                 auth=admin,
             ),
-            ("PUT", "/api/admin/workflow-types/{workflow_type_key}"): RouteScenario(
-                path="/api/admin/workflow-types/issue_execution",
-                auth=admin,
-                json={"orchestration_backend": "legacy", "retry_policy": {}},
-                expected_statuses=(200, 404, 422),
-            ),
             ("GET", "/api/admin/workflows/{execution_id}"): RouteScenario(
                 path="/api/admin/workflows/workflow-e2e",
                 auth=admin,
@@ -520,6 +514,12 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 path="/api/admin/workflows/workflow-e2e/operations/op-missing/retry",
                 auth=admin,
                 expected_statuses=(400, 404, 409),
+            ),
+            ("POST", "/api/admin/workflows/{execution_id}/operations/{operation_id}/restart"): RouteScenario(
+                path="/api/admin/workflows/workflow-e2e/operations/op-missing/restart",
+                auth=admin,
+                json={"restart_reason": "Smoke test restart request"},
+                expected_statuses=(404, 409),
             ),
             ("POST", "/api/admin/runs/{run_id}/cancel"): RouteScenario(
                 path="/api/admin/runs/run-e2e/cancel",

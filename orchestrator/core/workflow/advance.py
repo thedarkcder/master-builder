@@ -131,6 +131,10 @@ class DurableWorkflowLifecycle:
     def workflow_type(self):
         return self._workflow_type
 
+    @property
+    def session(self) -> Session:
+        return self._session
+
     def _ensure_projection(self) -> WorkflowExecutionProjection:
         if self._projection is None:
             self._projection = ensure_workflow_execution(

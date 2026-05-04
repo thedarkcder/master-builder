@@ -7,7 +7,7 @@ from unittest.mock import patch
 import pytest
 
 from orchestrator.runtime.issue_fanout import build_seed_issue_description, seed_issues_with_runtime
-from orchestrator.core.runtime.payload_models import EngineeringSeedPlanPayload, PmParentSeedPlanPayload
+from orchestrator.core.runtime.payload_models import EngineeringSeedPlan, PmParentSeedPlan
 from orchestrator.storage.models import AtlassianOAuthConnection, Tenant
 from orchestrator.tools.atlassian_oauth import JiraIssueCreateResult, JiraIssuePreview
 from tests.test_support.discord_command_api_harness import DiscordCommandApiTestHarness
@@ -52,7 +52,7 @@ class DiscordSeedCommandFlowTests(DiscordCommandApiTestHarness):
             patch("orchestrator.runtime.issue_fanout.build_issue_seed_runtime", return_value=object()),
             patch(
                 "orchestrator.runtime.issue_fanout.plan_pm_parent_issues_with_runtime",
-                return_value=PmParentSeedPlanPayload.from_payload(
+                return_value=PmParentSeedPlan.from_payload(
                     {
                         "project_key": "TP",
                         "issues": [
@@ -185,7 +185,7 @@ class DiscordSeedCommandFlowTests(DiscordCommandApiTestHarness):
             patch("orchestrator.runtime.issue_fanout.build_issue_seed_runtime", return_value=object()),
             patch(
                 "orchestrator.runtime.issue_fanout.plan_seed_issues_with_runtime",
-                return_value=EngineeringSeedPlanPayload.from_payload(
+                return_value=EngineeringSeedPlan.from_payload(
                     {
                         "project_key": "TP",
                         "parent_issue": {
@@ -370,7 +370,7 @@ class DiscordSeedCommandFlowTests(DiscordCommandApiTestHarness):
             patch("orchestrator.runtime.issue_fanout.build_issue_seed_runtime", return_value=object()),
             patch(
                 "orchestrator.runtime.issue_fanout.plan_seed_issues_with_runtime",
-                return_value=EngineeringSeedPlanPayload.from_payload(
+                return_value=EngineeringSeedPlan.from_payload(
                     {
                         "project_key": "TP",
                         "parent_issue": {

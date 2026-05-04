@@ -1708,12 +1708,12 @@ class AdminApiTests(AdminApiTestHarness):
         jira_adapter.assert_not_called()
         body = response.json()
         links = body["links"]
-        operation_types = [item["operation_type"] for item in body["operations"]]
+        operation_statuses = {item["operation_type"]: item["status"] for item in body["operations"]}
         self.assertTrue(any(link["kind"] == "jira_issue" and link["ref"] == "MAB-215" for link in links))
         self.assertFalse(any(link["kind"] == "child_issue" for link in links))
         self.assertEqual(
-            operation_types,
-            [
+            set(operation_statuses),
+            {
                 "brief_normalization",
                 "backlog_planning",
                 "discord_followup_projection",
@@ -1722,10 +1722,11 @@ class AdminApiTests(AdminApiTestHarness):
                 "jira_comment_projection",
                 "jira_parent_update",
                 "notification_emit",
-            ],
+                "pm_decision_resolution",
+            },
         )
-        self.assertEqual(body["operations"][5]["status"], "pending")
-        self.assertEqual(body["operations"][6]["status"], "pending")
+        self.assertEqual(operation_statuses["jira_comment_projection"], "pending")
+        self.assertEqual(operation_statuses["jira_parent_update"], "pending")
         self.assertEqual(body["failure_reason"], 'Failed to seed Jira issues: Jira API request failed (400): {"errorMessages":["CONTENT_LIMIT_EXCEEDED"],"errors":{}}')
 
     def test_retry_workflow_operation_returns_refreshed_workflow(self) -> None:
@@ -2530,7 +2531,7 @@ class AdminApiTests(AdminApiTestHarness):
             session.commit()
 
         with patch(
-            "orchestrator.api.admin.runs.use_cases.list_workflow_operation_live_events_impl",
+            "orchestrator.api.admin.workflows.use_cases.list_workflow_operation_live_events_impl",
             return_value=[
                 workflow_observability_event_to_schema(
                     {
@@ -2640,7 +2641,7 @@ class AdminApiTests(AdminApiTestHarness):
             return iter(['{"event_sequence":11719001157677308260}\n'])
 
         with patch(
-            "orchestrator.api.admin.runs.use_cases.stream_workflow_operation_live_events_ndjson_impl",
+            "orchestrator.api.admin.workflows.use_cases.stream_workflow_operation_live_events_ndjson_impl",
             side_effect=_stream_events,
         ):
             response = self.client.get(

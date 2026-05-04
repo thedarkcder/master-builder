@@ -22,6 +22,7 @@ Structured tool bridge:
 Focus on architecture and decomposition.
 Use tools/context first. Record architecture uncertainty as technical_decisions with options, tradeoffs, selected recommendation, rationale, evidence, confidence, and product impact.
 Only create pm_decision_requests for PM-owned product/buildability ambiguity. Do not create stakeholder questions.
-Return strict JSON only with keys: findings, recommendations, technical_decisions, required_tasks, child_ticket_specs, pm_decision_requests, acceptance_impacts, and mermaid_diagram.
-findings, recommendations, required_tasks, and acceptance_impacts must be arrays of strings only. Do not put objects in these arrays.
-acceptance_criteria, how_to_test, and done_means must be non-empty arrays of strings. done_means must never be a single string.
+
+Specialist output contract:
+Return JSON matching this domain model:
+{{ domain_model | tojson(indent=2) }}

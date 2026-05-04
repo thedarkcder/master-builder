@@ -14,7 +14,7 @@ from orchestrator.core.parent_feature_workflow.retry_support import (
     ParentWorkflowPlanningClarificationPublisher,
 )
 from orchestrator.core.planning.specialist import PLANNING_STATE_COMPLETED, RetryableSpecialistPlanningContractError
-from orchestrator.core.runtime.payload_models import PMDecisionRequestPayload, StakeholderEscalationPayload
+from orchestrator.core.runtime.payload_models import PMDecisionRequest, StakeholderEscalation
 from orchestrator.core.workflow.handler_composition import build_installed_workflow_handler_registry
 from orchestrator.core.workflow.operation_service import WorkflowOperationAttemptAlreadyRunningError
 from orchestrator.core.workflow.operation_retry_use_case import retry_workflow_operation_with_registered_handler
@@ -592,7 +592,7 @@ class ParentWorkflowOperationRetryTests(SqliteTemplateDbTestCase):
             planner_result = SimpleNamespace(
                 planning_state="planning_blocked",
                 pm_decision_requests=(
-                    PMDecisionRequestPayload(
+                    PMDecisionRequest(
                         request_id="pm-session-revocation",
                         question="Which broken-link reasons require immediate session revocation?",
                         why_it_matters="This changes session safety coverage.",
@@ -615,7 +615,7 @@ class ParentWorkflowOperationRetryTests(SqliteTemplateDbTestCase):
                     return_value=SimpleNamespace(
                         resolved_decisions=(),
                         stakeholder_escalations=(
-                            StakeholderEscalationPayload(
+                            StakeholderEscalation(
                                 escalation_id="stakeholder-session-revocation",
                                 question="Which broken-link reasons require immediate session revocation?",
                                 why_it_matters="This changes session safety coverage.",
@@ -996,13 +996,13 @@ class ParentWorkflowOperationRetryTests(SqliteTemplateDbTestCase):
             planner_result = SimpleNamespace(
                 planning_state="planning_blocked",
                 pm_decision_requests=(
-                    PMDecisionRequestPayload(
+                    PMDecisionRequest(
                         request_id="pm-invite-ttl",
                         question="What invitation TTL should v1 enforce for automatic expiry?",
                         why_it_matters="This changes link validity and account recovery behavior.",
                         related_decision_ids=("invite-ttl",),
                     ),
-                    PMDecisionRequestPayload(
+                    PMDecisionRequest(
                         request_id="pm-audit-retention",
                         question="What audit retention window must exports support in v1?",
                         why_it_matters="This changes export retention promises.",
@@ -1074,14 +1074,14 @@ class ParentWorkflowOperationRetryTests(SqliteTemplateDbTestCase):
                     return_value=SimpleNamespace(
                         resolved_decisions=(),
                         stakeholder_escalations=(
-                            StakeholderEscalationPayload(
+                            StakeholderEscalation(
                                 escalation_id="stakeholder-invite-ttl",
                                 question="What invitation TTL should v1 enforce for automatic expiry?",
                                 why_it_matters="This changes link validity and account recovery behavior.",
                                 business_impact_area="customer_business_impact",
                                 source_pm_decision_request_ids=("pm-invite-ttl",),
                             ),
-                            StakeholderEscalationPayload(
+                            StakeholderEscalation(
                                 escalation_id="stakeholder-audit-retention",
                                 question="What audit retention window must exports support in v1?",
                                 why_it_matters="This changes export retention promises.",

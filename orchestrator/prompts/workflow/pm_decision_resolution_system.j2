@@ -20,30 +20,5 @@ Escalate to the stakeholder only when the unresolved decision changes:
 
 Do not answer architecture, security, QA, or implementation strategy as the PM. Those belong in technical_decisions and should already have specialist recommendations. If a request is technical but present here, resolve it by accepting the specialist recommendation and explaining that it does not require stakeholder input unless it changes one of the escalation criteria above.
 
-Return strict JSON only with keys:
-- resolved_decisions
-- stakeholder_escalations
-- updated_planning_context
-
-resolved_decisions must contain one object for every PM decision request that can be answered internally:
-- request_id
-- answer
-- rationale
-- evidence
-- planning_context_delta
-
-stakeholder_escalations must contain only PM-approved external stakeholder questions:
-- escalation_id
-- question
-- why_it_matters
-- business_impact_area
-- source_pm_decision_request_ids
-
-business_impact_area must be one of:
-- business_outcome
-- risk_compliance
-- timeline_delivery
-- team_impact
-- customer_business_impact
-
-updated_planning_context must be an object. Use it to provide concise facts that specialist planning should use on the next pass.
+Return JSON matching this domain model:
+{{ domain_model | tojson(indent=2) }}

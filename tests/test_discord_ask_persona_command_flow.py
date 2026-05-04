@@ -4,7 +4,7 @@ import pytest
 
 from orchestrator.api.discord.ingress.executor import execute_discord_command
 from orchestrator.api.schemas import DiscordCommandRequest
-from orchestrator.core.runtime.payload_models import AskIntentPayload
+from orchestrator.core.runtime.payload_models import AskIntent
 from tests.test_support.discord_command_api_harness import DiscordCommandApiTestHarness
 
 
@@ -91,7 +91,7 @@ class DiscordAskPersonaCommandFlowTests(DiscordCommandApiTestHarness):
             ),
             patch(
                 "orchestrator.api.discord.commands.ask.plan_discord_ask_intent_with_runtime",
-                return_value=AskIntentPayload(mode="answer", summary="answer", command=None),
+                return_value=AskIntent(mode="answer", summary="answer", command=None),
             ),
             patch(
                 "orchestrator.api.discord.commands.ask.answer_board_question_with_runtime",
@@ -119,7 +119,7 @@ class DiscordAskPersonaCommandFlowTests(DiscordCommandApiTestHarness):
             ),
             patch(
                 "orchestrator.api.discord.commands.ask.plan_discord_ask_intent_with_runtime",
-                return_value=AskIntentPayload(mode="answer", summary="answer", command=None),
+                return_value=AskIntent(mode="answer", summary="answer", command=None),
             ),
             patch(
                 "orchestrator.api.discord.commands.ask.answer_board_question_with_runtime",

@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from orchestrator.core.pm.plugin_catalog import tool_catalog_payload
-from orchestrator.core.runtime.payload_models import PMToolCallPayload
+from orchestrator.core.runtime.payload_models import PMToolCall
 from orchestrator.tools.stitch_tool import maybe_invoke_stitch_tool_for_stage_plan
 
 
@@ -13,7 +13,7 @@ def _allowed_tool_names() -> set[str]:
 
 def execute_pm_tool_calls(
     *,
-    tool_calls: list[PMToolCallPayload],
+    tool_calls: list[PMToolCall],
     tenant_id: str,
     project_id: str | None,
 ) -> list[dict[str, Any]]:

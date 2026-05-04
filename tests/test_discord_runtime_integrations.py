@@ -28,7 +28,7 @@ from orchestrator.core.discord.gateway_listener import (
     _decision_gate_issue_for_thread,
     _project_seed_followup_thread_ids,
 )
-from orchestrator.core.runtime.payload_models import VoiceEntryRoutePayload
+from orchestrator.core.runtime.payload_models import VoiceEntryRoute
 from orchestrator.storage.models import Base, Tenant
 from orchestrator.tools.discord_api import DiscordApiError
 
@@ -729,7 +729,7 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
             patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_project_keys", return_value={}),
             patch(
                 "orchestrator.core.discord.gateway_listener.route_discord_voice_entry",
-                return_value=VoiceEntryRoutePayload(lane="interview", persona="pm", confidence=0.9, reason="test"),
+                return_value=VoiceEntryRoute(lane="interview", persona="pm", confidence=0.9, reason="test"),
             ),
             patch("orchestrator.core.discord.gateway_listener.execute_tenant_discord_command", return_value=command_response) as command_mock,
             patch("orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url", return_value="https://jira.example.com"),
@@ -770,7 +770,7 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
             patch("orchestrator.core.discord.gateway_listener.resolve_followup_context_match", return_value=_no_followup_resolution()),
             patch(
                 "orchestrator.core.discord.gateway_listener.route_discord_voice_entry",
-                return_value=VoiceEntryRoutePayload(lane="ask", persona="pm", confidence=0.9, reason="test"),
+                return_value=VoiceEntryRoute(lane="ask", persona="pm", confidence=0.9, reason="test"),
             ),
             patch("orchestrator.core.discord.gateway_listener.execute_tenant_discord_command", return_value=command_response) as command_mock,
             patch("orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url", return_value="https://jira.example.com"),
@@ -805,7 +805,7 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
             patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_project_keys", return_value={}),
             patch(
                 "orchestrator.core.discord.gateway_listener.route_discord_voice_entry",
-                return_value=VoiceEntryRoutePayload(lane="interview", persona="pm", confidence=0.9, reason="test"),
+                return_value=VoiceEntryRoute(lane="interview", persona="pm", confidence=0.9, reason="test"),
             ),
             patch("orchestrator.core.discord.gateway_listener.execute_tenant_discord_command", return_value=command_response) as command_mock,
             patch("orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url", return_value="https://jira.example.com"),
@@ -857,7 +857,7 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
             patch("orchestrator.core.discord.gateway_listener.resolve_followup_context_match", return_value=_no_followup_resolution()),
             patch(
                 "orchestrator.core.discord.gateway_listener.route_discord_voice_entry",
-                return_value=VoiceEntryRoutePayload(lane="ask", persona="pm", confidence=0.9, reason="test"),
+                return_value=VoiceEntryRoute(lane="ask", persona="pm", confidence=0.9, reason="test"),
             ),
             patch("orchestrator.core.discord.gateway_listener.execute_tenant_discord_command", return_value=command_response) as command_mock,
             patch("orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url", return_value="https://jira.example.com"),
@@ -950,7 +950,7 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
             patch("orchestrator.core.discord.gateway_listener.resolve_followup_context_match", return_value=_no_followup_resolution()),
             patch(
                 "orchestrator.core.discord.gateway_listener.route_discord_voice_entry",
-                return_value=VoiceEntryRoutePayload(lane="ask", persona="engineer", confidence=0.91, reason="router"),
+                return_value=VoiceEntryRoute(lane="ask", persona="engineer", confidence=0.91, reason="router"),
             ),
             patch("orchestrator.core.discord.gateway_listener.execute_tenant_discord_command", return_value=command_response) as command_mock,
             patch("orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url", return_value="https://jira.example.com"),
