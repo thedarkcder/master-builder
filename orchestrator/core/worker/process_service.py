@@ -5,7 +5,7 @@ from orchestrator.core.worker.run_dispatch_gateways import RunDispatchStatusConf
 from orchestrator.core.worker.run_dispatch_gateways import RunExecutionGateway
 from orchestrator.core.worker.run_dispatch_gateways import RunProjectGateway
 from orchestrator.core.worker.run_dispatch_gateways import RunStageUpdateGateway
-from orchestrator.core.worker_capabilities import resolve_worker_capability_context
+from orchestrator.core.worker.capabilities import resolve_worker_capability_context
 from orchestrator.core.worker.run_dispatch_workflow import (
     RunDispatchWorkflow,
     RunDispatchWorkflowDeps,

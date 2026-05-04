@@ -3,8 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import logging
 
-from orchestrator.core.clarification_questions import ClarificationQuestion, ClarificationQuestionSet
-from orchestrator.core.followup_context_service import upsert_followup_context
+from orchestrator.core.clarification.questions import ClarificationQuestion, ClarificationQuestionSet
+from orchestrator.core.pm.followup_context_service import upsert_followup_context
 from orchestrator.core.discord.thread_context import normalize_issue_key
 from orchestrator.tools.discord_api import DiscordApiError
 

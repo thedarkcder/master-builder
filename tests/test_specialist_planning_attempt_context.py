@@ -2,14 +2,13 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from orchestrator.core.specialist_planning import (
-    _PLANNING_STAGES,
-    SpecialistPlanningRequest,
-    _run_stage,
-)
+import pytest
+
+from orchestrator.core.planning.specialist.models import PLANNING_STAGES, SpecialistPlanningRequest
+from orchestrator.core.planning.specialist.stage_runner import SpecialistPlanningStageRunner
 
 
-def test_run_stage_preserves_attempt_id_in_invocation_context(monkeypatch) -> None:
+def test_run_stage_requires_session_for_attempt_scoped_work_unit(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
     class _FakeStageSession:
@@ -49,7 +48,7 @@ def test_run_stage_preserves_attempt_id_in_invocation_context(monkeypatch) -> No
                         "product_impact": "none",
                     }
                 ],
-                "product_escalations": [],
+                "pm_decision_requests": [],
                 "child_ticket_specs": [
                     {
                         "summary": "Build child workflow",
@@ -73,11 +72,11 @@ def test_run_stage_preserves_attempt_id_in_invocation_context(monkeypatch) -> No
         return _FakeStageSession()
 
     monkeypatch.setattr(
-        "orchestrator.core.specialist_planning.RuntimeStageSession.create",
+        "orchestrator.core.planning.specialist.stage_runner.RuntimeStageSession.create",
         _fake_create,
     )
     monkeypatch.setattr(
-        "orchestrator.core.specialist_planning.render_prompt",
+        "orchestrator.core.planning.specialist.stage_runner.render_prompt",
         lambda *_args, **_kwargs: "prompt",
     )
 
@@ -94,15 +93,15 @@ def test_run_stage_preserves_attempt_id_in_invocation_context(monkeypatch) -> No
         attempt=7,
     )
 
-    result = _run_stage(
-        session=None,
-        settings=None,
-        runtime=SimpleNamespace(),
-        runtime_for_selector=None,
-        request=request,
-        stage=_PLANNING_STAGES[0],
-    )
+    with pytest.raises(RuntimeError, match="require a database session"):
+        SpecialistPlanningStageRunner().run_stage(
+            session=None,
+            settings=None,
+            runtime=SimpleNamespace(),
+            runtime_for_selector=None,
+            request=request,
+            stage=PLANNING_STAGES[0],
+        )
 
     assert captured["attempt_id"] == "attempt-7"
     assert captured["attempt"] == 7
-    assert result.blocked is False

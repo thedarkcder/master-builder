@@ -8,14 +8,15 @@ from sqlalchemy import select
 from temporalio import activity
 
 from orchestrator.core.config import get_settings
-from orchestrator.core.run_human_input_service import _resume_workflow_from_human_input_answer_legacy
-from orchestrator.core.workflow_execution_projection import WorkflowExecutionProjection
-from orchestrator.core.workflow_step_runner import (
+from orchestrator.core.runs.human_input_service import resume_run_from_human_input_answer
+from orchestrator.core.workflow.execution_projection import WorkflowExecutionProjection
+from orchestrator.core.workflow.step_runner import (
     complete_workflow_step_attempt,
     fail_workflow_step_attempt,
     start_workflow_step_attempt,
 )
-from orchestrator.core.workflow_type_catalog import (
+from orchestrator.core.workflow.work_units import run_work_unit
+from orchestrator.core.workflow.type_catalog import (
     ISSUE_EXECUTION_STEP_HUMAN_INPUT_RESUME,
     ISSUE_EXECUTION_STEP_RUN_ATTEMPT_EXECUTION,
     get_workflow_type,
@@ -64,6 +65,30 @@ def _result_for_run(*, session, workflow_id: str, run: Run, claim_id: str | None
     )
 
 
+def _run_result_from_payload(payload: dict[str, object]) -> DevelopmentTeamRunActivityResult:
+    return DevelopmentTeamRunActivityResult(
+        workflow_id=str(payload["workflow_id"]),
+        run_id=str(payload["run_id"]),
+        status=str(payload["status"]),
+        issue_key=str(payload["issue_key"]),
+        claim_id=str(payload.get("claim_id") or "").strip() or None,
+        pending_request_id=str(payload.get("pending_request_id") or "").strip() or None,
+        last_error=str(payload.get("last_error") or "").strip() or None,
+    )
+
+
+def _run_result_to_payload(result: DevelopmentTeamRunActivityResult) -> dict[str, object]:
+    return {
+        "workflow_id": result.workflow_id,
+        "run_id": result.run_id,
+        "status": result.status,
+        "issue_key": result.issue_key,
+        "claim_id": result.claim_id,
+        "pending_request_id": result.pending_request_id,
+        "last_error": result.last_error,
+    }
+
+
 @activity.defn(name="execute_claimed_run_activity")
 def execute_claimed_run_activity(payload: DevelopmentTeamRunWorkflowInput) -> DevelopmentTeamRunActivityResult:
     settings = get_settings()
@@ -91,27 +116,47 @@ def execute_claimed_run_activity(payload: DevelopmentTeamRunWorkflowInput) -> De
         session.commit()
 
         try:
-            runner = build_workflow_runner_for_session(session=session)
-            processed = process_claimed_run(
-                session=session,
-                runner=runner,
-                settings=settings,
-                selection=SimpleNamespace(run=run, tenant=tenant, terminal_run=None),
-                **build_run_process_kwargs(
+            def _execute(_context) -> DevelopmentTeamRunActivityResult:  # noqa: ANN001
+                runner = build_workflow_runner_for_session(session=session)
+                processed = process_claimed_run(
                     session=session,
+                    runner=runner,
                     settings=settings,
-                    worker_service_instance_id=str(getattr(run, "worker_service_instance_id", "") or "").strip() or None,
-                ),
+                    selection=SimpleNamespace(run=run, tenant=tenant, terminal_run=None),
+                    **build_run_process_kwargs(
+                        session=session,
+                        settings=settings,
+                        worker_service_instance_id=str(getattr(run, "worker_service_instance_id", "") or "").strip()
+                        or None,
+                    ),
+                )
+                if processed is None:
+                    raise RuntimeError(f"Temporal run activity returned no run for workflow_id={workflow.workflow_id}")
+                return _result_for_run(session=session, workflow_id=workflow.workflow_id, run=processed)
+
+            result = run_work_unit(
+                session,
+                operation=step.operation,
+                operation_attempt=step.attempt,
+                unit_key="run_attempt_execution.runtime_invocation",
+                idempotency_key=f"run:{run.run_id}:runtime_invocation",
+                input_payload={
+                    "workflow_id": workflow.workflow_id,
+                    "run_id": run.run_id,
+                    "attempt_number": run.attempt_number,
+                    "issue_key": run.issue_key,
+                },
+                execute=_execute,
+                serialize=_run_result_to_payload,
+                deserialize=_run_result_from_payload,
             )
-            if processed is None:
-                raise RuntimeError(f"Temporal run activity returned no run for workflow_id={workflow.workflow_id}")
             complete_workflow_step_attempt(
                 lifecycle=lifecycle,
                 step=step,
-                summary=f"Run attempt {processed.run_id} finished with status {processed.status}",
+                summary=f"Run attempt {result.run_id} finished with status {result.status}",
             )
             session.commit()
-            return _result_for_run(session=session, workflow_id=workflow.workflow_id, run=processed)
+            return result
         except Exception as exc:  # noqa: BLE001
             logger.exception("temporal_run_execute_failed workflow_id=%s run_id=%s", workflow.workflow_id, run.run_id)
             fail_workflow_step_attempt(
@@ -149,49 +194,64 @@ def resume_human_input_activity(payload: HumanInputResumeInput) -> DevelopmentTe
         session.commit()
 
         try:
-            resumed_run = _resume_workflow_from_human_input_answer_legacy(
-                session=session,
-                settings=settings,
-                request=request,
-            )
-            claimed = claim_run_for_dispatch(
-                session,
-                run=resumed_run,
-                expected_status="queued",
-                worker_service_instance_id=f"temporal:{workflow.workflow_id}",
-                claim_id=uuid4().hex,
-            )
-            if claimed is None:
-                raise RuntimeError(f"Unable to claim resumed run {resumed_run.run_id} for temporal execution")
-            tenant = session.get(Tenant, claimed.tenant_id)
-            if tenant is None:
-                raise RuntimeError(f"Temporal resume activity missing tenant {claimed.tenant_id}")
-            runner = build_workflow_runner_for_session(session=session)
-            processed = process_claimed_run(
-                session=session,
-                runner=runner,
-                settings=settings,
-                selection=SimpleNamespace(run=claimed, tenant=tenant, terminal_run=None),
-                **build_run_process_kwargs(
+            def _execute(_context) -> DevelopmentTeamRunActivityResult:  # noqa: ANN001
+                resumed_run = resume_run_from_human_input_answer(
                     session=session,
                     settings=settings,
-                    worker_service_instance_id=str(getattr(claimed, "worker_service_instance_id", "") or "").strip() or None,
-                ),
+                    request=request,
+                )
+                claimed = claim_run_for_dispatch(
+                    session,
+                    run=resumed_run,
+                    expected_status="queued",
+                    worker_service_instance_id=f"temporal:{workflow.workflow_id}",
+                    claim_id=uuid4().hex,
+                )
+                if claimed is None:
+                    raise RuntimeError(f"Unable to claim resumed run {resumed_run.run_id} for temporal execution")
+                tenant = session.get(Tenant, claimed.tenant_id)
+                if tenant is None:
+                    raise RuntimeError(f"Temporal resume activity missing tenant {claimed.tenant_id}")
+                runner = build_workflow_runner_for_session(session=session)
+                processed = process_claimed_run(
+                    session=session,
+                    runner=runner,
+                    settings=settings,
+                    selection=SimpleNamespace(run=claimed, tenant=tenant, terminal_run=None),
+                    **build_run_process_kwargs(
+                        session=session,
+                        settings=settings,
+                        worker_service_instance_id=str(getattr(claimed, "worker_service_instance_id", "") or "").strip()
+                        or None,
+                    ),
+                )
+                if processed is None:
+                    raise RuntimeError(f"Temporal resume activity returned no run for workflow_id={workflow.workflow_id}")
+                return _result_for_run(
+                    session=session,
+                    workflow_id=workflow.workflow_id,
+                    run=processed,
+                    claim_id=str(getattr(claimed, "claim_id", "") or "").strip() or None,
+                )
+
+            result = run_work_unit(
+                session,
+                operation=step.operation,
+                operation_attempt=step.attempt,
+                unit_key="human_input_resume.resume",
+                idempotency_key=f"human-input-resume:{request.request_id}",
+                input_payload={"request_id": request.request_id, "workflow_id": workflow.workflow_id},
+                execute=_execute,
+                serialize=_run_result_to_payload,
+                deserialize=_run_result_from_payload,
             )
-            if processed is None:
-                raise RuntimeError(f"Temporal resume activity returned no run for workflow_id={workflow.workflow_id}")
             complete_workflow_step_attempt(
                 lifecycle=lifecycle,
                 step=step,
-                summary=f"Resumed run {processed.run_id} finished with status {processed.status}",
+                summary=f"Resumed run {result.run_id} finished with status {result.status}",
             )
             session.commit()
-            return _result_for_run(
-                session=session,
-                workflow_id=workflow.workflow_id,
-                run=processed,
-                claim_id=str(getattr(claimed, "claim_id", "") or "").strip() or None,
-            )
+            return result
         except Exception as exc:  # noqa: BLE001
             logger.exception("temporal_resume_execute_failed workflow_id=%s request_id=%s", workflow.workflow_id, request.request_id)
             fail_workflow_step_attempt(

@@ -1,22 +1,22 @@
 from __future__ import annotations
 
 from orchestrator.api.atlassian_oauth.connection_service import tenant_atlassian_oauth_context
-from orchestrator.api.discord.ingress.seed_runtime import seed_issues_with_runtime
-from orchestrator.api.discord.seed.issue_service import list_child_issue_previews_for_parent
 from orchestrator.api.webhooks.contracts import (
     create_jira_comment,
     extract_changed_fields,
     extract_status_transition,
     post_jira_comment,
 )
-from orchestrator.core.agent_runtime_resolver import build_runtime_for_selector
-from orchestrator.core.workflow_handler_composition import build_installed_workflow_handler_registry
-from orchestrator.core.workflow_handler_registry import WorkflowHandlerRegistry
-from orchestrator.core.workflow_integration_provider import (
+from orchestrator.core.issue_fanout.service import list_child_issue_previews_for_parent
+from orchestrator.core.runtime.agent_runtime_resolver import build_runtime_for_selector
+from orchestrator.core.workflow.handler_composition import build_installed_workflow_handler_registry
+from orchestrator.core.workflow.handler_registry import WorkflowHandlerRegistry
+from orchestrator.core.integrations.workflow.provider import (
     JiraWorkflowConnectionProvider,
     WorkflowIntegrationAdapterProvider,
 )
-from orchestrator.core.workflow_integration_router import WorkflowIntegrationRouter
+from orchestrator.core.integrations.workflow.router import WorkflowIntegrationRouter
+from orchestrator.runtime.issue_fanout import seed_issues_with_runtime
 
 
 def build_runtime_workflow_handler_registry() -> WorkflowHandlerRegistry:

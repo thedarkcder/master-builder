@@ -13,7 +13,7 @@ from orchestrator.api.atlassian_oauth.connection_service import (
 from orchestrator.api.atlassian_oauth.service import atlassian_oauth_client as _atlassian_oauth_client
 from orchestrator.api.atlassian_oauth.service import refresh_atlassian_connection_tokens as _refresh_atlassian_connection_tokens
 from orchestrator.core.config import get_settings
-from orchestrator.core.decision_types import tenant_jira_project_keys
+from orchestrator.core.decision.types import tenant_jira_project_keys
 from orchestrator.storage.models import Project, Tenant
 from orchestrator.tools.atlassian_oauth import JiraIssueDetail, JiraIssuePreview, AtlassianOAuthError
 

@@ -3,10 +3,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from orchestrator.core.decision_planner import DecisionPlannerQuestion, DecisionPlannerResult
-from orchestrator.core.decision_gate import DecisionGateResult
+from orchestrator.core.decision.planner import DecisionPlannerQuestion, DecisionPlannerResult
+from orchestrator.core.decision.gate import DecisionGateResult
 from orchestrator.core.gtd import GoodToDoValidationResult
-from orchestrator.core.pre_run_check import PreRunCheckResult
+from orchestrator.core.precheck.pre_run_check import PreRunCheckResult
 from orchestrator.tools.atlassian_oauth import JiraIssueDetail, JiraIssuePreview
 from tests.test_support.discord_command_reply_harness import DiscordCommandReplyHarness
 
@@ -217,7 +217,7 @@ class DiscordReplyCommandFlowTests(DiscordCommandReplyHarness):
                     ),
                 ),
             ),
-            patch("orchestrator.core.decision_engine.plan_decision_questions", return_value=planner_result),
+            patch("orchestrator.core.decision.engine.plan_decision_questions", return_value=planner_result),
             patch(
                 "orchestrator.api.discord.commands.run_controls.load_cycle_question_feedback",
                 return_value=(
@@ -419,7 +419,7 @@ class DiscordReplyCommandFlowTests(DiscordCommandReplyHarness):
                     ),
                 ),
             ),
-            patch("orchestrator.core.decision_engine.plan_decision_questions", return_value=planner_result),
+            patch("orchestrator.core.decision.engine.plan_decision_questions", return_value=planner_result),
             patch(
                 "orchestrator.api.discord.commands.run_controls.build_runtime_precheck_message",
                 return_value=(

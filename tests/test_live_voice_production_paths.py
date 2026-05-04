@@ -12,7 +12,7 @@ import pytest
 from orchestrator.api.schemas import DiscordCommandResponse
 from orchestrator.core.discord.live_voice_service import DiscordLiveVoiceService
 from orchestrator.core.discord.live_voice_session import LiveVoiceTurn
-from orchestrator.core.runtime_payload_models import VoiceEntryRoutePayload
+from orchestrator.core.runtime.payload_models import VoiceEntryRoutePayload
 from tests.production_path_support import (
     FakeDiscordApiClient,
     clear_runtime_environment,

@@ -10,7 +10,7 @@ from urllib.request import Request, urlopen
 
 from sqlalchemy.orm import Session
 
-from orchestrator.core.platform_secret_service import resolve_platform_secret_ref
+from orchestrator.core.platform.secret_service import resolve_platform_secret_ref
 from orchestrator.storage.models import Tenant
 from orchestrator.tools.discord_api import DiscordApiClient
 from orchestrator.tools.atlassian_oauth import AtlassianOAuthError

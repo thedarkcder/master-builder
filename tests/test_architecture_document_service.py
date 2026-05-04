@@ -5,7 +5,7 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from orchestrator.core.architecture_document_service import (
+from orchestrator.core.projects.architecture_document_service import (
     ARCHITECTURE_DOC_STATUS_READY,
     ArchitectureDocumentService,
 )
@@ -61,7 +61,7 @@ def test_internal_architecture_document_gate_creates_draft_stub_and_blocks_until
             service = ArchitectureDocumentService(
                 settings_factory=lambda: SimpleNamespace(admin_ui_base_url="http://localhost:4100")
             )
-            with patch("orchestrator.core.knowledge_base._embed_texts", return_value=[]):
+            with patch("orchestrator.core.knowledge.base._embed_texts", return_value=[]):
                 gate = service.resolve_gate(
                     session=session,
                     project=project,
@@ -167,7 +167,7 @@ def test_confluence_architecture_document_gate_creates_provider_stub_and_blocks_
                 ),
             )
             with patch(
-                "orchestrator.core.architecture_document_service.tenant_atlassian_oauth_context",
+                "orchestrator.core.projects.architecture_document_service.tenant_atlassian_oauth_context",
                 return_value=fake_oauth,
             ):
                 gate = service.resolve_gate(

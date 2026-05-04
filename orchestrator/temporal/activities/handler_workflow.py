@@ -4,18 +4,18 @@ from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
 from orchestrator.core.config import get_settings
-from orchestrator.core.specialist_planning import RetryableSpecialistPlanningContractError
-from orchestrator.core.workflow_advance import (
+from orchestrator.core.planning.specialist import RetryableSpecialistPlanningContractError
+from orchestrator.core.workflow.advance import (
     InvalidWorkflowOperationRetryError,
     UnsupportedWorkflowOperationRetryError,
     WorkflowAdvanceRequest,
     WorkflowTrigger,
     execute_workflow_advance,
 )
-from orchestrator.core.workflow_execution_projection import WorkflowExecutionReference, WorkflowSourceReference
-from orchestrator.core.workflow_operation_retry_use_case import retry_workflow_operation_with_registered_handler
-from orchestrator.core.workflow_operation_service import WorkflowOperationAttemptAlreadyRunningError
-from orchestrator.core.workflow_type_catalog import get_workflow_type_by_handler_key
+from orchestrator.core.workflow.execution_projection import WorkflowExecutionReference, WorkflowSourceReference
+from orchestrator.core.workflow.operation_retry_use_case import retry_workflow_operation_with_registered_handler
+from orchestrator.core.workflow.operation_service import WorkflowOperationAttemptAlreadyRunningError
+from orchestrator.core.workflow.type_catalog import get_workflow_type_by_handler_key
 from orchestrator.runtime.installed_workflow_handlers import build_runtime_workflow_handler_registry
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import Tenant, WorkflowExecution, WorkflowOperation

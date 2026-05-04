@@ -31,7 +31,10 @@ from orchestrator.api.routes.admin_knowledge import router as admin_knowledge_ro
 from orchestrator.api.routes.admin_observability import router as admin_observability_router
 from orchestrator.api.routes.admin_ready import router as admin_ready_router
 from orchestrator.api.routes.admin_release import router as admin_release_router
-from orchestrator.api.routes.admin_runs import router as admin_runs_router
+from orchestrator.api.admin.runs.routes import router as admin_runs_router
+from orchestrator.api.admin.workflows.routes import router as admin_workflows_router
+from orchestrator.api.admin.workflows.operation_stale_recovery_service import recover_stale_workflow_operation_attempts
+from orchestrator.api.admin.workflows.use_cases import restart_workflow_operation as restart_workflow_operation_use_case
 from orchestrator.api.routes.admin_secrets import router as admin_secrets_router
 from orchestrator.api.routes.admin_tenants import router as admin_tenants_router
 from orchestrator.api.routes.admin_tokens import router as admin_tokens_router
@@ -46,15 +49,15 @@ from orchestrator.api.routes.webhook_discord_interactions import (
 from orchestrator.api.routes.webhook_github import router as webhook_github_router
 from orchestrator.core.config import get_settings
 from orchestrator.core.discord.commands_sync import sync_discord_guild_commands
-from orchestrator.core.error_observability import emit_hard_error
-from orchestrator.core.logging import configure_logging
-from orchestrator.core.observability_stream import initialize_observability_streaming, shutdown_observability_streaming
-from orchestrator.core.platform_metrics import platform_metrics
-from orchestrator.core.observability import reset_log_context, set_log_context
+from orchestrator.core.observability.error import emit_hard_error
+from orchestrator.core.observability.logging import configure_logging
+from orchestrator.core.observability.observability_stream import initialize_observability_streaming, shutdown_observability_streaming
+from orchestrator.core.observability.metrics import platform_metrics
+from orchestrator.core.observability.otel import reset_log_context, set_log_context
 from orchestrator.core.sentry import initialize_sentry
-from orchestrator.core.telemetry import initialize_telemetry, shutdown_telemetry
+from orchestrator.core.observability.otel_telemetry import initialize_telemetry, shutdown_telemetry
 from orchestrator.core.workflow.execution_snapshot_startup import ensure_execution_snapshot_startup_bootstrap
-from orchestrator.core.workflow_type_catalog import validate_persisted_workflow_definitions
+from orchestrator.core.workflow.type_catalog import validate_persisted_workflow_definitions
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.database_support import ensure_postgres_database_url
 from orchestrator.storage.migrations import run_migrations
@@ -93,6 +96,12 @@ def create_app() -> FastAPI:
         )
         with session_factory() as session:
             validate_persisted_workflow_definitions(session=session)
+        recover_stale_workflow_operation_attempts(
+            session_factory=session_factory,
+            stale_timeout_seconds=int(getattr(settings, "workflow_operation_attempt_stale_timeout_seconds", 300)),
+            actor="api-startup",
+            restart_workflow_operation_fn=restart_workflow_operation_use_case,
+        )
         # Best-effort: failures are logged by sync_discord_guild_commands and must not block API startup.
         sync_discord_guild_commands(settings=settings)
         initialize_observability_streaming()
@@ -227,6 +236,7 @@ def create_app() -> FastAPI:
     app.include_router(admin_architecture_documents_router)
     app.include_router(admin_observability_router)
     app.include_router(admin_runs_router)
+    app.include_router(admin_workflows_router)
     app.include_router(admin_tenants_router)
     app.include_router(admin_auth_router)
     app.include_router(admin_agent_runtimes_router)

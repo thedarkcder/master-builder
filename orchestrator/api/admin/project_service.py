@@ -9,8 +9,8 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from orchestrator.storage.models import Project, Tenant
-from orchestrator.core.secret_manager import normalize_secret_ref
-from orchestrator.core.tenant_secret_service import tenant_secret_service
+from orchestrator.core.platform.secret_manager import normalize_secret_ref
+from orchestrator.core.platform.tenant_secret_service import tenant_secret_service
 from orchestrator.tools.discord_api import DiscordApiError
 from orchestrator.tools.atlassian_oauth import AtlassianOAuthError
 from orchestrator.tools.project_repo_checkout import ProjectRepoCheckoutError

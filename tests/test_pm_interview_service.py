@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 import pytest
 
-from orchestrator.core.pm_interview_service import (
+from orchestrator.core.pm.interview_service import (
     PM_INTERVIEW_STATUS_ABANDONED,
     PM_INTERVIEW_STATUS_PM_COMPLETED,
     PM_INTERVIEW_SOURCE_KIND_PARENT_BRIEF_SNAPSHOT,
@@ -28,14 +28,14 @@ from orchestrator.core.pm_interview_service import (
     resolve_pm_interview_case_match,
     upsert_pm_interview_case,
 )
-from orchestrator.core.parent_feature_brief_store import (
+from orchestrator.core.projects.parent_feature_brief_store import (
     parent_planning_clarification_history,
     persist_parent_feature_brief_snapshot,
     resolve_parent_feature_brief,
     resolve_parent_feature_case,
     resolve_parent_feature_brief_readiness,
 )
-from orchestrator.core.runtime_invocation import AgentInvocationContext
+from orchestrator.core.runtime.invocation import AgentInvocationContext
 from orchestrator.storage.models import FollowupContext, PMInterviewCase
 
 try:
@@ -611,7 +611,7 @@ class PMInterviewServiceTests(unittest.TestCase):
 
         with (
             patch(
-                "orchestrator.core.runtime_stage_session.invoke_runtime_json",
+                "orchestrator.core.runtime.stage_session.invoke_runtime_json",
                 return_value={
                     "brief": {
                         "objective": "Refactor the orchestration stack",
@@ -628,7 +628,7 @@ class PMInterviewServiceTests(unittest.TestCase):
                     "open_questions": [],
                 },
             ),
-            patch("orchestrator.core.pm_interview_service.render_prompt", side_effect=_render_prompt),
+            patch("orchestrator.core.pm.interview_service.render_prompt", side_effect=_render_prompt),
         ):
             payload = normalize_parent_feature_brief_with_runtime(
                 runtime=SimpleNamespace(),
@@ -681,8 +681,8 @@ class PMInterviewServiceTests(unittest.TestCase):
             }
 
         with (
-            patch("orchestrator.core.pm_interview_service.render_prompt", side_effect=_render_prompt),
-            patch("orchestrator.core.runtime_stage_session.invoke_runtime_json_with_tools", side_effect=_invoke_runtime_json_with_tools),
+            patch("orchestrator.core.pm.interview_service.render_prompt", side_effect=_render_prompt),
+            patch("orchestrator.core.runtime.stage_session.invoke_runtime_json_with_tools", side_effect=_invoke_runtime_json_with_tools),
         ):
             payload = normalize_parent_feature_brief_with_runtime(
                 session=object(),  # type: ignore[arg-type]
@@ -720,7 +720,7 @@ class PMInterviewServiceTests(unittest.TestCase):
 
         with (
             patch(
-                "orchestrator.core.pm_interview_service._invoke_discord_json_maybe_tools",
+                "orchestrator.core.pm.interview_service._invoke_discord_json_maybe_tools",
                 return_value={
                     "message": "What user group?",
                     "brief": {"objective": "Share the app with friends"},
@@ -733,7 +733,7 @@ class PMInterviewServiceTests(unittest.TestCase):
                     },
                 },
             ),
-            patch("orchestrator.core.pm_interview_service.render_prompt", side_effect=_render_prompt),
+            patch("orchestrator.core.pm.interview_service.render_prompt", side_effect=_render_prompt),
         ):
             payload = plan_pm_interview_with_runtime(
                 runtime=SimpleNamespace(),
@@ -776,7 +776,7 @@ class PMInterviewServiceTests(unittest.TestCase):
 
     def test_plan_pm_interview_with_runtime_reports_invalid_status_value(self) -> None:
         with patch(
-            "orchestrator.core.pm_interview_service._invoke_discord_json_maybe_tools",
+            "orchestrator.core.pm.interview_service._invoke_discord_json_maybe_tools",
             return_value={
                 "message": "The brief is complete.",
                 "brief": {"objective": "Share the app with friends"},
@@ -804,7 +804,7 @@ class PMInterviewServiceTests(unittest.TestCase):
 
     def test_plan_pm_interview_with_runtime_requires_explicit_next_question_when_incomplete(self) -> None:
         with patch(
-            "orchestrator.core.pm_interview_service._invoke_discord_json_maybe_tools",
+            "orchestrator.core.pm.interview_service._invoke_discord_json_maybe_tools",
             return_value={
                 "message": "I still need one more product clarification.",
                 "brief": {"objective": "Share the app with friends"},

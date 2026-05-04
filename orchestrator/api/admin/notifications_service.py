@@ -4,7 +4,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from orchestrator.api.schemas import AdminNotificationListRead, AdminNotificationRead
-from orchestrator.core.admin_notifications import list_tenant_admin_notifications
+from orchestrator.core.platform.admin_notifications import list_tenant_admin_notifications
 from orchestrator.storage.models import Tenant
 
 

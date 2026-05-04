@@ -15,7 +15,7 @@ from sqlalchemy import create_engine, inspect
 from sqlalchemy import text
 
 from orchestrator.core.config import get_settings
-from orchestrator.core.secrets import encrypt_value
+from orchestrator.core.platform.secrets import encrypt_value
 from orchestrator.storage.migrations import run_migrations
 
 
@@ -61,7 +61,231 @@ class MigrationTests(unittest.TestCase):
 
         duplicates = {revision_id: count for revision_id, count in Counter(revision_ids).items() if count > 1}
         self.assertEqual(duplicates, {})
-        self.assertEqual(script.get_heads(), ["20260430_0098"])
+        self.assertEqual(script.get_heads(), ["20260504_0104"])
+
+    def test_failed_attempt_retryability_repair_migration(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            database_url = f"sqlite:///{Path(tmpdir) / 'failed-attempt-retryability.sqlite'}"
+            engine = create_engine(database_url)
+            with engine.begin() as connection:
+                connection.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"))
+                connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('20260430_0099')"))
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE workflow_operations (
+                            operation_id VARCHAR PRIMARY KEY,
+                            operation_type VARCHAR NOT NULL,
+                            status VARCHAR NOT NULL,
+                            summary TEXT,
+                            finished_at DATETIME,
+                            updated_at DATETIME
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE workflow_operation_attempts (
+                            attempt_id VARCHAR PRIMARY KEY,
+                            operation_id VARCHAR NOT NULL,
+                            attempt_number INTEGER NOT NULL,
+                            status VARCHAR NOT NULL,
+                            error_category VARCHAR,
+                            error_message TEXT,
+                            status_detail TEXT,
+                            retryable BOOLEAN NOT NULL,
+                            next_retry_at DATETIME,
+                            finished_at DATETIME
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO workflow_operations (
+                            operation_id, operation_type, status, summary, finished_at, updated_at
+                        )
+                        VALUES (
+                            'operation-fanout', 'jira_child_fanout', 'failed',
+                            '502: Failed to seed Jira issues: Atlassian API request failed (400): {"errors":{"parentId":"Given parent work item does not belong to appropriate hierarchy."}}',
+                            '2026-04-30 10:16:00', '2026-04-30 10:16:00'
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO workflow_operation_attempts (
+                            attempt_id, operation_id, attempt_number, status, error_category, error_message,
+                            status_detail, retryable, next_retry_at, finished_at
+                        )
+                        VALUES
+                            (
+                                'attempt-hierarchy', 'operation-fanout', 2, 'failed', 'transient_external_failure',
+                                '502: Failed to seed Jira issues: Atlassian API request failed (400): {"errors":{"parentId":"Given parent work item does not belong to appropriate hierarchy."}}',
+                                'diagnostic only', 0, NULL, '2026-04-30 10:16:00'
+                            ),
+                            (
+                                'attempt-runtime', 'operation-fanout', 1, 'failed', 'external_failure',
+                                'Codex CLI command failed because a refresh token expired.',
+                                NULL, 1, NULL, '2026-04-30 10:00:00'
+                            )
+                        """
+                    )
+                )
+
+            self._alembic_upgrade(database_url, "20260430_0100")
+
+            with engine.connect() as connection:
+                rows = connection.execute(
+                    text(
+                        """
+                        SELECT attempt_id, error_category, retryable, status_detail
+                        FROM workflow_operation_attempts
+                        ORDER BY attempt_id
+                        """
+                    )
+                ).mappings().all()
+
+            attempts = {row["attempt_id"]: row for row in rows}
+            self.assertEqual(attempts["attempt-hierarchy"]["error_category"], "transient_external_failure")
+            self.assertTrue(bool(attempts["attempt-hierarchy"]["retryable"]))
+            self.assertEqual(attempts["attempt-hierarchy"]["status_detail"], "diagnostic only")
+            self.assertEqual(attempts["attempt-runtime"]["error_category"], "external_failure")
+            self.assertTrue(bool(attempts["attempt-runtime"]["retryable"]))
+
+    def test_single_active_operation_attempt_migration_repairs_and_enforces(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            database_url = f"sqlite:///{Path(tmpdir) / 'active-attempts.sqlite'}"
+            engine = create_engine(database_url)
+            with engine.begin() as connection:
+                connection.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"))
+                connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('20260430_0098')"))
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE workflow_operation_attempts (
+                            attempt_id VARCHAR PRIMARY KEY,
+                            operation_id VARCHAR NOT NULL,
+                            attempt_number INTEGER NOT NULL,
+                            status VARCHAR NOT NULL,
+                            status_detail TEXT,
+                            retryable BOOLEAN NOT NULL,
+                            next_retry_at DATETIME,
+                            created_at DATETIME NOT NULL,
+                            finished_at DATETIME
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO workflow_operation_attempts (
+                            attempt_id, operation_id, attempt_number, status, status_detail, retryable,
+                            next_retry_at, created_at, finished_at
+                        )
+                        VALUES
+                            ('attempt-1', 'operation-1', 1, 'waiting_for_input', NULL, 0, NULL, '2026-04-30 10:00:00', NULL),
+                            ('attempt-2', 'operation-1', 2, 'running', NULL, 0, NULL, '2026-04-30 10:01:00', NULL)
+                        """
+                    )
+                )
+
+            self._alembic_upgrade(database_url, "20260430_0099")
+
+            with engine.begin() as connection:
+                rows = connection.execute(
+                    text(
+                        """
+                        SELECT attempt_id, status
+                        FROM workflow_operation_attempts
+                        WHERE operation_id = 'operation-1'
+                        ORDER BY attempt_number
+                        """
+                    )
+                ).all()
+                self.assertEqual(rows, [("attempt-1", "superseded"), ("attempt-2", "running")])
+                with self.assertRaises(Exception):
+                    connection.execute(
+                        text(
+                            """
+                            INSERT INTO workflow_operation_attempts (
+                                attempt_id, operation_id, attempt_number, status, status_detail, retryable,
+                                next_retry_at, created_at, finished_at
+                            )
+                            VALUES (
+                                'attempt-3', 'operation-1', 3, 'waiting_for_input',
+                                NULL, 0, NULL, '2026-04-30 10:02:00', NULL
+                            )
+                            """
+                        )
+                    )
+
+    def test_stale_active_operation_attempt_migration_repairs_older_active_attempts(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            database_url = f"sqlite:///{Path(tmpdir) / 'stale-active-attempts.sqlite'}"
+            engine = create_engine(database_url)
+            with engine.begin() as connection:
+                connection.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"))
+                connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('20260430_0100')"))
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE workflow_operation_attempts (
+                            attempt_id VARCHAR PRIMARY KEY,
+                            operation_id VARCHAR NOT NULL,
+                            attempt_number INTEGER NOT NULL,
+                            status VARCHAR NOT NULL,
+                            status_detail TEXT,
+                            retryable BOOLEAN NOT NULL,
+                            next_retry_at DATETIME,
+                            created_at DATETIME NOT NULL,
+                            finished_at DATETIME
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO workflow_operation_attempts (
+                            attempt_id, operation_id, attempt_number, status, status_detail, retryable,
+                            next_retry_at, created_at, finished_at
+                        )
+                        VALUES
+                            ('attempt-1', 'operation-1', 1, 'waiting_for_input', NULL, 0, NULL, '2026-04-30 10:00:00', NULL),
+                            ('attempt-2', 'operation-1', 2, 'completed', NULL, 0, NULL, '2026-04-30 10:01:00', '2026-04-30 10:02:00'),
+                            ('attempt-3', 'operation-2', 1, 'running', NULL, 0, NULL, '2026-04-30 10:03:00', NULL)
+                        """
+                    )
+                )
+
+            self._alembic_upgrade(database_url, "20260430_0101")
+
+            with engine.begin() as connection:
+                rows = connection.execute(
+                    text(
+                        """
+                        SELECT attempt_id, status
+                        FROM workflow_operation_attempts
+                        ORDER BY attempt_id
+                        """
+                    )
+                ).all()
+
+            self.assertEqual(
+                rows,
+                [
+                    ("attempt-1", "superseded"),
+                    ("attempt-2", "completed"),
+                    ("attempt-3", "running"),
+                ],
+            )
 
     def test_optional_discord_projection_status_repair_migration(self) -> None:
         with TemporaryDirectory() as tmpdir:
@@ -1069,7 +1293,7 @@ class MigrationTests(unittest.TestCase):
 
             with engine.begin() as connection:
                 versions = connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
-            self.assertEqual(versions, ["20260424_0095"])
+            self.assertEqual(versions, ["20260504_0104"])
 
     def test_run_migrations_disables_alembic_logger_reconfiguration(self) -> None:
         fake_config = MagicMock()

@@ -12,8 +12,8 @@ from orchestrator.api.discord.shared.state_repository import (
     save_project_allowlist_requests,
     tenant_allowed_channel_ids,
 )
-from orchestrator.core.clarification_questions import ClarificationQuestionSet
-from orchestrator.core.followup_context_service import (
+from orchestrator.core.clarification.questions import ClarificationQuestionSet
+from orchestrator.core.pm.followup_context_service import (
     FOLLOWUP_CONTEXT_SEED_FOLLOWUP,
     close_followup_contexts,
     upsert_followup_context,

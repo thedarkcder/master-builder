@@ -2,7 +2,7 @@ from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from orchestrator.core.decision_gate import DecisionGateResult
+from orchestrator.core.decision.gate import DecisionGateResult
 from orchestrator.core.worker.decision_gate import apply_decision_gate
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.storage.models import AtlassianOAuthConnection

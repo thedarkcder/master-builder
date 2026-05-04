@@ -15,7 +15,7 @@ from orchestrator.core.communications import (
     DiscordSeedWithThreadAction,
     DiscordThreadReplyAction,
 )
-from orchestrator.core.observability import current_log_context, reset_log_context, set_log_context
+from orchestrator.core.observability.otel import current_log_context, reset_log_context, set_log_context
 from orchestrator.tools.discord_api import DiscordApiError
 
 

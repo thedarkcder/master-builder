@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from orchestrator.core.platform_secret_service import PLATFORM_SECRET_GITHUB_APP_ID_REF, PLATFORM_SECRET_GITHUB_PRIVATE_KEY_REF
+from orchestrator.core.platform.secret_service import PLATFORM_SECRET_GITHUB_APP_ID_REF, PLATFORM_SECRET_GITHUB_PRIVATE_KEY_REF
 
 
 def with_managed_github_refs(*, raw_github_config: dict, settings) -> dict:  # noqa: ANN001

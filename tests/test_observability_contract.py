@@ -2,7 +2,7 @@ import json
 import logging
 import unittest
 
-from orchestrator.core.observability import (
+from orchestrator.core.observability.otel import (
     ObservabilityJsonFormatter,
     REQUIRED_LOG_FIELDS,
     current_log_context,

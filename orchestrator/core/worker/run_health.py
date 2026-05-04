@@ -11,11 +11,11 @@ from uuid import uuid4
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
-from orchestrator.core.agent_observability import record_agent_lifecycle_event
+from orchestrator.core.observability.agent_observability import record_agent_lifecycle_event
 from orchestrator.core.config import Settings, get_settings
-from orchestrator.core.logging_pane_events import emit_logging_pane_event
-from orchestrator.core.workflow_execution_lifecycle import apply_execution_failure
-from orchestrator.core.runs import RUN_STATUS_DISPATCHING, RUN_STATUS_FAILED, RUN_STATUS_RUNNING
+from orchestrator.core.observability.logging_pane import emit_logging_pane_event
+from orchestrator.core.workflow.execution_lifecycle import apply_execution_failure
+from orchestrator.core.runs.service import RUN_STATUS_DISPATCHING, RUN_STATUS_FAILED, RUN_STATUS_RUNNING
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import Run, WorkflowExecution
 

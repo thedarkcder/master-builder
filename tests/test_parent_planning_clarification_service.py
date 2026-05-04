@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from orchestrator.core.parent_planning_clarification_service import (
+from orchestrator.core.projects.parent_planning_clarification_service import (
     ClarificationPublishEffects,
     ParentPlanningClarificationService,
 )

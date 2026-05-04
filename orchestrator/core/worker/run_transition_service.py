@@ -5,7 +5,7 @@ from datetime import datetime
 
 from sqlalchemy.orm import Session
 
-from orchestrator.core.workflow_execution_lifecycle import apply_execution_for_new_attempt
+from orchestrator.core.workflow.execution_lifecycle import apply_execution_for_new_attempt
 from orchestrator.storage.models import Run, WorkflowExecution
 from orchestrator.storage.run_queue_events import notify_run_enqueued
 

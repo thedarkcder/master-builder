@@ -17,7 +17,7 @@ from orchestrator.core.communications import (
     DiscordInteractionResponseAction,
     IngressResult,
 )
-from orchestrator.core.observability import current_log_context
+from orchestrator.core.observability.otel import current_log_context
 from orchestrator.core.discord.command_sync_status import (
     get_discord_command_sync_status,
     reset_discord_command_sync_status,
@@ -28,7 +28,7 @@ from orchestrator.core.discord.gateway_listener import (
     _decision_gate_issue_for_thread,
     _project_seed_followup_thread_ids,
 )
-from orchestrator.core.runtime_payload_models import VoiceEntryRoutePayload
+from orchestrator.core.runtime.payload_models import VoiceEntryRoutePayload
 from orchestrator.storage.models import Base, Tenant
 from orchestrator.tools.discord_api import DiscordApiError
 

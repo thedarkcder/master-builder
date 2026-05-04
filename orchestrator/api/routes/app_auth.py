@@ -27,18 +27,18 @@ from orchestrator.api.schemas import (
     TenantUserLoginRequest,
     TenantUserLoginResponse,
 )
-from orchestrator.core.auth_tokens import create_auth_access_token
+from orchestrator.core.platform.auth_tokens import create_auth_access_token
 from orchestrator.core.config import get_settings
 from orchestrator.core.discord.oauth import DiscordOAuthError, exchange_code_for_user, parse_discord_oauth_state
 from orchestrator.core.discord.oauth_config import resolve_discord_oauth_config
-from orchestrator.core.password_reset_email import send_password_reset_email
-from orchestrator.core.password_reset_tokens import (
+from orchestrator.core.platform.password_reset_email import send_password_reset_email
+from orchestrator.core.platform.password_reset_tokens import (
     PasswordResetTokenError,
     issue_password_reset_token,
     normalize_password_reset_timestamp,
     parse_password_reset_token,
 )
-from orchestrator.core.platform_secret_service import (
+from orchestrator.core.platform.secret_service import (
     PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF,
     resolve_platform_secret_ref,
 )
@@ -50,7 +50,7 @@ from orchestrator.core.security import (
     require_authenticated_principal,
     require_tenant_membership,
 )
-from orchestrator.core.tenant_users import (
+from orchestrator.core.platform.users import (
     accept_invite,
     authenticate_tenant_user,
     change_user_password,

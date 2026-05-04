@@ -55,6 +55,147 @@ function attemptDuration(attempt: WorkflowOperationAttemptRecord): number | null
   return Math.max(0, new Date(attempt.finished_at).getTime() - new Date(attempt.started_at).getTime());
 }
 
+function formatDuration(durationMs: number | null | undefined): string {
+  if (typeof durationMs !== "number" || !Number.isFinite(durationMs)) {
+    return "—";
+  }
+  const normalized = Math.max(0, Math.floor(durationMs));
+  const totalSeconds = Math.floor(normalized / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) {
+    return `${hours}h ${minutes}m ${seconds}s`;
+  }
+  if (minutes > 0) {
+    return `${minutes}m ${seconds}s`;
+  }
+  if (seconds > 0 || normalized >= 1000) {
+    return `${seconds}s`;
+  }
+  return `${normalized}ms`;
+}
+
+type AttemptMetric = {
+  label: string;
+  value: string;
+};
+
+export type ExecutionObservabilityView = "telemetry" | "metrics" | "audit";
+
+function numberFromPayload(payload: Record<string, unknown>, key: string): number | null {
+  const value = payload[key];
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function stringFromPayload(payload: Record<string, unknown>, key: string): string | null {
+  const value = payload[key];
+  if (typeof value !== "string") {
+    return null;
+  }
+  const normalized = value.trim();
+  return normalized || null;
+}
+
+function formatNumber(value: number): string {
+  return new Intl.NumberFormat("en").format(Math.max(0, Math.floor(value)));
+}
+
+function latestRuntimePayload(
+  attempt: WorkflowStepAttemptTranscriptRecord | null,
+  eventKind: string,
+): Record<string, unknown> | null {
+  const entries =
+    attempt?.sections.flatMap((section) =>
+      section.entries.filter((entry) => {
+        const payloadKind = stringFromPayload(entry.payload, "event_kind");
+        return payloadKind === eventKind || entry.title.replace(/ /g, "_") === eventKind;
+      }),
+    ) ?? [];
+  const directEntries =
+    attempt?.sections.flatMap((section) =>
+      section.entries.filter((entry) => {
+        if (eventKind === "stage_invocation_finished") {
+          return entry.title.endsWith("stage invocation finished") || entry.title === "stage invocation finished";
+        }
+        if (eventKind === "stage_invocation_started") {
+          return entry.title.endsWith("stage invocation started") || entry.title === "stage invocation started";
+        }
+        return false;
+      }),
+    ) ?? [];
+  const selected = [...entries, ...directEntries].at(-1);
+  return selected?.payload ?? null;
+}
+
+function attemptMetrics(attempt: WorkflowStepAttemptTranscriptRecord | null): AttemptMetric[] {
+  if (!attempt) {
+    return [];
+  }
+  const finishedPayload = latestRuntimePayload(attempt, "stage_invocation_finished");
+  const startedPayload = latestRuntimePayload(attempt, "stage_invocation_started");
+  const metrics: AttemptMetric[] = [];
+
+  const runtimeMs = finishedPayload ? numberFromPayload(finishedPayload, "duration_ms") : null;
+  if (runtimeMs !== null) {
+    metrics.push({ label: "Runtime", value: formatDuration(runtimeMs) });
+  }
+  const totalTokens = finishedPayload ? numberFromPayload(finishedPayload, "actual_total_tokens") : null;
+  if (totalTokens !== null) {
+    metrics.push({ label: "Tokens", value: formatNumber(totalTokens) });
+  }
+  const promptTokens = finishedPayload ? numberFromPayload(finishedPayload, "actual_prompt_tokens") : null;
+  const completionTokens = finishedPayload ? numberFromPayload(finishedPayload, "actual_completion_tokens") : null;
+  if (promptTokens !== null || completionTokens !== null) {
+    metrics.push({
+      label: "Token split",
+      value: `${promptTokens === null ? "—" : formatNumber(promptTokens)} in / ${
+        completionTokens === null ? "—" : formatNumber(completionTokens)
+      } out`,
+    });
+  }
+  const estimatedPromptTokens =
+    (startedPayload ? numberFromPayload(startedPayload, "estimated_prompt_tokens") : null) ??
+    (finishedPayload ? numberFromPayload(finishedPayload, "estimated_prompt_tokens") : null);
+  if (estimatedPromptTokens !== null) {
+    metrics.push({ label: "Estimated prompt", value: formatNumber(estimatedPromptTokens) });
+  }
+  const model = (finishedPayload && stringFromPayload(finishedPayload, "model")) || (startedPayload && stringFromPayload(startedPayload, "model"));
+  if (model) {
+    metrics.push({ label: "Model", value: model });
+  }
+  const reasoning =
+    (finishedPayload && stringFromPayload(finishedPayload, "reasoning_effort")) ||
+    (startedPayload && stringFromPayload(startedPayload, "reasoning_effort"));
+  if (reasoning) {
+    metrics.push({ label: "Reasoning", value: reasoning });
+  }
+  const persistedLines = finishedPayload ? numberFromPayload(finishedPayload, "db_persisted_lines") : null;
+  const rawLines = finishedPayload ? numberFromPayload(finishedPayload, "raw_lines_written") : null;
+  if (persistedLines !== null || rawLines !== null) {
+    metrics.push({
+      label: "Log lines",
+      value: `${persistedLines === null ? "—" : formatNumber(persistedLines)} stored / ${
+        rawLines === null ? "—" : formatNumber(rawLines)
+      } raw`,
+    });
+  }
+  const kbHits =
+    (finishedPayload ? numberFromPayload(finishedPayload, "kb_hits") : null) ??
+    (startedPayload ? numberFromPayload(startedPayload, "kb_hits") : null);
+  if (kbHits !== null) {
+    metrics.push({ label: "Knowledge hits", value: formatNumber(kbHits) });
+  }
+  return metrics;
+}
+
 export function ExecutionObservabilityDrawer({
   open,
   operationLabel,
@@ -78,8 +219,8 @@ export function ExecutionObservabilityDrawer({
   attempts: WorkflowOperationAttemptRecord[];
   selectedAttemptId: string | null;
   onSelectAttemptId: (attemptId: string | null) => void;
-  activeView: "telemetry" | "audit";
-  onViewChange: (view: "telemetry" | "audit") => void;
+  activeView: ExecutionObservabilityView;
+  onViewChange: (view: ExecutionObservabilityView) => void;
   onRefresh: () => void;
   onClose: () => void;
   currentStatus: string;
@@ -108,13 +249,14 @@ export function ExecutionObservabilityDrawer({
   const selectedDisplayStatus = selectedPersistedAttempt
     ? displayStatusForAttempt(selectedPersistedAttempt, { latestNumber })
     : "unknown";
-  const renderedAttempt = activeView === "telemetry" ? telemetryAttempt : auditAttempt;
-  const loading = activeView === "telemetry" ? telemetryLoading : auditLoading;
+  const renderedAttempt = activeView === "audit" ? auditAttempt : telemetryAttempt;
+  const loading = activeView === "audit" ? auditLoading : telemetryLoading;
   const nextAction = activeView === "audit" ? auditAttempt?.recommended_next_action?.trim() || null : null;
   const renderedEntryCount = useMemo(
     () => renderedAttempt?.sections.reduce((total, section) => total + section.entries.length, 0) ?? 0,
     [renderedAttempt],
   );
+  const metrics = useMemo(() => attemptMetrics(telemetryAttempt), [telemetryAttempt]);
 
   useEffect(() => {
     if (!open) {
@@ -183,6 +325,7 @@ export function ExecutionObservabilityDrawer({
           <nav className="-mb-px flex min-w-max gap-0" aria-label="Execution observability tabs">
             {[
               { key: "telemetry", label: "Live telemetry" },
+              { key: "metrics", label: "Metrics" },
               { key: "audit", label: "Audit history" },
             ].map((tab) => {
               const selected = activeView === tab.key;
@@ -190,7 +333,7 @@ export function ExecutionObservabilityDrawer({
                 <button
                   key={tab.key}
                   type="button"
-                  onClick={() => onViewChange(tab.key as "telemetry" | "audit")}
+                  onClick={() => onViewChange(tab.key as ExecutionObservabilityView)}
                   className={cn(
                     "inline-flex items-center border-b-2 px-4 py-2.5 text-sm font-medium whitespace-nowrap transition-colors",
                     selected
@@ -285,25 +428,88 @@ export function ExecutionObservabilityDrawer({
                       </div>
                       <div>
                         <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Duration</p>
-                        <p className="mt-1">
-                          {renderedAttempt?.duration_ms ?? attemptDuration(selectedPersistedAttempt) ?? "—"}
-                          {typeof (renderedAttempt?.duration_ms ?? attemptDuration(selectedPersistedAttempt)) === "number" ? " ms" : ""}
-                        </p>
+                        <p className="mt-1">{formatDuration(renderedAttempt?.duration_ms ?? attemptDuration(selectedPersistedAttempt))}</p>
                       </div>
                       <div>
                         <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
-                          {activeView === "telemetry" ? "Live status" : "Next action"}
+                          {activeView === "audit" ? "Next action" : "Live status"}
                         </p>
                         <p className="mt-1">
-                          {activeView === "telemetry"
-                            ? statusLabel(selectedDisplayStatus)
-                            : nextAction || "—"}
+                          {activeView === "audit" ? nextAction || "—" : statusLabel(selectedDisplayStatus)}
                         </p>
                       </div>
                     </div>
                   </section>
 
-                  {!renderedAttempt?.sections.length ? (
+                  {activeView === "telemetry" ? (
+                    <section className="rounded-xl border bg-background p-4">
+                      <div className="flex items-center justify-between gap-2">
+                        <h3 className="text-sm font-semibold">Work units</h3>
+                        <span className="text-xs text-muted-foreground">
+                          {(selectedPersistedAttempt.work_units ?? []).length} unit
+                          {(selectedPersistedAttempt.work_units ?? []).length === 1 ? "" : "s"}
+                        </span>
+                      </div>
+                      {(selectedPersistedAttempt.work_units ?? []).length ? (
+                        <div className="mt-3 space-y-2">
+                          {(selectedPersistedAttempt.work_units ?? []).map((unit) => {
+                            const latestUnitAttempt = [...(unit.attempts ?? [])].sort(
+                              (left, right) => right.attempt_number - left.attempt_number,
+                            )[0];
+                            return (
+                              <div key={`${unit.work_unit_id}-${latestUnitAttempt?.work_unit_attempt_id ?? "unit"}`} className="rounded-lg border bg-muted/20 px-3 py-2">
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                  <div>
+                                    <p className="text-sm font-medium">{unit.unit_key.replace(/\./g, " · ")}</p>
+                                    <p className="text-xs text-muted-foreground">{unit.unit_kind.replace(/_/g, " ")}</p>
+                                  </div>
+                                  <span className={cn("rounded-full border px-2 py-0.5 text-xs", statusTone(unit.status))}>
+                                    {statusLabel(unit.status)}
+                                  </span>
+                                </div>
+                                {unit.error_message ? (
+                                  <p className="mt-2 text-xs text-red-700">{unit.error_message}</p>
+                                ) : null}
+                                {latestUnitAttempt ? (
+                                  <p className="mt-2 text-xs text-muted-foreground">
+                                    Unit attempt {latestUnitAttempt.attempt_number}
+                                    {latestUnitAttempt.finished_at ? ` · ${formatTimeAgo(latestUnitAttempt.finished_at)}` : ""}
+                                  </p>
+                                ) : null}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <p className="mt-3 text-sm text-muted-foreground">No work units have been recorded for this attempt yet.</p>
+                      )}
+                    </section>
+                  ) : null}
+
+                  {activeView === "metrics" ? (
+                    metrics.length ? (
+                      <section className="rounded-xl border bg-background p-4">
+                        <div className="flex items-center justify-between gap-2">
+                          <h3 className="text-sm font-semibold">Attempt metrics</h3>
+                          <span className="text-xs text-muted-foreground">from live telemetry</span>
+                        </div>
+                        <div className="mt-3 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
+                          {metrics.map((metric) => (
+                            <div key={metric.label} className="rounded-lg border bg-muted/20 px-3 py-2">
+                              <p className="text-[11px] font-medium tracking-[0.16em] text-muted-foreground uppercase">{metric.label}</p>
+                              <p className="mt-1 font-semibold break-words">{metric.value}</p>
+                            </div>
+                          ))}
+                        </div>
+                      </section>
+                    ) : (
+                      <p className="rounded-xl border px-4 py-3 text-sm text-muted-foreground">
+                        No attempt metrics have been recorded for this attempt yet.
+                      </p>
+                    )
+                  ) : null}
+
+                  {activeView !== "metrics" && !renderedAttempt?.sections.length ? (
                     <p className="rounded-xl border px-4 py-3 text-sm text-muted-foreground">
                       {activeView === "telemetry"
                         ? "No live telemetry has been recorded for this attempt yet."
@@ -311,7 +517,7 @@ export function ExecutionObservabilityDrawer({
                     </p>
                   ) : null}
 
-                  {renderedAttempt?.sections.map((section, sectionIndex) => (
+                  {activeView !== "metrics" ? renderedAttempt?.sections.map((section, sectionIndex) => (
                     <section key={`${section.kind}-${section.label}-${sectionIndex}`} className="space-y-3">
                       <div className="flex items-center justify-between gap-2">
                         <h3 className="text-sm font-semibold">{section.label}</h3>
@@ -344,7 +550,7 @@ export function ExecutionObservabilityDrawer({
                         ))}
                       </div>
                     </section>
-                  ))}
+                  )) : null}
                   {activeView === "telemetry" ? <div ref={telemetryBottomRef} data-testid="execution-observability-bottom" aria-hidden="true" /> : null}
                 </div>
               ) : null}

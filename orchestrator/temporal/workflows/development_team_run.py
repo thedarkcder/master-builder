@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-from orchestrator.core.workflow_engine import WorkflowEngineState
+from orchestrator.core.workflow.engine import WorkflowEngineState
 from orchestrator.temporal.activities.run_execution import (
     execute_claimed_run_activity,
     resume_human_input_activity,

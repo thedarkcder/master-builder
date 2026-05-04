@@ -6,18 +6,21 @@ from unittest.mock import patch
 
 import pytest
 
-from orchestrator.core.clarification_questions import ClarificationQuestion
+from orchestrator.core.clarification.projection_service import ClarificationProjectionSpec, upsert_clarification_projection
+from orchestrator.core.clarification.questions import ClarificationQuestion, ClarificationQuestionSet
 from orchestrator.core.config import Settings
+from orchestrator.core.pm.followup_context_service import FOLLOWUP_CONTEXT_PARENT_PLANNING_CLARIFICATION
 from orchestrator.core.parent_feature_workflow.retry_support import (
     ParentWorkflowPlanningClarificationPublisher,
 )
-from orchestrator.core.specialist_planning import PLANNING_STATE_COMPLETED, RetryableSpecialistPlanningContractError
-from orchestrator.core.workflow_handler_composition import build_installed_workflow_handler_registry
-from orchestrator.core.workflow_operation_service import WorkflowOperationAttemptAlreadyRunningError
-from orchestrator.core.workflow_operation_retry_use_case import retry_workflow_operation_with_registered_handler
-from orchestrator.core.workflow_type_catalog import get_workflow_type
+from orchestrator.core.planning.specialist import PLANNING_STATE_COMPLETED, RetryableSpecialistPlanningContractError
+from orchestrator.core.runtime.payload_models import PMDecisionRequestPayload, StakeholderEscalationPayload
+from orchestrator.core.workflow.handler_composition import build_installed_workflow_handler_registry
+from orchestrator.core.workflow.operation_service import WorkflowOperationAttemptAlreadyRunningError
+from orchestrator.core.workflow.operation_retry_use_case import retry_workflow_operation_with_registered_handler
+from orchestrator.core.workflow.type_catalog import get_workflow_type
 from orchestrator.storage.db import create_session_factory
-from orchestrator.storage.models import Project, Tenant, WorkflowExecution, WorkflowOperation, WorkflowOperationAttempt
+from orchestrator.storage.models import FollowupContext, Project, Tenant, WorkflowExecution, WorkflowOperation, WorkflowOperationAttempt
 from tests.test_support.db_harness import SqliteTemplateDbTestCase
 
 
@@ -127,7 +130,7 @@ class ParentWorkflowOperationRetryTests(SqliteTemplateDbTestCase):
                 ),
             )
             fake_router = SimpleNamespace(jira=lambda **_kwargs: fake_jira_adapter)
-            planner_result = SimpleNamespace(planning_state=PLANNING_STATE_COMPLETED, product_escalations=())
+            planner_result = SimpleNamespace(planning_state=PLANNING_STATE_COMPLETED, pm_decision_requests=())
 
             with (
                 patch(
@@ -315,7 +318,7 @@ class ParentWorkflowOperationRetryTests(SqliteTemplateDbTestCase):
                 ),
             )
             fake_router = SimpleNamespace(jira=lambda **_kwargs: fake_jira_adapter)
-            planner_result = SimpleNamespace(planning_state=PLANNING_STATE_COMPLETED, product_escalations=())
+            planner_result = SimpleNamespace(planning_state=PLANNING_STATE_COMPLETED, pm_decision_requests=())
 
             with (
                 patch(
@@ -588,11 +591,13 @@ class ParentWorkflowOperationRetryTests(SqliteTemplateDbTestCase):
             fake_router = SimpleNamespace(jira=lambda **_kwargs: fake_jira_adapter)
             planner_result = SimpleNamespace(
                 planning_state="planning_blocked",
-                product_escalations=(
-                    {
-                        "question": "Which broken-link reasons require immediate session revocation?",
-                        "why_it_matters": "This changes session safety coverage.",
-                    },
+                pm_decision_requests=(
+                    PMDecisionRequestPayload(
+                        request_id="pm-session-revocation",
+                        question="Which broken-link reasons require immediate session revocation?",
+                        why_it_matters="This changes session safety coverage.",
+                        related_decision_ids=("session-revocation",),
+                    ),
                 ),
             )
 
@@ -605,6 +610,22 @@ class ParentWorkflowOperationRetryTests(SqliteTemplateDbTestCase):
                     "orchestrator.core.parent_feature_workflow.adapters._ParentBriefPlanner.plan_backlog_parent",
                     return_value=(planner_result, {"planning": "package"}),
                 ) as planner_mock,
+                patch(
+                    "orchestrator.core.parent_feature_workflow.adapters._ParentBriefPlanner.resolve_pm_decisions",
+                    return_value=SimpleNamespace(
+                        resolved_decisions=(),
+                        stakeholder_escalations=(
+                            StakeholderEscalationPayload(
+                                escalation_id="stakeholder-session-revocation",
+                                question="Which broken-link reasons require immediate session revocation?",
+                                why_it_matters="This changes session safety coverage.",
+                                business_impact_area="risk_compliance",
+                                source_pm_decision_request_ids=("pm-session-revocation",),
+                            ),
+                        ),
+                        updated_planning_context={},
+                    ),
+                ),
                 patch(
                     "orchestrator.core.parent_feature_workflow.retry_support.post_pm_product_clarification_questions_to_jira",
                     return_value=({"id": "comment-456"}, None),
@@ -723,7 +744,7 @@ class ParentWorkflowOperationRetryTests(SqliteTemplateDbTestCase):
             fake_router = SimpleNamespace(jira=lambda **_kwargs: fake_jira_adapter)
             planner_result = SimpleNamespace(
                 planning_state="planning_blocked",
-                product_escalations=(),
+                pm_decision_requests=(),
             )
 
             with (
@@ -756,10 +777,10 @@ class ParentWorkflowOperationRetryTests(SqliteTemplateDbTestCase):
 
             assert handle.status == "failed"
             assert backlog_operation.status == "failed"
-            assert "requires at least one clarification question" in (backlog_operation.summary or "")
+            assert "blocked without PM decision requests" in (backlog_operation.summary or "")
             assert len(attempts) == 1
             assert attempts[0].status == "failed"
-            assert attempts[0].error_category == "contract_violation"
+            assert attempts[0].error_category == "invalid_model_output"
 
     def test_engineering_clarification_projection_fails_without_jira_comment_id(self) -> None:
         now = datetime.now(timezone.utc)
@@ -859,6 +880,7 @@ class ParentWorkflowOperationRetryTests(SqliteTemplateDbTestCase):
                 workflow=workflow,
                 blocked_operation_type="backlog_planning",
                 create_jira_comment_fn=create_comment_without_id,
+                jira_adapter=SimpleNamespace(list_issue_comments=lambda **_kwargs: []),
             )
 
             with pytest.raises(RuntimeError, match="did not return a comment id"):
@@ -971,18 +993,25 @@ class ParentWorkflowOperationRetryTests(SqliteTemplateDbTestCase):
             session.add_all([tenant, project, workflow, fanout_operation, comment_operation])
             session.commit()
 
-            fake_jira_adapter = SimpleNamespace(
-                get_issue_detail=lambda **_kwargs: SimpleNamespace(
-                    key="MAB-215",
-                    summary="Identity redesign",
-                    description="Parent planning",
-                    labels=["pm-parent"],
-                ),
-            )
-            fake_router = SimpleNamespace(jira=lambda **_kwargs: fake_jira_adapter)
             planner_result = SimpleNamespace(
                 planning_state="planning_blocked",
-                product_escalations=(
+                pm_decision_requests=(
+                    PMDecisionRequestPayload(
+                        request_id="pm-invite-ttl",
+                        question="What invitation TTL should v1 enforce for automatic expiry?",
+                        why_it_matters="This changes link validity and account recovery behavior.",
+                        related_decision_ids=("invite-ttl",),
+                    ),
+                    PMDecisionRequestPayload(
+                        request_id="pm-audit-retention",
+                        question="What audit retention window must exports support in v1?",
+                        why_it_matters="This changes export retention promises.",
+                        related_decision_ids=("audit-retention",),
+                    ),
+                ),
+            )
+            stale_questions = ClarificationQuestionSet.from_values(
+                [
                     {
                         "question": "What invitation TTL should v1 enforce for automatic expiry?",
                         "why_it_matters": "This changes link validity and account recovery behavior.",
@@ -991,8 +1020,45 @@ class ParentWorkflowOperationRetryTests(SqliteTemplateDbTestCase):
                         "question": "What audit retention window must exports support in v1?",
                         "why_it_matters": "This changes export retention promises.",
                     },
+                ]
+            ).questions
+            upsert_clarification_projection(
+                session=session,
+                spec=ClarificationProjectionSpec(
+                    tenant_id=tenant.tenant_id,
+                    project_id=project.project_id,
+                    context_type=FOLLOWUP_CONTEXT_PARENT_PLANNING_CLARIFICATION,
+                    issue_key="MAB-215",
+                    request_id="parent-planning-clarification:MAB-215",
+                    origin_command="clarify",
+                    questions=stale_questions,
+                    metadata={
+                        "questions": [question.to_payload() for question in stale_questions],
+                        "source": "workflow_operation_retry",
+                        "blocked_operation_type": "jira_child_fanout",
+                        "workflow_id": workflow.workflow_id,
+                        "jira_comment_id": "deleted-comment-999",
+                    },
                 ),
             )
+            session.commit()
+
+            comment_lookups: list[str] = []
+
+            def list_issue_comments(*, issue_id_or_key: str):
+                comment_lookups.append(issue_id_or_key)
+                return []
+
+            fake_jira_adapter = SimpleNamespace(
+                get_issue_detail=lambda **_kwargs: SimpleNamespace(
+                    key="MAB-215",
+                    summary="Identity redesign",
+                    description="Parent planning",
+                    labels=["pm-parent"],
+                ),
+                list_issue_comments=list_issue_comments,
+            )
+            fake_router = SimpleNamespace(jira=lambda **_kwargs: fake_jira_adapter)
 
             with (
                 patch(
@@ -1004,8 +1070,27 @@ class ParentWorkflowOperationRetryTests(SqliteTemplateDbTestCase):
                     return_value=(planner_result, {"planning": "package"}),
                 ) as planner_mock,
                 patch(
-                    "orchestrator.core.parent_feature_workflow.adapters._ParentChildSyncGateway.seed_parent_backlog_children",
-                    return_value={"requires_input": True, "questions": []},
+                    "orchestrator.core.parent_feature_workflow.adapters._ParentBriefPlanner.resolve_pm_decisions",
+                    return_value=SimpleNamespace(
+                        resolved_decisions=(),
+                        stakeholder_escalations=(
+                            StakeholderEscalationPayload(
+                                escalation_id="stakeholder-invite-ttl",
+                                question="What invitation TTL should v1 enforce for automatic expiry?",
+                                why_it_matters="This changes link validity and account recovery behavior.",
+                                business_impact_area="customer_business_impact",
+                                source_pm_decision_request_ids=("pm-invite-ttl",),
+                            ),
+                            StakeholderEscalationPayload(
+                                escalation_id="stakeholder-audit-retention",
+                                question="What audit retention window must exports support in v1?",
+                                why_it_matters="This changes export retention promises.",
+                                business_impact_area="risk_compliance",
+                                source_pm_decision_request_ids=("pm-audit-retention",),
+                            ),
+                        ),
+                        updated_planning_context={},
+                    ),
                 ),
                 patch(
                     "orchestrator.core.parent_feature_workflow.retry_support.post_pm_product_clarification_questions_to_jira",
@@ -1035,14 +1120,27 @@ class ParentWorkflowOperationRetryTests(SqliteTemplateDbTestCase):
             assert "comment-123" in (comment_operation.summary or "")
             planner_mock.assert_called_once()
             post_comment_mock.assert_called_once()
+            assert comment_lookups == []
+            followup_context = (
+                session.query(FollowupContext)
+                .filter(
+                    FollowupContext.issue_key == "MAB-215",
+                    FollowupContext.context_type == FOLLOWUP_CONTEXT_PARENT_PLANNING_CLARIFICATION,
+                    FollowupContext.status == "active",
+                )
+                .one()
+            )
+            assert followup_context.metadata_json["jira_comment_id"] == "comment-123"
             assert [question.to_payload() for question in post_comment_mock.call_args.kwargs["questions"]] == [
                 {
                     "question": "What invitation TTL should v1 enforce for automatic expiry?",
                     "why_it_matters": "This changes link validity and account recovery behavior.",
+                    "source_ref": "stakeholder_escalation",
                 },
                 {
                     "question": "What audit retention window must exports support in v1?",
                     "why_it_matters": "This changes export retention promises.",
+                    "source_ref": "stakeholder_escalation",
                 },
             ]
 

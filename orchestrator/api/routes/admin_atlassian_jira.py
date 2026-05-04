@@ -16,7 +16,7 @@ from orchestrator.core.security import (
     require_any_tenant_permission,
     require_authenticated_principal,
 )
-from orchestrator.core.tenant_access import PERMISSION_PROJECTS_MANAGE, PERMISSION_WORKSPACE_MANAGE
+from orchestrator.core.platform.access import PERMISSION_PROJECTS_MANAGE, PERMISSION_WORKSPACE_MANAGE
 from orchestrator.storage.models import AtlassianOAuthConnection
 
 router = APIRouter(prefix="/api/admin", tags=["admin", "atlassian-jira"])

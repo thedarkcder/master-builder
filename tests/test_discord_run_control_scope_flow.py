@@ -4,12 +4,12 @@ from unittest.mock import patch
 
 import pytest
 
-from orchestrator.core.decision_gate import DecisionGateResult
-from orchestrator.core.decision_state_machine import resolve_execution_gate_state
-from orchestrator.core.decision_types import DecisionClassification, IngressDecision
-from orchestrator.core.decision_engine import DecisionEngineResult
+from orchestrator.core.decision.gate import DecisionGateResult
+from orchestrator.core.decision.state_machine import resolve_execution_gate_state
+from orchestrator.core.decision.types import DecisionClassification, IngressDecision
+from orchestrator.core.decision.engine import DecisionEngineResult
 from orchestrator.core.gtd import GoodToDoValidationResult
-from orchestrator.core.pre_run_check import PreRunCheckResult
+from orchestrator.core.precheck.pre_run_check import PreRunCheckResult
 from orchestrator.storage.models import Project, Run
 from orchestrator.tools.atlassian_oauth import JiraIssueDetail, JiraIssuePreview
 from tests.test_support.discord_command_api_harness import DiscordCommandApiTestHarness

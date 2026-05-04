@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from orchestrator.core.runtime.payload_models import TechnicalDecisionPayload
+
 _ELLIPSIS = "..."
 
 _PARENT_SECTION_ITEM_LIMITS: dict[str, int] = {
@@ -18,6 +20,7 @@ _CHILD_SECTION_ITEM_LIMITS: dict[str, int] = {
     "done_means": 8,
     "dependencies_and_risks": 8,
     "specialist_summary": 12,
+    "technical_decisions": 12,
 }
 
 _TEXT_LIMITS: dict[str, int] = {
@@ -36,6 +39,7 @@ _TEXT_LIMITS: dict[str, int] = {
     "how_to_test_item": 180,
     "done_means_item": 180,
     "specialist_item": 220,
+    "technical_decision_item": 260,
     "planning_state": 120,
     "revision": 120,
 }
@@ -87,6 +91,20 @@ def _bullet_list(items: list[str]) -> dict:
             for item in normalized_items
         ],
     }
+
+
+def _technical_decision_lines(technical_decisions: list[TechnicalDecisionPayload] | None) -> list[str]:
+    lines: list[str] = []
+    for decision in technical_decisions or []:
+        selected_option = next(
+            option for option in decision.options if option.option_id == decision.selected_option_id
+        )
+        suffix = f" Confidence: {decision.confidence}." if decision.confidence else ""
+        lines.append(
+            f"{decision.decision_id}: {decision.question} "
+            f"Selected {selected_option.title}. {decision.rationale}.{suffix}"
+        )
+    return lines
 
 def build_parent_feature_description(
     *,
@@ -222,6 +240,7 @@ def build_engineering_child_description(
     done_means: list[str],
     dependencies_and_risks: list[str],
     specialist_summary: list[str] | None = None,
+    technical_decisions: list[TechnicalDecisionPayload] | None = None,
     planning_state: str | None = None,
 ) -> dict:
     bounded_delivery = (
@@ -269,6 +288,12 @@ def build_engineering_child_description(
         max_chars=_TEXT_LIMITS["specialist_item"],
         empty_fallback="No specialist planning context was provided",
     )
+    bounded_technical_decisions = _budget_items(
+        _technical_decision_lines(technical_decisions),
+        max_items=_CHILD_SECTION_ITEM_LIMITS["technical_decisions"],
+        max_chars=_TEXT_LIMITS["technical_decision_item"],
+        empty_fallback="No technical decisions were recorded",
+    )
     bounded_planning_state = _truncate_text(
         planning_state if isinstance(planning_state, str) else "",
         max_chars=_TEXT_LIMITS["planning_state"],
@@ -294,6 +319,8 @@ def build_engineering_child_description(
         _bullet_list(bounded_dependencies_and_risks),
         _heading("Specialist Planning Context"),
         _bullet_list(bounded_specialist_summary),
+        _heading("Technical Decisions"),
+        _bullet_list(bounded_technical_decisions),
         _heading("Planning State"),
         _bullet_list([bounded_planning_state]),
         _heading("Synced From Parent Revision"),

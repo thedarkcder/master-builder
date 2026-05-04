@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from orchestrator.core.communications.enqueue_conflict_presentation import (
     present_discord_enqueue_conflict,
 )
-from orchestrator.core.run_enqueue_types import EnqueueFailureReason
+from orchestrator.core.runs.enqueue_types import EnqueueFailureReason
 
 
 def test_present_discord_enqueue_conflict_includes_active_run_context() -> None:

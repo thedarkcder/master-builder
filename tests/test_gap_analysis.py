@@ -13,7 +13,7 @@ from orchestrator.api.discord.bug.gap_analysis import (
     run_gap_analysis,
     tenant_repo_url,
 )
-from orchestrator.core.runs import RUN_STATUS_SUCCEEDED
+from orchestrator.core.runs.service import RUN_STATUS_SUCCEEDED
 
 
 class GapAnalysisTests(unittest.TestCase):

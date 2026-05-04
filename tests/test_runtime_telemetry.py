@@ -6,8 +6,8 @@ from unittest.mock import patch
 
 import pytest
 
-from orchestrator.core.runtime_telemetry import build_runtime_log_sink
-from orchestrator.core.telemetry import telemetry_span
+from orchestrator.core.observability.telemetry import build_runtime_log_sink
+from orchestrator.core.observability.otel_telemetry import telemetry_span
 
 
 class RuntimeTelemetryTests(unittest.TestCase):
@@ -28,7 +28,7 @@ class RuntimeTelemetryTests(unittest.TestCase):
             issue_key="TA-1",
         )
 
-        with patch("orchestrator.core.runtime_telemetry.logger.info", side_effect=_capture_log):
+        with patch("orchestrator.core.observability.telemetry.logger.info", side_effect=_capture_log):
             sink(
                 "stderr",
                 "APP_STORE_CONNECT_API_KEY_BASE64=super-secret-value email=user@example.com",

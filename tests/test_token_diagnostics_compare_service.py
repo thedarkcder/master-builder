@@ -7,7 +7,7 @@ from cryptography.fernet import Fernet
 
 from orchestrator.api.admin.token_diagnostics_compare_service import get_token_stage_diagnostics_compare
 from orchestrator.core.config import get_settings
-from orchestrator.core.logging_pane_events import emit_logging_pane_event
+from orchestrator.core.observability.logging_pane import emit_logging_pane_event
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import Project, Tenant

@@ -14,7 +14,7 @@ from orchestrator.core.communications import (
     TransportAction,
 )
 from orchestrator.api.discord.ask.context import tenant_project_keys
-from orchestrator.core.followup_context_service import FollowupReaction
+from orchestrator.core.pm.followup_context_service import FollowupReaction
 
 _ROOM_VOICE_REPLY_COMMANDS = frozenset(
     {

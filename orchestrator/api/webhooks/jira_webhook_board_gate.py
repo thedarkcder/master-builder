@@ -20,8 +20,8 @@ from orchestrator.core.communications.jira_enqueue_presentation import (
     format_backlog_pre_run_check_message,
     format_jira_enqueue_skipped_message,
 )
-from orchestrator.core.decision_types import tenant_ready_label
-from orchestrator.core.decision_state_machine import (
+from orchestrator.core.decision.types import tenant_ready_label
+from orchestrator.core.decision.state_machine import (
     ExecutionAdmissionReason,
     build_execution_admission_block,
 )

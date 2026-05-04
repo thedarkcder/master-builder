@@ -8,13 +8,13 @@ from datetime import timedelta
 from sqlalchemy.orm import Session, sessionmaker
 
 from orchestrator.core.config import Settings
-from orchestrator.core.workflow_advance import WorkflowAdvanceOutcome
-from orchestrator.core.workflow_engine import WorkflowEngineState
-from orchestrator.core.workflow_operation_service import WorkflowOperationHandle
-from orchestrator.core.workflow_handler_registry import WorkflowHandlerRegistry
-from orchestrator.core.workflow_operation_retry_use_case import retry_workflow_operation_with_registered_handler
-from orchestrator.core.workflow_execution_projection import workflow_execution_id
-from orchestrator.core.workflow_type_catalog import get_workflow_type, normalize_workflow_retry_policy_config
+from orchestrator.core.workflow.advance import InvalidWorkflowOperationRetryError, WorkflowAdvanceOutcome
+from orchestrator.core.workflow.engine import WorkflowEngineState
+from orchestrator.core.workflow.operation_service import WorkflowOperationHandle
+from orchestrator.core.workflow.handler_registry import WorkflowHandlerRegistry
+from orchestrator.core.workflow.operation_retry_use_case import retry_workflow_operation_with_registered_handler
+from orchestrator.core.workflow.execution_projection import workflow_execution_id
+from orchestrator.core.workflow.type_catalog import get_workflow_type, normalize_workflow_retry_policy_config
 from orchestrator.storage.models import Run, RunHumanInputRequest, WorkflowExecution, WorkflowOperation
 from orchestrator.temporal.client import connect_temporal_client
 from orchestrator.temporal.payloads import (
@@ -28,8 +28,7 @@ from orchestrator.temporal.payloads import (
 from orchestrator.temporal.workflow_registry import resolve_temporal_binding_for_handler
 
 try:  # pragma: no cover - exercised when temporal backend is enabled
-    from temporalio.client import WorkflowUpdateStage
-    from temporalio.exceptions import WorkflowAlreadyStartedError
+    from temporalio.exceptions import ApplicationError, WorkflowAlreadyStartedError
 except ImportError as exc:  # pragma: no cover - exercised when temporal backend is enabled
     raise RuntimeError("Temporal backend requires temporalio to be installed") from exc
 
@@ -411,7 +410,7 @@ class TemporalWorkflowEngine:
     ) -> WorkflowOperationHandle:
         config = _temporal_config_for_workflow(session=session, workflow=workflow, settings=settings)
         if config.execution_mode == "handler":
-            async def _retry() -> None:
+            async def _retry() -> WorkflowOperationHandle:
                 client = await connect_temporal_client(settings)
                 workflow_type = get_workflow_type(session, workflow_type_key=workflow.workflow_type_key)
                 handle = await _ensure_handler_workflow_handle(
@@ -420,7 +419,7 @@ class TemporalWorkflowEngine:
                     workflow_id=workflow.workflow_id,
                     workflow_handler_key=str(workflow_type.handler_key or "").strip(),
                 )
-                await handle.start_update(
+                result = await handle.execute_update(
                     config.workflow_defn.retry_operation,
                     WorkflowOperationRetryInput(
                         workflow_id=workflow.workflow_id,
@@ -430,16 +429,20 @@ class TemporalWorkflowEngine:
                         retry_max_interval_seconds=config.retry_max_interval_seconds,
                         retry_backoff_coefficient=config.retry_backoff_coefficient,
                     ),
-                    wait_for_stage=WorkflowUpdateStage.ACCEPTED,
+                )
+                return WorkflowOperationHandle(
+                    operation_id=result.operation_id,
+                    workflow_id=result.workflow_id,
+                    operation_type=result.operation_type,
+                    status=result.operation_status,
                 )
 
-            _run_sync(_retry())
-            return WorkflowOperationHandle(
-                operation_id=operation.operation_id,
-                workflow_id=workflow.workflow_id,
-                operation_type=operation.operation_type,
-                status=operation.status,
-            )
+            try:
+                return _run_sync(_retry())
+            except ApplicationError as exc:
+                if exc.type == "terminal_workflow_operation_retry_error":
+                    raise InvalidWorkflowOperationRetryError(exc.message) from exc
+                raise
         if self._workflow_handler_registry is None:
             raise RuntimeError("Workflow operation retry handler registry is not configured")
         return retry_workflow_operation_with_registered_handler(

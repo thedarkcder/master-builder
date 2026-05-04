@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 from sqlalchemy.exc import IntegrityError
 
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
-from orchestrator.core.runs import (
+from orchestrator.core.runs.service import (
     RUN_STATUS_FAILED,
     RUN_STATUS_RUNNING,
     RUN_STATUS_SUCCEEDED,

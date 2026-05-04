@@ -11,7 +11,7 @@ from orchestrator.core.communications import (
     DiscordChannelMessageWithAttachmentAction,
     DiscordThreadReplyAction,
 )
-from orchestrator.core.runtime_payload_models import VoiceEntryRoutePayload
+from orchestrator.core.runtime.payload_models import VoiceEntryRoutePayload
 
 
 class DiscordMessageApplicationTests(unittest.TestCase):

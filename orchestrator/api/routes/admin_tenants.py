@@ -77,7 +77,7 @@ from orchestrator.api.schemas import (
     TenantRead,
     TenantUpdate,
 )
-from orchestrator.core.install_registry_service import (
+from orchestrator.core.platform.install_registry_service import (
     ProjectInstallWrite as ServiceProjectInstallWrite,
     create_project_install,
     delete_project_install,
@@ -85,7 +85,7 @@ from orchestrator.core.install_registry_service import (
     list_project_installs,
     update_project_install,
 )
-from orchestrator.core.install_request_service import (
+from orchestrator.core.platform.install_request_service import (
     get_project_install_request,
     list_project_install_requests,
     update_install_request_status,
@@ -98,13 +98,13 @@ from orchestrator.core.discord.oauth import (
     issue_discord_oauth_state,
 )
 from orchestrator.core.discord.oauth_config import resolve_discord_oauth_config
-from orchestrator.core.email_delivery import EmailDeliveryError
+from orchestrator.core.platform.email_delivery import EmailDeliveryError
 from orchestrator.core.invites import email_delivery
-from orchestrator.core.platform_secret_service import (
+from orchestrator.core.platform.secret_service import (
     PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF,
     resolve_platform_secret_ref,
 )
-from orchestrator.core.project_automation_service import (
+from orchestrator.core.projects.automation_service import (
     enqueue_project_automation_run_now,
     ProjectAutomationWrite as ServiceProjectAutomationWrite,
     list_execution_history,
@@ -120,14 +120,14 @@ from orchestrator.core.security import (
     require_tenant_membership,
     require_tenant_permission,
 )
-from orchestrator.core.tenant_access import (
+from orchestrator.core.platform.access import (
     KNOWN_PERMISSION_KEYS,
     PERMISSION_PEOPLE_MANAGE,
     PERMISSION_PROJECTS_MANAGE,
     PERMISSION_WORKSPACE_MANAGE,
     normalize_permission_keys,
 )
-from orchestrator.core.tenant_users import (
+from orchestrator.core.platform.users import (
     create_team,
     create_invite,
     ensure_team_ids_exist,

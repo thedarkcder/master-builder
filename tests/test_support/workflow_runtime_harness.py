@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from orchestrator.core.workflow_advance import execute_workflow_advance
-from orchestrator.core.workflow_type_catalog import get_workflow_type_by_handler_key
+from orchestrator.core.workflow.advance import execute_workflow_advance
+from orchestrator.core.workflow.type_catalog import get_workflow_type_by_handler_key
 
 
 def skip_product_event_notification(

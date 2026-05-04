@@ -1,5 +1,5 @@
-from orchestrator.core.worker_capability_normalization import WorkerCapability
-from orchestrator.core.worker_capabilities import (
+from orchestrator.core.worker.capability_normalization import WorkerCapability
+from orchestrator.core.worker.capabilities import (
     infer_required_worker_capability,
     parse_worker_capabilities,
     parse_worker_capabilities_strict,

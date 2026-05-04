@@ -181,7 +181,18 @@ class JiraOAuthIssueServiceTests(unittest.TestCase):
                     "maxResults": 100,
                     "total": 1,
                 }
-            return {"key": "MAB-1", "fields": {"summary": "Summary", "status": {"name": "Done"}, "description": {"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "hello"}]}]}}}
+            return {
+                "key": "MAB-1",
+                "fields": {
+                    "summary": "Summary",
+                    "status": {"name": "Done"},
+                    "issuetype": {"name": "Epic"},
+                    "description": {
+                        "type": "doc",
+                        "content": [{"type": "paragraph", "content": [{"type": "text", "text": "hello"}]}],
+                    },
+                },
+            }
 
         def _request_json(**kwargs):  # noqa: ANN003
             request_calls.append(kwargs)
@@ -201,6 +212,7 @@ class JiraOAuthIssueServiceTests(unittest.TestCase):
         detail = service.get_issue_detail(access_token="tok", cloud_id="cloud", issue_id_or_key=" MAB-1 ")
         self.assertEqual(detail.summary, "Summary")
         self.assertEqual(detail.description, "hello")
+        self.assertEqual(detail.issue_type, "Epic")
 
         comments = service.list_issue_comments(access_token="tok", cloud_id="cloud", issue_id_or_key="MAB-1")
         self.assertEqual(comments[0].comment_id, "10001")
@@ -614,14 +626,31 @@ class JiraOAuthIssueServiceCoverageEdgesTests(unittest.TestCase):
             "MAB-1",
         )
 
+        service.create_issue(
+            access_token="tok",
+            cloud_id="cloud",
+            project_key="MAB",
+            issue=JiraIssueCreateInput(
+                summary="Child story",
+                description="Desc",
+                labels=["engineering-child"],
+                issue_type="Task",
+                parent_issue_key="MAB-1",
+            ),
+        )
+        self.assertEqual(
+            captured[1]["payload"]["fields"]["parent"]["key"],
+            "MAB-1",
+        )
+
         service.add_issue_link(
             access_token="tok",
             cloud_id="cloud",
             inward_issue_key="MAB-2",
             outward_issue_key="MAB-1",
         )
-        self.assertEqual(captured[1]["payload"]["inwardIssue"]["key"], "MAB-2")
-        self.assertEqual(captured[1]["payload"]["outwardIssue"]["key"], "MAB-1")
+        self.assertEqual(captured[2]["payload"]["inwardIssue"]["key"], "MAB-2")
+        self.assertEqual(captured[2]["payload"]["outwardIssue"]["key"], "MAB-1")
 
     def test_create_issue_raises_when_subtask_type_missing(self) -> None:
         service = JiraOAuthIssueService(

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from fastapi import HTTPException, status
-from orchestrator.core.decision_types import tenant_jira_ready_statuses
+from orchestrator.core.decision.types import tenant_jira_ready_statuses
 from orchestrator.storage.models import Tenant
 
 

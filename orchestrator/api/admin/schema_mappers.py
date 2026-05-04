@@ -11,12 +11,14 @@ from orchestrator.api.schemas import (
     WorkflowObservabilityEventRead,
     WorkflowOperationAttemptRead,
     WorkflowOperationRead,
+    WorkflowOperationWorkUnitAttemptRead,
+    WorkflowOperationWorkUnitRead,
     WorkflowRead,
     WorkflowStatePathEntryRead,
     WorkflowTypeRead,
 )
 from orchestrator.core.config import get_settings
-from orchestrator.core.project_policy import resolve_effective_policy
+from orchestrator.core.projects.policy import resolve_effective_policy
 from orchestrator.storage.models import (
     Project,
     ProjectInstall,
@@ -26,8 +28,10 @@ from orchestrator.storage.models import (
     WorkflowExecution,
     WorkflowOperation,
     WorkflowOperationAttempt,
+    WorkflowOperationWorkUnit,
+    WorkflowOperationWorkUnitAttempt,
 )
-from orchestrator.core.product_events import ProductEvent
+from orchestrator.core.observability.events import ProductEvent
 
 
 def tenant_to_schema(tenant: Tenant) -> TenantRead:
@@ -77,7 +81,45 @@ def run_to_schema(run: Run) -> RunRead:
     )
 
 
-def workflow_operation_attempt_to_schema(attempt: WorkflowOperationAttempt) -> WorkflowOperationAttemptRead:
+def workflow_operation_work_unit_to_schema(
+    work_unit: WorkflowOperationWorkUnit,
+    *,
+    attempts: list[WorkflowOperationWorkUnitAttempt],
+) -> WorkflowOperationWorkUnitRead:
+    return WorkflowOperationWorkUnitRead(
+        work_unit_id=work_unit.work_unit_id,
+        unit_key=work_unit.unit_key,
+        unit_kind=work_unit.unit_kind,
+        idempotency_key=work_unit.idempotency_key,
+        input_fingerprint=work_unit.input_fingerprint,
+        status=work_unit.status,
+        error_category=work_unit.error_category,
+        error_message=work_unit.error_message,
+        completed_at=work_unit.completed_at,
+        attempts=[
+            WorkflowOperationWorkUnitAttemptRead(
+                work_unit_attempt_id=unit_attempt.work_unit_attempt_id,
+                operation_attempt_id=unit_attempt.operation_attempt_id,
+                attempt_number=unit_attempt.attempt_number,
+                status=unit_attempt.status,
+                error_category=unit_attempt.error_category,
+                error_message=unit_attempt.error_message,
+                next_retry_at=unit_attempt.next_retry_at,
+                started_at=unit_attempt.started_at,
+                finished_at=unit_attempt.finished_at,
+            )
+            for unit_attempt in attempts
+        ],
+    )
+
+
+def workflow_operation_attempt_to_schema(
+    attempt: WorkflowOperationAttempt,
+    *,
+    work_units: list[WorkflowOperationWorkUnit] | None = None,
+    work_unit_attempts: dict[str, list[WorkflowOperationWorkUnitAttempt]] | None = None,
+) -> WorkflowOperationAttemptRead:
+    unit_attempts = work_unit_attempts or {}
     return WorkflowOperationAttemptRead(
         attempt_id=attempt.attempt_id,
         attempt_number=attempt.attempt_number,
@@ -89,6 +131,21 @@ def workflow_operation_attempt_to_schema(attempt: WorkflowOperationAttempt) -> W
         next_retry_at=attempt.next_retry_at,
         started_at=attempt.started_at,
         finished_at=attempt.finished_at,
+        work_units=[
+            workflow_operation_work_unit_to_schema(
+                work_unit,
+                attempts=[
+                    unit_attempt
+                    for unit_attempt in unit_attempts.get(work_unit.work_unit_id, [])
+                    if unit_attempt.operation_attempt_id == attempt.attempt_id
+                ],
+            )
+            for work_unit in list(work_units or [])
+            if any(
+                unit_attempt.operation_attempt_id == attempt.attempt_id
+                for unit_attempt in unit_attempts.get(work_unit.work_unit_id, [])
+            )
+        ],
     )
 
 
@@ -137,12 +194,16 @@ def workflow_operation_to_schema(
     required: bool,
     definition_only: bool,
     attempts: list[WorkflowOperationAttempt],
+    work_units: list[WorkflowOperationWorkUnit] | None = None,
+    work_unit_attempts: dict[str, list[WorkflowOperationWorkUnitAttempt]] | None = None,
     kind: str = "business",
     after: list[str] | None = None,
     supports: list[str] | None = None,
     events: list[ProductEvent | dict] | None = None,
     can_retry: bool = False,
     retry_unavailable_reason: str | None = None,
+    can_restart: bool = False,
+    restart_unavailable_reason: str | None = None,
 ) -> WorkflowOperationRead:
     return WorkflowOperationRead(
         operation_id=operation_id,
@@ -161,7 +222,16 @@ def workflow_operation_to_schema(
         summary=(operation.summary if operation is not None else None),
         can_retry=can_retry,
         retry_unavailable_reason=retry_unavailable_reason,
-        attempts=[workflow_operation_attempt_to_schema(attempt) for attempt in attempts],
+        can_restart=can_restart,
+        restart_unavailable_reason=restart_unavailable_reason,
+        attempts=[
+            workflow_operation_attempt_to_schema(
+                attempt,
+                work_units=work_units,
+                work_unit_attempts=work_unit_attempts,
+            )
+            for attempt in attempts
+        ],
         events=[workflow_observability_event_to_schema(event) for event in list(events or [])],
     )
 

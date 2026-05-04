@@ -14,7 +14,7 @@ from orchestrator.core.discord.command_sync_status import (
     mark_discord_command_sync_failure,
     mark_discord_command_sync_success,
 )
-from orchestrator.core.platform_secret_service import (
+from orchestrator.core.platform.secret_service import (
     PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF,
     resolve_platform_secret_ref,
 )

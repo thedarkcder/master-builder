@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from orchestrator.core.architecture_document_service import ArchitectureDocumentService
-from orchestrator.core.jira_links import architecture_document_remote_link_spec, workflow_execution_remote_link_spec
-from orchestrator.core.jira_parent_child_sync_publishers import (
+from orchestrator.core.projects.architecture_document_service import ArchitectureDocumentService
+from orchestrator.core.integrations.atlassian.links import architecture_document_remote_link_spec, workflow_execution_remote_link_spec
+from orchestrator.core.integrations.atlassian.parent_child_sync_publishers import (
     update_issue_sync_label,
     upsert_jira_remote_link,
 )
@@ -13,9 +13,9 @@ from orchestrator.core.parent_feature_workflow.retry_support import (
     jira_issue_key_for_workflow,
     operation_handle,
 )
-from orchestrator.core.workflow_advance import InvalidWorkflowOperationRetryError
-from orchestrator.core.workflow_execution_projection import WorkflowExecutionProjection, classify_external_workflow_failure
-from orchestrator.core.workflow_operation_service import WorkflowOperationHandle
+from orchestrator.core.workflow.advance import InvalidWorkflowOperationRetryError
+from orchestrator.core.workflow.execution_projection import WorkflowExecutionProjection, classify_external_workflow_failure
+from orchestrator.core.workflow.operation_service import WorkflowOperationHandle
 
 
 class JiraParentUpdateRetryExecutor:

@@ -3,13 +3,14 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import pytest
 from fastapi import HTTPException
 
 from orchestrator.core.issue_fanout.draft_assembly import normalize_planning_package
 from orchestrator.core.issue_fanout.service import seed_issues_with_runtime, seed_parent_issues_with_runtime
-from orchestrator.core.architecture_document_service import ArchitectureDocumentGate
-from orchestrator.core.workflow_attempt_ref import WorkflowAttemptRef
-from orchestrator.core.runtime_payload_models import EngineeringSeedPlanPayload, PmParentSeedPlanPayload
+from orchestrator.core.projects.architecture_document_service import ArchitectureDocumentGate
+from orchestrator.core.workflow.attempt_ref import WorkflowAttemptRef
+from orchestrator.core.runtime.payload_models import EngineeringSeedPlanPayload, PmParentSeedPlanPayload
 from orchestrator.storage.models import WorkflowExecution, WorkflowOperation, WorkflowOperationAttempt
 from orchestrator.tools.atlassian_oauth import JiraIssueCreateResult, AtlassianOAuthError
 from orchestrator.tools.atlassian_oauth_issue_service import MAX_JIRA_ADF_DOCUMENT_BYTES, _to_adf_description
@@ -144,7 +145,7 @@ def _planning_package(*, planning_state: str, child_issues: list[dict] | None = 
                     }
                 ],
                 "technical_decisions": [_technical_decision()],
-                "product_escalations": [],
+                "pm_decision_requests": [],
                 "acceptance_impacts": ["Parent stays PM-only until planning completes."],
                 "mermaid_diagram": "flowchart TD\n  Parent[Parent brief] --> Planner[Planning runtime]",
             },
@@ -153,7 +154,7 @@ def _planning_package(*, planning_state: str, child_issues: list[dict] | None = 
                 "recommendations": ["Keep sensitive data out of the parent brief."],
                 "required_tasks": ["Add security verification child"],
                 "technical_decisions": [_technical_decision()],
-                "product_escalations": [],
+                "pm_decision_requests": [],
                 "acceptance_impacts": ["Security tasks should stay technical."],
             },
             "testing": {
@@ -161,7 +162,7 @@ def _planning_package(*, planning_state: str, child_issues: list[dict] | None = 
                 "recommendations": ["Add regression coverage for the handoff."],
                 "required_tasks": ["Add planning-to-Jira regression tests"],
                 "technical_decisions": [_technical_decision()],
-                "product_escalations": [],
+                "pm_decision_requests": [],
                 "acceptance_impacts": ["Child creation waits for planning completion."],
             },
         },
@@ -221,7 +222,7 @@ def test_seed_issues_scopes_allowed_project_keys() -> None:
     assert "unsupported Jira project key 'YANA'" in str(exc_ctx.value.detail)
 
 
-def test_normalize_planning_package_accepts_structured_product_escalations() -> None:
+def test_normalize_planning_package_rejects_removed_product_escalations_contract() -> None:
     package = _planning_package(planning_state="planning_completed")
     package["specialist_outputs"]["testing"]["product_escalations"] = [
         {
@@ -231,14 +232,32 @@ def test_normalize_planning_package_accepts_structured_product_escalations() -> 
         }
     ]
 
+    with pytest.raises(HTTPException) as exc_ctx:
+        normalize_planning_package(package)
+
+    assert "removed product_escalations contract" in str(exc_ctx.value.detail)
+
+
+def test_normalize_planning_package_keeps_technical_decisions_typed() -> None:
+    package = _planning_package(planning_state="planning_completed")
+
     normalized = normalize_planning_package(package)
 
-    assert any(
-        "Testing Product escalations: Which browsers must the regression suite cover in v1? "
-        "Why it matters: QA needs a stable compatibility target."
-        == line
-        for line in normalized.specialist_summary
-    )
+    assert [decision.decision_id for decision in normalized.technical_decisions] == ["planning-package-handoff"]
+    assert all("Technical decision" not in line for line in normalized.specialist_summary)
+
+
+def test_normalize_planning_package_requires_stage_technical_decisions() -> None:
+    package = _planning_package(planning_state="planning_completed")
+    del package["specialist_outputs"]["security"]["technical_decisions"]
+
+    try:
+        normalize_planning_package(package)
+    except HTTPException as exc:
+        assert exc.status_code == 409
+        assert "security' missing 'technical_decisions" in str(exc.detail)
+    else:
+        raise AssertionError("missing technical_decisions should fail planning package normalization")
 
 
 def test_seed_issues_creates_parent_and_engineering_child() -> None:
@@ -932,7 +951,7 @@ def test_seed_issues_truncates_large_jira_descriptions_before_write() -> None:
                     "recommendations": [huge_line, huge_line],
                     "required_tasks": [huge_line],
                     "technical_decisions": [_technical_decision()],
-                    "product_escalations": [],
+                    "pm_decision_requests": [],
                     "acceptance_impacts": [huge_line],
                     "mermaid_diagram": "flowchart TD\n" + ("A-->B\n" * 5000),
                 },
@@ -941,7 +960,7 @@ def test_seed_issues_truncates_large_jira_descriptions_before_write() -> None:
                     "recommendations": [huge_line],
                     "required_tasks": [],
                     "technical_decisions": [_technical_decision()],
-                    "product_escalations": [],
+                    "pm_decision_requests": [],
                     "acceptance_impacts": [huge_line],
                 },
                 "testing": {
@@ -949,7 +968,7 @@ def test_seed_issues_truncates_large_jira_descriptions_before_write() -> None:
                     "recommendations": [huge_line],
                     "required_tasks": [huge_line],
                     "technical_decisions": [_technical_decision()],
-                    "product_escalations": [],
+                    "pm_decision_requests": [],
                     "acceptance_impacts": [huge_line],
                 },
             },

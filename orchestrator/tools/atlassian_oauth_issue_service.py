@@ -114,7 +114,7 @@ class JiraOAuthIssueService:
         if not normalized_issue:
             raise AtlassianOAuthError("Missing issue id/key for issue detail fetch")
 
-        query = urlencode({"fields": "summary,status,description,labels"})
+        query = urlencode({"fields": "summary,status,description,labels,issuetype"})
         payload = self._get_json(
             url=(
                 f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/issue/"
@@ -153,6 +153,13 @@ class JiraOAuthIssueService:
             if isinstance(category_raw, str) and category_raw.strip():
                 status_category_key = category_raw.strip()
 
+        issue_type: str | None = None
+        issue_type_obj = fields.get("issuetype")
+        if isinstance(issue_type_obj, dict):
+            issue_type_raw = issue_type_obj.get("name")
+            if isinstance(issue_type_raw, str) and issue_type_raw.strip():
+                issue_type = issue_type_raw.strip()
+
         description = _adf_to_plain_text(fields.get("description")).strip()
         labels_raw = fields.get("labels")
         labels: list[str] = []
@@ -163,6 +170,7 @@ class JiraOAuthIssueService:
             summary=summary,
             status=status_name,
             status_category_key=status_category_key,
+            issue_type=issue_type,
             description=description,
             labels=labels,
         )
@@ -734,8 +742,9 @@ class JiraOAuthIssueService:
                 raise AtlassianOAuthError(
                     f"Subtask issue type is not available for project {project_key}"
                 )
-            if issue_type.lower() in {"sub-task", "subtask"}:
-                fields["parent"] = {"key": parent_issue_key}
+            if issue_type.lower() == "epic":
+                raise AtlassianOAuthError("Epic issue type cannot be created as a child issue")
+            fields["parent"] = {"key": parent_issue_key}
         return fields
 
 

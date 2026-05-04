@@ -7,18 +7,22 @@ import pytest
 from sqlalchemy import select
 
 from orchestrator.api.webhooks.jira_application import JiraWebhookPlan
-from orchestrator.core.clarification_questions import ClarificationQuestion
+from orchestrator.core.clarification.questions import ClarificationQuestion
 from orchestrator.core.issue_fanout.description import build_parent_feature_description
-from orchestrator.core.followup_context_service import FOLLOWUP_CONTEXT_PM_INTERVIEW, upsert_followup_context
-from orchestrator.core.pm_interview_service import PM_INTERVIEW_STATUS_QUESTION_PENDING
-from orchestrator.core.parent_feature_brief_store import persist_parent_feature_brief_snapshot
-from orchestrator.core.runtime_payload_models import JiraIssueIntakeRoutePayload
-from orchestrator.core.workflow_execution_projection import (
+from orchestrator.core.pm.followup_context_service import FOLLOWUP_CONTEXT_PM_INTERVIEW, upsert_followup_context
+from orchestrator.core.pm.interview_service import PM_INTERVIEW_STATUS_QUESTION_PENDING
+from orchestrator.core.projects.parent_feature_brief_store import persist_parent_feature_brief_snapshot
+from orchestrator.core.runtime.payload_models import (
+    JiraIssueIntakeRoutePayload,
+    PMDecisionRequestPayload,
+    StakeholderEscalationPayload,
+)
+from orchestrator.core.workflow.execution_projection import (
     WorkflowExecutionReference,
     WorkflowSourceReference,
     ensure_workflow_execution,
 )
-from orchestrator.core.workflow_type_catalog import get_workflow_type
+from orchestrator.core.workflow.type_catalog import get_workflow_type
 from orchestrator.storage.models import (
     FollowupContext,
     PMInterviewCase,
@@ -147,6 +151,15 @@ class _JiraMetadataClientMixin:
     def _transition_issue(self, issue_id_or_key: str, target_status: str) -> dict[str, object]:
         return {}
 
+    def list_issue_comments(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        issue_id_or_key: str,
+    ) -> list[dict[str, object]]:
+        return []
+
 
 def _completed_specialist_planning_result(
     *,
@@ -194,7 +207,7 @@ def _completed_specialist_planning_result(
         "recommendations": [recommendation],
         "child_ticket_specs": [child_spec],
         "technical_decisions": [technical_decision],
-        "product_escalations": [],
+        "pm_decision_requests": [],
         "acceptance_impacts": [acceptance_impact],
     }
     return SimpleNamespace(
@@ -204,7 +217,7 @@ def _completed_specialist_planning_result(
         recommendations=(recommendation,),
         acceptance_impacts=(acceptance_impact,),
         technical_decisions=(),
-        product_escalations=(),
+        pm_decision_requests=(),
         architecture_summary=(recommendation,),
         architecture_diagram="",
         stages=(
@@ -217,7 +230,7 @@ def _completed_specialist_planning_result(
                     "required_tasks": [summary],
                     "child_ticket_specs": [child_spec],
                     "technical_decisions": [technical_decision],
-                    "product_escalations": [],
+                    "pm_decision_requests": [],
                     "acceptance_impacts": [acceptance_impact],
                 },
             ),
@@ -316,7 +329,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                     recommendations=("Seed engineering child tickets from the parent brief.",),
                     acceptance_impacts=("Parent planning should happen automatically in backlog.",),
                     technical_decisions=(),
-                    product_escalations=(),
+                    pm_decision_requests=(),
                     architecture_summary=("Seed engineering child tickets from the parent brief.",),
                     architecture_diagram="",
                     stages=(
@@ -342,7 +355,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                                     }
                                 ],
                                 "technical_decisions": [],
-                                "product_escalations": [],
+                                "pm_decision_requests": [],
                                 "acceptance_impacts": ["Parent planning should happen automatically in backlog."],
                             },
                         ),
@@ -616,7 +629,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                     recommendations=("Reuse board-location checks for PM routing.",),
                     acceptance_impacts=("Board backlog issues still seed children.",),
                     technical_decisions=(),
-                    product_escalations=(),
+                    pm_decision_requests=(),
                     architecture_summary=("Reuse board-location checks for PM routing.",),
                     architecture_diagram="",
                     stages=(
@@ -642,7 +655,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                                     }
                                 ],
                                 "technical_decisions": [],
-                                "product_escalations": [],
+                                "pm_decision_requests": [],
                                 "acceptance_impacts": ["Board backlog issues still seed children."],
                             },
                         ),
@@ -962,7 +975,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                     recommendations=("Seed engineering child tickets from the parent brief.",),
                     acceptance_impacts=("Access enforcement must be consistent.",),
                     technical_decisions=(),
-                    product_escalations=(),
+                    pm_decision_requests=(),
                     architecture_summary=("Centralize tenant authorization.",),
                     architecture_diagram="",
                     stages=(
@@ -988,7 +1001,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                                     }
                                 ],
                                 "technical_decisions": [],
-                                "product_escalations": [],
+                                "pm_decision_requests": [],
                                 "acceptance_impacts": ["Access enforcement must be consistent."],
                             },
                         ),
@@ -1013,7 +1026,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                             }
                         ],
                         "technical_decisions": [],
-                        "product_escalations": [],
+                        "pm_decision_requests": [],
                     },
                 ),
             ),
@@ -1194,7 +1207,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                     recommendations=("Promote runtime selection into the adapter layer.",),
                     acceptance_impacts=("Parent issue should include architecture context.",),
                     technical_decisions=(),
-                    product_escalations=(),
+                    pm_decision_requests=(),
                     architecture_summary=(
                         "Promote runtime selection into the adapter layer.",
                         "Parent issue should include architecture context.",
@@ -1223,7 +1236,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                                     }
                                 ],
                                 "technical_decisions": [],
-                                "product_escalations": [],
+                                "pm_decision_requests": [],
                                 "acceptance_impacts": ["Parent issue should include architecture context."],
                                 "mermaid_diagram": "flowchart TD\n  Parent[Parent issue] --> Planner[Planning runtime]",
                             },
@@ -1236,7 +1249,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                                 "recommendations": ["Keep Jira payloads free of secrets."],
                                 "required_tasks": [],
                                 "technical_decisions": [],
-                                "product_escalations": [],
+                                "pm_decision_requests": [],
                                 "acceptance_impacts": ["Backlog planning remains safe to run automatically."],
                             },
                         ),
@@ -1248,7 +1261,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                                 "recommendations": ["Cover parent backlog planning and fanout."],
                                 "required_tasks": ["Add architect Mermaid output"],
                                 "technical_decisions": [],
-                                "product_escalations": [],
+                                "pm_decision_requests": [],
                                 "acceptance_impacts": ["Parent planning remains deterministic."],
                             },
                         ),
@@ -1315,6 +1328,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                 "jira_child_fanout": "completed",
                 "jira_child_promotion": "pending",
                 "notification_emit": "pending",
+                "pm_decision_resolution": "pending",
             },
         )
         self.assertEqual(oauth_context.client.updated_fields, [])
@@ -1393,7 +1407,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                     recommendations=(),
                     acceptance_impacts=(),
                     technical_decisions=(),
-                    product_escalations=(),
+                    pm_decision_requests=(),
                     architecture_summary=(),
                     architecture_diagram=None,
                     stages=(),
@@ -1476,6 +1490,15 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
             ) -> None:
                 self.replaced_labels.append({"issue_id_or_key": issue_id_or_key, "labels": list(labels)})
 
+            def list_issue_comments(
+                self,
+                *,
+                access_token: str,
+                cloud_id: str,
+                issue_id_or_key: str,
+            ) -> list[dict[str, object]]:
+                return []
+
         discord_client = MagicMock()
         discord_client.post_message.return_value = {"id": "discord-msg-987"}
         oauth_context = SimpleNamespace(
@@ -1509,7 +1532,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                 },
             ),
             patch(
-                "orchestrator.core.jira_parent_child_sync_publishers.resolve_parent_feature_case",
+                "orchestrator.core.integrations.atlassian.parent_child_sync_publishers.resolve_parent_feature_case",
                 return_value=SimpleNamespace(
                     request_id="pm-request-987",
                     channel_id="discord-channel-1",
@@ -1518,8 +1541,8 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                     owner_user_id="discord-user-1",
                 ),
             ),
-            patch("orchestrator.core.jira_parent_child_sync_publishers.resolve_platform_secret_ref", return_value="discord-bot-token"),
-            patch("orchestrator.core.jira_parent_child_sync_publishers.DiscordApiClient", return_value=discord_client),
+            patch("orchestrator.core.integrations.atlassian.parent_child_sync_publishers.resolve_platform_secret_ref", return_value="discord-bot-token"),
+            patch("orchestrator.core.integrations.atlassian.parent_child_sync_publishers.DiscordApiClient", return_value=discord_client),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.create_jira_comment", return_value=({"id": "jira-comment-987"}, None)) as create_comment_mock,
             patch("orchestrator.api.webhooks.jira_parent_child_sync.post_jira_comment", return_value=(True, None)),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.seed_issues_with_runtime") as seed_mock,
@@ -1629,6 +1652,15 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
             ) -> None:
                 self.replaced_labels.append({"issue_id_or_key": issue_id_or_key, "labels": list(labels)})
 
+            def list_issue_comments(
+                self,
+                *,
+                access_token: str,
+                cloud_id: str,
+                issue_id_or_key: str,
+            ) -> list[dict[str, object]]:
+                return []
+
         oauth_context = SimpleNamespace(
             client=_FakeClient(),
             access_token="tok",
@@ -1660,7 +1692,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                 },
             ),
             patch(
-                "orchestrator.core.jira_parent_child_sync_publishers.resolve_parent_feature_case",
+                "orchestrator.core.integrations.atlassian.parent_child_sync_publishers.resolve_parent_feature_case",
                 return_value=SimpleNamespace(
                     request_id="pm-request-987A",
                     channel_id="discord-channel-1",
@@ -1669,7 +1701,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                     owner_user_id="discord-user-1",
                 ),
             ),
-            patch("orchestrator.core.jira_parent_child_sync_publishers.resolve_platform_secret_ref", return_value=None),
+            patch("orchestrator.core.integrations.atlassian.parent_child_sync_publishers.resolve_platform_secret_ref", return_value=None),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.create_jira_comment", return_value=({"id": "jira-comment-987A"}, None)) as create_comment_mock,
             patch("orchestrator.api.webhooks.jira_parent_child_sync.post_jira_comment", return_value=(True, None)),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.seed_issues_with_runtime") as seed_mock,
@@ -1758,6 +1790,15 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
             ) -> None:
                 self.replaced_labels.append({"issue_id_or_key": issue_id_or_key, "labels": list(labels)})
 
+            def list_issue_comments(
+                self,
+                *,
+                access_token: str,
+                cloud_id: str,
+                issue_id_or_key: str,
+            ) -> list[dict[str, object]]:
+                return []
+
         oauth_context = SimpleNamespace(
             client=_FakeClient(),
             access_token="tok",
@@ -1797,16 +1838,18 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                     recommendations=(),
                     acceptance_impacts=(),
                     technical_decisions=(),
-                    product_escalations=(
-                        ClarificationQuestion(
+                    pm_decision_requests=(
+                        PMDecisionRequestPayload(
+                            request_id="pm-broken-link-behavior",
                             question="What is the required user-visible behavior when a broken identity link is detected for a still-active sensitive session?",
                             why_it_matters="This defines the recovery and assurance contract.",
-                            question_id="Q-1",
+                            related_decision_ids=("broken-link-behavior",),
                         ),
-                        ClarificationQuestion(
+                        PMDecisionRequestPayload(
+                            request_id="pm-auth-rate-limit",
                             question="What cooldown or rate-limit behavior should users see on repeated auth-initiation attempts?",
                             why_it_matters="This defines a user-visible abuse-control behavior.",
-                            question_id="Q-2",
+                            related_decision_ids=("auth-rate-limit",),
                         ),
                     ),
                     architecture_summary=(),
@@ -1829,7 +1872,23 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                     },
                 ),
             ) as seed_mock,
-            patch("orchestrator.core.jira_parent_child_sync_publishers.resolve_platform_secret_ref", return_value=None),
+            patch("orchestrator.core.integrations.atlassian.parent_child_sync_publishers.resolve_platform_secret_ref", return_value=None),
+            patch(
+                "orchestrator.core.parent_feature_workflow.adapters._ParentBriefPlanner.resolve_pm_decisions",
+                return_value=SimpleNamespace(
+                    resolved_decisions=(),
+                    stakeholder_escalations=(
+                        StakeholderEscalationPayload(
+                            escalation_id="stakeholder-auth-behavior",
+                            question="What is the required user-visible behavior when a broken identity link is detected for a still-active sensitive session?",
+                            why_it_matters="This defines the recovery and assurance contract.",
+                            business_impact_area="customer_business_impact",
+                            source_pm_decision_request_ids=("pm-broken-link-behavior", "pm-auth-rate-limit"),
+                        ),
+                    ),
+                    updated_planning_context={},
+                ),
+            ),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.create_jira_comment", return_value=({"id": "jira-comment-987C"}, None)) as create_comment_mock,
             patch("orchestrator.api.webhooks.jira_parent_child_sync.post_jira_comment", return_value=(True, None)),
             patch("orchestrator.api.webhooks.jira_application.plan_jira_run_flow") as run_flow_mock,
@@ -1901,6 +1960,15 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
             ) -> None:
                 self.replaced_labels.append({"issue_id_or_key": issue_id_or_key, "labels": list(labels)})
 
+            def list_issue_comments(
+                self,
+                *,
+                access_token: str,
+                cloud_id: str,
+                issue_id_or_key: str,
+            ) -> list[dict[str, object]]:
+                return []
+
         oauth_context = SimpleNamespace(
             client=_FakeClient(),
             access_token="tok",
@@ -1940,7 +2008,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                     recommendations=(),
                     acceptance_impacts=(),
                     technical_decisions=(),
-                    product_escalations=(),
+                    pm_decision_requests=(),
                     architecture_summary=(),
                     architecture_diagram="",
                     stages=(),
@@ -2113,7 +2181,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                 },
             ),
             patch(
-                "orchestrator.core.jira_parent_child_sync_publishers.resolve_parent_feature_case",
+                "orchestrator.core.integrations.atlassian.parent_child_sync_publishers.resolve_parent_feature_case",
                 return_value=SimpleNamespace(
                     request_id="pm-request-987B",
                     channel_id="discord-channel-1",
@@ -2123,8 +2191,8 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                     source_kind="jira_parent",
                 ),
             ),
-            patch("orchestrator.core.jira_parent_child_sync_publishers.resolve_platform_secret_ref", return_value="discord-token"),
-            patch("orchestrator.core.jira_parent_child_sync_publishers.DiscordApiClient") as discord_client_cls,
+            patch("orchestrator.core.integrations.atlassian.parent_child_sync_publishers.resolve_platform_secret_ref", return_value="discord-token"),
+            patch("orchestrator.core.integrations.atlassian.parent_child_sync_publishers.DiscordApiClient") as discord_client_cls,
             patch("orchestrator.api.webhooks.jira_parent_child_sync.create_jira_comment", return_value=({"id": "jira-comment-987B-2"}, None)) as create_comment_mock,
             patch("orchestrator.api.webhooks.jira_parent_child_sync.post_jira_comment", return_value=(True, None)),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.seed_issues_with_runtime") as seed_mock,
@@ -2239,6 +2307,15 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
             ) -> None:
                 self.replaced_labels.append({"issue_id_or_key": issue_id_or_key, "labels": list(labels)})
 
+            def list_issue_comments(
+                self,
+                *,
+                access_token: str,
+                cloud_id: str,
+                issue_id_or_key: str,
+            ) -> list[SimpleNamespace]:
+                return [SimpleNamespace(comment_id="jira-comment-987B2")]
+
         oauth_context = SimpleNamespace(
             client=_FakeClient(),
             access_token="tok",
@@ -2299,7 +2376,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                 },
             ),
             patch(
-                "orchestrator.core.jira_parent_child_sync_publishers.resolve_parent_feature_case",
+                "orchestrator.core.integrations.atlassian.parent_child_sync_publishers.resolve_parent_feature_case",
                 return_value=SimpleNamespace(
                     request_id="pm-request-987B2",
                     channel_id="discord-channel-1",
@@ -2520,8 +2597,8 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                     "ready_to_write": False,
                 },
             ),
-            patch("orchestrator.core.jira_parent_child_sync_publishers.resolve_platform_secret_ref", return_value="discord-bot-token"),
-            patch("orchestrator.core.jira_parent_child_sync_publishers.DiscordApiClient", return_value=discord_client),
+            patch("orchestrator.core.integrations.atlassian.parent_child_sync_publishers.resolve_platform_secret_ref", return_value="discord-bot-token"),
+            patch("orchestrator.core.integrations.atlassian.parent_child_sync_publishers.DiscordApiClient", return_value=discord_client),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.create_jira_comment", return_value=({"id": "jira-comment-988"}, None)),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.post_jira_comment", return_value=(True, None)),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.seed_issues_with_runtime") as seed_mock,

@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, ClassVar
 
-from orchestrator.core.clarification_questions import ClarificationQuestion
+from orchestrator.core.clarification.questions import ClarificationQuestion
 
 @dataclass(frozen=True)
 class ActorIdentity:

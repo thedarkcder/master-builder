@@ -4,16 +4,16 @@ from unittest.mock import patch
 
 import pytest
 
-from orchestrator.core.workflow_step_runner import start_workflow_step_attempt
-from orchestrator.core.workflow_execution_projection import (
+from orchestrator.core.workflow.step_runner import start_workflow_step_attempt
+from orchestrator.core.workflow.execution_projection import (
     WorkflowExecutionReference,
     WorkflowSourceReference,
     ensure_workflow_execution,
     workflow_execution_id,
 )
 from orchestrator.storage.db import create_session_factory
-from orchestrator.core.workflow_type_catalog import get_workflow_type
-from orchestrator.api.admin.workflow_type_read_model import workflow_operation_reads
+from orchestrator.core.workflow.type_catalog import get_workflow_type
+from orchestrator.api.admin.workflows.type_read_model import workflow_operation_reads
 from orchestrator.storage.models import WorkflowExecution, WorkflowOperation, WorkflowOperationAttempt
 from tests.test_support.db_harness import SqliteTemplateDbTestCase
 
@@ -22,14 +22,8 @@ class WorkflowExecutionProjectionTests(SqliteTemplateDbTestCase):
     def setUp(self) -> None:
         self.database_url = self._prepare_test_database(name_prefix="workflow-projection")
         self.session_factory = create_session_factory(self.database_url)
-        self._event_store_patch = patch(
-            "orchestrator.core.product_events.event_store",
-            return_value=type("FakeEventStore", (), {"execute": lambda _self, _sql, **_kwargs: ""})(),
-        )
-        self._event_store_patch.start()
 
     def tearDown(self) -> None:
-        self._event_store_patch.stop()
         self._cleanup_test_database()
 
     def test_workflow_waiting_projection_does_not_mutate_operation_state(self) -> None:
@@ -204,7 +198,7 @@ class WorkflowExecutionProjectionTests(SqliteTemplateDbTestCase):
                 description="Waiting operation should emit attempt lifecycle event",
             )
             operation, attempt = projection.start_operation_attempt(operation_type="backlog_planning")
-            with patch("orchestrator.core.workflow_operation_service.emit_workflow_operation_log") as emit_log:
+            with patch("orchestrator.core.workflow.operation_service.emit_workflow_operation_log") as emit_log:
                 projection.wait_started_operation(
                     operation=operation,
                     attempt=attempt,
@@ -382,7 +376,7 @@ class WorkflowExecutionProjectionTests(SqliteTemplateDbTestCase):
             )
             operation, first_attempt = projection.start_operation_attempt(operation_type="backlog_planning")
 
-            with pytest.raises(RuntimeError, match="already has running attempt 1"):
+            with pytest.raises(RuntimeError, match="already has active attempt 1"):
                 projection.start_operation_attempt(operation_type="backlog_planning")
 
             attempts = (

@@ -10,7 +10,7 @@ from orchestrator.core.communications.contracts import (
     DiscordSeedWithThreadAction,
     DiscordThreadReplyAction,
 )
-from orchestrator.core.workflow_runtime import WorkflowAdvanceRequest
+from orchestrator.core.workflow.runtime import WorkflowAdvanceRequest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -46,7 +46,8 @@ NON_ROUTE_API_ROUTE_IMPORT_ALLOWLIST = {
         "orchestrator.api.routes.admin_observability",
         "orchestrator.api.routes.admin_ready",
         "orchestrator.api.routes.admin_release",
-        "orchestrator.api.routes.admin_runs",
+        "orchestrator.api.admin.runs.routes",
+        "orchestrator.api.admin.workflows.routes",
         "orchestrator.api.routes.admin_secrets",
         "orchestrator.api.routes.admin_tenants",
         "orchestrator.api.routes.admin_tokens",
@@ -117,7 +118,27 @@ class ArchitectureBoundaryTests(unittest.TestCase):
         self.assertEqual(
             violations,
             [],
-            msg=f"Specialist planning must use technical_decisions/product_escalations only: {violations}",
+            msg=f"Specialist planning must use technical_decisions/pm_decision_requests only: {violations}",
+        )
+
+    def test_specialist_planning_uses_deep_package_not_flat_core_module(self) -> None:
+        stale_module = ORCHESTRATOR_ROOT / "core" / "specialist_planning.py"
+        self.assertFalse(
+            stale_module.exists(),
+            msg="Specialist planning must live under core/planning/specialist, not as a broad flat core module.",
+        )
+        expected_modules = {
+            "assembly.py",
+            "contract_parser.py",
+            "models.py",
+            "service.py",
+            "stage_runner.py",
+        }
+        package_dir = ORCHESTRATOR_ROOT / "core" / "planning" / "specialist"
+        actual_modules = {path.name for path in package_dir.glob("*.py")}
+        self.assertTrue(
+            expected_modules.issubset(actual_modules),
+            msg=f"Specialist planning package is missing expected deep-module slices: {expected_modules - actual_modules}",
         )
 
     def test_atlassian_admin_surface_is_split_by_provider_capability(self) -> None:
@@ -231,7 +252,7 @@ class ArchitectureBoundaryTests(unittest.TestCase):
         for node in ast.walk(tree):
             if (
                 isinstance(node, ast.ImportFrom)
-                and node.module == "orchestrator.core.decision_clarification_service"
+                and node.module == "orchestrator.core.decision.clarification_service"
                 and any(alias.name == "evaluate_issue_clarification_state" for alias in node.names)
             ):
                 violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{node.lineno}")
@@ -250,7 +271,7 @@ class ArchitectureBoundaryTests(unittest.TestCase):
         for node in ast.walk(tree):
             if (
                 isinstance(node, ast.ImportFrom)
-                and node.module == "orchestrator.core.decision_engine"
+                and node.module == "orchestrator.core.decision.engine"
                 and any(alias.name == "evaluate_worker_decision" for alias in node.names)
             ):
                 violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{node.lineno}")
@@ -409,13 +430,13 @@ class ArchitectureBoundaryTests(unittest.TestCase):
 
     def test_workflow_infrastructure_does_not_import_parent_feature_handlers_directly(self) -> None:
         modules = [
-            ROOT / "orchestrator" / "api" / "admin" / "workflows_service.py",
+            ROOT / "orchestrator" / "api" / "admin" / "workflows" / "service.py",
             ROOT / "orchestrator" / "temporal" / "activities" / "handler_workflow.py",
-            ROOT / "orchestrator" / "core" / "workflow_runtime.py",
-            ROOT / "orchestrator" / "core" / "workflow_handler_registry.py",
-            ROOT / "orchestrator" / "core" / "workflow_engine.py",
-            ROOT / "orchestrator" / "core" / "workflow_engine_factory.py",
-            ROOT / "orchestrator" / "core" / "legacy_workflow_engine.py",
+            ROOT / "orchestrator" / "core" / "workflow" / "runtime.py",
+            ROOT / "orchestrator" / "core" / "workflow" / "handler_registry.py",
+            ROOT / "orchestrator" / "core" / "workflow" / "engine.py",
+            ROOT / "orchestrator" / "core" / "workflow" / "engine_factory.py",
+            ROOT / "orchestrator" / "core" / "workflow" / "legacy_engine.py",
             ROOT / "orchestrator" / "temporal" / "workflow_engine.py",
         ]
         banned_imports = {
@@ -434,7 +455,7 @@ class ArchitectureBoundaryTests(unittest.TestCase):
         )
 
     def test_admin_workflows_service_is_route_facade_not_god_service(self) -> None:
-        module_path = ROOT / "orchestrator" / "api" / "admin" / "workflows_service.py"
+        module_path = ROOT / "orchestrator" / "api" / "admin" / "workflows" / "service.py"
         tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
         local_functions = [node.name for node in tree.body if isinstance(node, ast.FunctionDef)]
         banned_local_helpers = {
@@ -497,10 +518,10 @@ class ArchitectureBoundaryTests(unittest.TestCase):
 
     def test_workflow_runtime_and_engines_do_not_use_retry_callback_escape_hatch(self) -> None:
         modules = [
-            ROOT / "orchestrator" / "core" / "workflow_runtime.py",
-            ROOT / "orchestrator" / "core" / "workflow_engine.py",
-            ROOT / "orchestrator" / "core" / "workflow_engine_factory.py",
-            ROOT / "orchestrator" / "core" / "legacy_workflow_engine.py",
+            ROOT / "orchestrator" / "core" / "workflow" / "runtime.py",
+            ROOT / "orchestrator" / "core" / "workflow" / "engine.py",
+            ROOT / "orchestrator" / "core" / "workflow" / "engine_factory.py",
+            ROOT / "orchestrator" / "core" / "workflow" / "legacy_engine.py",
             ROOT / "orchestrator" / "temporal" / "workflow_engine.py",
         ]
         banned_tokens = {"retry_" + "workflow_operation_fn", "resolve_" + "operation_retry_handler_fn"}
@@ -551,13 +572,13 @@ class ArchitectureBoundaryTests(unittest.TestCase):
 
     def test_parent_operation_names_do_not_leak_into_workflow_infrastructure(self) -> None:
         modules = [
-            ROOT / "orchestrator" / "api" / "admin" / "workflows_service.py",
+            ROOT / "orchestrator" / "api" / "admin" / "workflows" / "service.py",
             ROOT / "orchestrator" / "temporal" / "activities" / "handler_workflow.py",
-            ROOT / "orchestrator" / "core" / "workflow_runtime.py",
-            ROOT / "orchestrator" / "core" / "workflow_advance.py",
-            ROOT / "orchestrator" / "core" / "workflow_engine.py",
-            ROOT / "orchestrator" / "core" / "workflow_engine_factory.py",
-            ROOT / "orchestrator" / "core" / "legacy_workflow_engine.py",
+            ROOT / "orchestrator" / "core" / "workflow" / "runtime.py",
+            ROOT / "orchestrator" / "core" / "workflow" / "advance.py",
+            ROOT / "orchestrator" / "core" / "workflow" / "engine.py",
+            ROOT / "orchestrator" / "core" / "workflow" / "engine_factory.py",
+            ROOT / "orchestrator" / "core" / "workflow" / "legacy_engine.py",
             ROOT / "orchestrator" / "temporal" / "workflow_engine.py",
         ]
         banned_values = {"backlog_planning", "jira_comment_projection", "jira_child_fanout", "jira_parent_update"}
@@ -606,9 +627,9 @@ class ArchitectureBoundaryTests(unittest.TestCase):
 
     def test_product_event_streams_use_shared_stream_primitive(self) -> None:
         stream_modules = [
-            ROOT / "orchestrator" / "api" / "admin" / "workflow_live_stream_service.py",
-            ROOT / "orchestrator" / "api" / "admin" / "run_logging_stream_service.py",
-            ROOT / "orchestrator" / "api" / "admin" / "runtime_logs_service.py",
+            ROOT / "orchestrator" / "api" / "admin" / "workflows" / "live_stream_service.py",
+            ROOT / "orchestrator" / "api" / "admin" / "runs" / "logging_stream_service.py",
+            ROOT / "orchestrator" / "api" / "admin" / "runs" / "runtime_logs_service.py",
         ]
         for module_path in stream_modules:
             source = module_path.read_text(encoding="utf-8")
@@ -617,7 +638,7 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             self.assertNotIn("current_product_event_notification_marker", source)
 
     def test_product_events_facade_does_not_own_storage_writer_or_streaming(self) -> None:
-        product_events_source = (ROOT / "orchestrator" / "core" / "product_events.py").read_text(encoding="utf-8")
+        product_events_source = (ROOT / "orchestrator" / "core" / "observability" / "events.py").read_text(encoding="utf-8")
         forbidden_tokens = [
             "urlopen",
             "Request(",
@@ -634,28 +655,28 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             [],
             msg=f"product_events.py must remain a thin facade over repository/writer/stream services: {violations}",
         )
-        repository_source = (ROOT / "orchestrator" / "core" / "product_event_repository.py").read_text(encoding="utf-8")
-        writer_source = (ROOT / "orchestrator" / "core" / "product_event_writer.py").read_text(encoding="utf-8")
-        stream_source = (ROOT / "orchestrator" / "core" / "product_event_stream.py").read_text(encoding="utf-8")
+        repository_source = (ROOT / "orchestrator" / "core" / "observability" / "repository.py").read_text(encoding="utf-8")
+        writer_source = (ROOT / "orchestrator" / "core" / "observability" / "writer.py").read_text(encoding="utf-8")
+        stream_source = (ROOT / "orchestrator" / "core" / "observability" / "stream.py").read_text(encoding="utf-8")
         self.assertIn("class ProductEventRepository", repository_source)
         self.assertIn("class ClickHouseProductEventRepository", repository_source)
         self.assertIn("class ProductEventWriter", writer_source)
         self.assertIn("class ProductEventStream", stream_source)
 
     def test_admin_runs_route_is_not_the_composition_root(self) -> None:
-        source = (ROOT / "orchestrator" / "api" / "routes" / "admin_runs.py").read_text(encoding="utf-8")
+        source = (ROOT / "orchestrator" / "api" / "admin" / "runs" / "routes.py").read_text(encoding="utf-8")
         forbidden_imports = [
-            "orchestrator.api.admin.runtime_logs_service",
-            "orchestrator.api.admin.workflow_live_stream_service",
-            "orchestrator.api.admin.run_logging_stream_service",
-            "orchestrator.api.admin.runs_query",
-            "orchestrator.api.admin.runs_service",
+            "orchestrator.api.admin.runs.runtime_logs_service",
+            "orchestrator.api.admin.workflows.live_stream_service",
+            "orchestrator.api.admin.runs.logging_stream_service",
+            "orchestrator.api.admin.runs.query",
+            "orchestrator.api.admin.runs.service",
             "orchestrator.api.admin.schema_mappers",
-            "orchestrator.api.admin.workflows_service",
+            "orchestrator.api.admin.workflows.service",
             "orchestrator.runtime.issue_fanout",
-            "orchestrator.core.agent_runtime_resolver",
-            "orchestrator.core.jira_links",
-            "orchestrator.core.workflow_integration_router",
+            "orchestrator.core.runtime.agent_runtime_resolver",
+            "orchestrator.core.integrations.atlassian.links",
+            "orchestrator.core.integrations.workflow.router",
             "orchestrator.storage.models",
             "select(",
         ]
@@ -663,9 +684,9 @@ class ArchitectureBoundaryTests(unittest.TestCase):
         self.assertEqual(
             violations,
             [],
-            msg=f"admin_runs.py must validate web concerns and delegate to admin use cases, not compose concrete services: {violations}",
+            msg=f"admin runs routes must validate web concerns and delegate to admin use cases, not compose concrete services: {violations}",
         )
-        self.assertIn("runs_workflows_use_cases", source)
+        self.assertIn("orchestrator.api.admin.runs import use_cases", source)
 
     def test_run_human_input_resume_does_not_use_private_legacy_entrypoint(self) -> None:
         banned_token = "_resume_workflow_from_human_input_answer_legacy"
@@ -688,7 +709,7 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             relative = module_path.relative_to(ROOT).as_posix()
             allowed = LEGACY_ROUTE_IMPORT_ALLOWLIST.get(relative, set())
             for module_name in _imported_modules(module_path):
-                if not module_name.startswith("orchestrator.api.routes."):
+                if not (module_name.startswith("orchestrator.api.routes.") or module_name.endswith(".routes")):
                     continue
                 if module_name in allowed:
                     observed_allowed.add((relative, module_name))
@@ -720,7 +741,7 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             relative = module_path.relative_to(ROOT).as_posix()
             allowed = LEGACY_ROUTE_IMPORT_ALLOWLIST.get(relative, set())
             for module_name in _imported_modules(module_path):
-                if not module_name.startswith("orchestrator.api.routes."):
+                if not (module_name.startswith("orchestrator.api.routes.") or module_name.endswith(".routes")):
                     continue
                 if module_name == relative.replace("/", ".")[:-3]:
                     continue
@@ -756,7 +777,7 @@ class ArchitectureBoundaryTests(unittest.TestCase):
                 continue
             allowed = NON_ROUTE_API_ROUTE_IMPORT_ALLOWLIST.get(relative, set())
             for module_name in _imported_modules(module_path):
-                if not module_name.startswith("orchestrator.api.routes."):
+                if not (module_name.startswith("orchestrator.api.routes.") or module_name.endswith(".routes")):
                     continue
                 if module_name in allowed:
                     observed_allowed.add((relative, module_name))
@@ -924,12 +945,12 @@ class ArchitectureBoundaryTests(unittest.TestCase):
         )
 
     def test_decision_transition_logic_lives_in_decision_state_machine_boundary(self) -> None:
-        state_machine_module = ROOT / "orchestrator" / "core" / "decision_state_machine.py"
+        state_machine_module = ROOT / "orchestrator" / "core" / "decision" / "state_machine.py"
         self.assertTrue(state_machine_module.exists(), msg="decision_state_machine.py must exist as the canonical transition boundary")
 
         forbidden_modules = [
-            ROOT / "orchestrator" / "core" / "decision_precheck_mapping.py",
-            ROOT / "orchestrator" / "core" / "decision_state_repository.py",
+            ROOT / "orchestrator" / "core" / "decision" / "precheck_mapping.py",
+            ROOT / "orchestrator" / "core" / "decision" / "state_repository.py",
         ]
         forbidden_symbols = {
             "DecisionStateTransition",
@@ -956,10 +977,10 @@ class ArchitectureBoundaryTests(unittest.TestCase):
         )
 
     def test_decision_engine_uses_state_machine_boundary_for_transition_semantics(self) -> None:
-        module_path = ROOT / "orchestrator" / "core" / "decision_engine.py"
+        module_path = ROOT / "orchestrator" / "core" / "decision" / "engine.py"
         imports = _imported_modules(module_path)
         self.assertIn(
-            "orchestrator.core.decision_state_machine",
+            "orchestrator.core.decision.state_machine",
             imports,
             msg="decision_engine must import transition semantics from decision_state_machine",
         )
@@ -970,7 +991,7 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             if not isinstance(node, ast.ImportFrom):
                 continue
             if node.module != "orchestrator.core.decision_state_reducer":
-                if node.module == "orchestrator.core.decision_precheck_mapping":
+                if node.module == "orchestrator.core.decision.precheck_mapping":
                     for alias in node.names:
                         if alias.name == "decision_from_snapshot":
                             violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{node.lineno}:{alias.name}")
@@ -986,9 +1007,9 @@ class ArchitectureBoundaryTests(unittest.TestCase):
 
     def test_core_decision_runtime_modules_do_not_import_compat_wrappers(self) -> None:
         modules = [
-            ROOT / "orchestrator" / "core" / "decision_engine.py",
-            ROOT / "orchestrator" / "core" / "decision_precheck_mapping.py",
-            ROOT / "orchestrator" / "core" / "decision_state_repository.py",
+            ROOT / "orchestrator" / "core" / "decision" / "engine.py",
+            ROOT / "orchestrator" / "core" / "decision" / "precheck_mapping.py",
+            ROOT / "orchestrator" / "core" / "decision" / "state_repository.py",
         ]
         forbidden_imports = {
             "orchestrator.core.decision_reducer",

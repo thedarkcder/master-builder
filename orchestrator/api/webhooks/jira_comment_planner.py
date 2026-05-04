@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 from orchestrator.api.webhooks import jira_webhook_comment_flow
 from orchestrator.api.webhooks.jira_webhook_types import JiraWebhookContext
-from orchestrator.core.decision_state_machine import (
+from orchestrator.core.decision.state_machine import (
     ExecutionAdmissionReason,
     build_execution_admission_block,
 )

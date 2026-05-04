@@ -52,33 +52,36 @@ def upgrade() -> None:
         return
 
     now = _utcnow()
-    op.create_table(
-        "workflow_types",
-        sa.Column("workflow_type_key", sa.String(length=64), nullable=False),
-        sa.Column("label", sa.String(length=255), nullable=False),
-        sa.Column("description", sa.Text(), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
-        sa.PrimaryKeyConstraint("workflow_type_key"),
-    )
-    op.create_table(
-        "workflow_type_operations",
-        sa.Column("operation_definition_id", sa.String(length=64), nullable=False),
-        sa.Column("workflow_type_key", sa.String(length=64), nullable=False),
-        sa.Column("operation_type", sa.String(length=64), nullable=False),
-        sa.Column("label", sa.String(length=255), nullable=False),
-        sa.Column("retry_policy", sa.Text(), nullable=False),
-        sa.Column("description", sa.Text(), nullable=True),
-        sa.Column("required", sa.Boolean(), nullable=False, server_default=sa.true()),
-        sa.Column("sort_order", sa.Integer(), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
-        sa.ForeignKeyConstraint(["workflow_type_key"], ["workflow_types.workflow_type_key"], ondelete="CASCADE"),
-        sa.PrimaryKeyConstraint("operation_definition_id"),
-        sa.UniqueConstraint("workflow_type_key", "operation_type", name="uq_workflow_type_operations_key_type"),
-        sa.UniqueConstraint("workflow_type_key", "sort_order", name="uq_workflow_type_operations_key_order"),
-    )
-    op.create_index("ix_workflow_type_operations_workflow_type_key", "workflow_type_operations", ["workflow_type_key"])
+    if not _has_table("workflow_types"):
+        op.create_table(
+            "workflow_types",
+            sa.Column("workflow_type_key", sa.String(length=64), nullable=False),
+            sa.Column("label", sa.String(length=255), nullable=False),
+            sa.Column("description", sa.Text(), nullable=False),
+            sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+            sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
+            sa.PrimaryKeyConstraint("workflow_type_key"),
+        )
+    if not _has_table("workflow_type_operations"):
+        op.create_table(
+            "workflow_type_operations",
+            sa.Column("operation_definition_id", sa.String(length=64), nullable=False),
+            sa.Column("workflow_type_key", sa.String(length=64), nullable=False),
+            sa.Column("operation_type", sa.String(length=64), nullable=False),
+            sa.Column("label", sa.String(length=255), nullable=False),
+            sa.Column("retry_policy", sa.Text(), nullable=False),
+            sa.Column("description", sa.Text(), nullable=True),
+            sa.Column("required", sa.Boolean(), nullable=False, server_default=sa.true()),
+            sa.Column("sort_order", sa.Integer(), nullable=False),
+            sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+            sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
+            sa.ForeignKeyConstraint(["workflow_type_key"], ["workflow_types.workflow_type_key"], ondelete="CASCADE"),
+            sa.PrimaryKeyConstraint("operation_definition_id"),
+            sa.UniqueConstraint("workflow_type_key", "operation_type", name="uq_workflow_type_operations_key_type"),
+            sa.UniqueConstraint("workflow_type_key", "sort_order", name="uq_workflow_type_operations_key_order"),
+        )
+    if not _has_index("workflow_type_operations", "ix_workflow_type_operations_workflow_type_key"):
+        op.create_index("ix_workflow_type_operations_workflow_type_key", "workflow_type_operations", ["workflow_type_key"])
 
     workflow_types = sa.table(
         "workflow_types",
@@ -290,8 +293,12 @@ def upgrade() -> None:
         ],
     )
 
-    op.add_column("workflow_executions", sa.Column("workflow_type_key", sa.String(length=64), nullable=True))
-    op.create_index("ix_workflow_executions_workflow_type_key", "workflow_executions", ["workflow_type_key"])
+    added_workflow_type_key = False
+    if not _has_column("workflow_executions", "workflow_type_key"):
+        op.add_column("workflow_executions", sa.Column("workflow_type_key", sa.String(length=64), nullable=True))
+        added_workflow_type_key = True
+    if not _has_index("workflow_executions", "ix_workflow_executions_workflow_type_key"):
+        op.create_index("ix_workflow_executions_workflow_type_key", "workflow_executions", ["workflow_type_key"])
 
     op.execute(
         """
@@ -312,9 +319,9 @@ def upgrade() -> None:
     if int(missing or 0) != 0:
         raise RuntimeError("workflow_executions contains rows without a backfilled workflow_type_key")
 
-    if bind.dialect.name != "sqlite":
+    if bind.dialect.name != "sqlite" and added_workflow_type_key:
         op.alter_column("workflow_executions", "workflow_type_key", nullable=False)
-    else:
+    elif bind.dialect.name == "sqlite" and added_workflow_type_key:
         with op.batch_alter_table("workflow_executions") as batch_op:
             batch_op.alter_column("workflow_type_key", nullable=False)
     if bind.dialect.name != "sqlite":

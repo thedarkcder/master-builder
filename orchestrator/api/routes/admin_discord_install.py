@@ -13,7 +13,7 @@ from orchestrator.api.admin.route_helpers import reconcile_tenant_projects
 from orchestrator.core.config import get_settings
 from orchestrator.core.discord.commands_sync import sync_discord_guild_commands
 from orchestrator.core.discord.oauth_config import resolve_discord_oauth_config
-from orchestrator.core.discord_install_state import (
+from orchestrator.core.integrations.discord.install_state import (
     create_discord_install_state_token,
     parse_discord_install_state_token,
 )
@@ -23,7 +23,7 @@ from orchestrator.core.security import (
     require_authenticated_principal,
     require_tenant_permission,
 )
-from orchestrator.core.tenant_access import PERMISSION_WORKSPACE_MANAGE
+from orchestrator.core.platform.access import PERMISSION_WORKSPACE_MANAGE
 from orchestrator.storage.models import Tenant
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])

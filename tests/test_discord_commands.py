@@ -7,7 +7,7 @@ from fastapi import HTTPException
 from orchestrator.api.discord.ingress.executor import execute_discord_command
 from orchestrator.api.discord.shared.state import store_seed_followup_context
 from orchestrator.api.schemas import DiscordCommandRequest
-from orchestrator.core.runtime_payload_models import AskIntentPayload
+from orchestrator.core.runtime.payload_models import AskIntentPayload
 from orchestrator.storage.models import Tenant
 from orchestrator.tools.atlassian_oauth import JiraIssuePreview
 from tests.test_support.discord_command_api_harness import DiscordCommandApiTestHarness
@@ -239,7 +239,7 @@ class DiscordCommandApiTests(DiscordCommandApiTestHarness):
         with (
             self.session_factory() as session,
             patch(
-                "orchestrator.api.discord.ingress.seed_runtime.seed_parent_issues_with_runtime",
+                "orchestrator.runtime.issue_fanout.seed_parent_issues_with_runtime",
                 return_value=(
                     "PM parent issue upsert complete. Updated 1: TP-11. Created 0: none.",
                     {
@@ -291,7 +291,7 @@ class DiscordCommandApiTests(DiscordCommandApiTestHarness):
         with (
             self.session_factory() as session,
             patch(
-                "orchestrator.api.discord.ingress.seed_runtime.seed_parent_issues_with_runtime",
+                "orchestrator.runtime.issue_fanout.seed_parent_issues_with_runtime",
                 return_value=(
                     "PM parent issue upsert complete. Updated 1: TP-11. Created 0: none.",
                     {

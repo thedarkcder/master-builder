@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from orchestrator.core.product_event_repository import (
+from orchestrator.core.observability.repository import (
     configure_product_event_repository_for_tests,
     reset_product_event_repository_for_tests,
 )
@@ -415,7 +415,7 @@ def _runtime_responses(*, issue_key: str, issue_summary: str) -> list[dict[str, 
             "required_tasks": ["Implement workflow boundary harness"],
             "child_ticket_specs": [child_spec],
             "technical_decisions": [technical_decision],
-            "product_escalations": [],
+            "pm_decision_requests": [],
             "acceptance_impacts": ["Durable workflow behavior is regression-tested."],
             "mermaid_diagram": "flowchart TD\n  Webhook --> Workflow --> Fanout",
         },
@@ -424,7 +424,7 @@ def _runtime_responses(*, issue_key: str, issue_summary: str) -> list[dict[str, 
             "recommendations": ["Keep tenant-scoped workflow records verified."],
             "required_tasks": ["Assert attempt ownership for telemetry."],
             "technical_decisions": [technical_decision],
-            "product_escalations": [],
+            "pm_decision_requests": [],
             "acceptance_impacts": ["Telemetry rows carry attempt identity."],
         },
         {
@@ -432,7 +432,7 @@ def _runtime_responses(*, issue_key: str, issue_summary: str) -> list[dict[str, 
             "recommendations": ["Exercise real webhook worker and persistence boundaries."],
             "required_tasks": ["Add boundary test coverage."],
             "technical_decisions": [technical_decision],
-            "product_escalations": [],
+            "pm_decision_requests": [],
             "acceptance_impacts": ["Regressions are caught at the behavior boundary."],
         },
         {

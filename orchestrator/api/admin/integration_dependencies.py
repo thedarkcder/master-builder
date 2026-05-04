@@ -33,7 +33,7 @@ from orchestrator.api.admin.route_helpers import (
     remove_managed_webhook_id_from_tenants,
 )
 from orchestrator.api.schemas import JiraWebhookActionResult, ReleaseBootstrapReportRead
-from orchestrator.core.platform_secret_service import resolve_platform_secret_ref
+from orchestrator.core.platform.secret_service import resolve_platform_secret_ref
 from orchestrator.storage.models import AtlassianOAuthConnection, Project, Tenant
 from orchestrator.tools.discord_api import DiscordApiClient
 from orchestrator.tools import github_app

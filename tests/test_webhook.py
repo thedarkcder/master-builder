@@ -12,7 +12,7 @@ from orchestrator.api.routes.webhook import (
     _parse_jira_comment_command,
 )
 from orchestrator.api.schemas import DiscordCommandResponse
-from orchestrator.core.webhook_health import webhook_health_tracker
+from orchestrator.core.webhooks.health import webhook_health_tracker
 from orchestrator.storage.models import FollowupContext, Project, Run, Tenant, WebhookJob
 from orchestrator.tools.atlassian_oauth import JiraIssuePreview, AtlassianOAuthError
 from tests.test_support.jira_webhook_api_harness import JiraWebhookTestsHarness

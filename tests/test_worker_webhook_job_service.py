@@ -8,8 +8,8 @@ from tempfile import TemporaryDirectory
 
 from sqlalchemy.exc import PendingRollbackError
 
-from orchestrator.core.webhook_job_errors import RetryableWebhookJobError
-from orchestrator.core.webhook_job_queue import (
+from orchestrator.core.webhooks.job_errors import RetryableWebhookJobError
+from orchestrator.core.webhooks.job_queue import (
     WEBHOOK_TRANSPORT_DISCORD_COMMAND,
     WEBHOOK_TRANSPORT_GITHUB,
     WEBHOOK_TRANSPORT_JIRA,

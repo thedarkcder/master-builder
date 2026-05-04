@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import HTTPException, Response, status
 from sqlalchemy import delete, select
 
-from orchestrator.core.decision_types import JiraConfigKey, jira_config_text
+from orchestrator.core.decision.types import JiraConfigKey, jira_config_text
 from orchestrator.storage.models import (
     ManagedSecret,
     Project,

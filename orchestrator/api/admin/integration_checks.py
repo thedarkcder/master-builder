@@ -3,10 +3,10 @@ from __future__ import annotations
 from fastapi import HTTPException, status
 
 from orchestrator.api.schemas import IntegrationTestResult
-from orchestrator.core.decision_types import (
+from orchestrator.core.decision.types import (
     JiraConfigKey,
 )
-from orchestrator.core.tenant_operational_health_service import tenant_integration_snapshot
+from orchestrator.core.platform.operational_health_service import tenant_integration_snapshot
 from orchestrator.storage.models import AtlassianOAuthConnection, Tenant
 from orchestrator.tools.atlassian_oauth import AtlassianOAuthError
 

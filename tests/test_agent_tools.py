@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from orchestrator.core.agent_tools import (
+from orchestrator.core.runtime.tools import (
     allowed_tools_for_stage,
     execute_agent_tool,
     governed_allowed_tools_for_stage,
@@ -17,7 +17,7 @@ from orchestrator.core.agent_tools import (
     native_tool_catalog_for_stage,
     tool_catalog_for_stage,
 )
-from orchestrator.core.knowledge_base import KnowledgeEmbeddingAccessMode
+from orchestrator.core.knowledge.base import KnowledgeEmbeddingAccessMode
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.storage.models import DecisionCycle
 from orchestrator.tools.github_app import PullRequestSummary
@@ -147,7 +147,7 @@ def test_execute_agent_tool_rejects_disallowed_stage_tool() -> None:
     class _FakeContext:
         stage = "pm"
 
-    with patch("orchestrator.core.agent_tools._resolve_context", return_value=_FakeContext()):
+    with patch("orchestrator.core.runtime.tools._resolve_context", return_value=_FakeContext()):
         with pytest.raises(PermissionError):
             execute_agent_tool(
                 session=None,  # type: ignore[arg-type]
@@ -180,7 +180,7 @@ def test_execute_agent_tool_rejects_native_runtime_tools_through_governed_bridge
         run_id = None
         repo_dir = Path("/tmp/repo")
 
-    with patch("orchestrator.core.agent_tools._resolve_context", return_value=_FakeContext()):
+    with patch("orchestrator.core.runtime.tools._resolve_context", return_value=_FakeContext()):
         with pytest.raises(PermissionError):
             execute_agent_tool(
                 session=None,  # type: ignore[arg-type]
@@ -226,10 +226,10 @@ def test_github_create_branch_uses_remote_default_when_base_omitted() -> None:
             return "origin/main\n"
         return ""
 
-    with patch("orchestrator.core.agent_tools._resolve_context", return_value=_FakeContext()):
-        with patch("orchestrator.core.agent_tools._ensure_repo_checkout_exists"):
-            with patch("orchestrator.core.agent_tools.github_client_from_tenant_config", return_value=_FakeGitHubClient()):
-                with patch("orchestrator.core.agent_tools._run_git", side_effect=_fake_run_git):
+    with patch("orchestrator.core.runtime.tools._resolve_context", return_value=_FakeContext()):
+        with patch("orchestrator.core.runtime.tools._ensure_repo_checkout_exists"):
+            with patch("orchestrator.core.runtime.tools.github_client_from_tenant_config", return_value=_FakeGitHubClient()):
+                with patch("orchestrator.core.runtime.tools._run_git", side_effect=_fake_run_git):
                     payload = execute_agent_tool(
                         session=None,  # type: ignore[arg-type]
                         settings=None,
@@ -285,8 +285,8 @@ def test_run_request_human_input_creates_request() -> None:
     fake_session.get.return_value = fake_run
 
     with (
-        patch("orchestrator.core.agent_tools._resolve_context", return_value=_FakeContext()),
-        patch("orchestrator.core.agent_tools.create_human_input_request", return_value=fake_request) as create_mock,
+        patch("orchestrator.core.runtime.tools._resolve_context", return_value=_FakeContext()),
+        patch("orchestrator.core.runtime.tools.create_human_input_request", return_value=fake_request) as create_mock,
     ):
         payload = execute_agent_tool(
             session=fake_session,
@@ -340,7 +340,7 @@ def test_run_request_human_input_rejects_missing_request_type() -> None:
     fake_session = MagicMock()
     fake_session.get.return_value = SimpleNamespace(run_id="run-1")
 
-    with patch("orchestrator.core.agent_tools._resolve_context", return_value=_FakeContext()):
+    with patch("orchestrator.core.runtime.tools._resolve_context", return_value=_FakeContext()):
         with pytest.raises(ValueError, match="requires non-empty 'request_type'"):
             execute_agent_tool(
                 session=fake_session,
@@ -377,7 +377,7 @@ def test_run_request_human_input_rejects_top_level_questions_payload() -> None:
     fake_session = MagicMock()
     fake_session.get.return_value = SimpleNamespace(run_id="run-1")
 
-    with patch("orchestrator.core.agent_tools._resolve_context", return_value=_FakeContext()):
+    with patch("orchestrator.core.runtime.tools._resolve_context", return_value=_FakeContext()):
         with pytest.raises(ValueError, match="requires non-empty 'prompt'"):
             execute_agent_tool(
                 session=fake_session,
@@ -428,10 +428,10 @@ def test_github_create_branch_uses_supplied_base_branch_for_sync() -> None:
         git_calls.append((args, token))
         return ""
 
-    with patch("orchestrator.core.agent_tools._resolve_context", return_value=_FakeContext()):
-        with patch("orchestrator.core.agent_tools._ensure_repo_checkout_exists"):
-            with patch("orchestrator.core.agent_tools.github_client_from_tenant_config", return_value=_FakeGitHubClient()):
-                with patch("orchestrator.core.agent_tools._run_git", side_effect=_fake_run_git):
+    with patch("orchestrator.core.runtime.tools._resolve_context", return_value=_FakeContext()):
+        with patch("orchestrator.core.runtime.tools._ensure_repo_checkout_exists"):
+            with patch("orchestrator.core.runtime.tools.github_client_from_tenant_config", return_value=_FakeGitHubClient()):
+                with patch("orchestrator.core.runtime.tools._run_git", side_effect=_fake_run_git):
                     payload = execute_agent_tool(
                         session=None,  # type: ignore[arg-type]
                         settings=None,
@@ -487,10 +487,10 @@ def test_github_push_branch_uses_canonical_run_branch() -> None:
         return ""
 
     with (
-        patch("orchestrator.core.agent_tools._resolve_context", return_value=_FakeContext()),
-        patch("orchestrator.core.agent_tools._ensure_repo_checkout_exists"),
-        patch("orchestrator.core.agent_tools.github_client_from_tenant_config", return_value=_FakeGitHubClient()),
-        patch("orchestrator.core.agent_tools._run_git", side_effect=_fake_run_git),
+        patch("orchestrator.core.runtime.tools._resolve_context", return_value=_FakeContext()),
+        patch("orchestrator.core.runtime.tools._ensure_repo_checkout_exists"),
+        patch("orchestrator.core.runtime.tools.github_client_from_tenant_config", return_value=_FakeGitHubClient()),
+        patch("orchestrator.core.runtime.tools._run_git", side_effect=_fake_run_git),
     ):
         payload = execute_agent_tool(
             session=SimpleNamespace(flush=lambda: None),  # type: ignore[arg-type]
@@ -564,9 +564,9 @@ def test_github_open_pr_reuses_existing_pull_request() -> None:
 
     fake_client = _FakeGitHubClient()
     with (
-        patch("orchestrator.core.agent_tools._resolve_context", return_value=_FakeContext()),
-        patch("orchestrator.core.agent_tools._ensure_repo_checkout_exists"),
-        patch("orchestrator.core.agent_tools.github_client_from_tenant_config", return_value=fake_client),
+        patch("orchestrator.core.runtime.tools._resolve_context", return_value=_FakeContext()),
+        patch("orchestrator.core.runtime.tools._ensure_repo_checkout_exists"),
+        patch("orchestrator.core.runtime.tools.github_client_from_tenant_config", return_value=fake_client),
     ):
         payload = execute_agent_tool(
             session=SimpleNamespace(flush=lambda: None),  # type: ignore[arg-type]
@@ -647,9 +647,9 @@ def test_github_open_pr_prefers_remediation_pr_number_when_open() -> None:
     fake_client = _FakeGitHubClient()
     fake_session = SimpleNamespace(flush=lambda: None)
     with (
-        patch("orchestrator.core.agent_tools._resolve_context", return_value=_FakeContext()),
-        patch("orchestrator.core.agent_tools._ensure_repo_checkout_exists"),
-        patch("orchestrator.core.agent_tools.github_client_from_tenant_config", return_value=fake_client),
+        patch("orchestrator.core.runtime.tools._resolve_context", return_value=_FakeContext()),
+        patch("orchestrator.core.runtime.tools._ensure_repo_checkout_exists"),
+        patch("orchestrator.core.runtime.tools.github_client_from_tenant_config", return_value=fake_client),
     ):
         payload = execute_agent_tool(
             session=fake_session,  # type: ignore[arg-type]
@@ -737,9 +737,9 @@ def test_github_open_pr_falls_back_when_remediation_pr_is_closed() -> None:
     fake_client = _FakeGitHubClient()
     fake_session = SimpleNamespace(flush=lambda: None)
     with (
-        patch("orchestrator.core.agent_tools._resolve_context", return_value=_FakeContext()),
-        patch("orchestrator.core.agent_tools._ensure_repo_checkout_exists"),
-        patch("orchestrator.core.agent_tools.github_client_from_tenant_config", return_value=fake_client),
+        patch("orchestrator.core.runtime.tools._resolve_context", return_value=_FakeContext()),
+        patch("orchestrator.core.runtime.tools._ensure_repo_checkout_exists"),
+        patch("orchestrator.core.runtime.tools.github_client_from_tenant_config", return_value=fake_client),
     ):
         payload = execute_agent_tool(
             session=fake_session,  # type: ignore[arg-type]
@@ -830,9 +830,9 @@ def test_github_open_pr_uses_remediation_head_ref_over_stale_run_branch() -> Non
     fake_client = _FakeGitHubClient()
     fake_session = SimpleNamespace(flush=lambda: None)
     with (
-        patch("orchestrator.core.agent_tools._resolve_context", return_value=_FakeContext()),
-        patch("orchestrator.core.agent_tools._ensure_repo_checkout_exists"),
-        patch("orchestrator.core.agent_tools.github_client_from_tenant_config", return_value=fake_client),
+        patch("orchestrator.core.runtime.tools._resolve_context", return_value=_FakeContext()),
+        patch("orchestrator.core.runtime.tools._ensure_repo_checkout_exists"),
+        patch("orchestrator.core.runtime.tools.github_client_from_tenant_config", return_value=fake_client),
     ):
         payload = execute_agent_tool(
             session=fake_session,  # type: ignore[arg-type]
@@ -876,9 +876,9 @@ def test_repo_read_allows_read_only_git_status() -> None:
         repo_dir = Path("/tmp/repo")
 
     fake_process = SimpleNamespace(returncode=0, stdout="ok", stderr="")
-    with patch("orchestrator.core.agent_tools._resolve_context", return_value=_FakeContext()):
-        with patch("orchestrator.core.agent_tools._ensure_repo_checkout_exists"):
-            with patch("orchestrator.core.agent_tools.subprocess.run", return_value=fake_process) as run_mock:
+    with patch("orchestrator.core.runtime.tools._resolve_context", return_value=_FakeContext()):
+        with patch("orchestrator.core.runtime.tools._ensure_repo_checkout_exists"):
+            with patch("orchestrator.core.runtime.tools.subprocess.run", return_value=fake_process) as run_mock:
                 payload = execute_agent_tool(
                     session=None,  # type: ignore[arg-type]
                     settings=None,
@@ -914,9 +914,9 @@ def test_repo_read_rejects_mutating_git_subcommand() -> None:
         run_id = "run-1"
         repo_dir = Path("/tmp/repo")
 
-    with patch("orchestrator.core.agent_tools._resolve_context", return_value=_FakeContext()):
-        with patch("orchestrator.core.agent_tools._ensure_repo_checkout_exists"):
-            with patch("orchestrator.core.agent_tools.subprocess.run") as run_mock:
+    with patch("orchestrator.core.runtime.tools._resolve_context", return_value=_FakeContext()):
+        with patch("orchestrator.core.runtime.tools._ensure_repo_checkout_exists"):
+            with patch("orchestrator.core.runtime.tools.subprocess.run") as run_mock:
                 with pytest.raises(PermissionError, match="mutating git subcommand"):
                     execute_agent_tool(
                         session=None,  # type: ignore[arg-type]
@@ -951,9 +951,9 @@ def test_repo_read_rejects_shell_operator_chaining() -> None:
         run_id = "run-1"
         repo_dir = Path("/tmp/repo")
 
-    with patch("orchestrator.core.agent_tools._resolve_context", return_value=_FakeContext()):
-        with patch("orchestrator.core.agent_tools._ensure_repo_checkout_exists"):
-            with patch("orchestrator.core.agent_tools.subprocess.run") as run_mock:
+    with patch("orchestrator.core.runtime.tools._resolve_context", return_value=_FakeContext()):
+        with patch("orchestrator.core.runtime.tools._ensure_repo_checkout_exists"):
+            with patch("orchestrator.core.runtime.tools.subprocess.run") as run_mock:
                 with pytest.raises(PermissionError, match="no shell operators"):
                     execute_agent_tool(
                         session=None,  # type: ignore[arg-type]
@@ -989,9 +989,9 @@ def test_repo_read_allows_mutating_git_command_for_dev_stage() -> None:
         repo_dir = Path("/tmp/repo")
 
     fake_process = SimpleNamespace(returncode=0, stdout="", stderr="")
-    with patch("orchestrator.core.agent_tools._resolve_context", return_value=_FakeContext()):
-        with patch("orchestrator.core.agent_tools._ensure_repo_checkout_exists"):
-            with patch("orchestrator.core.agent_tools.subprocess.run", return_value=fake_process) as run_mock:
+    with patch("orchestrator.core.runtime.tools._resolve_context", return_value=_FakeContext()):
+        with patch("orchestrator.core.runtime.tools._ensure_repo_checkout_exists"):
+            with patch("orchestrator.core.runtime.tools.subprocess.run", return_value=fake_process) as run_mock:
                 payload = execute_agent_tool(
                     session=None,  # type: ignore[arg-type]
                     settings=None,
@@ -1027,9 +1027,9 @@ def test_repo_read_rejects_git_push_for_dev_stage() -> None:
         run_id = "run-1"
         repo_dir = Path("/tmp/repo")
 
-    with patch("orchestrator.core.agent_tools._resolve_context", return_value=_FakeContext()):
-        with patch("orchestrator.core.agent_tools._ensure_repo_checkout_exists"):
-            with patch("orchestrator.core.agent_tools.subprocess.run") as run_mock:
+    with patch("orchestrator.core.runtime.tools._resolve_context", return_value=_FakeContext()):
+        with patch("orchestrator.core.runtime.tools._ensure_repo_checkout_exists"):
+            with patch("orchestrator.core.runtime.tools.subprocess.run") as run_mock:
                 with pytest.raises(PermissionError, match="use github.push_branch"):
                     execute_agent_tool(
                         session=None,  # type: ignore[arg-type]
@@ -1065,8 +1065,8 @@ def test_decision_read_state_does_not_require_repo_checkout() -> None:
         repo_dir = Path("/tmp/missing-repo")
 
     with (
-        patch("orchestrator.core.agent_tools._resolve_context", return_value=_FakeContext()),
-        patch("orchestrator.core.agent_tools._execute_decision_tool", return_value={"ok": True}) as execute_mock,
+        patch("orchestrator.core.runtime.tools._resolve_context", return_value=_FakeContext()),
+        patch("orchestrator.core.runtime.tools._execute_decision_tool", return_value={"ok": True}) as execute_mock,
     ):
         payload = execute_agent_tool(
             session=None,  # type: ignore[arg-type]
@@ -1146,7 +1146,7 @@ def test_decision_read_state_returns_case_cycle_answers_and_recent_evidence() ->
         SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: [evidence])),
     ]
 
-    with patch("orchestrator.core.agent_tools._resolve_context", return_value=_FakeContext()):
+    with patch("orchestrator.core.runtime.tools._resolve_context", return_value=_FakeContext()):
         payload = execute_agent_tool(
             session=session,  # type: ignore[arg-type]
             settings=None,
@@ -1189,7 +1189,7 @@ def test_repo_read_requires_repo_checkout() -> None:
         run_id = "run-1"
         repo_dir = Path("/tmp/missing-repo")
 
-    with patch("orchestrator.core.agent_tools._resolve_context", return_value=_FakeContext()):
+    with patch("orchestrator.core.runtime.tools._resolve_context", return_value=_FakeContext()):
         with pytest.raises(ValueError, match="Repository checkout missing"):
             execute_agent_tool(
                 session=None,  # type: ignore[arg-type]
@@ -1242,9 +1242,9 @@ def test_resolve_context_prefers_run_worktree_for_run_scoped_tools() -> None:
         worker_workspace_key="worker-a",
     )
 
-    with patch("orchestrator.core.agent_tools._ensure_repo_checkout_exists"):
+    with patch("orchestrator.core.runtime.tools._ensure_repo_checkout_exists"):
         with patch(
-            "orchestrator.core.agent_tools.subprocess.run",
+            "orchestrator.core.runtime.tools.subprocess.run",
             return_value=SimpleNamespace(returncode=0, stdout="ok", stderr=""),
         ) as run_mock:
             execute_agent_tool(
@@ -1287,8 +1287,8 @@ def test_project_check_runtime_bindings_reports_environment_and_secret_ref_prese
         repo_dir = Path("/tmp/repo")
 
     with (
-        patch("orchestrator.core.agent_tools._resolve_context", return_value=_FakeContext()),
-        patch("orchestrator.core.agent_tools.check_project_bindings") as bindings_mock,
+        patch("orchestrator.core.runtime.tools._resolve_context", return_value=_FakeContext()),
+        patch("orchestrator.core.runtime.tools.check_project_bindings") as bindings_mock,
     ):
         bindings_mock.return_value = [
             SimpleNamespace(key="SUPABASE_URL", present=True, source="environment"),
@@ -1336,7 +1336,7 @@ def test_project_check_runtime_bindings_requires_keys_argument() -> None:
         run_id = "run-1"
         repo_dir = Path("/tmp/repo")
 
-    with patch("orchestrator.core.agent_tools._resolve_context", return_value=_FakeContext()):
+    with patch("orchestrator.core.runtime.tools._resolve_context", return_value=_FakeContext()):
         with pytest.raises(ValueError, match="requires non-empty 'keys'"):
             execute_agent_tool(
                 session=None,  # type: ignore[arg-type]
@@ -1383,8 +1383,8 @@ def test_project_list_installs_returns_safe_metadata_only() -> None:
         )
     ]
     with (
-        patch("orchestrator.core.agent_tools._resolve_context", return_value=_FakeContext()),
-        patch("orchestrator.core.agent_tools.list_project_installs", return_value=fake_installs),
+        patch("orchestrator.core.runtime.tools._resolve_context", return_value=_FakeContext()),
+        patch("orchestrator.core.runtime.tools.list_project_installs", return_value=fake_installs),
     ):
         payload = execute_agent_tool(
             session=object(),  # type: ignore[arg-type]
@@ -1434,8 +1434,8 @@ def test_project_request_install_creates_request_and_pauses() -> None:
 
     fake_request = SimpleNamespace(request_id="request-1", request_kind="project_missing_install", status="pending")
     with (
-        patch("orchestrator.core.agent_tools._resolve_context", return_value=_FakeContext()),
-        patch("orchestrator.core.agent_tools.create_install_request", return_value=fake_request) as request_mock,
+        patch("orchestrator.core.runtime.tools._resolve_context", return_value=_FakeContext()),
+        patch("orchestrator.core.runtime.tools.create_install_request", return_value=fake_request) as request_mock,
     ):
         payload = execute_agent_tool(
             session=object(),  # type: ignore[arg-type]
@@ -1505,9 +1505,9 @@ def test_exec_run_install_executes_registered_install() -> None:
         "stderr": "",
     }
     with (
-        patch("orchestrator.core.agent_tools._resolve_context", return_value=_FakeContext()),
-        patch("orchestrator.core.agent_tools.get_project_install", return_value=fake_install),
-        patch("orchestrator.core.agent_tools.execute_project_install", return_value=fake_result) as run_mock,
+        patch("orchestrator.core.runtime.tools._resolve_context", return_value=_FakeContext()),
+        patch("orchestrator.core.runtime.tools.get_project_install", return_value=fake_install),
+        patch("orchestrator.core.runtime.tools.execute_project_install", return_value=fake_result) as run_mock,
     ):
         payload = execute_agent_tool(
             session=object(),  # type: ignore[arg-type]
@@ -1546,9 +1546,9 @@ def test_knowledge_exact_read_returns_stored_asset_payload() -> None:
         repo_dir = Path("/tmp/repo")
 
     with (
-        patch("orchestrator.core.agent_tools._resolve_context", return_value=_FakeContext()),
+        patch("orchestrator.core.runtime.tools._resolve_context", return_value=_FakeContext()),
         patch(
-            "orchestrator.core.agent_tools.exact_read_knowledge_source",
+            "orchestrator.core.runtime.tools.exact_read_knowledge_source",
             return_value={"ok": True, "connector": "stored_asset", "layer": "exact_read"},
         ) as exact_read_mock,
     ):
@@ -1589,9 +1589,9 @@ def test_knowledge_read_uses_best_effort_embeddings_for_background_runs() -> Non
         repo_dir = Path("/tmp/repo")
 
     with (
-        patch("orchestrator.core.agent_tools._resolve_context", return_value=_FakeContext()),
+        patch("orchestrator.core.runtime.tools._resolve_context", return_value=_FakeContext()),
         patch(
-            "orchestrator.core.agent_tools.build_knowledge_prompt_context",
+            "orchestrator.core.runtime.tools.build_knowledge_prompt_context",
             return_value=SimpleNamespace(text="facts", citations=[]),
         ) as knowledge_mock,
     ):

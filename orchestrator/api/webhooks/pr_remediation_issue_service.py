@@ -6,7 +6,7 @@ import re
 from sqlalchemy import select
 
 from orchestrator.api.atlassian_oauth.service import atlassian_oauth_client, refresh_atlassian_connection_tokens
-from orchestrator.core.decision_types import JiraConfigKey, tenant_jira_config_text
+from orchestrator.core.decision.types import JiraConfigKey, tenant_jira_config_text
 from orchestrator.core.workflow.execution_snapshot import require_github_pr_remediation_context_from_plan
 from orchestrator.storage.models import AtlassianOAuthConnection, Run
 from orchestrator.tools.atlassian_oauth import JiraIssueCreateInput

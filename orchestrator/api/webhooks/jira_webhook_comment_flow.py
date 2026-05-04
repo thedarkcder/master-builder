@@ -29,18 +29,18 @@ from orchestrator.core.communications.decision_clarification_presentation import
     build_decision_clarification_response_fields,
     load_cycle_question_feedback,
 )
-from orchestrator.core.codex_runtime import CodexRuntimeError
-from orchestrator.core.decision_clarification_service import capture_decision_reply_and_recheck
-from orchestrator.core.decision_engine import DecisionEventInput
-from orchestrator.core.decision_reply_service import (
+from orchestrator.core.runtime.runtime import CodexRuntimeError
+from orchestrator.core.decision.clarification_service import capture_decision_reply_and_recheck
+from orchestrator.core.decision.engine import DecisionEventInput
+from orchestrator.core.decision.reply_service import (
     active_case_and_cycle_for_issue,
     is_machine_generated_decision_comment,
 )
-from orchestrator.core.followup_context_service import (
+from orchestrator.core.pm.followup_context_service import (
     FOLLOWUP_CONTEXT_DECISION_GATE,
     close_followup_contexts,
 )
-from orchestrator.core.pre_run_check import evaluate_pre_run_check
+from orchestrator.core.precheck.pre_run_check import evaluate_pre_run_check
 
 logger = logging.getLogger(__name__)
 

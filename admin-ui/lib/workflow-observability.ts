@@ -63,54 +63,17 @@ function durationMs(attempt: WorkflowOperationAttemptRecord): number | null {
   return Math.max(0, new Date(attempt.finished_at).getTime() - new Date(attempt.started_at).getTime());
 }
 
-const SECTION_LABELS: Record<WorkflowTranscriptSectionRecord["kind"], string> = {
-  summary: "Summary",
-  runtime: "Runtime",
-  prompts: "Prompts",
-  tool_calls: "Tool calls",
-  external_requests: "External requests",
-  external_responses: "External responses",
-  outcome: "Outcome",
-};
-
-const SECTION_ORDER: WorkflowTranscriptSectionRecord["kind"][] = [
-  "summary",
-  "runtime",
-  "prompts",
-  "tool_calls",
-  "external_requests",
-  "external_responses",
-  "outcome",
-];
-
-function invocationGroupForEvent(event: WorkflowObservabilityEventRecord): { key: string; label: string } {
-  const stage = String(event.stage || event.payload?.stage || "").trim();
-  const invocationId = String(event.invocation_id || event.payload?.invocation_id || "").trim();
-  const key = invocationId || stage || "runtime";
-  const stageLabel = stage ? stage.replace(/_/g, " ") : "unscoped runtime";
-  const suffix = invocationId ? ` · ${invocationId.slice(0, 8)}` : "";
-  return { key, label: `Runtime · ${stageLabel}${suffix}` };
-}
-
 export function buildTelemetryAttemptView(
   attempt: WorkflowOperationAttemptRecord,
   events: WorkflowObservabilityEventRecord[],
 ): WorkflowStepAttemptTranscriptRecord {
-  const sectionEntries: Record<Exclude<WorkflowTranscriptSectionRecord["kind"], "runtime">, WorkflowTranscriptEntryRecord[]> = {
-    summary: [],
-    prompts: [],
-    tool_calls: [],
-    external_requests: [],
-    external_responses: [],
-    outcome: [],
-  };
-  const runtimeSections = new Map<string, WorkflowTranscriptSectionRecord>();
+  const entries: WorkflowTranscriptEntryRecord[] = [];
   for (const event of events
     .filter((candidate) => candidate.attempt_id === attempt.attempt_id)
     .sort(compareWorkflowObservabilityEvents)) {
     const sectionKind = sectionForEvent(event);
     if (!sectionKind) continue;
-    const entry = {
+    entries.push({
       entry_id: event.event_id,
       recorded_at: event.recorded_at,
       level: event.level,
@@ -118,33 +81,7 @@ export function buildTelemetryAttemptView(
       message: event.message,
       source_component: event.source_component,
       payload: event.payload ?? {},
-    };
-    if (sectionKind === "runtime") {
-      const group = invocationGroupForEvent(event);
-      const section = runtimeSections.get(group.key) ?? {
-        kind: "runtime" as const,
-        label: group.label,
-        entries: [],
-      };
-      section.entries.push(entry);
-      runtimeSections.set(group.key, section);
-      continue;
-    }
-    sectionEntries[sectionKind].push(entry);
-  }
-  const sections: WorkflowTranscriptSectionRecord[] = [];
-  for (const kind of SECTION_ORDER) {
-    if (kind === "runtime") {
-      sections.push(...runtimeSections.values());
-      continue;
-    }
-    if (sectionEntries[kind].length > 0) {
-      sections.push({
-        kind,
-        label: SECTION_LABELS[kind],
-        entries: sectionEntries[kind],
-      });
-    }
+    });
   }
 
   return {
@@ -158,6 +95,14 @@ export function buildTelemetryAttemptView(
     failure_message: attempt.error_message,
     status_detail: attempt.status_detail,
     recommended_next_action: null,
-    sections,
+    sections: entries.length
+      ? [
+          {
+            kind: "runtime",
+            label: "Live log stream",
+            entries,
+          },
+        ]
+      : [],
   };
 }

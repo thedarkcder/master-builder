@@ -71,14 +71,14 @@ from orchestrator.api.schemas import (
     JiraWebhookActionResult,
 )
 from orchestrator.core.config import get_settings
-from orchestrator.core.decision_types import JiraConfigKey, tenant_jira_config_text
-from orchestrator.core.project_policy import normalize_project_policy_overrides
-from orchestrator.core.platform_secret_service import resolve_platform_secret_ref
-from orchestrator.core.platform_secret_service import (
+from orchestrator.core.decision.types import JiraConfigKey, tenant_jira_config_text
+from orchestrator.core.projects.policy import normalize_project_policy_overrides
+from orchestrator.core.platform.secret_service import resolve_platform_secret_ref
+from orchestrator.core.platform.secret_service import (
     PLATFORM_SECRET_GITHUB_APP_ID_REF,
     PLATFORM_SECRET_GITHUB_PRIVATE_KEY_REF,
 )
-from orchestrator.core.tenant_secret_service import resolve_scoped_secret_ref
+from orchestrator.core.platform.tenant_secret_service import resolve_scoped_secret_ref
 from orchestrator.storage.models import AtlassianOAuthConnection, Project, Tenant
 from orchestrator.tools.discord_api import DiscordApiClient
 from orchestrator.tools.github_app import GitHubApiError, github_client_from_tenant_config

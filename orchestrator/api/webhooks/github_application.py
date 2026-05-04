@@ -21,8 +21,8 @@ from orchestrator.core.communications import (
     HttpJsonResponseBytesAction,
     IngressResult,
 )
-from orchestrator.core.jira_links import tenant_jira_issue_url
-from orchestrator.core.pr_review_findings import evaluate_pr_review_findings
+from orchestrator.core.integrations.atlassian.links import tenant_jira_issue_url
+from orchestrator.core.review.pr_review_findings import evaluate_pr_review_findings
 
 logger = logging.getLogger(__name__)
 

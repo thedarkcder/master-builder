@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from orchestrator.core.workflow_run_state import (
+from orchestrator.core.workflow.run_state import (
     project_workflow_for_new_run_attempt,
     project_workflow_for_run_started,
     project_workflow_for_run_terminal,

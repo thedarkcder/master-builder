@@ -9,11 +9,11 @@ from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from orchestrator.api.schemas import AtlassianConnectStart
-from orchestrator.core.atlassian_oauth_state import (
+from orchestrator.core.integrations.atlassian.oauth_state import (
     create_atlassian_oauth_state_token,
     parse_atlassian_oauth_state_token,
 )
-from orchestrator.core.secrets import encrypt_value
+from orchestrator.core.platform.secrets import encrypt_value
 from orchestrator.storage.models import AtlassianOAuthConnection, Tenant
 from orchestrator.storage.tenant_rls import set_platform_system_rls_context
 from orchestrator.tools.atlassian_oauth import AtlassianOAuthError

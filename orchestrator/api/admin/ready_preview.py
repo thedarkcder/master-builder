@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import HTTPException, status
 
 from orchestrator.api.schemas import ReadyGatePreviewRead, ReadyIssuePreviewRead
-from orchestrator.core.tenant_operational_health_service import tenant_integration_snapshot
+from orchestrator.core.platform.operational_health_service import tenant_integration_snapshot
 from orchestrator.storage.models import AtlassianOAuthConnection, Tenant
 from orchestrator.tools.atlassian_oauth import AtlassianOAuthError
 

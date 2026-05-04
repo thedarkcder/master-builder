@@ -9,17 +9,17 @@ from cryptography.fernet import Fernet
 from fastapi import HTTPException
 
 from orchestrator.core.config import get_settings
-from orchestrator.core.decision_gate import DecisionGateResult
-from orchestrator.core.decision_state_machine import resolve_execution_gate_state
-from orchestrator.core.decision_types import (
+from orchestrator.core.decision.gate import DecisionGateResult
+from orchestrator.core.decision.state_machine import resolve_execution_gate_state
+from orchestrator.core.decision.types import (
     DecisionClassification,
     DecisionEngineResult,
     IngressDecision,
     PrecheckOutcome,
 )
 from orchestrator.core.gtd import GoodToDoValidationResult
-from orchestrator.core.pre_run_check import PreRunCheckResult
-from orchestrator.core.webhook_health import reset_webhook_health_tracker_for_tests
+from orchestrator.core.precheck.pre_run_check import PreRunCheckResult
+from orchestrator.core.webhooks.health import reset_webhook_health_tracker_for_tests
 from orchestrator.core.worker.webhook_job_service import process_next_webhook_job
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from tests.test_support.db_harness import SqliteTemplateApiTestCase
@@ -147,7 +147,7 @@ class JiraWebhookTestsHarness(SqliteTemplateApiTestCase):
         )
         self._default_precheck_decision_patch.start()
         self._event_notify_patch = patch(
-            "orchestrator.core.product_events.publish_product_event_notification",
+            "orchestrator.core.observability.writer.publish_product_event_notification",
             skip_product_event_notification,
         )
         self._event_notify_patch.start()

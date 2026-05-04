@@ -4,12 +4,12 @@ from datetime import datetime, timezone
 from unittest.mock import patch
 
 from orchestrator.core.config import get_settings
-from orchestrator.core.decision_planner import DecisionPlannerQuestion, DecisionPlannerResult
-from orchestrator.core.decision_engine import DecisionEventInput, evaluate_decision_event
-from orchestrator.core.decision_state_repository import existing_case_for_issue
-from orchestrator.core.decision_gate import DecisionGateResult
+from orchestrator.core.decision.planner import DecisionPlannerQuestion, DecisionPlannerResult
+from orchestrator.core.decision.engine import DecisionEventInput, evaluate_decision_event
+from orchestrator.core.decision.state_repository import existing_case_for_issue
+from orchestrator.core.decision.gate import DecisionGateResult
 from orchestrator.core.gtd import GoodToDoValidationResult
-from orchestrator.core.pre_run_check import PreRunCheckResult
+from orchestrator.core.precheck.pre_run_check import PreRunCheckResult
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.models import DecisionCase, DecisionCycle, DecisionEffectOutbox, DecisionEvent, Project, Tenant
 from tests.test_support.db_harness import SqliteTemplateDbTestCase
@@ -137,7 +137,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
         self.session_factory = create_session_factory(database_url=self.database_url)
         self.settings = get_settings()
         self._codex_resolution_patcher = patch(
-            "orchestrator.core.decision_engine.resolve_slots_with_runtime_resolution",
+            "orchestrator.core.decision.engine.resolve_slots_with_runtime_resolution",
             return_value={},
         )
         self._codex_resolution_patcher.start()
@@ -178,7 +178,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
             return prechecks.pop(0)
 
         with self.session_factory() as session, patch(
-            "orchestrator.core.decision_engine.plan_decision_questions",
+            "orchestrator.core.decision.engine.plan_decision_questions",
             side_effect=[
                 _planner_result(
                     gate_status="blocked_decision_gate",
@@ -248,7 +248,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
         )
 
         with self.session_factory() as session, patch(
-            "orchestrator.core.decision_engine.plan_decision_questions",
+            "orchestrator.core.decision.engine.plan_decision_questions",
             side_effect=[
                 _planner_result(
                     gate_status="blocked_decision_gate",
@@ -327,7 +327,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
         precheck = _precheck_result(outcome="ready_for_agent")
 
         with self.session_factory() as session, patch(
-            "orchestrator.core.decision_engine.plan_decision_questions",
+            "orchestrator.core.decision.engine.plan_decision_questions",
             return_value=_planner_result(
                 gate_status="blocked_decision_gate",
                 reason="Need config",
@@ -394,7 +394,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
             return prechecks.pop(0)
 
         with self.session_factory() as session, patch(
-            "orchestrator.core.decision_engine.plan_decision_questions",
+            "orchestrator.core.decision.engine.plan_decision_questions",
             return_value=_planner_result(
                 gate_status="blocked_decision_gate",
                 reason="Need owner decision",
@@ -470,7 +470,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
             return prechecks.pop(0)
 
         with self.session_factory() as session, patch(
-            "orchestrator.core.decision_engine.plan_decision_questions",
+            "orchestrator.core.decision.engine.plan_decision_questions",
             side_effect=[
                 _planner_result(
                     gate_status="blocked_decision_gate",
@@ -580,7 +580,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
             return prechecks.pop(0)
 
         with self.session_factory() as session, patch(
-            "orchestrator.core.decision_engine.plan_decision_questions",
+            "orchestrator.core.decision.engine.plan_decision_questions",
             side_effect=[
                 _planner_result(
                     gate_status="blocked_decision_gate",
@@ -692,7 +692,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
             return prechecks.pop(0)
 
         with self.session_factory() as session, patch(
-            "orchestrator.core.decision_engine.plan_decision_questions",
+            "orchestrator.core.decision.engine.plan_decision_questions",
             side_effect=[
                 _planner_result(
                     gate_status="blocked_decision_gate",
@@ -834,7 +834,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
             )
 
         with self.session_factory() as session, patch(
-            "orchestrator.core.decision_engine.plan_decision_questions",
+            "orchestrator.core.decision.engine.plan_decision_questions",
             side_effect=[
                 _planner_result(
                     gate_status="blocked_decision_gate",
@@ -965,7 +965,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
             return prechecks.pop(0)
 
         with self.session_factory() as session, patch(
-            "orchestrator.core.decision_engine.plan_decision_questions",
+            "orchestrator.core.decision.engine.plan_decision_questions",
             side_effect=[
                 _planner_result(
                     gate_status="blocked_decision_gate",
@@ -1175,7 +1175,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
             return True, None
 
         with self.session_factory() as session, patch(
-            "orchestrator.core.decision_engine.plan_decision_questions",
+            "orchestrator.core.decision.engine.plan_decision_questions",
             return_value=_planner_result(
                 gate_status="blocked_decision_gate",
                 reason="Need owner decision",
@@ -1226,14 +1226,14 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                 decision_gate_missing_sections=("objective",),
             )
 
-        from orchestrator.core.knowledge_base import SlotResolution
+        from orchestrator.core.knowledge.base import SlotResolution
 
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-stateful")
             project = session.get(Project, "project-stateful")
             assert tenant is not None and project is not None
             with patch(
-                "orchestrator.core.decision_engine.resolve_missing_slots_from_knowledge",
+                "orchestrator.core.decision.engine.resolve_missing_slots_from_knowledge",
                 return_value={
                     "objective": SlotResolution(
                         slot_name="objective",
@@ -1279,7 +1279,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                 decision_gate_missing_sections=("objective",),
             )
 
-        from orchestrator.core.knowledge_base import SlotResolution
+        from orchestrator.core.knowledge.base import SlotResolution
 
         source_time = datetime(2026, 3, 23, 13, 30, tzinfo=timezone.utc)
 
@@ -1288,7 +1288,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
             project = session.get(Project, "project-stateful")
             assert tenant is not None and project is not None
             with patch(
-                "orchestrator.core.decision_engine.resolve_missing_slots_from_knowledge",
+                "orchestrator.core.decision.engine.resolve_missing_slots_from_knowledge",
                 return_value={
                     "objective": SlotResolution(
                         slot_name="objective",

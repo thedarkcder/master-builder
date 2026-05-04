@@ -4,17 +4,15 @@ from types import SimpleNamespace
 
 import pytest
 
-from orchestrator.core.parent_planning_fanout_service import ParentPlanningFanoutService
-from orchestrator.core.specialist_planning import PLANNING_STATE_COMPLETED
-
-
-class _Planner:
-    def __init__(self, *, planning_result, planning_package: dict[str, object]) -> None:
-        self.planning_result = planning_result
-        self.planning_package = planning_package
-
-    def plan_backlog_parent(self, **_kwargs):  # noqa: ANN003
-        return self.planning_result, self.planning_package
+from orchestrator.core.parent_feature_workflow.child_fanout_execution import (
+    ChildFanoutExecutionError,
+    ChildFanoutExecutionInput,
+    execute_child_fanout_step,
+)
+from orchestrator.core.projects.parent_planning_fanout_service import ParentPlanningFanoutService
+from orchestrator.core.planning.specialist import PLANNING_STATE_COMPLETED
+from orchestrator.core.runtime.payload_models import PMDecisionRequestPayload
+from orchestrator.core.workflow.step_runner import WorkflowStepAttempt
 
 
 class _ChildSyncGateway:
@@ -34,71 +32,62 @@ class _ChildSyncGateway:
         )
 
 
-def test_parent_planning_fanout_service_returns_completed_result() -> None:
-    result = ParentPlanningFanoutService().plan_and_seed(
-        parent_detail=SimpleNamespace(key="MAB-229"),
-        product_brief={"objective": "Create child tickets"},
-        project_key="MAB",
-        planner=_Planner(
-            planning_result=SimpleNamespace(planning_state=PLANNING_STATE_COMPLETED, product_escalations=()),
-            planning_package={"child_ticket_specs": []},
-        ),
-        child_sync_gateway=_ChildSyncGateway(
-            seed_data={
-                "requires_input": False,
-                "updated_children": ["MAB-230"],
-                "created_children": ["MAB-231"],
-                "changed_children": ["MAB-230", "MAB-231"],
-            }
-        ),
-    )
+class _AttemptAwareChildSyncGateway(_ChildSyncGateway):
+    def __init__(self, *, seed_data: dict[str, object]) -> None:
+        super().__init__(seed_data=seed_data)
+        self.attempt_refs = []
 
-    assert result.completed is True
-    assert result.changed_children == ["MAB-230", "MAB-231"]
-    assert result.questions == ()
+    def with_attempt(self, *, attempt_ref):  # noqa: ANN001
+        self.attempt_refs.append(attempt_ref)
+        return self
+
+
+class _Lifecycle:
+    def __init__(self) -> None:
+        self.completed = []
+        self.failed = []
+
+    def complete_started_operation(self, *, operation, attempt, summary):  # noqa: ANN001
+        self.completed.append((operation, attempt, summary))
+
+    def fail_started_operation(self, *, operation, attempt, category, message):  # noqa: ANN001
+        self.failed.append((operation, attempt, category, message))
+
+
+def _step_attempt() -> WorkflowStepAttempt:
+    return WorkflowStepAttempt(
+        operation=SimpleNamespace(workflow_id="workflow-1", operation_id="operation-1"),
+        attempt=SimpleNamespace(attempt_id="attempt-1", attempt_number=1),
+    )
 
 
 def test_parent_planning_fanout_service_requires_questions_for_blocked_result() -> None:
-    child_sync_gateway = _ChildSyncGateway(seed_data={"requires_input": True, "questions": []})
     with pytest.raises(RuntimeError, match="blocked but did not return clarification questions"):
-        ParentPlanningFanoutService().plan_and_seed(
-            parent_detail=SimpleNamespace(key="MAB-229"),
-            product_brief={"objective": "Create child tickets"},
-            project_key="MAB",
-            planner=_Planner(
-                planning_result=SimpleNamespace(planning_state="planning_needs_clarification", product_escalations=()),
-                planning_package={"child_ticket_specs": []},
-            ),
-            child_sync_gateway=child_sync_gateway,
+        ParentPlanningFanoutService().blocked_planning_result(
+            planning_result=SimpleNamespace(planning_state="planning_needs_clarification", pm_decision_requests=()),
+            planning_package={"child_ticket_specs": []},
         )
-    assert child_sync_gateway.seed_calls == 0
 
 
 def test_parent_planning_fanout_service_returns_blocking_questions() -> None:
-    child_sync_gateway = _ChildSyncGateway(seed_data={"requires_input": True, "questions": []})
-    result = ParentPlanningFanoutService().plan_and_seed(
-        parent_detail=SimpleNamespace(key="MAB-229"),
-        product_brief={"objective": "Create child tickets"},
-        project_key="MAB",
-        planner=_Planner(
-            planning_result=SimpleNamespace(
-                planning_state="planning_needs_clarification",
-                product_escalations=[
-                    {
-                        "question": "What audit retention window should v1 support?",
-                        "why_it_matters": "The answer changes product commitments.",
-                    }
-                ],
-            ),
-            planning_package={"child_ticket_specs": []},
+    result = ParentPlanningFanoutService().blocked_planning_result(
+        planning_result=SimpleNamespace(
+            planning_state="planning_needs_clarification",
+            pm_decision_requests=[
+                PMDecisionRequestPayload(
+                    request_id="pm-audit-retention",
+                    question="What audit retention window should v1 support?",
+                    why_it_matters="The answer changes product commitments.",
+                    related_decision_ids=("audit-retention",),
+                )
+            ],
         ),
-        child_sync_gateway=child_sync_gateway,
+        planning_package={"child_ticket_specs": []},
     )
 
     assert result.completed is False
     assert result.changed_children == []
     assert result.questions[0].question == "What audit retention window should v1 support?"
-    assert child_sync_gateway.seed_calls == 0
 
 
 def test_parent_planning_fanout_service_evaluates_refresh_seed_data() -> None:
@@ -116,3 +105,56 @@ def test_parent_planning_fanout_service_evaluates_refresh_seed_data() -> None:
     assert result.completed is False
     assert result.changed_children == ["MAB-230"]
     assert result.questions[0].question == "Which child behavior should update?"
+
+
+def test_child_fanout_executor_uses_started_attempt_contract() -> None:
+    lifecycle = _Lifecycle()
+    gateway = _AttemptAwareChildSyncGateway(
+        seed_data={
+            "requires_input": False,
+            "updated_children": ["MAB-230"],
+            "created_children": [],
+            "changed_children": ["MAB-230"],
+        }
+    )
+
+    result = execute_child_fanout_step(
+        request=ChildFanoutExecutionInput(
+            lifecycle=lifecycle,
+            step=_step_attempt(),
+            child_sync_gateway=gateway,
+            fanout_service=ParentPlanningFanoutService(),
+            parent_detail=SimpleNamespace(key="MAB-229"),
+            project_key="MAB",
+            planning_result=SimpleNamespace(planning_state=PLANNING_STATE_COMPLETED, pm_decision_requests=()),
+            planning_package={"planning_state": PLANNING_STATE_COMPLETED},
+            completion_summary="Fanout complete.",
+        )
+    )
+
+    assert result.completed is True
+    assert gateway.seed_calls == 1
+    assert gateway.attempt_refs[0].attempt_id == "attempt-1"
+    assert lifecycle.completed[0][2] == "Fanout complete."
+
+
+def test_child_fanout_executor_fails_attempt_when_seed_contract_is_invalid() -> None:
+    lifecycle = _Lifecycle()
+    gateway = _AttemptAwareChildSyncGateway(seed_data={"requires_input": True, "questions": []})
+
+    with pytest.raises(ChildFanoutExecutionError, match="blocked but did not return clarification questions"):
+        execute_child_fanout_step(
+            request=ChildFanoutExecutionInput(
+                lifecycle=lifecycle,
+                step=_step_attempt(),
+                child_sync_gateway=gateway,
+                fanout_service=ParentPlanningFanoutService(),
+                parent_detail=SimpleNamespace(key="MAB-229"),
+                project_key="MAB",
+                planning_result=SimpleNamespace(planning_state=PLANNING_STATE_COMPLETED, pm_decision_requests=()),
+                planning_package={"planning_state": PLANNING_STATE_COMPLETED},
+                completion_summary="Fanout complete.",
+            )
+        )
+
+    assert lifecycle.failed[0][2] == "contract_violation"

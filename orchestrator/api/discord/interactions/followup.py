@@ -46,7 +46,7 @@ from orchestrator.api.discord.shared.followup_format import (
     build_command_followup_message,
     resolve_tenant_jira_browse_base_url,
 )
-from orchestrator.core.followup_context_service import (
+from orchestrator.core.pm.followup_context_service import (
     resolve_followup_context_match as _resolve_followup_context_match_impl,
     resolve_followup_context as _resolve_followup_context_impl,
     resolve_followup_reaction as _resolve_followup_reaction_impl,
@@ -54,7 +54,7 @@ from orchestrator.core.followup_context_service import (
 from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.core.config import get_settings
 from orchestrator.core.discord.channel_tenant_index import resolve_tenant_for_discord_channel
-from orchestrator.core.platform_secret_service import resolve_platform_secret_ref
+from orchestrator.core.platform.secret_service import resolve_platform_secret_ref
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import Project, Tenant
 from orchestrator.tools.discord_api import DiscordApiClient

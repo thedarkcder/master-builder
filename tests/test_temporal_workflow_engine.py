@@ -8,10 +8,10 @@ import pytest
 
 from temporalio.exceptions import ApplicationError
 
-from orchestrator.core.specialist_planning import RetryableSpecialistPlanningContractError
-from orchestrator.core.workflow_advance import WorkflowAdvanceOutcome
-from orchestrator.core.workflow_execution_projection import WorkflowExecutionReference, WorkflowSourceReference
-from orchestrator.core.workflow_runtime import WorkflowAdvanceRequest, WorkflowTrigger
+from orchestrator.core.planning.specialist import RetryableSpecialistPlanningContractError
+from orchestrator.core.workflow.advance import WorkflowAdvanceOutcome
+from orchestrator.core.workflow.execution_projection import WorkflowExecutionReference, WorkflowSourceReference
+from orchestrator.core.workflow.runtime import WorkflowAdvanceRequest, WorkflowTrigger
 from orchestrator.temporal.payloads import (
     DevelopmentTeamRunActivityResult,
     DevelopmentTeamRunWorkflowInput,
@@ -257,17 +257,20 @@ def test_temporal_engine_advances_handler_backed_workflow_through_temporal_updat
     assert captured["update_payload"].retry_backoff_coefficient == 2.0
 
 
-def test_temporal_engine_handler_retry_returns_after_update_is_accepted(monkeypatch):
+def test_temporal_engine_handler_retry_waits_for_retry_activity_result(monkeypatch):
     captured: dict[str, object] = {}
 
     class _FakeHandle:
-        async def start_update(self, update_method, payload, *, wait_for_stage):
+        async def execute_update(self, update_method, payload):
             captured["update_method"] = update_method
             captured["update_payload"] = payload
-            captured["wait_for_stage"] = wait_for_stage
-
-        async def execute_update(self, *_args, **_kwargs):
-            raise AssertionError("manual retry must not wait for operation completion")
+            return WorkflowOperationRetryResult(
+                operation_id="operation-backlog-planning",
+                workflow_id="parent_planning:MAB-233",
+                operation_type="backlog_planning",
+                operation_status="running",
+                workflow_status="running",
+            )
 
     class _FakeClient:
         async def start_workflow(self, run_method, payload, **kwargs):
@@ -330,9 +333,8 @@ def test_temporal_engine_handler_retry_returns_after_update_is_accepted(monkeypa
     assert handle.operation_id == operation.operation_id
     assert handle.workflow_id == workflow.workflow_id
     assert handle.operation_type == operation.operation_type
-    assert handle.status == "failed"
+    assert handle.status == "running"
     assert captured["update_method"] == "workflow-retry"
-    assert captured["wait_for_stage"].name == "ACCEPTED"
     payload = captured["update_payload"]
     assert payload.workflow_id == workflow.workflow_id
     assert payload.operation_id == operation.operation_id

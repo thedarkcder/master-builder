@@ -5,10 +5,10 @@ from dataclasses import dataclass
 from typing import Any
 from typing import Protocol
 
-from orchestrator.core.codex_agents import CodexWorkflowAgents
-from orchestrator.core.codex_runtime import CodexRuntime
-from orchestrator.core.worker_capability_normalization import WorkerCapability
-from orchestrator.core.worker_capability_normalization import parse_worker_capability
+from orchestrator.core.runtime.agents import CodexWorkflowAgents
+from orchestrator.core.runtime.runtime import CodexRuntime
+from orchestrator.core.worker.capability_normalization import WorkerCapability
+from orchestrator.core.worker.capability_normalization import parse_worker_capability
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.core.workflow.runner import (
     DevResult,

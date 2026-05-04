@@ -5,36 +5,44 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from orchestrator.core.clarification_questions import ClarificationQuestion, ClarificationQuestionSet
-from orchestrator.core.clarification_projection_service import (
+from orchestrator.core.clarification.questions import ClarificationQuestion, ClarificationQuestionSet
+from orchestrator.core.clarification.projection_service import (
     ClarificationProjectionSpec,
     jira_comment_evidence_id,
     matching_active_jira_clarification_evidence_id,
     upsert_clarification_projection,
 )
-from orchestrator.core.followup_context_service import (
+from orchestrator.core.pm.followup_context_service import (
     FOLLOWUP_CONTEXT_PARENT_PLANNING_CLARIFICATION,
     upsert_followup_context,
 )
-from orchestrator.core.jira_parent_child_sync_publishers import (
+from orchestrator.core.integrations.atlassian.parent_child_sync_publishers import (
     post_pm_product_clarification_questions_to_jira,
 )
-from orchestrator.core.jira_parent_child_sync_shared import JiraParentChildSyncContext, extract_created_comment_id
+from orchestrator.core.integrations.atlassian.parent_child_sync_shared import JiraParentChildSyncContext, extract_created_comment_id
 from orchestrator.core.parent_feature_workflow.adapters import _ParentChildSyncGateway
 from orchestrator.core.parent_feature_workflow.dependencies import ParentFeatureWorkflowHandlerDeps
 from orchestrator.core.parent_feature_workflow.operations import (
     PARENT_OP_JIRA_CHILD_FANOUT,
     PARENT_OP_JIRA_COMMENT_PROJECTION,
+    PARENT_OP_PM_DECISION_RESOLUTION,
 )
-from orchestrator.core.parent_planning_clarification_service import (
+from orchestrator.core.planning.decision_records import PlanningDecisionRecordStore
+from orchestrator.core.projects.parent_planning_clarification_service import (
     ClarificationPublishEffects,
     ParentPlanningClarificationService,
 )
-from orchestrator.core.parent_planning_fanout_service import ParentPlanningFanoutResult, ParentPlanningFanoutService
-from orchestrator.core.workflow_advance import InvalidWorkflowOperationRetryError
-from orchestrator.core.workflow_definition import WorkflowDefinition
-from orchestrator.core.workflow_execution_projection import WorkflowExecutionProjection, classify_external_workflow_failure
-from orchestrator.core.workflow_operation_service import WorkflowOperationHandle
+from orchestrator.core.parent_feature_workflow.child_fanout_execution import (
+    ChildFanoutExecutionError,
+    ChildFanoutExecutionInput,
+    execute_child_fanout_step,
+)
+from orchestrator.core.projects.parent_planning_fanout_service import ParentPlanningFanoutSeedError, ParentPlanningFanoutService
+from orchestrator.core.workflow.advance import InvalidWorkflowOperationRetryError
+from orchestrator.core.workflow.definition import WorkflowDefinition
+from orchestrator.core.workflow.execution_projection import WorkflowExecutionProjection, classify_external_workflow_failure
+from orchestrator.core.workflow.operation_service import WorkflowOperationHandle
+from orchestrator.core.workflow.step_runner import WorkflowStepAttempt
 from orchestrator.storage.models import Project, Tenant, WorkflowExecution, WorkflowOperation
 
 
@@ -58,12 +66,58 @@ def jira_issue_key_for_workflow(workflow: WorkflowExecution) -> str:
     return issue_key
 
 
-def product_escalation_questions(planning_result) -> tuple[ClarificationQuestion, ...]:  # noqa: ANN001
+def stakeholder_escalation_questions(pm_resolution) -> tuple[ClarificationQuestion, ...]:  # noqa: ANN001
     questions: list[object] = []
-    for escalation in getattr(planning_result, "product_escalations", ()) or ():
+    for escalation in getattr(pm_resolution, "stakeholder_escalations", ()) or ():
         to_question = getattr(escalation, "to_clarification_question", None)
         questions.append(to_question() if callable(to_question) else escalation)
     return ClarificationQuestionSet.from_values(questions).questions
+
+
+def augment_product_brief_with_pm_resolution(*, product_brief: dict[str, Any], pm_resolution) -> dict[str, Any]:  # noqa: ANN001
+    augmented = dict(product_brief)
+    planning_context = dict(augmented.get("planning_context") or {})
+    pm_answers = [resolution.to_payload() for resolution in getattr(pm_resolution, "resolved_decisions", ()) or ()]
+    if pm_answers:
+        planning_context["pm_decision_resolutions"] = pm_answers
+    updated_context = dict(getattr(pm_resolution, "updated_planning_context", {}) or {})
+    if updated_context:
+        planning_context.update(updated_context)
+    if planning_context:
+        augmented["planning_context"] = planning_context
+    return augmented
+
+
+def record_specialist_decisions_for_retry(
+    *,
+    context: ParentWorkflowRetryContext,
+    operation: WorkflowOperation,
+    attempt,
+    parent_issue_key: str,
+    planning_result,
+) -> None:
+    decision_store = PlanningDecisionRecordStore(session=context.session)
+    for stage in getattr(planning_result, "stages", ()) or ():
+        decision_store.record_technical_decisions(
+            tenant_id=context.tenant.tenant_id,
+            project_id=context.project.project_id,
+            workflow_id=context.workflow.workflow_id,
+            source_operation_id=operation.operation_id,
+            source_attempt_id=attempt.attempt_id,
+            parent_issue_key=parent_issue_key,
+            source_stage=str(getattr(stage, "planning_state", "") or "").strip() or None,
+            decisions=tuple(getattr(stage, "technical_decisions", ()) or ()),
+        )
+        decision_store.record_pm_requests(
+            tenant_id=context.tenant.tenant_id,
+            project_id=context.project.project_id,
+            workflow_id=context.workflow.workflow_id,
+            source_operation_id=operation.operation_id,
+            source_attempt_id=attempt.attempt_id,
+            parent_issue_key=parent_issue_key,
+            source_stage=str(getattr(stage, "planning_state", "") or "").strip() or None,
+            requests=tuple(getattr(stage, "pm_decision_requests", ()) or ()),
+        )
 
 
 def operation_handle(*, context: ParentWorkflowRetryContext, operation: WorkflowOperation) -> WorkflowOperationHandle:
@@ -126,47 +180,21 @@ def execute_child_fanout_on_started_attempt(
     )
     fanout_service = ParentPlanningFanoutService()
     try:
-        seed_data = child_sync_gateway.seed_parent_backlog_children(
-            parent_detail=parent_detail,
-            project_key=context.project.jira_project_key,
-            planning_package=planning_package,
-            planning_state=planning_result.planning_state,
+        execute_child_fanout_step(
+            request=ChildFanoutExecutionInput(
+                lifecycle=lifecycle,
+                step=WorkflowStepAttempt(operation=operation, attempt=attempt),
+                child_sync_gateway=child_sync_gateway,
+                fanout_service=fanout_service,
+                parent_detail=parent_detail,
+                project_key=context.project.jira_project_key,
+                planning_result=planning_result,
+                planning_package=planning_package,
+                completion_summary="Engineering child fanout completed from the confirmed parent brief.",
+            )
         )
-        seed_evaluation = fanout_service.evaluate_seed_data(
-            seed_data=seed_data,
-            combine_child_updates_fn=child_sync_gateway.combined_child_updates,
-            planning_result=planning_result,
-        )
-        fanout = ParentPlanningFanoutResult(
-            planning_result=planning_result,
-            planning_package=planning_package,
-            seed_evaluation=seed_evaluation,
-        )
-    except Exception as exc:  # noqa: BLE001
-        lifecycle.fail_started_operation(
-            operation=operation,
-            attempt=attempt,
-            category=classify_external_workflow_failure(error=exc),
-            message=str(exc),
-        )
+    except (ChildFanoutExecutionError, ParentPlanningFanoutSeedError):
         return operation_handle(context=context, operation=operation)
-    if not fanout.completed:
-        wait_for_stakeholder_clarification(
-            context=context,
-            deps=deps,
-            lifecycle=lifecycle,
-            operation=operation,
-            attempt=attempt,
-            parent_issue_key=parent_issue_key,
-            questions=fanout.questions,
-            clarification_context="Engineering child fanout",
-        )
-        return operation_handle(context=context, operation=operation)
-    lifecycle.complete_started_operation(
-        operation=operation,
-        attempt=attempt,
-        summary="Engineering child fanout completed from the confirmed parent brief.",
-    )
     return operation_handle(context=context, operation=operation)
 
 
@@ -206,6 +234,11 @@ def wait_for_stakeholder_clarification(
     clarification_context: str,
 ) -> None:
     clarification_service = ParentPlanningClarificationService()
+    jira_adapter = deps.integration_router.jira(
+        session=context.session,
+        tenant=context.tenant,
+        settings=context.settings,
+    )
     publisher = ParentWorkflowPlanningClarificationPublisher(
         session=context.session,
         settings=context.settings,
@@ -215,6 +248,7 @@ def wait_for_stakeholder_clarification(
         workflow=context.workflow,
         blocked_operation_type=str(operation.operation_type or "").strip(),
         create_jira_comment_fn=deps.create_jira_comment_fn,
+        jira_adapter=jira_adapter,
     )
     try:
         waiting_state = clarification_service.ensure_waiting_clarification(
@@ -246,6 +280,14 @@ def _extract_required_jira_comment_id(*, created_comment: dict[str, Any] | None,
     return comment_id
 
 
+def _jira_comment_exists(*, jira_adapter: Any, issue_key: str, comment_id: str) -> bool:
+    normalized_comment_id = str(comment_id or "").strip()
+    if not normalized_comment_id:
+        return False
+    comments = jira_adapter.list_issue_comments(issue_id_or_key=issue_key)
+    return any(str(getattr(comment, "comment_id", "") or "").strip() == normalized_comment_id for comment in comments)
+
+
 class ParentWorkflowPlanningClarificationPublisher:
     def __init__(
         self,
@@ -258,6 +300,7 @@ class ParentWorkflowPlanningClarificationPublisher:
         workflow: WorkflowExecution,
         blocked_operation_type: str,
         create_jira_comment_fn,
+        jira_adapter: Any,
     ) -> None:
         self._session = session
         self._settings = settings
@@ -267,6 +310,7 @@ class ParentWorkflowPlanningClarificationPublisher:
         self._workflow = workflow
         self._blocked_operation_type = blocked_operation_type
         self._create_jira_comment_fn = create_jira_comment_fn
+        self._jira_adapter = jira_adapter
 
     def active_clarification_effects(
         self,
@@ -282,6 +326,12 @@ class ParentWorkflowPlanningClarificationPublisher:
             questions=questions,
         )
         if jira_comment_id is None:
+            return None
+        if not _jira_comment_exists(
+            jira_adapter=self._jira_adapter,
+            issue_key=issue_key,
+            comment_id=jira_comment_id,
+        ):
             return None
         return ClarificationPublishEffects(
             state_recorded=True,
@@ -318,6 +368,12 @@ class ParentWorkflowPlanningClarificationPublisher:
         created_comment = None
         error = None
         jira_comment_id = jira_comment_evidence_id(projection.followup_context)
+        if jira_comment_id and not _jira_comment_exists(
+            jira_adapter=self._jira_adapter,
+            issue_key=issue_key,
+            comment_id=jira_comment_id,
+        ):
+            jira_comment_id = None
         if not jira_comment_id:
             lifecycle = WorkflowExecutionProjection(
                 session=self._session,

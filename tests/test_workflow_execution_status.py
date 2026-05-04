@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
-from orchestrator.core.workflow_execution_status import (
+from orchestrator.core.workflow.execution_status import (
     mark_workflow_running,
     mark_workflow_waiting_for_input,
     recompute_workflow_status,
@@ -83,7 +83,7 @@ def test_recompute_workflow_status_marks_completion_from_required_operations(mon
         SimpleNamespace(key="jira_child_fanout", required=True),
     ]
     monkeypatch.setattr(
-        "orchestrator.core.workflow_execution_status.get_workflow_type",
+        "orchestrator.core.workflow.execution_status.get_workflow_type",
         lambda *args, **kwargs: SimpleNamespace(steps=definitions),
     )
 
@@ -109,7 +109,7 @@ def test_recompute_workflow_status_marks_failure_from_required_operation(monkeyp
         SimpleNamespace(key="jira_child_fanout", required=True),
     ]
     monkeypatch.setattr(
-        "orchestrator.core.workflow_execution_status.get_workflow_type",
+        "orchestrator.core.workflow.execution_status.get_workflow_type",
         lambda *args, **kwargs: SimpleNamespace(steps=definitions),
     )
 

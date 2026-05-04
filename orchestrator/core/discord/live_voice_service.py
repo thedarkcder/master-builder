@@ -26,8 +26,8 @@ from orchestrator.api.discord.shared.state import (
     live_voice_room_links_from_discord_config,
 )
 from orchestrator.api.discord.shared.state_repository import resolve_project_for_discord_channel
-from orchestrator.core.codex_runtime import CodexRuntimeError
-from orchestrator.core.codex_working_dir import resolve_codex_working_dir
+from orchestrator.core.runtime.runtime import CodexRuntimeError
+from orchestrator.core.runtime.working_dir import resolve_codex_working_dir
 from orchestrator.core.config import Settings
 from orchestrator.core.discord.live_voice_audio import (
     LiveVoiceAudioError,
@@ -56,8 +56,8 @@ from orchestrator.core.discord.personas import (
     format_voice_room_persona_label,
     resolve_voice_room_persona_profile,
 )
-from orchestrator.core.observability import scoped_log_context
-from orchestrator.core.platform_secret_service import (
+from orchestrator.core.observability.otel import scoped_log_context
+from orchestrator.core.platform.secret_service import (
     PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF,
     resolve_platform_secret_ref,
 )

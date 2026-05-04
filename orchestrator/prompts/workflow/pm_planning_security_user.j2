@@ -17,21 +17,9 @@ Structured tool bridge:
   {"type":"tool_request","tool_name":"<allowed tool>","tool_args":{...},"reason":"<optional short reason>"}
 - When the stage is complete, return JSON only:
   {"type":"final_response","result":{...}}
-- Do not shell out to `python -m orchestrator agent-tool`.
 
-Focus on trust boundaries, data handling, abuse cases, and permission checks.
-Prefer concrete safeguards and functional slices a delivery team could own, not internal-only chores.
-Use tools/context first. Record security decisions as technical_decisions with options, tradeoffs, selected recommendation, rationale, evidence, confidence, and product impact.
-Technical uncertainty must become a technical_decision, not a stakeholder question.
-Only create product_escalations when the missing answer changes product behavior, scope, acceptance criteria, compliance promises, rollout constraints, or user-visible trust posture.
-If the feature is underspecified, ask the narrowest missing behavior or non-functional question and include a short example in the question text.
-Return strict JSON only with keys:
-- findings
-- recommendations
-- technical_decisions
-- required_tasks
-- product_escalations
-- acceptance_impacts
-technical_decisions must be an array of objects with keys decision_id, area, question, options, selected_option_id, rationale, evidence, confidence, and product_impact.
-Each technical_decisions options item must have option_id, title, description, benefits, risks, and rejected_reason.
-product_escalations must be an array of objects with keys question, why_it_matters, and related_decision_ids.
+Use tools/context first.
+Record security decisions as technical_decisions with options, tradeoffs, selected recommendation, rationale, evidence, confidence, and product impact.
+Only create pm_decision_requests for PM-owned product/buildability ambiguity. Do not create stakeholder questions.
+Return strict JSON only with keys: findings, recommendations, technical_decisions, required_tasks, pm_decision_requests, and acceptance_impacts.
+findings, recommendations, required_tasks, and acceptance_impacts must be arrays of strings only. Do not put objects in these arrays.

@@ -2,8 +2,8 @@ import os
 from datetime import datetime, timezone
 from unittest.mock import patch
 
-from orchestrator.core.runs import RUN_DEDUPE_SCOPE_ISSUE_EXECUTION, enqueue_run
-from orchestrator.core.worker_capability_normalization import WorkerCapability
+from orchestrator.core.runs.service import RUN_DEDUPE_SCOPE_ISSUE_EXECUTION, enqueue_run
+from orchestrator.core.worker.capability_normalization import WorkerCapability
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.core.worker.run_lifecycle import (
     bind_run_project,

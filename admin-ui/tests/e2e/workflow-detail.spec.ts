@@ -211,7 +211,8 @@ test("shows workflow definitions and retries a failed execution operation", asyn
     telemetryEventsByOperationId: {
       "operation-jira-child-fanout": [
         {
-          event_id: "telemetry:1",
+          event_id: "telemetry:11719001157677308257",
+          event_sequence: "11719001157677308257",
           source: "telemetry",
           level: "info",
           event_kind: "stage_request",
@@ -231,12 +232,12 @@ test("shows workflow definitions and retries a failed execution operation", asyn
           recorded_at: "2026-04-17T12:23:00Z",
         },
         {
-          event_id: "telemetry:2",
-          event_sequence: 2,
+          event_id: "telemetry:11719001157677308258",
+          event_sequence: 11719001157677308000,
           source: "telemetry",
           level: "info",
           event_kind: "runtime_log",
-          message: "Runtime line from seed invocation.",
+          message: "Older large-sequence runtime line from seed invocation.",
           source_component: "runtime_invocation",
           run_id: null,
           operation_id: "operation-jira-child-fanout",
@@ -253,8 +254,60 @@ test("shows workflow definitions and retries a failed execution operation", asyn
           recorded_at: "2026-04-17T12:23:01Z",
         },
         {
-          event_id: "telemetry:3",
-          event_sequence: 3,
+          event_id: "telemetry:11719001157677308256",
+          event_sequence: "11719001157677308256",
+          source: "telemetry",
+          level: "info",
+          event_kind: "stage_invocation_finished",
+          message: "stage invocation finished",
+          source_component: "runtime_invocation",
+          run_id: null,
+          operation_id: "operation-jira-child-fanout",
+          attempt_id: "attempt-1",
+          agent_id: null,
+          invocation_id: "inv-seed-1",
+          stage: "seed",
+          attempt: 1,
+          stream: "system",
+          payload: {
+            duration_ms: 541694,
+            actual_prompt_tokens: 22920,
+            actual_completion_tokens: 5384,
+            actual_total_tokens: 28304,
+            estimated_prompt_tokens: 13269,
+            model: "gpt-5.4",
+            reasoning_effort: "high",
+            db_persisted_lines: 4,
+            raw_lines_written: 7,
+            kb_hits: 3,
+          },
+          recorded_at: "2026-04-17T12:23:01Z",
+        },
+        {
+          event_id: "telemetry:11719001157677308259",
+          event_sequence: 11719001157677308000,
+          source: "telemetry",
+          level: "info",
+          event_kind: "runtime_log",
+          message: "Newest large-sequence runtime line from seed invocation.",
+          source_component: "runtime_invocation",
+          run_id: null,
+          operation_id: "operation-jira-child-fanout",
+          attempt_id: "attempt-1",
+          agent_id: null,
+          invocation_id: "inv-seed-1",
+          stage: "seed",
+          attempt: 1,
+          stream: "stdout",
+          payload: {
+            invocation_id: "inv-seed-1",
+            stage: "seed",
+          },
+          recorded_at: "2026-04-17T12:23:01Z",
+        },
+        {
+          event_id: "telemetry:11719001157677308260",
+          event_sequence: "11719001157677308260",
           source: "telemetry",
           level: "info",
           event_kind: "runtime_log",
@@ -275,7 +328,8 @@ test("shows workflow definitions and retries a failed execution operation", asyn
           recorded_at: "2026-04-17T12:23:02Z",
         },
         {
-          event_id: "telemetry:4",
+          event_id: "telemetry:11719001157677308261",
+          event_sequence: "11719001157677308261",
           source: "telemetry",
           level: "info",
           event_kind: "jira_child_upsert_request",
@@ -295,7 +349,8 @@ test("shows workflow definitions and retries a failed execution operation", asyn
           recorded_at: "2026-04-17T12:23:10Z",
         },
         {
-          event_id: "telemetry:5",
+          event_id: "telemetry:11719001157677308262",
+          event_sequence: "11719001157677308262",
           source: "telemetry",
           level: "error",
           event_kind: "attempt_failed",
@@ -317,7 +372,8 @@ test("shows workflow definitions and retries a failed execution operation", asyn
           recorded_at: "2026-04-17T12:23:30Z",
         },
         {
-          event_id: "telemetry:6",
+          event_id: "telemetry:11719001157677308263",
+          event_sequence: "11719001157677308263",
           source: "telemetry",
           level: "info",
           event_kind: "runtime_log",
@@ -425,11 +481,43 @@ test("shows workflow definitions and retries a failed execution operation", asyn
   await expect(page.getByRole("button", { name: "Auto-scroll on" })).toBeVisible();
   await expect(page.getByRole("button", { name: /Attempt 1/i })).toBeVisible();
   await expect(page.getByText("Attempt 1").last()).toBeVisible();
-  await expect(page.getByText("Runtime · seed · inv-seed")).toBeVisible();
-  await expect(page.getByText("Runtime · validation · inv-vali")).toBeVisible();
-  await expect(page.getByText("Prompts")).toBeVisible();
-  await expect(page.getByText("External requests")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Attempt metrics" })).toHaveCount(0);
+  await expect(page.getByText("Live log stream")).toBeVisible();
+  const olderLargeSequenceLog = page.getByText("Older large-sequence runtime line from seed invocation.");
+  const newerLargeSequenceLog = page.getByText("Newest large-sequence runtime line from seed invocation.");
+  await expect(olderLargeSequenceLog).toBeVisible();
+  await expect(newerLargeSequenceLog).toBeVisible();
+  const olderLargeSequenceBox = await olderLargeSequenceLog.boundingBox();
+  const newerLargeSequenceBox = await newerLargeSequenceLog.boundingBox();
+  expect(olderLargeSequenceBox).not.toBeNull();
+  expect(newerLargeSequenceBox).not.toBeNull();
+  expect(olderLargeSequenceBox!.y).toBeLessThan(newerLargeSequenceBox!.y);
+  const telemetryContent = page.getByTestId("execution-observability-content");
+  const promptLog = telemetryContent.getByText("Submitted runtime request.");
+  const externalLog = telemetryContent.getByText("Submitting child Jira issue upsert for Create tenant assurance boundary.");
+  const failureLog = telemetryContent.getByText(
+    'Failed to seed Jira issues: Jira API request failed (400): {"errorMessages":["CONTENT_LIMIT_EXCEEDED"],"errors":{}}',
+  );
+  await expect(promptLog).toBeVisible();
+  await expect(externalLog).toBeVisible();
+  await expect(failureLog).toBeVisible();
+  const promptBox = await promptLog.boundingBox();
+  const externalBox = await externalLog.boundingBox();
+  const failureBox = await failureLog.boundingBox();
+  expect(promptBox).not.toBeNull();
+  expect(externalBox).not.toBeNull();
+  expect(failureBox).not.toBeNull();
+  expect(promptBox!.y).toBeLessThan(externalBox!.y);
+  expect(externalBox!.y).toBeLessThan(failureBox!.y);
   expect(telemetrySnapshotRequests).toBe(0);
+  await page.getByRole("button", { name: "Metrics" }).click();
+  const metricsPanel = page.getByRole("heading", { name: "Attempt metrics" }).locator("xpath=ancestor::section[1]");
+  await expect(metricsPanel).toBeVisible();
+  await expect(metricsPanel.getByText("9m 1s")).toBeVisible();
+  await expect(metricsPanel.getByText("28,304")).toBeVisible();
+  await expect(metricsPanel.getByText("22,920 in / 5,384 out")).toBeVisible();
+  await expect(metricsPanel.getByText("gpt-5.4", { exact: true })).toBeVisible();
+  await expect(page.getByText("Live log stream")).toHaveCount(0);
   await page.getByRole("button", { name: "Audit history" }).click();
   await expect(page.getByText("Retry engineering child fanout after reducing Jira payload size.").first()).toBeVisible();
   await expect(page.getByText("Outcome")).toBeVisible();

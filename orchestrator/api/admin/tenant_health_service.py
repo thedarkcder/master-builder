@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from orchestrator.api.schemas import TenantHealthRead, TenantIntegrationHealthRead
-from orchestrator.core.tenant_operational_health_service import load_tenant_operational_health
+from orchestrator.core.platform.operational_health_service import load_tenant_operational_health
 
 
 def tenant_health(*, session, tenant_id: str) -> TenantHealthRead:  # noqa: ANN001

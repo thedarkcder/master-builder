@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from orchestrator.api.admin.workflow_transcript_service import build_workflow_step_transcript
+from orchestrator.api.admin.workflows.transcript_service import build_workflow_step_transcript
 from orchestrator.api.admin.schema_mappers import workflow_observability_event_to_schema
 from orchestrator.api.schemas import WorkflowObservabilityEventRead
-from orchestrator.core.product_events import ProductEvent
+from orchestrator.core.observability.events import ProductEvent
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import (
     WorkflowExecution,

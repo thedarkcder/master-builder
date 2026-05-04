@@ -12,7 +12,7 @@ from orchestrator.api.webhooks.pr_remediation_service import (
     count_pr_remediation_attempts,
     enqueue_pr_remediation_if_needed,
 )
-from orchestrator.core.runs import EnqueueRunResult
+from orchestrator.core.runs.service import EnqueueRunResult
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 
 

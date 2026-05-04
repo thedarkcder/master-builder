@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import unittest
 
-from orchestrator.core.decision_state_machine import (
+from orchestrator.core.decision.state_machine import (
     DecisionState,
     DecisionStateTransition,
     resolve_decision_state_transition,
 )
-from orchestrator.core.decision_types import DecisionClassification
+from orchestrator.core.decision.types import DecisionClassification
 
 
 class DecisionStateReducerTests(unittest.TestCase):

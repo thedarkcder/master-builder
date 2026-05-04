@@ -14,12 +14,12 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from orchestrator.api.admin.tenant_crud import purge_expired_archived_tenants
 from orchestrator.core.config import Settings, get_settings
-from orchestrator.core.logging import configure_logging
-from orchestrator.core.knowledge_prewarm import prewarm_knowledge_dependencies
-from orchestrator.core.platform_metrics import platform_metrics
-from orchestrator.core.telemetry import initialize_telemetry
-from orchestrator.core.project_policy import resolve_effective_policy
-from orchestrator.core.runs import (
+from orchestrator.core.observability.logging import configure_logging
+from orchestrator.core.knowledge.prewarm import prewarm_knowledge_dependencies
+from orchestrator.core.observability.metrics import platform_metrics
+from orchestrator.core.observability.otel_telemetry import initialize_telemetry
+from orchestrator.core.projects.policy import resolve_effective_policy
+from orchestrator.core.runs.service import (
     RUN_STATUS_BLOCKED,
     RUN_STATUS_CANCELLED,
     RUN_STATUS_DISPATCHING,
@@ -34,7 +34,6 @@ from orchestrator.core.worker.child_process import WORKER_CHILD_EXIT_PROCESSED
 from orchestrator.core.worker.child_process import WORKER_CHILD_EXIT_RUNTIME_FAILURE
 from orchestrator.core.worker.child_process import WorkerChildProcessHandle
 from orchestrator.core.worker.child_process import WorkerChildProcessResult
-from orchestrator.core.worker.child_process import child_command_for_mode as _child_command_for_mode
 from orchestrator.core.worker.child_process import spawn_worker_child_process as _spawn_worker_child_process
 from orchestrator.core.worker.child_process import terminate_worker_child_processes as _terminate_worker_child_processes
 from orchestrator.core.worker.run_health import (
@@ -55,17 +54,15 @@ from orchestrator.core.worker.runtime_dependencies import (
     stop_all_live_runtime_auth_sessions,
     worker_runtime_dependency_snapshot,
 )
-from orchestrator.core.worker.run_dispatch import CHILD_DISPATCH_STUCK_ERROR as _CHILD_DISPATCH_STUCK_ERROR
-from orchestrator.core.worker.run_dispatch import ClaimedRunDispatch
 from orchestrator.core.worker.run_dispatch import WorkerDependencyFailure
 from orchestrator.core.worker.run_dispatch import claim_next_run_once as _claim_next_run_once
 from orchestrator.core.worker.run_dispatch import has_available_webhook_job_once as _has_available_webhook_job_once
 from orchestrator.core.worker.run_dispatch import probe_claimable_run_once as _probe_claimable_run_once
 from orchestrator.core.worker.run_dispatch import process_next_run_once as _process_next_run_once
 from orchestrator.core.worker.run_dispatch import reconcile_claimed_run_after_child_exit as _reconcile_claimed_run_after_child_exit
-from orchestrator.core.worker_capabilities import resolve_worker_capability_context
+from orchestrator.core.worker.capabilities import resolve_worker_capability_context
 from orchestrator.core.workflow.execution_snapshot_startup import ensure_execution_snapshot_startup_bootstrap
-from orchestrator.core.workflow_type_catalog import validate_persisted_workflow_definitions
+from orchestrator.core.workflow.type_catalog import validate_persisted_workflow_definitions
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.run_queue_events import (
     RUN_QUEUE_NOTIFY_CHANNEL,

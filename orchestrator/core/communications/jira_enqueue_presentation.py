@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from orchestrator.core.decision_engine import DecisionEngineResult
-from orchestrator.core.decision_state_machine import ExecutionAdmissionDecision
-from orchestrator.core.decision_types import PrecheckOutcome
+from orchestrator.core.decision.engine import DecisionEngineResult
+from orchestrator.core.decision.state_machine import ExecutionAdmissionDecision
+from orchestrator.core.decision.types import PrecheckOutcome
 
 
 @dataclass(frozen=True)

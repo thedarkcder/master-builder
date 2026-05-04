@@ -3,9 +3,9 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import sentinel
 
-from orchestrator.core.workflow_execution_projection import WorkflowExecutionReference, WorkflowSourceReference
-from orchestrator.core.workflow_engine import WorkflowEngineState
-from orchestrator.core.workflow_runtime import WorkflowAdvanceRequest, WorkflowTrigger, build_workflow_runtime
+from orchestrator.core.workflow.execution_projection import WorkflowExecutionReference, WorkflowSourceReference
+from orchestrator.core.workflow.engine import WorkflowEngineState
+from orchestrator.core.workflow.runtime import WorkflowAdvanceRequest, WorkflowTrigger, build_workflow_runtime
 
 
 class FakeEngine:
@@ -43,11 +43,11 @@ def test_workflow_runtime_delegates_start_resume_query_and_retry(monkeypatch):
     session_factory = sentinel.session_factory
 
     monkeypatch.setattr(
-        "orchestrator.core.workflow_runtime.build_workflow_engine",
+        "orchestrator.core.workflow.runtime.build_workflow_engine",
         lambda **kwargs: engine,
     )
     monkeypatch.setattr(
-        "orchestrator.core.workflow_runtime.create_session_factory_for_engine",
+        "orchestrator.core.workflow.runtime.create_session_factory_for_engine",
         lambda **kwargs: session_factory,
     )
 
@@ -90,7 +90,7 @@ def test_workflow_runtime_delegates_attempt_creation(monkeypatch):
     enqueue_result = sentinel.enqueue_result
 
     monkeypatch.setattr(
-        "orchestrator.core.workflow_runtime.enqueue_attempt_for_workflow_uncommitted",
+        "orchestrator.core.workflow.runtime.enqueue_attempt_for_workflow_uncommitted",
         lambda *args, **kwargs: enqueue_result,
     )
 
@@ -131,11 +131,11 @@ def test_workflow_runtime_delegates_advance_to_handler_resolved_from_workflow_ty
     engine = FakeEngine()
 
     monkeypatch.setattr(
-        "orchestrator.core.workflow_runtime.get_workflow_type_by_handler_key",
+        "orchestrator.core.workflow.runtime.get_workflow_type_by_handler_key",
         lambda *args, **kwargs: workflow_type,
     )
     monkeypatch.setattr(
-        "orchestrator.core.workflow_runtime.build_workflow_engine",
+        "orchestrator.core.workflow.runtime.build_workflow_engine",
         lambda **kwargs: engine,
     )
 

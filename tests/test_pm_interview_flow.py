@@ -3,7 +3,7 @@ from unittest.mock import MagicMock, patch
 
 from orchestrator.api.discord.ingress.executor import execute_discord_command
 from orchestrator.api.schemas import DiscordCommandRequest
-from orchestrator.core.specialist_planning import (
+from orchestrator.core.planning.specialist import (
     ArchitectStageOutput,
     SecurityStageOutput,
     SpecialistPlanningResult,
@@ -95,7 +95,7 @@ class PmInterviewFlowTests(DiscordCommandApiTestHarness):
                     }
                 ],
                 "technical_decisions": [],
-                "product_escalations": [],
+                "pm_decision_requests": [],
                 "acceptance_impacts": ["Needs entry points in onboarding and profile."],
                 "mermaid_diagram": "flowchart TD\n  Parent[Parent brief] --> Child[Engineering child]",
             },
@@ -109,7 +109,7 @@ class PmInterviewFlowTests(DiscordCommandApiTestHarness):
                 "recommendations": ["Enforce rate limiting."],
                 "required_tasks": ["Add share-link verification"],
                 "technical_decisions": [],
-                "product_escalations": [],
+                "pm_decision_requests": [],
                 "acceptance_impacts": ["Security checks must be covered in acceptance."],
             },
         )
@@ -122,7 +122,7 @@ class PmInterviewFlowTests(DiscordCommandApiTestHarness):
                 "recommendations": ["Cover repeat-share misuse."],
                 "required_tasks": [],
                 "technical_decisions": [],
-                "product_escalations": [],
+                "pm_decision_requests": [],
                 "acceptance_impacts": ["Tests should prove the visible share outcome."],
             },
         )
@@ -133,7 +133,7 @@ class PmInterviewFlowTests(DiscordCommandApiTestHarness):
             recommendations=("Keep the first version link-only.",),
             acceptance_impacts=("Acceptance criteria should cover store fallback.",),
             technical_decisions=(),
-            product_escalations=(),
+            pm_decision_requests=(),
             architecture_summary=(
                 "Break the work into onboarding and profile slices.",
                 "Use one child ticket per implementation slice.",

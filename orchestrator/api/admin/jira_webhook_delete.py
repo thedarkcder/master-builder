@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
-from orchestrator.core.decision_types import JiraConfigKey, jira_config_text
+from orchestrator.core.decision.types import JiraConfigKey, jira_config_text
 from orchestrator.storage.models import AtlassianOAuthConnection, Tenant
 from orchestrator.tools.atlassian_oauth import AtlassianOAuthError
 

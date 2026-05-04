@@ -7,8 +7,8 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from orchestrator.core.decision_types import jira_config_project_keys
-from orchestrator.core.platform_secret_service import PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF, resolve_platform_secret_ref
+from orchestrator.core.decision.types import jira_config_project_keys
+from orchestrator.core.platform.secret_service import PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF, resolve_platform_secret_ref
 from orchestrator.storage.models import Project, Tenant
 from orchestrator.tools.discord_api import DiscordApiClient, DiscordCategoryChannel, DiscordTextChannel, DiscordVoiceChannel
 from orchestrator.tools.discord_api import DiscordApiError

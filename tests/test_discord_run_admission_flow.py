@@ -3,8 +3,8 @@ from unittest.mock import patch
 
 import pytest
 
-from orchestrator.core.runs import EnqueueRunResult
-from orchestrator.core.run_enqueue_types import EnqueueFailureReason
+from orchestrator.core.runs.service import EnqueueRunResult
+from orchestrator.core.runs.enqueue_types import EnqueueFailureReason
 from orchestrator.tools.atlassian_oauth import JiraIssueDetail, JiraIssuePreview
 from tests.test_support.discord_command_reply_harness import DiscordCommandReplyHarness
 

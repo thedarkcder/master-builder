@@ -7,8 +7,8 @@ import hashlib
 import hmac
 import json
 
-from orchestrator.core.github_install_state import create_install_state_token, parse_install_state_token
-from orchestrator.core.atlassian_oauth_state import create_atlassian_oauth_state_token, parse_atlassian_oauth_state_token
+from orchestrator.core.integrations.github.install_state import create_install_state_token, parse_install_state_token
+from orchestrator.core.integrations.atlassian.oauth_state import create_atlassian_oauth_state_token, parse_atlassian_oauth_state_token
 
 
 class GitHubInstallStateTests(unittest.TestCase):

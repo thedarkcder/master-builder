@@ -6,7 +6,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from orchestrator.api.atlassian_oauth.service import atlassian_oauth_client, refresh_atlassian_connection_tokens
-from orchestrator.core.decision_types import JiraConfigKey, tenant_jira_config_text
+from orchestrator.core.decision.types import JiraConfigKey, tenant_jira_config_text
 from orchestrator.storage.models import AtlassianOAuthConnection, Tenant
 from orchestrator.tools.atlassian_oauth import AtlassianOAuthClient
 

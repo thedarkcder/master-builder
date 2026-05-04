@@ -4,7 +4,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from orchestrator.core.specialist_planning import (
+from orchestrator.core.planning.specialist import (
     ArchitectStageOutput,
     ChildTicketSpec,
     PLANNING_STATE_BLOCKED,
@@ -55,7 +55,7 @@ def _technical_decision(decision_id: str = "decision-1") -> dict[str, object]:
 def _stage_contract(**extra: object) -> dict[str, object]:
     payload: dict[str, object] = {
         "technical_decisions": [_technical_decision()],
-        "product_escalations": [],
+        "pm_decision_requests": [],
     }
     payload.update(extra)
     return payload
@@ -140,8 +140,8 @@ class SpecialistPlanningTests(unittest.TestCase):
             })
 
         with (
-            patch("orchestrator.core.specialist_planning.render_prompt", side_effect=_render_prompt),
-            patch("orchestrator.core.runtime_stage_session.invoke_runtime_json", side_effect=_invoke_runtime_json),
+            patch("orchestrator.core.planning.specialist.stage_runner.render_prompt", side_effect=_render_prompt),
+            patch("orchestrator.core.runtime.stage_session.invoke_runtime_json", side_effect=_invoke_runtime_json),
         ):
             result = run_specialist_planning_fanout(
                 runtime=SimpleNamespace(),
@@ -170,7 +170,7 @@ class SpecialistPlanningTests(unittest.TestCase):
         self.assertIn("Use a dedicated invite service", result.recommendations)
         self.assertIn("Add signed invite tokens", result.required_tasks)
         self.assertIn("Invite flow works from Profile", result.acceptance_impacts)
-        self.assertEqual(result.product_escalations, ())
+        self.assertEqual(result.pm_decision_requests, ())
         self.assertTrue(result.technical_decisions)
         self.assertIsNone(result.block_reason)
         self.assertEqual(
@@ -192,7 +192,7 @@ class SpecialistPlanningTests(unittest.TestCase):
         self.assertEqual(user_prompt_context["parent_issue_key"], "PM-42")
         self.assertIn("Let users share the app with friends", user_prompt_context["product_brief_json"])
 
-    def test_product_escalations_block_planning_but_still_run_all_stages(self) -> None:
+    def test_pm_decision_requests_block_planning_but_still_run_all_stages(self) -> None:
         request = self._request()
 
         def _invoke_runtime_json(*, context, system_prompt, user_prompt, runtime):  # noqa: ANN001
@@ -210,8 +210,9 @@ class SpecialistPlanningTests(unittest.TestCase):
                     "findings": ["Share target is unclear"],
                     "recommendations": ["Clarify whether this is invite, referral, or social share"],
                     "required_tasks": [],
-                    "product_escalations": [
+                    "pm_decision_requests": [
                         {
+                            "request_id": "pm-share-type",
                             "question": "Is this a simple invite link or a referral system? Examples: invite-only link, reward-based referral.",
                             "why_it_matters": "The answer changes product behavior and abuse controls.",
                             "related_decision_ids": ["decision-1"],
@@ -227,8 +228,8 @@ class SpecialistPlanningTests(unittest.TestCase):
             })
 
         with (
-            patch("orchestrator.core.specialist_planning.render_prompt", return_value="prompt"),
-            patch("orchestrator.core.runtime_stage_session.invoke_runtime_json", side_effect=_invoke_runtime_json),
+            patch("orchestrator.core.planning.specialist.stage_runner.render_prompt", return_value="prompt"),
+            patch("orchestrator.core.runtime.stage_session.invoke_runtime_json", side_effect=_invoke_runtime_json),
         ):
             result = run_specialist_planning_fanout(runtime=SimpleNamespace(), request=request)
 
@@ -238,7 +239,7 @@ class SpecialistPlanningTests(unittest.TestCase):
         self.assertTrue(result.stages[1].blocked)
         self.assertIn(
             "Is this a simple invite link or a referral system?",
-            result.product_escalations[0].question,
+            result.pm_decision_requests[0].question,
         )
         self.assertIn("security_planning", result.block_reason or "")
         self.assertIn("Share entry point exists", result.acceptance_impacts)
@@ -262,14 +263,18 @@ class SpecialistPlanningTests(unittest.TestCase):
             self.assertIn("Return strict JSON only with keys", prompt_text)
             self.assertIn("findings", prompt_text)
             self.assertIn("recommendations", prompt_text)
-            self.assertIn("required_tasks", prompt_text)
             self.assertIn("technical_decisions", prompt_text)
-            self.assertIn("product_escalations", prompt_text)
+            self.assertIn("pm_decision_requests", prompt_text)
+            self.assertIn("findings, recommendations", prompt_text)
+            self.assertIn("arrays of strings only", prompt_text)
             self.assertNotIn("open_behavior_questions", prompt_text)
             self.assertNotIn("internal_decisions", prompt_text)
             self.assertNotIn("stakeholder_escalation_recommendations", prompt_text)
             self.assertIn("acceptance_impacts", prompt_text)
+            if prompt_name in system_prompts or prompt_name in user_prompts:
+                self.assertIn("required_tasks", prompt_text)
             if "architect" in prompt_name:
+                self.assertIn("required_tasks", prompt_text)
                 self.assertIn("mermaid_diagram", prompt_text)
                 self.assertIn("child_ticket_specs", prompt_text)
                 self.assertIn("done_means must never be a single string", prompt_text)
@@ -307,8 +312,8 @@ class SpecialistPlanningTests(unittest.TestCase):
             })
 
         with (
-            patch("orchestrator.core.specialist_planning.render_prompt", side_effect=_render_prompt),
-            patch("orchestrator.core.runtime_stage_session.invoke_runtime_json_with_tools", side_effect=_invoke_runtime_json_with_tools),
+            patch("orchestrator.core.planning.specialist.stage_runner.render_prompt", side_effect=_render_prompt),
+            patch("orchestrator.core.runtime.stage_session.invoke_runtime_json_with_tools", side_effect=_invoke_runtime_json_with_tools),
         ):
             run_specialist_planning_fanout(
                 session=object(),
@@ -367,8 +372,8 @@ class SpecialistPlanningTests(unittest.TestCase):
             })
 
         with (
-            patch("orchestrator.core.specialist_planning.render_prompt", return_value="prompt"),
-            patch("orchestrator.core.runtime_stage_session.invoke_runtime_json", side_effect=_invoke_runtime_json),
+            patch("orchestrator.core.planning.specialist.stage_runner.render_prompt", return_value="prompt"),
+            patch("orchestrator.core.runtime.stage_session.invoke_runtime_json", side_effect=_invoke_runtime_json),
         ):
             result = run_specialist_planning_fanout(
                 runtime=SimpleNamespace(),
@@ -454,8 +459,8 @@ class SpecialistPlanningTests(unittest.TestCase):
             })
 
         with (
-            patch("orchestrator.core.specialist_planning.render_prompt", return_value="prompt"),
-            patch("orchestrator.core.runtime_stage_session.invoke_runtime_json", side_effect=_invoke_runtime_json),
+            patch("orchestrator.core.planning.specialist.stage_runner.render_prompt", return_value="prompt"),
+            patch("orchestrator.core.runtime.stage_session.invoke_runtime_json", side_effect=_invoke_runtime_json),
         ):
             result = run_specialist_planning_fanout(
                 runtime=SimpleNamespace(),
@@ -474,6 +479,112 @@ class SpecialistPlanningTests(unittest.TestCase):
             prompts[1],
         )
         self.assertIn("done_means must be a non-empty array of strings, not a single string", prompts[1])
+
+    def test_stage_preserves_multiple_pm_decision_requests_for_same_decision_set(self) -> None:
+        prompts: list[str] = []
+
+        def _invoke_runtime_json(*, context, system_prompt, user_prompt, runtime):  # noqa: ANN001
+            _ = (system_prompt, runtime)
+            prompts.append(user_prompt)
+            if context.stage == PLANNING_STATE_SECURITY:
+                return _stage_contract(**{
+                    "findings": ["Share behavior may change abuse controls"],
+                    "recommendations": ["Ask product-owned questions"],
+                    "required_tasks": [],
+                    "pm_decision_requests": [
+                        {
+                            "request_id": "pm-share-type-1",
+                            "question": "Is this a simple invite link or a referral system?",
+                            "why_it_matters": "The answer changes abuse controls.",
+                            "related_decision_ids": ["decision-1"],
+                        },
+                        {
+                            "request_id": "pm-share-type-2",
+                            "question": "Should sharing be invite-only or reward referral?",
+                            "why_it_matters": "The answer changes product behavior.",
+                            "related_decision_ids": ["decision-1"],
+                        },
+                    ],
+                    "acceptance_impacts": ["Security model depends on share type"],
+                })
+            return _stage_contract(**{
+                "findings": ["No blocking ambiguity"],
+                "recommendations": ["Proceed"],
+                "required_tasks": [],
+                "acceptance_impacts": [],
+                **(
+                    {
+                        "child_ticket_specs": [],
+                        "mermaid_diagram": "flowchart TD\nA[Start]",
+                    }
+                    if context.stage == PLANNING_STATE_ENGINEERING
+                    else {}
+                ),
+            })
+
+        with (
+            patch("orchestrator.core.planning.specialist.stage_runner.render_prompt", return_value="prompt"),
+            patch("orchestrator.core.runtime.stage_session.invoke_runtime_json", side_effect=_invoke_runtime_json),
+        ):
+            result = run_specialist_planning_fanout(runtime=SimpleNamespace(), request=self._request())
+
+        self.assertEqual(len(result.pm_decision_requests), 2)
+        self.assertNotIn("CONTRACT REPAIR REQUIRED", "\n".join(prompts))
+
+    def test_security_stage_repairs_object_findings_into_string_findings(self) -> None:
+        prompts: list[str] = []
+        security_calls = 0
+
+        def _invoke_runtime_json(*, context, system_prompt, user_prompt, runtime):  # noqa: ANN001
+            nonlocal security_calls
+            _ = (system_prompt, runtime)
+            prompts.append(user_prompt)
+            if context.stage == PLANNING_STATE_SECURITY:
+                security_calls += 1
+                if security_calls == 1:
+                    return _stage_contract(**{
+                        "findings": [
+                            {
+                                "title": "Email verification boundary",
+                                "severity": "high",
+                                "evidence": ["Local auth email binding affects account takeover risk"],
+                            }
+                        ],
+                        "recommendations": ["Use verified-email evidence before sensitive binding"],
+                        "required_tasks": ["Add security tests for verified email binding"],
+                        "acceptance_impacts": [],
+                    })
+                return _stage_contract(**{
+                    "findings": ["Email verification boundary affects account takeover risk."],
+                    "recommendations": ["Use verified-email evidence before sensitive binding"],
+                    "required_tasks": ["Add security tests for verified email binding"],
+                    "acceptance_impacts": [],
+                })
+            return _stage_contract(**{
+                "findings": ["No blocking ambiguity"],
+                "recommendations": ["Proceed"],
+                "required_tasks": [],
+                "acceptance_impacts": [],
+                **(
+                    {
+                        "child_ticket_specs": [],
+                        "mermaid_diagram": "flowchart TD\nA[Start]",
+                    }
+                    if context.stage == PLANNING_STATE_ENGINEERING
+                    else {}
+                ),
+            })
+
+        with (
+            patch("orchestrator.core.planning.specialist.stage_runner.render_prompt", return_value="prompt"),
+            patch("orchestrator.core.runtime.stage_session.invoke_runtime_json", side_effect=_invoke_runtime_json),
+        ):
+            result = run_specialist_planning_fanout(runtime=SimpleNamespace(), request=self._request())
+
+        self.assertIn("Email verification boundary affects account takeover risk.", result.findings)
+        self.assertEqual(security_calls, 2)
+        self.assertIn("CONTRACT REPAIR REQUIRED", prompts[2])
+        self.assertIn("findings, recommendations, and acceptance_impacts as arrays of strings only", prompts[2])
 
     def test_architect_stage_fails_hard_when_child_ticket_spec_repair_is_still_missing_done_means(self) -> None:
         calls: list[str] = []
@@ -511,8 +622,8 @@ class SpecialistPlanningTests(unittest.TestCase):
             })
 
         with (
-            patch("orchestrator.core.specialist_planning.render_prompt", return_value="prompt"),
-            patch("orchestrator.core.runtime_stage_session.invoke_runtime_json", side_effect=_invoke_runtime_json),
+            patch("orchestrator.core.planning.specialist.stage_runner.render_prompt", return_value="prompt"),
+            patch("orchestrator.core.runtime.stage_session.invoke_runtime_json", side_effect=_invoke_runtime_json),
         ):
             with self.assertRaisesRegex(
                 RetryableSpecialistPlanningContractError,

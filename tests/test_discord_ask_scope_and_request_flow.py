@@ -11,7 +11,7 @@ from orchestrator.api.discord.ingress.ask_runtime import ask_board_message, coll
 from orchestrator.api.discord.ingress.executor import execute_discord_command
 from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.core.config import get_settings
-from orchestrator.core.runtime_payload_models import AskIntentPayload
+from orchestrator.core.runtime.payload_models import AskIntentPayload
 from orchestrator.storage.models import Project, Tenant
 from orchestrator.tools.github_app import GitHubApiError
 from orchestrator.tools.atlassian_oauth import JiraIssuePreview

@@ -504,7 +504,7 @@ def test_update_project_migrates_inline_secret_values_to_project_managed_refs() 
 
     upsert_calls: list[tuple[str, str]] = []
     with patch(
-        "orchestrator.core.tenant_secret_service._upsert_managed_secret",
+        "orchestrator.core.platform.tenant_secret_service._upsert_managed_secret",
         side_effect=lambda session, *, secret_ref, plaintext_value, encryption_key, scope, tenant_id: upsert_calls.append(
             (secret_ref, plaintext_value)
         )
@@ -623,7 +623,7 @@ def test_update_project_preserves_upstream_secret_refs_without_copying() -> None
         is_archived=False,
     )
 
-    with patch("orchestrator.core.tenant_secret_service._upsert_managed_secret") as upsert_mock:
+    with patch("orchestrator.core.platform.tenant_secret_service._upsert_managed_secret") as upsert_mock:
         service.update_project(session=session, tenant_id="t1", project_id="p1", payload=payload)
 
     assert existing_project.secret_refs == {

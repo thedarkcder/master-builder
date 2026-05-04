@@ -9,10 +9,10 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
-from orchestrator.core.project_policy import resolve_effective_policy
-from orchestrator.core.runtime_requirements import normalize_runtime_kinds, required_runtime_kinds_for_run
-from orchestrator.core.worker_capability_normalization import WorkerCapability
-from orchestrator.core.worker_capabilities import (
+from orchestrator.core.projects.policy import resolve_effective_policy
+from orchestrator.core.runtime.requirements import normalize_runtime_kinds, required_runtime_kinds_for_run
+from orchestrator.core.worker.capability_normalization import WorkerCapability
+from orchestrator.core.worker.capabilities import (
     parse_worker_capabilities,
     required_worker_capability_for_run,
 )

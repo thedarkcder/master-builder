@@ -11,18 +11,18 @@ from sqlalchemy.orm import Session
 
 from orchestrator.api.schemas import DiscordCommandRequest, DiscordCommandResponse
 from orchestrator.api.discord.shared.room_history import DiscordRoomHistoryService
-from orchestrator.core.clarification_questions import ClarificationQuestionSet
-from orchestrator.core.codex_agents import (
+from orchestrator.core.clarification.questions import ClarificationQuestionSet
+from orchestrator.core.runtime.agents import (
     answer_board_question_with_runtime,
     plan_discord_ask_intent_with_runtime,
 )
-from orchestrator.core.runtime_invocation import AgentInvocationContext
-from orchestrator.core.codex_runtime import CodexRuntimeError
-from orchestrator.core.agent_runtime_resolver import build_runtime_for_selector
+from orchestrator.core.runtime.invocation import AgentInvocationContext
+from orchestrator.core.runtime.runtime import CodexRuntimeError
+from orchestrator.core.runtime.agent_runtime_resolver import build_runtime_for_selector
 from orchestrator.core.config import get_settings
-from orchestrator.core.pm_plugin_catalog import plugin_catalog_payload, tool_catalog_payload
-from orchestrator.core.pm_tool_executor import execute_pm_tool_calls
-from orchestrator.core.pm_interview_service import (
+from orchestrator.core.pm.plugin_catalog import plugin_catalog_payload, tool_catalog_payload
+from orchestrator.core.pm.tool_executor import execute_pm_tool_calls
+from orchestrator.core.pm.interview_service import (
     PM_INTERVIEW_STATUS_PM_COMPLETED,
     PM_INTERVIEW_STATUS_READY_TO_WRITE,
     assess_pm_interview_brief,
@@ -36,14 +36,14 @@ from orchestrator.core.pm_interview_service import (
     upsert_pm_interview_case,
 )
 from orchestrator.core.discord.personas import VOICE_ROOM_PERSONA_IDS, resolve_voice_room_persona_profile
-from orchestrator.core.specialist_planning import (
+from orchestrator.core.planning.specialist import (
     SpecialistPlanningRequest,
     build_runtime_seed_planning_package,
     run_specialist_planning_fanout,
 )
-from orchestrator.core.stage_design_planning import invoke_stage_design_planning_llm
-from orchestrator.core.stage_spi_policy import resolve_stage_spi_enabled
-from orchestrator.core.stage_plugins import evaluate_stage_plugin
+from orchestrator.core.stages.design_planning import invoke_stage_design_planning_llm
+from orchestrator.core.stages.spi_policy import resolve_stage_spi_enabled
+from orchestrator.core.stages.plugins import evaluate_stage_plugin
 from orchestrator.storage.models import Project, Tenant
 
 
@@ -740,12 +740,14 @@ def dispatch_ask_command(
                     notes={"planning_state": planning_state},
                 )
                 interview_case.status = PM_INTERVIEW_STATUS_PM_COMPLETED
-            elif planning_result.product_escalations:
+            elif planning_result.pm_decision_requests:
                 planning_questions = ClarificationQuestionSet.from_values(
-                    escalation.to_clarification_question()
-                    if callable(getattr(escalation, "to_clarification_question", None))
-                    else escalation
-                    for escalation in planning_result.product_escalations
+                    {
+                        "question": request.question,
+                        "why_it_matters": request.why_it_matters,
+                        "source_ref": "pm_decision_request",
+                    }
+                    for request in planning_result.pm_decision_requests
                 )
                 interview_case.status = "question_pending"
                 interview_case.current_question_json = {

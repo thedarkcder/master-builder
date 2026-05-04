@@ -5,11 +5,11 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_serializer, model_validator
 
-from orchestrator.core.agent_execution_profiles import (
+from orchestrator.core.runtime.agent_execution_profiles import (
     normalize_execution_profile_routing,
     normalize_execution_profiles,
 )
-from orchestrator.core.codex_models import normalize_codex_model, normalize_codex_reasoning_effort
+from orchestrator.core.runtime.models import normalize_codex_model, normalize_codex_reasoning_effort
 from orchestrator.core.guardrails import enforce_safe_command
 
 
@@ -1115,6 +1115,32 @@ class WorkflowOperationAttemptRead(BaseModel):
     next_retry_at: datetime | None = None
     started_at: datetime | None = None
     finished_at: datetime | None = None
+    work_units: list["WorkflowOperationWorkUnitRead"] = Field(default_factory=list)
+
+
+class WorkflowOperationWorkUnitAttemptRead(BaseModel):
+    work_unit_attempt_id: str
+    attempt_number: int
+    operation_attempt_id: str
+    status: str
+    error_category: str | None = None
+    error_message: str | None = None
+    next_retry_at: datetime | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+
+class WorkflowOperationWorkUnitRead(BaseModel):
+    work_unit_id: str
+    unit_key: str
+    unit_kind: str
+    idempotency_key: str
+    input_fingerprint: str
+    status: str
+    error_category: str | None = None
+    error_message: str | None = None
+    completed_at: datetime | None = None
+    attempts: list[WorkflowOperationWorkUnitAttemptRead] = Field(default_factory=list)
 
 
 class WorkflowObservabilityEventRead(BaseModel):
@@ -1204,6 +1230,8 @@ class WorkflowOperationRead(BaseModel):
     summary: str | None = None
     can_retry: bool = False
     retry_unavailable_reason: str | None = None
+    can_restart: bool = False
+    restart_unavailable_reason: str | None = None
     attempts: list[WorkflowOperationAttemptRead] = Field(default_factory=list)
     events: list[WorkflowObservabilityEventRead] = Field(default_factory=list)
 
@@ -1362,6 +1390,10 @@ class WorkflowRead(BaseModel):
 class WorkflowOperationRetryRead(BaseModel):
     workflow: WorkflowRead
     started_attempt: WorkflowOperationAttemptRead | None = None
+
+
+class WorkflowOperationRestartRequest(BaseModel):
+    restart_reason: str = Field(default="Restarted stale running workflow operation attempt.")
 
 
 class WorkflowAttemptCreateRequest(BaseModel):

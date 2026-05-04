@@ -7,7 +7,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from orchestrator.api.schemas import DiscordCommandRequest, DiscordCommandResponse
-from orchestrator.core.clarification_questions import ClarificationQuestionSet
+from orchestrator.core.clarification.questions import ClarificationQuestionSet
 from orchestrator.storage.models import Tenant
 
 

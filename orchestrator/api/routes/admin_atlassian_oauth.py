@@ -16,7 +16,7 @@ from orchestrator.api.dependencies import get_session
 from orchestrator.api.schemas import AtlassianConnectStart, JiraWebhookActionResult
 from orchestrator.core.config import get_settings
 from orchestrator.core.security import AuthenticatedPrincipal, require_admin, require_authenticated_principal, require_tenant_permission
-from orchestrator.core.tenant_access import PERMISSION_WORKSPACE_MANAGE
+from orchestrator.core.platform.access import PERMISSION_WORKSPACE_MANAGE
 from orchestrator.storage.models import Tenant
 
 router = APIRouter(prefix="/api/admin", tags=["admin", "atlassian-oauth"])

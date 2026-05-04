@@ -8,9 +8,10 @@ from unittest.mock import MagicMock
 
 from fastapi import HTTPException
 
-from orchestrator.api.admin import jira_route_service, jira_webhook_route_service, runs_service
+from orchestrator.api.admin import jira_route_service, jira_webhook_route_service
+from orchestrator.api.admin.runs import service as runs_service
 from orchestrator.api.routes import runs as runs_route
-from orchestrator.core import project_routing
+from orchestrator.core.projects import routing as project_routing
 
 
 class JiraRouteServiceTests(unittest.TestCase):

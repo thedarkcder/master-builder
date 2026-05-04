@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import logging
 from types import SimpleNamespace
-from orchestrator.core.dashboard_links import admin_run_url
-from orchestrator.core.jira_links import tenant_jira_issue_url
-from orchestrator.core.runs import mark_run_terminal
+from orchestrator.core.platform.dashboard_links import admin_run_url
+from orchestrator.core.integrations.atlassian.links import tenant_jira_issue_url
+from orchestrator.core.runs.service import mark_run_terminal
 from orchestrator.core.worker.run_not_ready import derive_run_not_ready_outcome
 from orchestrator.core.worker.readiness import evaluate_worker_decision as evaluate_worker_readiness_decision
 from orchestrator.core.worker.run_lifecycle import resolve_project_for_run

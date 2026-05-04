@@ -3,7 +3,7 @@ import logging
 
 from sqlalchemy.orm import Session
 
-from orchestrator.core.jira_parent_child_sync_shared import (
+from orchestrator.core.integrations.atlassian.parent_child_sync_shared import (
     JiraParentChildSyncContext,
     material_parent_changed_fields as _material_parent_changed_fields,
     parent_board_entry_target_status as _parent_board_entry_target_status,
@@ -15,9 +15,9 @@ from orchestrator.core.parent_feature_workflow.planning import (
     ParentFeaturePlanningWorkflow,
     ParentFeaturePlanningWorkflowDeps,
 )
-from orchestrator.core.parent_planning_clarification_service import ParentPlanningClarificationService
-from orchestrator.core.parent_planning_fanout_service import ParentPlanningFanoutService
-from orchestrator.core.workflow_runtime import (
+from orchestrator.core.projects.parent_planning_clarification_service import ParentPlanningClarificationService
+from orchestrator.core.projects.parent_planning_fanout_service import ParentPlanningFanoutService
+from orchestrator.core.workflow.runtime import (
     WorkflowAdvanceOutcome,
     WorkflowAdvanceRequest,
 )
