@@ -7,15 +7,15 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from orchestrator.core.architecture_document_service import ArchitectureDocumentService
-from orchestrator.core.clarification_questions import ClarificationQuestion
-from orchestrator.core.clarification_projection_service import matching_active_jira_clarification_evidence_id
-from orchestrator.core.followup_context_service import FOLLOWUP_CONTEXT_PM_INTERVIEW
-from orchestrator.core.jira_links import (
+from orchestrator.core.projects.architecture_document_service import ArchitectureDocumentService
+from orchestrator.core.clarification.questions import ClarificationQuestion
+from orchestrator.core.clarification.projection_service import matching_active_jira_clarification_evidence_id
+from orchestrator.core.pm.followup_context_service import FOLLOWUP_CONTEXT_PM_INTERVIEW
+from orchestrator.core.integrations.atlassian.links import (
     architecture_document_remote_link_spec,
     workflow_execution_remote_link_spec,
 )
-from orchestrator.core.jira_parent_child_sync_publishers import (
+from orchestrator.core.integrations.atlassian.parent_child_sync_publishers import (
     mark_issues_sync_blocked as _mark_issues_sync_blocked,
     post_parent_brief_questions_to_discord as _post_parent_brief_questions_to_discord,
     post_parent_brief_questions_to_jira as _post_parent_brief_questions_to_jira,
@@ -23,7 +23,7 @@ from orchestrator.core.jira_parent_child_sync_publishers import (
     upsert_jira_remote_link as _upsert_jira_remote_link,
     update_issue_sync_label as _update_issue_sync_label,
 )
-from orchestrator.core.jira_parent_child_sync_shared import (
+from orchestrator.core.integrations.atlassian.parent_child_sync_shared import (
     JiraParentChildSyncContext,
     build_parent_resync_prompt as _build_parent_resync_prompt,
     build_parent_seed_prompt as _build_parent_seed_prompt,
@@ -35,27 +35,48 @@ from orchestrator.core.jira_parent_child_sync_shared import (
     question_text as _question_text,
     sync_completion_note as _sync_completion_note,
 )
-from orchestrator.core.parent_feature_brief_store import (
+from orchestrator.core.projects.parent_feature_brief_store import (
     parent_planning_clarification_history,
     persist_parent_feature_brief_snapshot,
     resolve_parent_feature_brief,
 )
-from orchestrator.core.parent_planning_clarification_service import ClarificationPublishEffects
-from orchestrator.core.pm_interview_service import (
+from orchestrator.core.projects.parent_planning_clarification_service import ClarificationPublishEffects
+from orchestrator.core.pm.interview_service import (
     PM_INTERVIEW_STATUS_PM_COMPLETED,
     PM_INTERVIEW_STATUS_QUESTION_PENDING,
     normalize_parent_feature_brief_with_runtime,
 )
-from orchestrator.core.runtime_invocation import AgentInvocationContext
-from orchestrator.core.workflow_attempt_ref import WorkflowAttemptRef
-from orchestrator.core.specialist_planning import (
+from orchestrator.core.runtime.invocation import AgentInvocationContext
+from orchestrator.core.workflow.attempt_ref import WorkflowAttemptRef
+from orchestrator.core.planning.specialist import (
     PLANNING_STATE_COMPLETED,
+    PLANNING_STATE_ENGINEERING,
+    PLANNING_STATE_SECURITY,
+    PLANNING_STATE_TEST,
     SpecialistPlanningRequest,
     build_runtime_seed_planning_package,
     run_specialist_planning_fanout,
 )
-from orchestrator.core.workflow_execution_projection import resolve_latest_workflow_execution_by_source
-from orchestrator.storage.models import Project
+from orchestrator.core.planning.pm_decision_resolution import (
+    PMDecisionResolutionRequest,
+    PMDecisionResolutionService,
+)
+from orchestrator.core.parent_feature_workflow.operations import (
+    PARENT_OP_BACKLOG_PLANNING,
+    PARENT_OP_JIRA_CHILD_FANOUT,
+    PARENT_WU_BACKLOG_ARCHITECTURE_MODEL,
+    PARENT_WU_BACKLOG_PACKAGE_ASSEMBLY,
+    PARENT_WU_BACKLOG_SECURITY_MODEL,
+    PARENT_WU_BACKLOG_TESTING_MODEL,
+    PARENT_WU_JIRA_CHILD_FANOUT_ARCHITECTURE_MODEL,
+    PARENT_WU_JIRA_CHILD_FANOUT_PACKAGE_ASSEMBLY,
+    PARENT_WU_JIRA_CHILD_FANOUT_SECURITY_MODEL,
+    PARENT_WU_JIRA_CHILD_FANOUT_SEED,
+    PARENT_WU_JIRA_CHILD_FANOUT_TESTING_MODEL,
+)
+from orchestrator.core.workflow.execution_projection import resolve_latest_workflow_execution_by_source
+from orchestrator.core.workflow.work_units import run_work_unit, workflow_work_unit_input_fingerprint
+from orchestrator.storage.models import Project, WorkflowOperation, WorkflowOperationAttempt
 from orchestrator.tools.atlassian_oauth import JiraIssueDetail
 
 logger = logging.getLogger(__name__)
@@ -227,6 +248,9 @@ class _JiraParentIssueGateway:
         )
         if jira_comment_id is None:
             return None
+        comments = self._jira().list_issue_comments(issue_id_or_key=issue_key)
+        if not any(str(getattr(comment, "comment_id", "") or "").strip() == jira_comment_id for comment in comments):
+            return None
         return ClarificationPublishEffects(
             state_recorded=True,
             jira_comment_created=False,
@@ -364,6 +388,19 @@ class _ParentBriefPlanner:
             build_runtime_for_selector_fn=self._build_runtime_for_selector_fn,
         )
 
+    def _attempt_models(self) -> tuple[WorkflowOperation, WorkflowOperationAttempt]:
+        operation_id = str(self._context.operation_id or "").strip()
+        attempt_id = str(self._context.attempt_id or "").strip()
+        if not operation_id or not attempt_id:
+            raise RuntimeError("Parent brief planner work units require operation_id and attempt_id")
+        operation = self._session.get(WorkflowOperation, operation_id)
+        attempt = self._session.get(WorkflowOperationAttempt, attempt_id)
+        if operation is None:
+            raise RuntimeError(f"Workflow operation {operation_id} is missing for parent brief planner")
+        if attempt is None:
+            raise RuntimeError(f"Workflow operation attempt {attempt_id} is missing for parent brief planner")
+        return operation, attempt
+
     def resolve_product_brief(
         self,
         *,
@@ -383,6 +420,28 @@ class _ParentBriefPlanner:
             attempt_id=self._context.attempt_id,
             refresh=refresh,
         )
+
+    def _package_assembly_unit_key(self, *, operation_type: str) -> str:
+        if operation_type == PARENT_OP_BACKLOG_PLANNING:
+            return PARENT_WU_BACKLOG_PACKAGE_ASSEMBLY
+        if operation_type == PARENT_OP_JIRA_CHILD_FANOUT:
+            return PARENT_WU_JIRA_CHILD_FANOUT_PACKAGE_ASSEMBLY
+        raise RuntimeError(f"No planning package assembly work unit is declared for {operation_type}")
+
+    def _stage_work_unit_keys(self, *, operation_type: str) -> dict[str, str]:
+        if operation_type == PARENT_OP_BACKLOG_PLANNING:
+            return {
+                PLANNING_STATE_ENGINEERING: PARENT_WU_BACKLOG_ARCHITECTURE_MODEL,
+                PLANNING_STATE_SECURITY: PARENT_WU_BACKLOG_SECURITY_MODEL,
+                PLANNING_STATE_TEST: PARENT_WU_BACKLOG_TESTING_MODEL,
+            }
+        if operation_type == PARENT_OP_JIRA_CHILD_FANOUT:
+            return {
+                PLANNING_STATE_ENGINEERING: PARENT_WU_JIRA_CHILD_FANOUT_ARCHITECTURE_MODEL,
+                PLANNING_STATE_SECURITY: PARENT_WU_JIRA_CHILD_FANOUT_SECURITY_MODEL,
+                PLANNING_STATE_TEST: PARENT_WU_JIRA_CHILD_FANOUT_TESTING_MODEL,
+            }
+        raise RuntimeError(f"No specialist planning work units are declared for {operation_type}")
 
     def plan_backlog_parent(
         self,
@@ -423,6 +482,9 @@ class _ParentBriefPlanner:
                 operation_id=self._context.operation_id,
                 attempt_id=self._context.attempt_id,
                 attempt=self._context.attempt,
+                work_unit_keys_by_stage=self._stage_work_unit_keys(
+                    operation_type=self._attempt_models()[0].operation_type,
+                ),
             ),
             runtime_for_selector=lambda selector: self._build_runtime_for_selector_fn(
                 session=self._session,
@@ -432,8 +494,64 @@ class _ParentBriefPlanner:
                 selector=selector,
             ),
         )
-        planning_package = build_runtime_seed_planning_package(result=planning_result)
+        operation, attempt = self._attempt_models()
+        assembly_input = {"planning_result": planning_result.to_payload()}
+        assembly_hash = workflow_work_unit_input_fingerprint(assembly_input)
+        planning_package = run_work_unit(
+            self._session,
+            operation=operation,
+            operation_attempt=attempt,
+            unit_key=self._package_assembly_unit_key(operation_type=operation.operation_type),
+            idempotency_key=f"{parent_detail.key}:planning_package:{operation.operation_type}:{assembly_hash}",
+            input_payload=assembly_input,
+            execute=lambda _context: build_runtime_seed_planning_package(result=planning_result),
+            serialize=lambda result: {"planning_package": result},
+            deserialize=lambda payload: dict(payload.get("planning_package") or {}),
+        )
         return planning_result, planning_package
+
+    def resolve_pm_decisions(
+        self,
+        *,
+        parent_detail: JiraIssueDetail,
+        product_brief: dict[str, object],
+        planning_result,
+        planning_package: dict[str, Any],
+    ):
+        resolution_runtime = self._build_runtime_for_selector_fn(
+            session=self._session,
+            settings=self._settings,
+            tenant_id=self._context.tenant_id,
+            project_id=self._context.project_id,
+            selector="workflow.pm_decision_resolution",
+        )
+        return PMDecisionResolutionService().resolve(
+            session=self._session,
+            settings=self._settings,
+            runtime=resolution_runtime,
+            request=PMDecisionResolutionRequest(
+                tenant_id=self._context.tenant_id,
+                project_id=self._context.project_id,
+                parent_issue_key=parent_detail.key,
+                parent_summary=parent_detail.summary,
+                parent_description=parent_detail.description,
+                product_brief=dict(product_brief),
+                planning_package=planning_package,
+                technical_decisions=tuple(getattr(planning_result, "technical_decisions", ()) or ()),
+                pm_decision_requests=tuple(getattr(planning_result, "pm_decision_requests", ()) or ()),
+                conversation_history=tuple(
+                    parent_planning_clarification_history(
+                        session=self._session,
+                        tenant_id=self._context.tenant_id,
+                        parent_issue_key=parent_detail.key,
+                    )
+                ),
+                workflow_id=self._context.workflow_id,
+                operation_id=self._context.operation_id,
+                attempt_id=self._context.attempt_id,
+                attempt=self._context.attempt,
+            ),
+        )
 
 
 class _ParentChildSyncGateway:
@@ -465,6 +583,19 @@ class _ParentChildSyncGateway:
             seed_issues_with_runtime_fn=self._seed_issues_with_runtime_fn,
         )
 
+    def _attempt_models(self) -> tuple[WorkflowOperation, WorkflowOperationAttempt]:
+        operation_id = str(self._context.operation_id or "").strip()
+        attempt_id = str(self._context.attempt_id or "").strip()
+        if not operation_id or not attempt_id:
+            raise RuntimeError("Parent child sync work units require operation_id and attempt_id")
+        operation = self._session.get(WorkflowOperation, operation_id)
+        attempt = self._session.get(WorkflowOperationAttempt, attempt_id)
+        if operation is None:
+            raise RuntimeError(f"Workflow operation {operation_id} is missing for parent child sync")
+        if attempt is None:
+            raise RuntimeError(f"Workflow operation attempt {attempt_id} is missing for parent child sync")
+        return operation, attempt
+
     def seed_parent_backlog_children(
         self,
         *,
@@ -473,27 +604,49 @@ class _ParentChildSyncGateway:
         planning_package: dict[str, Any],
         planning_state: str,
     ) -> dict[str, Any]:
-        _, seed_data = self._seed_issues_with_runtime_fn(
-            session=self._session,
-            tenant=self._context.tenant,
-            prompt_markdown=_build_parent_seed_prompt(parent_detail=parent_detail),
-            scoped_project_id=self._context.project_id,
-            force_issue_keys=[self._context.issue_key],
-            allow_create=True,
-            allow_empty_children=planning_state != PLANNING_STATE_COMPLETED,
-            scoped_project_keys=[project_key],
-            codex_working_dir=".",
-            planning_package=planning_package,
-            workflow_id=self._context.workflow_id,
-            operation_id=self._context.operation_id,
-            attempt_ref=WorkflowAttemptRef(
+        operation, attempt = self._attempt_models()
+
+        def _execute(_context) -> dict[str, Any]:  # noqa: ANN001
+            _, seed_data = self._seed_issues_with_runtime_fn(
+                session=self._session,
+                tenant=self._context.tenant,
+                prompt_markdown=_build_parent_seed_prompt(parent_detail=parent_detail),
+                scoped_project_id=self._context.project_id,
+                force_issue_keys=[self._context.issue_key],
+                allow_create=True,
+                allow_empty_children=planning_state != PLANNING_STATE_COMPLETED,
+                scoped_project_keys=[project_key],
+                codex_working_dir=".",
+                planning_package=planning_package,
                 workflow_id=self._context.workflow_id,
                 operation_id=self._context.operation_id,
-                attempt_id=self._context.attempt_id,
-                number=self._context.attempt,
-            ),
+                attempt_ref=WorkflowAttemptRef(
+                    workflow_id=self._context.workflow_id,
+                    operation_id=self._context.operation_id,
+                    attempt_id=self._context.attempt_id,
+                    number=self._context.attempt,
+                ),
+            )
+            return seed_data
+
+        input_payload = {
+            "parent_issue_key": parent_detail.key,
+            "project_key": project_key,
+            "planning_package": planning_package,
+            "planning_state": planning_state,
+        }
+        input_hash = workflow_work_unit_input_fingerprint(input_payload)
+        return run_work_unit(
+            self._session,
+            operation=operation,
+            operation_attempt=attempt,
+            unit_key=PARENT_WU_JIRA_CHILD_FANOUT_SEED,
+            idempotency_key=f"{parent_detail.key}:seed_parent_backlog_children:{input_hash}",
+            input_payload=input_payload,
+            execute=_execute,
+            serialize=lambda result: {"seed_data": result},
+            deserialize=lambda payload: dict(payload.get("seed_data") or {}),
         )
-        return seed_data
 
     def refresh_parent_children(
         self,
@@ -503,30 +656,52 @@ class _ParentChildSyncGateway:
         changed_fields: list[str],
         project_key: str,
     ) -> dict[str, Any]:
-        _, seed_data = self._seed_issues_with_runtime_fn(
-            session=self._session,
-            tenant=self._context.tenant,
-            prompt_markdown=_build_parent_resync_prompt(
-                parent_detail=parent_detail,
-                child_details=child_details,
-                changed_fields=changed_fields,
-            ),
-            scoped_project_id=self._context.project_id,
-            force_issue_keys=[self._context.issue_key, *[detail.key for detail in child_details]],
-            allow_create=True,
-            allow_empty_children=True,
-            scoped_project_keys=[project_key],
-            codex_working_dir=".",
-            workflow_id=self._context.workflow_id,
-            operation_id=self._context.operation_id,
-            attempt_ref=WorkflowAttemptRef(
+        operation, attempt = self._attempt_models()
+
+        def _execute(_context) -> dict[str, Any]:  # noqa: ANN001
+            _, seed_data = self._seed_issues_with_runtime_fn(
+                session=self._session,
+                tenant=self._context.tenant,
+                prompt_markdown=_build_parent_resync_prompt(
+                    parent_detail=parent_detail,
+                    child_details=child_details,
+                    changed_fields=changed_fields,
+                ),
+                scoped_project_id=self._context.project_id,
+                force_issue_keys=[self._context.issue_key, *[detail.key for detail in child_details]],
+                allow_create=True,
+                allow_empty_children=True,
+                scoped_project_keys=[project_key],
+                codex_working_dir=".",
                 workflow_id=self._context.workflow_id,
                 operation_id=self._context.operation_id,
-                attempt_id=self._context.attempt_id,
-                number=self._context.attempt,
-            ),
+                attempt_ref=WorkflowAttemptRef(
+                    workflow_id=self._context.workflow_id,
+                    operation_id=self._context.operation_id,
+                    attempt_id=self._context.attempt_id,
+                    number=self._context.attempt,
+                ),
+            )
+            return seed_data
+
+        input_payload = {
+            "parent_issue_key": parent_detail.key,
+            "child_issue_keys": [detail.key for detail in child_details],
+            "changed_fields": list(changed_fields),
+            "project_key": project_key,
+        }
+        input_hash = workflow_work_unit_input_fingerprint(input_payload)
+        return run_work_unit(
+            self._session,
+            operation=operation,
+            operation_attempt=attempt,
+            unit_key=PARENT_WU_JIRA_CHILD_FANOUT_SEED,
+            idempotency_key=f"{parent_detail.key}:refresh_parent_children:{input_hash}",
+            input_payload=input_payload,
+            execute=_execute,
+            serialize=lambda result: {"seed_data": result},
+            deserialize=lambda payload: dict(payload.get("seed_data") or {}),
         )
-        return seed_data
 
     @staticmethod
     def combined_child_updates(*, seed_data: dict[str, Any]) -> tuple[list[str], list[str], list[str]]:

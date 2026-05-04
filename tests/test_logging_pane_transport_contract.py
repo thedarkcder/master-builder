@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from orchestrator.core.logging_pane_events import emit_logging_pane_event
+from orchestrator.core.observability.logging_pane import emit_logging_pane_event
 
 
 def test_operation_scoped_logging_pane_event_requires_attempt_id() -> None:

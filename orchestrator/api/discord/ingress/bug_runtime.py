@@ -16,7 +16,7 @@ from orchestrator.api.discord.bug.service import (
 )
 from orchestrator.api.discord.ingress import jira_runtime
 from orchestrator.core.config import get_settings
-from orchestrator.core.platform_secret_service import (
+from orchestrator.core.platform.secret_service import (
     PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF,
     resolve_platform_secret_ref,
 )

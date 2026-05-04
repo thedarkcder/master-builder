@@ -2,12 +2,11 @@ import os
 import unittest
 from datetime import datetime, timedelta, timezone
 from tempfile import TemporaryDirectory
-from unittest.mock import patch
 
 from cryptography.fernet import Fernet
 from sqlalchemy import select
 
-from orchestrator.core.agent_observability import prune_agent_lifecycle_events, record_agent_lifecycle_event
+from orchestrator.core.observability.agent_observability import prune_agent_lifecycle_events, record_agent_lifecycle_event
 from orchestrator.core.config import get_settings
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
@@ -34,11 +33,8 @@ class AgentLifecyclePersistenceTests(unittest.TestCase):
 
     def test_record_agent_lifecycle_event_persists_to_shared_storage(self) -> None:
         now = datetime.now(timezone.utc)
-        class _FakeStore:
-            def execute(self, sql: str) -> str:
-                return ""
 
-        with self.session_factory() as session, patch("orchestrator.core.product_events.event_store", return_value=_FakeStore()):
+        with self.session_factory() as session:
             record_agent_lifecycle_event(
                 session=session,
                 event_type="TASK_STARTED",
@@ -59,11 +55,8 @@ class AgentLifecyclePersistenceTests(unittest.TestCase):
 
     def test_prune_agent_lifecycle_event_applies_retention_cap(self) -> None:
         now = datetime.now(timezone.utc)
-        class _FakeStore:
-            def execute(self, sql: str) -> str:
-                return ""
 
-        with self.session_factory() as session, patch("orchestrator.core.product_events.event_store", return_value=_FakeStore()):
+        with self.session_factory() as session:
             for idx in range(6):
                 record_agent_lifecycle_event(
                     session=session,

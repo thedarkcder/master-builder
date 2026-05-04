@@ -4,7 +4,7 @@ import json
 from dataclasses import dataclass
 from uuid import uuid4
 
-from orchestrator.core.logging_pane_events import emit_logging_pane_event
+from orchestrator.core.observability.logging_pane import emit_logging_pane_event
 from orchestrator.core.worker.run_dispatch_gateways import RunExecutionGateway
 from orchestrator.core.worker.run_dispatch_gateways import RunDispatchIdentityGateway
 from orchestrator.core.worker.run_dispatch_gateways import RunProjectGateway
@@ -12,7 +12,7 @@ from orchestrator.core.worker.run_dispatch_gateways import RunDispatchStatusConf
 from orchestrator.core.worker.run_dispatch_gateways import RunStageUpdateGateway
 from orchestrator.core.worker.run_outcome_policy import RunOutcomePolicy
 from orchestrator.core.worker.run_preparation_service import RunPreparationService
-from orchestrator.core.worker_workspace import resolve_worker_workspace_key
+from orchestrator.core.worker.workspace import resolve_worker_workspace_key
 
 
 @dataclass(frozen=True)

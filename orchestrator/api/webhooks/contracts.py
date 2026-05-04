@@ -28,13 +28,13 @@ from orchestrator.api.webhooks.jira_payload_contracts import (
     parse_jira_comment_command,
 )
 from orchestrator.api.webhooks.payload_utils import extract_webhook_token
-from orchestrator.core.project_routing import (
+from orchestrator.core.projects.routing import (
     find_active_project_for_issue_key,
     find_active_project_for_repo_full_name,
 )
-from orchestrator.core.platform_secret_service import resolve_platform_secret_ref
-from orchestrator.core.tenant_secret_service import resolve_scoped_secret_ref
-from orchestrator.core.decision_types import tenant_jira_webhook_secret_ref
+from orchestrator.core.platform.secret_service import resolve_platform_secret_ref
+from orchestrator.core.platform.tenant_secret_service import resolve_scoped_secret_ref
+from orchestrator.core.decision.types import tenant_jira_webhook_secret_ref
 from orchestrator.storage.models import Project, Tenant
 from orchestrator.tools.atlassian_oauth import AtlassianOAuthError
 

@@ -5,6 +5,20 @@ export function workflowEventSequenceFromId(eventId: string): bigint | null {
   return match ? BigInt(match[1]) : null;
 }
 
+function workflowEventSequence(event: WorkflowObservabilityEventRecord): bigint | null {
+  const idSequence = workflowEventSequenceFromId(event.event_id);
+  if (idSequence !== null) {
+    return idSequence;
+  }
+  if (typeof event.event_sequence === "string" && /^\d+$/.test(event.event_sequence.trim())) {
+    return BigInt(event.event_sequence.trim());
+  }
+  if (typeof event.event_sequence === "number" && Number.isSafeInteger(event.event_sequence)) {
+    return BigInt(event.event_sequence);
+  }
+  return null;
+}
+
 export function workflowEventSequenceCursor(events: { event_id: string }[]): string | null {
   let cursor: bigint | null = null;
   for (const event of events) {
@@ -20,14 +34,8 @@ export function compareWorkflowObservabilityEvents(
   left: WorkflowObservabilityEventRecord,
   right: WorkflowObservabilityEventRecord,
 ): number {
-  const leftEventSequence = typeof left.event_sequence === "number" ? left.event_sequence : null;
-  const rightEventSequence = typeof right.event_sequence === "number" ? right.event_sequence : null;
-  if (leftEventSequence !== null && rightEventSequence !== null && leftEventSequence !== rightEventSequence) {
-    return leftEventSequence - rightEventSequence;
-  }
-
-  const leftSequence = workflowEventSequenceFromId(left.event_id);
-  const rightSequence = workflowEventSequenceFromId(right.event_id);
+  const leftSequence = workflowEventSequence(left);
+  const rightSequence = workflowEventSequence(right);
   if (leftSequence !== null && rightSequence !== null && leftSequence !== rightSequence) {
     return leftSequence < rightSequence ? -1 : 1;
   }

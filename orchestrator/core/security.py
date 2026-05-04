@@ -8,16 +8,16 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBasic, HTTPBasicC
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from orchestrator.core.admin_tokens import parse_admin_access_token
-from orchestrator.core.auth_tokens import parse_auth_access_token
+from orchestrator.core.platform.admin_tokens import parse_admin_access_token
+from orchestrator.core.platform.auth_tokens import parse_auth_access_token
 from orchestrator.core.config import get_settings
-from orchestrator.core.passwords import hash_password, verify_password
-from orchestrator.core.platform_secret_service import (
+from orchestrator.core.platform.passwords import hash_password, verify_password
+from orchestrator.core.platform.secret_service import (
     PLATFORM_SECRET_ADMIN_PASSWORD_HASH_REF,
     platform_secret_service,
     resolve_platform_secret_ref,
 )
-from orchestrator.core.tenant_access import (
+from orchestrator.core.platform.access import (
     MODE_TECHNICAL,
     VALID_ROLE_KEYS,
     compute_permission_snapshot,

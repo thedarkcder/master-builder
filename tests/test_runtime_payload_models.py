@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from orchestrator.core.runtime_payload_models import (
+from orchestrator.core.runtime.payload_models import (
     ArchitectStageOutputPayload,
     ChildTicketSpecPayload,
     DecisionPlannerPayload,
@@ -10,12 +10,14 @@ from orchestrator.core.runtime_payload_models import (
     EngineeringSeedPlanPayload,
     PlannerGateStatus,
     PmParentSeedPlanPayload,
+    PMDecisionRequestPayload,
+    PMDecisionResolutionSetPayload,
     PMInterviewPlanPayload,
     RuntimeMessageBriefPayload,
     RuntimeMessagePayload,
     PrecheckMessagePayload,
     PrecheckPolicyPayload,
-    ProductEscalationPayload,
+    StakeholderEscalationPayload,
     TechnicalDecisionPayload,
 )
 
@@ -225,7 +227,7 @@ def test_architect_stage_output_payload_rejects_missing_child_ticket_specs() -> 
                 "recommendations": ["Create invite service"],
                 "required_tasks": ["Build invite service"],
                 "technical_decisions": [_technical_decision_payload()],
-                "product_escalations": [],
+                "pm_decision_requests": [],
                 "acceptance_impacts": ["Invite flow works"],
             },
         )
@@ -254,20 +256,132 @@ def test_technical_decision_payload_rejects_unknown_selected_option() -> None:
         )
 
 
-def test_product_escalation_payload_converts_to_clarification_question() -> None:
-    escalation = ProductEscalationPayload.from_payload(
+def test_pm_decision_request_payload_requires_related_decision_ids() -> None:
+    request = PMDecisionRequestPayload.from_payload(
         {
-            "question": "Should customers see this as a compliance promise?",
-            "why_it_matters": "The answer changes acceptance criteria.",
+            "request_id": "pm-decision-1",
+            "question": "Should customers see this as an acceptance promise?",
+            "why_it_matters": "The PM owns acceptance interpretation.",
             "related_decision_ids": ["decision-1"],
         },
-        context="security_planning product_escalations[1]",
+        context="security_planning pm_decision_requests[1]",
+    )
+
+    assert request.request_id == "pm-decision-1"
+    assert request.to_payload()["related_decision_ids"] == ["decision-1"]
+
+
+def test_pm_decision_request_payload_rejects_empty_related_decision_ids() -> None:
+    with pytest.raises(RuntimeError, match="missing related_decision_ids"):
+        PMDecisionRequestPayload.from_payload(
+            {
+                "request_id": "pm-decision-1",
+                "question": "Should customers see this as an acceptance promise?",
+                "why_it_matters": "The PM owns acceptance interpretation.",
+                "related_decision_ids": [],
+            },
+            context="security_planning pm_decision_requests[1]",
+        )
+
+
+def test_stage_payload_rejects_pm_decision_request_unknown_decision_id() -> None:
+    with pytest.raises(RuntimeError, match="references unknown related_decision_ids missing-decision"):
+        ArchitectStageOutputPayload.from_payload(
+            planning_state="engineering_planning",
+            persona_id="architect",
+            role_label="Architect",
+            payload={
+                "findings": ["Invite creation needs a service boundary"],
+                "recommendations": ["Create invite service"],
+                "required_tasks": ["Build invite service"],
+                "child_ticket_specs": [],
+                "technical_decisions": [_technical_decision_payload()],
+                "pm_decision_requests": [
+                    {
+                        "request_id": "pm-decision-1",
+                        "question": "Should customers see this as an acceptance promise?",
+                        "why_it_matters": "The PM owns acceptance interpretation.",
+                        "related_decision_ids": ["missing-decision"],
+                    }
+                ],
+                "acceptance_impacts": ["Invite flow works"],
+                "mermaid_diagram": "flowchart TD\nA[Start]",
+            },
+        )
+
+
+def test_stage_payload_keeps_multiple_pm_decision_requests_for_same_decision_set() -> None:
+    payload = ArchitectStageOutputPayload.from_payload(
+        planning_state="engineering_planning",
+        persona_id="architect",
+        role_label="Architect",
+        payload={
+            "findings": ["Invite creation needs a service boundary"],
+            "recommendations": ["Create invite service"],
+            "required_tasks": ["Build invite service"],
+            "child_ticket_specs": [],
+            "technical_decisions": [_technical_decision_payload()],
+            "pm_decision_requests": [
+                {
+                    "request_id": "pm-decision-1",
+                    "question": "Should invite links be compliance evidence?",
+                    "why_it_matters": "The answer changes acceptance criteria.",
+                    "related_decision_ids": ["decision-1"],
+                },
+                {
+                    "request_id": "pm-decision-2",
+                    "question": "Should customers see invite links as a compliance promise?",
+                    "why_it_matters": "The answer changes release scope.",
+                    "related_decision_ids": ["decision-1"],
+                },
+            ],
+            "acceptance_impacts": ["Invite flow works"],
+            "mermaid_diagram": "flowchart TD\nA[Start]",
+        },
+    )
+
+    assert [item.question for item in payload.pm_decision_requests] == [
+        "Should invite links be compliance evidence?",
+        "Should customers see invite links as a compliance promise?",
+    ]
+
+
+def test_stakeholder_escalation_payload_converts_to_clarification_question() -> None:
+    escalation = StakeholderEscalationPayload.from_payload(
+        {
+            "escalation_id": "stakeholder-1",
+            "question": "Does this create a regulated compliance promise?",
+            "why_it_matters": "The answer changes customer-facing compliance commitments.",
+            "business_impact_area": "risk_compliance",
+            "source_pm_decision_request_ids": ["pm-decision-1"],
+        },
+        context="PM decision resolution stakeholder_escalations[1]",
     )
 
     question = escalation.to_clarification_question()
-    assert question.question == "Should customers see this as a compliance promise?"
-    assert question.why_it_matters == "The answer changes acceptance criteria."
-    assert escalation.to_payload()["related_decision_ids"] == ["decision-1"]
+    assert question.question == "Does this create a regulated compliance promise?"
+    assert question.source_ref == "stakeholder_escalation"
+
+
+def test_pm_decision_resolution_set_rejects_unknown_request_ids() -> None:
+    with pytest.raises(RuntimeError, match="references unknown request_id"):
+        PMDecisionResolutionSetPayload.from_payload(
+            {
+                "resolved_decisions": [],
+                "stakeholder_escalations": [
+                    {
+                        "escalation_id": "stakeholder-1",
+                        "question": "Does this create a regulated compliance promise?",
+                        "why_it_matters": "The answer changes customer-facing compliance commitments.",
+                        "business_impact_area": "risk_compliance",
+                        "source_pm_decision_request_ids": ["missing-request"],
+                    }
+                ],
+                "updated_planning_context": {},
+            },
+            expected_request_ids=("pm-decision-1",),
+            context="PM decision resolution payload",
+        )
 
 
 def test_design_planning_payload_rejects_malformed_tool_call() -> None:

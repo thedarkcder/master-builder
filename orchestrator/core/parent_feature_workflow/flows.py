@@ -6,10 +6,10 @@ from datetime import datetime, timezone
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
-from orchestrator.core.clarification_projection_service import resolve_active_clarification_context
-from orchestrator.core.clarification_questions import ClarificationQuestionSet
-from orchestrator.core.codex_runtime import CodexRuntimeError
-from orchestrator.core.followup_context_service import (
+from orchestrator.core.clarification.projection_service import resolve_active_clarification_context
+from orchestrator.core.clarification.questions import ClarificationQuestionSet
+from orchestrator.core.runtime.runtime import CodexRuntimeError
+from orchestrator.core.pm.followup_context_service import (
     CLOSED_FOLLOWUP_CONTEXT_STATUS,
     FOLLOWUP_CONTEXT_ENGINEERING_CLARIFICATION,
     FOLLOWUP_CONTEXT_PARENT_PLANNING_CLARIFICATION,
@@ -17,7 +17,7 @@ from orchestrator.core.followup_context_service import (
     close_followup_contexts,
     resolve_issue_followup_context,
 )
-from orchestrator.core.jira_parent_child_sync_publishers import (
+from orchestrator.core.integrations.atlassian.parent_child_sync_publishers import (
     JiraEngineeringClarificationPublisher,
     engineering_decision_note as _engineering_decision_note,
     mark_issues_sync_blocked as _mark_issues_sync_blocked,
@@ -35,8 +35,9 @@ from orchestrator.core.parent_feature_workflow.operations import (
     PARENT_OP_BRIEF_NORMALIZATION,
     PARENT_OP_JIRA_CHILD_FANOUT,
     PARENT_OP_JIRA_COMMENT_PROJECTION,
+    PARENT_WU_JIRA_CHILD_FANOUT_SEED,
 )
-from orchestrator.core.jira_parent_child_sync_shared import (
+from orchestrator.core.integrations.atlassian.parent_child_sync_shared import (
     JiraParentChildSyncContext,
     JiraParentChildSyncResult,
     jira_sync_result_from_advance_result,
@@ -48,22 +49,22 @@ from orchestrator.core.jira_parent_child_sync_shared import (
     pm_interview_jira_transport as _pm_interview_jira_transport,
     project_key_for_issue as _project_key_for_issue,
 )
-from orchestrator.core.parent_feature_brief_store import (
+from orchestrator.core.projects.parent_feature_brief_store import (
     persist_parent_feature_brief_snapshot,
 )
-from orchestrator.core.parent_planning_clarification_service import ParentPlanningClarificationService
-from orchestrator.core.parent_planning_fanout_service import ParentPlanningFanoutService
-from orchestrator.core.pm_interview_followup_service import continue_pm_interview_from_followup
-from orchestrator.core.pm_interview_service import (
+from orchestrator.core.projects.parent_planning_clarification_service import ParentPlanningClarificationService
+from orchestrator.core.projects.parent_planning_fanout_service import ParentPlanningFanoutService
+from orchestrator.core.pm.interview_followup_service import continue_pm_interview_from_followup
+from orchestrator.core.pm.interview_service import (
     PM_INTERVIEW_STATUS_PM_COMPLETED,
     mark_pm_interview_case_completed,
     normalize_pm_interview_evidence,
     pm_interview_case_from_row,
 )
-from orchestrator.core.runtime_invocation import AgentInvocationContext
-from orchestrator.core.webhook_job_errors import RetryableWebhookJobError
-from orchestrator.core.workflow_runtime import WorkflowAdvanceRequest, WorkflowTrigger
-from orchestrator.core.workflow_execution_projection import (
+from orchestrator.core.runtime.invocation import AgentInvocationContext
+from orchestrator.core.webhooks.job_errors import RetryableWebhookJobError
+from orchestrator.core.workflow.runtime import WorkflowAdvanceRequest, WorkflowTrigger
+from orchestrator.core.workflow.execution_projection import (
     WorkflowExecutionProjection,
     WorkflowExecutionReference,
     WorkflowSourceReference,
@@ -71,17 +72,18 @@ from orchestrator.core.workflow_execution_projection import (
     ensure_workflow_execution,
     resolve_latest_workflow_execution_by_source,
 )
-from orchestrator.core.workflow_handler_composition import build_installed_workflow_handler_registry
-from orchestrator.core.workflow_operation_retry_use_case import retry_workflow_operation_with_registered_handler
-from orchestrator.core.workflow_operation_service import complete_workflow_operation
-from orchestrator.core.workflow_step_runner import (
+from orchestrator.core.workflow.handler_composition import build_installed_workflow_handler_registry
+from orchestrator.core.workflow.operation_retry_use_case import retry_workflow_operation_with_registered_handler
+from orchestrator.core.workflow.operation_service import complete_workflow_operation
+from orchestrator.core.workflow.step_runner import (
     WorkflowStepAttempt,
     complete_workflow_step_attempt,
     fail_workflow_step_attempt,
     start_workflow_step_attempt,
     wait_workflow_step_attempt,
 )
-from orchestrator.core.workflow_type_catalog import get_workflow_type, get_workflow_type_by_handler_key
+from orchestrator.core.workflow.type_catalog import get_workflow_type, get_workflow_type_by_handler_key
+from orchestrator.core.workflow.work_units import run_work_unit, workflow_work_unit_input_fingerprint
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import FollowupContext, PMInterviewCase, WorkflowExecution, WorkflowOperation, WorkflowOperationAttempt
 
@@ -516,6 +518,7 @@ def handle_engineering_clarification_command(
                     "updated_at": datetime.now(timezone.utc).isoformat(),
                 },
                 create_jira_comment_fn=create_jira_comment_fn,
+                jira_adapter=jira,
             ),
         )
         session.commit()
@@ -814,19 +817,41 @@ def handle_engineering_clarification_reply(
         reply_text=comment_body,
     )
     try:
-        _, seed_data = seed_issues_with_runtime_fn(
-            session=session,
-            tenant=context.tenant,
-            prompt_markdown=prompt_markdown,
-            scoped_project_id=context.project_id,
-            force_issue_keys=[context.issue_key, *affected_child_keys],
-            allow_create=True,
-            allow_empty_children=True,
-            scoped_project_keys=[_project_key_for_issue(context.issue_key)],
-            codex_working_dir=".",
-            workflow_id=fanout_step.workflow_id,
-            operation_id=fanout_step.operation_id,
-            attempt_ref=fanout_step.ref,
+        seed_input = {
+            "parent_issue_key": context.issue_key,
+            "affected_child_keys": affected_child_keys,
+            "reply_text": comment_body,
+            "metadata": metadata,
+        }
+        seed_input_hash = workflow_work_unit_input_fingerprint(seed_input)
+
+        def _execute_seed(_unit_context):  # noqa: ANN001
+            _, seed_data = seed_issues_with_runtime_fn(
+                session=session,
+                tenant=context.tenant,
+                prompt_markdown=prompt_markdown,
+                scoped_project_id=context.project_id,
+                force_issue_keys=[context.issue_key, *affected_child_keys],
+                allow_create=True,
+                allow_empty_children=True,
+                scoped_project_keys=[_project_key_for_issue(context.issue_key)],
+                codex_working_dir=".",
+                workflow_id=fanout_step.workflow_id,
+                operation_id=fanout_step.operation_id,
+                attempt_ref=fanout_step.ref,
+            )
+            return seed_data
+
+        seed_data = run_work_unit(
+            session,
+            operation=fanout_step.operation,
+            operation_attempt=fanout_step.attempt,
+            unit_key=PARENT_WU_JIRA_CHILD_FANOUT_SEED,
+            idempotency_key=f"{context.issue_key}:engineering_clarification_seed:{seed_input_hash}",
+            input_payload=seed_input,
+            execute=_execute_seed,
+            serialize=lambda result: {"seed_data": result},
+            deserialize=lambda payload: dict(payload.get("seed_data") or {}),
         )
     except Exception as exc:  # noqa: BLE001
         logger.exception(
@@ -878,6 +903,7 @@ def handle_engineering_clarification_reply(
                     settings=settings,
                     metadata=metadata,
                     create_jira_comment_fn=create_jira_comment_fn,
+                    jira_adapter=jira,
                 ),
                 context="Engineering clarification reply",
             )

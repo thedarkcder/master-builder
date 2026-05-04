@@ -3,7 +3,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from tempfile import TemporaryDirectory
 
-from orchestrator.core.webhook_job_queue import (
+from orchestrator.core.webhooks.job_queue import (
     WEBHOOK_TRANSPORT_DISCORD_COMMAND,
     WEBHOOK_TRANSPORT_JIRA,
     WebhookJobEnqueueRequest,

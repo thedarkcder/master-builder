@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from orchestrator.api.discord.shared.errors import DiscordInteractionWebhookExpiredError
 from orchestrator.api.discord.shared.state import command_matches, parse_command_text
-from orchestrator.core.clarification_questions import ClarificationQuestionSet
+from orchestrator.core.clarification.questions import ClarificationQuestionSet
 from orchestrator.core.communications import (
     DiscordAskWithThreadAction,
     DiscordInteractionFollowupAction,
@@ -20,8 +20,8 @@ from orchestrator.core.communications import (
     DiscordThreadReplyAction,
 )
 from orchestrator.core.communications.integration_contracts import TransportActionExecutor
-from orchestrator.core.error_observability import emit_hard_error
-from orchestrator.core.observability import reset_log_context, set_log_context
+from orchestrator.core.observability.error import emit_hard_error
+from orchestrator.core.observability.otel import reset_log_context, set_log_context
 from orchestrator.storage.models import Tenant
 from orchestrator.tools.discord_api import DiscordApiError
 

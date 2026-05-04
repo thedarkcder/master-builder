@@ -14,8 +14,8 @@ from orchestrator.core.discord.live_voice_service import (
     _encode_pcm_wav,
 )
 from orchestrator.core.discord.live_voice_session import LiveVoiceTurn
-from orchestrator.core.observability import current_log_context
-from orchestrator.core.runtime_payload_models import VoiceEntryRoutePayload
+from orchestrator.core.observability.otel import current_log_context
+from orchestrator.core.runtime.payload_models import VoiceEntryRoutePayload
 
 
 class _FakeSidecarClient:

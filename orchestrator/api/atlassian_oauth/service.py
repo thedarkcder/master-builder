@@ -5,8 +5,8 @@ from typing import Callable, TypeVar
 
 from sqlalchemy.orm import Session
 
-from orchestrator.core.secrets import decrypt_value, encrypt_value
-from orchestrator.core.platform_secret_service import (
+from orchestrator.core.platform.secrets import decrypt_value, encrypt_value
+from orchestrator.core.platform.secret_service import (
     PLATFORM_SECRET_ATLASSIAN_OAUTH_CLIENT_ID_REF,
     PLATFORM_SECRET_ATLASSIAN_OAUTH_CLIENT_SECRET_REF,
     resolve_platform_secret_ref,

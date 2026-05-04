@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
-from orchestrator.api.discord.ingress.seed_runtime import seed_issues_with_runtime
-from orchestrator.api.discord.seed.issue_service import list_child_issue_previews_for_parent
 from orchestrator.api.atlassian_oauth.connection_service import tenant_atlassian_oauth_context
 from orchestrator.api.webhooks.contracts import (
     create_jira_comment,
@@ -14,14 +12,15 @@ from orchestrator.api.webhooks.contracts import (
     post_jira_comment,
 )
 from orchestrator.api.webhooks.jira_webhook_types import JiraWebhookContext, jira_webhook_response
-from orchestrator.core.agent_runtime_resolver import build_runtime_for_selector
-from orchestrator.core.codex_agents import classify_engineering_clarification_with_runtime
-from orchestrator.core.workflow_integration_provider import (
+from orchestrator.core.runtime.agent_runtime_resolver import build_runtime_for_selector
+from orchestrator.core.runtime.agents import classify_engineering_clarification_with_runtime
+from orchestrator.core.integrations.workflow.provider import (
     JiraWorkflowConnectionProvider,
     WorkflowIntegrationAdapterProvider,
 )
-from orchestrator.core.workflow_integration_router import WorkflowIntegrationRouter
-from orchestrator.core.workflow_runtime import build_workflow_runtime
+from orchestrator.core.integrations.workflow.router import WorkflowIntegrationRouter
+from orchestrator.core.workflow.runtime import build_workflow_runtime
+from orchestrator.core.issue_fanout.service import list_child_issue_previews_for_parent
 from orchestrator.core.parent_feature_workflow.flows import (
     handle_engineering_clarification_command as handle_engineering_clarification_command_service,
     handle_engineering_clarification_reply as handle_engineering_clarification_reply_service,
@@ -29,11 +28,12 @@ from orchestrator.core.parent_feature_workflow.flows import (
     handle_pm_interview_reply as handle_pm_interview_reply_service,
     handle_parent_feature_sync as handle_parent_feature_sync_service,
 )
-from orchestrator.core.jira_parent_child_sync_shared import (
+from orchestrator.core.integrations.atlassian.parent_child_sync_shared import (
     JiraParentChildSyncContext,
     JiraParentChildSyncResult,
     is_system_generated_comment as is_system_generated_comment_service,
 )
+from orchestrator.runtime.issue_fanout import seed_issues_with_runtime
 
 
 def _build_workflow_integration_router() -> WorkflowIntegrationRouter:

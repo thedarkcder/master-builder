@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from unittest import TestCase
 from unittest.mock import patch
 
-from orchestrator.core.codex_runtime_home import prepare_runtime_home, resolve_runtime_home
+from orchestrator.core.runtime.runtime_home import prepare_runtime_home, resolve_runtime_home
 
 
 class CodexRuntimeHomeTests(TestCase):
@@ -23,7 +23,7 @@ class CodexRuntimeHomeTests(TestCase):
         with TemporaryDirectory() as temp_dir:
             with (
                 patch.dict(os.environ, {"HOME": temp_dir}, clear=False),
-                patch("orchestrator.core.codex_runtime_home._running_inside_container", return_value=False),
+                patch("orchestrator.core.runtime.runtime_home._running_inside_container", return_value=False),
             ):
                 runtime_home = resolve_runtime_home(settings=settings)
 
@@ -37,7 +37,7 @@ class CodexRuntimeHomeTests(TestCase):
         with TemporaryDirectory() as temp_dir:
             with (
                 patch.dict(os.environ, {"HOME": temp_dir}, clear=False),
-                patch("orchestrator.core.codex_runtime_home._running_inside_container", return_value=True),
+                patch("orchestrator.core.runtime.runtime_home._running_inside_container", return_value=True),
             ):
                 runtime_home = resolve_runtime_home(settings=settings)
 
@@ -69,9 +69,9 @@ class CodexRuntimeHomeTests(TestCase):
 
             with (
                 patch.dict(os.environ, {"HOME": str(home_root)}, clear=False),
-                patch("orchestrator.core.codex_runtime_home._running_inside_container", return_value=False),
-                patch("orchestrator.core.codex_runtime_home._repo_root", return_value=repo_root),
-                patch("orchestrator.core.codex_runtime_home._repo_codex_dir", return_value=repo_codex),
+                patch("orchestrator.core.runtime.runtime_home._running_inside_container", return_value=False),
+                patch("orchestrator.core.runtime.runtime_home._repo_root", return_value=repo_root),
+                patch("orchestrator.core.runtime.runtime_home._repo_codex_dir", return_value=repo_codex),
             ):
                 runtime_home = prepare_runtime_home(settings=settings, runtime_kind="codex_cli")
 
@@ -132,10 +132,10 @@ class CodexRuntimeHomeTests(TestCase):
 
             with (
                 patch.dict(os.environ, {"HOME": str(home_root)}, clear=False),
-                patch("orchestrator.core.codex_runtime_home._running_inside_container", return_value=True),
-                patch("orchestrator.core.codex_runtime_home._repo_root", return_value=repo_root),
-                patch("orchestrator.core.codex_runtime_home._repo_codex_dir", return_value=repo_codex),
-                patch("orchestrator.core.codex_runtime_home.shutil.copy2", side_effect=_copy2_with_race),
+                patch("orchestrator.core.runtime.runtime_home._running_inside_container", return_value=True),
+                patch("orchestrator.core.runtime.runtime_home._repo_root", return_value=repo_root),
+                patch("orchestrator.core.runtime.runtime_home._repo_codex_dir", return_value=repo_codex),
+                patch("orchestrator.core.runtime.runtime_home.shutil.copy2", side_effect=_copy2_with_race),
             ):
                 runtime_home = prepare_runtime_home(settings=settings, runtime_kind="codex_cli")
 

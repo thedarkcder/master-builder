@@ -4,7 +4,7 @@ import pytest
 
 from orchestrator.api.discord.ingress.executor import execute_discord_command
 from orchestrator.api.schemas import DiscordCommandRequest
-from orchestrator.core.runtime_payload_models import AskIntentPayload
+from orchestrator.core.runtime.payload_models import AskIntentPayload
 from tests.test_support.discord_command_api_harness import DiscordCommandApiTestHarness
 
 

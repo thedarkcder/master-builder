@@ -13,7 +13,7 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Any
 
-from orchestrator.core.release_train import (
+from orchestrator.core.projects.release_train import (
     apply_release_label,
     next_release_version_from_tags,
     normalize_release_version,

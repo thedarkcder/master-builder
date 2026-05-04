@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from orchestrator.core.config import Settings
-from orchestrator.core.knowledge_jira_sync_runtime import (
+from orchestrator.core.knowledge.jira_sync_runtime import (
     KnowledgeJiraSyncDependencyFailure,
     KnowledgeJiraSyncRuntime,
     _classify_project_failure,
@@ -205,7 +205,7 @@ def test_run_sync_pass_persists_runtime_and_project_status() -> None:
         with (
             patch("orchestrator.api.atlassian_oauth.service.refresh_atlassian_connection_tokens", return_value="access-token") as refresh_mock,
             patch("orchestrator.api.atlassian_oauth.service.atlassian_oauth_client", return_value=SimpleNamespace()),
-            patch("orchestrator.core.knowledge_jira_sync_runtime.sync_project_knowledge_from_jira", return_value=fake_result) as sync_mock,
+            patch("orchestrator.core.knowledge.jira_sync_runtime.sync_project_knowledge_from_jira", return_value=fake_result) as sync_mock,
         ):
             runtime._run_sync_pass()
 
@@ -286,7 +286,7 @@ def test_run_sync_pass_marks_auth_required_as_degraded_with_backoff() -> None:
             patch("orchestrator.api.atlassian_oauth.service.refresh_atlassian_connection_tokens", side_effect=["access-token-1", "access-token-2"]),
             patch("orchestrator.api.atlassian_oauth.service.atlassian_oauth_client", return_value=SimpleNamespace()),
             patch(
-                "orchestrator.core.knowledge_jira_sync_runtime.sync_project_knowledge_from_jira",
+                "orchestrator.core.knowledge.jira_sync_runtime.sync_project_knowledge_from_jira",
                 side_effect=[
                     AtlassianOAuthHttpError(
                         "Jira API request failed (401): unauthorized",
@@ -391,7 +391,7 @@ def test_run_sync_pass_skips_auth_required_project_during_backoff() -> None:
             patch("orchestrator.api.atlassian_oauth.service.refresh_atlassian_connection_tokens", side_effect=["access-token-1", "access-token-2"]),
             patch("orchestrator.api.atlassian_oauth.service.atlassian_oauth_client", return_value=SimpleNamespace()),
             patch(
-                "orchestrator.core.knowledge_jira_sync_runtime.sync_project_knowledge_from_jira",
+                "orchestrator.core.knowledge.jira_sync_runtime.sync_project_knowledge_from_jira",
                 side_effect=[
                     AtlassianOAuthHttpError(
                         "Jira API request failed (401): unauthorized",
@@ -435,7 +435,7 @@ def test_get_runtime_status_marks_stale_runtime() -> None:
         settings = _settings(database_url)
         session_factory = create_session_factory(database_url)
         with session_factory() as session:
-            from orchestrator.core.knowledge_jira_sync_status import upsert_runtime_status
+            from orchestrator.core.knowledge.jira_sync_status import upsert_runtime_status
 
             upsert_runtime_status(
                 session=session,

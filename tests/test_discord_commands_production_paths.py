@@ -14,18 +14,18 @@ from fastapi.testclient import TestClient
 
 from orchestrator.api.main import create_app
 from orchestrator.core.config import get_settings
-from orchestrator.core.codex_runtime import CodexRuntime, CodexRuntimeError
-from orchestrator.core.decision_engine import DecisionEngineResult
-from orchestrator.core.decision_gate import DecisionGateResult
-from orchestrator.core.decision_state_machine import resolve_execution_gate_state
-from orchestrator.core.decision_types import (
+from orchestrator.core.runtime.runtime import CodexRuntime, CodexRuntimeError
+from orchestrator.core.decision.engine import DecisionEngineResult
+from orchestrator.core.decision.gate import DecisionGateResult
+from orchestrator.core.decision.state_machine import resolve_execution_gate_state
+from orchestrator.core.decision.types import (
     DecisionClassification,
     IngressDecision,
 )
 from orchestrator.core.gtd import GoodToDoValidationResult
-from orchestrator.core.pre_run_check import PreRunCheckResult
-from orchestrator.core.runtime_payload_models import AskIntentPayload
-from orchestrator.core.secrets import encrypt_value
+from orchestrator.core.precheck.pre_run_check import PreRunCheckResult
+from orchestrator.core.runtime.payload_models import AskIntentPayload
+from orchestrator.core.platform.secrets import encrypt_value
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.models import AtlassianOAuthConnection, Project, Tenant
 from orchestrator.tools.atlassian_oauth import JiraIssueBulkCreateResult, JiraIssueCreateResult, JiraIssueDetail, JiraIssuePreview
@@ -76,6 +76,7 @@ class _FakeJiraClient:
             status=self._status,
             description=self._description,
             labels=list(self._labels),
+            issue_type="Epic",
         )
 
     def create_issues_bulk(
@@ -250,11 +251,14 @@ class DiscordCommandProductionPathTests(SqliteTemplateDbTestCase):
         get_settings.cache_clear()
         reset_db_engine_cache()
         self.session_factory = create_session_factory(database_url=self.database_url)
+        self._product_event_notify_patcher = patch("orchestrator.core.observability.writer.publish_product_event_notification")
+        self._product_event_notify_patcher.start()
         self._seed_runtime_state()
         self.client = TestClient(create_app())
 
     def tearDown(self) -> None:
         self.client.close()
+        self._product_event_notify_patcher.stop()
         self.temp_dir.cleanup()
         self._cleanup_test_database()
         os.environ.pop("ORCHESTRATOR_DATABASE_URL", None)
@@ -494,7 +498,7 @@ class DiscordCommandProductionPathTests(SqliteTemplateDbTestCase):
         with (
             patch("orchestrator.api.discord.ask.context._refresh_atlassian_connection_tokens", return_value="access-token"),
             patch("orchestrator.api.discord.ask.context._atlassian_oauth_client", return_value=fake_jira_client),
-            patch("orchestrator.api.discord.ingress.jira_runtime.tenant_atlassian_oauth_context", return_value=fake_oauth),
+            patch("orchestrator.runtime.issue_fanout.tenant_atlassian_oauth_context", return_value=fake_oauth),
         ):
             response = self._post_command("!reply TP-42 reject the relink")
 
@@ -520,8 +524,8 @@ class DiscordCommandProductionPathTests(SqliteTemplateDbTestCase):
         }
 
         with (
-            patch("orchestrator.api.discord.ingress.seed_runtime.build_issue_seed_runtime", return_value=runtime),
-            patch("orchestrator.api.discord.ingress.jira_runtime.tenant_atlassian_oauth_context", return_value=fake_oauth),
+            patch("orchestrator.runtime.issue_fanout.build_issue_seed_runtime", return_value=runtime),
+            patch("orchestrator.runtime.issue_fanout.tenant_atlassian_oauth_context", return_value=fake_oauth),
         ):
             response = self._post_command("!issues seed draft a backlog item for relink policy")
 
@@ -560,8 +564,8 @@ class DiscordCommandProductionPathTests(SqliteTemplateDbTestCase):
             session.commit()
 
         with (
-            patch("orchestrator.api.discord.ingress.seed_runtime.build_issue_seed_runtime", return_value=runtime),
-            patch("orchestrator.api.discord.ingress.jira_runtime.tenant_atlassian_oauth_context", return_value=fake_oauth),
+            patch("orchestrator.runtime.issue_fanout.build_issue_seed_runtime", return_value=runtime),
+            patch("orchestrator.runtime.issue_fanout.tenant_atlassian_oauth_context", return_value=fake_oauth),
         ):
             response = self._post_command("!issues seed draft a backlog item for relink policy")
 
@@ -643,7 +647,20 @@ class DiscordCommandProductionPathTests(SqliteTemplateDbTestCase):
                 ),
             ]
         )
-        with patch("orchestrator.api.discord.ingress.seed_runtime.build_issue_seed_runtime", return_value=runtime):
+        fake_oauth = {
+            "client": _FakeJiraClient(
+                issue_key="TP-42",
+                summary="Cross-account relink policy",
+                status="To Do",
+                description="Clarify the device relink policy.",
+            ),
+            "connection": SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
+            "access_token": "access-token",
+        }
+        with (
+            patch("orchestrator.runtime.issue_fanout.build_issue_seed_runtime", return_value=runtime),
+            patch("orchestrator.runtime.issue_fanout.tenant_atlassian_oauth_context", return_value=fake_oauth),
+        ):
             response = self._post_command("!issues seed draft a backlog item for relink policy")
 
         self.assertEqual(response.status_code, 503)
@@ -660,7 +677,20 @@ class DiscordCommandProductionPathTests(SqliteTemplateDbTestCase):
             ]
         )
 
-        with patch("orchestrator.api.discord.ingress.seed_runtime.build_issue_seed_runtime", return_value=runtime):
+        fake_oauth = {
+            "client": _FakeJiraClient(
+                issue_key="TP-42",
+                summary="Cross-account relink policy",
+                status="To Do",
+                description="Clarify the device relink policy.",
+            ),
+            "connection": SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
+            "access_token": "access-token",
+        }
+        with (
+            patch("orchestrator.runtime.issue_fanout.build_issue_seed_runtime", return_value=runtime),
+            patch("orchestrator.runtime.issue_fanout.tenant_atlassian_oauth_context", return_value=fake_oauth),
+        ):
             response = self._post_command("!issues seed draft a backlog item for relink policy")
 
         self.assertEqual(response.status_code, 503)
@@ -672,14 +702,14 @@ class DiscordCommandProductionPathTests(SqliteTemplateDbTestCase):
         runtime, queue = self._seed_runtime([self._planned_seed_output()])
 
         with (
-            patch("orchestrator.api.discord.ingress.seed_runtime.build_issue_seed_runtime", return_value=runtime),
-            patch("orchestrator.api.discord.ingress.jira_runtime.tenant_atlassian_oauth_context", return_value={"client": None}),
+            patch("orchestrator.runtime.issue_fanout.build_issue_seed_runtime", return_value=runtime),
+            patch("orchestrator.runtime.issue_fanout.tenant_atlassian_oauth_context", return_value={"client": None}),
         ):
             response = self._post_command("!issues seed draft a backlog item for relink policy")
 
         self.assertEqual(response.status_code, 502)
         self.assertEqual(response.json()["detail"], "Failed to seed Jira issues: Atlassian context is incomplete")
-        self.assertEqual(queue.calls, 1)
+        self.assertEqual(queue.calls, 0)
 
 
 if __name__ == "__main__":

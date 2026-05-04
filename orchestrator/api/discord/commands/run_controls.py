@@ -9,8 +9,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestrator.api.schemas import DiscordCommandRequest, DiscordCommandResponse
-from orchestrator.core.runtime_invocation import AgentInvocationContext
-from orchestrator.core.codex_runtime import CodexRuntimeError
+from orchestrator.core.runtime.invocation import AgentInvocationContext
+from orchestrator.core.runtime.runtime import CodexRuntimeError
 from orchestrator.core.communications.command_pipeline import CommandScope
 from orchestrator.core.communications.enqueue_conflict_presentation import (
     present_discord_enqueue_conflict,
@@ -24,21 +24,21 @@ from orchestrator.core.communications.decision_clarification_presentation import
 from orchestrator.core.communications.execution_admission_format import (
     present_discord_admission_conflict,
 )
-from orchestrator.core.decision_engine import DecisionEventInput, DecisionSource
-from orchestrator.core.decision_clarification_port import DecisionClarificationPort
-from orchestrator.core.decision_state_machine import resolve_execution_admission
-from orchestrator.core.decision_state_machine import (
+from orchestrator.core.decision.engine import DecisionEventInput, DecisionSource
+from orchestrator.core.decision.clarification_port import DecisionClarificationPort
+from orchestrator.core.decision.state_machine import resolve_execution_admission
+from orchestrator.core.decision.state_machine import (
     ExecutionAdmissionReason,
     build_execution_admission_block,
 )
-from orchestrator.core.followup_context_service import (
+from orchestrator.core.pm.followup_context_service import (
     FOLLOWUP_CONTEXT_DECISION_GATE,
     close_followup_contexts,
 )
-from orchestrator.core.pre_run_check import evaluate_pre_run_check
-from orchestrator.core.project_policy import resolve_effective_policy
-from orchestrator.core.run_gate_service import enqueue_issue_run_with_precheck
-from orchestrator.core.runs import cancel_run
+from orchestrator.core.precheck.pre_run_check import evaluate_pre_run_check
+from orchestrator.core.projects.policy import resolve_effective_policy
+from orchestrator.core.runs.gate_service import enqueue_issue_run_with_precheck
+from orchestrator.core.runs.service import cancel_run
 from orchestrator.storage.models import Run, Tenant
 
 logger = logging.getLogger(__name__)

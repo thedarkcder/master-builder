@@ -8,7 +8,7 @@ from urllib.parse import parse_qs, urlparse
 from cryptography.fernet import Fernet
 
 from orchestrator.core.config import get_settings
-from orchestrator.core.email_delivery import EmailDeliveryError
+from orchestrator.core.platform.email_delivery import EmailDeliveryError
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.models import Project, Run, Tenant, WebhookJob, WorkflowCheckpoint, WorkflowExecution
 from orchestrator.tools.discord_api import DiscordApiError

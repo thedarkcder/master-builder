@@ -5,12 +5,12 @@ import unittest
 
 import pytest
 
-from orchestrator.core.clarification_projection_service import (
+from orchestrator.core.clarification.projection_service import (
     ClarificationProjectionSpec,
     upsert_clarification_projection,
 )
-from orchestrator.core.clarification_questions import ClarificationQuestionSet
-from orchestrator.core.followup_context_service import (
+from orchestrator.core.clarification.questions import ClarificationQuestionSet
+from orchestrator.core.pm.followup_context_service import (
     close_followup_contexts,
     FOLLOWUP_CONTEXT_PM_INTERVIEW,
     resolve_discord_command_subject_key,
@@ -116,6 +116,42 @@ class FollowupContextServiceTests(unittest.TestCase):
                     channel_id="thread-1",
                 )
             )
+
+    def test_clarification_projection_drops_stale_jira_comment_id_when_question_set_changes(self) -> None:
+        with self.session_factory() as session:
+            upsert_clarification_projection(
+                session=session,
+                spec=ClarificationProjectionSpec(
+                    tenant_id="example",
+                    project_id="example-default",
+                    context_type=FOLLOWUP_CONTEXT_PM_INTERVIEW,
+                    issue_key="MAB-243",
+                    request_id="parent-planning-clarification:MAB-243",
+                    origin_command="clarify",
+                    questions=ClarificationQuestionSet.from_values(["What is the audit window?"]).questions,
+                    metadata={
+                        "questions": [{"question": "What is the audit window?"}],
+                        "jira_comment_id": "comment-old",
+                    },
+                ),
+            )
+            projection = upsert_clarification_projection(
+                session=session,
+                spec=ClarificationProjectionSpec(
+                    tenant_id="example",
+                    project_id="example-default",
+                    context_type=FOLLOWUP_CONTEXT_PM_INTERVIEW,
+                    issue_key="MAB-243",
+                    request_id="parent-planning-clarification:MAB-243",
+                    origin_command="clarify",
+                    questions=ClarificationQuestionSet.from_values(["What email verification policy should v1 use?"]).questions,
+                    metadata={"questions": [{"question": "What email verification policy should v1 use?"}]},
+                ),
+            )
+
+            self.assertFalse(projection.already_projected)
+            self.assertNotIn("jira_comment_id", projection.metadata)
+            self.assertNotIn("created_comment_id", projection.metadata)
 
     def test_resolve_followup_context_prefers_root_message_over_parent_channel(self) -> None:
         with self.session_factory() as session:

@@ -6,13 +6,13 @@ from uuid import uuid4
 from sqlalchemy import update
 from sqlalchemy.orm import Session
 
-from orchestrator.core.workflow_execution_lifecycle import (
+from orchestrator.core.workflow.execution_lifecycle import (
     apply_execution_for_dispatch_claim,
     apply_execution_for_run_started,
     apply_execution_for_run_terminal,
 )
-from orchestrator.core.project_routing import find_active_project_for_issue_key
-from orchestrator.core.runs import mark_run_terminal
+from orchestrator.core.projects.routing import find_active_project_for_issue_key
+from orchestrator.core.runs.service import mark_run_terminal
 from orchestrator.core.workflow.checkpoints import (
     checkpoint_kind_for_stage,
     upsert_workflow_checkpoint,

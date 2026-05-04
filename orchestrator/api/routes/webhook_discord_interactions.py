@@ -25,10 +25,10 @@ from orchestrator.core.communications import (
     TransportEnvelope,
 )
 from orchestrator.core.config import get_settings
-from orchestrator.core.followup_context_service import (
+from orchestrator.core.pm.followup_context_service import (
     resolve_discord_interaction_subject_scope as _resolve_interaction_subject_scope,
 )
-from orchestrator.core.webhook_job_queue import (
+from orchestrator.core.webhooks.job_queue import (
     WEBHOOK_TRANSPORT_DISCORD_INTERACTION,
     WebhookJobEnqueueRequest,
     enqueue_webhook_job,

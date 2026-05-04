@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
-from orchestrator.api.admin.workflow_execution_state_read_model import (
+from orchestrator.api.admin.workflows.execution_state_read_model import (
     build_workflow_execution_state_read_model,
     bucket_workflow_steps,
 )

@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from orchestrator.api.main import create_app
 from orchestrator.core.config import get_settings
-from orchestrator.core.platform_metrics import platform_metrics, reset_platform_metrics_for_tests
+from orchestrator.core.observability.metrics import platform_metrics, reset_platform_metrics_for_tests
 from orchestrator.storage.db import reset_db_engine_cache
 
 

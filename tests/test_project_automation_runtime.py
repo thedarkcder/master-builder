@@ -3,7 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 import unittest
 
-from orchestrator.core.project_automation_runtime import ProjectAutomationRuntime
+from orchestrator.core.projects.automation_runtime import ProjectAutomationRuntime
 
 
 class ProjectAutomationRuntimeTests(unittest.TestCase):

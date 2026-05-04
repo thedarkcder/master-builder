@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import status
 
 from orchestrator.api.schemas import JiraWebhookActionResult, JiraWebhookDiagnosticsRead
-from orchestrator.core.decision_types import JiraConfigKey, jira_config_text
+from orchestrator.core.decision.types import JiraConfigKey, jira_config_text
 
 
 def jira_webhook_action_status_code(result: JiraWebhookActionResult) -> int:

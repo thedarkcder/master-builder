@@ -9,14 +9,14 @@ from typing import Any
 
 from sqlalchemy import func, select
 
-from orchestrator.core.agent_tools import execute_agent_tool, print_tool_event
+from orchestrator.core.runtime.tools import execute_agent_tool, print_tool_event
 from orchestrator.core.config import get_settings
 from orchestrator.core.discord.gateway_runtime import run_discord_gateway
 from orchestrator.core.discord.live_voice_gateway_runtime import run_discord_live_voice
-from orchestrator.core.knowledge_prewarm import prewarm_knowledge_dependencies
-from orchestrator.core.knowledge_jira_sync_runtime import run_knowledge_jira_sync
-from orchestrator.core.project_automation_runtime import run_project_automation_runtime
-from orchestrator.core.runs import (
+from orchestrator.core.knowledge.prewarm import prewarm_knowledge_dependencies
+from orchestrator.core.knowledge.jira_sync_runtime import run_knowledge_jira_sync
+from orchestrator.core.projects.automation_runtime import run_project_automation_runtime
+from orchestrator.core.runs.service import (
     enqueue_run,
     resolve_enqueue_precheck_outcome,
     resolve_precheck_outcome_for_enqueue,

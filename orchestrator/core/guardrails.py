@@ -5,7 +5,7 @@ import re
 import traceback
 from collections.abc import Iterable
 
-from orchestrator.core.log_redaction import redact_log_text
+from orchestrator.core.observability.log_redaction import redact_log_text
 
 _DANGEROUS_COMMAND_PATTERNS = (
     re.compile(r"(^|\s)rm\s+-rf(\s|$)", re.IGNORECASE),

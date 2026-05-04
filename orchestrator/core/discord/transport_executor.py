@@ -34,7 +34,7 @@ from orchestrator.core.communications import (
     TransportAction,
 )
 from orchestrator.core.discord.notifications import send_tenant_discord_message
-from orchestrator.core.platform_secret_service import resolve_platform_secret_ref
+from orchestrator.core.platform.secret_service import resolve_platform_secret_ref
 from orchestrator.storage.models import Project, Tenant
 from orchestrator.tools.discord_api import DiscordApiClient
 

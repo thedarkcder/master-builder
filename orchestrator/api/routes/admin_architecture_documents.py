@@ -10,7 +10,7 @@ from orchestrator.api.schemas import (
     ArchitectureDocumentRead,
     ArchitectureDocumentUpdate,
 )
-from orchestrator.core.architecture_document_service import ArchitectureDocumentService
+from orchestrator.core.projects.architecture_document_service import ArchitectureDocumentService
 from orchestrator.core.config import get_settings
 from orchestrator.core.security import (
     AuthenticatedPrincipal,

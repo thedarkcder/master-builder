@@ -4,8 +4,8 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from orchestrator.core.knowledge_base import KnowledgeEmbeddingAccessMode
-from orchestrator.core.runtime_invocation import (
+from orchestrator.core.knowledge.base import KnowledgeEmbeddingAccessMode
+from orchestrator.core.runtime.invocation import (
     AgentInvocationContext,
     _AsyncRuntimeLogWriter,
     RuntimeJsonContractError,
@@ -15,12 +15,12 @@ from orchestrator.core.runtime_invocation import (
     invoke_runtime_json,
     invoke_runtime_json_with_tools,
 )
-from orchestrator.core.codex_runtime import CodexRuntime, CodexRuntimeError
+from orchestrator.core.runtime.runtime import CodexRuntime, CodexRuntimeError
 
 
 class CodexInvocationTests(unittest.TestCase):
     def setUp(self) -> None:
-        self._emit_invocation_event_patcher = patch("orchestrator.core.runtime_invocation._emit_invocation_event")
+        self._emit_invocation_event_patcher = patch("orchestrator.core.runtime.invocation._emit_invocation_event")
         self._emit_invocation_event_patcher.start()
         self.addCleanup(self._emit_invocation_event_patcher.stop)
 
@@ -79,11 +79,11 @@ class CodexInvocationTests(unittest.TestCase):
             persisted_messages.append(message)
 
         with (
-            patch("orchestrator.core.runtime_invocation._get_log_writer", return_value=self._Writer()),
-            patch("orchestrator.core.runtime_invocation._enqueue_runtime_log_line", side_effect=_capture_persist),
-            patch("orchestrator.core.runtime_invocation._append_raw_log_line"),
-            patch("orchestrator.core.runtime_invocation._emit_invocation_event"),
-            patch("orchestrator.core.runtime_invocation.get_settings") as settings_mock,
+            patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()),
+            patch("orchestrator.core.runtime.invocation._enqueue_runtime_log_line", side_effect=_capture_persist),
+            patch("orchestrator.core.runtime.invocation._append_raw_log_line"),
+            patch("orchestrator.core.runtime.invocation._emit_invocation_event"),
+            patch("orchestrator.core.runtime.invocation.get_settings") as settings_mock,
         ):
             settings_mock.return_value = type(
                 "_Settings",
@@ -130,7 +130,7 @@ class CodexInvocationTests(unittest.TestCase):
             if invocation_ids == ["bad"]:
                 raise RuntimeError("bad invocation")
 
-        with patch("orchestrator.core.runtime_invocation._persist_runtime_log_lines", side_effect=_persist_group):
+        with patch("orchestrator.core.runtime.invocation._persist_runtime_log_lines", side_effect=_persist_group):
             self.assertTrue(writer.enqueue(context=contexts["bad"], stream="stdout", message="bad line"))
             self.assertTrue(writer.enqueue(context=contexts["good"], stream="stdout", message="good line"))
 
@@ -182,8 +182,8 @@ class CodexInvocationTests(unittest.TestCase):
             events.append((event_kind, payload))
 
         with (
-            patch("orchestrator.core.runtime_invocation._get_log_writer", return_value=self._Writer()),
-            patch("orchestrator.core.runtime_invocation._emit_invocation_event", side_effect=_capture_event),
+            patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()),
+            patch("orchestrator.core.runtime.invocation._emit_invocation_event", side_effect=_capture_event),
         ):
             payload = invoke_runtime_json(
                 runtime=runtime,
@@ -249,10 +249,10 @@ class CodexInvocationTests(unittest.TestCase):
             captured_db.append(message)
 
         with (
-            patch("orchestrator.core.runtime_invocation._get_log_writer", return_value=self._Writer()),
-            patch("orchestrator.core.runtime_invocation._append_raw_log_line"),
-            patch("orchestrator.core.runtime_invocation._enqueue_runtime_log_line", side_effect=_capture_db),
-            patch("orchestrator.core.runtime_invocation._emit_invocation_event"),
+            patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()),
+            patch("orchestrator.core.runtime.invocation._append_raw_log_line"),
+            patch("orchestrator.core.runtime.invocation._enqueue_runtime_log_line", side_effect=_capture_db),
+            patch("orchestrator.core.runtime.invocation._emit_invocation_event"),
         ):
             payload = invoke_runtime_json(
                 runtime=runtime,
@@ -295,7 +295,7 @@ class CodexInvocationTests(unittest.TestCase):
                 self.flushed_invocations.append(invocation_id)
 
         writer = _CaptureWriter()
-        with patch("orchestrator.core.runtime_invocation._get_log_writer", return_value=writer):
+        with patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=writer):
             payload = invoke_runtime_json(
                 runtime=runtime,
                 context=context,
@@ -343,8 +343,8 @@ class CodexInvocationTests(unittest.TestCase):
         )
 
         with (
-            patch("orchestrator.core.runtime_invocation._get_log_writer", return_value=self._Writer()),
-            patch("orchestrator.core.runtime_invocation._persist_checkpoint_session_id") as persist_mock,
+            patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()),
+            patch("orchestrator.core.runtime.invocation._persist_checkpoint_session_id") as persist_mock,
         ):
             payload = invoke_runtime_json(
                 runtime=runtime,
@@ -398,8 +398,8 @@ class CodexInvocationTests(unittest.TestCase):
         )
 
         with (
-            patch("orchestrator.core.runtime_invocation._get_log_writer", return_value=self._Writer()),
-            patch("orchestrator.core.runtime_invocation._persist_checkpoint_session_id") as persist_mock,
+            patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()),
+            patch("orchestrator.core.runtime.invocation._persist_checkpoint_session_id") as persist_mock,
         ):
             payload = invoke_runtime_json(
                 runtime=runtime,
@@ -453,8 +453,8 @@ class CodexInvocationTests(unittest.TestCase):
         )
 
         with (
-            patch("orchestrator.core.runtime_invocation._get_log_writer", return_value=self._Writer()),
-            patch("orchestrator.core.runtime_invocation._persist_checkpoint_session_id") as persist_mock,
+            patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()),
+            patch("orchestrator.core.runtime.invocation._persist_checkpoint_session_id") as persist_mock,
         ):
             payload = invoke_runtime_json(
                 runtime=runtime,
@@ -508,8 +508,8 @@ class CodexInvocationTests(unittest.TestCase):
         )
 
         with (
-            patch("orchestrator.core.runtime_invocation._get_log_writer", return_value=self._Writer()),
-            patch("orchestrator.core.runtime_invocation._persist_checkpoint_session_id"),
+            patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()),
+            patch("orchestrator.core.runtime.invocation._persist_checkpoint_session_id"),
         ):
             payload = invoke_runtime_json(
                 runtime=runtime,
@@ -565,8 +565,8 @@ class CodexInvocationTests(unittest.TestCase):
             events.append((event_kind, payload))
 
         with (
-            patch("orchestrator.core.runtime_invocation._get_log_writer", return_value=self._Writer()),
-            patch("orchestrator.core.runtime_invocation._emit_invocation_event", side_effect=_capture_event),
+            patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()),
+            patch("orchestrator.core.runtime.invocation._emit_invocation_event", side_effect=_capture_event),
         ):
             payload = invoke_runtime_json(
                 runtime=runtime,
@@ -584,6 +584,72 @@ class CodexInvocationTests(unittest.TestCase):
         self.assertEqual(finished_payload["actual_prompt_tokens"], 41)
         self.assertEqual(finished_payload["actual_completion_tokens"], 9)
         self.assertEqual(finished_payload["actual_total_tokens"], 50)
+        self.assertEqual(finished_payload["actual_usage_observed"], True)
+
+    def test_invoke_runtime_json_normalizes_provider_usage_metrics(self) -> None:
+        def _request(  # noqa: ANN001
+            _system_prompt,
+            _user_prompt,
+            _working_dir,
+            _on_log_line,
+            _reasoning_effort,
+            _resume_session_id,
+            _on_session_id,
+            on_usage,
+        ) -> str:
+            if on_usage is not None:
+                on_usage(
+                    {
+                        "input_tokens": 41,
+                        "cached_input_tokens": 17,
+                        "output_tokens": 9,
+                    }
+                )
+            return '{"ok": true}'
+
+        runtime = CodexRuntime(
+            model="m",
+            max_output_tokens=10,
+            command="override",
+            _request=_request,
+        )
+        context = AgentInvocationContext(
+            channel="worker",
+            tenant_id="tenant-1",
+            project_id="proj-1",
+            command="workflow",
+            stage="pm",
+            working_dir=".",
+            run_id="run-1",
+        )
+
+        events: list[tuple[str, dict[str, object]]] = []
+
+        def _capture_event(*, context, event_kind: str, payload: dict[str, object]) -> None:  # noqa: ANN001
+            _ = context
+            events.append((event_kind, payload))
+
+        with (
+            patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()),
+            patch("orchestrator.core.runtime.invocation._emit_invocation_event", side_effect=_capture_event),
+        ):
+            payload = invoke_runtime_json(
+                runtime=runtime,
+                context=context,
+                system_prompt="system",
+                user_prompt="user",
+            )
+
+        self.assertEqual(payload, {"ok": True})
+        finished_payload = next(
+            payload
+            for event_kind, payload in events
+            if event_kind == "stage_invocation_finished"
+        )
+        self.assertEqual(finished_payload["actual_prompt_tokens"], 41)
+        self.assertEqual(finished_payload["actual_completion_tokens"], 9)
+        self.assertEqual(finished_payload["actual_total_tokens"], 50)
+        self.assertEqual(finished_payload["actual_cached_input_tokens"], 17)
         self.assertEqual(finished_payload["actual_usage_observed"], True)
 
     def test_invoke_runtime_json_passes_effective_policy_model_to_runtime(self) -> None:
@@ -605,13 +671,13 @@ class CodexInvocationTests(unittest.TestCase):
         )
 
         with (
-            patch("orchestrator.core.runtime_invocation._get_log_writer", return_value=self._Writer()),
+            patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()),
             patch(
-                "orchestrator.core.runtime_invocation._resolve_knowledge_policy_for_context",
+                "orchestrator.core.runtime.invocation._resolve_knowledge_policy_for_context",
                 return_value=("proj-1", True, "aggressive", "gpt-5.4-mini", "high", True),
             ),
-            patch("orchestrator.core.runtime_invocation.create_session_factory"),
-            patch("orchestrator.core.runtime_invocation.build_knowledge_prompt_context", return_value=SimpleNamespace(text="", citations=[])),
+            patch("orchestrator.core.runtime.invocation.create_session_factory"),
+            patch("orchestrator.core.runtime.invocation.build_knowledge_prompt_context", return_value=SimpleNamespace(text="", citations=[])),
         ):
             payload = invoke_runtime_json(
                 runtime=_Runtime(),  # type: ignore[arg-type]
@@ -640,14 +706,14 @@ class CodexInvocationTests(unittest.TestCase):
         )
 
         with (
-            patch("orchestrator.core.runtime_invocation._get_log_writer", return_value=self._Writer()),
+            patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()),
             patch(
-                "orchestrator.core.runtime_invocation._resolve_knowledge_policy_for_context",
+                "orchestrator.core.runtime.invocation._resolve_knowledge_policy_for_context",
                 return_value=("proj-1", True, "aggressive", "gpt-5.4", "medium", False),
             ),
-            patch("orchestrator.core.runtime_invocation.create_session_factory"),
+            patch("orchestrator.core.runtime.invocation.create_session_factory"),
             patch(
-                "orchestrator.core.runtime_invocation.build_knowledge_prompt_context",
+                "orchestrator.core.runtime.invocation.build_knowledge_prompt_context",
                 return_value=SimpleNamespace(text="", citations=[]),
             ) as knowledge_mock,
         ):
@@ -684,14 +750,14 @@ class CodexInvocationTests(unittest.TestCase):
         )
 
         with (
-            patch("orchestrator.core.runtime_invocation._get_log_writer", return_value=self._Writer()),
+            patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()),
             patch(
-                "orchestrator.core.runtime_invocation._resolve_knowledge_policy_for_context",
+                "orchestrator.core.runtime.invocation._resolve_knowledge_policy_for_context",
                 return_value=("proj-1", True, "aggressive", "gpt-5.4-mini", "high", True),
             ),
-            patch("orchestrator.core.runtime_invocation.create_session_factory"),
+            patch("orchestrator.core.runtime.invocation.create_session_factory"),
             patch(
-                "orchestrator.core.runtime_invocation.build_knowledge_prompt_context",
+                "orchestrator.core.runtime.invocation.build_knowledge_prompt_context",
                 return_value=SimpleNamespace(text="", citations=[]),
             ),
         ):
@@ -724,12 +790,12 @@ class CodexInvocationTests(unittest.TestCase):
         )
 
         with (
-            patch("orchestrator.core.runtime_invocation._get_log_writer", return_value=self._Writer()),
+            patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()),
             patch(
-                "orchestrator.core.runtime_invocation._resolve_knowledge_policy_for_context",
+                "orchestrator.core.runtime.invocation._resolve_knowledge_policy_for_context",
                 return_value=("proj-1", False, "aggressive", "gpt-5.4-mini", "high", True),
             ) as resolve_policy_mock,
-            patch("orchestrator.core.runtime_invocation.get_settings") as settings_mock,
+            patch("orchestrator.core.runtime.invocation.get_settings") as settings_mock,
         ):
             settings_mock.return_value = type(
                 "_Settings",
@@ -776,13 +842,13 @@ class CodexInvocationTests(unittest.TestCase):
         )
 
         with (
-            patch("orchestrator.core.runtime_invocation._get_log_writer", return_value=self._Writer()),
+            patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()),
             patch(
-                "orchestrator.core.runtime_invocation._resolve_knowledge_policy_for_context",
+                "orchestrator.core.runtime.invocation._resolve_knowledge_policy_for_context",
                 return_value=("proj-1", True, "aggressive", "gpt-5.4", "high", True),
             ),
-            patch("orchestrator.core.runtime_invocation.create_session_factory"),
-            patch("orchestrator.core.runtime_invocation.build_knowledge_prompt_context", return_value=SimpleNamespace(text="", citations=[])),
+            patch("orchestrator.core.runtime.invocation.create_session_factory"),
+            patch("orchestrator.core.runtime.invocation.build_knowledge_prompt_context", return_value=SimpleNamespace(text="", citations=[])),
         ):
             payload = invoke_runtime_json(
                 runtime=_Runtime(),  # type: ignore[arg-type]
@@ -814,7 +880,7 @@ class CodexInvocationTests(unittest.TestCase):
         )
 
         with (
-            patch("orchestrator.core.runtime_invocation._get_log_writer", return_value=self._Writer()),
+            patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()),
             self.assertRaises(RuntimeJsonContractError) as raised,
         ):
             invoke_runtime_json(
@@ -842,7 +908,7 @@ class CodexInvocationTests(unittest.TestCase):
         )
 
         with (
-            patch("orchestrator.core.runtime_invocation._get_log_writer", return_value=self._Writer()),
+            patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()),
             self.assertRaises(CodexRuntimeError),
         ):
             invoke_runtime_json(
@@ -882,7 +948,7 @@ class CodexInvocationTests(unittest.TestCase):
             working_dir=".",
         )
 
-        with patch("orchestrator.core.runtime_invocation._get_log_writer", return_value=self._Writer()):
+        with patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()):
             payload = invoke_runtime_json_with_tools(
                 runtime=_Runtime(),  # type: ignore[arg-type]
                 context=context,
@@ -932,11 +998,11 @@ class CodexInvocationTests(unittest.TestCase):
             live_lines.append((context.operation_id, context.attempt_id, message))
 
         with (
-            patch("orchestrator.core.runtime_invocation._get_log_writer", return_value=self._Writer()),
-            patch("orchestrator.core.runtime_invocation.build_runtime_log_sink", side_effect=_fake_sink),
-            patch("orchestrator.core.runtime_invocation._emit_invocation_event"),
-            patch("orchestrator.core.runtime_invocation._append_raw_log_line"),
-            patch("orchestrator.core.runtime_invocation._enqueue_runtime_log_line", side_effect=_capture_live_line),
+            patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()),
+            patch("orchestrator.core.runtime.invocation.build_runtime_log_sink", side_effect=_fake_sink),
+            patch("orchestrator.core.runtime.invocation._emit_invocation_event"),
+            patch("orchestrator.core.runtime.invocation._append_raw_log_line"),
+            patch("orchestrator.core.runtime.invocation._enqueue_runtime_log_line", side_effect=_capture_live_line),
         ):
             payload = invoke_runtime_json(
                 runtime=_Runtime(),  # type: ignore[arg-type]
@@ -995,11 +1061,11 @@ class CodexInvocationTests(unittest.TestCase):
             invocation_events.append((event_kind, context.operation_id, context.attempt_id, payload))
 
         with (
-            patch("orchestrator.core.runtime_invocation._get_log_writer", return_value=self._Writer()),
-            patch("orchestrator.core.runtime_invocation.build_runtime_log_sink", side_effect=_fake_sink),
-            patch("orchestrator.core.runtime_invocation._emit_invocation_event", side_effect=_capture_event),
-            patch("orchestrator.core.runtime_invocation._append_raw_log_line"),
-            patch("orchestrator.core.runtime_invocation._enqueue_runtime_log_line"),
+            patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()),
+            patch("orchestrator.core.runtime.invocation.build_runtime_log_sink", side_effect=_fake_sink),
+            patch("orchestrator.core.runtime.invocation._emit_invocation_event", side_effect=_capture_event),
+            patch("orchestrator.core.runtime.invocation._append_raw_log_line"),
+            patch("orchestrator.core.runtime.invocation._enqueue_runtime_log_line"),
         ):
             payload = invoke_runtime_json_with_tools(
                 runtime=_Runtime(),  # type: ignore[arg-type]
@@ -1064,7 +1130,7 @@ class CodexInvocationTests(unittest.TestCase):
         )
 
         with (
-            patch("orchestrator.core.runtime_invocation._get_log_writer", return_value=self._Writer()),
+            patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()),
             self.assertRaises(ToolBridgeProtocolError) as raised,
         ):
             invoke_runtime_json_with_tools(
@@ -1106,7 +1172,7 @@ class CodexInvocationTests(unittest.TestCase):
         )
 
         with (
-            patch("orchestrator.core.runtime_invocation._get_log_writer", return_value=self._Writer()),
+            patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()),
             self.assertRaises(ToolBridgeExhaustedError) as raised,
         ):
             invoke_runtime_json_with_tools(
@@ -1141,7 +1207,7 @@ class CodexInvocationTests(unittest.TestCase):
         )
 
         with (
-            patch("orchestrator.core.runtime_invocation._get_log_writer", return_value=self._Writer()),
+            patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()),
             self.assertRaises(ToolBridgeProtocolError) as raised,
         ):
             invoke_runtime_json_with_tools(
@@ -1177,7 +1243,7 @@ class CodexInvocationTests(unittest.TestCase):
             raise RuntimeError("tool database unavailable")
 
         with (
-            patch("orchestrator.core.runtime_invocation._get_log_writer", return_value=self._Writer()),
+            patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()),
             self.assertRaises(ToolExecutionError) as raised,
         ):
             invoke_runtime_json_with_tools(

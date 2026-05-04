@@ -7,10 +7,10 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm import sessionmaker
 
 from orchestrator.core.config import Settings, get_settings
-from orchestrator.core.agent_observability import record_agent_lifecycle_event
+from orchestrator.core.observability.agent_observability import record_agent_lifecycle_event
 from orchestrator.core.discord.notifications import send_tenant_discord_message
-from orchestrator.core.jira_links import tenant_jira_issue_url
-from orchestrator.core.workflow_runtime import build_workflow_runtime
+from orchestrator.core.integrations.atlassian.links import tenant_jira_issue_url
+from orchestrator.core.workflow.runtime import build_workflow_runtime
 from orchestrator.core.worker.webhook_job_service import process_next_webhook_job
 from orchestrator.core.worker.jira_stage_service import send_stage_update_to_jira as _send_stage_update_to_jira
 from orchestrator.core.worker.jira_stage_service import transition_issue_status as _transition_issue_status

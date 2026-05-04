@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from tempfile import TemporaryDirectory
 import unittest
 
-from orchestrator.core.project_automation_service import (
+from orchestrator.core.projects.automation_service import (
     compute_next_run_at,
     enqueue_project_automation_run_now,
     PROJECT_AUTOMATION_KIND_STANDUP,

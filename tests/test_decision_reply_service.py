@@ -8,18 +8,18 @@ import unittest.mock
 from sqlalchemy import select
 
 from orchestrator.core.config import get_settings
-from orchestrator.core.decision_gate import DecisionGateResult
-from orchestrator.core.decision_precheck_mapping import apply_frozen_cycle_to_precheck
-from orchestrator.core.decision_reply_service import (
+from orchestrator.core.decision.gate import DecisionGateResult
+from orchestrator.core.decision.precheck_mapping import apply_frozen_cycle_to_precheck
+from orchestrator.core.decision.reply_service import (
     capture_decision_reply,
     latest_recorded_answers_for_issue,
     serialize_recorded_answers_for_policy,
     sync_cycle_answers_from_planner,
     unresolved_question_feedback_for_cycle,
 )
-from orchestrator.core.decision_presentation import build_cycle_comment
+from orchestrator.core.decision.presentation import build_cycle_comment
 from orchestrator.core.gtd import GoodToDoValidationResult
-from orchestrator.core.pre_run_check import PreRunCheckResult
+from orchestrator.core.precheck.pre_run_check import PreRunCheckResult
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import DecisionAnswer, DecisionCase, DecisionCycle, Project, Tenant
@@ -244,11 +244,11 @@ class DecisionReplyServiceTests(unittest.TestCase):
         with (
             self.session_factory() as session,
             unittest.mock.patch(
-                "orchestrator.core.decision_reply_service.build_codex_runtime",
+                "orchestrator.core.decision.reply_service.build_codex_runtime",
                 return_value=object(),
             ),
             unittest.mock.patch(
-                "orchestrator.core.decision_reply_service.invoke_runtime_json",
+                "orchestrator.core.decision.reply_service.invoke_runtime_json",
                 return_value={
                     "answers": [
                         {
@@ -317,11 +317,11 @@ class DecisionReplyServiceTests(unittest.TestCase):
 
             with (
                 unittest.mock.patch(
-                    "orchestrator.core.decision_reply_service.build_codex_runtime",
+                    "orchestrator.core.decision.reply_service.build_codex_runtime",
                     return_value=object(),
                 ),
                 unittest.mock.patch(
-                    "orchestrator.core.decision_reply_service.invoke_runtime_json",
+                    "orchestrator.core.decision.reply_service.invoke_runtime_json",
                     return_value={
                         "answers": [
                             {
@@ -412,11 +412,11 @@ class DecisionReplyServiceTests(unittest.TestCase):
 
             with (
                 unittest.mock.patch(
-                    "orchestrator.core.decision_reply_service.build_codex_runtime",
+                    "orchestrator.core.decision.reply_service.build_codex_runtime",
                     return_value=object(),
                 ),
                 unittest.mock.patch(
-                    "orchestrator.core.decision_reply_service.invoke_runtime_json",
+                    "orchestrator.core.decision.reply_service.invoke_runtime_json",
                     return_value={
                         "answers": [
                             {

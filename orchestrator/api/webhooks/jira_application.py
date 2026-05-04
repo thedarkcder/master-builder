@@ -24,22 +24,22 @@ from orchestrator.api.webhooks.jira_webhook_types import (
     jira_webhook_response,
     snapshot_jira_webhook_context,
 )
-from orchestrator.core.agent_runtime_resolver import build_runtime_for_selector
-from orchestrator.core.webhook_job_queue import (
+from orchestrator.core.runtime.agent_runtime_resolver import build_runtime_for_selector
+from orchestrator.core.webhooks.job_queue import (
     WEBHOOK_TRANSPORT_JIRA,
     WebhookJobEnqueueRequest,
     enqueue_webhook_job,
 )
 from orchestrator.core.communications import HttpJsonResponseAction, IngressResult, TransportAction, TransportEnvelope
 from orchestrator.core.communications.execution_admission_format import present_jira_admission
-from orchestrator.core.decision_state_machine import (
+from orchestrator.core.decision.state_machine import (
     ExecutionAdmissionReason,
     build_execution_admission_block,
 )
-from orchestrator.core.jira_issue_intake_routing import classify_jira_issue_intake_with_runtime
-from orchestrator.core.observability import reset_log_context, set_log_context
-from orchestrator.core.runtime_invocation import AgentInvocationContext
-from orchestrator.core.webhook_job_errors import RetryableWebhookJobError
+from orchestrator.core.integrations.atlassian.issue_intake_routing import classify_jira_issue_intake_with_runtime
+from orchestrator.core.observability.otel import reset_log_context, set_log_context
+from orchestrator.core.runtime.invocation import AgentInvocationContext
+from orchestrator.core.webhooks.job_errors import RetryableWebhookJobError
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import Tenant
 from orchestrator.storage.run_queue_events import notify_webhook_job_enqueued

@@ -3,8 +3,8 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 
 from orchestrator.core.config import get_settings
-from orchestrator.core.logging import configure_logging
-from orchestrator.core.telemetry import initialize_telemetry
+from orchestrator.core.observability.logging import configure_logging
+from orchestrator.core.observability.otel_telemetry import initialize_telemetry
 from orchestrator.temporal.client import connect_temporal_client, temporal_task_queue
 
 

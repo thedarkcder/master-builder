@@ -8,7 +8,7 @@ from temporalio.client import OutboundInterceptor
 from temporalio.worker import ActivityInboundInterceptor
 from temporalio.worker import Interceptor as WorkerInterceptor
 
-from orchestrator.core.telemetry import telemetry_span
+from orchestrator.core.observability.otel_telemetry import telemetry_span
 
 
 def _app_workflow_id(handle_id: str | None) -> str | None:

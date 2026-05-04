@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 
-from orchestrator.core.worker_capability_normalization import KNOWN_WORKER_CAPABILITIES
+from orchestrator.core.worker.capability_normalization import KNOWN_WORKER_CAPABILITIES
 from orchestrator.core.workflow.runner import DevResult
 from orchestrator.core.workflow.runner import PmPlan
 from orchestrator.core.workflow.runner import ReviewResult

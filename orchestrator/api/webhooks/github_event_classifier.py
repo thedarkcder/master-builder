@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from orchestrator.api.webhooks.pr_remediation_policy import parse_manual_pr_fix_request
-from orchestrator.core.project_policy import resolve_effective_policy
+from orchestrator.core.projects.policy import resolve_effective_policy
 
 
 @dataclass(frozen=True)

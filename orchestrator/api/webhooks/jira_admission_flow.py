@@ -17,22 +17,22 @@ from orchestrator.core.communications.execution_admission_format import (
 from orchestrator.core.communications.jira_enqueue_presentation import (
     format_jira_enqueue_skipped_message,
 )
-from orchestrator.core.decision_clarification_service import evaluate_issue_clarification_state
-from orchestrator.core.decision_engine import DecisionEngineResult, DecisionEventInput
-from orchestrator.core.decision_types import tenant_ready_label, tenant_ready_trigger_mode
-from orchestrator.core.decision_state_machine import (
+from orchestrator.core.decision.clarification_service import evaluate_issue_clarification_state
+from orchestrator.core.decision.engine import DecisionEngineResult, DecisionEventInput
+from orchestrator.core.decision.types import tenant_ready_label, tenant_ready_trigger_mode
+from orchestrator.core.decision.state_machine import (
     ExecutionAdmissionReason,
     admission_from_enqueue_reason,
     build_execution_admission_block,
     resolve_execution_admission,
 )
-from orchestrator.core.pre_run_check import evaluate_pre_run_check
-from orchestrator.core.precheck_question_lock import (
+from orchestrator.core.precheck.pre_run_check import evaluate_pre_run_check
+from orchestrator.core.precheck.question_lock import (
     build_precheck_questions_block,
     remove_precheck_questions_block,
     upsert_precheck_questions_block,
 )
-from orchestrator.core.run_gate_service import enqueue_issue_run_with_precheck
+from orchestrator.core.runs.gate_service import enqueue_issue_run_with_precheck
 
 logger = logging.getLogger(__name__)
 

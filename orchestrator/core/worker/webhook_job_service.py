@@ -36,13 +36,13 @@ from orchestrator.core.communications import (
     TransportEnvelope,
 )
 from orchestrator.core.github.transport_executor import GitHubTransportExecutor
-from orchestrator.core.project_automation_execution_service import (
+from orchestrator.core.projects.automation_execution_service import (
     mark_project_automation_execution_failure,
     mark_project_automation_execution_success,
     prepare_project_automation_execution,
 )
-from orchestrator.core.webhook_job_errors import RetryableWebhookJobError
-from orchestrator.core.webhook_job_queue import (
+from orchestrator.core.webhooks.job_errors import RetryableWebhookJobError
+from orchestrator.core.webhooks.job_queue import (
     WEBHOOK_TRANSPORT_DISCORD_COMMAND,
     WEBHOOK_TRANSPORT_DISCORD_INTERACTION,
     WEBHOOK_TRANSPORT_GITHUB,

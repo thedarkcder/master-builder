@@ -5,7 +5,7 @@ from typing import Pattern
 
 from sqlalchemy.orm import Session
 
-from orchestrator.core.decision_types import JiraConfigKey, tenant_jira_config_text
+from orchestrator.core.decision.types import JiraConfigKey, tenant_jira_config_text
 from orchestrator.core.discord.personas import format_voice_room_persona_label
 from orchestrator.storage.models import AtlassianOAuthConnection, Tenant
 

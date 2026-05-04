@@ -5,8 +5,8 @@ from datetime import datetime, timezone
 from orchestrator.api.schemas import PlatformServiceStatusRead, PlatformStatusRead
 from orchestrator.core.config import Settings
 from orchestrator.core.discord.command_sync_status import get_discord_command_sync_status
-from orchestrator.core.knowledge_jira_sync_status import get_runtime_status as get_knowledge_jira_sync_runtime_status
-from orchestrator.core.worker_runtime_status_service import build_worker_service_status
+from orchestrator.core.knowledge.jira_sync_status import get_runtime_status as get_knowledge_jira_sync_runtime_status
+from orchestrator.core.worker.runtime_status_service import build_worker_service_status
 
 
 def _utcnow() -> datetime:

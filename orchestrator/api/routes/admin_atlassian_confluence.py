@@ -13,7 +13,7 @@ from orchestrator.api.dependencies import get_session
 from orchestrator.api.schemas import ConfluencePageRead, ConfluenceSpaceCatalogRead
 from orchestrator.core.config import get_settings
 from orchestrator.core.security import AuthenticatedPrincipal, require_admin, require_any_tenant_permission, require_authenticated_principal
-from orchestrator.core.tenant_access import PERMISSION_PROJECTS_MANAGE, PERMISSION_WORKSPACE_MANAGE
+from orchestrator.core.platform.access import PERMISSION_PROJECTS_MANAGE, PERMISSION_WORKSPACE_MANAGE
 from orchestrator.storage.models import Tenant
 
 router = APIRouter(prefix="/api/admin", tags=["admin", "atlassian-confluence"])

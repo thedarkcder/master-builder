@@ -26,8 +26,8 @@ from orchestrator.api.schemas import (
     KnowledgeSyncResultRead,
 )
 from orchestrator.core.config import get_settings
-from orchestrator.core.decision_types import JiraConfigKey, tenant_jira_config_text
-from orchestrator.core.knowledge_base import (
+from orchestrator.core.decision.types import JiraConfigKey, tenant_jira_config_text
+from orchestrator.core.knowledge.base import (
     create_knowledge_asset,
     decode_base64_content,
     delete_knowledge_asset,
@@ -40,7 +40,7 @@ from orchestrator.core.knowledge_base import (
     sync_knowledge_fact_approval_state_for_asset,
     sync_project_knowledge_from_jira,
 )
-from orchestrator.core.knowledge_sources import (
+from orchestrator.core.knowledge.sources import (
     KnowledgeSourceSyncUnsupportedError,
     KnowledgeSourceValidationError,
     build_knowledge_source_summary,

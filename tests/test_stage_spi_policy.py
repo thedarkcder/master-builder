@@ -3,7 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from orchestrator.core.stage_spi_policy import resolve_stage_spi_enabled
+from orchestrator.core.stages.spi_policy import resolve_stage_spi_enabled
 from orchestrator.storage.models import Project, Tenant
 
 

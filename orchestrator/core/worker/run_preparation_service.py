@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from orchestrator.core.dashboard_links import admin_run_url
-from orchestrator.core.project_policy import resolve_effective_policy
+from orchestrator.core.platform.dashboard_links import admin_run_url
+from orchestrator.core.projects.policy import resolve_effective_policy
 from orchestrator.core.worker.repo_setup_service import (
     RetryableRepoSetupError,
     TerminalRepoSetupError,

@@ -2,17 +2,17 @@ import os
 import pytest
 from unittest.mock import MagicMock, patch
 
-from orchestrator.core.platform_secret_service import (
+from orchestrator.core.platform.secret_service import (
     platform_secret_service,
 )
-from orchestrator.core.secret_manager import (
+from orchestrator.core.platform.secret_manager import (
     resolve_platform_secret_ref,
     resolve_tenant_secret_ref,
     resolve_scoped_secret_ref,
     resolve_secret_ref,
     resolve_secret_ref_metadata,
 )
-from orchestrator.core.tenant_secret_service import tenant_secret_service
+from orchestrator.core.platform.tenant_secret_service import tenant_secret_service
 
 
 def test_resolve_secret_ref_platform_scope_does_not_fall_back_to_environment_by_default() -> None:
@@ -81,7 +81,7 @@ def test_resolve_scoped_secret_ref_project_falls_back_to_tenant_only() -> None:
 
     session.get.side_effect = _session_get
 
-    from orchestrator.core import secret_manager as module
+    from orchestrator.core.platform import secret_manager as module
 
     original_decrypt = module.decrypt_value
     module.decrypt_value = lambda ciphertext, encryption_key: "tenant-secret"  # type: ignore[assignment]
@@ -129,7 +129,7 @@ def test_resolve_platform_secret_ref_rejects_unscoped_ref() -> None:
 
     session.get.side_effect = _session_get
 
-    import orchestrator.core.secret_manager as module
+    import orchestrator.core.platform.secret_manager as module
 
     original_decrypt = module.decrypt_value
     module.decrypt_value = lambda ciphertext, encryption_key, **_: "managed"  # type: ignore[assignment]
@@ -169,7 +169,7 @@ def test_resolve_platform_secret_ref_rejects_invalid_scopes() -> None:
 
 
 def test_platform_secret_service_get_supports_platform_refs() -> None:
-    with patch("orchestrator.core.platform_secret_service._resolve_platform_secret_ref") as resolve_mock:
+    with patch("orchestrator.core.platform.secret_service._resolve_platform_secret_ref") as resolve_mock:
         resolve_mock.side_effect = [None, "platform-value"]
         service = platform_secret_service
         assert service.get(session=MagicMock(), secret_ref="DISCORD_BOT_TOKEN", encryption_key="unused") is None
@@ -185,7 +185,7 @@ def test_platform_secret_service_get_supports_platform_refs() -> None:
 def test_platform_secret_service_does_not_fall_back_to_platform_env_names_by_default() -> None:
     os.environ["platform/ATLASSIAN_OAUTH_CLIENT_SECRET"] = "env-platform-secret"
     try:
-        with patch("orchestrator.core.platform_secret_service._resolve_platform_secret_ref", return_value=None):
+        with patch("orchestrator.core.platform.secret_service._resolve_platform_secret_ref", return_value=None):
             assert (
                 platform_secret_service.get(
                     session=MagicMock(),
@@ -201,7 +201,7 @@ def test_platform_secret_service_does_not_fall_back_to_platform_env_names_by_def
 def test_platform_secret_service_does_not_fall_back_to_unscoped_env_names() -> None:
     os.environ["ATLASSIAN_OAUTH_CLIENT_SECRET"] = "env-plain-secret"
     try:
-        with patch("orchestrator.core.platform_secret_service._resolve_platform_secret_ref", return_value=None):
+        with patch("orchestrator.core.platform.secret_service._resolve_platform_secret_ref", return_value=None):
             assert (
                 platform_secret_service.get(
                     session=MagicMock(),
@@ -246,7 +246,7 @@ def test_resolve_tenant_secret_ref_builds_tenant_ref() -> None:
         return None
 
     session.get.side_effect = _session_get
-    import orchestrator.core.secret_manager as module
+    import orchestrator.core.platform.secret_manager as module
 
     original_decrypt = module.decrypt_value
     module.decrypt_value = lambda ciphertext, encryption_key, **_: "tenant-value"  # type: ignore[assignment]

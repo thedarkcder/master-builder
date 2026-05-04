@@ -10,18 +10,18 @@ from orchestrator.core.issue_fanout.draft_assembly import (
     parse_engineering_seed_drafts,
     parse_parent_seed_drafts,
 )
-from orchestrator.core.architecture_document_service import (
+from orchestrator.core.projects.architecture_document_service import (
     ArchitectureDocumentGate,
     ArchitectureDocumentLink,
     ArchitectureDocumentService,
     architecture_required_for_issue,
 )
-from orchestrator.core.audit_events import record_audit_event
-from orchestrator.core.issue_formatting import build_issue_url_list, format_issue_markdown_list
-from orchestrator.core.jira_links import architecture_document_remote_link_spec
-from orchestrator.core.runtime_invocation import AgentInvocationContext
-from orchestrator.core.workflow_attempt_ref import WorkflowAttemptRef
-from orchestrator.core.workflow_operation_logging import emit_workflow_operation_log
+from orchestrator.core.observability.audit import record_audit_event
+from orchestrator.core.issue_fanout.formatting import build_issue_url_list, format_issue_markdown_list
+from orchestrator.core.integrations.atlassian.links import architecture_document_remote_link_spec
+from orchestrator.core.runtime.invocation import AgentInvocationContext
+from orchestrator.core.workflow.attempt_ref import WorkflowAttemptRef
+from orchestrator.core.workflow.operation_logging import emit_workflow_operation_log
 from orchestrator.storage.models import Project, Tenant, WorkflowOperation
 from orchestrator.tools.atlassian_oauth import JiraIssueCreateInput, JiraIssuePreview, AtlassianOAuthError
 
@@ -89,7 +89,7 @@ def _assert_stage_spi_allows_parent_seed(
     settings: object,
     pm_interview_notes_json: dict | None,
 ) -> None:
-    from orchestrator.core.stage_spi_policy import resolve_stage_spi_enabled
+    from orchestrator.core.stages.spi_policy import resolve_stage_spi_enabled
 
     if not resolve_stage_spi_enabled(
         session=session,
@@ -646,6 +646,7 @@ def seed_issues_with_runtime(
     effective_pm_status = draft_set.pm_status
     effective_planning_package = draft_set.planning_package
     specialist_summary = list(effective_planning_package.specialist_summary)
+    technical_decisions = list(effective_planning_package.technical_decisions)
     planning_blocked = effective_planning_package.blocked
     planning_state_for_description = effective_planning_package.planning_state_for_description
     parent_issue = draft_set.parent_issue
@@ -878,6 +879,7 @@ def seed_issues_with_runtime(
                 parent_revision=parent_issue.revision,
                 sync_status=final_sync_status,
                 specialist_summary=specialist_summary,
+                technical_decisions=technical_decisions,
                 planning_state=planning_state_for_description,
                 pm_status=effective_pm_status or None,
             )

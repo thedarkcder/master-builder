@@ -12,6 +12,7 @@ from orchestrator.core.issue_fanout.description import (
     build_engineering_child_description,
     build_parent_feature_description,
 )
+from orchestrator.core.runtime.payload_models import TechnicalDecisionPayload
 from orchestrator.tools.atlassian_oauth import JiraIssueCreateInput
 
 _MAX_ENGINEERING_CHILDREN = 12
@@ -142,6 +143,7 @@ def _parse_questions(raw_questions: object) -> list[str]:
 class PlanningPackageDraft:
     planning_state: str
     specialist_summary: list[str]
+    technical_decisions: list[TechnicalDecisionPayload]
     architecture_summary: list[str]
     architecture_diagram: str | None
     child_issues: list[dict[str, Any]]
@@ -180,32 +182,7 @@ def _string_list_from_stage(*, stage_name: str, field_name: str, raw_value: obje
     return values
 
 
-def _product_escalation_list_from_stage(*, stage_name: str, raw_value: object) -> list[str]:
-    if raw_value is None:
-        return []
-    if not isinstance(raw_value, list):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                f"Planning package stage '{stage_name}' has invalid 'product_escalations' "
-                "(expected list of product escalation questions)"
-            ),
-        )
-    values: list[str] = []
-    for entry in raw_value:
-        if not isinstance(entry, dict):
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"Planning package stage '{stage_name}' has invalid 'product_escalations' item type",
-            )
-        question = str(entry.get("question") or "").strip()
-        why_it_matters = str(entry.get("why_it_matters") or "").strip()
-        if question and why_it_matters:
-            values.append(f"{question} Why it matters: {why_it_matters}")
-    return values
-
-
-def _technical_decision_lines_from_stage(*, stage_name: str, raw_value: object) -> list[str]:
+def _technical_decisions_from_stage(*, stage_name: str, raw_value: object) -> list[TechnicalDecisionPayload]:
     if raw_value is None:
         return []
     if not isinstance(raw_value, list):
@@ -216,19 +193,36 @@ def _technical_decision_lines_from_stage(*, stage_name: str, raw_value: object) 
                 "(expected list of technical decision records)"
             ),
         )
-    lines: list[str] = []
+    decisions: list[TechnicalDecisionPayload] = []
     for index, entry in enumerate(raw_value, start=1):
         if not isinstance(entry, dict):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"Planning package stage '{stage_name}' has invalid 'technical_decisions' item type",
             )
-        question = str(entry.get("question") or "").strip()
-        selected = str(entry.get("selected_option_id") or "").strip()
-        rationale = str(entry.get("rationale") or "").strip()
-        if question and selected and rationale:
-            lines.append(f"{stage_name.title()} Technical decision {index}: {question} Selected {selected}. {rationale}")
-    return lines
+        try:
+            decisions.append(
+                TechnicalDecisionPayload.from_payload(
+                    entry,
+                    context=f"Planning package stage '{stage_name}' technical_decisions[{index}]",
+                )
+            )
+        except RuntimeError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    return decisions
+
+
+def _merge_technical_decisions(*decision_groups: list[TechnicalDecisionPayload]) -> list[TechnicalDecisionPayload]:
+    decisions: list[TechnicalDecisionPayload] = []
+    seen: set[str] = set()
+    for group in decision_groups:
+        for decision in group:
+            key = decision.decision_id
+            if key in seen:
+                continue
+            seen.add(key)
+            decisions.append(decision)
+    return decisions
 
 
 def _planning_stage_summary_lines(*, stage_name: str, raw_stage: object) -> list[str]:
@@ -249,24 +243,12 @@ def _planning_stage_summary_lines(*, stage_name: str, raw_stage: object) -> list
         values = _string_list_from_stage(stage_name=stage_name, field_name=field_name, raw_value=raw_stage.get(field_name))
         if values:
             lines.append(f"{stage_name.title()} {label}: {'; '.join(values)}")
-    lines.extend(
-        _technical_decision_lines_from_stage(
-            stage_name=stage_name,
-            raw_value=raw_stage.get("technical_decisions"),
-        )
-    )
-    escalation_values = _product_escalation_list_from_stage(
-        stage_name=stage_name,
-        raw_value=raw_stage.get("product_escalations"),
-    )
-    if escalation_values:
-        lines.append(f"{stage_name.title()} Product escalations: {'; '.join(escalation_values)}")
     return lines
 
 
 def normalize_planning_package(raw_planning_package: object) -> PlanningPackageDraft:
     if raw_planning_package is None:
-        return PlanningPackageDraft("", [], [], None, [])
+        return PlanningPackageDraft("", [], [], [], None, [])
     if not isinstance(raw_planning_package, dict):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -287,6 +269,15 @@ def normalize_planning_package(raw_planning_package: object) -> PlanningPackageD
         child_issues = []
     planning_state = _normalized_status(raw_planning_package.get("planning_state") or raw_planning_package.get("state"))
     summary_lines: list[str] = []
+    technical_decision_groups: list[list[TechnicalDecisionPayload]] = []
+    raw_top_level_technical_decisions = raw_planning_package.get("technical_decisions")
+    if raw_top_level_technical_decisions is not None:
+        technical_decision_groups.append(
+            _technical_decisions_from_stage(
+                stage_name="planning_package",
+                raw_value=raw_top_level_technical_decisions,
+            )
+        )
     architecture_summary_raw = raw_planning_package.get("architecture_summary")
     if architecture_summary_raw is not None and not isinstance(architecture_summary_raw, list):
         raise HTTPException(
@@ -309,12 +300,30 @@ def normalize_planning_package(raw_planning_package: object) -> PlanningPackageD
     )
     if isinstance(specialist_outputs, dict):
         for stage_name in ("architecture", "engineering", "security", "testing"):
+            raw_stage = specialist_outputs.get(stage_name)
             summary_lines.extend(
                 _planning_stage_summary_lines(
                     stage_name=stage_name,
-                    raw_stage=specialist_outputs.get(stage_name),
+                    raw_stage=raw_stage,
                 )
             )
+            if isinstance(raw_stage, dict):
+                if "product_escalations" in raw_stage:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail=f"Planning package stage '{stage_name}' uses removed product_escalations contract",
+                    )
+                if "technical_decisions" not in raw_stage:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail=f"Planning package stage '{stage_name}' missing 'technical_decisions'",
+                    )
+                technical_decision_groups.append(
+                    _technical_decisions_from_stage(
+                        stage_name=stage_name,
+                        raw_value=raw_stage.get("technical_decisions"),
+                    )
+                )
         if not architecture_summary:
             architecture_stage = specialist_outputs.get("architecture")
             if isinstance(architecture_stage, dict):
@@ -331,6 +340,7 @@ def normalize_planning_package(raw_planning_package: object) -> PlanningPackageD
     return PlanningPackageDraft(
         planning_state=planning_state,
         specialist_summary=summary_lines,
+        technical_decisions=_merge_technical_decisions(*technical_decision_groups),
         architecture_summary=architecture_summary,
         architecture_diagram=architecture_diagram,
         child_issues=child_issues,
@@ -495,6 +505,7 @@ class EngineeringChildDraft:
         parent_revision: str,
         sync_status: str,
         specialist_summary: list[str] | None = None,
+        technical_decisions: list[TechnicalDecisionPayload] | None = None,
         planning_state: str | None = None,
         pm_status: str | None = None,
     ) -> JiraIssueCreateInput:
@@ -513,6 +524,7 @@ class EngineeringChildDraft:
                 done_means=self.done_means,
                 dependencies_and_risks=[*self.dependencies, *self.risks],
                 specialist_summary=specialist_summary,
+                technical_decisions=technical_decisions,
                 planning_state=planning_state,
             ),
             labels=_dedupe_labels(

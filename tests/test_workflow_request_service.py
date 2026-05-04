@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 import unittest
 
-from orchestrator.core.worker_capability_normalization import WorkerCapability
+from orchestrator.core.worker.capability_normalization import WorkerCapability
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.core.workflow.runner import PmPlan, WorkflowStageCheckpoint
 from orchestrator.core.worker.workflow_request_service import build_workflow_request_for_run

@@ -4,8 +4,8 @@ from dataclasses import dataclass, field
 from collections.abc import Callable
 from typing import Literal, Protocol
 
-from orchestrator.core.followups import build_backlog_follow_up_draft
-from orchestrator.core.worker_capability_normalization import WorkerCapability
+from orchestrator.core.pm.followups import build_backlog_follow_up_draft
+from orchestrator.core.worker.capability_normalization import WorkerCapability
 
 StageOutcome = Literal["continue", "requeue", "waiting_for_input", "blocked", "failed"]
 WorkflowOutcome = Literal["success", "requeue", "waiting_for_input", "blocked", "failed"]

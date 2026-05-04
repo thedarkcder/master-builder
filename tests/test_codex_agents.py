@@ -6,14 +6,14 @@ from unittest.mock import patch
 import json
 import pytest
 
-from orchestrator.core.codex_agents import (
+from orchestrator.core.runtime.agents import (
     CodexWorkflowAgents,
     answer_board_question_with_runtime,
     answer_voice_room_persona_with_runtime,
     route_voice_entry_with_runtime,
 )
-from orchestrator.core.runtime_invocation import AgentInvocationContext, RuntimeJsonContractError
-from orchestrator.core.codex_runtime import CodexRuntime, CodexRuntimeError
+from orchestrator.core.runtime.invocation import AgentInvocationContext, RuntimeJsonContractError
+from orchestrator.core.runtime.runtime import CodexRuntime, CodexRuntimeError
 from orchestrator.core.config import get_settings
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.core.workflow.runner import (
@@ -115,7 +115,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         agents = CodexWorkflowAgents(runtime=runtime)
         request = self._request()
 
-        with patch("orchestrator.core.codex_agents.render_prompt", side_effect=lambda template_name, **_: template_name):
+        with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=lambda template_name, **_: template_name):
             plan = agents.pm(request, 1, None, [], None, None, None)
             dev = agents.dev(request, plan, 1, None)
             test_result = agents.test(request, plan, dev, 1)
@@ -144,7 +144,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         )
         agents = CodexWorkflowAgents(runtime=runtime)
 
-        with patch("orchestrator.core.codex_agents.render_prompt", side_effect=lambda template_name, **_: template_name):
+        with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=lambda template_name, **_: template_name):
             plan = agents.pm(self._request(), 1, None, [], None, None, None)
 
         self.assertEqual(plan.outcome, "blocked")
@@ -189,7 +189,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
                 captured.update(kwargs)
             return template_name
 
-        with patch("orchestrator.core.codex_agents.render_prompt", side_effect=_render_prompt):
+        with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=_render_prompt):
             agents.pm(request, 1, None, [], None, None, None)
 
         self.assertEqual(captured["project_id"], "project-1")
@@ -231,7 +231,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
                 captured.update(kwargs)
             return template_name
 
-        with patch("orchestrator.core.codex_agents.render_prompt", side_effect=_render_prompt):
+        with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=_render_prompt):
             plan = agents.pm(request, 1, None, [], None, None, None)
             dev = agents.dev(request, plan, 1, None)
             agents.test(request, plan, dev, 1)
@@ -291,7 +291,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
                 captured.update(kwargs)
             return template_name
 
-        with patch("orchestrator.core.codex_agents.render_prompt", side_effect=_render_prompt):
+        with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=_render_prompt):
             plan = agents.pm(request, 1, None, [], None, None, None)
             agents.dev(request, plan, 1, None)
 
@@ -341,7 +341,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
                 captured.update(kwargs)
             return template_name
 
-        with patch("orchestrator.core.codex_agents.render_prompt", side_effect=_render_prompt):
+        with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=_render_prompt):
             plan = agents.pm(request, 1, None, [], None, None, None)
             dev = agents.dev(request, plan, 1, None)
             test_result = agents.test(request, plan, dev, 1)
@@ -393,8 +393,8 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             return {"outcome": "continue", "change_summary": ["implemented"], "pr_url": None}
 
         with (
-            patch("orchestrator.core.codex_agents.render_prompt", side_effect=lambda template_name, **_: template_name),
-            patch("orchestrator.core.runtime_stage_session.invoke_runtime_json_with_tools", side_effect=_invoke_runtime_json),
+            patch("orchestrator.core.runtime.agents.render_prompt", side_effect=lambda template_name, **_: template_name),
+            patch("orchestrator.core.runtime.stage_session.invoke_runtime_json_with_tools", side_effect=_invoke_runtime_json),
         ):
             plan = agents.pm(request, 1, None, [], None, None, None)
             agents.dev(request, plan, 1, None)
@@ -461,8 +461,8 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             return template_name
 
         with (
-            patch("orchestrator.core.codex_agents.render_prompt", side_effect=_render_prompt),
-            patch("orchestrator.core.runtime_stage_session.invoke_runtime_json_with_tools", return_value={"outcome": "continue", "summary": ["ok"], "feedback": None, "pr_url": None}),
+            patch("orchestrator.core.runtime.agents.render_prompt", side_effect=_render_prompt),
+            patch("orchestrator.core.runtime.stage_session.invoke_runtime_json_with_tools", return_value={"outcome": "continue", "summary": ["ok"], "feedback": None, "pr_url": None}),
         ):
             agents.review(
                 request,
@@ -492,7 +492,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         agents = CodexWorkflowAgents(runtime=runtime)
         request = self._request()
 
-        with patch("orchestrator.core.codex_agents.render_prompt", side_effect=lambda template_name, **_: template_name):
+        with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=lambda template_name, **_: template_name):
             plan = agents.pm(request, 1, None, [], None, None, None)
             dev = agents.dev(request, plan, 1, None)
             test_result = agents.test(request, plan, dev, 1)
@@ -522,7 +522,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         agents = CodexWorkflowAgents(runtime=runtime)
         request = self._request()
 
-        with patch("orchestrator.core.codex_agents.render_prompt", side_effect=lambda template_name, **_: template_name):
+        with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=lambda template_name, **_: template_name):
             plan = agents.pm(request, 1, None, [], None, None, None)
             dev = agents.dev(request, plan, 1, None)
             test_result = agents.test(request, plan, dev, 1)
@@ -546,7 +546,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         agents = CodexWorkflowAgents(runtime=runtime)
         request = self._request()
 
-        with patch("orchestrator.core.codex_agents.render_prompt", side_effect=lambda template_name, **_: template_name):
+        with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=lambda template_name, **_: template_name):
             plan = agents.pm(request, 1, None, [], None, None, None)
             dev = agents.dev(request, plan, 1, None)
             test_result = agents.test(request, plan, dev, 1)
@@ -571,7 +571,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         agents = CodexWorkflowAgents(runtime=runtime)
         request = self._request()
 
-        with patch("orchestrator.core.codex_agents.render_prompt", side_effect=lambda template_name, **_: template_name):
+        with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=lambda template_name, **_: template_name):
             with self.assertRaises(RuntimeJsonContractError):
                 agents.pm(request, 1, None, [], None, None, None)
 
@@ -583,7 +583,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             _request=lambda _system, _user, _working_dir=None, _on_log_line=None: '{"message":"2 blocked issues: MAB-1, MAB-2"}',
         )
 
-        with patch("orchestrator.core.codex_agents.render_prompt", side_effect=lambda template_name, **_: template_name):
+        with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=lambda template_name, **_: template_name):
             message = answer_board_question_with_runtime(
                 runtime=runtime,
                 question="what is blocked?",
@@ -618,9 +618,9 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
 
         sample_history = [{"question": "status?", "answer": "MAB-74 stale", "issue_key": "MAB-74"}]
         with (
-            patch("orchestrator.core.codex_agents.render_prompt", side_effect=_render_prompt),
+            patch("orchestrator.core.runtime.agents.render_prompt", side_effect=_render_prompt),
             patch(
-                "orchestrator.core.codex_agents._invoke_discord_json_maybe_tools",
+                "orchestrator.core.runtime.agents._invoke_discord_json_maybe_tools",
                 return_value={"message": "ok"},
             ),
         ):
@@ -657,9 +657,9 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             return template_name
 
         with (
-            patch("orchestrator.core.codex_agents.render_prompt", side_effect=_render_prompt),
+            patch("orchestrator.core.runtime.agents.render_prompt", side_effect=_render_prompt),
             patch(
-                "orchestrator.core.codex_agents._invoke_discord_json_maybe_tools",
+                "orchestrator.core.runtime.agents._invoke_discord_json_maybe_tools",
                 return_value={"message": "ok"},
             ),
         ):
@@ -704,7 +704,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             stage="voice-entry-router",
             working_dir="/tmp",
         )
-        with patch("orchestrator.core.codex_agents.render_prompt", side_effect=lambda template_name, **_: template_name):
+        with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=lambda template_name, **_: template_name):
             with pytest.raises(CodexRuntimeError, match="interview lane without pm persona"):
                 route_voice_entry_with_runtime(
                     runtime=runtime,
@@ -730,7 +730,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         )
         agents = CodexWorkflowAgents(runtime=runtime, log_sink=lambda payload: captured_logs.append(payload))
 
-        with patch("orchestrator.core.codex_agents.render_prompt", side_effect=lambda template_name, **_: template_name):
+        with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=lambda template_name, **_: template_name):
             plan = agents.pm(self._request(), 1, None, [], None, None, None)
         self.assertEqual(plan.plan_steps, ["step1"])
         self.assertEqual(len(captured_logs), 2)
@@ -757,8 +757,8 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         agents = CodexWorkflowAgents(runtime=runtime, log_sink=lambda payload: captured_logs.append(payload))
 
         with (
-            patch("orchestrator.core.codex_agents.render_prompt", side_effect=lambda template_name, **_: template_name),
-            patch("orchestrator.core.runtime_invocation._enqueue_runtime_log_line", side_effect=RuntimeError("db down")),
+            patch("orchestrator.core.runtime.agents.render_prompt", side_effect=lambda template_name, **_: template_name),
+            patch("orchestrator.core.runtime.invocation._enqueue_runtime_log_line", side_effect=RuntimeError("db down")),
         ):
             with self.assertRaisesRegex(RuntimeError, "db down"):
                 agents.pm(self._request(), 1, None, [], None, None, None)
@@ -783,7 +783,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             stage="voice-entry-router",
             working_dir="/tmp",
         )
-        with patch("orchestrator.core.codex_agents.render_prompt", side_effect=lambda template_name, **_: template_name):
+        with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=lambda template_name, **_: template_name):
             with pytest.raises(CodexRuntimeError, match="invalid lane"):
                 route_voice_entry_with_runtime(
                     runtime=runtime,
@@ -811,7 +811,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             stage="voice-entry-router",
             working_dir="/tmp",
         )
-        with patch("orchestrator.core.codex_agents.render_prompt", side_effect=lambda template_name, **_: template_name):
+        with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=lambda template_name, **_: template_name):
             with pytest.raises(CodexRuntimeError, match="invalid lane"):
                 route_voice_entry_with_runtime(
                     runtime=runtime,
@@ -839,7 +839,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             stage="voice-entry-router",
             working_dir="/tmp",
         )
-        with patch("orchestrator.core.codex_agents.render_prompt", side_effect=lambda template_name, **_: template_name):
+        with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=lambda template_name, **_: template_name):
             with pytest.raises(CodexRuntimeError, match="invalid lane"):
                 route_voice_entry_with_runtime(
                     runtime=runtime,
@@ -860,7 +860,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             ),
         )
 
-        with patch("orchestrator.core.codex_agents.render_prompt", side_effect=lambda template_name, **_: template_name):
+        with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=lambda template_name, **_: template_name):
             with pytest.raises(CodexRuntimeError, match="Voice room persona payload missing brief"):
                 answer_voice_room_persona_with_runtime(
                     runtime=runtime,

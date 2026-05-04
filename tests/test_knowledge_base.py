@@ -7,7 +7,7 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from orchestrator.core.knowledge_base import (
+from orchestrator.core.knowledge.base import (
     _build_knowledge_text_embedding_model,
     _embed_texts,
     _knowledge_text_embedding_model,
@@ -16,7 +16,7 @@ from orchestrator.core.knowledge_base import (
     create_knowledge_asset,
     sync_project_knowledge_from_jira,
 )
-from orchestrator.core import knowledge_base as knowledge_base_module
+from orchestrator.core.knowledge import base as knowledge_base_module
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import KnowledgeAsset, KnowledgeFact, Project, Tenant
@@ -51,7 +51,7 @@ def test_embed_texts_uses_local_cache_for_runtime_embedding_access() -> None:
     try:
         knowledge_base_module._embedding_model_unavailable_until_epoch = 0.0
         with patch(
-            "orchestrator.core.knowledge_base._knowledge_text_embedding_model",
+            "orchestrator.core.knowledge.base._knowledge_text_embedding_model",
             return_value=fake_model,
         ) as model_mock:
             vectors = _embed_texts(
@@ -70,7 +70,7 @@ def test_embed_texts_suppresses_repeated_embedding_bootstrap_failures() -> None:
     try:
         knowledge_base_module._embedding_model_unavailable_until_epoch = 0.0
         with patch(
-            "orchestrator.core.knowledge_base._knowledge_text_embedding_model",
+            "orchestrator.core.knowledge.base._knowledge_text_embedding_model",
             side_effect=RuntimeError("embedding model unavailable"),
         ) as model_mock:
             first = _embed_texts(
@@ -604,7 +604,7 @@ def test_sync_project_knowledge_from_jira_with_pgvector_string_embeddings() -> N
                     return []
 
             with patch(
-                "orchestrator.core.knowledge_base._embed_texts",
+                "orchestrator.core.knowledge.base._embed_texts",
                 return_value=["[0.1,0.2,0.3]"],
             ):
                 result = sync_project_knowledge_from_jira(

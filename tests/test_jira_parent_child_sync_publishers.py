@@ -1,6 +1,6 @@
 import pytest
 
-from orchestrator.core.jira_parent_child_sync_publishers import (
+from orchestrator.core.integrations.atlassian.parent_child_sync_publishers import (
     DISCORD_MESSAGE_CONTENT_LIMIT,
     chunk_discord_message_content,
     post_discord_message_content,

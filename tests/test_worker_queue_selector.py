@@ -11,7 +11,7 @@ from orchestrator.core.worker.queue_selector import (
     probe_claimable_queued_run,
     select_next_queued_run,
 )
-from orchestrator.core.runs import resolve_required_worker_capability_from_plan
+from orchestrator.core.runs.service import resolve_required_worker_capability_from_plan
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations

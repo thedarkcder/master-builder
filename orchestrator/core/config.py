@@ -82,8 +82,8 @@ class Settings(BaseSettings):
     log_retention_sweep_seconds: int = 60
     clickhouse_http_url: str = "http://127.0.0.1:8123"
     clickhouse_database: str = "master_builder"
-    clickhouse_username: str = "default"
-    clickhouse_password: str = ""
+    clickhouse_username: str = "master_builder"
+    clickhouse_password: str = "master_builder"
     clickhouse_query_timeout_seconds: int = 30
     event_stream_poll_ms: int = 500
     knowledge_injection_enabled: bool = True
@@ -121,6 +121,8 @@ class Settings(BaseSettings):
     worker_poll_interval_seconds: int = 5
     worker_run_heartbeat_interval_seconds: int = 30
     worker_run_stale_timeout_seconds: int = 300
+    workflow_operation_attempt_heartbeat_interval_seconds: int = 30
+    workflow_operation_attempt_stale_timeout_seconds: int = 300
     worker_stale_sweep_interval_seconds: int = 60
     worker_max_child_processes: int = 5
     worker_runtime_readiness_refresh_seconds: int = 30

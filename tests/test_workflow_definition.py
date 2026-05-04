@@ -4,15 +4,19 @@ from pathlib import Path
 
 import pytest
 
-from orchestrator.core.workflow_definition import (
+from orchestrator.core.workflow.definition import (
     WorkflowDefinition,
     WorkflowDefinitionRegistry,
     WorkflowStepKind,
+    WorkflowWorkUnitIdempotencyPolicy,
+    WorkflowWorkUnitKind,
     infer_workflow_steps,
+    infer_workflow_work_units,
     workflow_step,
+    workflow_work_unit,
 )
-from orchestrator.core.workflow_handler_composition import installed_operation_retry_capabilities
-from orchestrator.core.workflow_type_catalog import get_workflow_type
+from orchestrator.core.workflow.handler_composition import installed_operation_retry_capabilities
+from orchestrator.core.workflow.type_catalog import get_workflow_type
 
 
 def test_workflow_step_decorator_infers_ordered_graph() -> None:
@@ -55,7 +59,11 @@ def test_parent_planning_supporting_steps_declare_visual_owners() -> None:
     workflow_type = get_workflow_type(workflow_type_key="parent_planning")
     steps = {step.key: step for step in workflow_type.steps}
 
-    assert steps["jira_comment_projection"].supports == ("backlog_planning", "jira_child_fanout")
+    assert steps["jira_comment_projection"].supports == (
+        "backlog_planning",
+        "pm_decision_resolution",
+        "jira_child_fanout",
+    )
     assert steps["jira_parent_update"].supports == ("backlog_planning", "jira_child_fanout")
     assert steps["discord_followup_projection"].supports == ("backlog_planning", "jira_child_fanout")
     assert steps["jira_child_promotion"].supports == ("jira_child_fanout",)
@@ -132,6 +140,85 @@ def test_workflow_step_graph_rejects_duplicate_step_keys() -> None:
 def test_workflow_step_requires_enum_kind() -> None:
     with pytest.raises(ValueError, match="Workflow step kind must be"):
         workflow_step(key="build", label="Build", kind="business")  # type: ignore[arg-type]
+
+
+def test_workflow_work_unit_decorator_infers_units() -> None:
+    class ExampleWorkflow:
+        @workflow_work_unit(
+            key="build.model",
+            step_key="build",
+            label="Build model",
+            kind=WorkflowWorkUnitKind.MODEL_CALL,
+        )
+        @workflow_step(key="build", label="Build", kind=WorkflowStepKind.BUSINESS)
+        def build(self) -> None:
+            raise NotImplementedError
+
+    work_units = infer_workflow_work_units(ExampleWorkflow)
+
+    assert [(unit.key, unit.step_key, unit.kind, unit.graph_index) for unit in work_units] == [
+        ("build.model", "build", WorkflowWorkUnitKind.MODEL_CALL, 0)
+    ]
+
+
+def test_workflow_definition_rejects_unit_attached_to_unknown_step() -> None:
+    class ExampleWorkflow:
+        @workflow_step(key="build", label="Build", kind=WorkflowStepKind.BUSINESS)
+        def build(self) -> None:
+            raise NotImplementedError
+
+        @workflow_work_unit(
+            key="missing.model",
+            step_key="missing",
+            label="Missing model",
+            kind=WorkflowWorkUnitKind.MODEL_CALL,
+        )
+        def missing(self) -> None:
+            raise NotImplementedError
+
+    registry = WorkflowDefinitionRegistry()
+    with pytest.raises(ValueError, match="belongs to unknown step missing"):
+        registry.register(
+            WorkflowDefinition(
+                workflow_type_key="example",
+                system_key="example",
+                handler_key="example_handler",
+                label="Example",
+                description="Example workflow",
+                orchestration_backend="temporal",
+                steps=infer_workflow_steps(ExampleWorkflow),
+                work_units=infer_workflow_work_units(ExampleWorkflow),
+            )
+        )
+
+
+def test_workflow_definition_rejects_side_effect_unit_without_idempotency() -> None:
+    class ExampleWorkflow:
+        @workflow_work_unit(
+            key="notify.emit",
+            step_key="notify",
+            label="Notify",
+            kind=WorkflowWorkUnitKind.SIDE_EFFECT,
+            idempotency_policy=WorkflowWorkUnitIdempotencyPolicy(required=False),
+        )
+        @workflow_step(key="notify", label="Notify", kind=WorkflowStepKind.NOTIFICATION)
+        def notify(self) -> None:
+            raise NotImplementedError
+
+    registry = WorkflowDefinitionRegistry()
+    with pytest.raises(ValueError, match="requires idempotency policy"):
+        registry.register(
+            WorkflowDefinition(
+                workflow_type_key="example",
+                system_key="example",
+                handler_key="example_handler",
+                label="Example",
+                description="Example workflow",
+                orchestration_backend="temporal",
+                steps=infer_workflow_steps(ExampleWorkflow),
+                work_units=infer_workflow_work_units(ExampleWorkflow),
+            )
+        )
 
 
 def test_workflow_definition_registry_fails_unknown_operation_type() -> None:

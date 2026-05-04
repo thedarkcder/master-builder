@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import HTTPException, status
 
-from orchestrator.core.admin_notifications import (
+from orchestrator.core.platform.admin_notifications import (
     ADMIN_NOTIFICATION_KIND_JIRA_CONNECTION_REAUTH_REQUIRED,
     AdminNotificationDraft,
     AdminNotificationScope,

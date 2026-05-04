@@ -15,9 +15,9 @@ from fastapi.testclient import TestClient
 
 from orchestrator.api.main import create_app
 from orchestrator.core.config import get_settings
-from orchestrator.core.platform_secret_service import platform_secret_service
-from orchestrator.core.runtime_payload_models import AskIntentPayload
-from orchestrator.core.secrets import encrypt_value
+from orchestrator.core.platform.secret_service import platform_secret_service
+from orchestrator.core.runtime.payload_models import AskIntentPayload
+from orchestrator.core.platform.secrets import encrypt_value
 from orchestrator.core.worker.webhook_job_service import process_next_webhook_job
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations

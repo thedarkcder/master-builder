@@ -5,7 +5,7 @@ import logging
 from sqlalchemy.orm import Session
 
 from orchestrator.api.atlassian_oauth.service import atlassian_oauth_client, refresh_atlassian_connection_tokens
-from orchestrator.core.decision_types import (
+from orchestrator.core.decision.types import (
     JiraConfigKey,
     WorkerStageEvent,
     tenant_jira_config_text,

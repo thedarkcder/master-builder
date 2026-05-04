@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from orchestrator.api.admin.workflow_events_service import list_workflow_telemetry_events
-from orchestrator.core.product_events import ProductEvent
+from orchestrator.api.admin.workflows.events_service import list_workflow_telemetry_events
+from orchestrator.core.observability.events import ProductEvent
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import WorkflowExecution, WorkflowOperation
 from tests.test_support.db_harness import SqliteTemplateDbTestCase
@@ -85,7 +85,7 @@ class WorkflowEventsServiceTests(SqliteTemplateDbTestCase):
                 )
             ]
 
-            import orchestrator.api.admin.workflow_events_service as service
+            import orchestrator.api.admin.workflows.events_service as service
 
             original = service.list_workflow_observability_events
             service.list_workflow_observability_events = lambda **kwargs: events

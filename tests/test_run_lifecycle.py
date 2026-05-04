@@ -5,7 +5,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from orchestrator.core.config import get_settings
-from orchestrator.core.runs import (
+from orchestrator.core.runs.service import (
     RUN_DEDUPE_SCOPE_ISSUE_EXECUTION,
     RUN_DEDUPE_SCOPE_PR_REMEDIATION,
     RUN_STATUS_BLOCKED,

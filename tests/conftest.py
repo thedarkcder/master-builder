@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterator
-from types import SimpleNamespace
 
 import pytest
 
@@ -33,13 +32,22 @@ def _isolate_test_environment() -> Iterator[None]:
 @pytest.fixture(autouse=True)
 def _isolate_product_event_store(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """Unit tests use explicit fakes for ClickHouse-backed product events."""
-    from orchestrator.core.product_events import reset_event_store_for_tests
+    from orchestrator.core.observability.repository import configure_product_event_repository_for_tests, reset_product_event_repository_for_tests
 
-    fake_event_store = SimpleNamespace(
-        execute=lambda *_args, **_kwargs: "",
-        query_events=lambda *_args, **_kwargs: [],
-    )
-    monkeypatch.setattr("orchestrator.core.product_events.event_store", lambda: fake_event_store)
-    reset_event_store_for_tests()
+    class _FakeProductEventRepository:
+        def initialize(self) -> None:
+            return None
+
+        def insert_event(self, row) -> None:  # noqa: ANN001
+            return None
+
+        def list_events(self, **_kwargs):  # noqa: ANN003
+            return []
+
+        def list_events_after_sequence(self, **_kwargs):  # noqa: ANN003
+            return []
+
+    configure_product_event_repository_for_tests(_FakeProductEventRepository())
+    monkeypatch.setattr("orchestrator.core.observability.writer.publish_product_event_notification", lambda **_kwargs: None)
     yield
-    reset_event_store_for_tests()
+    reset_product_event_repository_for_tests()

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from orchestrator.core.decision_state_machine import decision_missing_slots_for_precheck
+from orchestrator.core.decision.state_machine import decision_missing_slots_for_precheck
 
 
 def test_precheck_missing_slots_keeps_exact_canonical_keys_only() -> None:

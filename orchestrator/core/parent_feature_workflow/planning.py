@@ -6,11 +6,11 @@ from typing import Any, Callable
 
 from sqlalchemy.orm import Session
 
-from orchestrator.core.clarification_questions import ClarificationQuestion, ClarificationQuestionSet
-from orchestrator.core.parent_planning_clarification_service import (
+from orchestrator.core.clarification.questions import ClarificationQuestion, ClarificationQuestionSet
+from orchestrator.core.projects.parent_planning_clarification_service import (
     ParentPlanningClarificationService,
 )
-from orchestrator.core.parent_planning_fanout_service import (
+from orchestrator.core.projects.parent_planning_fanout_service import (
     ParentPlanningFanoutResult,
     ParentPlanningFanoutSeedError,
     ParentPlanningFanoutService,
@@ -24,28 +24,77 @@ from orchestrator.core.parent_feature_workflow.operations import (
     PARENT_OP_JIRA_COMMENT_PROJECTION,
     PARENT_OP_JIRA_PARENT_UPDATE,
     PARENT_OP_NOTIFICATION_EMIT,
+    PARENT_OP_PM_DECISION_RESOLUTION,
+    PARENT_WU_BACKLOG_ARCHITECTURE_MODEL,
+    PARENT_WU_BACKLOG_PACKAGE_ASSEMBLY,
+    PARENT_WU_BACKLOG_SECURITY_MODEL,
+    PARENT_WU_BACKLOG_TESTING_MODEL,
+    PARENT_WU_BRIEF_NORMALIZATION_MODEL,
+    PARENT_WU_DISCORD_FOLLOWUP_PROJECTION_API,
+    PARENT_WU_JIRA_CHILD_FANOUT_EVALUATE,
+    PARENT_WU_JIRA_CHILD_FANOUT_ARCHITECTURE_MODEL,
+    PARENT_WU_JIRA_CHILD_FANOUT_PACKAGE_ASSEMBLY,
+    PARENT_WU_JIRA_CHILD_FANOUT_SECURITY_MODEL,
+    PARENT_WU_JIRA_CHILD_FANOUT_SEED,
+    PARENT_WU_JIRA_CHILD_FANOUT_TESTING_MODEL,
+    PARENT_WU_JIRA_CHILD_PROMOTION_API,
+    PARENT_WU_JIRA_COMMENT_PROJECTION_API,
+    PARENT_WU_JIRA_PARENT_UPDATE_API,
+    PARENT_WU_NOTIFICATION_EMIT,
+    PARENT_WU_PM_DECISION_MODEL,
 )
+from orchestrator.core.planning.decision_records import PlanningDecisionRecordStore
 from orchestrator.core.parent_feature_workflow.clarification_steps import ParentPlanningClarificationStepRunner
-from orchestrator.core.specialist_planning import PLANNING_STATE_COMPLETED
-from orchestrator.core.workflow_advance import WorkflowAdvanceLifecycle, WorkflowAdvanceOutcome
-from orchestrator.core.workflow_definition import WorkflowStepKind, workflow_step
-from orchestrator.core.workflow_execution_projection import classify_external_workflow_failure
-from orchestrator.core.workflow_step_runner import (
+from orchestrator.core.parent_feature_workflow.child_fanout_execution import (
+    ChildFanoutExecutionInput,
+    execute_child_fanout_step,
+)
+from orchestrator.core.planning.specialist import PLANNING_STATE_COMPLETED
+from orchestrator.core.workflow.advance import WorkflowAdvanceLifecycle, WorkflowAdvanceOutcome
+from orchestrator.core.workflow.definition import (
+    WorkflowStepKind,
+    WorkflowWorkUnitIdempotencyPolicy,
+    WorkflowWorkUnitKind,
+    WorkflowWorkUnitRetryPolicy,
+    workflow_step,
+    workflow_work_unit,
+)
+from orchestrator.core.workflow.execution_projection import classify_external_workflow_failure
+from orchestrator.core.workflow.step_runner import (
     complete_workflow_step_attempt,
     fail_workflow_step_attempt,
     start_workflow_step_attempt,
     wait_workflow_step_attempt,
 )
+from orchestrator.core.workflow.work_units import run_work_unit, workflow_work_unit_input_fingerprint
 
 logger = logging.getLogger(__name__)
 
 
-def _product_escalation_questions(planning_result) -> tuple[ClarificationQuestion, ...]:  # noqa: ANN001
+def _stakeholder_escalation_questions(pm_resolution) -> tuple[ClarificationQuestion, ...]:  # noqa: ANN001
     questions: list[object] = []
-    for escalation in getattr(planning_result, "product_escalations", ()) or ():
+    for escalation in getattr(pm_resolution, "stakeholder_escalations", ()) or ():
         to_question = getattr(escalation, "to_clarification_question", None)
         questions.append(to_question() if callable(to_question) else escalation)
     return ClarificationQuestionSet.from_values(questions).questions
+
+
+def _augment_product_brief_with_pm_resolution(
+    *,
+    product_brief: dict[str, Any],
+    pm_resolution,
+) -> dict[str, Any]:
+    augmented = dict(product_brief)
+    planning_context = dict(augmented.get("planning_context") or {})
+    pm_answers = [resolution.to_payload() for resolution in getattr(pm_resolution, "resolved_decisions", ()) or ()]
+    if pm_answers:
+        planning_context["pm_decision_resolutions"] = pm_answers
+    updated_context = dict(getattr(pm_resolution, "updated_planning_context", {}) or {})
+    if updated_context:
+        planning_context.update(updated_context)
+    if planning_context:
+        augmented["planning_context"] = planning_context
+    return augmented
 
 
 @dataclass(frozen=True)
@@ -112,6 +161,128 @@ class ParentFeaturePlanningWorkflow:
             clarification_service=self._deps.clarification_service,
             issue_gateway=self._deps.issue_gateway,
         )
+
+    @workflow_work_unit(
+        key=PARENT_WU_BRIEF_NORMALIZATION_MODEL,
+        step_key=PARENT_OP_BRIEF_NORMALIZATION,
+        label="Normalize PM brief",
+        kind=WorkflowWorkUnitKind.MODEL_CALL,
+        retry_policy=WorkflowWorkUnitRetryPolicy(max_attempts=3, initial_interval_seconds=30, max_interval_seconds=300),
+    )
+    @workflow_work_unit(
+        key=PARENT_WU_JIRA_PARENT_UPDATE_API,
+        step_key=PARENT_OP_JIRA_PARENT_UPDATE,
+        label="Update parent Jira issue",
+        kind=WorkflowWorkUnitKind.EXTERNAL_API,
+        retry_policy=WorkflowWorkUnitRetryPolicy(max_attempts=3, initial_interval_seconds=30, max_interval_seconds=300),
+    )
+    @workflow_work_unit(
+        key=PARENT_WU_BACKLOG_ARCHITECTURE_MODEL,
+        step_key=PARENT_OP_BACKLOG_PLANNING,
+        label="Architecture planning",
+        kind=WorkflowWorkUnitKind.MODEL_CALL,
+        retry_policy=WorkflowWorkUnitRetryPolicy(max_attempts=3, initial_interval_seconds=30, max_interval_seconds=300),
+    )
+    @workflow_work_unit(
+        key=PARENT_WU_BACKLOG_SECURITY_MODEL,
+        step_key=PARENT_OP_BACKLOG_PLANNING,
+        label="Security planning",
+        kind=WorkflowWorkUnitKind.MODEL_CALL,
+        retry_policy=WorkflowWorkUnitRetryPolicy(max_attempts=3, initial_interval_seconds=30, max_interval_seconds=300),
+    )
+    @workflow_work_unit(
+        key=PARENT_WU_BACKLOG_TESTING_MODEL,
+        step_key=PARENT_OP_BACKLOG_PLANNING,
+        label="Testing planning",
+        kind=WorkflowWorkUnitKind.MODEL_CALL,
+        retry_policy=WorkflowWorkUnitRetryPolicy(max_attempts=3, initial_interval_seconds=30, max_interval_seconds=300),
+    )
+    @workflow_work_unit(
+        key=PARENT_WU_BACKLOG_PACKAGE_ASSEMBLY,
+        step_key=PARENT_OP_BACKLOG_PLANNING,
+        label="Assemble planning package",
+        kind=WorkflowWorkUnitKind.ASSEMBLY,
+        idempotency_policy=WorkflowWorkUnitIdempotencyPolicy(required=True),
+    )
+    @workflow_work_unit(
+        key=PARENT_WU_PM_DECISION_MODEL,
+        step_key=PARENT_OP_PM_DECISION_RESOLUTION,
+        label="Resolve PM decisions",
+        kind=WorkflowWorkUnitKind.MODEL_CALL,
+        retry_policy=WorkflowWorkUnitRetryPolicy(max_attempts=3, initial_interval_seconds=30, max_interval_seconds=300),
+    )
+    @workflow_work_unit(
+        key=PARENT_WU_JIRA_CHILD_FANOUT_SEED,
+        step_key=PARENT_OP_JIRA_CHILD_FANOUT,
+        label="Seed Jira child issues",
+        kind=WorkflowWorkUnitKind.EXTERNAL_API,
+        retry_policy=WorkflowWorkUnitRetryPolicy(max_attempts=3, initial_interval_seconds=30, max_interval_seconds=300),
+    )
+    @workflow_work_unit(
+        key=PARENT_WU_JIRA_CHILD_FANOUT_EVALUATE,
+        step_key=PARENT_OP_JIRA_CHILD_FANOUT,
+        label="Evaluate child fanout",
+        kind=WorkflowWorkUnitKind.ASSEMBLY,
+        idempotency_policy=WorkflowWorkUnitIdempotencyPolicy(required=True),
+    )
+    @workflow_work_unit(
+        key=PARENT_WU_JIRA_CHILD_FANOUT_ARCHITECTURE_MODEL,
+        step_key=PARENT_OP_JIRA_CHILD_FANOUT,
+        label="Refresh architecture planning",
+        kind=WorkflowWorkUnitKind.MODEL_CALL,
+        retry_policy=WorkflowWorkUnitRetryPolicy(max_attempts=3, initial_interval_seconds=30, max_interval_seconds=300),
+    )
+    @workflow_work_unit(
+        key=PARENT_WU_JIRA_CHILD_FANOUT_SECURITY_MODEL,
+        step_key=PARENT_OP_JIRA_CHILD_FANOUT,
+        label="Refresh security planning",
+        kind=WorkflowWorkUnitKind.MODEL_CALL,
+        retry_policy=WorkflowWorkUnitRetryPolicy(max_attempts=3, initial_interval_seconds=30, max_interval_seconds=300),
+    )
+    @workflow_work_unit(
+        key=PARENT_WU_JIRA_CHILD_FANOUT_TESTING_MODEL,
+        step_key=PARENT_OP_JIRA_CHILD_FANOUT,
+        label="Refresh testing planning",
+        kind=WorkflowWorkUnitKind.MODEL_CALL,
+        retry_policy=WorkflowWorkUnitRetryPolicy(max_attempts=3, initial_interval_seconds=30, max_interval_seconds=300),
+    )
+    @workflow_work_unit(
+        key=PARENT_WU_JIRA_CHILD_FANOUT_PACKAGE_ASSEMBLY,
+        step_key=PARENT_OP_JIRA_CHILD_FANOUT,
+        label="Refresh planning package",
+        kind=WorkflowWorkUnitKind.ASSEMBLY,
+        idempotency_policy=WorkflowWorkUnitIdempotencyPolicy(required=True),
+    )
+    @workflow_work_unit(
+        key=PARENT_WU_JIRA_CHILD_PROMOTION_API,
+        step_key=PARENT_OP_JIRA_CHILD_PROMOTION,
+        label="Promote child issues",
+        kind=WorkflowWorkUnitKind.EXTERNAL_API,
+        retry_policy=WorkflowWorkUnitRetryPolicy(max_attempts=3, initial_interval_seconds=30, max_interval_seconds=300),
+    )
+    @workflow_work_unit(
+        key=PARENT_WU_JIRA_COMMENT_PROJECTION_API,
+        step_key=PARENT_OP_JIRA_COMMENT_PROJECTION,
+        label="Publish Jira clarification",
+        kind=WorkflowWorkUnitKind.EXTERNAL_API,
+        retry_policy=WorkflowWorkUnitRetryPolicy(max_attempts=3, initial_interval_seconds=30, max_interval_seconds=300),
+    )
+    @workflow_work_unit(
+        key=PARENT_WU_DISCORD_FOLLOWUP_PROJECTION_API,
+        step_key=PARENT_OP_DISCORD_FOLLOWUP_PROJECTION,
+        label="Publish Discord follow-up",
+        kind=WorkflowWorkUnitKind.EXTERNAL_API,
+        retry_policy=WorkflowWorkUnitRetryPolicy(max_attempts=3, initial_interval_seconds=30, max_interval_seconds=300),
+    )
+    @workflow_work_unit(
+        key=PARENT_WU_NOTIFICATION_EMIT,
+        step_key=PARENT_OP_NOTIFICATION_EMIT,
+        label="Emit notification",
+        kind=WorkflowWorkUnitKind.SIDE_EFFECT,
+        retry_policy=WorkflowWorkUnitRetryPolicy(max_attempts=3, initial_interval_seconds=30, max_interval_seconds=300),
+    )
+    def _work_unit_contract(self) -> None:
+        raise NotImplementedError
 
     @workflow_step(
         key=PARENT_OP_NOTIFICATION_EMIT,
@@ -812,10 +983,33 @@ class ParentFeaturePlanningWorkflow:
         planner = brief_planner.with_attempt(
             attempt_ref=step.ref,
         )
+        brief_input = {
+            "parent_issue_key": parent_detail.key,
+            "summary": parent_detail.summary,
+            "description": parent_detail.description,
+            "refresh": bool(refresh),
+        }
+        brief_input_hash = workflow_work_unit_input_fingerprint(brief_input)
         try:
-            product_brief, raw_questions = planner.resolve_product_brief(
-                parent_detail=parent_detail,
-                refresh=refresh,
+            product_brief, raw_questions = run_work_unit(
+                session=lifecycle.session,
+                operation=step.operation,
+                operation_attempt=step.attempt,
+                unit_key=PARENT_WU_BRIEF_NORMALIZATION_MODEL,
+                idempotency_key=f"{parent_detail.key}:brief_normalization:{brief_input_hash}",
+                input_payload=brief_input,
+                execute=lambda _context: planner.resolve_product_brief(
+                    parent_detail=parent_detail,
+                    refresh=refresh,
+                ),
+                serialize=lambda result: {
+                    "product_brief": result[0],
+                    "questions": ClarificationQuestionSet.from_values(result[1]).to_payload(),
+                },
+                deserialize=lambda payload: (
+                    dict(payload.get("product_brief") or {}),
+                    list(payload.get("questions") or []),
+                ),
             )
         except Exception as exc:  # noqa: BLE001
             fail_workflow_step_attempt(
@@ -850,11 +1044,27 @@ class ParentFeaturePlanningWorkflow:
         draft: bool,
     ) -> None:
         step = start_workflow_step_attempt(lifecycle=lifecycle, operation_type=PARENT_OP_JIRA_PARENT_UPDATE)
+        sync_input = {
+            "parent_issue_key": parent_detail.key,
+            "architecture_ready": bool(getattr(architecture_gate, "ready", False)),
+            "draft": bool(draft),
+        }
+        sync_input_hash = workflow_work_unit_input_fingerprint(sync_input)
         try:
-            self._sync_parent_issue_references(
-                issue_gateway=issue_gateway,
-                parent_detail=parent_detail,
-                architecture_gate=architecture_gate,
+            run_work_unit(
+                lifecycle.session,
+                operation=step.operation,
+                operation_attempt=step.attempt,
+                unit_key=PARENT_WU_JIRA_PARENT_UPDATE_API,
+                idempotency_key=f"{parent_detail.key}:jira_parent_update:{sync_input_hash}",
+                input_payload=sync_input,
+                execute=lambda _context: self._sync_parent_issue_references(
+                    issue_gateway=issue_gateway,
+                    parent_detail=parent_detail,
+                    architecture_gate=architecture_gate,
+                ),
+                serialize=lambda _result: {"completed": True},
+                deserialize=lambda _payload: None,
             )
         except Exception as exc:  # noqa: BLE001
             fail_workflow_step_attempt(
@@ -882,6 +1092,16 @@ class ParentFeaturePlanningWorkflow:
         required=True,
         retryable=True,
         description="Build the planning package that determines required engineering child tickets.",
+    )
+    @workflow_step(
+        key=PARENT_OP_PM_DECISION_RESOLUTION,
+        label="PM decision resolution",
+        kind=WorkflowStepKind.HUMAN_GATE,
+        after=PARENT_OP_BACKLOG_PLANNING,
+        supports=(PARENT_OP_BACKLOG_PLANNING, PARENT_OP_JIRA_CHILD_FANOUT),
+        required=False,
+        retryable=False,
+        description="Resolve specialist product decision requests before any stakeholder clarification is published.",
     )
     @workflow_step(
         key=PARENT_OP_JIRA_CHILD_FANOUT,
@@ -925,6 +1145,147 @@ class ParentFeaturePlanningWorkflow:
             )
             raise
 
+        decision_store = PlanningDecisionRecordStore(session=session)
+        for stage in getattr(planning_result, "stages", ()) or ():
+            decision_store.record_technical_decisions(
+                tenant_id=tenant_id,
+                project_id=project_id,
+                workflow_id=planning_step.ref.require_workflow_id(),
+                source_operation_id=planning_step.ref.require_operation_id(),
+                source_attempt_id=planning_step.ref.require_attempt_id(),
+                parent_issue_key=parent_detail.key,
+                source_stage=str(getattr(stage, "planning_state", "") or "").strip() or None,
+                decisions=tuple(getattr(stage, "technical_decisions", ()) or ()),
+            )
+            decision_store.record_pm_requests(
+                tenant_id=tenant_id,
+                project_id=project_id,
+                workflow_id=planning_step.ref.require_workflow_id(),
+                source_operation_id=planning_step.ref.require_operation_id(),
+                source_attempt_id=planning_step.ref.require_attempt_id(),
+                parent_issue_key=parent_detail.key,
+                source_stage=str(getattr(stage, "planning_state", "") or "").strip() or None,
+                requests=tuple(getattr(stage, "pm_decision_requests", ()) or ()),
+            )
+
+        pm_decision_requests = tuple(getattr(planning_result, "pm_decision_requests", ()) or ())
+        if pm_decision_requests:
+            pm_step = start_workflow_step_attempt(lifecycle=lifecycle, operation_type=PARENT_OP_PM_DECISION_RESOLUTION)
+            pm_planner = self._deps.brief_planner.with_attempt(attempt_ref=pm_step.ref)
+            try:
+                pm_resolution = pm_planner.resolve_pm_decisions(
+                    parent_detail=parent_detail,
+                    product_brief=product_brief,
+                    planning_result=planning_result,
+                    planning_package=planning_package,
+                )
+                decision_store.record_pm_resolutions(
+                    tenant_id=tenant_id,
+                    project_id=project_id,
+                    workflow_id=pm_step.ref.require_workflow_id(),
+                    source_operation_id=pm_step.ref.require_operation_id(),
+                    source_attempt_id=pm_step.ref.require_attempt_id(),
+                    parent_issue_key=parent_detail.key,
+                    resolutions=tuple(getattr(pm_resolution, "resolved_decisions", ()) or ()),
+                )
+                decision_store.record_stakeholder_escalations(
+                    tenant_id=tenant_id,
+                    project_id=project_id,
+                    workflow_id=pm_step.ref.require_workflow_id(),
+                    source_operation_id=pm_step.ref.require_operation_id(),
+                    source_attempt_id=pm_step.ref.require_attempt_id(),
+                    parent_issue_key=parent_detail.key,
+                    escalations=tuple(getattr(pm_resolution, "stakeholder_escalations", ()) or ()),
+                )
+            except Exception as exc:  # noqa: BLE001
+                fail_workflow_step_attempt(
+                    lifecycle=lifecycle,
+                    step=pm_step,
+                    category=classify_external_workflow_failure(error=exc),
+                    message=str(exc),
+                )
+                fail_workflow_step_attempt(
+                    lifecycle=lifecycle,
+                    step=planning_step,
+                    category=classify_external_workflow_failure(error=exc),
+                    message=str(exc),
+                )
+                raise
+
+            stakeholder_questions = _stakeholder_escalation_questions(pm_resolution)
+            if stakeholder_questions:
+                complete_workflow_step_attempt(
+                    lifecycle=lifecycle,
+                    step=pm_step,
+                    summary="PM escalated stakeholder-owned product clarification.",
+                )
+                self._publish_clarification_then_wait_step(
+                    lifecycle=lifecycle,
+                    blocking_step=planning_step,
+                    parent_detail=parent_detail,
+                    questions=stakeholder_questions,
+                    context="PM decision resolution",
+                )
+                return self._deps.fanout_service.blocked_planning_result(
+                    planning_result=planning_result,
+                    planning_package=planning_package,
+                    questions=stakeholder_questions,
+                )
+
+            complete_workflow_step_attempt(
+                lifecycle=lifecycle,
+                step=pm_step,
+                summary="PM resolved specialist product decision requests internally.",
+            )
+            product_brief = _augment_product_brief_with_pm_resolution(
+                product_brief=product_brief,
+                pm_resolution=pm_resolution,
+            )
+            planner = self._deps.brief_planner.with_attempt(attempt_ref=planning_step.ref)
+            try:
+                planning_result, planning_package = planner.plan_backlog_parent(
+                    parent_detail=parent_detail,
+                    product_brief=product_brief,
+                    project_key=project_key,
+                )
+            except Exception as exc:  # noqa: BLE001
+                fail_workflow_step_attempt(
+                    lifecycle=lifecycle,
+                    step=planning_step,
+                    category=classify_external_workflow_failure(error=exc),
+                    message=str(exc),
+                )
+                raise
+            for stage in getattr(planning_result, "stages", ()) or ():
+                decision_store.record_technical_decisions(
+                    tenant_id=tenant_id,
+                    project_id=project_id,
+                    workflow_id=planning_step.ref.require_workflow_id(),
+                    source_operation_id=planning_step.ref.require_operation_id(),
+                    source_attempt_id=planning_step.ref.require_attempt_id(),
+                    parent_issue_key=parent_detail.key,
+                    source_stage=str(getattr(stage, "planning_state", "") or "").strip() or None,
+                    decisions=tuple(getattr(stage, "technical_decisions", ()) or ()),
+                )
+                decision_store.record_pm_requests(
+                    tenant_id=tenant_id,
+                    project_id=project_id,
+                    workflow_id=planning_step.ref.require_workflow_id(),
+                    source_operation_id=planning_step.ref.require_operation_id(),
+                    source_attempt_id=planning_step.ref.require_attempt_id(),
+                    parent_issue_key=parent_detail.key,
+                    source_stage=str(getattr(stage, "planning_state", "") or "").strip() or None,
+                    requests=tuple(getattr(stage, "pm_decision_requests", ()) or ()),
+                )
+            if getattr(planning_result, "pm_decision_requests", ()) or ():
+                fail_workflow_step_attempt(
+                    lifecycle=lifecycle,
+                    step=planning_step,
+                    category="invalid_model_output",
+                    message="Specialist planning returned PM decision requests after PM decision resolution.",
+                )
+                raise RuntimeError("Specialist planning returned PM decision requests after PM decision resolution.")
+
         if planning_result.planning_state == PLANNING_STATE_COMPLETED:
             complete_workflow_step_attempt(
                 lifecycle=lifecycle,
@@ -932,66 +1293,29 @@ class ParentFeaturePlanningWorkflow:
                 summary=planning_summary,
             )
         else:
-            self._publish_clarification_then_wait_step(
-                lifecycle=lifecycle,
-                blocking_step=planning_step,
-                parent_detail=parent_detail,
-                questions=_product_escalation_questions(planning_result),
-                context="Backlog planning",
-            )
-            return self._deps.fanout_service.blocked_planning_result(
-                planning_result=planning_result,
-                planning_package=planning_package,
-            )
-        fanout_step = start_workflow_step_attempt(lifecycle=lifecycle, operation_type=PARENT_OP_JIRA_CHILD_FANOUT)
-        child_sync_gateway = self._deps.child_sync_gateway.with_attempt(
-            attempt_ref=fanout_step.ref,
-        )
-        try:
-            seed_data = child_sync_gateway.seed_parent_backlog_children(
-                parent_detail=parent_detail,
-                project_key=project_key,
-                planning_package=planning_package,
-                planning_state=planning_result.planning_state,
-            )
-        except Exception as exc:  # noqa: BLE001
             fail_workflow_step_attempt(
                 lifecycle=lifecycle,
-                step=fanout_step,
-                category=classify_external_workflow_failure(error=exc),
-                message=str(exc),
+                step=planning_step,
+                category="invalid_model_output",
+                message="Specialist planning blocked without PM decision requests.",
             )
-            raise ParentPlanningFanoutSeedError(
-                error=exc,
+            raise RuntimeError("Specialist planning blocked without PM decision requests.")
+        fanout_step = start_workflow_step_attempt(lifecycle=lifecycle, operation_type=PARENT_OP_JIRA_CHILD_FANOUT)
+        fanout = execute_child_fanout_step(
+            request=ChildFanoutExecutionInput(
+                lifecycle=lifecycle,
+                step=fanout_step,
+                child_sync_gateway=self._deps.child_sync_gateway,
+                fanout_service=self._deps.fanout_service,
+                parent_detail=parent_detail,
+                project_key=project_key,
                 planning_result=planning_result,
                 planning_package=planning_package,
-            ) from exc
-
-        seed_evaluation = self._deps.fanout_service.evaluate_seed_data(
-            seed_data=seed_data,
-            combine_child_updates_fn=child_sync_gateway.combined_child_updates,
-            planning_result=planning_result,
-        )
-        fanout = ParentPlanningFanoutResult(
-            planning_result=planning_result,
-            planning_package=planning_package,
-            seed_evaluation=seed_evaluation,
+                completion_summary=fanout_summary,
+            )
         )
         if fanout.completed:
-            complete_workflow_step_attempt(
-                lifecycle=lifecycle,
-                step=fanout_step,
-                summary=fanout_summary,
-            )
             lifecycle.mark_completed_if_ready()
-        else:
-            self._publish_clarification_then_wait_step(
-                lifecycle=lifecycle,
-                blocking_step=fanout_step,
-                parent_detail=parent_detail,
-                questions=fanout.questions,
-                context="Engineering child fanout",
-            )
         return fanout
 
     def _publish_clarification_then_wait_step(
@@ -1025,7 +1349,7 @@ class ParentFeaturePlanningWorkflow:
         label="Jira comment projection",
         kind=WorkflowStepKind.NOTIFICATION,
         after=PARENT_OP_BRIEF_NORMALIZATION,
-        supports=(PARENT_OP_BACKLOG_PLANNING, PARENT_OP_JIRA_CHILD_FANOUT),
+        supports=(PARENT_OP_BACKLOG_PLANNING, PARENT_OP_PM_DECISION_RESOLUTION, PARENT_OP_JIRA_CHILD_FANOUT),
         required=False,
         description="Publish clarification questions to Jira.",
     )

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 
-from orchestrator.api.discord.ingress.seed_runtime import build_seed_issue_description, seed_issues_with_runtime
-from orchestrator.core.runtime_payload_models import EngineeringSeedPlanPayload, PmParentSeedPlanPayload
+from orchestrator.runtime.issue_fanout import build_seed_issue_description, seed_issues_with_runtime
+from orchestrator.core.runtime.payload_models import EngineeringSeedPlanPayload, PmParentSeedPlanPayload
 from orchestrator.storage.models import AtlassianOAuthConnection, Tenant
 from orchestrator.tools.atlassian_oauth import JiraIssueCreateResult, JiraIssuePreview
 from tests.test_support.discord_command_api_harness import DiscordCommandApiTestHarness
@@ -26,7 +27,7 @@ class DiscordSeedCommandFlowTests(DiscordCommandApiTestHarness):
 
     def test_issues_seed_calls_codex_seed_flow(self) -> None:
         with patch(
-            "orchestrator.api.discord.ingress.seed_runtime.seed_parent_issues_with_runtime",
+            "orchestrator.runtime.issue_fanout.seed_parent_issues_with_runtime",
             return_value=(
                 "PM parent issue upsert complete. Created 2: TP-1, TP-2. Updated 0: none.",
                 {"created_parent_issue_keys": ["TP-1", "TP-2"]},
@@ -48,9 +49,9 @@ class DiscordSeedCommandFlowTests(DiscordCommandApiTestHarness):
 
     def test_issues_seed_with_incomplete_oauth_context_returns_controlled_502(self) -> None:
         with (
-            patch("orchestrator.api.discord.ingress.seed_runtime.build_issue_seed_runtime", return_value=object()),
+            patch("orchestrator.runtime.issue_fanout.build_issue_seed_runtime", return_value=object()),
             patch(
-                "orchestrator.api.discord.ingress.seed_runtime.plan_pm_parent_issues_with_runtime",
+                "orchestrator.runtime.issue_fanout.plan_pm_parent_issues_with_runtime",
                 return_value=PmParentSeedPlanPayload.from_payload(
                     {
                         "project_key": "TP",
@@ -77,7 +78,7 @@ class DiscordSeedCommandFlowTests(DiscordCommandApiTestHarness):
                 ),
             ),
             patch(
-                "orchestrator.api.discord.ingress.jira_runtime.tenant_atlassian_oauth_context",
+                "orchestrator.runtime.issue_fanout.tenant_atlassian_oauth_context",
                 return_value={"access_token": "tok-only"},
             ),
         ):
@@ -181,9 +182,9 @@ class DiscordSeedCommandFlowTests(DiscordCommandApiTestHarness):
 
         with (
             self.session_factory() as session,
-            patch("orchestrator.api.discord.ingress.seed_runtime.build_issue_seed_runtime", return_value=object()),
+            patch("orchestrator.runtime.issue_fanout.build_issue_seed_runtime", return_value=object()),
             patch(
-                "orchestrator.api.discord.ingress.seed_runtime.plan_seed_issues_with_runtime",
+                "orchestrator.runtime.issue_fanout.plan_seed_issues_with_runtime",
                 return_value=EngineeringSeedPlanPayload.from_payload(
                     {
                         "project_key": "TP",
@@ -222,8 +223,14 @@ class DiscordSeedCommandFlowTests(DiscordCommandApiTestHarness):
                     }
                 ),
             ),
-            patch("orchestrator.api.discord.ingress.jira_runtime.refresh_atlassian_connection_tokens", return_value="token"),
-            patch("orchestrator.api.discord.ingress.jira_runtime.atlassian_oauth_client", return_value=_FakeClient()),
+            patch(
+                "orchestrator.runtime.issue_fanout.tenant_atlassian_oauth_context",
+                return_value={
+                    "client": _FakeClient(),
+                    "access_token": "token",
+                    "connection": type("Connection", (), {"cloud_id": "cloud-1", "site_url": "https://example.atlassian.net"})(),
+                },
+            ),
         ):
             tenant = session.get(Tenant, self.tenant_id)
             self.assertIsNotNone(tenant)
@@ -289,6 +296,20 @@ class DiscordSeedCommandFlowTests(DiscordCommandApiTestHarness):
                     JiraIssuePreview(key="TP-111", summary="Create worker retries", status="To Do"),
                 ]
 
+            def get_issue_detail(
+                self,
+                *,
+                access_token: str,
+                cloud_id: str,
+                issue_id_or_key: str,
+            ) -> SimpleNamespace:
+                return SimpleNamespace(
+                    key=str(issue_id_or_key),
+                    summary="Improve worker retry reliability",
+                    status="To Do",
+                    issue_type="Story",
+                )
+
             def update_issue_summary(
                 self,
                 *,
@@ -346,9 +367,9 @@ class DiscordSeedCommandFlowTests(DiscordCommandApiTestHarness):
         fake_client = _FakeClient()
         with (
             self.session_factory() as session,
-            patch("orchestrator.api.discord.ingress.seed_runtime.build_issue_seed_runtime", return_value=object()),
+            patch("orchestrator.runtime.issue_fanout.build_issue_seed_runtime", return_value=object()),
             patch(
-                "orchestrator.api.discord.ingress.seed_runtime.plan_seed_issues_with_runtime",
+                "orchestrator.runtime.issue_fanout.plan_seed_issues_with_runtime",
                 return_value=EngineeringSeedPlanPayload.from_payload(
                     {
                         "project_key": "TP",
@@ -387,8 +408,14 @@ class DiscordSeedCommandFlowTests(DiscordCommandApiTestHarness):
                     }
                 ),
             ),
-            patch("orchestrator.api.discord.ingress.jira_runtime.refresh_atlassian_connection_tokens", return_value="token"),
-            patch("orchestrator.api.discord.ingress.jira_runtime.atlassian_oauth_client", return_value=fake_client),
+            patch(
+                "orchestrator.runtime.issue_fanout.tenant_atlassian_oauth_context",
+                return_value={
+                    "client": fake_client,
+                    "access_token": "token",
+                    "connection": type("Connection", (), {"cloud_id": "cloud-1", "site_url": "https://example.atlassian.net"})(),
+                },
+            ),
         ):
             tenant = session.get(Tenant, self.tenant_id)
             self.assertIsNotNone(tenant)

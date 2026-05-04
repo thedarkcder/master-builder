@@ -48,7 +48,7 @@ export type RunEventRecord = {
 
 export type RuntimeLogEventRecord = {
   event_id: string;
-  event_sequence?: number | null;
+  event_sequence?: number | string | null;
   run_id: string;
   issue_key: string | null;
   project_id: string | null;

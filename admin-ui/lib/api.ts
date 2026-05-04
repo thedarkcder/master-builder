@@ -887,11 +887,37 @@ export type WorkflowOperationAttemptRecord = {
   next_retry_at: string | null;
   started_at: string | null;
   finished_at: string | null;
+  work_units?: WorkflowOperationWorkUnitRecord[];
+};
+
+export type WorkflowOperationWorkUnitAttemptRecord = {
+  work_unit_attempt_id: string;
+  operation_attempt_id: string;
+  attempt_number: number;
+  status: string;
+  error_category: string | null;
+  error_message: string | null;
+  next_retry_at: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+};
+
+export type WorkflowOperationWorkUnitRecord = {
+  work_unit_id: string;
+  unit_key: string;
+  unit_kind: string;
+  idempotency_key: string;
+  input_fingerprint: string;
+  status: string;
+  error_category: string | null;
+  error_message: string | null;
+  completed_at: string | null;
+  attempts: WorkflowOperationWorkUnitAttemptRecord[];
 };
 
 export type WorkflowObservabilityEventRecord = {
   event_id: string;
-  event_sequence?: number | null;
+  event_sequence?: number | string | null;
   source: "audit" | "telemetry";
   level: string;
   event_kind: string;
@@ -970,6 +996,8 @@ export type WorkflowOperationRecord = {
   summary: string | null;
   can_retry: boolean;
   retry_unavailable_reason: string | null;
+  can_restart?: boolean;
+  restart_unavailable_reason?: string | null;
   attempts: WorkflowOperationAttemptRecord[];
   events: WorkflowObservabilityEventRecord[];
 };
@@ -2690,6 +2718,22 @@ export function retryWorkflowOperation(
     `/api/admin/workflows/${encodeURIComponent(executionId)}/operations/${encodeURIComponent(operationId)}/retry`,
     {
       method: "POST",
+    }
+  );
+}
+
+export function restartWorkflowOperation(
+  credentials: Credentials,
+  executionId: string,
+  operationId: string,
+  restartReason = "Restarted stale running workflow operation attempt."
+): Promise<WorkflowOperationRetryResponseRecord> {
+  return request<WorkflowOperationRetryResponseRecord>(
+    credentials,
+    `/api/admin/workflows/${encodeURIComponent(executionId)}/operations/${encodeURIComponent(operationId)}/restart`,
+    {
+      method: "POST",
+      body: JSON.stringify({ restart_reason: restartReason }),
     }
   );
 }

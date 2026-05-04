@@ -41,8 +41,8 @@ from orchestrator.api.schemas import (
     WebhookQueueJobPageRead,
     WorkerRuntimeAuthRequestRead,
 )
-from orchestrator.core.knowledge_jira_sync_runtime import get_knowledge_jira_sync_runtime_status
-from orchestrator.core.observability_policy import normalize_tenant_observability_policy
+from orchestrator.core.knowledge.jira_sync_runtime import get_knowledge_jira_sync_runtime_status
+from orchestrator.core.observability.observability_policy import normalize_tenant_observability_policy
 from orchestrator.core.config import get_settings
 from orchestrator.core.security import (
     AuthenticatedPrincipal,

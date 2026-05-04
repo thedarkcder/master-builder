@@ -2,7 +2,7 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
-from orchestrator.core.alerting import AlertCandidate, AlertDedupRegistry
+from orchestrator.core.observability.alerting import AlertCandidate, AlertDedupRegistry
 
 
 class AlertingTests(unittest.TestCase):

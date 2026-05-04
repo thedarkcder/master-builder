@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import json
 
-from orchestrator.api.discord.seed.description import (
+from orchestrator.core.issue_fanout.description import (
     build_engineering_child_description,
     build_parent_feature_description,
 )
+from orchestrator.core.runtime.payload_models import TechnicalDecisionPayload
 from orchestrator.tools.atlassian_oauth_issue_service import (
     MAX_JIRA_ADF_DOCUMENT_BYTES,
     _to_adf_description,
@@ -35,6 +36,31 @@ def _flatten_text(value: object) -> str:
     if isinstance(value, list):
         return " ".join(_flatten_text(item) for item in value if item is not None).strip()
     return ""
+
+
+def _technical_decision() -> TechnicalDecisionPayload:
+    return TechnicalDecisionPayload.from_payload(
+        {
+            "decision_id": "auth-boundary",
+            "area": "security",
+            "question": "Where should tenant authorization be enforced?",
+            "options": [
+                {
+                    "option_id": "database-rls",
+                    "title": "Database RLS",
+                    "description": "Use database-owned row-level security as the enforcement backstop.",
+                    "benefits": ["Prevents app-layer omission from leaking tenant data"],
+                    "risks": ["Requires migration and policy coverage"],
+                }
+            ],
+            "selected_option_id": "database-rls",
+            "rationale": "The database must own tenant isolation for high-risk tables",
+            "evidence": ["Tenant-scoped tables have tenant_id"],
+            "confidence": "high",
+            "product_impact": "none",
+        },
+        context="test technical decision",
+    )
 
 
 def test_parent_feature_description_omits_pm_handoff_and_sync_status_sections() -> None:
@@ -129,6 +155,30 @@ def test_engineering_child_description_omits_architecture_section() -> None:
     assert "Architecture Context" not in headings
     assert "Architecture Diagram" not in headings
     assert "See Architecture:" not in _flatten_text(doc)
+
+
+def test_engineering_child_description_renders_typed_technical_decisions_at_description_boundary() -> None:
+    doc = build_engineering_child_description(
+        parent_issue_key="MAB-215",
+        parent_summary="Decision engine rollout",
+        parent_revision="normalized-parent-brief",
+        capability="Introduce authorization boundary",
+        delivery="Apply the selected tenant authorization design.",
+        expected_outcome="Tenant data access is enforced consistently.",
+        acceptance_criteria=["Authorization enforcement is covered by tests."],
+        how_to_test=["Run tenant isolation regression tests."],
+        done_means=["Tenant data cannot be read across tenant boundaries."],
+        dependencies_and_risks=["Database policy migration must be applied."],
+        specialist_summary=["Security selected an enforcement strategy."],
+        technical_decisions=[_technical_decision()],
+        planning_state="planning_completed",
+    )
+
+    text = _flatten_text(doc)
+
+    assert "Technical Decisions" in _heading_texts(doc)
+    assert "auth-boundary: Where should tenant authorization be enforced?" in text
+    assert "Selected Database RLS" in text
 
 
 def test_parent_feature_description_omits_architecture_section() -> None:

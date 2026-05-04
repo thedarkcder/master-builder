@@ -3,7 +3,9 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
-from orchestrator.core.logging_pane_events import emit_logging_pane_event
+from orchestrator.core.observability.logging_pane import emit_logging_pane_event
+from orchestrator.core.observability.repository import configure_product_event_repository_for_tests
+from tests.test_support.product_events import RecordingProductEventRepository
 
 
 class RunLogRedactionTests(unittest.TestCase):
@@ -14,14 +16,10 @@ class RunLogRedactionTests(unittest.TestCase):
             "email=user@example.com "
             "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----"
         )
-        executed_sql: list[str] = []
+        repository = RecordingProductEventRepository()
 
-        class _FakeStore:
-            def execute(self, sql: str) -> str:
-                executed_sql.append(sql)
-                return ""
-
-        with patch("orchestrator.core.product_events.event_store", return_value=_FakeStore()):
+        with patch("orchestrator.core.observability.writer.publish_product_event_notification", lambda **_kwargs: None):
+            configure_product_event_repository_for_tests(repository)
             emit_logging_pane_event(
                 session=object(),
                 tenant_id="tenant-a",
@@ -39,7 +37,8 @@ class RunLogRedactionTests(unittest.TestCase):
                 message=message,
             )
 
-        persisted = "\n".join(executed_sql)
+        self.assertEqual(len(repository.inserted), 1)
+        persisted = f"{repository.inserted[0].message} {repository.inserted[0].payload_json}"
         self.assertNotIn("super-secret-value", persisted)
         self.assertNotIn("user@example.com", persisted)
         self.assertNotIn("BEGIN PRIVATE KEY", persisted)

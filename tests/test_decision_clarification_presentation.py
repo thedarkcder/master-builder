@@ -11,9 +11,9 @@ from orchestrator.core.communications.decision_clarification_presentation import
     render_decision_gate_feedback_message,
     render_decision_gate_remaining_questions_message,
 )
-from orchestrator.core.codex_runtime import CodexRuntimeError
-from orchestrator.core.runtime_invocation import AgentInvocationContext
-from orchestrator.core.decision_types import DecisionClassification
+from orchestrator.core.runtime.runtime import CodexRuntimeError
+from orchestrator.core.runtime.invocation import AgentInvocationContext
+from orchestrator.core.decision.types import DecisionClassification
 
 
 def _decision_result(

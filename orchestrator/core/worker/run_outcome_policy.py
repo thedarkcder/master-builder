@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from orchestrator.core.runs import RUN_STATUS_WAITING_FOR_INPUT
+from orchestrator.core.runs.service import RUN_STATUS_WAITING_FOR_INPUT
 from orchestrator.core.worker.finalization import CompletionTailExecutor, WorkflowFinalizer
-from orchestrator.core.worker_capabilities import worker_label_for_capability
+from orchestrator.core.worker.capabilities import worker_label_for_capability
 
 
 class RunOutcomePolicy:

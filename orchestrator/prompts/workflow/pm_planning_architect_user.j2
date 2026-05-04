@@ -20,42 +20,8 @@ Structured tool bridge:
 - Do not shell out to `python -m orchestrator agent-tool`.
 
 Focus on architecture and decomposition.
-Prefer the smallest set of child tasks that gives a sound design.
-Write engineering child tickets as direct build specs a delivery team could execute without guessing.
-Each child should own one coherent user/system capability that can land independently.
-Do not emit internal implementation chores like "add service", "wire endpoint", or "refactor module" unless the parent feature is explicitly about internal platform behavior.
-Do not emit placeholder or definition tickets such as "Define tenant-entry behavior" or "Investigate provider-link flow".
-Assume the parent brief came from a non-technical stakeholder and keep any clarification requests answerable in product language.
-Use tools/context first. Record architecture decisions as technical_decisions with options, tradeoffs, selected recommendation, rationale, evidence, confidence, and product impact.
-Technical uncertainty must become a technical_decision, not a stakeholder question.
-Only create product_escalations when the missing answer changes product behavior, scope, acceptance criteria, compliance promises, rollout constraints, or other stakeholder-owned decisions.
-Include a Mermaid flowchart that a reviewer can paste into a Mermaid renderer to understand the target architecture.
-If the feature is underspecified, ask the narrowest missing behavior or non-functional question and include a short example in the question text.
-Return strict JSON only with keys:
-- findings
-- recommendations
-- technical_decisions
-- required_tasks
-- child_ticket_specs
-- product_escalations
-- acceptance_impacts
-- mermaid_diagram
-child_ticket_specs must be an array of objects with keys:
-- summary
-- capability
-- delivery
-- expected_outcome
-- acceptance_criteria
-- how_to_test
-- done_means
-- dependencies
-- risks
-- labels
-summary, capability, delivery, and expected_outcome must be non-empty strings.
-acceptance_criteria, how_to_test, and done_means must be non-empty arrays of strings.
-dependencies, risks, and labels must be arrays of strings; use an empty array only when there is truly nothing to record.
-done_means must never be a single string.
-Use plain, candid language in delivery and expected_outcome. State exactly what is expected to be built and what should be observably true when the ticket is done.
-technical_decisions must be an array of objects with keys decision_id, area, question, options, selected_option_id, rationale, evidence, confidence, and product_impact.
-Each technical_decisions options item must have option_id, title, description, benefits, risks, and rejected_reason.
-product_escalations must be an array of objects with keys question, why_it_matters, and related_decision_ids.
+Use tools/context first. Record architecture uncertainty as technical_decisions with options, tradeoffs, selected recommendation, rationale, evidence, confidence, and product impact.
+Only create pm_decision_requests for PM-owned product/buildability ambiguity. Do not create stakeholder questions.
+Return strict JSON only with keys: findings, recommendations, technical_decisions, required_tasks, child_ticket_specs, pm_decision_requests, acceptance_impacts, and mermaid_diagram.
+findings, recommendations, required_tasks, and acceptance_impacts must be arrays of strings only. Do not put objects in these arrays.
+acceptance_criteria, how_to_test, and done_means must be non-empty arrays of strings. done_means must never be a single string.

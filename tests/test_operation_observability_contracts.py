@@ -5,20 +5,23 @@ from types import SimpleNamespace
 
 import pytest
 
-from orchestrator.core.audit_events import record_audit_event
-from orchestrator.core.observability_stream import record_observability_stream_event
-from orchestrator.core.product_events import list_product_events, reset_event_store_for_tests
-from orchestrator.core.runtime_invocation import AgentInvocationContext, _emit_invocation_event, invoke_runtime_json
-from orchestrator.core.workflow_step_runner import start_workflow_step_attempt
-from orchestrator.core.workflow_execution_projection import (
+from orchestrator.core.observability.audit import record_audit_event
+from orchestrator.core.observability.observability_stream import record_observability_stream_event
+from orchestrator.core.observability.repository import configure_product_event_repository_for_tests, event_from_json
+from orchestrator.core.observability.events import list_product_events, reset_event_store_for_tests
+from orchestrator.core.runtime.invocation import AgentInvocationContext, _emit_invocation_event, invoke_runtime_json
+from orchestrator.core.workflow.operation_service import WorkflowOperationAttemptAlreadyRunningError
+from orchestrator.core.workflow.step_runner import start_workflow_step_attempt
+from orchestrator.core.workflow.execution_projection import (
     WorkflowExecutionReference,
     WorkflowSourceReference,
     ensure_workflow_execution,
 )
 from orchestrator.storage.db import create_session_factory
-from orchestrator.core.workflow_type_catalog import get_workflow_type
+from orchestrator.core.workflow.type_catalog import get_workflow_type
 from orchestrator.storage.models import Project, Run, Tenant, WorkflowOperationAttempt
 from tests.test_support.db_harness import SqliteTemplateDbTestCase
+from tests.test_support.product_events import RecordingProductEventRepository
 
 
 class OperationObservabilityContractTests(SqliteTemplateDbTestCase):
@@ -123,19 +126,14 @@ class OperationObservabilityContractTests(SqliteTemplateDbTestCase):
             )
             session.commit()
 
-        executed_sql: list[str] = []
-
-        class _FakeStore:
-            def execute(self, sql: str) -> str:
-                executed_sql.append(sql)
-                return ""
+        repository = RecordingProductEventRepository()
 
         with pytest.MonkeyPatch.context() as monkeypatch:
             monkeypatch.setattr(
-                "orchestrator.core.runtime_invocation.get_settings",
+                "orchestrator.core.runtime.invocation.get_settings",
                 lambda: SimpleNamespace(database_url=self.database_url, agent_id="agent-test"),
             )
-            monkeypatch.setattr("orchestrator.core.product_events.event_store", lambda: _FakeStore())
+            configure_product_event_repository_for_tests(repository)
             _emit_invocation_event(
                 context=AgentInvocationContext(
                     channel="worker",
@@ -151,21 +149,15 @@ class OperationObservabilityContractTests(SqliteTemplateDbTestCase):
                 payload={"message": "Submitted runtime request.", "system_prompt": "system", "user_prompt": "user"},
             )
 
-        assert executed_sql
-        persisted_sql = "\n".join(executed_sql)
-        assert "execution_log_events" in persisted_sql
-        assert "run-scoped-1" in persisted_sql
-        assert "stage_request" in persisted_sql
-        assert "inv-run-scoped" in persisted_sql
+        assert repository.inserted
+        persisted = repository.inserted[0]
+        assert persisted.run_id == "run-scoped-1"
+        assert persisted.event_kind == "stage_request"
+        assert persisted.payload_json["invocation_id"] == "inv-run-scoped"
 
     def test_operation_runtime_log_lines_use_committed_attempt_identity(self) -> None:
         session_factory = create_session_factory(self.database_url)
-        executed_sql: list[str] = []
-
-        class _FakeStore:
-            def execute(self, sql: str) -> str:
-                executed_sql.append(sql)
-                return ""
+        repository = RecordingProductEventRepository()
 
         class _Runtime:
             model = "test-model"
@@ -177,11 +169,10 @@ class OperationObservabilityContractTests(SqliteTemplateDbTestCase):
 
         with pytest.MonkeyPatch.context() as monkeypatch:
             monkeypatch.setattr(
-                "orchestrator.core.runtime_invocation.get_settings",
+                "orchestrator.core.runtime.invocation.get_settings",
                 lambda: SimpleNamespace(database_url=self.database_url, agent_id="agent-test"),
             )
-            monkeypatch.setattr("orchestrator.core.product_events.event_store", lambda: _FakeStore())
-            monkeypatch.setattr("orchestrator.core.product_events.publish_product_event_notification", lambda **_kwargs: None)
+            configure_product_event_repository_for_tests(repository)
             with session_factory() as session:
                 now = datetime.now(timezone.utc)
                 session.add_all(
@@ -257,41 +248,100 @@ class OperationObservabilityContractTests(SqliteTemplateDbTestCase):
                 )
 
         assert payload == {"ok": True}
-        persisted_sql = "\n".join(executed_sql)
-        assert "runtime line attached to uncommitted attempt" in persisted_sql
-        assert step.operation_id in persisted_sql
-        assert step.attempt_id in persisted_sql
+        assert any(row.message == "runtime line attached to uncommitted attempt" for row in repository.inserted)
+        runtime_line = next(row for row in repository.inserted if row.message == "runtime line attached to uncommitted attempt")
+        assert runtime_line.operation_id == step.operation_id
+        assert runtime_line.attempt_id == step.attempt_id
+
+    def test_workflow_step_attempt_rejects_existing_waiting_attempt(self) -> None:
+        session_factory = create_session_factory(self.database_url)
+
+        with pytest.MonkeyPatch.context():
+            configure_product_event_repository_for_tests(RecordingProductEventRepository())
+            with session_factory() as session:
+                now = datetime.now(timezone.utc)
+                session.add_all(
+                    [
+                        Tenant(
+                            tenant_id="tenant-waiting-attempt",
+                            name="Tenant Waiting Attempt",
+                            is_enabled=True,
+                            jira_config={},
+                            github_config={},
+                            repos_config={},
+                            policy_config={},
+                            discord_config={},
+                            experience_config={},
+                            setup_state={},
+                            created_at=now,
+                            updated_at=now,
+                        ),
+                        Project(
+                            project_id="project-waiting-attempt",
+                            tenant_id="tenant-waiting-attempt",
+                            name="Project Waiting Attempt",
+                            github_repository="example/project-waiting-attempt",
+                            jira_project_key="MAB",
+                            policy_overrides={},
+                            environment={},
+                            secret_refs={},
+                            discord_config=None,
+                            is_archived=False,
+                            created_at=now,
+                            updated_at=now,
+                        ),
+                    ]
+                )
+                workflow_type = get_workflow_type(session, workflow_type_key="parent_planning")
+                projection = ensure_workflow_execution(
+                    session=session,
+                    workflow_type=workflow_type,
+                    tenant_id="tenant-waiting-attempt",
+                    project_id="project-waiting-attempt",
+                    execution=WorkflowExecutionReference(
+                        key="MAB-902",
+                        source=WorkflowSourceReference(source_system="jira", source_ref="MAB-902"),
+                    ),
+                    display_name="Waiting attempt",
+                    description="Reject duplicate active attempts",
+                )
+                step = start_workflow_step_attempt(lifecycle=projection, operation_type="backlog_planning")
+                attempt = session.get(WorkflowOperationAttempt, step.attempt_id)
+                assert attempt is not None
+                attempt.status = "waiting_for_input"
+                session.commit()
+
+                with pytest.raises(WorkflowOperationAttemptAlreadyRunningError, match="already has active attempt"):
+                    start_workflow_step_attempt(lifecycle=projection, operation_type="backlog_planning")
 
     def test_clickhouse_naive_timestamp_is_returned_as_utc_aware_iso(self) -> None:
-        class _FakeStore:
-            def query_events(self, _sql: str):
-                from orchestrator.core.product_events import _event_from_json
+        repository = RecordingProductEventRepository(
+            rows=[
+                event_from_json(
+                    {
+                        "event_sequence": 1,
+                        "event_id": "event-1",
+                        "event_class": "execution_log",
+                        "tenant_id": "tenant-a",
+                        "project_id": None,
+                        "workflow_id": "workflow-1",
+                        "run_id": None,
+                        "operation_id": "operation-1",
+                        "attempt_id": "attempt-1",
+                        "issue_key": "MAB-215",
+                        "event_kind": "workflow_operation_attempt_started",
+                        "level": "info",
+                        "source_component": "workflow_operation",
+                        "message": "Started attempt.",
+                        "payload_json": "{}",
+                        "recorded_at": "2026-04-24 16:33:24.887931",
+                    }
+                )
+            ]
+        )
 
-                return [
-                    _event_from_json(
-                        {
-                            "event_sequence": 1,
-                            "event_id": "event-1",
-                            "event_class": "execution_log",
-                            "tenant_id": "tenant-a",
-                            "project_id": None,
-                            "workflow_id": "workflow-1",
-                            "run_id": None,
-                            "operation_id": "operation-1",
-                            "attempt_id": "attempt-1",
-                            "issue_key": "MAB-215",
-                            "event_kind": "workflow_operation_attempt_started",
-                            "level": "info",
-                            "source_component": "workflow_operation",
-                            "message": "Started attempt.",
-                            "payload_json": "{}",
-                            "recorded_at": "2026-04-24 16:33:24.887931",
-                        }
-                    )
-                ]
-
-        with pytest.MonkeyPatch.context() as monkeypatch:
-            monkeypatch.setattr("orchestrator.core.product_events.event_store", lambda: _FakeStore())
+        with pytest.MonkeyPatch.context():
+            configure_product_event_repository_for_tests(repository)
             events = list_product_events(
                 event_class="execution_log",
                 filters={"attempt_id": "attempt-1"},

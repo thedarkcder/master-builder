@@ -3,8 +3,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from orchestrator.core.decision_resolution_service import resolve_slots_with_runtime
-from orchestrator.core.knowledge_base import SlotResolution
+from orchestrator.core.decision.resolution_service import resolve_slots_with_runtime
+from orchestrator.core.knowledge.base import SlotResolution
 
 
 class _RuntimeErrorForTest(RuntimeError):

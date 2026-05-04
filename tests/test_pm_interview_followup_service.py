@@ -9,13 +9,13 @@ import pytest
 from sqlalchemy import select
 
 from orchestrator.storage.models import PMInterviewCase
-from orchestrator.core.pm_interview_followup_service import continue_pm_interview_from_followup
-from orchestrator.core.pm_interview_service import (
+from orchestrator.core.pm.interview_followup_service import continue_pm_interview_from_followup
+from orchestrator.core.pm.interview_service import (
     PM_INTERVIEW_STATUS_PM_COMPLETED,
     PM_INTERVIEW_STATUS_QUESTION_PENDING,
     upsert_pm_interview_case,
 )
-from orchestrator.core.runtime_invocation import AgentInvocationContext
+from orchestrator.core.runtime.invocation import AgentInvocationContext
 
 try:
     from tests.production_path_support import (
@@ -101,7 +101,7 @@ class PMInterviewFollowupServiceTests(unittest.TestCase):
         with (
             self.session_factory() as session,
             patch(
-                "orchestrator.core.pm_interview_followup_service.plan_pm_interview_with_runtime",
+                "orchestrator.core.pm.interview_followup_service.plan_pm_interview_with_runtime",
                 return_value=pm_payload,
             ) as plan_mock,
         ):
@@ -219,7 +219,7 @@ class PMInterviewFollowupServiceTests(unittest.TestCase):
         with (
             self.session_factory() as session,
             patch(
-                "orchestrator.core.pm_interview_followup_service.plan_pm_interview_with_runtime",
+                "orchestrator.core.pm.interview_followup_service.plan_pm_interview_with_runtime",
                 return_value=pm_payload,
             ),
         ):

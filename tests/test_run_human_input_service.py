@@ -4,13 +4,13 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch, sentinel
 
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
-from orchestrator.core.run_human_input_service import (
-    _resume_workflow_from_human_input_answer_legacy,
+from orchestrator.core.runs.human_input_service import (
+    resume_run_from_human_input_answer,
     answer_human_input_request,
     create_human_input_request,
     resume_workflow_from_human_input_answer,
 )
-from orchestrator.core.run_enqueue_types import EnqueueFailureReason
+from orchestrator.core.runs.enqueue_types import EnqueueFailureReason
 
 
 def test_create_human_input_request_snapshots_checkpoint_and_moves_run_to_waiting() -> None:
@@ -51,9 +51,9 @@ def test_create_human_input_request_snapshots_checkpoint_and_moves_run_to_waitin
     )
 
     with (
-        patch("orchestrator.core.run_human_input_service.snapshot_checkpoint_for_run", return_value=checkpoint),
-        patch("orchestrator.core.run_human_input_service.send_tenant_discord_message", return_value=send_result),
-        patch("orchestrator.core.run_human_input_service.upsert_followup_context"),
+        patch("orchestrator.core.runs.human_input_service.snapshot_checkpoint_for_run", return_value=checkpoint),
+        patch("orchestrator.core.runs.human_input_service.send_tenant_discord_message", return_value=send_result),
+        patch("orchestrator.core.runs.human_input_service.upsert_followup_context"),
     ):
         request = create_human_input_request(
             session=session,
@@ -114,9 +114,9 @@ def test_create_human_input_request_renders_structured_questions_in_discord_mess
     )
 
     with (
-        patch("orchestrator.core.run_human_input_service.snapshot_checkpoint_for_run", return_value=checkpoint),
-        patch("orchestrator.core.run_human_input_service.send_tenant_discord_message", return_value=send_result) as send_mock,
-        patch("orchestrator.core.run_human_input_service.upsert_followup_context"),
+        patch("orchestrator.core.runs.human_input_service.snapshot_checkpoint_for_run", return_value=checkpoint),
+        patch("orchestrator.core.runs.human_input_service.send_tenant_discord_message", return_value=send_result) as send_mock,
+        patch("orchestrator.core.runs.human_input_service.upsert_followup_context"),
     ):
         create_human_input_request(
             session=session,
@@ -202,9 +202,9 @@ def test_resume_workflow_from_human_input_answer_creates_resume_attempt_and_cons
     runtime.create_attempt.return_value = enqueue_result
 
     with (
-        patch("orchestrator.core.run_human_input_service.encrypt_value", return_value="encrypted"),
-        patch("orchestrator.core.run_human_input_service.build_workflow_runtime", return_value=runtime),
-        patch("orchestrator.core.run_human_input_service.close_followup_contexts"),
+        patch("orchestrator.core.runs.human_input_service.encrypt_value", return_value="encrypted"),
+        patch("orchestrator.core.runs.human_input_service.build_workflow_runtime", return_value=runtime),
+        patch("orchestrator.core.runs.human_input_service.close_followup_contexts"),
     ):
         answered = answer_human_input_request(
             session=session,
@@ -213,7 +213,7 @@ def test_resume_workflow_from_human_input_answer_creates_resume_attempt_and_cons
             reply_text="use qa-apple@example.com",
             source_ref="discord:message-1",
         )
-        result = _resume_workflow_from_human_input_answer_legacy(
+        result = resume_run_from_human_input_answer(
             session=session,
             settings=SimpleNamespace(secrets_encryption_key="secret-key"),
             request=answered,
@@ -274,10 +274,10 @@ def test_resume_workflow_from_human_input_answer_carries_precheck_from_source_ru
     runtime.create_attempt.return_value = enqueue_result
 
     with (
-        patch("orchestrator.core.run_human_input_service.build_workflow_runtime", return_value=runtime),
-        patch("orchestrator.core.run_human_input_service.close_followup_contexts"),
+        patch("orchestrator.core.runs.human_input_service.build_workflow_runtime", return_value=runtime),
+        patch("orchestrator.core.runs.human_input_service.close_followup_contexts"),
     ):
-        result = _resume_workflow_from_human_input_answer_legacy(
+        result = resume_run_from_human_input_answer(
             session=session,
             settings=SimpleNamespace(secrets_encryption_key="secret-key"),
             request=request,
@@ -303,7 +303,7 @@ def test_resume_workflow_from_human_input_answer_delegates_to_workflow_runtime()
     runtime.resume_input.return_value = sentinel.resumed_run
     session.get.side_effect = lambda model, key: request if key == "request-1" else workflow if key == "workflow-1" else None
 
-    with patch("orchestrator.core.run_human_input_service.build_workflow_runtime", return_value=runtime):
+    with patch("orchestrator.core.runs.human_input_service.build_workflow_runtime", return_value=runtime):
         result = resume_workflow_from_human_input_answer(
             session=session,
             settings=SimpleNamespace(secrets_encryption_key="secret-key"),
@@ -335,8 +335,8 @@ def test_resume_workflow_from_human_input_answer_reuses_existing_resume_run() ->
     existing_resume_query.scalars.return_value.all.return_value = [existing_resume_run]
     session.execute.side_effect = [lock_query, existing_resume_query]
 
-    with patch("orchestrator.core.run_human_input_service.close_followup_contexts"):
-        result = _resume_workflow_from_human_input_answer_legacy(
+    with patch("orchestrator.core.runs.human_input_service.close_followup_contexts"):
+        result = resume_run_from_human_input_answer(
             session=session,
             settings=SimpleNamespace(secrets_encryption_key="secret-key"),
             request=request,
@@ -390,9 +390,9 @@ def test_resume_workflow_from_human_input_answer_rejects_unrelated_active_resume
     runtime = MagicMock()
     runtime.create_attempt.return_value = enqueue_result
 
-    with patch("orchestrator.core.run_human_input_service.build_workflow_runtime", return_value=runtime):
+    with patch("orchestrator.core.runs.human_input_service.build_workflow_runtime", return_value=runtime):
         try:
-            _resume_workflow_from_human_input_answer_legacy(
+            resume_run_from_human_input_answer(
                 session=session,
                 settings=SimpleNamespace(secrets_encryption_key="secret-key"),
                 request=request,
@@ -437,7 +437,7 @@ def test_resume_workflow_from_human_input_answer_rejects_non_canonical_checkpoin
     )
 
     try:
-        _resume_workflow_from_human_input_answer_legacy(
+        resume_run_from_human_input_answer(
             session=session,
             settings=SimpleNamespace(secrets_encryption_key="secret-key"),
             request=request,
@@ -494,9 +494,9 @@ def test_create_human_input_request_commits_before_dispatching_discord_message()
 
     session.commit.side_effect = _commit
     with (
-        patch("orchestrator.core.run_human_input_service.snapshot_checkpoint_for_run", return_value=checkpoint),
-        patch("orchestrator.core.run_human_input_service.send_tenant_discord_message", side_effect=_send_side_effect),
-        patch("orchestrator.core.run_human_input_service.upsert_followup_context"),
+        patch("orchestrator.core.runs.human_input_service.snapshot_checkpoint_for_run", return_value=checkpoint),
+        patch("orchestrator.core.runs.human_input_service.send_tenant_discord_message", side_effect=_send_side_effect),
+        patch("orchestrator.core.runs.human_input_service.upsert_followup_context"),
     ):
         request = create_human_input_request(
             session=session,
@@ -558,9 +558,9 @@ def test_create_human_input_request_redelivers_existing_pending_request_without_
     session.execute.side_effect = [workflow_query, pending_query]
 
     with (
-        patch("orchestrator.core.run_human_input_service.snapshot_checkpoint_for_run") as checkpoint_mock,
-        patch("orchestrator.core.run_human_input_service.send_tenant_discord_message", return_value=send_result),
-        patch("orchestrator.core.run_human_input_service.upsert_followup_context"),
+        patch("orchestrator.core.runs.human_input_service.snapshot_checkpoint_for_run") as checkpoint_mock,
+        patch("orchestrator.core.runs.human_input_service.send_tenant_discord_message", return_value=send_result),
+        patch("orchestrator.core.runs.human_input_service.upsert_followup_context"),
     ):
         request = create_human_input_request(
             session=session,

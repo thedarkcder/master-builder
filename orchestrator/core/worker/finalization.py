@@ -6,9 +6,9 @@ from time import perf_counter
 from traceback import format_exception
 from uuid import uuid4
 
-from orchestrator.core.logging_pane_events import emit_logging_pane_event
+from orchestrator.core.observability.logging_pane import emit_logging_pane_event
 from orchestrator.core.worker.stage_events import WorkerStageUpdate
-from orchestrator.core.runs import mark_run_terminal
+from orchestrator.core.runs.service import mark_run_terminal
 from orchestrator.core.worker.manual_pr_remediation_completion import publish_manual_pr_remediation_completion
 from orchestrator.core.workflow.runner import WorkflowResult
 

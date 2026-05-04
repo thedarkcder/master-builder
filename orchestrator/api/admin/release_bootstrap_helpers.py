@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from orchestrator.api.schemas import ReleaseBootstrapReportRead
-from orchestrator.core.decision_types import (
+from orchestrator.core.decision.types import (
     JiraConfigKey,
     jira_config_project_keys,
     jira_config_text,

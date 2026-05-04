@@ -3,8 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from unittest.mock import patch
 
-from orchestrator.core.workflow_operation_logging import emit_workflow_operation_log
-from orchestrator.core.workflow_attempt_ref import WorkflowAttemptRef
+from orchestrator.core.workflow.operation_logging import emit_workflow_operation_log
+from orchestrator.core.workflow.attempt_ref import WorkflowAttemptRef
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import WorkflowExecution, WorkflowOperation, WorkflowOperationAttempt
 from tests.test_support.db_harness import SqliteTemplateDbTestCase
@@ -90,7 +90,7 @@ class WorkflowOperationLoggingTests(SqliteTemplateDbTestCase):
                 captured["extra"] = extra
 
             with patch(
-                "orchestrator.core.workflow_operation_logging._OPERATION_LOGGER.log",
+                "orchestrator.core.workflow.operation_logging._OPERATION_LOGGER.log",
                 _fake_log,
             ):
                 emit_workflow_operation_log(

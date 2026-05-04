@@ -14,8 +14,8 @@ from alembic import op
 from sqlalchemy import text
 
 from orchestrator.core.config import get_settings
-from orchestrator.core.secret_manager import normalize_secret_ref
-from orchestrator.core.secrets import decrypt_value, encrypt_value
+from orchestrator.core.platform.secret_manager import normalize_secret_ref
+from orchestrator.core.platform.secrets import decrypt_value, encrypt_value
 
 
 revision = "20260407_0054"

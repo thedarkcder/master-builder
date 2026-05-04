@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { ArrowLeft, ExternalLink, MoreHorizontal, RefreshCw } from "lucide-react";
 
-import { ExecutionObservabilityDrawer } from "@/components/execution-observability-drawer";
+import { ExecutionObservabilityDrawer, type ExecutionObservabilityView } from "@/components/execution-observability-drawer";
 import { WorkflowFlowDiagram } from "@/components/workflow-flow-diagram";
 import { useAuth } from "@/components/auth-provider";
 import { Button } from "@/components/ui/button";
@@ -16,6 +16,7 @@ import {
   getWorkflow,
   getWorkflowOperationAttemptAudit,
   resumeWorkflowExecution,
+  restartWorkflowOperation,
   retryWorkflowOperation,
   streamWorkflowOperationTelemetryEvents,
   type WorkflowObservabilityEventRecord,
@@ -152,6 +153,7 @@ function mergeAttemptLifecycleEventIntoWorkflow(
         finished_at: ["completed", "failed", "waiting_for_input"].includes(nextStatus)
           ? event.recorded_at
           : existingAttempt.finished_at ?? null,
+        work_units: existingAttempt.work_units ?? [],
       };
       const attempts = operation.attempts.map((attempt) => (attempt.attempt_id === eventAttemptId ? nextAttempt : attempt));
       return {
@@ -160,6 +162,7 @@ function mergeAttemptLifecycleEventIntoWorkflow(
         attempts,
         summary: event.message || operation.summary,
         can_retry: nextStatus === "failed" ? operation.can_retry : false,
+        can_restart: false,
       };
     }),
   };
@@ -177,13 +180,14 @@ export default function TenantExecutionDetailPage() {
   const [loading, setLoading] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const [retryingOperationId, setRetryingOperationId] = useState<string | null>(null);
+  const [restartingOperationId, setRestartingOperationId] = useState<string | null>(null);
   const [statusLine, setStatusLine] = useState("");
   const [activeTab, setActiveTab] = useState<"overview" | "step-recovery" | "execution-path">("overview");
   const [linksMenuOpen, setLinksMenuOpen] = useState(false);
   const [selectedOperationId, setSelectedOperationId] = useState<string | null>(null);
   const [selectedAttemptId, setSelectedAttemptId] = useState<string | null>(null);
   const [attemptSelectionMode, setAttemptSelectionMode] = useState<"follow_latest" | "pinned">("follow_latest");
-  const [observabilityView, setObservabilityView] = useState<"telemetry" | "audit">("telemetry");
+  const [observabilityView, setObservabilityView] = useState<ExecutionObservabilityView>("telemetry");
   const [telemetryEvents, setTelemetryEvents] = useState<WorkflowObservabilityEventRecord[]>([]);
   const [auditAttempt, setAuditAttempt] = useState<WorkflowStepAttemptTranscriptRecord | null>(null);
   const [telemetryLoading, setTelemetryLoading] = useState(false);
@@ -338,7 +342,7 @@ export default function TenantExecutionDetailPage() {
 
   useEffect(() => {
     const operationId = selectedTelemetryOperationId;
-    if (!operationId || !credentials || observabilityView !== "telemetry") {
+    if (!operationId || !credentials || !["telemetry", "metrics"].includes(observabilityView)) {
       return;
     }
     let disposed = false;
@@ -496,6 +500,44 @@ export default function TenantExecutionDetailPage() {
       showToast({ title: "Operation retry failed", description: (error as Error).message, tone: "error" });
     } finally {
       setRetryingOperationId(null);
+    }
+  }
+
+  async function handleRestartOperation(operation: WorkflowOperationRecord) {
+    if (!credentials || !workflow || operation.definition_only) {
+      return;
+    }
+    setSelectedOperationId(operation.operation_id);
+    setAttemptSelectionMode("follow_latest");
+    setSelectedAttemptId(null);
+    setAwaitingNewAttemptForOperationId(operation.operation_id);
+    setObservabilityView("telemetry");
+    setTelemetryEvents([]);
+    setAuditAttempt(null);
+    setObservabilityError(null);
+    setTelemetryLoading(true);
+    setAuditLoading(false);
+    setTelemetryRefreshNonce((value) => value + 1);
+    setRestartingOperationId(operation.operation_id);
+    try {
+      const restartResult = await restartWorkflowOperation(
+        credentials,
+        workflow.execution_id,
+        operation.operation_id,
+        "Admin restarted stale running workflow operation attempt."
+      );
+      setWorkflow(restartResult.workflow);
+      if (restartResult.started_attempt?.attempt_id) {
+        setSelectedAttemptId(restartResult.started_attempt.attempt_id);
+        setAwaitingNewAttemptForOperationId(null);
+      }
+      showToast({ title: "Operation restart queued", description: operation.label?.trim() || operation.operation_type, tone: "success" });
+    } catch (error) {
+      setTelemetryLoading(false);
+      setAwaitingNewAttemptForOperationId(null);
+      showToast({ title: "Operation restart failed", description: (error as Error).message, tone: "error" });
+    } finally {
+      setRestartingOperationId(null);
     }
   }
 
@@ -731,6 +773,18 @@ export default function TenantExecutionDetailPage() {
                                 <RefreshCw className={cn("mr-1.5 h-3.5 w-3.5", retryingOperationId === operation.operation_id && "animate-spin")} />
                                 Retry step
                               </Button>
+                              {operation.can_restart ? (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-8"
+                                  onClick={() => void handleRestartOperation(operation)}
+                                  disabled={operation.definition_only || restartingOperationId === operation.operation_id}
+                                >
+                                  <RefreshCw className={cn("mr-1.5 h-3.5 w-3.5", restartingOperationId === operation.operation_id && "animate-spin")} />
+                                  Restart step
+                                </Button>
+                              ) : null}
                               {needsClarification && jiraIssueLink ? (
                                 <Button size="sm" variant="ghost" className="h-8 px-2 text-muted-foreground" asChild>
                                   <a href={jiraIssueLink} target="_blank" rel="noreferrer">
@@ -777,10 +831,10 @@ export default function TenantExecutionDetailPage() {
             activeView={observabilityView}
             onViewChange={setObservabilityView}
             onRefresh={() => {
-              if (observabilityView === "telemetry") {
-                setTelemetryRefreshNonce((value) => value + 1);
-              } else {
+              if (observabilityView === "audit") {
                 setAuditRefreshNonce((value) => value + 1);
+              } else {
+                setTelemetryRefreshNonce((value) => value + 1);
               }
             }}
             onClose={() => {

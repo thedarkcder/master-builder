@@ -7,8 +7,8 @@ from unittest.mock import MagicMock, patch
 from fastapi import HTTPException
 
 from orchestrator.api.atlassian_oauth.connection_service import resolve_tenant_atlassian_connection, tenant_atlassian_oauth_context
-from orchestrator.core.agent_runtime_resolver import resolve_agent_execution_profile
-from orchestrator.core import project_policy
+from orchestrator.core.runtime.agent_runtime_resolver import resolve_agent_execution_profile
+from orchestrator.core.projects import policy as project_policy
 from orchestrator.core.communications import integration_contracts
 
 

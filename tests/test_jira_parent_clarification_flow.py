@@ -5,17 +5,21 @@ from unittest.mock import patch
 import pytest
 from sqlalchemy import select
 
-from orchestrator.core.codex_runtime import CodexRuntimeError
-from orchestrator.core.clarification_projection_service import clarification_state_fingerprint
-from orchestrator.core.runtime_payload_models import EngineeringClarificationPayload
-from orchestrator.core.workflow_advance import execute_workflow_advance
-from orchestrator.core.workflow_execution_projection import (
+from orchestrator.core.runtime.runtime import CodexRuntimeError
+from orchestrator.core.clarification.projection_service import clarification_state_fingerprint
+from orchestrator.core.runtime.payload_models import (
+    EngineeringClarificationPayload,
+    PMDecisionRequestPayload,
+    StakeholderEscalationPayload,
+)
+from orchestrator.core.workflow.advance import execute_workflow_advance
+from orchestrator.core.workflow.execution_projection import (
     WorkflowExecutionReference,
     WorkflowSourceReference,
     ensure_workflow_execution,
 )
-from orchestrator.core.workflow_operation_service import WorkflowOperationHandle
-from orchestrator.core.workflow_type_catalog import get_workflow_type
+from orchestrator.core.workflow.operation_service import WorkflowOperationHandle
+from orchestrator.core.workflow.type_catalog import get_workflow_type
 from orchestrator.storage.models import FollowupContext, PMInterviewCase, Project, WorkflowOperation, WorkflowOperationAttempt
 from orchestrator.tools.atlassian_oauth import JiraIssueDetail
 from tests.test_support.jira_webhook_harness import JiraWebhookHarness
@@ -163,7 +167,7 @@ class JiraParentClarificationFlowTests(JiraWebhookHarness):
                 ),
             ),
             patch(
-                "orchestrator.core.jira_parent_child_sync_publishers.resolve_parent_feature_case",
+                "orchestrator.core.integrations.atlassian.parent_child_sync_publishers.resolve_parent_feature_case",
                 return_value=SimpleNamespace(
                     request_id="pm-parent-950",
                     source_kind="jira_parent",
@@ -176,8 +180,8 @@ class JiraParentClarificationFlowTests(JiraWebhookHarness):
                     notes_json={},
                 ),
             ),
-            patch("orchestrator.core.jira_parent_child_sync_publishers.resolve_platform_secret_ref", return_value="discord-token"),
-            patch("orchestrator.core.jira_parent_child_sync_publishers.DiscordApiClient") as discord_client_cls,
+            patch("orchestrator.core.integrations.atlassian.parent_child_sync_publishers.resolve_platform_secret_ref", return_value="discord-token"),
+            patch("orchestrator.core.integrations.atlassian.parent_child_sync_publishers.DiscordApiClient") as discord_client_cls,
             patch("orchestrator.api.webhooks.jira_parent_child_sync.post_jira_comment", return_value=(True, None)) as comment_mock,
             patch("orchestrator.api.webhooks.jira_parent_child_sync.create_jira_comment", return_value=({"id": "jira-comment-950"}, None)),
         ):
@@ -459,7 +463,7 @@ class JiraParentClarificationFlowTests(JiraWebhookHarness):
             access_token="tok",
             connection=SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
         )
-        planner_result = SimpleNamespace(planning_state="planning_completed", product_escalations=())
+        planner_result = SimpleNamespace(planning_state="planning_completed", pm_decision_requests=())
         with (
             patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_atlassian_oauth_context", return_value=oauth_context),
             patch(
@@ -978,6 +982,9 @@ class JiraParentClarificationFlowTests(JiraWebhookHarness):
                     labels=["engineering-child", "parent-tp-955b", "sync-blocked"],
                 )
 
+            def list_issue_comments(self, **_kwargs):  # noqa: ANN003
+                return [SimpleNamespace(comment_id="jira-comment-955b")]
+
         oauth_context = SimpleNamespace(
             client=_FakeClient(),
             access_token="tok",
@@ -1164,7 +1171,7 @@ class JiraParentClarificationFlowTests(JiraWebhookHarness):
             patch("orchestrator.api.webhooks.jira_parent_child_sync.build_runtime_for_selector", return_value=object()),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.build_workflow_runtime", side_effect=_build_local_workflow_runtime),
             patch(
-                "orchestrator.core.pm_interview_followup_service.plan_pm_interview_with_runtime",
+                "orchestrator.core.pm.interview_followup_service.plan_pm_interview_with_runtime",
                 return_value={
                     "message": "Retention is now clear.",
                     "brief": {
@@ -1189,7 +1196,7 @@ class JiraParentClarificationFlowTests(JiraWebhookHarness):
             ),
             patch(
                 "orchestrator.core.parent_feature_workflow.adapters._ParentBriefPlanner.plan_backlog_parent",
-                return_value=(SimpleNamespace(planning_state="planning_completed", product_escalations=()), {"planning": "package"}),
+                return_value=(SimpleNamespace(planning_state="planning_completed", pm_decision_requests=()), {"planning": "package"}),
             ),
             patch(
                 "orchestrator.api.webhooks.jira_parent_child_sync.seed_issues_with_runtime",
@@ -1583,7 +1590,7 @@ class JiraParentClarificationFlowTests(JiraWebhookHarness):
             patch("orchestrator.api.webhooks.jira_parent_child_sync.build_runtime_for_selector", return_value=object()),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.build_workflow_runtime", side_effect=_build_local_workflow_runtime),
             patch(
-                "orchestrator.core.pm_interview_followup_service.plan_pm_interview_with_runtime",
+                "orchestrator.core.pm.interview_followup_service.plan_pm_interview_with_runtime",
                 return_value={
                     "message": "Retention is now clear.",
                     "brief": {
@@ -1610,14 +1617,32 @@ class JiraParentClarificationFlowTests(JiraWebhookHarness):
                 return_value=(
                     SimpleNamespace(
                         planning_state="planning_blocked",
-                        product_escalations=(
-                            {
-                                "question": "Where should the user start this flow?",
-                                "why_it_matters": "The answer changes the user-visible entry point.",
-                            },
+                        pm_decision_requests=(
+                            PMDecisionRequestPayload(
+                                request_id="pm-entry-point",
+                                question="Where should the user start this flow?",
+                                why_it_matters="The answer changes the user-visible entry point.",
+                                related_decision_ids=("entry-point",),
+                            ),
                         ),
                     ),
                     {"planning": "package"},
+                ),
+            ),
+            patch(
+                "orchestrator.core.parent_feature_workflow.adapters._ParentBriefPlanner.resolve_pm_decisions",
+                return_value=SimpleNamespace(
+                    resolved_decisions=(),
+                    stakeholder_escalations=(
+                        StakeholderEscalationPayload(
+                            escalation_id="stakeholder-entry-point",
+                            question="Where should the user start this flow?",
+                            why_it_matters="The answer changes the user-visible entry point.",
+                            business_impact_area="customer_business_impact",
+                            source_pm_decision_request_ids=("pm-entry-point",),
+                        ),
+                    ),
+                    updated_planning_context={},
                 ),
             ),
             patch(
@@ -1634,8 +1659,8 @@ class JiraParentClarificationFlowTests(JiraWebhookHarness):
                     },
                 ),
             ) as seed_mock,
-            patch("orchestrator.core.jira_parent_child_sync_publishers.resolve_platform_secret_ref", return_value="discord-token"),
-            patch("orchestrator.core.jira_parent_child_sync_publishers.DiscordApiClient") as discord_client_cls,
+            patch("orchestrator.core.integrations.atlassian.parent_child_sync_publishers.resolve_platform_secret_ref", return_value="discord-token"),
+            patch("orchestrator.core.integrations.atlassian.parent_child_sync_publishers.DiscordApiClient") as discord_client_cls,
             patch("orchestrator.api.webhooks.jira_parent_child_sync.create_jira_comment", return_value=({"id": "jira-question-980b-2"}, None)) as create_comment_mock,
             patch("orchestrator.api.webhooks.jira_parent_child_sync.post_jira_comment", return_value=(True, None)),
         ):
@@ -1813,7 +1838,7 @@ class JiraParentClarificationFlowTests(JiraWebhookHarness):
             patch("orchestrator.api.webhooks.jira_parent_child_sync.build_runtime_for_selector", return_value=object()),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.build_workflow_runtime", side_effect=_build_local_workflow_runtime),
             patch(
-                "orchestrator.core.pm_interview_followup_service.plan_pm_interview_with_runtime",
+                "orchestrator.core.pm.interview_followup_service.plan_pm_interview_with_runtime",
                 return_value={
                     "message": "I still need one more decision.",
                     "brief": {
@@ -1845,8 +1870,8 @@ class JiraParentClarificationFlowTests(JiraWebhookHarness):
                     },
                 },
             ),
-            patch("orchestrator.core.jira_parent_child_sync_publishers.resolve_platform_secret_ref", return_value="discord-token"),
-            patch("orchestrator.core.jira_parent_child_sync_publishers.DiscordApiClient") as discord_client_cls,
+            patch("orchestrator.core.integrations.atlassian.parent_child_sync_publishers.resolve_platform_secret_ref", return_value="discord-token"),
+            patch("orchestrator.core.integrations.atlassian.parent_child_sync_publishers.DiscordApiClient") as discord_client_cls,
             patch("orchestrator.api.webhooks.jira_parent_child_sync.create_jira_comment", return_value=({"id": "jira-question-981b"}, None)) as create_comment_mock,
             patch("orchestrator.api.webhooks.jira_parent_child_sync.post_jira_comment", return_value=(True, None)),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.seed_issues_with_runtime") as seed_mock,
@@ -2004,7 +2029,7 @@ class JiraParentClarificationFlowTests(JiraWebhookHarness):
             patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_atlassian_oauth_context", return_value=oauth_context),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.build_runtime_for_selector", return_value=object()),
             patch(
-                "orchestrator.core.pm_interview_followup_service.plan_pm_interview_with_runtime",
+                "orchestrator.core.pm.interview_followup_service.plan_pm_interview_with_runtime",
                 return_value={
                     "message": "I still need one more product clarification.",
                     "brief": {
@@ -2135,7 +2160,7 @@ class JiraParentClarificationFlowTests(JiraWebhookHarness):
             patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_atlassian_oauth_context", return_value=oauth_context),
             patch("orchestrator.api.webhooks.jira_parent_child_sync.build_runtime_for_selector", return_value=object()),
             patch(
-                "orchestrator.core.pm_interview_followup_service.plan_pm_interview_with_runtime",
+                "orchestrator.core.pm.interview_followup_service.plan_pm_interview_with_runtime",
                 side_effect=CodexRuntimeError("Runtime HTTP request failed: [Errno 101] Network is unreachable"),
             ),
         ):

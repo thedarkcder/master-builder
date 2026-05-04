@@ -16,7 +16,7 @@ from fastapi.testclient import TestClient
 
 from orchestrator.api.main import create_app
 from orchestrator.core.config import get_settings
-from orchestrator.core.secrets import encrypt_value
+from orchestrator.core.platform.secrets import encrypt_value
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import AtlassianOAuthConnection, Run, Tenant, WorkflowCheckpoint, WorkflowExecution

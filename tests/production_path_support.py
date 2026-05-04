@@ -15,8 +15,8 @@ from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
 from orchestrator.core.config import get_settings
-from orchestrator.core.platform_secret_service import platform_secret_service
-from orchestrator.core.secrets import encrypt_value
+from orchestrator.core.platform.secret_service import platform_secret_service
+from orchestrator.core.platform.secrets import encrypt_value
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import AtlassianOAuthConnection, Project, Tenant

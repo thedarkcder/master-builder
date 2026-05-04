@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from orchestrator.api.admin.schema_mappers import workflow_observability_event_to_schema
 from orchestrator.api.schemas import AuditEventExportRequest
-from orchestrator.core.product_events import list_product_events
+from orchestrator.core.observability.events import list_product_events
 
 
 def iter_audit_event_export(

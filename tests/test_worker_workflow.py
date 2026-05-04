@@ -7,13 +7,13 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from orchestrator.core.config import get_settings
-from orchestrator.core.agent_observability import (
+from orchestrator.core.observability.agent_observability import (
     agent_observability_tracker,
     reset_agent_observability_for_tests,
 )
-from orchestrator.core.runs import enqueue_run
+from orchestrator.core.runs.service import enqueue_run
 from orchestrator.core.worker.execution_service import process_next_queued_run
-from orchestrator.core.worker_capability_normalization import WorkerCapability
+from orchestrator.core.worker.capability_normalization import WorkerCapability
 from orchestrator.core.workflow.runner import (
     PmPlan,
     WorkflowStageCheckpoint,
