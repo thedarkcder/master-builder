@@ -140,11 +140,10 @@ def start_workflow_execution(
     *,
     session: Session,
     principal: AuthenticatedPrincipal,
-    workflow_type_key: str,
     payload: WorkflowExecutionStartRequest,
 ) -> WorkflowExecutionStartRead:
     try:
-        workflow_type = get_workflow_type(session, workflow_type_key=workflow_type_key)
+        workflow_type = get_workflow_type(session, workflow_type_key=payload.workflow_type_key)
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow type not found") from exc
     if workflow_type.workflow_type_key != "jira_project_reconciliation":

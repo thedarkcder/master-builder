@@ -53,6 +53,24 @@ def list_workflows(
         offset=offset,
     )
 
+
+@router.post(
+    "/workflows",
+    response_model=WorkflowExecutionStartRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def start_workflow_execution(
+    payload: WorkflowExecutionStartRequest,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> WorkflowExecutionStartRead:
+    return use_cases.start_workflow_execution(
+        session=session,
+        principal=principal,
+        payload=payload,
+    )
+
+
 @router.get("/workflow-types", response_model=list[WorkflowTypeSummaryRead])
 def list_workflow_types(
     tenant_id: str | None = Query(default=None),
@@ -82,25 +100,6 @@ def get_workflow(
     session: Session = Depends(get_session),
 ) -> WorkflowRead:
     return use_cases.get_workflow(session=session, principal=principal, execution_id=execution_id)
-
-
-@router.post(
-    "/workflow-types/{workflow_type_key}/executions",
-    response_model=WorkflowExecutionStartRead,
-    status_code=status.HTTP_201_CREATED,
-)
-def start_workflow_execution(
-    workflow_type_key: str,
-    payload: WorkflowExecutionStartRequest,
-    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
-    session: Session = Depends(get_session),
-) -> WorkflowExecutionStartRead:
-    return use_cases.start_workflow_execution(
-        session=session,
-        principal=principal,
-        workflow_type_key=workflow_type_key,
-        payload=payload,
-    )
 
 @router.get("/workflows/{execution_id}/telemetry", response_model=list[WorkflowObservabilityEventRead])
 def list_workflow_telemetry_events(

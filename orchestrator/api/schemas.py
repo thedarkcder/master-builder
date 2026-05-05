@@ -1393,6 +1393,7 @@ class WorkflowOperationRetryRead(BaseModel):
 
 
 class WorkflowExecutionStartRequest(BaseModel):
+    workflow_type_key: str
     tenant_id: str
     project_id: str | None = None
     input: dict[str, object] = Field(default_factory=dict)

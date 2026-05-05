@@ -5,6 +5,7 @@
 - Dashboard chart colors must come from the product theme. Use primary plus muted neutrals, with warning reserved for waiting/blockage; do not turn workflow-state charts into rainbow categorical palettes.
 - Do not add product-specific manual workflow-start routes such as project-level Jira reconciliation endpoints. Workflow starts must follow the existing workflow architecture; delete special entrypoints and their orphaned helpers/tests instead of preserving parallel paths.
 - A user-facing manual trigger is not the same thing as a product-specific route. Keep the button when it is useful, but wire it through a generic workflow-start contract owned by the workflow architecture.
+- Generic workflow start must be one generic endpoint with the workflow type in the payload, not a URL template that bakes the workflow type into the route path.
 
 2026-04-21
 
