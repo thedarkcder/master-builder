@@ -11,12 +11,15 @@ from unittest.mock import MagicMock, patch
 
 from alembic import command
 from alembic.config import Config
+from alembic.migration import MigrationContext
+from alembic.operations import Operations
 from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, inspect
 from sqlalchemy import text
 
 from orchestrator.core.config import get_settings
 from orchestrator.core.platform.secrets import encrypt_value
+from orchestrator.storage.models import WorkflowExecution
 from orchestrator.storage.migrations import run_migrations
 
 
@@ -63,6 +66,64 @@ class MigrationTests(unittest.TestCase):
         duplicates = {revision_id: count for revision_id, count in Counter(revision_ids).items() if count > 1}
         self.assertEqual(duplicates, {})
         self.assertEqual(script.get_heads(), ["20260505_0106"])
+
+    def test_workflow_execution_source_external_id_index_is_composite_in_metadata(self) -> None:
+        expected_columns = ["tenant_id", "source_system", "source_external_id", "dedupe_scope"]
+        matching_indexes = [
+            index
+            for index in WorkflowExecution.__table__.indexes
+            if index.name == "ix_workflow_executions_source_external_id"
+        ]
+
+        self.assertEqual(len(matching_indexes), 1)
+        self.assertEqual([column.name for column in matching_indexes[0].columns], expected_columns)
+
+    def test_source_external_id_migration_recreates_same_named_single_column_index(self) -> None:
+        migration = self._load_migration_module(
+            "20260505_0106_workflow_execution_source_external_id.py",
+            "migration_20260505_0106",
+        )
+        expected_columns = ["tenant_id", "source_system", "source_external_id", "dedupe_scope"]
+
+        with TemporaryDirectory() as tmpdir:
+            database_url = f"sqlite:///{Path(tmpdir) / 'source-external-id-index.sqlite'}"
+            engine = create_engine(database_url)
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE workflow_executions (
+                            workflow_id VARCHAR PRIMARY KEY,
+                            tenant_id VARCHAR NOT NULL,
+                            source_system VARCHAR NOT NULL,
+                            source_ref VARCHAR NOT NULL,
+                            source_external_id VARCHAR,
+                            dedupe_scope VARCHAR NOT NULL
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        CREATE INDEX ix_workflow_executions_source_external_id
+                        ON workflow_executions (source_external_id)
+                        """
+                    )
+                )
+                context = MigrationContext.configure(connection)
+                operations = Operations(context)
+                with patch.object(migration, "op", operations):
+                    migration.upgrade()
+
+                indexes = inspect(connection).get_indexes("workflow_executions")
+
+        index_columns = {
+            index["name"]: list(index.get("column_names") or [])
+            for index in indexes
+            if index["name"] == "ix_workflow_executions_source_external_id"
+        }
+        self.assertEqual(index_columns, {"ix_workflow_executions_source_external_id": expected_columns})
 
     def test_failed_attempt_retryability_repair_migration(self) -> None:
         with TemporaryDirectory() as tmpdir:
