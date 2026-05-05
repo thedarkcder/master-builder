@@ -19,6 +19,19 @@ from orchestrator.core.observability.agent_observability import (
 )
 from orchestrator.core.observability.logging_pane import emit_logging_pane_event
 from orchestrator.core.observability.events import ProductEvent
+from orchestrator.core.parent_feature_workflow.operations import (
+    PARENT_OP_BACKLOG_PLANNING,
+    PARENT_OP_BRIEF_NORMALIZATION,
+    PARENT_OP_DEVELOPMENT_START,
+    PARENT_OP_DEVELOPMENT_START_LINK_PROJECTION,
+    PARENT_OP_DISCORD_FOLLOWUP_PROJECTION,
+    PARENT_OP_JIRA_CHILD_FANOUT,
+    PARENT_OP_JIRA_CHILD_PROMOTION,
+    PARENT_OP_JIRA_COMMENT_PROJECTION,
+    PARENT_OP_JIRA_PARENT_UPDATE,
+    PARENT_OP_NOTIFICATION_EMIT,
+    PARENT_OP_PM_DECISION_RESOLUTION,
+)
 from orchestrator.core.platform.secrets import encrypt_value
 from orchestrator.core.workflow.operation_service import WorkflowOperationAttemptAlreadyRunningError
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
@@ -1898,15 +1911,17 @@ class AdminApiTests(AdminApiTestHarness):
         self.assertEqual(
             set(operation_statuses),
             {
-                "brief_normalization",
-                "backlog_planning",
-                "discord_followup_projection",
-                "jira_child_fanout",
-                "jira_child_promotion",
-                "jira_comment_projection",
-                "jira_parent_update",
-                "notification_emit",
-                "pm_decision_resolution",
+                PARENT_OP_BACKLOG_PLANNING,
+                PARENT_OP_BRIEF_NORMALIZATION,
+                PARENT_OP_DEVELOPMENT_START,
+                PARENT_OP_DEVELOPMENT_START_LINK_PROJECTION,
+                PARENT_OP_DISCORD_FOLLOWUP_PROJECTION,
+                PARENT_OP_JIRA_CHILD_FANOUT,
+                PARENT_OP_JIRA_CHILD_PROMOTION,
+                PARENT_OP_JIRA_COMMENT_PROJECTION,
+                PARENT_OP_JIRA_PARENT_UPDATE,
+                PARENT_OP_NOTIFICATION_EMIT,
+                PARENT_OP_PM_DECISION_RESOLUTION,
             },
         )
         self.assertEqual(operation_statuses["jira_comment_projection"], "pending")
