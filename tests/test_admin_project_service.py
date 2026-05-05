@@ -356,7 +356,7 @@ def test_create_project_rejects_confluence_architecture_config_without_space_key
         assert "require a space key" in str(exc.detail)
 
 
-def test_create_project_returns_502_when_jira_board_resolution_fails_with_oauth_error() -> None:
+def test_create_project_saves_when_jira_board_resolution_fails_with_oauth_error() -> None:
     from orchestrator.storage.models import Tenant
 
     session = _Session()
@@ -387,15 +387,16 @@ def test_create_project_returns_502_when_jira_board_resolution_fails_with_oauth_
         discord=None,
     )
 
-    try:
-        service.create_project(session=session, tenant_id="t1", payload=payload)
-        assert False, "expected HTTPException"
-    except HTTPException as exc:
-        assert exc.status_code == 502
-        assert "Unable to resolve Jira board for project TP: oauth unavailable" == str(exc.detail)
+    service.create_project(session=session, tenant_id="t1", payload=payload)
+
+    assert session.commits == 1
+    created_project = session.added[0]
+    assert isinstance(created_project, Project)
+    assert created_project.jira_project_key == "TP"
+    assert "run_board_id" not in created_project.policy_overrides
 
 
-def test_update_project_returns_502_when_jira_board_resolution_fails_with_oauth_error() -> None:
+def test_update_project_saves_when_jira_board_resolution_fails_with_oauth_error() -> None:
     from orchestrator.storage.models import Tenant
 
     session = _Session()
@@ -443,12 +444,13 @@ def test_update_project_returns_502_when_jira_board_resolution_fails_with_oauth_
         is_archived=False,
     )
 
-    try:
-        service.update_project(session=session, tenant_id="t1", project_id="p1", payload=payload)
-        assert False, "expected HTTPException"
-    except HTTPException as exc:
-        assert exc.status_code == 502
-        assert "Unable to resolve Jira board for project TP: token revoked" == str(exc.detail)
+    service.update_project(session=session, tenant_id="t1", project_id="p1", payload=payload)
+
+    assert session.commits == 1
+    assert existing_project.name == "Updated"
+    assert existing_project.github_repository == "https://github.com/example/repo-2"
+    assert existing_project.jira_project_key == "TP"
+    assert "run_board_id" not in existing_project.policy_overrides
 
 
 def test_update_project_migrates_inline_secret_values_to_project_managed_refs() -> None:
