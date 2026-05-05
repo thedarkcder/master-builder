@@ -5,10 +5,8 @@ import { useEffect, useMemo, useState } from "react";
 import { useParams, usePathname, useRouter } from "next/navigation";
 import {
   Archive,
-  ArrowLeft,
   ExternalLink,
   KeyRound,
-  Library,
   Pencil,
   RefreshCw,
   Save,
@@ -18,6 +16,8 @@ import {
 } from "lucide-react";
 
 import { useAuth } from "@/components/auth-provider";
+import { ProjectParentWorkBoard } from "@/components/project-parent-work-board";
+import { ProjectSectionTabs } from "@/components/project-section-tabs";
 import { ProjectAutomationsContent, ProjectNotificationsContent } from "@/components/tenant-project-discord-page";
 import { CodexModelSelect } from "@/components/codex-model-select";
 import { OverrideSegmentedControl } from "@/components/override-segmented-control";
@@ -61,9 +61,9 @@ import {
   canManageProjects,
   getProjectArchiveRedirectRoute,
 } from "@/lib/auth-routing";
-import { buildProjectSectionPath, buildRunDetailPath, resolveProjectSection } from "@/lib/dashboard-paths";
+import { buildRunDetailPath, resolveProjectSection, type ProjectSection } from "@/lib/dashboard-paths";
 
-type Tab = "overview" | "settings" | "runs" | "webhooks" | "notifications" | "automations" | "secrets" | "danger";
+type Tab = Exclude<ProjectSection, "knowledge">;
 type SettingsSection = "general" | "ai" | "automation" | "knowledge" | "governance";
 type OverrideToggleValue = "inherit" | "enabled" | "disabled";
 type RequireAgentsValue = "inherit" | "required";
@@ -96,23 +96,12 @@ type ProjectFormState = {
   allowed_commands_text: string;
 };
 
-const TABS: { id: Tab; label: string }[] = [
-  { id: "overview", label: "Overview" },
-  { id: "settings", label: "Settings" },
-  { id: "runs", label: "Runs" },
-  { id: "webhooks", label: "Webhooks" },
-  { id: "notifications", label: "Notifications" },
-  { id: "automations", label: "Automations" },
-  { id: "secrets", label: "Secrets" },
-  { id: "danger", label: "Danger" },
-];
-
-const SETTINGS_SECTIONS: { id: SettingsSection; label: string; description: string }[] = [
-  { id: "general", label: "General", description: "Name, repository, and Jira mapping." },
-  { id: "ai", label: "AI", description: "Model and reasoning controls." },
-  { id: "automation", label: "Automation", description: "Execution, PR, and command policy." },
-  { id: "knowledge", label: "Knowledge", description: "Knowledge-base behavior for this project." },
-  { id: "governance", label: "Governance", description: "Repository standards and archive controls." },
+const SETTINGS_SECTIONS: { id: SettingsSection; label: string }[] = [
+  { id: "general", label: "General" },
+  { id: "ai", label: "AI" },
+  { id: "automation", label: "Automation" },
+  { id: "knowledge", label: "Knowledge" },
+  { id: "governance", label: "Governance" },
 ];
 
 const STATUS_BORDER: Record<string, string> = {
@@ -306,21 +295,24 @@ export function TenantProjectDetailsPage() {
     [params.tenantId, params.projectId]
   );
   const canReadCodexModels = canAccessPlatformAdmin(principal);
+  const isPlatformSuperAdmin = canAccessPlatformAdmin(principal);
   const allowProjectManagement = canManageProjects(principal, params.tenantId);
   const canAccessTechnicalPolicy = canAccessTechnicalSurface(principal, params.tenantId);
   const activeTab = useMemo<Tab>(() => {
     const resolved = resolveProjectSection(pathname) ?? "overview";
+    if (resolved === "knowledge") {
+      return "overview";
+    }
+    if (resolved === "runs" && !isPlatformSuperAdmin) {
+      return "overview";
+    }
     if (allowProjectManagement) {
       return resolved;
     }
     return resolved === "settings" || resolved === "notifications" || resolved === "automations" || resolved === "secrets" || resolved === "danger"
       ? "overview"
       : resolved;
-  }, [allowProjectManagement, pathname]);
-  const visibleTabs = useMemo(
-    () => (allowProjectManagement ? TABS : TABS.filter((tab) => tab.id === "overview" || tab.id === "runs")),
-    [allowProjectManagement],
-  );
+  }, [allowProjectManagement, isPlatformSuperAdmin, pathname]);
   const webhookStatusOptions = useMemo(
     () => Array.from(new Set(webhookJobs.map((job) => job.status).filter(Boolean))).sort(),
     [webhookJobs],
@@ -519,7 +511,9 @@ export function TenantProjectDetailsPage() {
       setForm(buildProjectFormState(payload));
       setSecretRefs(payload.secret_refs ?? {});
       await loadOptions();
-      await loadRuns();
+      if (isPlatformSuperAdmin) {
+        await loadRuns();
+      }
       setStatusLine("");
     } catch (error) {
       setStatusLine(`Failed to load project: ${(error as Error).message}`);
@@ -530,7 +524,7 @@ export function TenantProjectDetailsPage() {
 
   useEffect(() => {
     if (ready && credentials) void loadProject();
-  }, [ready, credentials, params.tenantId, params.projectId, allowProjectManagement]);
+  }, [ready, credentials, params.tenantId, params.projectId, allowProjectManagement, isPlatformSuperAdmin]);
 
   useEffect(() => {
     if (!ready || !credentials || !allowProjectManagement || form.architecture_provider !== "confluence") {
@@ -564,8 +558,8 @@ export function TenantProjectDetailsPage() {
   ]);
 
   useEffect(() => {
-    if (ready && credentials && project && (activeTab === "overview" || activeTab === "runs")) void loadRuns();
-  }, [activeTab, ready, credentials, project, runFromDate, runIssueFilter, runPage, runPageSize, runPrFilter, runStatusFilter, runToDate]);
+    if (ready && credentials && project && isPlatformSuperAdmin && (activeTab === "overview" || activeTab === "runs")) void loadRuns();
+  }, [activeTab, ready, credentials, isPlatformSuperAdmin, project, runFromDate, runIssueFilter, runPage, runPageSize, runPrFilter, runStatusFilter, runToDate]);
 
   useEffect(() => {
     if (ready && credentials && project && activeTab === "webhooks") void loadWebhookJobs();
@@ -904,14 +898,7 @@ export function TenantProjectDetailsPage() {
 
   return (
     <div className="space-y-6">
-      {/* Header strip */}
       <div className="flex flex-wrap items-center gap-3">
-        <Button asChild variant="ghost" size="sm" className="-ml-1">
-          <Link href={`/${encodeURIComponent(params.tenantId)}/projects`}>
-            <ArrowLeft className="mr-1.5 h-3.5 w-3.5" />
-            Back
-          </Link>
-        </Button>
         <div className="flex items-center gap-2.5 min-w-0">
           <h1 className="truncate text-xl font-semibold">{project?.name ?? params.projectId}</h1>
           {project ? (
@@ -922,37 +909,14 @@ export function TenantProjectDetailsPage() {
         </div>
       </div>
 
-      {/* Underline tab bar */}
-      <div className="border-b overflow-x-auto">
-        <nav className="-mb-px flex min-w-max gap-1" aria-label="Project sections">
-          {visibleTabs.map((tab) => {
-            const isDanger = tab.id === "danger";
-            return (
-              <Link
-                key={tab.id}
-                href={buildProjectSectionPath(params.tenantId, params.projectId, tab.id)}
-                className={[
-                  "px-4 py-2.5 text-sm font-medium transition-colors whitespace-nowrap border-b-2",
-                  isDanger && activeTab === tab.id
-                    ? "border-red-500 text-red-600"
-                    : isDanger
-                      ? "border-transparent text-red-400 hover:border-red-300 hover:text-red-500"
-                      : activeTab === tab.id
-                        ? "border-primary text-foreground"
-                        : "border-transparent text-muted-foreground hover:text-foreground",
-                ].join(" ")}
-              >
-                <span>{tab.label}</span>
-                {tab.id === "notifications" && notificationCount > 0 ? (
-                  <span className="ml-2 inline-flex min-w-5 items-center justify-center rounded-full bg-warning px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white">
-                    {notificationCount}
-                  </span>
-                ) : null}
-              </Link>
-            );
-          })}
-        </nav>
-      </div>
+      <ProjectSectionTabs
+        tenantId={params.tenantId}
+        projectId={params.projectId}
+        activeSection={activeTab}
+        allowProjectManagement={allowProjectManagement}
+        isPlatformSuperAdmin={isPlatformSuperAdmin}
+        notificationCount={notificationCount}
+      />
 
       {/* ── Overview tab ─────────────────────────────────────────────────── */}
       {activeTab === "overview" ? (
@@ -960,249 +924,16 @@ export function TenantProjectDetailsPage() {
           {statusLine ? (
             <p className="rounded-lg border bg-muted/40 px-4 py-2.5 text-sm text-muted-foreground">{statusLine}</p>
           ) : null}
-          {runsStatusLine ? (
-            <p className="rounded-lg border bg-muted/40 px-4 py-2.5 text-sm text-muted-foreground">{runsStatusLine}</p>
-          ) : null}
           {project ? (
-            <>
-              <section className="overflow-hidden rounded-2xl border bg-background">
-                <div className="grid gap-6 p-6 lg:grid-cols-[280px_minmax(0,1fr)]">
-                  <aside className="space-y-4">
-                    <div className="rounded-xl border bg-muted/20 p-4">
-                      <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Project</p>
-                      <p className="mt-2 text-base font-semibold text-foreground">{project.name}</p>
-                      <div className="mt-4 grid gap-3 text-sm">
-                        <div>
-                          <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Status</p>
-                          <p className="mt-1 font-medium">{project.is_archived ? "Archived" : "Active"}</p>
-                        </div>
-                        <div>
-                          <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Jira project</p>
-                          <p className="mt-1 font-medium">{project.jira_project_key}</p>
-                        </div>
-                        <div>
-                          <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Secret refs</p>
-                          <p className="mt-1 font-medium">{Object.keys(secretRefs).length}</p>
-                        </div>
-                        <div>
-                          <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Loaded runs</p>
-                          <p className="mt-1 font-medium">{runs.length}</p>
-                        </div>
-                      </div>
-                    </div>
-                    <div className="flex flex-col gap-2">
-                      {allowProjectManagement ? (
-                        <Button asChild size="sm">
-                          <Link href={buildProjectSectionPath(params.tenantId, params.projectId, "settings")}>Open settings</Link>
-                        </Button>
-                      ) : null}
-                      <Button asChild size="sm" variant="outline">
-                        <Link href={`/${encodeURIComponent(params.tenantId)}/projects/${encodeURIComponent(params.projectId)}/knowledge`}>
-                          Browse knowledge
-                        </Link>
-                      </Button>
-                      {allowProjectManagement ? (
-                        <>
-                          <Button asChild size="sm" variant="outline">
-                            <Link href={`/${encodeURIComponent(params.tenantId)}/projects/${encodeURIComponent(params.projectId)}/knowledge?view=add`}>
-                              Add knowledge
-                            </Link>
-                          </Button>
-                          <Button asChild size="sm" variant="outline">
-                            <Link href={buildProjectSectionPath(params.tenantId, params.projectId, "notifications")}>Notifications</Link>
-                          </Button>
-                          <Button asChild size="sm" variant="outline">
-                            <Link href={buildProjectSectionPath(params.tenantId, params.projectId, "automations")}>Automations</Link>
-                          </Button>
-                        </>
-                      ) : null}
-                    </div>
-                  </aside>
-                  <div className="space-y-5">
-                    <div className="rounded-xl border bg-background px-4 py-3">
-                      <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Repository</p>
-                      <Link
-                        className="mt-2 inline-flex items-center gap-1 text-sm text-primary hover:underline"
-                        href={project.github_repository}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                      >
-                        {project.github_repository}
-                        <ExternalLink className="h-3 w-3" />
-                      </Link>
-                    </div>
-                    <div className="grid gap-4 xl:grid-cols-3">
-                {canAccessTechnicalPolicy ? (
-                  <>
-                    <div className="overflow-hidden rounded-2xl border bg-background xl:col-span-1">
-                      <div className="px-6 pt-6 pb-3">
-                        <h2 className="text-base font-semibold">Effective AI policy</h2>
-                      </div>
-                      <div className="px-6 pb-6 space-y-3">
-                        <div className="space-y-1">
-                          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Model</p>
-                          <p className="text-sm font-medium text-foreground">
-                            {project.effective_policy.codex_model ?? (globalCodexModel || "Global default")}
-                          </p>
-                        </div>
-                        <div className="space-y-1">
-                          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Reasoning mode</p>
-                          <p className="text-sm font-medium text-foreground">
-                            {project.effective_policy.codex_reasoning_effort ?? (globalCodexReasoningEffort || "medium")}
-                          </p>
-                        </div>
-                        <div className="space-y-1">
-                          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Knowledge base</p>
-                          <p className="text-sm font-medium text-foreground">
-                            {formatBoolean(project.effective_policy.knowledge_base_enabled)}
-                          </p>
-                        </div>
-                        <div className="space-y-1">
-                          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                            Knowledge answer mode
-                          </p>
-                          <p className="text-sm font-medium text-foreground">{project.effective_policy.knowledge_auto_answer_mode}</p>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="overflow-hidden rounded-2xl border bg-background xl:col-span-1">
-                      <div className="px-6 pt-6 pb-3">
-                        <h2 className="text-base font-semibold">Effective automation policy</h2>
-                      </div>
-                      <div className="px-6 pb-6 space-y-3">
-                        <div className="grid gap-3 sm:grid-cols-2">
-                          <div className="space-y-1">
-                            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">PR creation</p>
-                            <p className="text-sm font-medium text-foreground">{formatBoolean(project.effective_policy.allow_pr_creation)}</p>
-                          </div>
-                          <div className="space-y-1">
-                            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Code review</p>
-                            <p className="text-sm font-medium text-foreground">{formatBoolean(project.effective_policy.allow_code_reviews)}</p>
-                          </div>
-                          <div className="space-y-1">
-                            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">PR remediation</p>
-                            <p className="text-sm font-medium text-foreground">{formatBoolean(project.effective_policy.allow_pr_remediation)}</p>
-                          </div>
-                          <div className="space-y-1">
-                            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Manual PR fix requests</p>
-                            <p className="text-sm font-medium text-foreground">
-                              {formatBoolean(project.effective_policy.allow_manual_pr_fix_requests)}
-                            </p>
-                          </div>
-                          <div className="space-y-1">
-                            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Auto merge</p>
-                            <p className="text-sm font-medium text-foreground">{formatBoolean(project.effective_policy.allow_auto_merge)}</p>
-                          </div>
-                          <div className="space-y-1">
-                            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Label mutations</p>
-                            <p className="text-sm font-medium text-foreground">{formatBoolean(project.effective_policy.allow_label_mutations)}</p>
-                          </div>
-                          <div className="space-y-1">
-                            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Jira transitions</p>
-                            <p className="text-sm font-medium text-foreground">{formatBoolean(project.effective_policy.allow_jira_transitions)}</p>
-                          </div>
-                        </div>
-                        <div className="grid gap-3 sm:grid-cols-3">
-                          <div className="space-y-1">
-                            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Dev/test/review loops</p>
-                            <p className="text-sm font-medium text-foreground">{project.effective_policy.max_dev_test_review_loops}</p>
-                          </div>
-                          <div className="space-y-1">
-                            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">PR remediation loops</p>
-                            <p className="text-sm font-medium text-foreground">{project.effective_policy.max_pr_auto_remediation_loops}</p>
-                          </div>
-                          <div className="space-y-1">
-                            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Concurrent runs</p>
-                            <p className="text-sm font-medium text-foreground">{project.effective_policy.max_concurrent_runs}</p>
-                          </div>
-                        </div>
-                        <div className="space-y-1">
-                          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Allowed commands</p>
-                          <p className="text-sm text-foreground">
-                            {(project.effective_policy.allowed_commands ?? []).length > 0
-                              ? (project.effective_policy.allowed_commands ?? []).join(", ")
-                              : "None"}
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-                  </>
-                ) : null}
-
-                <div className={`overflow-hidden rounded-2xl border bg-background ${canAccessTechnicalPolicy ? "xl:col-span-1" : "xl:col-span-3"}`}>
-                  <div className="px-6 pt-6 pb-3">
-                    <div className="flex items-center gap-2">
-                      <Library className="h-4 w-4 text-primary" />
-                      <h2 className="text-base font-semibold">Knowledge</h2>
-                    </div>
-                  </div>
-                  <div className="px-6 pb-6 space-y-3">
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      <div className="space-y-1">
-                        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Knowledge browser</p>
-                        <p className="text-sm text-muted-foreground">
-                          Inspect indexed assets, metadata, and retrieval chunks from the dedicated browser page.
-                        </p>
-                      </div>
-                      {allowProjectManagement ? (
-                        <div className="space-y-1">
-                          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Add knowledge</p>
-                          <p className="text-sm text-muted-foreground">
-                            Upload files directly into the knowledge store from the Add Knowledge tab.
-                          </p>
-                        </div>
-                      ) : null}
-                    </div>
-                    <div className="space-y-1">
-                      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Sources</p>
-                      <p className="text-sm text-muted-foreground">
-                        Manage Jira, Google Drive, and Discord connectors from the Sources tab.
-                      </p>
-                    </div>
-                    <div className="space-y-1">
-                      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">AGENTS.md requirement</p>
-                      <p className="text-sm font-medium text-foreground">
-                        {project.effective_policy.require_agents_md ? "Required" : "Not required"}
-                      </p>
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      <Button asChild size="sm" variant="outline">
-                        <Link href={`/${encodeURIComponent(params.tenantId)}/projects/${encodeURIComponent(params.projectId)}/knowledge`}>
-                          Browse knowledge
-                        </Link>
-                      </Button>
-                      {allowProjectManagement ? (
-                        <>
-                          <Button asChild size="sm" variant="outline">
-                            <Link href={`/${encodeURIComponent(params.tenantId)}/projects/${encodeURIComponent(params.projectId)}/knowledge?view=add`}>
-                              Add knowledge
-                            </Link>
-                          </Button>
-                          <Button asChild size="sm" variant="outline">
-                            <Link href={`/${encodeURIComponent(params.tenantId)}/projects/${encodeURIComponent(params.projectId)}/knowledge?view=sources`}>
-                              Sources
-                            </Link>
-                          </Button>
-                        </>
-                      ) : null}
-                    </div>
-                    <div className="space-y-1">
-                      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Secrets</p>
-                      <p className="text-sm text-muted-foreground">
-                        Runtime secret references are configured separately to keep settings focused.
-                      </p>
-                    </div>
-                  </div>
-                </div>
-                    </div>
-                  </div>
-                </div>
-              </section>
-            </>
-          ) : (
+            <ProjectParentWorkBoard
+              tenantId={params.tenantId}
+              projectId={params.projectId}
+              allowJiraReconciliation={allowProjectManagement}
+            />
+          ) : null}
+          {!project ? (
             <p className="text-sm text-muted-foreground">Loading project details…</p>
-          )}
+          ) : null}
         </div>
       ) : null}
 
@@ -1243,7 +974,6 @@ export function TenantProjectDetailsPage() {
                         }`}
                       >
                         <p className="text-sm font-medium text-foreground">{section.label}</p>
-                        <p className="mt-1 text-xs text-muted-foreground">{section.description}</p>
                       </button>
                     ))}
                   </div>

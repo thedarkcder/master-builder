@@ -5,8 +5,11 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from sqlalchemy.orm import Session
+from sqlalchemy import select
 
 from orchestrator.core.clarification.questions import ClarificationQuestion, ClarificationQuestionSet
+from orchestrator.core.development.start_work import StartWorkUseCase
+from orchestrator.core.development.start_work_links import StartWorkActionTokenClaims, build_start_work_action_url
 from orchestrator.core.projects.parent_planning_clarification_service import (
     ParentPlanningClarificationService,
 )
@@ -18,6 +21,8 @@ from orchestrator.core.projects.parent_planning_fanout_service import (
 from orchestrator.core.parent_feature_workflow.operations import (
     PARENT_OP_BACKLOG_PLANNING,
     PARENT_OP_BRIEF_NORMALIZATION,
+    PARENT_OP_DEVELOPMENT_START,
+    PARENT_OP_DEVELOPMENT_START_LINK_PROJECTION,
     PARENT_OP_DISCORD_FOLLOWUP_PROJECTION,
     PARENT_OP_JIRA_CHILD_FANOUT,
     PARENT_OP_JIRA_CHILD_PROMOTION,
@@ -60,6 +65,7 @@ from orchestrator.core.workflow.definition import (
     workflow_work_unit,
 )
 from orchestrator.core.workflow.execution_projection import classify_external_workflow_failure
+from orchestrator.core.workflow.execution_projection import resolve_latest_workflow_execution_by_source
 from orchestrator.core.workflow.step_runner import (
     complete_workflow_step_attempt,
     fail_workflow_step_attempt,
@@ -67,8 +73,23 @@ from orchestrator.core.workflow.step_runner import (
     wait_workflow_step_attempt,
 )
 from orchestrator.core.workflow.work_units import run_work_unit, workflow_work_unit_input_fingerprint
+from orchestrator.storage.models import Project, WorkflowOperation
 
 logger = logging.getLogger(__name__)
+
+_BOARD_ENTRY_STATUSES = {"to do", "ready for agent"}
+_CHILD_ALREADY_ACTIONABLE_STATUSES = {"to do", "ready for agent", "in progress", "testing", "done"}
+
+
+def _normalized_status(value: object) -> str:
+    return str(value or "").strip().casefold()
+
+
+def _promotion_target_for_parent_status(parent_status: object) -> str | None:
+    normalized = _normalized_status(parent_status)
+    if normalized not in _BOARD_ENTRY_STATUSES:
+        return None
+    return str(parent_status or "").strip() or None
 
 
 def _stakeholder_escalation_questions(pm_resolution) -> tuple[ClarificationQuestion, ...]:  # noqa: ANN001
@@ -634,8 +655,9 @@ class ParentFeaturePlanningWorkflow:
         label="Child promotion",
         kind=WorkflowStepKind.INTEGRATION,
         after=PARENT_OP_JIRA_CHILD_FANOUT,
-        supports=PARENT_OP_JIRA_CHILD_FANOUT,
-        required=False,
+        supports=(PARENT_OP_JIRA_CHILD_FANOUT,),
+        required=True,
+        retryable=False,
         description="Promote backlog engineering child tickets onto the working board.",
     )
     def _handle_board_entry(
@@ -652,85 +674,170 @@ class ParentFeaturePlanningWorkflow:
             display_name=parent_detail.summary,
             description=parent_detail.description,
         )
-        project_key = self._deps.project_key_for_issue_fn(context.issue_key)
-        child_details = issue_gateway.load_child_details(project_key=project_key, parent_issue_key=context.issue_key)
         promotion_step = start_workflow_step_attempt(lifecycle=lifecycle, operation_type=PARENT_OP_JIRA_CHILD_PROMOTION)
-        if not child_details:
-            complete_workflow_step_attempt(
+        try:
+            result = self._promote_child_issues_work_unit(
                 lifecycle=lifecycle,
                 step=promotion_step,
-                summary=f"No engineering child tickets required promotion to {target_status}.",
+                issue_gateway=issue_gateway,
+                parent_issue_key=context.issue_key,
+                target_status=target_status,
+                idempotency_context="board_entry",
             )
-            lifecycle.mark_completed_if_ready()
-            return self._outcome(
-                handled=True,
-                reason="pm_parent_board_entry_no_children",
-                extra={"target_status": target_status, "webhook_event": context.webhook_event},
-            )
-
-        promoted_children: list[str] = []
-        unchanged_children: list[str] = []
-        skipped_children: list[str] = []
-        failed_children: list[str] = []
-        for child_detail in child_details:
-            child_labels = {str(label).strip().casefold() for label in child_detail.labels}
-            if "engineering-child" not in child_labels:
-                skipped_children.append(child_detail.key)
-                continue
-            if str(child_detail.status or "").strip().casefold() in {"to do", "ready for agent", "in progress", "testing", "done"}:
-                unchanged_children.append(child_detail.key)
-                continue
-            try:
-                issue_gateway.transition_issue(issue_key=child_detail.key, target_status=target_status)
-            except Exception as exc:  # noqa: BLE001
-                logger.exception(
-                    "jira_parent_board_entry_child_transition_failed request_id=%s tenant_id=%s parent_issue_key=%s child_issue_key=%s target_status=%s error=%s",
-                    context.request_id,
-                    context.tenant_id,
-                    context.issue_key,
-                    child_detail.key,
-                    target_status,
-                    exc,
-                )
-                failed_children.append(child_detail.key)
-                continue
-            promoted_children.append(child_detail.key)
-
-        if failed_children:
+        except Exception as exc:  # noqa: BLE001
             fail_workflow_step_attempt(
                 lifecycle=lifecycle,
                 step=promotion_step,
-                category="external_failure",
-                message=(
-                    f"Failed to promote engineering child tickets to {target_status}: "
-                    f"{', '.join(failed_children)}"
-                ),
+                category=classify_external_workflow_failure(error=exc),
+                message=str(exc),
             )
-        else:
-            complete_workflow_step_attempt(
-                lifecycle=lifecycle,
-                step=promotion_step,
-                summary=(
-                    f"Promoted engineering child tickets to {target_status}: "
-                    f"{', '.join(promoted_children)}."
-                    if promoted_children
-                    else f"No engineering child tickets required promotion to {target_status}."
-                ),
-            )
-            lifecycle.mark_completed_if_ready()
+            raise
+
+        promoted_children = list(result["promoted_children"])
+        unchanged_children = list(result["unchanged_children"])
+        skipped_children = list(result["skipped_children"])
+        complete_workflow_step_attempt(
+            lifecycle=lifecycle,
+            step=promotion_step,
+            summary=self._promotion_summary(
+                target_status=target_status,
+                promoted_children=promoted_children,
+            ),
+        )
+        lifecycle.mark_completed_if_ready()
+        tenant = context.tenant
+        project = lifecycle.session.get(Project, context.project_id) if context.project_id else None
+        if project is None:
+            raise RuntimeError(f"Project is required to start development for {context.issue_key}")
+        source_workflow = resolve_latest_workflow_execution_by_source(
+            session=lifecycle.session,
+            tenant_id=context.tenant_id,
+            source_system="jira",
+            source_ref=context.issue_key,
+        )
+        if source_workflow is None:
+            raise RuntimeError(f"Parent planning workflow is required to start development for {context.issue_key}")
+        StartWorkUseCase(session=lifecycle.session, issue_gateway=issue_gateway).start(
+            tenant=tenant,
+            project=project,
+            issue_key=context.issue_key,
+            target_status=target_status,
+            actor="jira_board_transition",
+            reason="parent_board_entry",
+            source_workflow_id=source_workflow.workflow_id,
+            require_source_workflow_completed=False,
+            promote_targets=False,
+        )
 
         return self._outcome(
             handled=True,
-            reason="pm_parent_board_entry_fanout_completed" if not failed_children else "pm_parent_board_entry_fanout_partial",
+            reason="pm_parent_board_entry_fanout_completed",
             extra={
                 "target_status": target_status,
                 "promoted_children": promoted_children,
                 "unchanged_children": unchanged_children,
                 "skipped_children": skipped_children,
-                "failed_children": failed_children,
+                "failed_children": [],
                 "webhook_event": context.webhook_event,
             },
         )
+
+    def _promote_child_issues_work_unit(
+        self,
+        *,
+        lifecycle,
+        step,
+        issue_gateway,
+        parent_issue_key: str,
+        target_status: str,
+        idempotency_context: str,
+    ) -> dict[str, list[str]]:
+        project_key = self._deps.project_key_for_issue_fn(parent_issue_key)
+        input_payload = {
+            "parent_issue_key": parent_issue_key,
+            "project_key": project_key,
+            "target_status": target_status,
+            "idempotency_context": idempotency_context,
+        }
+        input_hash = workflow_work_unit_input_fingerprint(input_payload)
+        return run_work_unit(
+            lifecycle.session,
+            operation=step.operation,
+            operation_attempt=step.attempt,
+            unit_key=PARENT_WU_JIRA_CHILD_PROMOTION_API,
+            idempotency_key=f"{parent_issue_key}:jira_child_promotion:{input_hash}",
+            input_payload=input_payload,
+            execute=lambda _context: self._promote_child_issues(
+                issue_gateway=issue_gateway,
+                project_key=project_key,
+                parent_issue_key=parent_issue_key,
+                target_status=target_status,
+            ),
+            serialize=lambda result: dict(result),
+            deserialize=lambda payload: {
+                "promoted_children": list(payload.get("promoted_children") or []),
+                "unchanged_children": list(payload.get("unchanged_children") or []),
+                "skipped_children": list(payload.get("skipped_children") or []),
+            },
+        )
+
+    def _promote_child_issues(
+        self,
+        *,
+        issue_gateway,
+        project_key: str,
+        parent_issue_key: str,
+        target_status: str,
+    ) -> dict[str, list[str]]:
+        child_details = issue_gateway.load_child_details(project_key=project_key, parent_issue_key=parent_issue_key)
+        promoted_children: list[str] = []
+        unchanged_children: list[str] = []
+        skipped_children: list[str] = []
+        for child_detail in child_details:
+            child_labels = {str(label).strip().casefold() for label in child_detail.labels}
+            if "engineering-child" not in child_labels:
+                skipped_children.append(child_detail.key)
+                continue
+            if _normalized_status(child_detail.status) in _CHILD_ALREADY_ACTIONABLE_STATUSES:
+                unchanged_children.append(child_detail.key)
+                continue
+            issue_gateway.transition_issue(issue_key=child_detail.key, target_status=target_status)
+            promoted_children.append(child_detail.key)
+        return {
+            "promoted_children": promoted_children,
+            "unchanged_children": unchanged_children,
+            "skipped_children": skipped_children,
+        }
+
+    @staticmethod
+    def _promotion_summary(*, target_status: str, promoted_children: list[str]) -> str:
+        if promoted_children:
+            return f"Promoted engineering child tickets to {target_status}: {', '.join(promoted_children)}."
+        return f"No engineering child tickets required promotion to {target_status}."
+
+    @workflow_step(
+        key=PARENT_OP_DEVELOPMENT_START_LINK_PROJECTION,
+        label="Development start link",
+        kind=WorkflowStepKind.NOTIFICATION,
+        after=PARENT_OP_JIRA_CHILD_PROMOTION,
+        required=False,
+        retryable=False,
+        description="Publish the Jira action link that starts ready engineering work.",
+    )
+    def _development_start_link_projection_definition(self) -> None:
+        raise NotImplementedError
+
+    @workflow_step(
+        key=PARENT_OP_DEVELOPMENT_START,
+        label="Development start",
+        kind=WorkflowStepKind.INTEGRATION,
+        after=PARENT_OP_JIRA_CHILD_PROMOTION,
+        required=False,
+        retryable=False,
+        description="Start executable development runs for engineering child tickets.",
+    )
+    def _development_start_definition(self) -> None:
+        raise NotImplementedError
 
     def _block_parent_brief(
         self,
@@ -1315,8 +1422,120 @@ class ParentFeaturePlanningWorkflow:
             )
         )
         if fanout.completed:
+            target_status = _promotion_target_for_parent_status(parent_detail.status)
+            promotion_step = start_workflow_step_attempt(
+                lifecycle=lifecycle,
+                operation_type=PARENT_OP_JIRA_CHILD_PROMOTION,
+            )
+            try:
+                if target_status is None:
+                    complete_workflow_step_attempt(
+                        lifecycle=lifecycle,
+                        step=promotion_step,
+                        summary=(
+                            f"Child promotion not required while parent issue {parent_detail.key} "
+                            f"is {parent_detail.status or 'not on the working board'}."
+                        ),
+                    )
+                else:
+                    promotion_result = self._promote_child_issues_work_unit(
+                        lifecycle=lifecycle,
+                        step=promotion_step,
+                        issue_gateway=self._deps.issue_gateway,
+                        parent_issue_key=parent_detail.key,
+                        target_status=target_status,
+                        idempotency_context="post_fanout",
+                    )
+                    complete_workflow_step_attempt(
+                        lifecycle=lifecycle,
+                        step=promotion_step,
+                        summary=self._promotion_summary(
+                            target_status=target_status,
+                            promoted_children=list(promotion_result["promoted_children"]),
+                        ),
+                    )
+            except Exception as exc:  # noqa: BLE001
+                fail_workflow_step_attempt(
+                    lifecycle=lifecycle,
+                    step=promotion_step,
+                    category=classify_external_workflow_failure(error=exc),
+                    message=str(exc),
+                )
+                raise
+            self._publish_start_development_link_step(
+                lifecycle=lifecycle,
+                settings=settings,
+                parent_detail=parent_detail,
+                tenant_id=tenant_id,
+                project_id=project_id,
+            )
             lifecycle.mark_completed_if_ready()
         return fanout
+
+    def _publish_start_development_link_step(
+        self,
+        *,
+        lifecycle,
+        settings,  # noqa: ANN001
+        parent_detail,
+        tenant_id: str,
+        project_id: str | None,
+    ) -> None:
+        if self._operation_completed(
+            lifecycle=lifecycle,
+            operation_type=PARENT_OP_DEVELOPMENT_START_LINK_PROJECTION,
+        ):
+            return
+        normalized_project_id = str(project_id or "").strip()
+        if not normalized_project_id:
+            raise RuntimeError(f"Project is required to publish the start development link for {parent_detail.key}")
+        action_url = build_start_work_action_url(
+            admin_ui_base_url=settings.admin_ui_base_url,
+            claims=StartWorkActionTokenClaims(
+                tenant_id=tenant_id,
+                project_id=normalized_project_id,
+                execution_id=lifecycle.workflow.execution_id,
+                workflow_id=lifecycle.workflow.workflow_id,
+                issue_key=parent_detail.key,
+            ),
+            secret=settings.jira_action_token_secret,
+        )
+        step = start_workflow_step_attempt(
+            lifecycle=lifecycle,
+            operation_type=PARENT_OP_DEVELOPMENT_START_LINK_PROJECTION,
+            target_system="jira",
+            target_ref=parent_detail.key,
+            summary="Publish Jira action link for starting ready development work.",
+        )
+        try:
+            created_comment, error = self._deps.issue_gateway.publish_start_development_link(
+                issue_key=parent_detail.key,
+                action_url=action_url,
+            )
+            if error is not None or created_comment is None:
+                raise RuntimeError(error or "Jira start development link comment was not created")
+        except Exception as exc:  # noqa: BLE001
+            fail_workflow_step_attempt(
+                lifecycle=lifecycle,
+                step=step,
+                category=classify_external_workflow_failure(error=exc),
+                message=str(exc),
+            )
+            raise
+        complete_workflow_step_attempt(
+            lifecycle=lifecycle,
+            step=step,
+            summary="Published Jira action link for starting ready development work.",
+        )
+
+    def _operation_completed(self, *, lifecycle, operation_type: str) -> bool:  # noqa: ANN001
+        operation = lifecycle.session.execute(
+            select(WorkflowOperation).where(
+                WorkflowOperation.workflow_id == lifecycle.workflow.workflow_id,
+                WorkflowOperation.operation_type == operation_type,
+            )
+        ).scalar_one_or_none()
+        return str(getattr(operation, "status", "") or "").strip().lower() == "completed"
 
     def _publish_clarification_then_wait_step(
         self,

@@ -70,6 +70,7 @@ class WorkflowExecution(Base):
     )
     source_system: Mapped[str] = mapped_column(String(64), nullable=False)
     source_ref: Mapped[str] = mapped_column(String(255), nullable=False)
+    source_external_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     display_name: Mapped[str | None] = mapped_column(Text, nullable=True)
     source_description: Mapped[str | None] = mapped_column(Text, nullable=True)
     repo_url: Mapped[str | None] = mapped_column(String(512), nullable=True)

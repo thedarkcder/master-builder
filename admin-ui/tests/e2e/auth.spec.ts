@@ -9,6 +9,8 @@ import {
 } from "./support/admin-ui";
 import { archiveTenant } from "./support/live-backend";
 
+test.describe.configure({ mode: "serial" });
+
 type RuntimeMatrixEntry = {
   runtimeKind: string;
   createModelValue: string;
@@ -948,12 +950,12 @@ test("requests a password reset and completes it through the real browser flow",
     await page.getByLabel("New password").fill(newPassword);
     await page.getByRole("button", { name: "Reset password" }).click();
     await expect(page).toHaveURL(/\/login\?reset=success$/, { timeout: 15000 });
-    await expect(page.getByText("Password updated. Sign in with your new password.")).toBeVisible();
+    await expect(page.getByRole("main")).toContainText("Password updated. Sign in with your new password.");
 
     await page.getByLabel("Email or username").fill(email);
     await page.getByLabel("Password").fill(oldPassword);
     await page.getByRole("button", { name: "Sign in" }).click();
-    await expect(page.locator("p[role='alert']")).toContainText("Invalid credentials");
+    await expect(page.getByRole("main").locator("p[role='alert']")).toContainText("Invalid credentials");
 
     await page.getByLabel("Password").fill(newPassword);
     await page.getByRole("button", { name: "Sign in" }).click();

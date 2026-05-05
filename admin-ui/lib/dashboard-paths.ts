@@ -1,4 +1,13 @@
-export type ProjectSection = "overview" | "settings" | "runs" | "webhooks" | "notifications" | "automations" | "secrets" | "danger";
+export type ProjectSection =
+  | "overview"
+  | "knowledge"
+  | "settings"
+  | "runs"
+  | "webhooks"
+  | "notifications"
+  | "automations"
+  | "secrets"
+  | "danger";
 export type RunPanel = "overview" | "agents" | "diagnostics" | "cost";
 
 function encodeSegment(value: string): string {
@@ -60,6 +69,7 @@ export function resolveProjectSection(pathname: string): ProjectSection | null {
   }
   if (
     rawSection === "settings" ||
+    rawSection === "knowledge" ||
     rawSection === "runs" ||
     rawSection === "webhooks" ||
     rawSection === "notifications" ||

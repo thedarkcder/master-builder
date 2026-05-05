@@ -123,6 +123,15 @@ class PlanningDecisionRecord(Base):
         Index("ix_planning_decision_records_tenant_issue", "tenant_id", "parent_issue_key"),
         Index("ix_planning_decision_records_tenant_lane_status", "tenant_id", "lane", "status"),
         Index("ix_planning_decision_records_source_attempt", "source_attempt_id"),
+        Index(
+            "uq_planning_decision_records_identity",
+            "tenant_id",
+            "workflow_id",
+            "lane",
+            "source_stage",
+            "external_key",
+            unique=True,
+        ),
     )
 
     record_id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -159,7 +168,7 @@ class PlanningDecisionRecord(Base):
     parent_issue_key: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     lane: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
-    source_stage: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    source_stage: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     external_key: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     payload_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)

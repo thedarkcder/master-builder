@@ -13,6 +13,11 @@ from orchestrator.api.admin.workflows.execution_read_service import list_workflo
 from orchestrator.api.admin.workflows.operation_retry_service import retry_workflow_operation
 from orchestrator.api.admin.workflows.operation_restart_service import restart_workflow_operation
 from orchestrator.api.admin.workflows.queries import workflow_by_execution_id
+from orchestrator.api.admin.workflows.start_development_service import (
+    preview_start_engineering,
+    start_engineering_from_action,
+    start_work_result_to_schema,
+)
 from orchestrator.api.admin.workflows.type_read_model import list_workflow_type_summaries, workflow_type_detail
 from orchestrator.core.workflow.type_catalog import get_workflow_type
 
@@ -29,6 +34,9 @@ __all__ = [
     "resume_workflow_execution",
     "restart_workflow_operation",
     "retry_workflow_operation",
+    "preview_start_engineering",
+    "start_engineering_from_action",
+    "start_work_result_to_schema",
 ]
 
 

@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:4100,http://127.0.0.1:4100"
     cors_origin_regex: str = ""
     admin_ui_base_url: str = "http://localhost:4100"
+    jira_action_token_secret: str = "local-dev-jira-action-token-secret"
     github_install_state_secret: str = "local-dev-change-me"
     github_app_slug: str = ""
     public_api_base_url: str = "http://localhost:4000"
@@ -98,6 +99,10 @@ class Settings(BaseSettings):
     knowledge_jira_sync_lock_key: int = 947102033128
     knowledge_jira_sync_max_issues: int = 500
     knowledge_jira_sync_invalid_token_backoff_seconds: int = 21600
+    jira_project_reconciliation_interval_seconds: int = 1800
+    jira_project_reconciliation_poll_seconds: int = 30
+    jira_project_reconciliation_lock_key: int = 947102033132
+    jira_project_reconciliation_max_items: int = 1000
     stage_spi_enabled: bool = False
     stage_spi_default_plugin: str = "design"
     stage_spi_llm_planning_enabled: bool = False

@@ -114,7 +114,7 @@ class JiraOAuthIssueService:
         if not normalized_issue:
             raise AtlassianOAuthError("Missing issue id/key for issue detail fetch")
 
-        query = urlencode({"fields": "summary,status,description,labels,issuetype"})
+        query = urlencode({"fields": "summary,status,description,labels,issuetype,parent"})
         payload = self._get_json(
             url=(
                 f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/issue/"
@@ -129,6 +129,8 @@ class JiraOAuthIssueService:
         if not isinstance(key_raw, str) or not key_raw.strip():
             raise AtlassianOAuthError("Issue detail response missing issue key")
         key = key_raw.strip()
+        issue_id_raw = payload.get("id")
+        issue_id = issue_id_raw.strip() if isinstance(issue_id_raw, str) and issue_id_raw.strip() else None
 
         fields = payload.get("fields")
         if not isinstance(fields, dict):
@@ -154,25 +156,46 @@ class JiraOAuthIssueService:
                 status_category_key = category_raw.strip()
 
         issue_type: str | None = None
+        issue_type_hierarchy_level: int | None = None
+        issue_type_is_subtask: bool | None = None
         issue_type_obj = fields.get("issuetype")
         if isinstance(issue_type_obj, dict):
             issue_type_raw = issue_type_obj.get("name")
             if isinstance(issue_type_raw, str) and issue_type_raw.strip():
                 issue_type = issue_type_raw.strip()
+            hierarchy_level_raw = issue_type_obj.get("hierarchyLevel")
+            if isinstance(hierarchy_level_raw, int):
+                issue_type_hierarchy_level = hierarchy_level_raw
+            subtask_raw = issue_type_obj.get("subtask")
+            if isinstance(subtask_raw, bool):
+                issue_type_is_subtask = subtask_raw
 
         description = _adf_to_plain_text(fields.get("description")).strip()
         labels_raw = fields.get("labels")
         labels: list[str] = []
         if isinstance(labels_raw, list):
             labels = [str(label).strip() for label in labels_raw if str(label).strip()]
+        parent_key: str | None = None
+        parent_issue_id: str | None = None
+        parent_obj = fields.get("parent")
+        if isinstance(parent_obj, dict):
+            raw_parent_key = parent_obj.get("key")
+            raw_parent_id = parent_obj.get("id")
+            parent_key = raw_parent_key.strip() if isinstance(raw_parent_key, str) and raw_parent_key.strip() else None
+            parent_issue_id = raw_parent_id.strip() if isinstance(raw_parent_id, str) and raw_parent_id.strip() else None
         return JiraIssueDetail(
             key=key,
             summary=summary,
             status=status_name,
             status_category_key=status_category_key,
             issue_type=issue_type,
+            issue_type_hierarchy_level=issue_type_hierarchy_level,
+            issue_type_is_subtask=issue_type_is_subtask,
             description=description,
             labels=labels,
+            issue_id=issue_id,
+            parent_key=parent_key,
+            parent_issue_id=parent_issue_id,
         )
 
     def list_issue_comments(

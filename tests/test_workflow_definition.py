@@ -55,6 +55,33 @@ def test_registered_parent_planning_retryable_steps_have_executable_capabilities
     assert retryable_steps == executable_retry_types
 
 
+def test_registered_jira_project_reconciliation_workflow_has_expected_steps_and_work_units() -> None:
+    workflow_type = get_workflow_type(workflow_type_key="jira_project_reconciliation")
+
+    assert [step.key for step in workflow_type.steps] == [
+        "jira_project_scan",
+        "jira_issue_classification",
+        "jira_label_reconciliation",
+        "parent_workflow_reconciliation",
+        "reconciliation_summary",
+    ]
+    assert {unit.key for unit in workflow_type.work_units} == {
+        "jira_project_scan.page_fetch",
+        "jira_project_scan.issue_detail_fetch",
+        "jira_issue_classification.compute",
+        "jira_label_reconciliation.label_replace",
+        "parent_workflow_reconciliation.parent_upsert",
+        "reconciliation_summary.compute",
+    }
+    assert {step.key for step in workflow_type.steps if step.retryable} == {
+        "jira_project_scan",
+        "jira_issue_classification",
+        "jira_label_reconciliation",
+        "parent_workflow_reconciliation",
+        "reconciliation_summary",
+    }
+
+
 def test_parent_planning_supporting_steps_declare_visual_owners() -> None:
     workflow_type = get_workflow_type(workflow_type_key="parent_planning")
     steps = {step.key: step for step in workflow_type.steps}

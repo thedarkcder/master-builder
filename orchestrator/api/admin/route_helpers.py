@@ -66,6 +66,7 @@ from orchestrator.api.admin.tenant_project_helpers import (
     sync_tenant_project_discord_channels as _sync_tenant_project_discord_channels_impl,
     sync_tenant_jira_project_keys as _sync_tenant_jira_project_keys_impl,
 )
+from orchestrator.core.jira_project_reconciliation.start import start_jira_project_reconciliation
 from orchestrator.api.schemas import (
     DiscordAllowlistRequestRead,
     JiraWebhookActionResult,
@@ -164,6 +165,22 @@ def reconcile_tenant_projects(session: Session, *, tenant: Tenant) -> None:
         settings=get_settings(),
         resolve_project_discord_channel_binding_fn=resolve_project_discord_channel_binding,
     )
+    projects = (
+        session.query(Project)
+        .filter(Project.tenant_id == tenant.tenant_id, Project.is_archived.is_(False))
+        .order_by(Project.project_id.asc())
+        .all()
+    )
+    for project in projects:
+        if not str(getattr(project, "jira_project_key", "") or "").strip():
+            continue
+        start_jira_project_reconciliation(
+            session=session,
+            settings=get_settings(),
+            tenant=tenant,
+            project=project,
+            trigger_event="tenant_setup_reconciliation",
+        )
 
 
 def with_managed_github_refs(raw_github_config: dict) -> dict:

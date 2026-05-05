@@ -141,6 +141,39 @@ def jira_question_comment_adf(
     return {"type": "doc", "version": 1, "content": content}
 
 
+def start_development_link_comment_adf(*, issue_key: str, action_url: str) -> dict[str, Any]:
+    normalized_issue_key = str(issue_key or "").strip().upper()
+    normalized_url = str(action_url or "").strip()
+    if not normalized_issue_key:
+        raise ValueError("Start development Jira comment requires an issue key")
+    if not normalized_url:
+        raise ValueError("Start development Jira comment requires an action URL")
+    return {
+        "type": "doc",
+        "version": 1,
+        "content": [
+            {
+                "type": "paragraph",
+                "content": [
+                    {"type": "text", "text": f"{system_comment_marker()} Master Builder prepared engineering work for {normalized_issue_key}."},
+                ],
+            },
+            {
+                "type": "paragraph",
+                "content": [
+                    {"type": "text", "text": "When you are ready, "},
+                    {
+                        "type": "text",
+                        "text": "start ready development work",
+                        "marks": [{"type": "link", "attrs": {"href": normalized_url}}],
+                    },
+                    {"type": "text", "text": ". Already-started child work will be skipped."},
+                ],
+            },
+        ],
+    }
+
+
 def persist_parent_brief_jira_followup(
     *,
     session: Session,
@@ -296,6 +329,24 @@ def post_sync_note(
         tenant=tenant,
         issue_key=issue_key,
         comment=_sync_note(body=body),
+        settings=settings,
+    )
+
+
+def post_start_development_link_to_jira(
+    *,
+    session: Session,
+    tenant,
+    issue_key: str,
+    action_url: str,
+    settings,  # noqa: ANN001
+    create_jira_comment_fn,
+) -> tuple[dict[str, Any] | None, str | None]:
+    return create_jira_comment_fn(
+        session=session,
+        tenant=tenant,
+        issue_key=issue_key,
+        comment=start_development_link_comment_adf(issue_key=issue_key, action_url=action_url),
         settings=settings,
     )
 

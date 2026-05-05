@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -21,8 +20,6 @@ _PLANNING_COMPLETE_STATUSES = {"planning_completed"}
 _SYNC_CURRENT_LABEL = "sync-current"
 _SYNC_STALE_LABEL = "sync-stale"
 _SYNC_BLOCKED_LABEL = "sync-blocked"
-_PM_COMPLETE_LABEL = "pm-complete"
-_PLANNING_COMPLETE_LABEL = "planning-complete"
 _HIERARCHY_RESOLVED_CHILD_ISSUE_TYPE = "hierarchy-resolved"
 _PM_PARENT_LABEL = "pm-parent"
 _ENGINEERING_CHILD_LABEL = "engineering-child"
@@ -91,15 +88,6 @@ def _is_planning_complete(planning_state: object) -> bool:
     return _normalized_status(planning_state) in _PLANNING_COMPLETE_STATUSES
 
 
-def _normalize_label(raw_value: str, *, prefix: str = "") -> str:
-    normalized = re.sub(r"[^a-z0-9]+", "-", str(raw_value or "").strip().lower()).strip("-")
-    if not normalized:
-        return ""
-    if prefix:
-        normalized = f"{prefix}{normalized}"
-    return normalized[:64]
-
-
 def _dedupe_labels(*label_groups: list[str]) -> list[str]:
     seen: set[str] = set()
     labels: list[str] = []
@@ -123,6 +111,11 @@ def _sync_label(sync_status: str) -> str:
     if normalized in {"sync_blocked", "planning_blocked"}:
         return _SYNC_BLOCKED_LABEL
     return _SYNC_STALE_LABEL
+
+
+def _non_current_sync_label(sync_status: str) -> list[str]:
+    label = _sync_label(sync_status)
+    return [label] if label == _SYNC_BLOCKED_LABEL else []
 
 
 def _parse_questions(raw_questions: object) -> list[str]:
@@ -457,10 +450,8 @@ class ParentIssueDraft:
                 planning_state=planning_state,
             ),
             labels=_dedupe_labels(
-                self.labels,
-                [_PM_PARENT_LABEL, _sync_label(sync_status)],
-                [_PM_COMPLETE_LABEL] if _is_pm_complete(pm_status) else [],
-                [_PLANNING_COMPLETE_LABEL] if _is_planning_complete(planning_state) else [],
+                [_PM_PARENT_LABEL],
+                _non_current_sync_label(sync_status),
             ),
             issue_type=self.issue_type,
         )
@@ -509,7 +500,6 @@ class EngineeringChildDraft:
         planning_state: str | None = None,
         pm_status: str | None = None,
     ) -> JiraIssueCreateInput:
-        parent_label = _normalize_label(parent_issue_key, prefix="parent-")
         return JiraIssueCreateInput(
             summary=self.summary,
             description=build_engineering_child_description(
@@ -528,10 +518,8 @@ class EngineeringChildDraft:
                 planning_state=planning_state,
             ),
             labels=_dedupe_labels(
-                self.labels,
-                [_ENGINEERING_CHILD_LABEL, parent_label, _sync_label(sync_status)],
-                [_PM_COMPLETE_LABEL] if _is_pm_complete(pm_status) else [],
-                [_PLANNING_COMPLETE_LABEL] if _is_planning_complete(planning_state) else [],
+                [_ENGINEERING_CHILD_LABEL],
+                _non_current_sync_label(sync_status),
             ),
             issue_type=self.issue_type,
             parent_issue_key=parent_issue_key,

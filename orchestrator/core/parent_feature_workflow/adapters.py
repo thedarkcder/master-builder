@@ -19,6 +19,7 @@ from orchestrator.core.integrations.atlassian.parent_child_sync_publishers impor
     mark_issues_sync_blocked as _mark_issues_sync_blocked,
     post_parent_brief_questions_to_discord as _post_parent_brief_questions_to_discord,
     post_parent_brief_questions_to_jira as _post_parent_brief_questions_to_jira,
+    post_start_development_link_to_jira as _post_start_development_link_to_jira,
     post_sync_note as _post_sync_note,
     upsert_jira_remote_link as _upsert_jira_remote_link,
     update_issue_sync_label as _update_issue_sync_label,
@@ -146,6 +147,9 @@ class _JiraParentIssueGateway:
 
     def load_parent_detail(self, issue_key: str) -> JiraIssueDetail:
         return self._jira().get_issue_detail(issue_id_or_key=issue_key)
+
+    def load_issue_detail(self, issue_key: str) -> JiraIssueDetail:
+        return self.load_parent_detail(issue_key)
 
     def load_child_details(self, *, project_key: str, parent_issue_key: str) -> list[JiraIssueDetail]:
         previews = self._jira().list_child_issue_previews(
@@ -293,6 +297,16 @@ class _JiraParentIssueGateway:
             jira_comment_created=jira_comment_created,
             discord_followup_created=posted_to_discord,
             jira_comment_id=jira_comment_id,
+        )
+
+    def publish_start_development_link(self, *, issue_key: str, action_url: str) -> tuple[dict[str, Any] | None, str | None]:
+        return _post_start_development_link_to_jira(
+            session=self._session,
+            tenant=self._context.tenant,
+            issue_key=issue_key,
+            action_url=action_url,
+            settings=self._settings,
+            create_jira_comment_fn=self._create_jira_comment_fn,
         )
 
     def matching_active_pm_jira_comment_id(

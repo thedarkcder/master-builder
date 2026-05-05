@@ -1,5 +1,14 @@
+2026-05-05
+
+- Workspace home is a team velocity dashboard, not an operational workflow-debug dashboard. Lead with throughput trend, waiting pressure, active time, and project flow metrics; keep execution internals and dense status lists in platform-admin troubleshooting surfaces.
+- Do not add intro/hero copy to workspace dashboards. If the page is a dashboard, start with the working chart surface; labels like "Workspace admin", "Workspace dashboard", or explanatory promise text add noise.
+- Dashboard chart colors must come from the product theme. Use primary plus muted neutrals, with warning reserved for waiting/blockage; do not turn workflow-state charts into rainbow categorical palettes.
+- Do not add product-specific manual workflow-start routes such as project-level Jira reconciliation endpoints. Workflow starts must follow the existing workflow architecture; delete special entrypoints and their orphaned helpers/tests instead of preserving parallel paths.
+- A user-facing manual trigger is not the same thing as a product-specific route. Keep the button when it is useful, but wire it through a generic workflow-start contract owned by the workflow architecture.
+
 2026-04-21
 
+- Jira-facing action URLs should use stable product permalink paths and redirect internally to implementation routes so page reorganizations do not invalidate comments already posted to Jira.
 - Optional notification integrations such as Discord or Slack must have a terminal non-blocking operation result. Do not mark the workflow operation failed just because an optional notification was not created; keep required delivery semantics on the primary human-response channel such as Jira.
 - Live log streaming must not allocate one database listener connection per browser drawer. Use one process-level wakeup listener and durable cursor queries so open HTTP streams do not exhaust Postgres clients or make snapshots disappear.
 - Workflow telemetry UI ordering must use the durable event sequence first and preserve invocation/stage context. Do not flatten parallel specialist runtime logs into one unlabeled Runtime section where separate invocation timelines look scrambled.
@@ -336,3 +345,25 @@
 - 2026-05-04: Do not replace prompt-contract prose with a generic domain-model framework. Define explicit domain model classes for each payload contract and reuse those concrete domain objects across prompt paths that share the same output shape.
 - 2026-05-04: Prompt output contracts must be generated from the same strongly typed payload models used by parsing. Do not maintain parallel prompt-only domain classes with loose `dict[str, object]` field specs when a concrete dataclass/Pydantic contract exists.
 - 2026-05-04: Do not name domain output contracts after transport details like `Payload`. Domain classes should use business names such as `PMInterviewPlan` or `TechnicalDecision`; serialization is a method on the domain type, not the type identity.
+- 2026-05-04: Model-generated IDs like `TD-001` and `PM-001` are usually scoped to a stage or prompt, not globally durable. Persisted planning-decision identity must include the source stage/scope, and tests must cover duplicate model IDs across specialist stages.
+- 2026-05-04: Do not encode older dict-shaped integration contexts in tests when production returns typed provider context objects. Tests should exercise the typed contract returned by the real provider boundary so runtime context validation does not fail in live workflows.
+- 2026-05-04: Jira issue hierarchy must resolve against the project's actual create metadata. Do not hard-code `Story` as the only Epic child type when a Jira project may use `Task` as its story-level work item.
+- 2026-05-04: Do not keep workflow steps as optional supporting projections when they are required for the product handoff to be usable. Required Jira readiness work must run as an attempt-backed mandatory step, fail hard on side-effect failure, and avoid polluting Jira with non-functional status labels.
+- 2026-05-04: Do not put customer-facing development-start actions on internal workflow/execution debugging pages. Jira action links should land on a standalone product action page, while workflow/execution pages remain platform-admin surfaces for workflow design and verification.
+- 2026-05-04: Workspace home is a customer/product work surface, not an execution debugger. Model it around parent Jira work items and show runs/questions as card context instead of making runs the primary dashboard entity.
+- 2026-05-04: Workspace board cards should have one primary interaction. Do not add secondary Jira/inspect/debug links to customer-facing parent-work cards unless the user explicitly asks for those actions.
+- 2026-05-04: Do not show raw workflow execution statuses like failed/completed on customer-facing parent Jira cards. The board lane owns the parent-work state; reserve status badges for contextual run/attempt details.
+- 2026-05-05: Workspace home is a cross-project dashboard. Project-scoped Kanban boards belong under the project surface, not the workspace landing page.
+- 2026-05-05: Pipeline, workflow, execution, and analytics surfaces are troubleshooting tools for platform admins. Do not expose them in customer workspace navigation or project tabs for tenant users.
+- 2026-05-05: Do not add redundant eyebrow labels when the page heading already states the page purpose; remove chrome that does not improve orientation.
+- 2026-05-05: Project Overview should be the working board only. Move metadata, policy, knowledge, secrets, notifications, and automation detail into their own tabs instead of making the dashboard a mixed information dump.
+- 2026-05-05: Do not keep tenant settings hub pages that only link to other tabs. Route users directly to the owned settings surface and delete link-hub tabs instead of preserving navigation noise.
+- 2026-05-05: When removing shortcut links from a dashboard, first move the destination into the owning navigation/tab structure. Deleting a link without a replacement navigation path breaks discoverability even if the route still exists.
+- 2026-05-05: Settings navigation should default to the configuration surface, not a third-party integration. Integrations are supporting setup destinations near the end, and destructive Danger controls must be last.
+- 2026-05-05: Workspace admin home should communicate delivery velocity and work completed, not just project navigation. Cross-project dashboards need throughput, active work, blocked input, and recent completion signals above navigation lists.
+- 2026-05-05: Velocity dashboards should be chart-led, not label-led. Aggregate workflow states into trend, distribution, and throughput visualizations before falling back to lists of counts.
+- 2026-05-05: Engineering dashboards should expose improvement metrics, not vanity counts. Include active cycle time, waiting age, longest waiting item, and waiting-for-information bottlenecks so teams can see where delivery flow needs attention.
+- 2026-05-05: Utilization dashboards must expose pickup failure directly. If parent work is ready but no run is queued or running, show that idle-ready condition as the operating signal instead of making users infer it from separate counts.
+- 2026-05-05: Do not define MB utilization as allocated work divided by ready work. Utilization is capacity usage during the working day: active MB execution time across available concurrency slots divided by elapsed working-day capacity.
+- 2026-05-05: Workspace productivity dashboards must sell the platform benefit, not expose internal workflow counters. Every chart needs a plain operational question it answers without explanatory labels; if the chart needs heavy copy to make sense, redesign the chart.
+- 2026-05-05: If the user asks for a platform workflow, do not implement only a synchronous admin use case and call it done. Jira/environment reconciliation needs to be a code-defined durable workflow with attempts, telemetry, retry, restart, and schedule/manual triggers.

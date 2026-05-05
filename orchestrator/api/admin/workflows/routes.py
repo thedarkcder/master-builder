@@ -17,6 +17,8 @@ from orchestrator.api.admin.workflows import use_cases
 from orchestrator.api.schemas import (
     RunRead,
     WorkflowAttemptCreateRequest,
+    WorkflowExecutionStartRead,
+    WorkflowExecutionStartRequest,
     WorkflowObservabilityEventRead,
     WorkflowOperationRestartRequest,
     WorkflowOperationRetryRead,
@@ -80,6 +82,25 @@ def get_workflow(
     session: Session = Depends(get_session),
 ) -> WorkflowRead:
     return use_cases.get_workflow(session=session, principal=principal, execution_id=execution_id)
+
+
+@router.post(
+    "/workflow-types/{workflow_type_key}/executions",
+    response_model=WorkflowExecutionStartRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def start_workflow_execution(
+    workflow_type_key: str,
+    payload: WorkflowExecutionStartRequest,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> WorkflowExecutionStartRead:
+    return use_cases.start_workflow_execution(
+        session=session,
+        principal=principal,
+        workflow_type_key=workflow_type_key,
+        payload=payload,
+    )
 
 @router.get("/workflows/{execution_id}/telemetry", response_model=list[WorkflowObservabilityEventRead])
 def list_workflow_telemetry_events(
@@ -273,6 +294,7 @@ def resume_workflow_execution(
     session: Session = Depends(get_session),
 ) -> RunRead:
     return use_cases.resume_workflow_execution(session=session, execution_id=execution_id)
+
 
 @router.post("/workflows/{execution_id}/operations/{operation_id}/retry", response_model=WorkflowOperationRetryRead)
 def retry_workflow_operation(
