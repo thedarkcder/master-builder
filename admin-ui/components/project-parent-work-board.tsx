@@ -244,9 +244,17 @@ export function ProjectParentWorkBoard({
 
       {allowJiraReconciliation ? (
         <div className="flex justify-end">
-          <Button type="button" variant="outline" size="sm" onClick={() => void syncJiraWork()} disabled={!ready || !credentials || syncing}>
-            <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${syncing ? "animate-spin" : ""}`} />
-            Sync Jira work
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-8 w-8 p-0"
+            onClick={() => void syncJiraWork()}
+            disabled={!ready || !credentials || syncing}
+            aria-label="Sync Jira work"
+            title="Sync Jira work"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${syncing ? "animate-spin" : ""}`} />
           </Button>
         </div>
       ) : null}
