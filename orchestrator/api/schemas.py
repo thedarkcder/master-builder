@@ -1335,6 +1335,7 @@ class WorkflowBoardItemRead(BaseModel):
     failed_run_count: int = 0
     latest_run: WorkflowBoardRunSummaryRead | None = None
     runs: list[WorkflowBoardRunSummaryRead] = Field(default_factory=list)
+    links: list[WorkflowLinkRead] = Field(default_factory=list)
     latest_activity_at: datetime
     created_at: datetime
     started_at: datetime | None = None

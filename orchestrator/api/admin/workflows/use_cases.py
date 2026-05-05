@@ -28,6 +28,7 @@ from orchestrator.api.admin.workflows.service import (
     retry_workflow_operation as retry_workflow_operation_impl,
     preview_start_engineering as preview_start_engineering_impl,
     start_engineering_from_action as start_engineering_from_action_impl,
+    start_parent_planning as start_parent_planning_impl,
     start_work_result_to_schema,
 )
 from orchestrator.api.schemas import (
@@ -154,6 +155,21 @@ def get_workflow(*, session: Session, principal: AuthenticatedPrincipal, executi
         execution_id=execution_id,
         workflow_to_schema_fn=workflow_to_schema,
         run_to_schema_fn=run_to_schema,
+    )
+
+
+def start_parent_planning(*, session: Session, principal: AuthenticatedPrincipal, execution_id: str) -> WorkflowRead:
+    workflow = _require_workflow_access(session=session, principal=principal, execution_id=execution_id)
+    require_tenant_permission(
+        principal=principal,
+        tenant_id=workflow.tenant_id,
+        permission_key=PERMISSION_PROJECTS_MANAGE,
+    )
+    return start_parent_planning_impl(
+        session=session,
+        execution_id=execution_id,
+        integration_router=workflow_integration_router,
+        workflow_to_schema_fn=workflow_to_schema,
     )
 
 

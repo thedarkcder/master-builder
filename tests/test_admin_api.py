@@ -1644,6 +1644,27 @@ class AdminApiTests(AdminApiTestHarness):
                 run_status="running",
                 now=now,
             )
+            session.add(
+                WorkflowExecution(
+                    workflow_id="parent_planning:TP-103",
+                    execution_id="exec-board-cancelled",
+                    workflow_type_key="parent_planning",
+                    tenant_id="tenant-a",
+                    project_id="tenant-a-default",
+                    source_system="jira",
+                    source_ref="TP-103",
+                    display_name="Cancelled parent planning",
+                    source_description="Already no longer eligible",
+                    orchestration_backend="temporal",
+                    dedupe_scope="parent_planning",
+                    status="cancelled",
+                    last_error="Source item is no longer eligible for MB parent planning.",
+                    created_at=now,
+                    started_at=None,
+                    finished_at=now,
+                    updated_at=now,
+                )
+            )
             session.commit()
 
         response = self.client.get(
@@ -1658,8 +1679,85 @@ class AdminApiTests(AdminApiTestHarness):
         self.assertEqual(body[0]["pending_input_request_id"], "request-board-1")
         self.assertEqual(body[0]["run_count"], 1)
         self.assertEqual(body[0]["latest_run"]["run_id"], "run-board-1")
+        self.assertEqual(body[0]["links"][0]["kind"], "jira_issue")
+        self.assertEqual(body[0]["links"][0]["url"], "https://example.atlassian.net/browse/TP-101")
         self.assertNotIn("operations", body[0])
         self.assertNotIn("workflow_type", body[0])
+
+    def test_start_parent_planning_uses_parent_workflow_advance_contract(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201)
+
+        now = datetime.now(timezone.utc)
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            session.add(
+                WorkflowExecution(
+                    workflow_id="parent_planning:TP-165",
+                    execution_id="exec-parent-planning-165",
+                    workflow_type_key="parent_planning",
+                    tenant_id="tenant-a",
+                    project_id="tenant-a-default",
+                    source_system="jira",
+                    source_ref="TP-165",
+                    display_name="Plan GP165",
+                    source_description="Existing Jira parent issue",
+                    orchestration_backend="temporal",
+                    dedupe_scope="parent_planning",
+                    status="queued",
+                    created_at=now,
+                    started_at=None,
+                    finished_at=None,
+                    updated_at=now,
+                )
+            )
+            session.commit()
+
+        class FakeJiraAdapter:
+            def get_issue_detail(self, *, issue_id_or_key: str):
+                self.issue_id_or_key = issue_id_or_key
+                return SimpleNamespace(labels=["pm-parent", "sync-current"])
+
+        class FakeIntegrationRouter:
+            def __init__(self) -> None:
+                self.jira_adapter = FakeJiraAdapter()
+
+            def jira(self, **kwargs):
+                self.jira_kwargs = kwargs
+                return self.jira_adapter
+
+        fake_router = FakeIntegrationRouter()
+
+        def _handle_parent_feature_sync(**kwargs):
+            context = kwargs["context"]
+            self.assertEqual(context.issue_key, "TP-165")
+            self.assertEqual(context.webhook_event, "issue_created")
+            self.assertIn("pm-parent", context.issue_labels)
+            with session_factory() as session:
+                workflow = session.get(WorkflowExecution, "parent_planning:TP-165")
+                workflow.status = "running"
+                workflow.updated_at = now
+                session.commit()
+            return SimpleNamespace(handled=True, failed=False, reason="manual_parent_planning_start", extra={})
+
+        with (
+            patch("orchestrator.api.admin.workflows.use_cases.workflow_integration_router", fake_router),
+            patch(
+                "orchestrator.api.admin.workflows.start_planning_service.handle_parent_feature_sync_service",
+                side_effect=_handle_parent_feature_sync,
+            ) as handle_sync,
+        ):
+            response = self.client.post(
+                "/api/admin/workflows/exec-parent-planning-165/start-planning",
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(fake_router.jira_adapter.issue_id_or_key, "TP-165")
+        self.assertEqual(handle_sync.call_count, 1)
+        self.assertEqual(response.json()["status"], "running")
 
     def test_list_and_get_workflow_types_from_admin(self) -> None:
         payload = self._tenant_payload()

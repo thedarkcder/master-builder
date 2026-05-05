@@ -63,6 +63,7 @@ class JiraProjectReconciliationAdvanceHandler:
             project=project,
             gateway=gateway,
             max_items=max_items,
+            request_id=request_id,
         )
         try:
             result = service.run()
