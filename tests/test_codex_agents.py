@@ -861,7 +861,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         )
 
         with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=lambda template_name, **_: template_name):
-            with pytest.raises(CodexRuntimeError, match="Voice room persona payload missing brief"):
+            with pytest.raises(CodexRuntimeError, match="Voice room persona payload brief must be an object"):
                 answer_voice_room_persona_with_runtime(
                     runtime=runtime,
                     persona_id="architect",
