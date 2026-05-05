@@ -251,8 +251,8 @@ export function ProjectParentWorkBoard({
             className="h-8 w-8 p-0"
             onClick={() => void syncJiraWork()}
             disabled={!ready || !credentials || syncing}
-            aria-label="Sync Jira work"
-            title="Sync Jira work"
+            aria-label="Sync"
+            title="Sync"
           >
             <RefreshCw className={`h-3.5 w-3.5 ${syncing ? "animate-spin" : ""}`} />
           </Button>
