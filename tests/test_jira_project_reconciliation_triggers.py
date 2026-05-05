@@ -23,6 +23,10 @@ class JiraProjectReconciliationTriggerTests(AdminApiTestHarness):
             "/api/admin/tenants/{tenant_id}/projects/{project_id}/jira-work/reconcile",
             paths,
         )
+        self.assertNotIn(
+            "/api/admin/workflow-types/{workflow_type_key}/executions",
+            paths,
+        )
 
     def test_generic_workflow_start_route_starts_project_reconciliation(self) -> None:
         payload = self._tenant_payload()
@@ -45,8 +49,9 @@ class JiraProjectReconciliationTriggerTests(AdminApiTestHarness):
             ),
         ) as start_mock:
             response = self.client.post(
-                "/api/admin/workflow-types/jira_project_reconciliation/executions",
+                "/api/admin/workflows",
                 json={
+                    "workflow_type_key": "jira_project_reconciliation",
                     "tenant_id": "tenant-a",
                     "project_id": "tenant-a-default",
                     "input": {"max_items": 250},

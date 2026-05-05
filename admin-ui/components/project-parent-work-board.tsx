@@ -174,7 +174,8 @@ export function ProjectParentWorkBoard({
     setSyncing(true);
     setErrorMessage(null);
     try {
-      const result = await startWorkflowExecution(credentials, "jira_project_reconciliation", {
+      const result = await startWorkflowExecution(credentials, {
+        workflow_type_key: "jira_project_reconciliation",
         tenant_id: tenantId,
         project_id: projectId,
         input: { max_items: 1000 },

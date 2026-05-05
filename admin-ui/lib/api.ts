@@ -980,6 +980,7 @@ export type WorkflowOperationRetryResponseRecord = {
 };
 
 export type WorkflowExecutionStartPayload = {
+  workflow_type_key: string;
   tenant_id: string;
   project_id?: string | null;
   input?: Record<string, unknown>;
@@ -2696,12 +2697,11 @@ export function getWorkflowType(
 
 export function startWorkflowExecution(
   credentials: Credentials,
-  workflowTypeKey: string,
   payload: WorkflowExecutionStartPayload,
 ): Promise<WorkflowExecutionStartRecord> {
   return request<WorkflowExecutionStartRecord>(
     credentials,
-    `/api/admin/workflow-types/${encodeURIComponent(workflowTypeKey)}/executions`,
+    "/api/admin/workflows",
     {
       method: "POST",
       body: JSON.stringify(payload),
