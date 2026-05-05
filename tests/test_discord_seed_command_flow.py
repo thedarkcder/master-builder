@@ -410,11 +410,11 @@ class DiscordSeedCommandFlowTests(DiscordCommandApiTestHarness):
             ),
             patch(
                 "orchestrator.runtime.issue_fanout.tenant_atlassian_oauth_context",
-                return_value={
-                    "client": fake_client,
-                    "access_token": "token",
-                    "connection": type("Connection", (), {"cloud_id": "cloud-1", "site_url": "https://master-builder.atlassian.net"})(),
-                },
+                return_value=SimpleNamespace(
+                    client=fake_client,
+                    access_token="token",
+                    connection=SimpleNamespace(cloud_id="cloud-1", site_url="https://master-builder.atlassian.net"),
+                ),
             ),
         ):
             tenant = session.get(Tenant, self.tenant_id)
