@@ -94,7 +94,7 @@ class JiraWebhookAdmissionFlowTests(JiraWebhookHarness):
             ],
         }
         with (
-            patch("orchestrator.api.webhooks.jira_webhook_board_gate._fetch_issue_board_location", return_value=("backlog", None)),
+            patch("orchestrator.api.webhooks.jira_board_location._fetch_issue_board_location", return_value=("backlog", None)),
             patch(
                 "orchestrator.api.webhooks.jira_admission_flow.evaluate_pre_run_check",
                 return_value=self._pre_run_check(),

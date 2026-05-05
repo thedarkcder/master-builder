@@ -684,7 +684,7 @@ class CodexInvocationTests(unittest.TestCase):
                 context=context,
                 system_prompt="system",
                 user_prompt="user",
-            )
+        )
 
         self.assertEqual(payload, {"ok": True})
         self.assertEqual(captured["model_override"], "gpt-5.4-mini")

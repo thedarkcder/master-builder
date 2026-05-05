@@ -32,7 +32,7 @@ class JiraRouteServiceTests(unittest.TestCase):
         self.assertEqual(exc_ctx.exception.status_code, 404)
 
     def test_list_jira_projects_for_connection_success(self) -> None:
-        connection = SimpleNamespace(connection_id="conn-1", cloud_id="cloud-1")
+        connection = SimpleNamespace(connection_id="conn-1", cloud_id="cloud-1", site_url="https://example.atlassian.net")
         session = MagicMock()
         session.get.return_value = connection
 
