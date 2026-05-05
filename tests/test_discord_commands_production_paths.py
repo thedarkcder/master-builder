@@ -539,8 +539,8 @@ class DiscordCommandProductionPathTests(SqliteTemplateDbTestCase):
         self.assertEqual(len(fake_jira_client.create_calls), 1)
         self.assertEqual(fake_jira_client.create_calls[0]["project_key"], "TP")
 
-    def test_issues_seed_uses_project_scoped_codex_model_override(self) -> None:
-        runtime, queue = self._seed_runtime([self._planned_seed_output(summary="Use project model override")])
+    def test_issues_seed_uses_runtime_profile_model_without_transport_model_override(self) -> None:
+        runtime, queue = self._seed_runtime([self._planned_seed_output(summary="Use runtime profile model")])
         fake_jira_client = _FakeJiraClient(
             issue_key="TP-42",
             summary="Cross-account relink policy",
@@ -570,9 +570,9 @@ class DiscordCommandProductionPathTests(SqliteTemplateDbTestCase):
             response = self._post_command("!issues seed draft a backlog item for relink policy")
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(queue.model_overrides, ["gpt-5.4"])
+        self.assertEqual(queue.model_overrides, ["gpt-5-codex"])
 
-    def test_ask_uses_project_scoped_codex_model_override(self) -> None:
+    def test_ask_uses_runtime_profile_model_without_transport_model_override(self) -> None:
         runtime, queue = self._seed_runtime([json.dumps({"message": "Scoped answer"})])
         fake_jira_client = _FakeJiraClient(
             issue_key="TP-42",
@@ -608,7 +608,7 @@ class DiscordCommandProductionPathTests(SqliteTemplateDbTestCase):
             response = self._post_command("!ask what is blocked?")
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(queue.model_overrides, ["gpt-5.4"])
+        self.assertEqual(queue.model_overrides, ["gpt-5-codex"])
 
     def test_ask_requires_single_project_scope_when_unscoped(self) -> None:
         with self.session_factory() as session:

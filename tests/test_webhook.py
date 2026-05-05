@@ -87,7 +87,7 @@ class JiraWebhookTests(JiraWebhookTestsHarness):
         payload = self._jira_issue_payload(issue_key="TP-123", status_name="To Do", labels=["agent:ready"])
         payload["webhookEvent"] = "jira:issue_created"
         with (
-            patch("orchestrator.api.webhooks.jira_webhook_board_gate._fetch_issue_board_location", return_value=("backlog", None)),
+            patch("orchestrator.api.webhooks.jira_board_location._fetch_issue_board_location", return_value=("backlog", None)),
             patch(
                 "orchestrator.api.webhooks.jira_admission_flow.evaluate_pre_run_check",
                 return_value=self._pre_run_check(outcome="decision_gate_required"),
@@ -113,7 +113,7 @@ class JiraWebhookTests(JiraWebhookTestsHarness):
         payload = self._jira_issue_payload(issue_key="TP-139", status_name="To Do", labels=["agent:ready"])
         payload["webhookEvent"] = "jira:issue_updated"
         with (
-            patch("orchestrator.api.webhooks.jira_webhook_board_gate._fetch_issue_board_location", return_value=("backlog", None)),
+            patch("orchestrator.api.webhooks.jira_board_location._fetch_issue_board_location", return_value=("backlog", None)),
             patch("orchestrator.api.webhooks.jira_admission_flow.evaluate_pre_run_check", return_value=self._pre_run_check()),
             patch("orchestrator.core.discord.transport_executor.send_tenant_discord_message") as notify_mock,
         ):
@@ -165,7 +165,7 @@ class JiraWebhookTests(JiraWebhookTestsHarness):
             session.commit()
 
         payload = self._jira_issue_payload(issue_key="TP-123", status_name="To Do", labels=["agent:ready"])
-        with patch("orchestrator.api.webhooks.jira_webhook_board_gate._fetch_issue_board_location", return_value=("not_on_board", None)):
+        with patch("orchestrator.api.webhooks.jira_board_location._fetch_issue_board_location", return_value=("not_on_board", None)):
             response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
 
         body = self._assert_jira_issue_event_queued(response, issue_key="TP-123")
@@ -182,13 +182,13 @@ class JiraWebhookTests(JiraWebhookTestsHarness):
             session.commit()
 
         payload = self._jira_issue_payload(issue_key="TP-123", status_name="To Do", labels=["agent:ready"])
-        with patch("orchestrator.api.webhooks.jira_webhook_board_gate._fetch_issue_board_location", return_value=("board", None)):
+        with patch("orchestrator.api.webhooks.jira_board_location._fetch_issue_board_location", return_value=("board", None)):
             response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
 
         self._assert_jira_issue_event_queued(response, issue_key="TP-123")
 
     def test_fetch_issue_board_location_still_checks_board_when_backlog_lookup_fails(self) -> None:
-        from orchestrator.api.webhooks.jira_webhook_board_gate import _fetch_issue_board_location
+        from orchestrator.api.webhooks.jira_board_location import _fetch_issue_board_location
 
         context = JiraWebhookContext(
             request_id="req-1",
@@ -219,8 +219,8 @@ class JiraWebhookTests(JiraWebhookTestsHarness):
         ]
 
         with (
-            patch("orchestrator.api.webhooks.jira_webhook_board_gate.tenant_atlassian_oauth_context", return_value=oauth_context),
-            patch("orchestrator.api.webhooks.jira_webhook_board_gate.AtlassianOAuthHttpClient", return_value=http_client),
+            patch("orchestrator.api.webhooks.jira_board_location.tenant_atlassian_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.webhooks.jira_board_location.AtlassianOAuthHttpClient", return_value=http_client),
         ):
             location, detail = _fetch_issue_board_location(
                 context=context,

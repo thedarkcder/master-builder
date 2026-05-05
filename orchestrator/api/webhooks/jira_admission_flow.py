@@ -78,9 +78,9 @@ def resolve_jira_issue_board_location(
     session: Session,
     settings,  # noqa: ANN001
 ) -> tuple[str | None, str | None]:
-    from orchestrator.api.webhooks import jira_webhook_board_gate
+    from orchestrator.api.webhooks.jira_board_location import resolve_project_issue_board_location
 
-    return jira_webhook_board_gate.resolve_project_issue_board_location(
+    return resolve_project_issue_board_location(
         context=context,
         session=session,
         settings=settings,
