@@ -62,7 +62,7 @@ class MigrationTests(unittest.TestCase):
 
         duplicates = {revision_id: count for revision_id, count in Counter(revision_ids).items() if count > 1}
         self.assertEqual(duplicates, {})
-        self.assertEqual(script.get_heads(), ["20260504_0104"])
+        self.assertEqual(script.get_heads(), ["20260505_0106"])
 
     def test_failed_attempt_retryability_repair_migration(self) -> None:
         with TemporaryDirectory() as tmpdir:

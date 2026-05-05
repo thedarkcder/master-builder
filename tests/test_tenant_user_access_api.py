@@ -68,8 +68,14 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
 
         get_settings.cache_clear()
         reset_db_engine_cache()
+        self._jira_project_reconciliation_patch = patch(
+            "orchestrator.api.admin.route_helpers.start_jira_project_reconciliation",
+            return_value=None,
+        )
+        self._jira_project_reconciliation_patch.start()
 
     def tearDown(self) -> None:
+        self._jira_project_reconciliation_patch.stop()
         self._cleanup_test_database()
         get_settings.cache_clear()
         reset_db_engine_cache()

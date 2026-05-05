@@ -85,7 +85,8 @@ class WorkflowBoundaryPathTests(JiraWebhookTestsHarness):
 
         self.assertEqual(boundary.jira.created_issue_keys, ["TP-998"])
         self.assertTrue(boundary.jira.updated_parent_labels)
-        self.assertIn("sync-current", boundary.jira.updated_parent_labels[-1])
+        self.assertEqual(boundary.jira.updated_parent_labels[-1], ["pm-parent"])
+        self.assertEqual([issue_key for issue_key, _comment in boundary.jira.comments], ["TP-997"])
         self.assertTrue(boundary.telemetry.contains_kind("runtime_log"))
         self.assertTrue(boundary.telemetry.contains_kind("stage_request"))
         self.assertTrue(boundary.telemetry.contains_kind("jira_child_upsert_request"))
