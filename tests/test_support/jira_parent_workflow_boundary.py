@@ -102,6 +102,7 @@ class BoundaryJiraClient:
         self.created_issue_keys: list[str] = []
         self.updated_parent_labels: list[list[str]] = []
         self.remote_links: list[tuple[str, str]] = []
+        self.comments: list[tuple[str, str | dict[str, object]]] = []
 
     def get_issue_detail(
         self,
@@ -255,6 +256,18 @@ class BoundaryJiraClient:
         self.remote_links.append((issue_id_or_key, title or global_id))
         return {}
 
+    def add_issue_comment(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        issue_id_or_key: str,
+        comment: str | dict[str, object],
+    ) -> dict[str, object]:
+        del access_token, cloud_id
+        self.comments.append((issue_id_or_key, comment))
+        return {"id": f"comment-{issue_id_or_key}-{len(self.comments)}", "body": comment}
+
     def transition_issue(
         self,
         *,
@@ -299,11 +312,6 @@ class JiraParentWorkflowBoundaryHarness:
                 site_url="https://example.atlassian.net",
             ),
         )
-        oauth_dict = {
-            "client": self.jira,
-            "access_token": "boundary-token",
-            "connection": oauth_object.connection,
-        }
         with ExitStack() as stack:
             configure_product_event_repository_for_tests(self.event_repository)
             stack.callback(reset_product_event_repository_for_tests)
@@ -315,7 +323,7 @@ class JiraParentWorkflowBoundaryHarness:
             ):
                 stack.enter_context(patch(target, return_value=oauth_object))
             stack.enter_context(
-                patch("orchestrator.runtime.issue_fanout.tenant_atlassian_oauth_context", return_value=oauth_dict)
+                patch("orchestrator.runtime.issue_fanout.tenant_atlassian_oauth_context", return_value=oauth_object)
             )
             stack.enter_context(
                 patch("orchestrator.api.webhooks.contracts.tenant_atlassian_oauth_context", return_value=oauth_object)

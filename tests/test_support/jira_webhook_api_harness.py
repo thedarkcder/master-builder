@@ -156,6 +156,11 @@ class JiraWebhookTestsHarness(SqliteTemplateApiTestCase):
             build_local_workflow_runtime,
         )
         self._workflow_runtime_patch.start()
+        self._contracts_oauth_patch = patch(
+            "orchestrator.api.webhooks.contracts.tenant_atlassian_oauth_context",
+            side_effect=self._tenant_atlassian_oauth_context,
+        )
+        self._contracts_oauth_patch.start()
 
     def tearDown(self) -> None:
         self._cleanup_test_database()
@@ -170,6 +175,13 @@ class JiraWebhookTestsHarness(SqliteTemplateApiTestCase):
         self._default_precheck_decision_patch.stop()
         self._event_notify_patch.stop()
         self._workflow_runtime_patch.stop()
+        self._contracts_oauth_patch.stop()
+
+    @staticmethod
+    def _tenant_atlassian_oauth_context(*args, **kwargs):
+        from orchestrator.core.worker import webhook_job_service
+
+        return webhook_job_service.tenant_atlassian_oauth_context(*args, **kwargs)
 
     def _evaluate_precheck_decision_with_labels(
         self,

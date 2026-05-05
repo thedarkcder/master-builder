@@ -159,6 +159,19 @@ class _JiraMetadataClientMixin:
     ) -> list[dict[str, object]]:
         return []
 
+    def add_issue_comment(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        issue_id_or_key: str,
+        comment: str | dict[str, object],
+    ) -> dict[str, object]:
+        return self._add_issue_comment(issue_id_or_key, comment)
+
+    def _add_issue_comment(self, issue_id_or_key: str, comment: str | dict[str, object]) -> dict[str, object]:
+        return {"id": f"comment-{issue_id_or_key}", "body": comment}
+
 
 def _completed_specialist_planning_result(
     *,
@@ -771,6 +784,10 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                     },
                 ),
             ) as seed_mock,
+            patch(
+                "orchestrator.api.webhooks.jira_parent_child_sync.create_jira_comment",
+                return_value=({"id": "start-development-comment-1"}, None),
+            ) as create_comment_mock,
             patch("orchestrator.api.webhooks.jira_parent_child_sync.post_jira_comment", return_value=(True, None)) as comment_mock,
             patch("orchestrator.api.webhooks.jira_application.plan_jira_run_flow") as run_flow_mock,
         ):
@@ -784,6 +801,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
         seed_mock.assert_called_once()
         self.assertTrue(seed_mock.call_args.kwargs["allow_create"])
         run_flow_mock.assert_not_called()
+        create_comment_mock.assert_called_once()
         comment_mock.assert_not_called()
 
     def test_webhook_pm_parent_material_change_with_no_child_delta_is_successful_no_op(self) -> None:
@@ -1284,6 +1302,10 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                     },
                 ),
             ) as seed_mock,
+            patch(
+                "orchestrator.api.webhooks.jira_parent_child_sync.create_jira_comment",
+                return_value=({"id": "start-development-comment-983"}, None),
+            ) as create_comment_mock,
             patch("orchestrator.api.webhooks.jira_parent_child_sync.post_jira_comment", return_value=(True, None)) as comment_mock,
             patch("orchestrator.api.webhooks.jira_application.plan_jira_run_flow") as run_flow_mock,
         ):
@@ -1329,12 +1351,15 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                 "backlog_planning": "completed",
                 "jira_child_fanout": "completed",
                 "jira_child_promotion": "completed",
+                "development_start": "pending",
+                "development_start_link_projection": "completed",
                 "notification_emit": "pending",
                 "pm_decision_resolution": "pending",
             },
         )
         self.assertEqual(oauth_context.client.updated_fields, [])
         run_flow_mock.assert_not_called()
+        create_comment_mock.assert_called_once()
         comment_mock.assert_not_called()
 
     def test_webhook_pm_parent_issue_created_uses_canonical_parent_brief_snapshot(self) -> None:
