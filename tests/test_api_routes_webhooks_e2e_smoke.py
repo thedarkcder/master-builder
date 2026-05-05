@@ -459,6 +459,11 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 path="/api/admin/workflows/workflow-e2e/audit",
                 auth=admin,
             ),
+            ("POST", "/api/admin/workflows/{execution_id}/start-planning"): RouteScenario(
+                path="/api/admin/workflows/workflow-missing/start-planning",
+                auth=admin,
+                expected_statuses=(404,),
+            ),
             ("GET", "/api/admin/runs/{run_id}/events"): RouteScenario(
                 path="/api/admin/runs/run-e2e/events",
                 auth=admin,
