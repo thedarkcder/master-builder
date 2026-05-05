@@ -21,6 +21,7 @@ from tests.workflow_test_support import add_human_input_request, add_run_with_wo
 class AdminApiTestHarness(SqliteTemplateApiTestCase):
     _secrets_encryption_key: str
     _provision_jira_webhook_patcher: object
+    _start_jira_reconciliation_patcher: object
     client: TestClient
     database_url: str
 
@@ -98,10 +99,15 @@ class AdminApiTestHarness(SqliteTemplateApiTestCase):
             side_effect=_stub_provision_jira_webhook,
         )
         self._provision_jira_webhook_patcher.start()
+        self._start_jira_reconciliation_patcher = patch(
+            "orchestrator.api.admin.route_helpers.start_jira_project_reconciliation"
+        )
+        self._start_jira_reconciliation_patcher.start()
         self.client = TestClient(create_app(), raise_server_exceptions=False)
 
     def tearDown(self) -> None:
         self.client.close()
+        self._start_jira_reconciliation_patcher.stop()
         self._provision_jira_webhook_patcher.stop()
         self._cleanup_test_database()
         os.environ.pop("ORCHESTRATOR_WORKER_CAPABILITIES", None)
