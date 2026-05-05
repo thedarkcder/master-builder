@@ -285,6 +285,306 @@ class JiraProjectReconciliationWorkflowTests(SqliteTemplateDbTestCase):
         assert parent_workflows[0].source_ref == "MAB-200"
         assert parent_workflows[0].display_name == "Renamed issue key"
 
+    def test_release_ready_parent_source_deactivates_existing_planning_workflow(self) -> None:
+        gateway = _FakeGateway(
+            previews=[JiraIssuePreview(key="MAB-300", summary="Release-ready parent", status="Ready to Release")],
+            details={
+                "MAB-300": JiraIssueDetail(
+                    key="MAB-300",
+                    summary="Release-ready parent",
+                    status="Ready to Release",
+                    status_category_key="done",
+                    description="Already past planning",
+                    issue_type="Epic",
+                    labels=["pm-parent"],
+                    issue_id="30001",
+                    parent_key=None,
+                    parent_issue_id=None,
+                )
+            },
+            fail_label_once_for=set(),
+        )
+
+        with self.session_factory() as session:
+            now = _now()
+            session.add(
+                WorkflowExecution(
+                    workflow_id="parent_planning:MAB-300",
+                    execution_id="exec-release-ready",
+                    workflow_type_key="parent_planning",
+                    tenant_id="example",
+                    project_id="example-default",
+                    source_system="jira",
+                    source_ref="MAB-300",
+                    source_external_id="30001",
+                    display_name="Release-ready parent",
+                    source_description="Already past planning",
+                    repo_url=None,
+                    branch=None,
+                    pr_url=None,
+                    orchestration_backend="temporal",
+                    dedupe_scope="parent_planning",
+                    status="queued",
+                    last_error=None,
+                    active_run_id=None,
+                    latest_checkpoint_id=None,
+                    source_workflow_id=None,
+                    source_run_id=None,
+                    created_at=now,
+                    started_at=None,
+                    finished_at=None,
+                    updated_at=now,
+                )
+            )
+            session.commit()
+
+            registry = self._handler_registry(gateway=gateway)
+            workflow_type = get_workflow_type(session, workflow_type_key="jira_project_reconciliation")
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=self._request(request_id="release-ready-reconcile-1"),
+                resolve_advance_handler_fn=registry.resolve_advance_handler,
+            )
+            session.commit()
+
+            parent_workflow = session.get(WorkflowExecution, "parent_planning:MAB-300")
+
+        assert parent_workflow.status == "cancelled"
+        assert parent_workflow.last_error == "Source item is no longer eligible for MB parent planning."
+
+    def test_non_planning_parent_source_deactivates_failed_or_waiting_planning_workflows(self) -> None:
+        gateway = _FakeGateway(
+            previews=[
+                JiraIssuePreview(key="MAB-303", summary="Failed stale parent", status="Testing"),
+                JiraIssuePreview(key="MAB-304", summary="Waiting stale parent", status="Testing"),
+            ],
+            details={
+                "MAB-303": JiraIssueDetail(
+                    key="MAB-303",
+                    summary="Failed stale parent",
+                    status="Testing",
+                    status_category_key="indeterminate",
+                    description="Already in engineering",
+                    issue_type="Epic",
+                    labels=["pm-parent"],
+                    issue_id="30301",
+                    parent_key=None,
+                    parent_issue_id=None,
+                ),
+                "MAB-304": JiraIssueDetail(
+                    key="MAB-304",
+                    summary="Waiting stale parent",
+                    status="Testing",
+                    status_category_key="indeterminate",
+                    description="Already in engineering",
+                    issue_type="Epic",
+                    labels=["pm-parent"],
+                    issue_id="30401",
+                    parent_key=None,
+                    parent_issue_id=None,
+                ),
+            },
+            fail_label_once_for=set(),
+        )
+
+        with self.session_factory() as session:
+            now = _now()
+            for issue_key, issue_id, workflow_status in (
+                ("MAB-303", "30301", "failed"),
+                ("MAB-304", "30401", "waiting_for_input"),
+            ):
+                session.add(
+                    WorkflowExecution(
+                        workflow_id=f"parent_planning:{issue_key}",
+                        execution_id=f"exec-{issue_key.lower()}",
+                        workflow_type_key="parent_planning",
+                        tenant_id="example",
+                        project_id="example-default",
+                        source_system="jira",
+                        source_ref=issue_key,
+                        source_external_id=issue_id,
+                        display_name=f"Stale {issue_key}",
+                        source_description="Already in engineering",
+                        repo_url=None,
+                        branch=None,
+                        pr_url=None,
+                        orchestration_backend="temporal",
+                        dedupe_scope="parent_planning",
+                        status=workflow_status,
+                        last_error=None,
+                        active_run_id=None,
+                        latest_checkpoint_id=None,
+                        source_workflow_id=None,
+                        source_run_id=None,
+                        created_at=now,
+                        started_at=now,
+                        finished_at=None,
+                        updated_at=now,
+                    )
+                )
+            session.commit()
+
+            registry = self._handler_registry(gateway=gateway)
+            workflow_type = get_workflow_type(session, workflow_type_key="jira_project_reconciliation")
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=self._request(request_id="stale-active-parent-reconcile"),
+                resolve_advance_handler_fn=registry.resolve_advance_handler,
+            )
+            session.commit()
+
+            workflows = {
+                workflow.source_ref: workflow
+                for workflow in session.execute(
+                    select(WorkflowExecution).where(WorkflowExecution.workflow_type_key == "parent_planning")
+                ).scalars()
+            }
+
+        assert workflows["MAB-303"].status == "cancelled"
+        assert workflows["MAB-304"].status == "cancelled"
+
+    def test_release_ready_parent_source_does_not_create_planning_workflow(self) -> None:
+        gateway = _FakeGateway(
+            previews=[JiraIssuePreview(key="MAB-301", summary="Already release-ready parent", status="Ready to Release")],
+            details={
+                "MAB-301": JiraIssueDetail(
+                    key="MAB-301",
+                    summary="Already release-ready parent",
+                    status="Ready to Release",
+                    status_category_key="done",
+                    description="Already past planning",
+                    issue_type="Epic",
+                    labels=[],
+                    issue_id="30101",
+                    parent_key=None,
+                    parent_issue_id=None,
+                )
+            },
+            fail_label_once_for=set(),
+        )
+
+        with self.session_factory() as session:
+            registry = self._handler_registry(gateway=gateway)
+            workflow_type = get_workflow_type(session, workflow_type_key="jira_project_reconciliation")
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=self._request(request_id="release-ready-reconcile-no-create"),
+                resolve_advance_handler_fn=registry.resolve_advance_handler,
+            )
+            session.commit()
+
+            parent_workflows = session.execute(
+                select(WorkflowExecution).where(WorkflowExecution.workflow_type_key == "parent_planning")
+            ).scalars().all()
+
+        assert parent_workflows == []
+
+    def test_in_progress_parent_source_does_not_create_planning_workflow(self) -> None:
+        gateway = _FakeGateway(
+            previews=[JiraIssuePreview(key="MAB-302", summary="Already in engineering", status="Testing")],
+            details={
+                "MAB-302": JiraIssueDetail(
+                    key="MAB-302",
+                    summary="Already in engineering",
+                    status="Testing",
+                    status_category_key="indeterminate",
+                    description="Already past planning",
+                    issue_type="Epic",
+                    labels=[],
+                    issue_id="30201",
+                    parent_key=None,
+                    parent_issue_id=None,
+                )
+            },
+            fail_label_once_for=set(),
+        )
+
+        with self.session_factory() as session:
+            registry = self._handler_registry(gateway=gateway)
+            workflow_type = get_workflow_type(session, workflow_type_key="jira_project_reconciliation")
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=self._request(request_id="in-progress-reconcile-no-create"),
+                resolve_advance_handler_fn=registry.resolve_advance_handler,
+            )
+            session.commit()
+
+            parent_workflows = session.execute(
+                select(WorkflowExecution).where(WorkflowExecution.workflow_type_key == "parent_planning")
+            ).scalars().all()
+
+        assert parent_workflows == []
+
+    def test_repeated_sync_rereads_current_jira_state_before_board_eligibility(self) -> None:
+        gateway = _FakeGateway(
+            previews=[JiraIssuePreview(key="MAB-400", summary="State changed parent", status="Backlog")],
+            details={
+                "MAB-400": JiraIssueDetail(
+                    key="MAB-400",
+                    summary="State changed parent",
+                    status="Backlog",
+                    description="Planning candidate",
+                    issue_type="Epic",
+                    labels=[],
+                    issue_id="40001",
+                    parent_key=None,
+                    parent_issue_id=None,
+                )
+            },
+            fail_label_once_for=set(),
+        )
+
+        with self.session_factory() as session:
+            registry = self._handler_registry(gateway=gateway)
+            workflow_type = get_workflow_type(session, workflow_type_key="jira_project_reconciliation")
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=self._request(request_id="sync-before-status-change"),
+                resolve_advance_handler_fn=registry.resolve_advance_handler,
+            )
+            session.commit()
+
+            created_parent = session.get(WorkflowExecution, "parent_planning:MAB-400")
+            assert created_parent is not None
+            assert created_parent.status == "queued"
+
+            gateway.details["MAB-400"] = JiraIssueDetail(
+                key="MAB-400",
+                summary="State changed parent",
+                status="Ready to Release",
+                status_category_key="done",
+                description="No longer a planning candidate",
+                issue_type="Epic",
+                labels=["pm-parent"],
+                issue_id="40001",
+                parent_key=None,
+                parent_issue_id=None,
+            )
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=self._request(request_id="sync-after-status-change"),
+                resolve_advance_handler_fn=registry.resolve_advance_handler,
+            )
+            session.commit()
+
+            refreshed_parent = session.get(WorkflowExecution, "parent_planning:MAB-400")
+
+        assert gateway.detail_calls == ["MAB-400", "MAB-400"]
+        assert refreshed_parent.status == "cancelled"
+        assert refreshed_parent.last_error == "Source item is no longer eligible for MB parent planning."
+
     def test_retry_after_label_failure_reuses_completed_scan_work_units_and_does_not_duplicate_parent_workflows(self) -> None:
         gateway = _FakeGateway(
             previews=[

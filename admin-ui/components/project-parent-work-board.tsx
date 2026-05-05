@@ -1,9 +1,8 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
-import { Clock3, RefreshCw, X } from "lucide-react";
+import { Clock3, ExternalLink, Play, RefreshCw, X } from "lucide-react";
 
 import { useAuth } from "@/components/auth-provider";
 import { StatusBadge } from "@/components/ui/status-badge";
@@ -12,6 +11,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { formatTimeAgo } from "@/lib/datetime";
 import {
   listWorkflowBoardItems,
+  startParentPlanning,
   startWorkflowExecution,
   type WorkflowBoardItemRecord,
   type WorkflowBoardRunSummaryRecord,
@@ -56,14 +56,6 @@ export function isParentPlanningWorkflow(workflow: WorkflowBoardItemRecord): boo
   );
 }
 
-export function isJiraProjectReconciliationWorkflow(workflow: WorkflowBoardItemRecord): boolean {
-  return (
-    workflow.workflow_type_key === "jira_project_reconciliation" ||
-    workflow.dedupe_scope === "jira_project_reconciliation" ||
-    workflow.workflow_id.startsWith("jira_project_reconciliation:")
-  );
-}
-
 export function normalizedWorkflowStatus(value: string | null | undefined): string {
   return String(value || "").trim().toLowerCase();
 }
@@ -105,6 +97,11 @@ export function workflowLane(workflow: WorkflowBoardItemRecord): BoardLaneKey {
   return "planning";
 }
 
+function canStartPlanning(workflow: WorkflowBoardItemRecord): boolean {
+  const status = normalizedWorkflowStatus(workflow.status);
+  return workflow.workflow_type_key === "parent_planning" && (status === "queued" || status === "pending");
+}
+
 function buildParentWorkCard(workflow: WorkflowBoardItemRecord): ParentWorkCard {
   const sortedRuns = [...(workflow.runs ?? [])].sort((left, right) => {
     const leftActivity = left.finished_at ?? left.started_at ?? left.created_at;
@@ -140,6 +137,7 @@ export function ProjectParentWorkBoard({
   const [allWorkflows, setAllWorkflows] = useState<WorkflowBoardItemRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
+  const [startingPlanningExecutionId, setStartingPlanningExecutionId] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [selectedCard, setSelectedCard] = useState<ParentWorkCard | null>(null);
 
@@ -204,12 +202,39 @@ export function ProjectParentWorkBoard({
     }
   }
 
+  async function startPlanning(card: ParentWorkCard) {
+    if (!credentials || startingPlanningExecutionId) return;
+    setStartingPlanningExecutionId(card.workflow.execution_id);
+    setErrorMessage(null);
+    try {
+      const started = await startParentPlanning(credentials, card.workflow.execution_id);
+      const workflowPayload = await listWorkflowBoardItems(credentials, { tenantId, projectId, limit: 100 });
+      const sortedWorkflows = workflowPayload.sort((left, right) => latestWorkflowActivity(right).localeCompare(latestWorkflowActivity(left)));
+      setAllWorkflows(sortedWorkflows);
+      const refreshed = sortedWorkflows.find((workflow) => workflow.execution_id === started.execution_id);
+      if (refreshed) {
+        setSelectedCard(buildParentWorkCard(refreshed));
+      }
+      showToast({
+        title: "Planning started",
+        description: `${card.issueKey} is now being planned.`,
+        tone: "success",
+      });
+    } catch (error) {
+      const message = (error as Error).message;
+      setErrorMessage(`Failed to start planning for ${card.issueKey}: ${message}`);
+      showToast({
+        title: "Planning start failed",
+        description: message,
+        tone: "error",
+      });
+    } finally {
+      setStartingPlanningExecutionId(null);
+    }
+  }
+
   const parentWorkflows = useMemo(
     () => allWorkflows.filter(isParentPlanningWorkflow),
-    [allWorkflows],
-  );
-  const latestReconciliationWorkflow = useMemo(
-    () => allWorkflows.filter(isJiraProjectReconciliationWorkflow).sort((left, right) => latestWorkflowActivity(right).localeCompare(latestWorkflowActivity(left)))[0] ?? null,
     [allWorkflows],
   );
   const cards = useMemo(() => parentWorkflows.map(buildParentWorkCard), [parentWorkflows]);
@@ -225,25 +250,6 @@ export function ProjectParentWorkBoard({
 
   return (
     <section className="space-y-4">
-      {latestReconciliationWorkflow ? (
-        <div className="flex flex-col gap-3 rounded-2xl border border-border bg-background px-4 py-4 md:flex-row md:items-center md:justify-between">
-          <div className="space-y-1">
-            <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">Latest Jira reconciliation</div>
-            <div className="flex items-center gap-2 text-sm">
-              <StatusBadge status={latestReconciliationWorkflow.status} />
-              <span className="text-muted-foreground">
-                Updated {formatTimeAgo(latestWorkflowActivity(latestReconciliationWorkflow))}
-              </span>
-            </div>
-          </div>
-          <Button asChild type="button" variant="outline" size="sm">
-            <Link href={`/${encodeURIComponent(tenantId)}/executions/${encodeURIComponent(latestReconciliationWorkflow.execution_id)}`}>
-              View execution
-            </Link>
-          </Button>
-        </div>
-      ) : null}
-
       {allowJiraReconciliation ? (
         <div className="flex justify-end">
           <Button
@@ -281,6 +287,8 @@ export function ProjectParentWorkBoard({
 
       <ParentWorkDetailsDrawer
         card={selectedCard}
+        startingPlanning={selectedCard?.workflow.execution_id === startingPlanningExecutionId}
+        onStartPlanning={startPlanning}
         onClose={() => setSelectedCard(null)}
       />
     </section>
@@ -367,9 +375,13 @@ function ParentWorkItemCard({
 
 function ParentWorkDetailsDrawer({
   card,
+  startingPlanning,
+  onStartPlanning,
   onClose,
 }: {
   card: ParentWorkCard | null;
+  startingPlanning: boolean;
+  onStartPlanning: (card: ParentWorkCard) => void;
   onClose: () => void;
 }) {
   const [mounted, setMounted] = useState(false);
@@ -379,6 +391,8 @@ function ParentWorkDetailsDrawer({
   }, []);
 
   if (!card || !mounted) return null;
+  const jiraLink = card.workflow.links.find((link) => link.kind === "jira_issue" && link.url);
+  const startable = canStartPlanning(card.workflow);
 
   return createPortal(
     <div className="fixed inset-0 z-[80] flex justify-end bg-slate-950/35" role="dialog" aria-modal="true" aria-label={`${card.issueKey} details`}>
@@ -398,6 +412,27 @@ function ParentWorkDetailsDrawer({
             <Clock3 className="h-3.5 w-3.5" />
             {formatTimeAgo(latestWorkflowActivity(card.workflow))}
           </p>
+          <div className="mt-4 flex flex-wrap gap-2">
+            {jiraLink?.url ? (
+              <Button asChild variant="outline" size="sm">
+                <a href={jiraLink.url} target="_blank" rel="noreferrer">
+                  <ExternalLink className="mr-2 h-3.5 w-3.5" />
+                  Open Jira
+                </a>
+              </Button>
+            ) : null}
+            {startable ? (
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => onStartPlanning(card)}
+                disabled={startingPlanning}
+              >
+                <Play className={`mr-2 h-3.5 w-3.5 ${startingPlanning ? "animate-pulse" : ""}`} />
+                Start planning
+              </Button>
+            ) : null}
+          </div>
         </header>
 
         <div className="flex-1 space-y-6 overflow-y-auto px-5 py-5">

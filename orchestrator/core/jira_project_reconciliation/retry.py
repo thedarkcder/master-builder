@@ -4,6 +4,7 @@ from orchestrator.core.jira_project_reconciliation.dependencies import JiraProje
 from orchestrator.core.jira_project_reconciliation.service import (
     JiraProjectReconciliationWorkflowService,
     build_default_jira_project_reconciliation_gateway,
+    latest_reconciliation_request_id_for_workflow,
 )
 from orchestrator.core.workflow.advance import DurableWorkflowLifecycle
 from orchestrator.core.workflow.execution_projection import WorkflowExecutionReference, WorkflowSourceReference
@@ -109,5 +110,10 @@ class JiraProjectReconciliationOperationRetryHandler:
             project=project,
             gateway=gateway,
             max_items=1000,
+            request_id=latest_reconciliation_request_id_for_workflow(
+                session=request.session,
+                workflow_id=request.workflow.workflow_id,
+                project_id=project.project_id,
+            ),
         )
         return service.retry_operation(operation_type=operation_type)

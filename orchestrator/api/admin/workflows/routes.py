@@ -121,6 +121,16 @@ def get_workflow(
 ) -> WorkflowRead:
     return use_cases.get_workflow(session=session, principal=principal, execution_id=execution_id)
 
+
+@router.post("/workflows/{execution_id}/start-planning", response_model=WorkflowRead)
+def start_parent_planning(
+    execution_id: str,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> WorkflowRead:
+    return use_cases.start_parent_planning(session=session, principal=principal, execution_id=execution_id)
+
+
 @router.get("/workflows/{execution_id}/telemetry", response_model=list[WorkflowObservabilityEventRead])
 def list_workflow_telemetry_events(
     execution_id: str,

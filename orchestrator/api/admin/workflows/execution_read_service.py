@@ -20,6 +20,7 @@ from orchestrator.storage.models import Run, RunHumanInputRequest, Tenant, Workf
 
 BOARD_WORKFLOW_TYPE_KEYS = ("parent_planning", "jira_project_reconciliation")
 BOARD_DEDUPE_SCOPES = ("parent_planning", "jira_project_reconciliation")
+BOARD_EXCLUDED_WORKFLOW_STATUSES = ("cancelled",)
 BOARD_ACTIVE_RUN_STATUSES = frozenset(
     ("queued", "running", "processing", "retrying", "review", "in_review", "blocked", "failed")
 )
@@ -51,6 +52,27 @@ def _run_summary(run: Run) -> WorkflowBoardRunSummaryRead:
         started_at=run.started_at,
         finished_at=run.finished_at,
     )
+
+
+def _board_links(*, session, tenant: Tenant | None, workflow: WorkflowExecution) -> list[WorkflowLinkRead]:  # noqa: ANN001
+    workflow_source_ref = str(workflow.source_ref or "").strip()
+    is_jira_workflow = str(workflow.source_system or "").strip() == "jira"
+    jira_url = (
+        tenant_jira_issue_url(session=session, tenant=tenant, issue_key=workflow_source_ref)
+        if tenant is not None and is_jira_workflow
+        else None
+    )
+    if not jira_url:
+        return []
+    return [
+        WorkflowLinkRead(
+            kind="jira_issue",
+            label=f"Jira issue {workflow_source_ref}",
+            ref=workflow_source_ref,
+            url=jira_url,
+            status=workflow.status,
+        )
+    ]
 
 
 def workflow_links(
@@ -237,6 +259,7 @@ def list_workflow_board_items(
     )
     if project_id:
         query = query.where(WorkflowExecution.project_id == project_id)
+    query = query.where(WorkflowExecution.status.notin_(BOARD_EXCLUDED_WORKFLOW_STATUSES))
     workflows = (
         session.execute(query.order_by(desc(WorkflowExecution.updated_at)).limit(limit).offset(offset))
         .scalars()
@@ -245,6 +268,8 @@ def list_workflow_board_items(
     workflow_ids = [workflow.workflow_id for workflow in workflows]
     if not workflow_ids:
         return []
+
+    tenant = session.get(Tenant, tenant_id)
 
     pending_request_by_workflow: dict[str, RunHumanInputRequest] = {}
     pending_requests = session.execute(
@@ -293,6 +318,7 @@ def list_workflow_board_items(
                 failed_run_count=sum(1 for run in sorted_runs if str(run.status).lower() == "failed"),
                 latest_run=_run_summary(latest_run) if latest_run is not None else None,
                 runs=run_summaries,
+                links=_board_links(session=session, tenant=tenant, workflow=workflow),
                 latest_activity_at=_workflow_activity_at(workflow, sorted_runs),
                 created_at=workflow.created_at,
                 started_at=workflow.started_at,

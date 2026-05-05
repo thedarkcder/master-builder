@@ -789,6 +789,7 @@ export type WorkflowBoardItemRecord = {
   failed_run_count: number;
   latest_run: WorkflowBoardRunSummaryRecord | null;
   runs: WorkflowBoardRunSummaryRecord[];
+  links: WorkflowLinkRecord[];
   latest_activity_at: string;
   created_at: string;
   started_at: string | null;
@@ -2820,6 +2821,19 @@ export function resumeWorkflowExecution(
   return request<RunRecord>(credentials, `/api/admin/workflows/${encodeURIComponent(executionId)}/resume`, {
     method: "POST",
   });
+}
+
+export function startParentPlanning(
+  credentials: Credentials,
+  executionId: string,
+): Promise<WorkflowRecord> {
+  return request<WorkflowRecord>(
+    credentials,
+    `/api/admin/workflows/${encodeURIComponent(executionId)}/start-planning`,
+    {
+      method: "POST",
+    },
+  );
 }
 
 export function getStartEngineeringPreview(

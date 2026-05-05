@@ -7,6 +7,8 @@ ENGINEERING_CHILD_LABEL = "engineering-child"
 PARENT_LABEL_PREFIX = "parent-"
 ISSUE_CLASS_PARENT = "parent"
 ISSUE_CLASS_ENGINEERING_CHILD = "engineering_child"
+MB_WORK_STATE_PLANNING_CANDIDATE = "planning_candidate"
+MB_WORK_STATE_NOT_PLANNING = "not_planning"
 
 
 @dataclass(frozen=True)
@@ -16,6 +18,7 @@ class JiraReconciliationIssue:
     summary: str
     description: str
     status: str
+    mb_work_state: str
     issue_type: str | None
     labels: tuple[str, ...]
     parent_key: str | None
@@ -30,6 +33,7 @@ class JiraReconciliationIssue:
             "summary": self.summary,
             "description": self.description,
             "status": self.status,
+            "mb_work_state": self.mb_work_state,
             "issue_type": self.issue_type,
             "labels": list(self.labels),
             "parent_key": self.parent_key,
@@ -46,6 +50,7 @@ class JiraReconciliationIssue:
             summary=str(payload.get("summary") or "").strip(),
             description=str(payload.get("description") or ""),
             status=str(payload.get("status") or "").strip(),
+            mb_work_state=str(payload.get("mb_work_state") or "").strip(),
             issue_type=str(payload.get("issue_type") or "").strip() or None,
             labels=tuple(str(label).strip() for label in list(payload.get("labels") or []) if str(label).strip()),
             parent_key=str(payload.get("parent_key") or "").strip().upper() or None,
@@ -98,12 +103,16 @@ class ParentWorkflowReconciliationResult:
     issue_key: str
     workflow_id: str
     created: bool
+    mb_work_state: str
+    deactivated: bool = False
 
     def to_payload(self) -> dict[str, object]:
         return {
             "issue_key": self.issue_key,
             "workflow_id": self.workflow_id,
             "created": self.created,
+            "mb_work_state": self.mb_work_state,
+            "deactivated": self.deactivated,
         }
 
     @classmethod
@@ -112,6 +121,8 @@ class ParentWorkflowReconciliationResult:
             issue_key=str(payload.get("issue_key") or "").strip().upper(),
             workflow_id=str(payload.get("workflow_id") or "").strip(),
             created=bool(payload.get("created")),
+            mb_work_state=str(payload.get("mb_work_state") or "").strip(),
+            deactivated=bool(payload.get("deactivated")),
         )
 
 

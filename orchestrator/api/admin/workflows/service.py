@@ -22,6 +22,7 @@ from orchestrator.api.admin.workflows.start_development_service import (
     start_engineering_from_action,
     start_work_result_to_schema,
 )
+from orchestrator.api.admin.workflows.start_planning_service import start_parent_planning
 from orchestrator.api.admin.workflows.type_read_model import list_workflow_type_summaries, workflow_type_detail
 from orchestrator.core.workflow.type_catalog import get_workflow_type
 
@@ -41,6 +42,7 @@ __all__ = [
     "retry_workflow_operation",
     "preview_start_engineering",
     "start_engineering_from_action",
+    "start_parent_planning",
     "start_work_result_to_schema",
 ]
 
