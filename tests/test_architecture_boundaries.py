@@ -54,6 +54,7 @@ NON_ROUTE_API_ROUTE_IMPORT_ALLOWLIST = {
         "orchestrator.api.routes.app_auth",
         "orchestrator.api.routes.discord",
         "orchestrator.api.routes.runs",
+        "orchestrator.api.routes.start_engineering",
         "orchestrator.api.routes.webhook",
         "orchestrator.api.routes.webhook_discord",
         "orchestrator.api.routes.webhook_discord_interactions",
