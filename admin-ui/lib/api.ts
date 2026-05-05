@@ -979,6 +979,46 @@ export type WorkflowOperationRetryResponseRecord = {
   started_attempt?: WorkflowOperationAttemptRecord | null;
 };
 
+export type WorkflowExecutionStartPayload = {
+  tenant_id: string;
+  project_id?: string | null;
+  input?: Record<string, unknown>;
+};
+
+export type WorkflowExecutionStartRecord = {
+  execution_id: string;
+  workflow_id: string;
+  workflow_type_key: string;
+  status: string;
+  started_attempt_id: string | null;
+};
+
+export type StartWorkIssueRecord = {
+  issue_key: string;
+  run_id: string | null;
+  status: string;
+  reason: string | null;
+};
+
+export type WorkflowStartWorkResponseRecord = {
+  workflow: WorkflowRecord;
+  queued: StartWorkIssueRecord[];
+  skipped: StartWorkIssueRecord[];
+  promoted_issue_keys: string[];
+  started_attempt?: WorkflowOperationAttemptRecord | null;
+};
+
+export type StartEngineeringPreviewRecord = {
+  tenant_id: string;
+  project_id: string;
+  execution_id: string;
+  issue_key: string;
+  display_name: string | null;
+  workflow_status: string;
+  can_start: boolean;
+  unavailable_reason: string | null;
+};
+
 export type WorkflowOperationRecord = {
   operation_id: string;
   run_id: string | null;
@@ -2654,6 +2694,21 @@ export function getWorkflowType(
   );
 }
 
+export function startWorkflowExecution(
+  credentials: Credentials,
+  workflowTypeKey: string,
+  payload: WorkflowExecutionStartPayload,
+): Promise<WorkflowExecutionStartRecord> {
+  return request<WorkflowExecutionStartRecord>(
+    credentials,
+    `/api/admin/workflow-types/${encodeURIComponent(workflowTypeKey)}/executions`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
 export function listWorkflows(
   credentials: Credentials,
   params: {
@@ -2706,6 +2761,33 @@ export function resumeWorkflowExecution(
   return request<RunRecord>(credentials, `/api/admin/workflows/${encodeURIComponent(executionId)}/resume`, {
     method: "POST",
   });
+}
+
+export function getStartEngineeringPreview(
+  credentials: Credentials,
+  executionId: string,
+  actionToken: string,
+): Promise<StartEngineeringPreviewRecord> {
+  const query = new URLSearchParams({ action_token: actionToken });
+  return request<StartEngineeringPreviewRecord>(
+    credentials,
+    `/api/app/start-engineering/${encodeURIComponent(executionId)}/preview?${query.toString()}`,
+  );
+}
+
+export function startEngineeringFromAction(
+  credentials: Credentials,
+  executionId: string,
+  actionToken: string,
+): Promise<WorkflowStartWorkResponseRecord> {
+  return request<WorkflowStartWorkResponseRecord>(
+    credentials,
+    `/api/app/start-engineering/${encodeURIComponent(executionId)}/start`,
+    {
+      method: "POST",
+      body: JSON.stringify({ action_token: actionToken }),
+    },
+  );
 }
 
 export function retryWorkflowOperation(

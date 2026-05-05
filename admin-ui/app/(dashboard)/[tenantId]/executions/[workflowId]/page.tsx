@@ -605,10 +605,12 @@ export default function TenantExecutionDetailPage() {
             </div>
           ) : null}
           {workflow ? (
-            <Button size="sm" className="h-8" onClick={() => void handleWorkflowAction()} disabled={retrying || !workflow.can_resume}>
-              <RefreshCw className={cn("mr-1.5 h-3.5 w-3.5", retrying && "animate-spin")} />
-              Resume execution
-            </Button>
+            <>
+              <Button size="sm" className="h-8" onClick={() => void handleWorkflowAction()} disabled={retrying || !workflow.can_resume}>
+                <RefreshCw className={cn("mr-1.5 h-3.5 w-3.5", retrying && "animate-spin")} />
+                Resume execution
+              </Button>
+            </>
           ) : null}
         </div>
       </div>
@@ -707,7 +709,11 @@ export default function TenantExecutionDetailPage() {
                   <div>
                     <p className="font-medium">Available recovery</p>
                     <p className="text-muted-foreground">
-                      {hasRetryableAttempt ? "Retry failed step" : workflow.can_resume ? "Resume execution" : "—"}
+                      {hasRetryableAttempt
+                        ? "Retry failed step"
+                        : workflow.can_resume
+                          ? "Resume execution"
+                          : "—"}
                     </p>
                   </div>
                 </div>

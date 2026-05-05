@@ -72,7 +72,12 @@ class JiraIssueDetail:
     description: str
     status_category_key: str | None = None
     issue_type: str | None = None
+    issue_type_hierarchy_level: int | None = None
+    issue_type_is_subtask: bool | None = None
     labels: list[str] = field(default_factory=list)
+    issue_id: str | None = None
+    parent_key: str | None = None
+    parent_issue_id: str | None = None
 
 
 @dataclass(frozen=True)

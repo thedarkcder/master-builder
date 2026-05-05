@@ -108,9 +108,9 @@ export function ProjectSetupWizard() {
           <CardContent className="space-y-4 text-sm text-muted-foreground">
             <p>You do not have permission to create or edit projects in this workspace.</p>
             <Button asChild variant="outline" size="sm">
-              <Link href={`/${encodeURIComponent(params.tenantId)}/projects`}>
+              <Link href={`/${encodeURIComponent(params.tenantId)}/dashboard`}>
                 <ArrowLeft className="mr-1.5 h-3.5 w-3.5" />
-                Back to Projects
+                Back to dashboard
               </Link>
             </Button>
           </CardContent>
@@ -124,9 +124,9 @@ export function ProjectSetupWizard() {
       {/* Back link */}
       <div>
         <Button asChild variant="ghost" size="sm" className="-ml-1">
-          <Link href={`/${encodeURIComponent(params.tenantId)}/projects`}>
+          <Link href={`/${encodeURIComponent(params.tenantId)}/dashboard`}>
             <ArrowLeft className="mr-1.5 h-3.5 w-3.5" />
-            Back to Projects
+            Back to dashboard
           </Link>
         </Button>
       </div>

@@ -25,6 +25,12 @@ _TEMPORAL_BINDINGS = (
         workflow_defn=DevelopmentTeamRunWorkflow,
     ),
     TemporalWorkflowBinding(
+        handler_key="jira_project_reconciliation",
+        workflow_name="HandlerBackedWorkflow",
+        workflow_defn=HandlerBackedWorkflow,
+        execution_mode="handler",
+    ),
+    TemporalWorkflowBinding(
         handler_key="jira_parent_feature",
         workflow_name="HandlerBackedWorkflow",
         workflow_defn=HandlerBackedWorkflow,

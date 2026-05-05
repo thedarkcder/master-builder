@@ -1392,6 +1392,50 @@ class WorkflowOperationRetryRead(BaseModel):
     started_attempt: WorkflowOperationAttemptRead | None = None
 
 
+class WorkflowExecutionStartRequest(BaseModel):
+    tenant_id: str
+    project_id: str | None = None
+    input: dict[str, object] = Field(default_factory=dict)
+
+
+class WorkflowExecutionStartRead(BaseModel):
+    execution_id: str
+    workflow_id: str
+    workflow_type_key: str
+    status: str
+    started_attempt_id: str | None = None
+
+
+class StartWorkIssueRead(BaseModel):
+    issue_key: str
+    run_id: str | None = None
+    status: str
+    reason: str | None = None
+
+
+class WorkflowStartWorkRead(BaseModel):
+    workflow: WorkflowRead
+    queued: list[StartWorkIssueRead] = Field(default_factory=list)
+    skipped: list[StartWorkIssueRead] = Field(default_factory=list)
+    promoted_issue_keys: list[str] = Field(default_factory=list)
+    started_attempt: WorkflowOperationAttemptRead | None = None
+
+
+class WorkflowStartWorkRequest(BaseModel):
+    action_token: str | None = None
+
+
+class StartEngineeringPreviewRead(BaseModel):
+    tenant_id: str
+    project_id: str
+    execution_id: str
+    issue_key: str
+    display_name: str | None = None
+    workflow_status: str
+    can_start: bool
+    unavailable_reason: str | None = None
+
+
 class WorkflowOperationRestartRequest(BaseModel):
     restart_reason: str = Field(default="Restarted stale running workflow operation attempt.")
 

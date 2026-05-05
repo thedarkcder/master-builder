@@ -147,6 +147,9 @@ class PlanningDecisionRecordStore:
         normalized_external_key = str(external_key or "").strip()
         if not normalized_external_key:
             raise ValueError("Planning decision record requires external_key")
+        normalized_source_stage = str(source_stage or "").strip()
+        if not normalized_source_stage:
+            raise ValueError("Planning decision record requires source_stage")
         now = datetime.now(UTC)
         existing = (
             self._session.query(PlanningDecisionRecord)
@@ -154,6 +157,7 @@ class PlanningDecisionRecordStore:
                 PlanningDecisionRecord.tenant_id == tenant_id,
                 PlanningDecisionRecord.workflow_id == workflow_id,
                 PlanningDecisionRecord.lane == lane,
+                PlanningDecisionRecord.source_stage == normalized_source_stage,
                 PlanningDecisionRecord.external_key == normalized_external_key,
             )
             .one_or_none()
@@ -169,7 +173,7 @@ class PlanningDecisionRecordStore:
                 parent_issue_key=parent_issue_key,
                 lane=lane,
                 status=status,
-                source_stage=source_stage,
+                source_stage=normalized_source_stage,
                 external_key=normalized_external_key,
                 payload_json=payload,
                 created_at=now,
@@ -182,6 +186,6 @@ class PlanningDecisionRecordStore:
         existing.source_attempt_id = source_attempt_id
         existing.parent_issue_key = parent_issue_key
         existing.status = status
-        existing.source_stage = source_stage
+        existing.source_stage = normalized_source_stage
         existing.payload_json = payload
         existing.updated_at = now

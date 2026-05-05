@@ -1,10 +1,14 @@
 import { expect, test } from "@playwright/test";
 
 import {
+  fulfillJson,
+  installBffApiMocks,
   makeRun,
+  makeTenantUserPrincipal,
   makeWorkflow,
   mockTenantWorkflowApis,
   seedAdminSession,
+  seedTenantSession,
 } from "./support/admin-ui";
 
 test("shows workflow definitions and retries a failed execution operation", async ({ page }) => {
@@ -548,6 +552,78 @@ test("shows workflow definitions and retries a failed execution operation", asyn
   await page.getByRole("button", { name: "Execution path" }).click();
   await expect(page.getByRole("button", { name: "Execution path" })).toBeVisible();
   await expect(page.getByText("Fan out engineering child tickets").first()).toBeVisible();
+});
+
+test("starts engineering work from the standalone signed Jira action page", async ({ page }) => {
+  await seedTenantSession(page, {
+    principal: makeTenantUserPrincipal(),
+    userEmail: "person@example.com",
+  });
+
+  let previewToken: string | null = null;
+  let submittedActionToken: string | null = null;
+  await installBffApiMocks(page, [
+    {
+      method: "GET",
+      pathname: "/api/bff/api/app/auth/me",
+      handler: (route) => fulfillJson(route, makeTenantUserPrincipal()),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/app/start-engineering/wfexec-mab-243/preview",
+      handler: (route, url) => {
+        previewToken = url.searchParams.get("action_token");
+        return fulfillJson(route, {
+          tenant_id: "route25",
+          project_id: "route25-default",
+          execution_id: "wfexec-mab-243",
+          issue_key: "MAB-243",
+          display_name: "Identity redesign",
+          workflow_status: "completed",
+          can_start: true,
+          unavailable_reason: null,
+        });
+      },
+    },
+    {
+      method: "POST",
+      pathname: "/api/bff/api/app/start-engineering/wfexec-mab-243/start",
+      handler: (route) => {
+        const payload = route.request().postDataJSON() as { action_token?: string | null };
+        submittedActionToken = payload.action_token ?? null;
+        return fulfillJson(route, {
+          workflow: makeWorkflow({
+            execution_id: "wfexec-mab-243",
+            workflow_id: "parent_planning:MAB-243",
+            tenant_id: "route25",
+            project_id: "route25-default",
+            source_ref: "MAB-243",
+            display_name: "Identity redesign",
+            status: "completed",
+          }),
+          queued: [
+            { issue_key: "MAB-244", run_id: "run-mab-244", status: "queued", reason: null },
+            { issue_key: "MAB-245", run_id: "run-mab-245", status: "queued", reason: null },
+          ],
+          skipped: [],
+          promoted_issue_keys: ["MAB-244", "MAB-245"],
+          started_attempt: null,
+        });
+      },
+    },
+  ]);
+
+  await page.goto("/route25/start/wfexec-mab-243?startDevelopmentToken=signed-token-from-jira");
+
+  await expect(page.getByRole("heading", { name: "Start engineering work" })).toBeVisible();
+  await expect(page.getByText("MAB-243")).toBeVisible();
+  await page.getByRole("button", { name: "Start ready engineering work" }).click();
+
+  expect(previewToken).toBe("signed-token-from-jira");
+  expect(submittedActionToken).toBe("signed-token-from-jira");
+  await expect(page.getByText("Engineering work has been started.")).toBeVisible();
+  await expect(page.getByText("MAB-244")).toBeVisible();
+  await expect(page.getByText("MAB-245")).toBeVisible();
 });
 
 test("shows the new live retry attempt when retry submission returns before started_attempt is available", async ({ page }) => {

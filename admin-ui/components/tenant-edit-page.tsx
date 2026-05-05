@@ -54,7 +54,6 @@ import { cn } from "@/lib/utils";
 
 type TenantEditSection =
   | "setup"
-  | "integrations"
   | "atlassian"
   | "github"
   | "discord"
@@ -641,38 +640,7 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
                 </Link>
               </Button>
               <Button asChild variant="outline">
-                <Link href={getTenantSettingsRoute(tenant.tenant_id, "integrations")}>Open Integrations</Link>
-              </Button>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      {section === "integrations" ? (
-        <div className="overflow-hidden rounded-2xl border bg-background">
-          <div className="px-6 pt-6">
-            <h2 className="text-base font-semibold">Integrations</h2>
-          </div>
-          <div className="mt-4 divide-y border-t text-sm">
-            <div className="space-y-2 px-6 py-4">
-              <p className="font-medium">Atlassian</p>
-              <p className="text-muted-foreground">Connect Atlassian and verify tenant board access.</p>
-              <Button asChild variant="outline" size="sm">
                 <Link href={getTenantSettingsRoute(tenant.tenant_id, "atlassian")}>Open Atlassian</Link>
-              </Button>
-            </div>
-            <div className="space-y-2 px-6 py-4">
-              <p className="font-medium">GitHub</p>
-              <p className="text-muted-foreground">Install or reconnect GitHub App for this tenant.</p>
-              <Button asChild variant="outline" size="sm">
-                <Link href={getTenantSettingsRoute(tenant.tenant_id, "github")}>Open GitHub</Link>
-              </Button>
-            </div>
-            <div className="space-y-2 px-6 py-4">
-              <p className="font-medium">Discord</p>
-              <p className="text-muted-foreground">Manage notification and command settings for tenant channels.</p>
-              <Button asChild variant="outline" size="sm">
-                <Link href={getTenantSettingsRoute(tenant.tenant_id, "discord")}>Open Discord</Link>
               </Button>
             </div>
           </div>

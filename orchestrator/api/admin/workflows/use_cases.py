@@ -25,13 +25,20 @@ from orchestrator.api.admin.workflows.service import (
     resume_workflow_execution as resume_workflow_execution_impl,
     restart_workflow_operation as restart_workflow_operation_impl,
     retry_workflow_operation as retry_workflow_operation_impl,
+    preview_start_engineering as preview_start_engineering_impl,
+    start_engineering_from_action as start_engineering_from_action_impl,
+    start_work_result_to_schema,
 )
 from orchestrator.api.schemas import (
     RunRead,
+    WorkflowExecutionStartRead,
+    WorkflowExecutionStartRequest,
     WorkflowObservabilityEventRead,
     WorkflowOperationRestartRequest,
     WorkflowOperationRetryRead,
     WorkflowRead,
+    WorkflowStartWorkRead,
+    StartEngineeringPreviewRead,
     WorkflowStepAttemptTranscriptRead,
     WorkflowStepTranscriptRead,
     WorkflowTypeDetailRead,
@@ -39,11 +46,14 @@ from orchestrator.api.schemas import (
 )
 from orchestrator.core.runtime.agent_runtime_resolver import build_runtime_for_selector
 from orchestrator.core.config import get_settings
-from orchestrator.core.security import AuthenticatedPrincipal, require_tenant_workspace_access
+from orchestrator.core.jira_project_reconciliation.start import start_jira_project_reconciliation
+from orchestrator.core.platform.access import PERMISSION_PROJECTS_MANAGE
+from orchestrator.core.security import AuthenticatedPrincipal, require_tenant_permission, require_tenant_workspace_access
 from orchestrator.core.integrations.workflow.router import WorkflowIntegrationRouter
+from orchestrator.core.workflow.type_catalog import get_workflow_type
 from orchestrator.runtime.issue_fanout import seed_issues_with_runtime
 from orchestrator.storage.db import create_session_factory
-from orchestrator.storage.models import Tenant, WorkflowExecution, WorkflowOperation, WorkflowOperationAttempt
+from orchestrator.storage.models import Project, Tenant, WorkflowExecution, WorkflowOperation, WorkflowOperationAttempt
 
 workflow_integration_router = WorkflowIntegrationRouter()
 
@@ -124,6 +134,98 @@ def get_workflow(*, session: Session, principal: AuthenticatedPrincipal, executi
         workflow_to_schema_fn=workflow_to_schema,
         run_to_schema_fn=run_to_schema,
     )
+
+
+def start_workflow_execution(
+    *,
+    session: Session,
+    principal: AuthenticatedPrincipal,
+    workflow_type_key: str,
+    payload: WorkflowExecutionStartRequest,
+) -> WorkflowExecutionStartRead:
+    try:
+        workflow_type = get_workflow_type(session, workflow_type_key=workflow_type_key)
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow type not found") from exc
+    if workflow_type.workflow_type_key != "jira_project_reconciliation":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Workflow type does not support direct admin starts",
+        )
+    return _start_jira_project_reconciliation_workflow(
+        session=session,
+        principal=principal,
+        payload=payload,
+    )
+
+
+def _start_jira_project_reconciliation_workflow(
+    *,
+    session: Session,
+    principal: AuthenticatedPrincipal,
+    payload: WorkflowExecutionStartRequest,
+) -> WorkflowExecutionStartRead:
+    tenant_id = payload.tenant_id.strip()
+    if not tenant_id:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="tenant_id is required")
+    require_tenant_permission(
+        principal=principal,
+        tenant_id=tenant_id,
+        permission_key=PERMISSION_PROJECTS_MANAGE,
+    )
+    tenant = session.get(Tenant, tenant_id)
+    if tenant is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+    project_id = str(payload.project_id or "").strip()
+    if not project_id:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="project_id is required")
+    project = session.get(Project, project_id)
+    if project is None or project.tenant_id != tenant_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+    if project.is_archived:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Archived projects cannot be reconciled")
+
+    settings = get_settings()
+    max_items = _workflow_start_positive_int(
+        payload.input.get("max_items"),
+        field_name="input.max_items",
+        default=max(1, int(getattr(settings, "jira_project_reconciliation_max_items", 1000))),
+    )
+    try:
+        result = start_jira_project_reconciliation(
+            session=session,
+            settings=settings,
+            tenant=tenant,
+            project=project,
+            max_items=max_items,
+            trigger_event="admin_workflow_start",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    return WorkflowExecutionStartRead(
+        execution_id=result.execution_id,
+        workflow_id=result.workflow_id,
+        workflow_type_key=result.workflow_type_key,
+        status=result.status,
+        started_attempt_id=result.started_attempt_id,
+    )
+
+
+def _workflow_start_positive_int(value: object, *, field_name: str, default: int) -> int:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"{field_name} must be an integer")
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"{field_name} must be an integer") from exc
+    if parsed < 1:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"{field_name} must be greater than or equal to 1",
+        )
+    return parsed
 
 
 def list_workflow_telemetry_events(
@@ -319,6 +421,46 @@ def restart_workflow_operation(
         build_runtime_for_selector_fn=build_runtime_for_selector,
         seed_issues_with_runtime_fn=seed_issues_with_runtime,
     )
+
+
+def preview_start_engineering(
+    *,
+    session: Session,
+    principal: AuthenticatedPrincipal,
+    execution_id: str,
+    action_token: str | None,
+) -> StartEngineeringPreviewRead:
+    return preview_start_engineering_impl(
+        session=session,
+        principal=principal,
+        execution_id=execution_id,
+        action_token=action_token,
+    )
+
+
+def start_engineering_from_action(
+    *,
+    session: Session,
+    principal: AuthenticatedPrincipal,
+    execution_id: str,
+    action_token: str | None,
+) -> WorkflowStartWorkRead:
+    result, workflow, started_attempt = start_engineering_from_action_impl(
+        session=session,
+        principal=principal,
+        execution_id=execution_id,
+        action_token=action_token,
+        integration_router=workflow_integration_router,
+    )
+    return start_work_result_to_schema(
+        result=result,
+        workflow=workflow,
+        started_attempt=started_attempt,
+        workflow_to_schema_fn=workflow_to_schema,
+        run_to_schema_fn=run_to_schema,
+        session=session,
+    )
+
 
 def _require_workflow_access(
     *,

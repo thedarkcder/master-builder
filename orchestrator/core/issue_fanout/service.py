@@ -111,6 +111,14 @@ def _assert_stage_spi_allows_parent_seed(
     )
 
 
+def _resolved_oauth_value(value: object, attr_name: str) -> object:
+    sentinel = object()
+    resolved = getattr(value, attr_name, sentinel)
+    if resolved is sentinel:
+        raise TypeError(f"Atlassian OAuth context is missing {attr_name}")
+    return resolved
+
+
 def _resolve_seed_oauth_context(*, session, tenant: Tenant, settings, tenant_atlassian_oauth_context_fn):  # noqa: ANN001
     try:
         oauth = tenant_atlassian_oauth_context_fn(session=session, tenant=tenant, settings=settings)
@@ -120,15 +128,16 @@ def _resolve_seed_oauth_context(*, session, tenant: Tenant, settings, tenant_atl
             detail=f"Failed to seed Jira issues: {exc}",
         ) from exc
 
-    if not isinstance(oauth, dict):
+    try:
+        client = _resolved_oauth_value(oauth, "client")
+        access_token = str(_resolved_oauth_value(oauth, "access_token") or "").strip()
+        connection = _resolved_oauth_value(oauth, "connection")
+        cloud_id = str(getattr(connection, "cloud_id", "") or "").strip()
+    except (TypeError, AttributeError) as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Failed to seed Jira issues: Atlassian context is incomplete",
-        )
-    client = oauth.get("client")
-    access_token = str(oauth.get("access_token") or "").strip()
-    connection = oauth.get("connection")
-    cloud_id = str(getattr(connection, "cloud_id", "") or "").strip()
+        ) from exc
     if client is None or not access_token or connection is None or not cloud_id:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -166,11 +175,16 @@ def validate_seed_followup_context(
         return True, None
     try:
         settings = get_settings_fn()
-        oauth = tenant_atlassian_oauth_context_fn(session=session, tenant=tenant, settings=settings)
+        oauth = _resolve_seed_oauth_context(
+            session=session,
+            tenant=tenant,
+            settings=settings,
+            tenant_atlassian_oauth_context_fn=tenant_atlassian_oauth_context_fn,
+        )
         escaped_keys = ", ".join(f'"{value.replace(chr(34), "").strip()}"' for value in issue_keys)
         existing = oauth["client"].search_issues_by_jql(
             access_token=oauth["access_token"],
-            cloud_id=oauth["connection"].cloud_id,
+            cloud_id=oauth["cloud_id"],
             jql=f"issuekey in ({escaped_keys})",
             max_results=min(len(issue_keys), 50),
         )
@@ -286,6 +300,19 @@ def _matching_subtask_issue_type(*, available_issue_types: list[str]) -> str | N
     return None
 
 
+def _matching_epic_child_issue_type(*, available_issue_types: list[str]) -> str | None:
+    by_name = {
+        str(available_issue_type).strip().replace("-", "").replace(" ", "").casefold(): str(available_issue_type).strip()
+        for available_issue_type in available_issue_types
+        if str(available_issue_type).strip()
+    }
+    for candidate in ("story", "task"):
+        match = by_name.get(candidate)
+        if match:
+            return match
+    return None
+
+
 def _engineering_child_issue_type_for_parent(
     *,
     parent_issue_type: str,
@@ -299,17 +326,23 @@ def _engineering_child_issue_type_for_parent(
             detail=f"Cannot determine Jira parent issue type for {parent_issue_key}",
         )
     if normalized_parent_type.casefold() == "epic":
-        return _require_available_issue_type(
-            issue_type="Story",
-            available_issue_types=available_issue_types,
-            summary=f"engineering child for epic {parent_issue_key}",
-        )
+        epic_child_issue_type = _matching_epic_child_issue_type(available_issue_types=available_issue_types)
+        if epic_child_issue_type is None:
+            available = ", ".join(available_issue_types)
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"Epic parent {parent_issue_key} requires a Jira story-level issue type; "
+                    f"available issue types: {available}"
+                ),
+            )
+        return epic_child_issue_type
     if normalized_parent_type.casefold() != "story":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
                 f"Parent issue {parent_issue_key} is {normalized_parent_type}; "
-                "engineering child fanout supports Epic -> Story and Story -> Sub-task only"
+                "engineering child fanout supports Epic -> story-level children and Story -> Sub-task only"
             ),
         )
     subtask_issue_type = _matching_subtask_issue_type(available_issue_types=available_issue_types)

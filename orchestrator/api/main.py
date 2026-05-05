@@ -41,6 +41,7 @@ from orchestrator.api.routes.admin_tokens import router as admin_tokens_router
 from orchestrator.api.routes.app_auth import router as app_auth_router
 from orchestrator.api.routes.discord import router as discord_router
 from orchestrator.api.routes.runs import router as runs_router
+from orchestrator.api.routes.start_engineering import router as start_engineering_router
 from orchestrator.api.routes.webhook import router as webhook_router
 from orchestrator.api.routes.webhook_discord import router as webhook_discord_router
 from orchestrator.api.routes.webhook_discord_interactions import (
@@ -256,6 +257,7 @@ def create_app() -> FastAPI:
     app.include_router(app_auth_router)
     app.include_router(discord_router)
     app.include_router(runs_router)
+    app.include_router(start_engineering_router)
     app.include_router(webhook_router)
     app.include_router(webhook_discord_router)
     app.include_router(webhook_discord_interactions_router)

@@ -5,7 +5,6 @@ import {
   fulfillJson,
   installAppApiMocks,
   installBffApiMocks,
-  makeDeliverySummary,
   makeDiscordIdentity,
   makeInvite,
   makeMember,
@@ -15,6 +14,7 @@ import {
   makeTeam,
   makeTenant,
   makeTenantUserPrincipal,
+  makeWorkflow,
   mockCredentialSignIn,
   seedAdminSession,
   seedTenantSession,
@@ -235,17 +235,201 @@ test("redirects non-technical users away from technical analytics surfaces", asy
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/route25/delivery-summary",
-      handler: (route) => fulfillJson(route, makeDeliverySummary()),
+      pathname: "/api/bff/api/admin/workflows",
+      handler: (route) => fulfillJson(route, []),
     },
   ]);
 
   await page.goto("/route25/analytics/token-overview");
 
-  await expect(page).toHaveURL(/\/route25\/analytics\/business$/, { timeout: 15000 });
+  await expect(page).toHaveURL(/\/route25\/dashboard$/, { timeout: 15000 });
   await expect(page.getByRole("link", { name: "Token Overview" })).toHaveCount(0);
-  await expect(page.getByRole("heading", { name: "Recent delivery timeline" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Throughput trend" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Secrets" })).toHaveCount(0);
+});
+
+test("workspace home summarizes projects and project overview shows parent Jira board", async ({ page }) => {
+  const principal = makeTenantUserPrincipal({
+    email: "product@example.com",
+    full_name: "Product Example",
+  });
+  const tenant = makeTenant({ tenant_id: "route25", name: "Route 25" });
+  const project = makeProject({
+    tenant_id: "route25",
+    project_id: "route25-default",
+    name: "Route 25 Default",
+    jira_project_key: "MAB",
+    github_repository: "thedarkcder/master-builder",
+  });
+  const readyParent = makeWorkflow({
+    execution_id: "wfexec-mab-243",
+    workflow_id: "parent_planning:MAB-243",
+    tenant_id: "route25",
+    project_id: "route25-default",
+    source_system: "jira",
+    source_ref: "MAB-243",
+    display_name: "Identity redesign",
+    workflow_type: {
+      ...makeWorkflow().workflow_type,
+      key: "parent_planning",
+      label: "Parent Planning",
+    },
+    status: "completed",
+    waiting_on: null,
+    operations: [
+      {
+        operation_id: "op-start-link",
+        run_id: null,
+        operation_type: "development_start_link_projection",
+        label: "Start engineering link",
+        description: null,
+        required: true,
+        kind: "notification",
+        after: [],
+        supports: [],
+        definition_only: false,
+        status: "completed",
+        target_system: "jira",
+        target_ref: "MAB-243",
+        summary: null,
+        can_retry: false,
+        retry_unavailable_reason: null,
+        can_restart: false,
+        restart_unavailable_reason: null,
+        attempts: [],
+        events: [],
+      },
+    ],
+    runs: [
+      {
+        ...makeWorkflow().runs[0],
+        run_id: "run-mab-244",
+        issue_key: "MAB-244",
+        issue_summary: "Implement local auth verification",
+        status: "succeeded",
+      },
+    ],
+  });
+  const idleReadyParent = makeWorkflow({
+    execution_id: "wfexec-mab-251",
+    workflow_id: "parent_planning:MAB-251",
+    tenant_id: "route25",
+    project_id: "route25-default",
+    source_system: "jira",
+    source_ref: "MAB-251",
+    display_name: "Ready but not allocated",
+    workflow_type: {
+      ...makeWorkflow().workflow_type,
+      key: "parent_planning",
+      label: "Parent Planning",
+    },
+    status: "completed",
+    waiting_on: null,
+    runs: [],
+  });
+  const blockedParent = makeWorkflow({
+    execution_id: "wfexec-mab-250",
+    workflow_id: "parent_planning:MAB-250",
+    tenant_id: "route25",
+    project_id: "route25-default",
+    source_system: "jira",
+    source_ref: "MAB-250",
+    display_name: "Workspace billing plan",
+    workflow_type: {
+      ...makeWorkflow().workflow_type,
+      key: "parent_planning",
+      label: "Parent Planning",
+    },
+    status: "waiting_for_input",
+    waiting_on: "stakeholder",
+    pending_input_request_id: "input-mab-250",
+    runs: [],
+  });
+
+  await seedTenantSession(page, { principal, userEmail: principal.email, userName: principal.full_name });
+  await installBffApiMocks(page, [
+    {
+      method: "GET",
+      pathname: "/api/bff/api/app/auth/me",
+      handler: (route) => fulfillJson(route, principal),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/tenants/route25",
+      handler: (route) => fulfillJson(route, tenant),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/tenants/route25/projects",
+      handler: (route) => fulfillJson(route, [project]),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/tenants/route25/projects/route25-default",
+      handler: (route) => fulfillJson(route, project),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/runs",
+      handler: (route, url) => {
+        expect(url.searchParams.get("tenant_id")).toBe("route25");
+        expect(url.searchParams.get("project_id")).toBe("route25-default");
+        return fulfillJson(route, []);
+      },
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/workflows",
+      handler: (route, url) => {
+        expect(url.searchParams.get("tenant_id")).toBe("route25");
+        expect(url.searchParams.get("status")).toBeNull();
+        if (url.searchParams.has("project_id")) {
+          expect(url.searchParams.get("project_id")).toBe("route25-default");
+        }
+        return fulfillJson(route, [readyParent, idleReadyParent, blockedParent]);
+      },
+    },
+  ]);
+
+  await page.goto("/route25/dashboard");
+
+  await expect(page.getByRole("heading", { name: "Throughput trend" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Project flow" })).toBeVisible();
+  const projectCard = page.getByRole("main").locator('a[href="/route25/projects/route25-default"]').filter({ hasText: "Route 25 Default" });
+  await expect(projectCard).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Throughput trend" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Utilization" })).toBeVisible();
+  await expect(page.getByText("Ready work is idle.")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Waiting pressure" })).toBeVisible();
+  await expect(projectCard.getByText("Throughput")).toBeVisible();
+  await expect(projectCard.getByText("Active")).toBeVisible();
+  await expect(projectCard.getByText("Waiting")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Ready to start" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Needs input" })).toHaveCount(0);
+
+  await projectCard.click();
+
+  await expect(page).toHaveURL(/\/route25\/projects\/route25-default$/);
+  await expect(page.getByRole("link", { name: "Knowledge" })).toHaveAttribute(
+    "href",
+    "/route25/projects/route25-default/knowledge",
+  );
+  await expect(page.getByRole("heading", { name: "Ready to start" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Needs input" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Repository" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Effective AI policy" })).toHaveCount(0);
+  await expect(page.getByText("Browse knowledge")).toHaveCount(0);
+  await expect(page.getByText("MAB-243")).toBeVisible();
+  await expect(page.getByText("Identity redesign")).toBeVisible();
+  const readyCard = page.locator("article").filter({ hasText: "MAB-243" });
+  await expect(readyCard.getByText("1 run")).not.toBeVisible();
+  await readyCard.click();
+  const detailsDrawer = page.getByRole("dialog", { name: "MAB-243 details" });
+  await expect(detailsDrawer).toBeVisible();
+  await expect(detailsDrawer.getByText("1 run")).toBeVisible();
+  await expect(page.getByText("MAB-250")).toBeVisible();
+  await expect(detailsDrawer.getByText("Questions")).toBeVisible();
+  await expect(page.getByText("Recent Delivery")).toHaveCount(0);
 });
 
 test("lets a platform admin create a workspace through the setup wizard and blocks Jira step validation", async ({ page }) => {
@@ -296,6 +480,16 @@ test("lets a platform admin create a workspace through the setup wizard and bloc
       method: "GET",
       pathname: "/api/bff/api/admin/tenants/beta-workspace",
       handler: (route) => fulfillJson(route, tenantState),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/tenants/beta-workspace/projects",
+      handler: (route) => fulfillJson(route, []),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/workflows",
+      handler: (route) => fulfillJson(route, []),
     },
     {
       method: "POST",
@@ -415,8 +609,7 @@ test("lets a platform admin create a workspace through the setup wizard and bloc
   await expect(page).toHaveURL(/\/tenants\/new\/review$/);
   await page.getByRole("button", { name: "Save workspace" }).click();
   await expect(page).toHaveURL(/\/beta-workspace\/dashboard$/, { timeout: 15000 });
-  await expect(page.getByRole("heading", { name: "Recent Runs" })).toBeVisible();
-  await expect(page.getByText("Connection Status")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Throughput trend" })).toBeVisible();
 });
 
 test("formats Jira webhook timestamps on the tenant Jira settings page", async ({ page }) => {
@@ -539,8 +732,8 @@ test("opens the tenant workspace from the selector for tenant users", async ({ p
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/route25/delivery-summary",
-      handler: (route) => fulfillJson(route, makeDeliverySummary()),
+      pathname: "/api/bff/api/admin/workflows",
+      handler: (route) => fulfillJson(route, []),
     },
   ]);
 
@@ -549,8 +742,7 @@ test("opens the tenant workspace from the selector for tenant users", async ({ p
     page.waitForURL(/\/route25\/dashboard$/, { timeout: 15000 }),
     page.getByRole("link", { name: /Route 25/ }).click(),
   ]);
-  await expect(page.getByRole("heading", { name: "Recent Delivery" })).toBeVisible();
-  await expect(page.getByText("Connection Status")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Throughput trend" })).toBeVisible();
 });
 
 test("lets standard tenant users open Projects without showing project-management actions", async ({ page }) => {
@@ -662,35 +854,74 @@ test("lets standard tenant users open Projects without showing project-managemen
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/runs",
+      pathname: "/api/bff/api/admin/tenants/route25/projects/route-web/knowledge/stats",
       handler: (route) =>
-        fulfillJson(route, { detail: "Admin authentication required" }, 401),
+        fulfillJson(route, {
+          total_assets: 0,
+          total_chunks: 0,
+          total_facts: 0,
+          approved_facts: 0,
+          pending_review_facts: 0,
+          superseded_facts: 0,
+          ready_assets: 0,
+          pending_review_assets: 0,
+          rejected_assets: 0,
+          latest_asset_updated_at: null,
+          source_type_counts: {},
+        }),
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/route25/delivery-summary",
-      handler: (route) => fulfillJson(route, makeDeliverySummary()),
+      pathname: "/api/bff/api/admin/tenants/route25/projects/route-web/knowledge/assets",
+      handler: (route) => fulfillJson(route, { items: [], total: 0, limit: 25, offset: 0 }),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/runs",
+      handler: (route) => {
+        throw new Error(`Runs endpoint should not be called for non-platform project users: ${route.request().url()}`);
+      },
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/workflows",
+      handler: (route) => fulfillJson(route, []),
     },
   ]);
 
-  await page.goto("/route25/projects");
+  await page.goto("/route25/dashboard");
 
-  await expect(page.locator('a[href="/route25/projects/route-web/runs"]').last()).toBeVisible();
-  await expect(page.getByRole("link", { name: "All projects" })).toBeVisible();
+  await expect(page.locator('a[href="/route25/projects/route-web"]').last()).toBeVisible();
+  await expect(page.locator('a[href="/route25/projects/route-web/runs"]')).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "All projects" })).toHaveCount(0);
   await expect(page.getByRole("link", { name: "Add project" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Add project" })).toHaveCount(0);
 
-  await page.locator('a[href="/route25/projects/route-web/runs"]').last().click();
-  await expect(page).toHaveURL(/\/route25\/projects\/route-web\/runs$/);
+  await page.locator('a[href="/route25/projects/route-web"]').last().click();
+  await expect(page).toHaveURL(/\/route25\/projects\/route-web$/);
   await expect(page.getByRole("heading", { name: "Route Web" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Project Runs" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Knowledge" })).toHaveAttribute(
+    "href",
+    "/route25/projects/route-web/knowledge",
+  );
+  await expect(page.getByRole("tab", { name: "Runs" })).toHaveCount(0);
   await expect(page.getByRole("link", { name: "Open settings" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Add knowledge" })).toHaveCount(0);
   await expect(page.getByText("Failed to load project")).toHaveCount(0);
-  await expect(page.getByText("Runs are unavailable: 401: Admin authentication required")).toBeVisible();
+  await expect(page.getByText("Runs are unavailable: 401: Admin authentication required")).toHaveCount(0);
+
+  await page.getByRole("link", { name: "Knowledge" }).click();
+  await expect(page).toHaveURL(/\/route25\/projects\/route-web\/knowledge$/);
+  await expect(page.getByRole("link", { name: "Overview" })).toHaveAttribute("href", "/route25/projects/route-web");
+  await expect(page.getByRole("heading", { name: "Knowledge Analytics" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Add knowledge" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Sources" })).toHaveCount(0);
+
+  await page.goto("/route25/projects/route-web/runs");
+  await expect(page).toHaveURL(/\/route25\/dashboard$/, { timeout: 15000 });
 });
 
-test("lets platform super admins see team navigation and security controls inside a workspace", async ({ page }) => {
+test("lets platform super admins see troubleshooting navigation and direct settings tabs", async ({ page }) => {
   const principal = makePlatformAdminPrincipal();
   const tenant = makeTenant({
     tenant_id: "route25",
@@ -716,12 +947,28 @@ test("lets platform super admins see team navigation and security controls insid
     },
   ]);
 
-  await page.goto("/route25/profile/security");
+  await page.goto("/route25/settings");
 
+  await expect(page).toHaveURL(/\/route25\/settings\/config$/, { timeout: 15000 });
+  await expect(page.getByRole("link", { name: "Integrations" })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Configuration" })).toHaveAttribute("aria-current", "page");
+  await expect(page.getByRole("navigation", { name: "Settings tabs" }).getByRole("link")).toHaveText([
+    "Configuration",
+    "Observability",
+    "Health",
+    "Notifications",
+    "Atlassian",
+    "GitHub",
+    "Discord",
+    "Danger",
+  ]);
+
+  await expect(page.getByText("Troubleshooting")).toBeVisible();
+  await expect(page.getByRole("link", { name: "Pipeline" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Workflows" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Executions" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Analytics" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Team" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Security" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Update password" })).toBeVisible();
-  await expect(page.getByText("Password management for platform administrators")).toHaveCount(0);
 });
 
 test("lets tenant admins manage team settings from dedicated Team tabs", async ({ page }) => {
@@ -889,7 +1136,7 @@ test("lets tenant admins manage team settings from dedicated Team tabs", async (
   await page.getByPlaceholder("Team name").fill("Ops");
   await page.getByPlaceholder("Description").fill("Ops and enablement");
   await page.getByRole("button", { name: "Create team" }).click();
-  await expect(page.getByText("Ops", { exact: true })).toBeVisible();
+  await expect(page.getByRole("main").getByText("Ops", { exact: true })).toBeVisible();
   await expect(page.getByPlaceholder("Team name")).toHaveCount(0);
 
   await page.getByRole("link", { name: "Invites" }).click();
@@ -902,8 +1149,8 @@ test("lets tenant admins manage team settings from dedicated Team tabs", async (
   await page.getByPlaceholder("Full name").fill("New Hire");
   await page.getByRole("button", { name: "Delivery" }).click();
   await page.getByRole("button", { name: "Send invite" }).click();
-  await expect(page.getByText("newhire@example.com")).toBeVisible();
-  await expect(page.getByText("Pending • Business member • Delivery")).toBeVisible();
+  await expect(page.getByRole("main").getByText("newhire@example.com")).toBeVisible();
+  await expect(page.getByRole("main").getByText("Pending • Business member • Delivery")).toBeVisible();
 });
 
 test("redirects platform super admins to the tenant selector after archiving a project", async ({ page }) => {
@@ -941,6 +1188,11 @@ test("redirects platform super admins to the tenant selector after archiving a p
       handler: (route) => fulfillJson(route, project),
     },
     {
+      method: "GET",
+      pathname: "/api/bff/api/admin/workflows",
+      handler: (route) => fulfillJson(route, []),
+    },
+    {
       method: "PUT",
       pathname: "/api/bff/api/admin/tenants/route25/projects/route-web",
       handler: async (route) => {
@@ -961,8 +1213,10 @@ test("redirects platform super admins to the tenant selector after archiving a p
 
   await expect(page).toHaveURL(/\/tenants\/select$/, { timeout: 15000 });
 
-  await page.goto("/route25/projects");
+  await page.goto("/route25/dashboard");
+  await expect(page.getByRole("link", { name: "All projects" })).toHaveCount(0);
   await expect(page.locator('a[href="/route25/projects/route-web/runs"]').last()).toHaveCount(0);
+  await expect(page.locator('a[href="/route25/projects/route-web"]').last()).toHaveCount(0);
 });
 
 test("shows a standalone tenant archive confirmation page and moves the tenant into the archived workspace list", async ({
@@ -1047,8 +1301,12 @@ test("shows a standalone tenant archive confirmation page and moves the tenant i
   await expect(page).toHaveURL(/\/tenants\/select$/, { timeout: 15000 });
   await expect(page.getByText("Active workspaces")).toBeVisible();
   await expect(page.getByText("Archived workspaces", { exact: true })).toBeVisible();
-  await expect(page.getByText("auth-workspace-one-1774668649405-k03pkj")).toBeVisible();
-  await expect(page.getByText("Auth Workspace Two 1774668649405-k03pkj")).toBeVisible();
+  await expect(
+    page.locator('a[href="/auth-workspace-one-1774668649405-k03pkj/settings/config"]'),
+  ).toContainText("Auth Workspace One 1774668649405-k03pkj");
+  await expect(page.locator('a[href="/auth-workspace-two-1774668649405-k03pkj/dashboard"]')).toContainText(
+    "Auth Workspace Two 1774668649405-k03pkj",
+  );
 });
 
 test("pages the workspace selector when there are many active workspaces", async ({ page }) => {
@@ -1192,14 +1450,14 @@ test("hides team navigation for invited users without team-management access", a
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/route25/delivery-summary",
-      handler: (route) => fulfillJson(route, makeDeliverySummary()),
+      pathname: "/api/bff/api/admin/workflows",
+      handler: (route) => fulfillJson(route, []),
     },
   ]);
 
   await page.goto("/route25/dashboard");
 
-  await expect(page.getByRole("heading", { name: "Recent Delivery" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Throughput trend" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Team" })).toHaveCount(0);
   await expect(page.getByRole("link", { name: "Profile" })).toBeVisible();
 });
@@ -1362,7 +1620,7 @@ test("lets a tenant user manage profile details, experience, and password from P
   await page.getByLabel("Full name").fill("Person Renamed");
   await page.getByLabel("Experience preference").selectOption("non_technical");
   await page.getByRole("button", { name: "Save profile" }).click();
-  await expect(page.getByText("Profile updated.")).toBeVisible();
+  await expect(page.getByLabel("Notifications").getByText("Profile updated", { exact: true })).toBeVisible();
 
   await page.getByRole("link", { name: "Security" }).click();
   await expect(page).toHaveURL(new RegExp(`/${encodedTenantId}/profile/security$`), { timeout: 15000 });
@@ -1370,7 +1628,7 @@ test("lets a tenant user manage profile details, experience, and password from P
   await page.getByLabel("Current password").fill("old-password");
   await page.getByLabel("New password").fill("updated-password");
   await page.getByRole("button", { name: "Update password" }).click();
-  await expect(page.getByText("Password updated.")).toBeVisible();
+  await expect(page.getByLabel("Notifications").getByText("Password updated", { exact: true })).toBeVisible();
 });
 
 test("resumes the wizard on the Discord step after a successful install callback", async ({ page }) => {

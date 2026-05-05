@@ -288,6 +288,91 @@ class MigrationTests(unittest.TestCase):
                 ],
             )
 
+    def test_planning_decision_record_identity_is_stage_scoped(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            database_url = f"sqlite:///{Path(tmpdir) / 'planning-decision-identity.sqlite'}"
+            engine = create_engine(database_url)
+            now = "2026-05-04 21:00:00"
+            later = "2026-05-04 21:01:00"
+            with engine.begin() as connection:
+                connection.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"))
+                connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('20260504_0104')"))
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE planning_decision_records (
+                            record_id VARCHAR(64) PRIMARY KEY,
+                            tenant_id VARCHAR(128) NOT NULL,
+                            project_id VARCHAR(128),
+                            workflow_id VARCHAR(128) NOT NULL,
+                            source_operation_id VARCHAR(64),
+                            source_attempt_id VARCHAR(64),
+                            parent_issue_key VARCHAR(64) NOT NULL,
+                            lane VARCHAR(32) NOT NULL,
+                            status VARCHAR(32) NOT NULL,
+                            source_stage VARCHAR(64),
+                            external_key VARCHAR(128) NOT NULL,
+                            payload_json JSON NOT NULL,
+                            created_at DATETIME NOT NULL,
+                            updated_at DATETIME NOT NULL
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO planning_decision_records (
+                            record_id, tenant_id, workflow_id, parent_issue_key, lane, status,
+                            source_stage, external_key, payload_json, created_at, updated_at
+                        )
+                        VALUES
+                            ('engineering-old', 'route25', 'parent_planning:MAB-243', 'MAB-243', 'technical', 'selected', 'engineering_planning', 'TD-001', '{}', :now, :now),
+                            ('engineering-new', 'route25', 'parent_planning:MAB-243', 'MAB-243', 'technical', 'selected', 'engineering_planning', 'TD-001', '{}', :now, :later),
+                            ('testing', 'route25', 'parent_planning:MAB-243', 'MAB-243', 'technical', 'selected', 'test_planning', 'TD-001', '{}', :now, :now),
+                            ('missing-stage', 'route25', 'parent_planning:MAB-243', 'MAB-243', 'pm', 'requested', NULL, 'PM-001', '{}', :now, :now)
+                        """
+                    ),
+                    {"now": now, "later": later},
+                )
+
+            self._alembic_upgrade(database_url, "20260504_0105")
+
+            with engine.begin() as connection:
+                rows = connection.execute(
+                    text(
+                        """
+                        SELECT record_id, source_stage, external_key
+                        FROM planning_decision_records
+                        ORDER BY record_id
+                        """
+                    )
+                ).all()
+                self.assertEqual(
+                    rows,
+                    [
+                        ("engineering-new", "engineering_planning", "TD-001"),
+                        ("missing-stage", "unknown", "PM-001"),
+                        ("testing", "test_planning", "TD-001"),
+                    ],
+                )
+                with self.assertRaises(Exception):
+                    connection.execute(
+                        text(
+                            """
+                            INSERT INTO planning_decision_records (
+                                record_id, tenant_id, workflow_id, parent_issue_key, lane, status,
+                                source_stage, external_key, payload_json, created_at, updated_at
+                            )
+                            VALUES (
+                                'duplicate', 'route25', 'parent_planning:MAB-243', 'MAB-243',
+                                'technical', 'selected', 'test_planning', 'TD-001', '{}', :now, :now
+                            )
+                            """
+                        ),
+                        {"now": now},
+                    )
+
     def test_optional_discord_projection_status_repair_migration(self) -> None:
         with TemporaryDirectory() as tmpdir:
             database_url = f"sqlite:///{Path(tmpdir) / 'discord-projection-repair.sqlite'}"
@@ -1294,7 +1379,7 @@ class MigrationTests(unittest.TestCase):
 
             with engine.begin() as connection:
                 versions = connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
-            self.assertEqual(versions, ["20260504_0104"])
+            self.assertEqual(versions, ["20260505_0106"])
 
     def test_run_migrations_disables_alembic_logger_reconfiguration(self) -> None:
         fake_config = MagicMock()
@@ -1355,6 +1440,7 @@ class MigrationTests(unittest.TestCase):
             self.assertIn("latest_checkpoint_id", workflow_columns)
             self.assertIn("source_workflow_id", workflow_columns)
             self.assertIn("source_run_id", workflow_columns)
+            self.assertIn("source_external_id", workflow_columns)
             self.assertIn("updated_at", workflow_columns)
 
             checkpoint_columns = {column["name"] for column in inspector.get_columns("workflow_checkpoints")}

@@ -98,6 +98,7 @@ type DashboardNavPanelProps = {
   tenantDisplayName: string;
   tenantBaseRoute: string | null;
   navItems: NavItem[];
+  troubleshootingNavItems: NavItem[];
   tenantProjects: ProjectRecord[];
   projectNotificationCounts: Record<string, number>;
   pathname: string;
@@ -114,6 +115,7 @@ function DashboardNavPanel({
   tenantDisplayName,
   tenantBaseRoute,
   navItems,
+  troubleshootingNavItems,
   tenantProjects,
   projectNotificationCounts,
   pathname,
@@ -126,16 +128,8 @@ function DashboardNavPanel({
   const close = () => onNavigate?.();
   const projectMenu = (
     <SidebarMenu>
-      <SidebarMenuItem key={`projects-overview-${decodedTenantId}`}>
-        <SidebarMenuButton asChild isActive={tenantBaseRoute != null && pathname === `${tenantBaseRoute}/projects`}>
-          <Link href={`${tenantBaseRoute}/projects`} onClick={close}>
-            <FolderKanban className="h-4 w-4 flex-shrink-0" />
-            All projects
-          </Link>
-        </SidebarMenuButton>
-      </SidebarMenuItem>
       {tenantProjects.map((project) => {
-        const projectHref = buildProjectSectionPath(decodedTenantId ?? project.tenant_id, project.project_id, "runs");
+        const projectHref = buildProjectSectionPath(decodedTenantId ?? project.tenant_id, project.project_id, "overview");
         const active =
           pathname === buildProjectSectionPath(decodedTenantId ?? project.tenant_id, project.project_id) ||
           pathname.startsWith(`${buildProjectSectionPath(decodedTenantId ?? project.tenant_id, project.project_id)}/`) ||
@@ -219,6 +213,31 @@ function DashboardNavPanel({
                 );
               })}
             </SidebarMenu>
+
+            {troubleshootingNavItems.length > 0 ? (
+              <div className="mt-4">
+                <SidebarMenuLabel className="px-0">Troubleshooting</SidebarMenuLabel>
+                <SidebarMenu>
+                  {troubleshootingNavItems.map((item) => {
+                    const active = item.activePathname
+                      ? pathname === item.activePathname
+                      : item.matchPrefix
+                        ? pathname.startsWith(item.matchPrefix)
+                        : pathname === item.href.split("#")[0];
+                    return (
+                      <SidebarMenuItem key={item.href}>
+                        <SidebarMenuButton asChild isActive={active}>
+                          <Link href={item.href} onClick={close}>
+                            <item.icon className="h-4 w-4 flex-shrink-0" />
+                            {item.label}
+                          </Link>
+                        </SidebarMenuButton>
+                      </SidebarMenuItem>
+                    );
+                  })}
+                </SidebarMenu>
+              </div>
+            ) : null}
 
             <div className="mt-4 flex min-h-0 flex-1 flex-col">
               <SidebarMenuLabel className="px-0">Projects</SidebarMenuLabel>
@@ -304,6 +323,22 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   const [runTenantId, setRunTenantId] = useState<string | null>(null);
   const tenantId = tenantMatch ? tenantMatch[1] : runTenantId;
   const projectContextId = projectMatch?.[2] ? decodeURIComponent(projectMatch[2]) : runContext.projectId || null;
+  const decodedTenantId = tenantId ? decodeURIComponent(tenantId) : null;
+  const tenantBaseRoute = decodedTenantId ? getTenantWorkspaceRoute(decodedTenantId) : null;
+  const isPlatformSuperAdmin = canAccessPlatformAdmin(principal);
+  const isTenantTroubleshootingRoute =
+    Boolean(tenantBaseRoute) &&
+    (
+      pathname === `${tenantBaseRoute}/runs` ||
+      pathname.startsWith(`${tenantBaseRoute}/runs/`) ||
+      /^\/(?!tenants(?:\/|$)|runs(?:\/|$)|platform(?:\/|$)|login(?:\/|$)|register(?:\/|$)|invite(?:\/|$)|get-started(?:\/|$)|forgot-password(?:\/|$)|reset-password(?:\/|$)|api(?:\/|$))[^/]+\/projects\/[^/]+\/runs(?:\/|$)/.test(pathname) ||
+      pathname === `${tenantBaseRoute}/workflows` ||
+      pathname.startsWith(`${tenantBaseRoute}/workflows/`) ||
+      pathname === `${tenantBaseRoute}/executions` ||
+      pathname.startsWith(`${tenantBaseRoute}/executions/`) ||
+      pathname === `${tenantBaseRoute}/analytics` ||
+      pathname.startsWith(`${tenantBaseRoute}/analytics/`)
+    );
 
   useEffect(() => {
     setMobileNavOpen(false);
@@ -426,6 +461,12 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
     };
   }, [credentials, decodedTenantIdForPersist, isWizardRoute, tenantProjects]);
 
+  useEffect(() => {
+    if (ready && principalReady && decodedTenantId && !isPlatformSuperAdmin && isTenantTroubleshootingRoute) {
+      router.replace(`${getTenantWorkspaceRoute(decodedTenantId)}/dashboard`);
+    }
+  }, [decodedTenantId, isPlatformSuperAdmin, isTenantTroubleshootingRoute, principalReady, ready, router]);
+
   if (!ready) {
     return <main className="p-8 text-sm text-muted-foreground">Loading session...</main>;
   }
@@ -456,9 +497,10 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
     return <div className="min-h-screen bg-background">{children}</div>;
   }
 
-  const decodedTenantId = tenantId ? decodeURIComponent(tenantId) : null;
-  const tenantBaseRoute = decodedTenantId ? getTenantWorkspaceRoute(decodedTenantId) : null;
-  const isPlatformSuperAdmin = canAccessPlatformAdmin(principal);
+  if (ready && principalReady && decodedTenantId && !isPlatformSuperAdmin && isTenantTroubleshootingRoute) {
+    return <main className="p-8 text-sm text-muted-foreground">Redirecting to workspace dashboard...</main>;
+  }
+
   const globalNavItems: NavItem[] = [
     { href: "/platform/dashboard", label: "Dashboard", icon: LayoutDashboard },
     { href: "/platform/status", label: "Status", icon: Activity },
@@ -466,14 +508,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
     { href: "/tenants/select", label: "Tenants", icon: Building2 },
     { href: "/platform/secrets", label: "Secrets", icon: KeyRound }
   ];
-  const tenantMembership = decodedTenantId ? getMembershipForTenant(principal, decodedTenantId) : null;
   const canManageWorkspaceTeam = decodedTenantId ? canManageTeam(principal, decodedTenantId) : false;
-  const analyticsHref =
-    decodedTenantId && !canAccessTechnicalSurface(principal, decodedTenantId)
-      ? `${tenantBaseRoute}/analytics/business`
-      : decodedTenantId
-        ? `${tenantBaseRoute}/analytics/token-overview`
-        : null;
   const showSecretsNav = !decodedTenantId || canAccessPlatformAdmin(principal) || canAccessTechnicalSurface(principal, decodedTenantId);
 
   const tenantNavItems: NavItem[] = decodedTenantId
@@ -484,6 +519,42 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
           icon: LayoutDashboard,
           matchPrefix: `${tenantBaseRoute}/dashboard`
         },
+        ...(canManageWorkspaceTeam
+          ? [
+              {
+                href: `${tenantBaseRoute}/team/members`,
+                label: "Team",
+                icon: Users,
+                matchPrefix: `${tenantBaseRoute}/team`
+              }
+            ]
+          : []),
+        {
+          href: `${tenantBaseRoute}/profile`,
+          label: "Profile",
+          icon: User,
+          matchPrefix: `${tenantBaseRoute}/profile`
+        },
+        {
+          href: `${tenantBaseRoute}/settings/config`,
+          label: "Settings",
+          icon: Settings2,
+          matchPrefix: `${tenantBaseRoute}/settings`
+        },
+        ...(showSecretsNav
+          ? [
+              {
+                href: `${tenantBaseRoute}/secrets`,
+                label: "Secrets",
+                icon: KeyRound,
+                matchPrefix: `${tenantBaseRoute}/secrets`
+              }
+            ]
+          : [])
+      ]
+    : [];
+  const troubleshootingNavItems: NavItem[] = decodedTenantId && isPlatformSuperAdmin
+    ? [
         {
           href: `${tenantBaseRoute}/runs`,
           label: "Pipeline",
@@ -503,43 +574,11 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
           matchPrefix: `${tenantBaseRoute}/executions`
         },
         {
-          href: analyticsHref ?? `${tenantBaseRoute}/analytics/token-overview`,
+          href: `${tenantBaseRoute}/analytics/token-overview`,
           label: "Analytics",
           icon: BarChart3,
           matchPrefix: `${tenantBaseRoute}/analytics`
         },
-        ...(canManageWorkspaceTeam
-          ? [
-              {
-                href: `${tenantBaseRoute}/team/members`,
-                label: "Team",
-                icon: Users,
-                matchPrefix: `${tenantBaseRoute}/team`
-              }
-            ]
-          : []),
-        {
-          href: `${tenantBaseRoute}/profile`,
-          label: "Profile",
-          icon: User,
-          matchPrefix: `${tenantBaseRoute}/profile`
-        },
-        {
-          href: `${tenantBaseRoute}/settings/integrations`,
-          label: "Settings",
-          icon: Settings2,
-          matchPrefix: `${tenantBaseRoute}/settings`
-        },
-        ...(showSecretsNav
-          ? [
-              {
-                href: `${tenantBaseRoute}/secrets`,
-                label: "Secrets",
-                icon: KeyRound,
-                matchPrefix: `${tenantBaseRoute}/secrets`
-              }
-            ]
-          : [])
       ]
     : [];
 
@@ -551,6 +590,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
     tenantDisplayName,
     tenantBaseRoute,
     navItems,
+    troubleshootingNavItems,
     tenantProjects,
     projectNotificationCounts,
     pathname,

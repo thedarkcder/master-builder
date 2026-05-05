@@ -83,6 +83,7 @@ class _FakeIssueGateway:
     def __init__(self) -> None:
         self.label_updates: list[str] = []
         self.published_questions: list[tuple[str, tuple[object, ...]]] = []
+        self.start_development_links: list[tuple[str, str]] = []
 
     def update_issue_sync_label(self, *, issue_detail, target_label: str) -> None:  # noqa: ANN001
         self.label_updates.append(f"{issue_detail.key}:{target_label}")
@@ -98,6 +99,10 @@ class _FakeIssueGateway:
             discord_followup_created=True,
             jira_comment_id="jira-comment-1",
         )
+
+    def publish_start_development_link(self, *, issue_key: str, action_url: str):  # noqa: ANN001
+        self.start_development_links.append((issue_key, action_url))
+        return {"id": "jira-start-comment-1"}, None
 
 
 class ParentFeaturePlanningWorkflowTests(SqliteTemplateDbTestCase):
@@ -180,7 +185,10 @@ class ParentFeaturePlanningWorkflowTests(SqliteTemplateDbTestCase):
 
             fanout = workflow._plan_and_seed_with_attempts(
                 session=session,
-                settings=SimpleNamespace(),
+                settings=SimpleNamespace(
+                    admin_ui_base_url="https://mb.example.test",
+                    jira_action_token_secret="test-action-secret",
+                ),
                 tenant_id="tenant-a",
                 project_id="tenant-a-default",
                 lifecycle=lifecycle,
@@ -285,13 +293,17 @@ class ParentFeaturePlanningWorkflowTests(SqliteTemplateDbTestCase):
 
             fanout = workflow._plan_and_seed_with_attempts(
                 session=session,
-                settings=SimpleNamespace(),
+                settings=SimpleNamespace(
+                    admin_ui_base_url="https://mb.example.test",
+                    jira_action_token_secret="test-action-secret",
+                ),
                 tenant_id="tenant-b",
                 project_id="tenant-b-default",
                 lifecycle=lifecycle,
                 parent_detail=SimpleNamespace(
                     key="MAB-242",
                     summary="Internal PM resolution",
+                    status="Backlog",
                     description="Planning question can be answered internally",
                     labels=["pm-parent"],
                 ),
@@ -315,6 +327,9 @@ class ParentFeaturePlanningWorkflowTests(SqliteTemplateDbTestCase):
             self.assertEqual(operations["pm_decision_resolution"].status, "pending")
             self.assertEqual(operations["backlog_planning"].status, "completed")
             self.assertEqual(operations["jira_child_fanout"].status, "completed")
+            self.assertEqual(issue_gateway.start_development_links[0][0], "MAB-242")
+            self.assertIn("/tenant-b/start/", issue_gateway.start_development_links[0][1])
+            self.assertIn("startDevelopmentToken=", issue_gateway.start_development_links[0][1])
 
     def test_pm_decision_request_is_answered_internally_then_fanout_continues_without_jira(self) -> None:
         with self.session_factory() as session:
@@ -396,13 +411,17 @@ class ParentFeaturePlanningWorkflowTests(SqliteTemplateDbTestCase):
 
             fanout = workflow._plan_and_seed_with_attempts(
                 session=session,
-                settings=SimpleNamespace(),
+                settings=SimpleNamespace(
+                    admin_ui_base_url="https://mb.example.test",
+                    jira_action_token_secret="test-action-secret",
+                ),
                 tenant_id="tenant-c",
                 project_id="tenant-c-default",
                 lifecycle=lifecycle,
                 parent_detail=SimpleNamespace(
                     key="MAB-243",
                     summary="PM decision resolution",
+                    status="Backlog",
                     description="Planning question should be resolved internally",
                     labels=["pm-parent"],
                 ),

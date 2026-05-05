@@ -34,6 +34,7 @@ def _now() -> datetime:
 class WorkflowSourceReference:
     source_system: str
     source_ref: str
+    external_id: str | None = None
     display_name: str | None = None
     description: object | None = None
     attributes: dict[str, object] = field(default_factory=dict)
@@ -295,7 +296,20 @@ def ensure_workflow_execution(
     )
     normalized_description = _normalize_source_description(description)
     source_ref = str(execution.source.source_ref or "").strip()
+    source_external_id = str(execution.source.external_id or "").strip() or None
     workflow = session.get(WorkflowExecution, workflow_id)
+    if workflow is None and source_external_id is not None:
+        workflow = session.execute(
+            select(WorkflowExecution)
+            .where(
+                WorkflowExecution.tenant_id == tenant_id,
+                WorkflowExecution.source_system == execution.source.source_system,
+                WorkflowExecution.source_external_id == source_external_id,
+                WorkflowExecution.dedupe_scope == workflow_type.system_key,
+            )
+            .order_by(desc(WorkflowExecution.created_at))
+            .limit(1)
+        ).scalar_one_or_none()
     now = _now()
     if workflow is None:
         workflow = WorkflowExecution(
@@ -305,6 +319,7 @@ def ensure_workflow_execution(
             project_id=project_id,
             source_system=execution.source.source_system,
             source_ref=source_ref,
+            source_external_id=source_external_id,
             display_name=display_name,
             source_description=normalized_description,
             repo_url=None,
@@ -326,9 +341,16 @@ def ensure_workflow_execution(
         session.add(workflow)
         session.flush()
     else:
+        if (
+            workflow.source_external_id
+            and source_external_id
+            and str(workflow.source_external_id or "").strip() != source_external_id
+        ):
+            raise ValueError("Workflow source external id does not match the supplied source reference")
         workflow.project_id = project_id or workflow.project_id
         workflow.source_system = execution.source.source_system
         workflow.source_ref = source_ref
+        workflow.source_external_id = source_external_id or workflow.source_external_id
         workflow.display_name = display_name
         workflow.source_description = normalized_description
         workflow.orchestration_backend = workflow_type.orchestration_backend

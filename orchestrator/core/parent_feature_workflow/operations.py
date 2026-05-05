@@ -8,6 +8,8 @@ PARENT_OP_BACKLOG_PLANNING = "backlog_planning"
 PARENT_OP_PM_DECISION_RESOLUTION = "pm_decision_resolution"
 PARENT_OP_JIRA_CHILD_FANOUT = "jira_child_fanout"
 PARENT_OP_JIRA_CHILD_PROMOTION = "jira_child_promotion"
+PARENT_OP_DEVELOPMENT_START_LINK_PROJECTION = "development_start_link_projection"
+PARENT_OP_DEVELOPMENT_START = "development_start"
 PARENT_OP_NOTIFICATION_EMIT = "notification_emit"
 
 PARENT_WU_BRIEF_NORMALIZATION_MODEL = "brief_normalization.model"

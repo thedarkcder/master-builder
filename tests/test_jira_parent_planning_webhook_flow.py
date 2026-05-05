@@ -1328,7 +1328,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                 "discord_followup_projection": "pending",
                 "backlog_planning": "completed",
                 "jira_child_fanout": "completed",
-                "jira_child_promotion": "pending",
+                "jira_child_promotion": "completed",
                 "notification_emit": "pending",
                 "pm_decision_resolution": "pending",
             },

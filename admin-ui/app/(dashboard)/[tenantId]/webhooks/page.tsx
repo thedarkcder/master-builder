@@ -160,7 +160,7 @@ export default function TenantWebhooksPage() {
             {loading ? "Refreshing" : "Refresh"}
           </Button>
           <Button variant="outline" size="sm" asChild>
-            <Link href={`/${encodeURIComponent(tenantId)}/settings/integrations`}>
+            <Link href={`/${encodeURIComponent(tenantId)}/settings/config`}>
               <ArrowLeft className="mr-1.5 h-3.5 w-3.5" />
               Settings
             </Link>
