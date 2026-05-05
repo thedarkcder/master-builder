@@ -55,12 +55,23 @@ export function stringifyErrorDetail(detail: unknown): string {
   return "Unexpected error";
 }
 
-export async function request<T>(
-  credentials: Credentials,
+const inFlightGetRequests = new Map<string, Promise<unknown>>();
+
+function requestMethod(init?: RequestInit): string {
+  return String(init?.method || "GET").trim().toUpperCase();
+}
+
+function requestKey(path: string, init?: RequestInit): string | null {
+  if (requestMethod(init) !== "GET" || init?.body || init?.signal) {
+    return null;
+  }
+  return path;
+}
+
+async function executeRequest<T>(
   path: string,
   init?: RequestInit,
 ): Promise<T> {
-  void credentials;
   const response = await fetch(`/api/bff${path}`, {
     ...init,
     headers: {
@@ -81,6 +92,27 @@ export async function request<T>(
   }
 
   return body as T;
+}
+
+export async function request<T>(
+  credentials: Credentials,
+  path: string,
+  init?: RequestInit,
+): Promise<T> {
+  void credentials;
+  const key = requestKey(path, init);
+  if (!key) {
+    return executeRequest<T>(path, init);
+  }
+  const existing = inFlightGetRequests.get(key);
+  if (existing) {
+    return existing as Promise<T>;
+  }
+  const pending = executeRequest<T>(path, init).finally(() => {
+    inFlightGetRequests.delete(key);
+  });
+  inFlightGetRequests.set(key, pending);
+  return pending;
 }
 
 const MAX_NDJSON_STREAM_LINE_BYTES = 1_000_000;

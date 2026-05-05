@@ -165,10 +165,11 @@ def test_development_team_run_workflow_uses_configured_activity_timeouts(monkeyp
 def test_temporal_engine_advances_handler_backed_workflow_through_temporal_update(monkeypatch):
     captured: dict[str, object] = {}
 
-    class _FakeHandle:
-        async def execute_update(self, update_method, payload):
+    class _FakeClient:
+        async def execute_update_with_start_workflow(self, update_method, payload, *, start_workflow_operation):
             captured["update_method"] = update_method
             captured["update_payload"] = payload
+            captured["start_operation"] = start_workflow_operation
             return HandlerWorkflowAdvanceResult(
                 handled=True,
                 reason=None,
@@ -176,13 +177,6 @@ def test_temporal_engine_advances_handler_backed_workflow_through_temporal_updat
                 active_run_id=None,
                 last_error=None,
             )
-
-    class _FakeClient:
-        async def start_workflow(self, run_method, payload, **kwargs):
-            captured["run_method"] = run_method
-            captured["run_payload"] = payload
-            captured["start_kwargs"] = kwargs
-            return _FakeHandle()
 
     async def _connect(_settings):
         return _FakeClient()
@@ -248,13 +242,20 @@ def test_temporal_engine_advances_handler_backed_workflow_through_temporal_updat
     )
 
     assert result.handled is True
-    assert captured["run_method"] == "workflow-run"
     assert captured["update_method"] == "workflow-advance"
     assert captured["update_payload"].workflow_id == "parent_planning:MAB-215"
     assert captured["update_payload"].retry_max_attempts == 4
     assert captured["update_payload"].retry_initial_interval_seconds == 5
     assert captured["update_payload"].retry_max_interval_seconds == 30
     assert captured["update_payload"].retry_backoff_coefficient == 2.0
+    start_operation = captured["start_operation"]
+    start_input = start_operation._start_workflow_input
+    assert start_input.workflow == "workflow-run"
+    assert start_input.id == "workflow:parent_planning:MAB-215"
+    assert start_input.task_queue == "custom-queue"
+    assert start_input.id_conflict_policy.name == "USE_EXISTING"
+    assert start_input.args[0].workflow_id == "parent_planning:MAB-215"
+    assert start_input.args[0].workflow_handler_key == "jira_parent_feature"
 
 
 def test_temporal_engine_handler_retry_waits_for_retry_activity_result(monkeypatch):

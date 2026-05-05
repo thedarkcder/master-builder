@@ -36,7 +36,6 @@ import {
   listConfluencePages,
   listConfluenceSpaces,
   getTenant,
-  listDiscordAllowlistRequests,
   listCodexModels,
   listGitHubRepositories,
   listJiraProjects,
@@ -281,8 +280,6 @@ export function TenantProjectDetailsPage() {
   const [runToDate, setRunToDate] = useState("");
   const [runPage, setRunPage] = useState(1);
   const [runPageSize, setRunPageSize] = useState<25 | 50 | 100>(25);
-  const [notificationCount, setNotificationCount] = useState(0);
-
   // Secrets state
   const [secretRefs, setSecretRefs] = useState<Record<string, string>>({});
   const [secretKey, setSecretKey] = useState("");
@@ -510,10 +507,6 @@ export function TenantProjectDetailsPage() {
       setProject(payload);
       setForm(buildProjectFormState(payload));
       setSecretRefs(payload.secret_refs ?? {});
-      await loadOptions();
-      if (isPlatformSuperAdmin) {
-        await loadRuns();
-      }
       setStatusLine("");
     } catch (error) {
       setStatusLine(`Failed to load project: ${(error as Error).message}`);
@@ -527,7 +520,11 @@ export function TenantProjectDetailsPage() {
   }, [ready, credentials, params.tenantId, params.projectId, allowProjectManagement, isPlatformSuperAdmin]);
 
   useEffect(() => {
-    if (!ready || !credentials || !allowProjectManagement || form.architecture_provider !== "confluence") {
+    if (ready && credentials && project && activeTab === "settings" && allowProjectManagement) void loadOptions();
+  }, [activeTab, allowProjectManagement, credentials, project, ready]);
+
+  useEffect(() => {
+    if (!ready || !credentials || activeTab !== "settings" || !allowProjectManagement || form.architecture_provider !== "confluence") {
       setConfluenceSpaces([]);
       setConfluencePages([]);
       setConfluenceCreateSpaceUrl(null);
@@ -535,10 +532,10 @@ export function TenantProjectDetailsPage() {
       return;
     }
     void loadConfluenceSpaces();
-  }, [allowProjectManagement, credentials, form.architecture_provider, params.tenantId, ready]);
+  }, [activeTab, allowProjectManagement, credentials, form.architecture_provider, params.tenantId, ready]);
 
   useEffect(() => {
-    if (!ready || !credentials || !allowProjectManagement || form.architecture_provider !== "confluence") {
+    if (!ready || !credentials || activeTab !== "settings" || !allowProjectManagement || form.architecture_provider !== "confluence") {
       setConfluencePages([]);
       return;
     }
@@ -548,6 +545,7 @@ export function TenantProjectDetailsPage() {
     }
     void loadConfluencePages(form.architecture_space_key);
   }, [
+    activeTab,
     allowProjectManagement,
     credentials,
     form.architecture_provider,
@@ -558,7 +556,7 @@ export function TenantProjectDetailsPage() {
   ]);
 
   useEffect(() => {
-    if (ready && credentials && project && isPlatformSuperAdmin && (activeTab === "overview" || activeTab === "runs")) void loadRuns();
+    if (ready && credentials && project && isPlatformSuperAdmin && activeTab === "runs") void loadRuns();
   }, [activeTab, ready, credentials, isPlatformSuperAdmin, project, runFromDate, runIssueFilter, runPage, runPageSize, runPrFilter, runStatusFilter, runToDate]);
 
   useEffect(() => {
@@ -582,28 +580,6 @@ export function TenantProjectDetailsPage() {
       setActiveSettingsSection("general");
     }
   }, [activeTab]);
-
-  useEffect(() => {
-    if (!credentials || !allowProjectManagement) {
-      setNotificationCount(0);
-      return;
-    }
-    let cancelled = false;
-    void listDiscordAllowlistRequests(credentials, params.tenantId, params.projectId)
-      .then((requests) => {
-        if (!cancelled) {
-          setNotificationCount(requests.length);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setNotificationCount(0);
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [allowProjectManagement, credentials, params.projectId, params.tenantId]);
 
   async function toggleArchive() {
     if (!credentials || !project) return;
@@ -915,7 +891,6 @@ export function TenantProjectDetailsPage() {
         activeSection={activeTab}
         allowProjectManagement={allowProjectManagement}
         isPlatformSuperAdmin={isPlatformSuperAdmin}
-        notificationCount={notificationCount}
       />
 
       {/* ── Overview tab ─────────────────────────────────────────────────── */}
@@ -1927,7 +1902,6 @@ export function TenantProjectDetailsPage() {
           tenantId={params.tenantId}
           projectId={params.projectId}
           credentials={credentials}
-          onAllowlistRequestsChange={(requests) => setNotificationCount(requests.length)}
         />
       ) : null}
 

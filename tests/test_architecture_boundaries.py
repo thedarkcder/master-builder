@@ -688,6 +688,32 @@ class ArchitectureBoundaryTests(unittest.TestCase):
         )
         self.assertIn("orchestrator.api.admin.runs import use_cases", source)
 
+    def test_project_shell_and_overview_do_not_eagerly_load_discord_allowlist_requests(self) -> None:
+        eager_surfaces = [
+            ROOT / "admin-ui" / "components" / "dashboard-shell.tsx",
+            ROOT / "admin-ui" / "components" / "tenant-project-details-page.tsx",
+            ROOT / "admin-ui" / "components" / "project-section-tabs.tsx",
+            ROOT / "admin-ui" / "components" / "project-parent-work-board.tsx",
+        ]
+        violations = [
+            path.relative_to(ROOT).as_posix()
+            for path in eager_surfaces
+            if "listDiscordAllowlistRequests" in path.read_text(encoding="utf-8")
+        ]
+        self.assertEqual(
+            violations,
+            [],
+            msg=f"Project shell/overview must not fan out Discord allowlist requests; notifications tab owns that fetch: {violations}",
+        )
+
+    def test_frontend_api_client_coalesces_in_flight_get_requests(self) -> None:
+        source = (ROOT / "admin-ui" / "lib" / "api" / "http.ts").read_text(encoding="utf-8")
+        self.assertIn("const inFlightGetRequests = new Map", source)
+        self.assertIn('requestMethod(init) !== "GET"', source)
+        self.assertIn("init?.body", source)
+        self.assertIn("init?.signal", source)
+        self.assertIn("inFlightGetRequests.delete(key)", source)
+
     def test_run_human_input_resume_does_not_use_private_legacy_entrypoint(self) -> None:
         banned_token = "_resume_workflow_from_human_input_answer_legacy"
         violations = []

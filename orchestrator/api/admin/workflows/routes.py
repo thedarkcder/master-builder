@@ -16,6 +16,7 @@ from orchestrator.core.security import (
 from orchestrator.api.admin.workflows import use_cases
 from orchestrator.api.schemas import (
     RunRead,
+    WorkflowBoardItemRead,
     WorkflowAttemptCreateRequest,
     WorkflowExecutionStartRead,
     WorkflowExecutionStartRequest,
@@ -49,6 +50,25 @@ def list_workflows(
         project_id=project_id,
         status_filter=status_filter,
         issue_query=issue_query,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get("/workflows/board", response_model=list[WorkflowBoardItemRead])
+def list_workflow_board_items(
+    tenant_id: str = Query(...),
+    project_id: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> list[WorkflowBoardItemRead]:
+    return use_cases.list_workflow_board_items(
+        session=session,
+        principal=principal,
+        tenant_id=tenant_id,
+        project_id=project_id,
         limit=limit,
         offset=offset,
     )

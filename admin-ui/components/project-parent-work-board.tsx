@@ -11,10 +11,10 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatTimeAgo } from "@/lib/datetime";
 import {
-  listWorkflows,
+  listWorkflowBoardItems,
   startWorkflowExecution,
-  type RunRecord,
-  type WorkflowRecord,
+  type WorkflowBoardItemRecord,
+  type WorkflowBoardRunSummaryRecord,
 } from "@/lib/api";
 import { useToast } from "@/components/ui/toast-provider";
 
@@ -26,7 +26,7 @@ type BoardLane = {
 };
 
 type ParentWorkCard = {
-  workflow: WorkflowRecord;
+  workflow: WorkflowBoardItemRecord;
   lane: BoardLaneKey;
   issueKey: string;
   title: string;
@@ -34,7 +34,7 @@ type ParentWorkCard = {
   runCount: number;
   activeRunCount: number;
   failedRunCount: number;
-  latestRun: RunRecord | null;
+  latestRun: WorkflowBoardRunSummaryRecord | null;
 };
 
 const BOARD_LANES: BoardLane[] = [
@@ -48,17 +48,17 @@ const BOARD_LANES: BoardLane[] = [
 const ACTIVE_RUN_STATUSES = new Set(["queued", "running", "processing", "retrying", "review", "in_review", "blocked", "failed"]);
 const TERMINAL_SUCCESS_RUN_STATUSES = new Set(["succeeded", "completed", "done"]);
 
-export function isParentPlanningWorkflow(workflow: WorkflowRecord): boolean {
+export function isParentPlanningWorkflow(workflow: WorkflowBoardItemRecord): boolean {
   return (
-    workflow.workflow_type.key === "parent_planning" ||
+    workflow.workflow_type_key === "parent_planning" ||
     workflow.dedupe_scope === "parent_planning" ||
     workflow.workflow_id.startsWith("parent_planning:")
   );
 }
 
-export function isJiraProjectReconciliationWorkflow(workflow: WorkflowRecord): boolean {
+export function isJiraProjectReconciliationWorkflow(workflow: WorkflowBoardItemRecord): boolean {
   return (
-    workflow.workflow_type.key === "jira_project_reconciliation" ||
+    workflow.workflow_type_key === "jira_project_reconciliation" ||
     workflow.dedupe_scope === "jira_project_reconciliation" ||
     workflow.workflow_id.startsWith("jira_project_reconciliation:")
   );
@@ -68,8 +68,10 @@ export function normalizedWorkflowStatus(value: string | null | undefined): stri
   return String(value || "").trim().toLowerCase();
 }
 
-export function latestWorkflowActivity(workflow: WorkflowRecord): string {
+export function latestWorkflowActivity(workflow: WorkflowBoardItemRecord): string {
   const candidates = [
+    workflow.latest_activity_at,
+    workflow.updated_at,
     workflow.finished_at,
     workflow.started_at,
     workflow.created_at,
@@ -78,7 +80,7 @@ export function latestWorkflowActivity(workflow: WorkflowRecord): string {
   return [...candidates].sort().at(-1) ?? workflow.created_at;
 }
 
-export function workflowLane(workflow: WorkflowRecord): BoardLaneKey {
+export function workflowLane(workflow: WorkflowBoardItemRecord): BoardLaneKey {
   const status = normalizedWorkflowStatus(workflow.status);
   const runs = workflow.runs ?? [];
   const runStatuses = runs.map((run) => normalizedWorkflowStatus(run.status));
@@ -103,7 +105,7 @@ export function workflowLane(workflow: WorkflowRecord): BoardLaneKey {
   return "planning";
 }
 
-function buildParentWorkCard(workflow: WorkflowRecord): ParentWorkCard {
+function buildParentWorkCard(workflow: WorkflowBoardItemRecord): ParentWorkCard {
   const sortedRuns = [...(workflow.runs ?? [])].sort((left, right) => {
     const leftActivity = left.finished_at ?? left.started_at ?? left.created_at;
     const rightActivity = right.finished_at ?? right.started_at ?? right.created_at;
@@ -117,10 +119,10 @@ function buildParentWorkCard(workflow: WorkflowRecord): ParentWorkCard {
     issueKey: workflow.source_ref || workflow.workflow_id,
     title: workflow.display_name || workflow.source_ref || workflow.workflow_id,
     questionOpen: Boolean(workflow.pending_input_request_id || normalizedWorkflowStatus(workflow.status) === "waiting_for_input"),
-    runCount: sortedRuns.length,
+    runCount: workflow.run_count,
     activeRunCount,
     failedRunCount,
-    latestRun: sortedRuns[0] ?? null,
+    latestRun: workflow.latest_run ?? sortedRuns[0] ?? null,
   };
 }
 
@@ -135,7 +137,7 @@ export function ProjectParentWorkBoard({
 }) {
   const { credentials, ready } = useAuth();
   const { showToast } = useToast();
-  const [allWorkflows, setAllWorkflows] = useState<WorkflowRecord[]>([]);
+  const [allWorkflows, setAllWorkflows] = useState<WorkflowBoardItemRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -148,7 +150,7 @@ export function ProjectParentWorkBoard({
       setLoading(true);
       setErrorMessage(null);
       try {
-        const workflowPayload = await listWorkflows(credentials, { tenantId, projectId, limit: 100 });
+        const workflowPayload = await listWorkflowBoardItems(credentials, { tenantId, projectId, limit: 100 });
         if (disposed) return;
         setAllWorkflows(
           workflowPayload.sort((left, right) => latestWorkflowActivity(right).localeCompare(latestWorkflowActivity(left))),
@@ -180,7 +182,7 @@ export function ProjectParentWorkBoard({
         project_id: projectId,
         input: { max_items: 1000 },
       });
-      const workflowPayload = await listWorkflows(credentials, { tenantId, projectId, limit: 100 });
+      const workflowPayload = await listWorkflowBoardItems(credentials, { tenantId, projectId, limit: 100 });
       setAllWorkflows(
         workflowPayload.sort((left, right) => latestWorkflowActivity(right).localeCompare(latestWorkflowActivity(left))),
       );

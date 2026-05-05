@@ -1306,6 +1306,42 @@ class WorkflowExecutionPreviewRead(BaseModel):
     finished_at: datetime | None = None
 
 
+class WorkflowBoardRunSummaryRead(BaseModel):
+    run_id: str
+    workflow_id: str
+    issue_key: str
+    issue_summary: str | None = None
+    status: str
+    created_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+
+class WorkflowBoardItemRead(BaseModel):
+    execution_id: str
+    workflow_id: str
+    workflow_type_key: str
+    tenant_id: str
+    project_id: str | None
+    source_system: str
+    source_ref: str
+    display_name: str | None = None
+    dedupe_scope: str
+    status: str
+    failure_reason: str | None = None
+    pending_input_request_id: str | None = None
+    run_count: int = 0
+    active_run_count: int = 0
+    failed_run_count: int = 0
+    latest_run: WorkflowBoardRunSummaryRead | None = None
+    runs: list[WorkflowBoardRunSummaryRead] = Field(default_factory=list)
+    latest_activity_at: datetime
+    created_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    updated_at: datetime
+
+
 class WorkflowTypeSummaryRead(BaseModel):
     key: str
     label: str

@@ -9,7 +9,11 @@ from orchestrator.api.admin.workflows.events_service import (
     list_workflow_audit_events,
     list_workflow_telemetry_events,
 )
-from orchestrator.api.admin.workflows.execution_read_service import list_workflow_schemas, workflow_schema
+from orchestrator.api.admin.workflows.execution_read_service import (
+    list_workflow_board_items,
+    list_workflow_schemas,
+    workflow_schema,
+)
 from orchestrator.api.admin.workflows.operation_retry_service import retry_workflow_operation
 from orchestrator.api.admin.workflows.operation_restart_service import restart_workflow_operation
 from orchestrator.api.admin.workflows.queries import workflow_by_execution_id
@@ -28,6 +32,7 @@ __all__ = [
     "get_workflow_step_transcript",
     "get_workflow_type_detail",
     "list_workflow_audit_events",
+    "list_workflow_board_items",
     "list_workflow_telemetry_events",
     "list_workflow_types",
     "list_workflows",
