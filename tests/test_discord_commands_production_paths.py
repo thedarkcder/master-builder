@@ -489,11 +489,11 @@ class DiscordCommandProductionPathTests(SqliteTemplateDbTestCase):
             description="Clarify the device relink policy.",
             labels=["agent:ready"],
         )
-        fake_oauth = {
-            "client": fake_jira_client,
-            "connection": SimpleNamespace(cloud_id="cloud-1"),
-            "access_token": "access-token",
-        }
+        fake_oauth = SimpleNamespace(
+            client=fake_jira_client,
+            connection=SimpleNamespace(cloud_id="cloud-1"),
+            access_token="access-token",
+        )
 
         with (
             patch("orchestrator.api.discord.ask.context._refresh_atlassian_connection_tokens", return_value="access-token"),
@@ -517,11 +517,11 @@ class DiscordCommandProductionPathTests(SqliteTemplateDbTestCase):
             labels=["agent:ready"],
             created_issue_keys=["TP-301", "TP-302"],
         )
-        fake_oauth = {
-            "client": fake_jira_client,
-            "connection": SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
-            "access_token": "access-token",
-        }
+        fake_oauth = SimpleNamespace(
+            client=fake_jira_client,
+            connection=SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
+            access_token="access-token",
+        )
 
         with (
             patch("orchestrator.runtime.issue_fanout.build_issue_seed_runtime", return_value=runtime),
@@ -549,11 +549,11 @@ class DiscordCommandProductionPathTests(SqliteTemplateDbTestCase):
             labels=["agent:ready"],
             created_issue_keys=["TP-303", "TP-304"],
         )
-        fake_oauth = {
-            "client": fake_jira_client,
-            "connection": SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
-            "access_token": "access-token",
-        }
+        fake_oauth = SimpleNamespace(
+            client=fake_jira_client,
+            connection=SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
+            access_token="access-token",
+        )
         with self.session_factory() as session:
             tenant = session.get(Tenant, "example")
             project = session.get(Project, "example-default")
@@ -570,7 +570,7 @@ class DiscordCommandProductionPathTests(SqliteTemplateDbTestCase):
             response = self._post_command("!issues seed draft a backlog item for relink policy")
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(queue.model_overrides, ["gpt-5-codex"])
+        self.assertEqual(queue.model_overrides, ["gpt-5.4"])
 
     def test_ask_uses_runtime_profile_model_without_transport_model_override(self) -> None:
         runtime, queue = self._seed_runtime([json.dumps({"message": "Scoped answer"})])
@@ -608,7 +608,7 @@ class DiscordCommandProductionPathTests(SqliteTemplateDbTestCase):
             response = self._post_command("!ask what is blocked?")
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(queue.model_overrides, ["gpt-5-codex"])
+        self.assertEqual(queue.model_overrides, ["gpt-5.4"])
 
     def test_ask_requires_single_project_scope_when_unscoped(self) -> None:
         with self.session_factory() as session:
@@ -647,16 +647,16 @@ class DiscordCommandProductionPathTests(SqliteTemplateDbTestCase):
                 ),
             ]
         )
-        fake_oauth = {
-            "client": _FakeJiraClient(
+        fake_oauth = SimpleNamespace(
+            client=_FakeJiraClient(
                 issue_key="TP-42",
                 summary="Cross-account relink policy",
                 status="To Do",
                 description="Clarify the device relink policy.",
             ),
-            "connection": SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
-            "access_token": "access-token",
-        }
+            connection=SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
+            access_token="access-token",
+        )
         with (
             patch("orchestrator.runtime.issue_fanout.build_issue_seed_runtime", return_value=runtime),
             patch("orchestrator.runtime.issue_fanout.tenant_atlassian_oauth_context", return_value=fake_oauth),
@@ -677,16 +677,16 @@ class DiscordCommandProductionPathTests(SqliteTemplateDbTestCase):
             ]
         )
 
-        fake_oauth = {
-            "client": _FakeJiraClient(
+        fake_oauth = SimpleNamespace(
+            client=_FakeJiraClient(
                 issue_key="TP-42",
                 summary="Cross-account relink policy",
                 status="To Do",
                 description="Clarify the device relink policy.",
             ),
-            "connection": SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
-            "access_token": "access-token",
-        }
+            connection=SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
+            access_token="access-token",
+        )
         with (
             patch("orchestrator.runtime.issue_fanout.build_issue_seed_runtime", return_value=runtime),
             patch("orchestrator.runtime.issue_fanout.tenant_atlassian_oauth_context", return_value=fake_oauth),
