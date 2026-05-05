@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from datetime import datetime, timezone
 from uuid import uuid4
@@ -14,6 +15,8 @@ from orchestrator.core.platform.tenant_secret_service import tenant_secret_servi
 from orchestrator.tools.discord_api import DiscordApiError
 from orchestrator.tools.atlassian_oauth import AtlassianOAuthError
 from orchestrator.tools.project_repo_checkout import ProjectRepoCheckoutError
+
+logger = logging.getLogger(__name__)
 
 
 class AdminProjectService:
@@ -135,6 +138,30 @@ class AdminProjectService:
             materialized[variable_name] = managed_ref
         return materialized
 
+    def _discover_run_board_id_for_settings_save(
+        self,
+        *,
+        session,
+        tenant,
+        jira_project_key: str,
+        settings,
+    ) -> int | None:  # noqa: ANN001
+        try:
+            return self._resolve_project_run_board_id(
+                session=session,
+                tenant=tenant,
+                jira_project_key=jira_project_key,
+                settings=settings,
+            )
+        except (ValueError, AtlassianOAuthError) as exc:
+            logger.warning(
+                "project_run_board_discovery_failed tenant_id=%s jira_project_key=%s error=%s",
+                tenant.tenant_id,
+                jira_project_key,
+                exc,
+            )
+            return None
+
     def list_projects(self, *, session, tenant_id: str) -> list[object]:
         tenant = session.get(Tenant, tenant_id)
         if tenant is None:
@@ -170,18 +197,12 @@ class AdminProjectService:
 
         now = datetime.now(timezone.utc)
         normalized_policy_overrides = self._normalize_project_policy_overrides(payload.policy_overrides)
-        try:
-            run_board_id = self._resolve_project_run_board_id(
-                session=session,
-                tenant=tenant,
-                jira_project_key=normalized_jira_key,
-                settings=self._settings_factory(),
-            )
-        except (ValueError, AtlassianOAuthError) as exc:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Unable to resolve Jira board for project {normalized_jira_key}: {exc}",
-            ) from exc
+        run_board_id = self._discover_run_board_id_for_settings_save(
+            session=session,
+            tenant=tenant,
+            jira_project_key=normalized_jira_key,
+            settings=self._settings_factory(),
+        )
         if run_board_id is not None:
             normalized_policy_overrides["run_board_id"] = run_board_id
 
@@ -294,18 +315,12 @@ class AdminProjectService:
         project.jira_project_key = normalized_jira_key
         normalized_policy_overrides = self._normalize_project_policy_overrides(payload.policy_overrides)
         settings = self._settings_factory()
-        try:
-            run_board_id = self._resolve_project_run_board_id(
-                session=session,
-                tenant=tenant,
-                jira_project_key=normalized_jira_key,
-                settings=settings,
-            )
-        except (ValueError, AtlassianOAuthError) as exc:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Unable to resolve Jira board for project {normalized_jira_key}: {exc}",
-            ) from exc
+        run_board_id = self._discover_run_board_id_for_settings_save(
+            session=session,
+            tenant=tenant,
+            jira_project_key=normalized_jira_key,
+            settings=settings,
+        )
         if run_board_id is not None:
             normalized_policy_overrides["run_board_id"] = run_board_id
         try:
