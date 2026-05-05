@@ -116,7 +116,7 @@ function buildParentWorkCard(workflow: WorkflowBoardItemRecord): ParentWorkCard 
     issueKey: workflow.source_ref || workflow.workflow_id,
     title: workflow.display_name || workflow.source_ref || workflow.workflow_id,
     questionOpen: Boolean(workflow.pending_input_request_id || normalizedWorkflowStatus(workflow.status) === "waiting_for_input"),
-    runCount: workflow.run_count,
+    runCount: workflow.run_count ?? sortedRuns.length,
     activeRunCount,
     failedRunCount,
     latestRun: workflow.latest_run ?? sortedRuns[0] ?? null,

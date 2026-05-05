@@ -281,7 +281,7 @@ test("hides troubleshooting surfaces from an invited team member after joining t
 
     await expect(invitedPage).toHaveURL(new RegExp(`/${tenantId}/dashboard$`), { timeout: 30000 });
     await expect(invitedPage.getByRole("heading", { name: tenantName })).toBeVisible();
-    await expect(invitedPage.getByRole("heading", { name: "Throughput trend" })).toBeVisible();
+    await expect(invitedPage.getByText("Capacity used today")).toBeVisible({ timeout: 15000 });
     await expect(invitedPage.getByRole("link", { name: "Pipeline" })).toHaveCount(0);
     await expect(invitedPage.getByRole("link", { name: "Analytics" })).toHaveCount(0);
     await expect(invitedPage.getByRole("link", { name: "Workflows" })).toHaveCount(0);

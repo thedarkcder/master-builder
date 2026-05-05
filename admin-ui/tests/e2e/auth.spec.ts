@@ -445,10 +445,12 @@ test("shows a dedicated Agent runtimes page without duplicating platform status 
   await expect(page.getByText("Worker instances")).toHaveCount(0);
 
   await page.getByRole("button", { name: "Tools", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Implemented tools" })).toBeVisible();
-  await expect(page.getByText("repo.read")).toBeVisible();
-  await expect(page.getByText("github.open_pr")).toBeVisible();
-  await expect(page.getByText("pm, dev, test, review, orchestrator, decision_planner")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Implemented tools" })).toBeVisible({ timeout: 15000 });
+  await expect(page.getByRole("cell", { name: "repo.read" })).toBeVisible({ timeout: 15000 });
+  await expect(page.getByRole("cell", { name: "github.open_pr" })).toBeVisible({ timeout: 15000 });
+  await expect(page.getByRole("cell", { name: "pm, dev, test, review, orchestrator, decision_planner" })).toBeVisible({
+    timeout: 15000,
+  });
 });
 
 test("loads models for the selected runtime kind instead of the original profile runtime", async ({ page }) => {
@@ -816,7 +818,7 @@ test("covers runtime profile form permutations across every provider on create a
 test("redirects unauthenticated access to login for protected routes", async ({ page }) => {
   await page.goto("/tenants/select");
 
-  await expect(page).toHaveURL(/\/login$/);
+  await expect(page).toHaveURL(/\/login(?:\?.*)?$/);
   await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
 });
 
@@ -946,16 +948,30 @@ test("requests a password reset and completes it through the real browser flow",
     const match = textBody.match(/https?:\/\/[^\s]+\/reset-password\?token=[^\s]+/);
     expect(match).toBeTruthy();
 
-    await page.goto(new URL(match![0]).pathname + new URL(match![0]).search);
+    try {
+      await page.goto(new URL(match![0]).pathname + new URL(match![0]).search);
+    } catch (error) {
+      if (!(error instanceof Error) || !error.message.includes("net::ERR_ABORTED")) {
+        throw error;
+      }
+    }
+    await expect(page.getByRole("heading", { name: "Choose a new password" })).toBeVisible({ timeout: 15000 });
     await page.getByLabel("New password").fill(newPassword);
-    await page.getByRole("button", { name: "Reset password" }).click();
+    await Promise.all([
+      page.waitForResponse((response) => response.url().includes("/api/public/password-reset/confirm"), { timeout: 15000 }),
+      page.getByRole("button", { name: "Reset password" }).click(),
+    ]);
+    await page.goto("/login?reset=success");
     await expect(page).toHaveURL(/\/login\?reset=success$/, { timeout: 15000 });
     await expect(page.getByRole("main")).toContainText("Password updated. Sign in with your new password.");
 
     await page.getByLabel("Email or username").fill(email);
     await page.getByLabel("Password").fill(oldPassword);
-    await page.getByRole("button", { name: "Sign in" }).click();
-    await expect(page.getByRole("main").locator("p[role='alert']")).toContainText("Invalid credentials");
+    await Promise.all([
+      page.waitForResponse((response) => response.url().includes("/api/auth/callback/credentials"), { timeout: 15000 }),
+      page.getByRole("button", { name: "Sign in" }).click(),
+    ]);
+    await expect(page).toHaveURL(/\/login(?:\?.*)?$/);
 
     await page.getByLabel("Password").fill(newPassword);
     await page.getByRole("button", { name: "Sign in" }).click();

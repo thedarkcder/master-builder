@@ -22,10 +22,10 @@ const PLAYWRIGHT_RUN_LIVE = process.env.PLAYWRIGHT_RUN_LIVE === "1";
 
 export default defineConfig({
   testDir: "./tests/e2e",
-  fullyParallel: true,
+  fullyParallel: !process.env.CI,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 2 : 0,
-  workers: process.env.CI ? 2 : undefined,
+  workers: process.env.CI ? 1 : undefined,
   reporter: process.env.CI ? [["github"], ["html", { open: "never" }]] : [["list"], ["html", { open: "never" }]],
   use: {
     baseURL: PLAYWRIGHT_BASE_URL,
@@ -34,7 +34,7 @@ export default defineConfig({
     video: "retain-on-failure",
   },
   webServer: {
-    command: `npx next dev -p ${PLAYWRIGHT_APP_PORT}`,
+    command: `npx next dev --webpack -p ${PLAYWRIGHT_APP_PORT}`,
     url: `${PLAYWRIGHT_BASE_URL}/login`,
     timeout: 120_000,
     reuseExistingServer: !process.env.CI,

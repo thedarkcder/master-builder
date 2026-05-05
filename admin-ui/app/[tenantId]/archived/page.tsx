@@ -1,7 +1,8 @@
 "use client";
 
 import { Suspense } from "react";
-import { useParams, useRouter, useSearchParams } from "next/navigation";
+import Link from "next/link";
+import { useParams, useSearchParams } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 
@@ -23,7 +24,6 @@ function ArchivedWorkspaceFallback() {
 }
 
 function ArchivedWorkspacePageInner() {
-  const router = useRouter();
   const params = useParams<{ tenantId: string }>();
   const searchParams = useSearchParams();
 
@@ -59,7 +59,9 @@ function ArchivedWorkspacePageInner() {
           {purgeDate ? (
             <p className="text-sm text-muted-foreground">This workspace is scheduled for permanent deletion on {purgeDate}.</p>
           ) : null}
-          <Button onClick={() => router.push(href)}>{buttonLabel}</Button>
+          <Button asChild>
+            <Link href={href}>{buttonLabel}</Link>
+          </Button>
         </div>
       </div>
     </div>

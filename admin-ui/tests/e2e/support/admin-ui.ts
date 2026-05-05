@@ -208,7 +208,11 @@ export async function mockCredentialSignIn(
   page: Page,
   seed: TenantSessionSeed,
 ): Promise<void> {
-  await page.route(`${APP_BASE_URL}/api/auth/callback/credentials**`, async (route) => {
+  await page.route(`${APP_BASE_URL}/api/auth/csrf**`, async (route) => {
+    await fulfillJson(route, { csrfToken: "playwright-csrf-token" });
+  });
+
+  const handleCredentialSignIn = async (route: Route) => {
     await seedTenantSession(page, seed);
     const principal = seed.principal;
     const redirectUrl =
@@ -226,7 +230,9 @@ export async function mockCredentialSignIn(
         url: redirectUrl,
       }),
     });
-  });
+  };
+  await page.route(`${APP_BASE_URL}/api/auth/callback/credentials**`, handleCredentialSignIn);
+  await page.route(`${APP_BASE_URL}/api/auth/signin/credentials**`, handleCredentialSignIn);
 }
 
 export async function fulfillJson(route: Route, body: unknown, status = 200): Promise<void> {
