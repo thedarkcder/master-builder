@@ -760,6 +760,42 @@ export type WorkflowRecord = {
   finished_at: string | null;
 };
 
+export type WorkflowBoardRunSummaryRecord = {
+  run_id: string;
+  workflow_id: string;
+  issue_key: string;
+  issue_summary: string | null;
+  status: string;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+};
+
+export type WorkflowBoardItemRecord = {
+  execution_id: string;
+  workflow_id: string;
+  workflow_type_key: string;
+  tenant_id: string;
+  project_id: string | null;
+  source_system: string;
+  source_ref: string;
+  display_name: string | null;
+  dedupe_scope: string;
+  status: string;
+  failure_reason: string | null;
+  pending_input_request_id: string | null;
+  run_count: number;
+  active_run_count: number;
+  failed_run_count: number;
+  latest_run: WorkflowBoardRunSummaryRecord | null;
+  runs: WorkflowBoardRunSummaryRecord[];
+  latest_activity_at: string;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  updated_at: string;
+};
+
 export type WorkflowTypeOperationRecord = {
   operation_type: string;
   label: string;
@@ -2741,6 +2777,29 @@ export function listWorkflows(
   }
   const suffix = query.toString() ? `?${query.toString()}` : "";
   return request<WorkflowRecord[]>(credentials, `/api/admin/workflows${suffix}`);
+}
+
+export function listWorkflowBoardItems(
+  credentials: Credentials,
+  params: {
+    tenantId: string;
+    projectId?: string;
+    limit?: number;
+    offset?: number;
+  },
+): Promise<WorkflowBoardItemRecord[]> {
+  const query = new URLSearchParams();
+  query.set("tenant_id", params.tenantId);
+  if (params.projectId) {
+    query.set("project_id", params.projectId);
+  }
+  if (typeof params.limit === "number") {
+    query.set("limit", String(params.limit));
+  }
+  if (typeof params.offset === "number") {
+    query.set("offset", String(params.offset));
+  }
+  return request<WorkflowBoardItemRecord[]>(credentials, `/api/admin/workflows/board?${query.toString()}`);
 }
 
 export function createWorkflowAttempt(

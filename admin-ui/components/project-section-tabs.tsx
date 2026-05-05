@@ -28,7 +28,6 @@ type ProjectSectionTabsProps = {
   activeSection: ProjectSection;
   allowProjectManagement: boolean;
   isPlatformSuperAdmin: boolean;
-  notificationCount?: number;
 };
 
 export function ProjectSectionTabs({
@@ -37,7 +36,6 @@ export function ProjectSectionTabs({
   activeSection,
   allowProjectManagement,
   isPlatformSuperAdmin,
-  notificationCount = 0,
 }: ProjectSectionTabsProps) {
   const visibleTabs = PROJECT_SECTION_TABS.filter((tab) => {
     if (tab.visibility === "platform") {
@@ -70,11 +68,6 @@ export function ProjectSectionTabs({
               ].join(" ")}
             >
               <span>{tab.label}</span>
-              {tab.id === "notifications" && notificationCount > 0 ? (
-                <span className="ml-2 inline-flex min-w-5 items-center justify-center rounded-full bg-warning px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white">
-                  {notificationCount}
-                </span>
-              ) : null}
             </Link>
           );
         })}

@@ -28,8 +28,6 @@ type AuthContextValue = {
   applyPrincipal: (nextPrincipal: AuthenticatedPrincipalRecord | null) => void;
 };
 
-type SessionUserShape = Record<string, never>;
-
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
 function hasPendingOnboarding(principal: AuthenticatedPrincipalRecord | null): boolean {
@@ -40,20 +38,19 @@ function hasPendingOnboarding(principal: AuthenticatedPrincipalRecord | null): b
 }
 
 function AuthProviderInner({ children }: { children: React.ReactNode }) {
-  const { data: session, status } = useSession();
+  const { status } = useSession();
   const [principal, setPrincipal] = useState<AuthenticatedPrincipalRecord | null>(null);
   const [principalReady, setPrincipalReady] = useState(false);
   const [sessionRevoked, setSessionRevoked] = useState(false);
-  const sessionUser = session?.user as SessionUserShape | undefined;
 
   const credentials = useMemo<Credentials | null>(() => {
-    if (!sessionUser || status !== "authenticated" || sessionRevoked) {
+    if (status !== "authenticated" || sessionRevoked) {
       return null;
     }
     return {
       apiBaseUrl: ""
     };
-  }, [sessionRevoked, sessionUser, status]);
+  }, [sessionRevoked, status]);
 
   function normalizeAuthErrorMessage(message: string): string {
     if (message === "CredentialsSignin" || message === "Invalid tenant credentials") {

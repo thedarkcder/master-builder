@@ -13,11 +13,11 @@ import {
 } from "@/components/project-parent-work-board";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
+  listWorkflowBoardItems,
   listProjects,
-  listWorkflows,
   type ProjectRecord,
-  type RunRecord,
-  type WorkflowRecord,
+  type WorkflowBoardItemRecord,
+  type WorkflowBoardRunSummaryRecord,
 } from "@/lib/api";
 import { buildProjectSectionPath } from "@/lib/dashboard-paths";
 import { formatTimeAgo } from "@/lib/datetime";
@@ -111,14 +111,14 @@ function overlapMs(startMs: number | null, endMs: number | null, startBoundaryMs
   return Math.max(0, Math.min(boundedEnd, endBoundaryMs) - Math.max(startMs, startBoundaryMs));
 }
 
-function runActiveMsInWindow(run: RunRecord, window: WorkingDayWindow): number {
+function runActiveMsInWindow(run: WorkflowBoardRunSummaryRecord, window: WorkingDayWindow): number {
   if (run.status === "queued" || run.status === "cancelled") {
     return 0;
   }
   return overlapMs(timestampMs(run.started_at), timestampMs(run.finished_at), window.startMs, window.endMs);
 }
 
-function workflowCurrentWaitingMs(workflow: WorkflowRecord): number {
+function workflowCurrentWaitingMs(workflow: WorkflowBoardItemRecord): number {
   if (workflowLane(workflow) !== "needs_input") {
     return 0;
   }
@@ -142,7 +142,7 @@ function utilizationPercent(activeMs: number, capacitySlots: number, workingDayE
   return Math.min(100, Math.round((activeMs / capacityMs) * 100));
 }
 
-function isSuccessfulRun(run: RunRecord): boolean {
+function isSuccessfulRun(run: WorkflowBoardRunSummaryRecord): boolean {
   const status = String(run.status || "").trim().toLowerCase();
   return status === "succeeded" || status === "completed" || status === "done";
 }
@@ -190,7 +190,7 @@ function toneClass(tone: "primary" | "muted" | "warning" | "danger"): string {
   return "bg-primary";
 }
 
-function buildCapacityBuckets(runs: RunRecord[], capacitySlots: number, window: WorkingDayWindow): CapacityBucket[] {
+function buildCapacityBuckets(runs: WorkflowBoardRunSummaryRecord[], capacitySlots: number, window: WorkingDayWindow): CapacityBucket[] {
   const bucketMs = window.totalMs / CAPACITY_BUCKETS;
   return Array.from({ length: CAPACITY_BUCKETS }, (_, index) => {
     const bucketStart = window.startMs + index * bucketMs;
@@ -213,7 +213,7 @@ export default function WorkspaceDashboardPage() {
   const tenantId = paramValue(params.tenantId);
   const { credentials, ready } = useAuth();
   const [projects, setProjects] = useState<ProjectRecord[]>([]);
-  const [workflows, setWorkflows] = useState<WorkflowRecord[]>([]);
+  const [workflows, setWorkflows] = useState<WorkflowBoardItemRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -226,7 +226,7 @@ export default function WorkspaceDashboardPage() {
       try {
         const [projectPayload, workflowPayload] = await Promise.all([
           listProjects(credentials, tenantId),
-          listWorkflows(credentials, { tenantId, limit: 100 }),
+          listWorkflowBoardItems(credentials, { tenantId, limit: 500 }),
         ]);
         if (disposed) return;
         setProjects(projectPayload);
@@ -251,7 +251,7 @@ export default function WorkspaceDashboardPage() {
   const workday = useMemo(() => workingDayWindow(), []);
   const allRuns = useMemo(() => workflows.flatMap((workflow) => workflow.runs), [workflows]);
   const projectSummaries = useMemo<ProjectWorkSummary[]>(() => {
-    const workflowsByProject = new Map<string, WorkflowRecord[]>();
+    const workflowsByProject = new Map<string, WorkflowBoardItemRecord[]>();
     for (const workflow of workflows) {
       if (!workflow.project_id) continue;
       const bucket = workflowsByProject.get(workflow.project_id) ?? [];

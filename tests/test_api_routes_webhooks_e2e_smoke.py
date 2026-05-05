@@ -166,6 +166,12 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
         )
         self.patch_stack.enter_context(
             patch(
+                "orchestrator.api.admin.route_helpers.start_jira_project_reconciliation",
+                return_value=None,
+            )
+        )
+        self.patch_stack.enter_context(
+            patch(
                 "orchestrator.api.routes.webhook.ingest_jira_webhook_event",
                 new=AsyncMock(return_value={"ok": True}),
             )
@@ -423,6 +429,16 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
             ("GET", "/api/admin/runs"): RouteScenario(path="/api/admin/runs", auth=admin),
             ("GET", "/api/admin/runs/{run_id}"): RouteScenario(path="/api/admin/runs/run-e2e", auth=admin),
             ("GET", "/api/admin/workflows"): RouteScenario(path="/api/admin/workflows", auth=admin),
+            ("POST", "/api/admin/workflows"): RouteScenario(
+                path="/api/admin/workflows",
+                auth=admin,
+                json={},
+                expected_statuses=(422,),
+            ),
+            ("GET", "/api/admin/workflows/board"): RouteScenario(
+                path="/api/admin/workflows/board?tenant_id=route25",
+                auth=admin,
+            ),
             ("GET", "/api/admin/workflow-types"): RouteScenario(
                 path="/api/admin/workflow-types?tenant_id=route25",
                 auth=admin,
@@ -520,6 +536,17 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 auth=admin,
                 json={"restart_reason": "Smoke test restart request"},
                 expected_statuses=(404, 409),
+            ),
+            ("GET", "/api/app/start-engineering/{execution_id}/preview"): RouteScenario(
+                path="/api/app/start-engineering/workflow-e2e/preview",
+                auth=admin,
+                expected_statuses=(422,),
+            ),
+            ("POST", "/api/app/start-engineering/{execution_id}/start"): RouteScenario(
+                path="/api/app/start-engineering/workflow-e2e/start",
+                auth=admin,
+                json={},
+                expected_statuses=(409, 422),
             ),
             ("POST", "/api/admin/runs/{run_id}/cancel"): RouteScenario(
                 path="/api/admin/runs/run-e2e/cancel",

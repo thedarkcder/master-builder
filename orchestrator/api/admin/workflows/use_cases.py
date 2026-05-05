@@ -19,6 +19,7 @@ from orchestrator.api.admin.workflows.service import (
     get_workflow_step_transcript as get_workflow_step_transcript_impl,
     get_workflow_type_detail as get_workflow_type_detail_impl,
     list_workflow_audit_events as list_workflow_audit_events_impl,
+    list_workflow_board_items as list_workflow_board_items_impl,
     list_workflow_telemetry_events as list_workflow_telemetry_events_impl,
     list_workflows as list_workflows_impl,
     list_workflow_types as list_workflow_types_impl,
@@ -33,6 +34,7 @@ from orchestrator.api.schemas import (
     RunRead,
     WorkflowExecutionStartRead,
     WorkflowExecutionStartRequest,
+    WorkflowBoardItemRead,
     WorkflowObservabilityEventRead,
     WorkflowOperationRestartRequest,
     WorkflowOperationRetryRead,
@@ -86,6 +88,25 @@ def list_workflows(
         offset=offset,
         workflow_to_schema_fn=workflow_to_schema,
         run_to_schema_fn=run_to_schema,
+    )
+
+
+def list_workflow_board_items(
+    *,
+    session: Session,
+    principal: AuthenticatedPrincipal,
+    tenant_id: str,
+    project_id: str | None,
+    limit: int,
+    offset: int,
+) -> list[WorkflowBoardItemRead]:
+    require_tenant_workspace_access(principal=principal, tenant_id=tenant_id)
+    return list_workflow_board_items_impl(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        limit=limit,
+        offset=offset,
     )
 
 

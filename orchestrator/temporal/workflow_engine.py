@@ -28,6 +28,8 @@ from orchestrator.temporal.payloads import (
 from orchestrator.temporal.workflow_registry import resolve_temporal_binding_for_handler
 
 try:  # pragma: no cover - exercised when temporal backend is enabled
+    from temporalio.client import WithStartWorkflowOperation
+    from temporalio.common import WorkflowIDConflictPolicy
     from temporalio.exceptions import ApplicationError, WorkflowAlreadyStartedError
 except ImportError as exc:  # pragma: no cover - exercised when temporal backend is enabled
     raise RuntimeError("Temporal backend requires temporalio to be installed") from exc
@@ -295,13 +297,24 @@ class TemporalWorkflowEngine:
 
         async def _advance() -> HandlerWorkflowAdvanceResult:
             client = await connect_temporal_client(settings)
-            handle = await _ensure_handler_workflow_handle(
-                client=client,
-                config=config,
-                workflow_id=workflow_id,
-                workflow_handler_key=str(workflow_type.handler_key or "").strip(),
+            start_operation = WithStartWorkflowOperation(
+                config.workflow_defn.run,
+                HandlerWorkflowRunInput(
+                    workflow_id=workflow_id,
+                    workflow_handler_key=str(workflow_type.handler_key or "").strip(),
+                    activity_start_to_close_timeout_seconds=config.activity_start_to_close_timeout_seconds,
+                ),
+                id=_temporal_workflow_handle_id(workflow_id=workflow_id),
+                task_queue=config.task_queue,
+                execution_timeout=timedelta(seconds=config.workflow_execution_timeout_seconds),
+                run_timeout=timedelta(seconds=config.workflow_run_timeout_seconds),
+                id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
             )
-            return await handle.execute_update(config.workflow_defn.advance, advance_payload)
+            return await client.execute_update_with_start_workflow(
+                config.workflow_defn.advance,
+                advance_payload,
+                start_workflow_operation=start_operation,
+            )
 
         return _workflow_advance_outcome_from_temporal(_run_sync(_advance()))
 

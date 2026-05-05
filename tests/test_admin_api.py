@@ -1575,6 +1575,92 @@ class AdminApiTests(AdminApiTestHarness):
         self.assertEqual(detail_body["runs"][0]["attempt_number"], 1)
         self.assertEqual(detail_body["runs"][0]["entry_checkpoint_id"], "checkpoint-read-1")
 
+    def test_workflow_board_items_use_lightweight_project_summary_contract(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201)
+
+        now = datetime.now(timezone.utc)
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            workflow, run, _checkpoint = add_workflow_attempt(
+                session,
+                workflow_type_key="parent_planning",
+                workflow_id="parent_planning:TP-101",
+                run_id="run-board-1",
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                issue_key="TP-101",
+                issue_summary="Board summary parent",
+                dedupe_scope="parent_planning",
+                workflow_status="waiting_for_input",
+                run_status="running",
+                entry_checkpoint_id="checkpoint-board-1",
+                checkpoint_kind="pm",
+                now=now,
+            )
+            session.add(
+                RunHumanInputRequest(
+                    request_id="request-board-1",
+                    tenant_id="tenant-a",
+                    project_id="tenant-a-default",
+                    workflow_id=workflow.workflow_id,
+                    checkpoint_id="checkpoint-board-1",
+                    source_run_id=run.run_id,
+                    issue_key="TP-101",
+                    source_stage="pm",
+                    request_type="human_reply",
+                    status="pending",
+                    prompt="Answer",
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.add(
+                WorkflowOperation(
+                    operation_id="operation-board-hidden",
+                    workflow_id=workflow.workflow_id,
+                    run_id=run.run_id,
+                    operation_type="backlog_planning",
+                    idempotency_key="board-hidden",
+                    status="running",
+                    created_at=now,
+                    started_at=now,
+                    finished_at=None,
+                    updated_at=now,
+                )
+            )
+            add_workflow_attempt(
+                session,
+                workflow_type_key="issue_execution",
+                workflow_id="workflow-issue-execution-hidden",
+                run_id="run-hidden",
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                issue_key="TP-102",
+                issue_summary="Hidden issue execution",
+                workflow_status="running",
+                run_status="running",
+                now=now,
+            )
+            session.commit()
+
+        response = self.client.get(
+            "/api/admin/workflows/board?tenant_id=tenant-a&project_id=tenant-a-default",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertEqual(len(body), 1)
+        self.assertEqual(body[0]["workflow_id"], "parent_planning:TP-101")
+        self.assertEqual(body[0]["workflow_type_key"], "parent_planning")
+        self.assertEqual(body[0]["pending_input_request_id"], "request-board-1")
+        self.assertEqual(body[0]["run_count"], 1)
+        self.assertEqual(body[0]["latest_run"]["run_id"], "run-board-1")
+        self.assertNotIn("operations", body[0])
+        self.assertNotIn("workflow_type", body[0])
+
     def test_list_and_get_workflow_types_from_admin(self) -> None:
         payload = self._tenant_payload()
         self._insert_jira_connection(connection_id="conn-1")
