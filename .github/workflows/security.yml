@@ -31,7 +31,9 @@ jobs:
 
           has_file_pattern() {
             local pattern="$1"
-            find . -path './.git' -prune -o -type f -name "$pattern" -print -quit | grep -q .
+            local found
+            found="$(find . -path './.git' -prune -o -type f -name "$pattern" -print -quit)"
+            [ -n "$found" ]
           }
 
           languages=()
