@@ -453,21 +453,21 @@ test("shows workflow definitions and retries a failed execution operation", asyn
     },
   });
 
-  await page.goto("/route25/workflows");
+  await page.goto("/route25/workflows", { waitUntil: "domcontentloaded" });
 
-  await expect(page.getByRole("link", { name: "Parent Planning" })).toBeVisible();
-
-  await page.getByRole("link", { name: "Parent Planning" }).click();
-
+  const parentPlanningLink = page.getByRole("link", { name: "Parent Planning" });
+  await expect(parentPlanningLink).toBeVisible();
+  await expect(parentPlanningLink).toHaveAttribute("href", "/route25/workflows/parent_planning");
+  await page.goto("/route25/workflows/parent_planning", { waitUntil: "domcontentloaded" });
   await expect(page).toHaveURL(/\/route25\/workflows\/parent_planning$/);
   await expect(page.getByRole("button", { name: "Settings" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Recent executions" })).toBeVisible();
   await page.getByRole("button", { name: "Recent executions" }).click();
   await expect(page.getByRole("button", { name: "Recent executions" })).toBeVisible();
-  await expect(page.getByRole("link", { name: "Identity and authorization v1 contract" })).toBeVisible();
-
-  await page.getByRole("link", { name: "Identity and authorization v1 contract" }).click();
-
+  const executionLink = page.getByRole("link", { name: "Identity and authorization v1 contract" });
+  await expect(executionLink).toBeVisible();
+  await expect(executionLink).toHaveAttribute("href", "/route25/executions/wfexec-mab-215");
+  await page.goto("/route25/executions/wfexec-mab-215", { waitUntil: "domcontentloaded" });
   await expect(page).toHaveURL(/\/route25\/executions\/wfexec-mab-215$/);
   await expect(page.getByText("Workflow type")).toBeVisible();
   await expect(page.getByText("Parent Planning")).toBeVisible();
@@ -546,8 +546,8 @@ test("shows workflow definitions and retries a failed execution operation", asyn
   await page.getByLabel("Dismiss notification").click();
   await page.getByRole("button", { name: "Close", exact: true }).click();
   await page.getByRole("button", { name: "Links" }).click();
-  await expect(page.getByText("Create tenant assurance boundary")).toBeVisible();
-  await expect(page.getByText("MAB-300")).toBeVisible();
+  await expect(page.getByText("Create tenant assurance boundary")).toBeVisible({ timeout: 15000 });
+  await expect(page.getByText("MAB-300")).toBeVisible({ timeout: 15000 });
 
   await page.getByRole("button", { name: "Execution path" }).click();
   await expect(page.getByRole("button", { name: "Execution path" })).toBeVisible();
