@@ -98,6 +98,7 @@ type DashboardNavPanelProps = {
   tenantBaseRoute: string | null;
   navItems: NavItem[];
   troubleshootingNavItems: NavItem[];
+  showProjectNavigation: boolean;
   tenantProjects: ProjectRecord[];
   pathname: string;
   runContext: RunRouteCtx;
@@ -114,6 +115,7 @@ function DashboardNavPanel({
   tenantBaseRoute,
   navItems,
   troubleshootingNavItems,
+  showProjectNavigation,
   tenantProjects,
   pathname,
   runContext,
@@ -231,10 +233,12 @@ function DashboardNavPanel({
               </div>
             ) : null}
 
-            <div className="mt-4 flex min-h-0 flex-1 flex-col">
-              <SidebarMenuLabel className="px-0">Projects</SidebarMenuLabel>
-              <div className="min-h-0 flex-1 overflow-y-auto pr-1">{projectMenu}</div>
-            </div>
+            {showProjectNavigation ? (
+              <div className="mt-4 flex min-h-0 flex-1 flex-col">
+                <SidebarMenuLabel className="px-0">Projects</SidebarMenuLabel>
+                <div className="min-h-0 flex-1 overflow-y-auto pr-1">{projectMenu}</div>
+              </div>
+            ) : null}
           </div>
         ) : (
           <div className="flex min-h-0 flex-1 flex-col">
@@ -316,6 +320,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   const projectContextId = projectMatch?.[2] ? decodeURIComponent(projectMatch[2]) : runContext.projectId || null;
   const decodedTenantId = tenantId ? decodeURIComponent(tenantId) : null;
   const tenantBaseRoute = decodedTenantId ? getTenantWorkspaceRoute(decodedTenantId) : null;
+  const showProjectNavigation = Boolean(projectMatch && decodedTenantId && !isWizardRoute);
   const isPlatformSuperAdmin = canAccessPlatformAdmin(principal);
   const isTenantTroubleshootingRoute =
     Boolean(tenantBaseRoute) &&
@@ -400,7 +405,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   }, [decodedTenantIdForPersist, isWizardRoute]);
 
   useEffect(() => {
-    if (!credentials || !tenantId || isWizardRoute) {
+    if (!credentials || !tenantId || !showProjectNavigation) {
       setTenantProjects([]);
       return;
     }
@@ -424,7 +429,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [credentials, isWizardRoute, tenantId]);
+  }, [credentials, showProjectNavigation, tenantId]);
 
   useEffect(() => {
     if (ready && principalReady && decodedTenantId && !isPlatformSuperAdmin && isTenantTroubleshootingRoute) {
@@ -556,6 +561,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
     tenantBaseRoute,
     navItems,
     troubleshootingNavItems,
+    showProjectNavigation,
     tenantProjects,
     pathname,
     runContext,
