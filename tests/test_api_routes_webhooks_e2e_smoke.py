@@ -904,19 +904,46 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 path="/api/admin/tenants/example/projects/example-default",
                 auth=admin,
             ),
-            ("PUT", "/api/admin/tenants/{tenant_id}/projects/{project_id}"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default",
+            ("PATCH", "/api/admin/tenants/{tenant_id}/projects/{project_id}/configuration"): RouteScenario(
+                path="/api/admin/tenants/example/projects/example-default/configuration",
                 auth=admin,
                 json={
                     "name": "example Default",
                     "github_repository": "https://github.com/example/repo",
                     "jira_project_key": "TP",
-                    "policy_overrides": {},
-                    "environment": {},
-                    "secret_refs": {},
-                    "discord": {"notify_events": []},
+                },
+            ),
+            ("PATCH", "/api/admin/tenants/{tenant_id}/projects/{project_id}/policy"): RouteScenario(
+                path="/api/admin/tenants/example/projects/example-default/policy",
+                auth=admin,
+                json={"policy_overrides": {}},
+            ),
+            ("PATCH", "/api/admin/tenants/{tenant_id}/projects/{project_id}/environment"): RouteScenario(
+                path="/api/admin/tenants/example/projects/example-default/environment",
+                auth=admin,
+                json={"environment": {}},
+            ),
+            ("PATCH", "/api/admin/tenants/{tenant_id}/projects/{project_id}/secrets"): RouteScenario(
+                path="/api/admin/tenants/example/projects/example-default/secrets",
+                auth=admin,
+                json={"secret_refs": {}},
+            ),
+            ("PATCH", "/api/admin/tenants/{tenant_id}/projects/{project_id}/discord"): RouteScenario(
+                path="/api/admin/tenants/example/projects/example-default/discord",
+                auth=admin,
+                json={"discord": {"notify_events": []}},
+            ),
+            ("PATCH", "/api/admin/tenants/{tenant_id}/projects/{project_id}/archive"): RouteScenario(
+                path="/api/admin/tenants/example/projects/example-default/archive",
+                auth=admin,
+                json={
                     "is_archived": False,
                 },
+            ),
+            ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/jira/resolve-run-board"): RouteScenario(
+                path="/api/admin/tenants/example/projects/example-default/jira/resolve-run-board",
+                auth=admin,
+                expected_statuses=(200, 400, 404, 502),
             ),
             ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/installs"): RouteScenario(
                 path="/api/admin/tenants/example/projects/example-default/installs",

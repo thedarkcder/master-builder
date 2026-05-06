@@ -491,16 +491,31 @@ class ProjectCreate(BaseModel):
     discord: ProjectDiscordConfig | None = None
 
 
-class ProjectUpdate(BaseModel):
+class ProjectConfigurationUpdate(BaseModel):
     name: str = Field(min_length=1)
     github_repository: str = Field(min_length=1)
     jira_project_key: str = Field(min_length=1)
-    policy_overrides: dict = Field(default_factory=dict)
     architecture_docs: ProjectArchitectureDocsConfig | None = None
+
+
+class ProjectPolicyUpdate(BaseModel):
+    policy_overrides: dict = Field(default_factory=dict)
+
+
+class ProjectEnvironmentUpdate(BaseModel):
     environment: dict[str, str] = Field(default_factory=dict)
+
+
+class ProjectSecretRefsUpdate(BaseModel):
     secret_refs: dict[str, str] = Field(default_factory=dict)
+
+
+class ProjectDiscordUpdate(BaseModel):
     discord: ProjectDiscordConfig | None = None
-    is_archived: bool = False
+
+
+class ProjectArchiveUpdate(BaseModel):
+    is_archived: bool
 
 
 class ProjectRead(BaseModel):

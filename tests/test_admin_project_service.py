@@ -169,7 +169,7 @@ def test_create_project_clones_repository_after_commit() -> None:
     assert checkout_calls == [("t1", "https://github.com/example/repo", 1)]
     created_project = session.added[0]
     assert isinstance(created_project, Project)
-    assert created_project.policy_overrides.get("run_board_id") == 11
+    assert "run_board_id" not in created_project.policy_overrides
 
 
 def test_create_project_returns_502_and_deletes_project_when_clone_fails() -> None:
@@ -356,7 +356,7 @@ def test_create_project_rejects_confluence_architecture_config_without_space_key
         assert "require a space key" in str(exc.detail)
 
 
-def test_create_project_saves_when_jira_board_resolution_fails_with_oauth_error() -> None:
+def test_resolve_project_jira_run_board_returns_502_when_oauth_fails() -> None:
     from orchestrator.storage.models import Tenant
 
     session = _Session()
@@ -376,27 +376,31 @@ def test_create_project_saves_when_jira_board_resolution_fails_with_oauth_error(
         project_to_schema=_project_to_schema,
         settings_factory=lambda: SimpleNamespace(),
     )
-    payload = SimpleNamespace(
-        name="Sample",
+    existing_project = Project(
+        project_id="p1",
+        tenant_id="t1",
+        name="Existing",
         github_repository="https://github.com/example/repo",
-        jira_project_key="tp",
-        policy_overrides=None,
-        environment=None,
-        secret_refs=None,
-        architecture_docs=None,
-        discord=None,
+        jira_project_key="TP",
+        policy_overrides={},
+        environment={},
+        secret_refs={},
+        discord_config={},
+        is_archived=False,
+        created_at=None,  # type: ignore[arg-type]
+        updated_at=None,  # type: ignore[arg-type]
     )
+    session.set(Project, "p1", existing_project)
 
-    service.create_project(session=session, tenant_id="t1", payload=payload)
+    try:
+        service.resolve_project_jira_run_board(session=session, tenant_id="t1", project_id="p1")
+        assert False, "expected HTTPException"
+    except HTTPException as exc:
+        assert exc.status_code == 502
+        assert "Unable to resolve Jira board for project TP: oauth unavailable" == str(exc.detail)
 
-    assert session.commits == 1
-    created_project = session.added[0]
-    assert isinstance(created_project, Project)
-    assert created_project.jira_project_key == "TP"
-    assert "run_board_id" not in created_project.policy_overrides
 
-
-def test_update_project_saves_when_jira_board_resolution_fails_with_oauth_error() -> None:
+def test_update_project_configuration_does_not_resolve_jira_board() -> None:
     from orchestrator.storage.models import Tenant
 
     session = _Session()
@@ -444,7 +448,7 @@ def test_update_project_saves_when_jira_board_resolution_fails_with_oauth_error(
         is_archived=False,
     )
 
-    service.update_project(session=session, tenant_id="t1", project_id="p1", payload=payload)
+    service.update_project_configuration(session=session, tenant_id="t1", project_id="p1", payload=payload)
 
     assert session.commits == 1
     assert existing_project.name == "Updated"
@@ -512,7 +516,7 @@ def test_update_project_migrates_inline_secret_values_to_project_managed_refs() 
         )
         or SimpleNamespace(secret_ref=secret_ref, source="managed", updated_at=None),
     ):
-        service.update_project(session=session, tenant_id="t1", project_id="p1", payload=payload)
+        service.update_project_secret_refs(session=session, tenant_id="t1", project_id="p1", payload=payload)
 
     assert existing_project.secret_refs == {
         "SUPABASE_URL": "project/t1/p1/SUPABASE_URL",
@@ -578,11 +582,11 @@ def test_update_project_auto_binds_discord_channel_when_tenant_discord_is_instal
         environment=None,
         secret_refs=None,
         architecture_docs=None,
-        discord=None,
+        discord={},
         is_archived=False,
     )
 
-    service.update_project(session=session, tenant_id="t1", project_id="p1", payload=payload)
+    service.update_project_discord(session=session, tenant_id="t1", project_id="p1", payload=payload)
 
     assert existing_project.discord_config == {"channel_id": "discord-channel-999"}
     assert resolve_calls == [("t1", "p1")]
@@ -626,7 +630,7 @@ def test_update_project_preserves_upstream_secret_refs_without_copying() -> None
     )
 
     with patch("orchestrator.core.platform.tenant_secret_service._upsert_managed_secret") as upsert_mock:
-        service.update_project(session=session, tenant_id="t1", project_id="p1", payload=payload)
+        service.update_project_secret_refs(session=session, tenant_id="t1", project_id="p1", payload=payload)
 
     assert existing_project.secret_refs == {
         "RAILWAY_TOKEN": "platform/RAILWAY_TOKEN",

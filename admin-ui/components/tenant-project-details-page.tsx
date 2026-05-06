@@ -42,8 +42,12 @@ import {
   listRuns,
   listWebhookQueueJobs,
   retryWebhookJob,
+  resolveProjectJiraRunBoard,
   RUN_STATUSES,
-  updateProject,
+  updateProjectArchiveState,
+  updateProjectConfiguration,
+  updateProjectPolicy,
+  updateProjectSecretRefs,
   type ArchitectureDocumentRecord,
   type ConfluencePageRecord,
   type ConfluenceSpaceRecord,
@@ -588,15 +592,7 @@ export function TenantProjectDetailsPage() {
     }
     setBusy(true);
     try {
-      const updated = await updateProject(credentials, params.tenantId, params.projectId, {
-        name: form.name.trim(),
-        github_repository: form.github_repository.trim(),
-        jira_project_key: form.jira_project_key.trim().toUpperCase(),
-        policy_overrides: project.policy_overrides,
-        environment: project.environment,
-        secret_refs: secretRefs,
-        discord: project.discord,
-        architecture_docs: buildArchitectureDocsPayload(form),
+      const updated = await updateProjectArchiveState(credentials, params.tenantId, params.projectId, {
         is_archived: !project.is_archived,
       });
       if (updated.is_archived) {
@@ -623,12 +619,8 @@ export function TenantProjectDetailsPage() {
     }
   }
 
-  async function saveDetails() {
-    if (!credentials || !project) return;
-    if (!form.name.trim() || !form.github_repository.trim() || !form.jira_project_key.trim()) {
-      setStatusLine("Project name, repository, and Jira key are required.");
-      return;
-    }
+  function buildNextPolicyOverrides(): Record<string, unknown> {
+    if (!project) return {};
     const nextPolicyOverrides = { ...(project.policy_overrides ?? {}) };
     if (form.codex_model?.trim()) {
       nextPolicyOverrides.codex_model = form.codex_model.trim();
@@ -724,30 +716,62 @@ export function TenantProjectDetailsPage() {
         .map((line) => line.trim())
         .filter((line, index, array) => line.length > 0 && array.indexOf(line) === index);
     }
+    return nextPolicyOverrides;
+  }
+
+  async function saveDetails() {
+    if (!credentials || !project) return;
+    if (!form.name.trim() || !form.github_repository.trim() || !form.jira_project_key.trim()) {
+      setStatusLine("Project name, repository, and Jira key are required.");
+      return;
+    }
     setBusy(true);
     try {
-      const updated = await updateProject(credentials, params.tenantId, params.projectId, {
-        name: form.name.trim(),
-        github_repository: form.github_repository.trim(),
-        jira_project_key: form.jira_project_key.trim().toUpperCase(),
-        policy_overrides: nextPolicyOverrides,
-        environment: project.environment,
-        secret_refs: secretRefs,
-        discord: project.discord,
-        architecture_docs: buildArchitectureDocsPayload(form),
-        is_archived: project.is_archived,
-      });
+      const updated =
+        activeSettingsSection === "general"
+          ? await updateProjectConfiguration(credentials, params.tenantId, params.projectId, {
+              name: form.name.trim(),
+              github_repository: form.github_repository.trim(),
+              jira_project_key: form.jira_project_key.trim().toUpperCase(),
+              architecture_docs: buildArchitectureDocsPayload(form),
+            })
+          : await updateProjectPolicy(credentials, params.tenantId, params.projectId, {
+              policy_overrides: buildNextPolicyOverrides(),
+            });
       setProject(updated);
       setForm(buildProjectFormState(updated));
       setStatusLine("");
       showToast({
-        title: "Project saved",
+        title: activeSettingsSection === "general" ? "Project configuration saved" : "Project policy saved",
         description: updated.name,
         tone: "success",
       });
     } catch (error) {
       showToast({
         title: "Project update failed",
+        description: (error as Error).message,
+        tone: "error",
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function resolveJiraRunBoard() {
+    if (!credentials || !project) return;
+    setBusy(true);
+    try {
+      const updated = await resolveProjectJiraRunBoard(credentials, params.tenantId, params.projectId);
+      setProject(updated);
+      setForm(buildProjectFormState(updated));
+      showToast({
+        title: "Jira board resolved",
+        description: `Run board id ${String(updated.policy_overrides?.run_board_id ?? "")}`,
+        tone: "success",
+      });
+    } catch (error) {
+      showToast({
+        title: "Jira board resolution failed",
         description: (error as Error).message,
         tone: "error",
       });
@@ -789,16 +813,8 @@ export function TenantProjectDetailsPage() {
     const refsToSave = nextSecretRefs ?? secretRefs;
     setSecretsBusy(true);
     try {
-      const updated = await updateProject(credentials, params.tenantId, params.projectId, {
-        name: project.name,
-        github_repository: project.github_repository,
-        jira_project_key: project.jira_project_key,
-        policy_overrides: project.policy_overrides,
-        environment: project.environment,
+      const updated = await updateProjectSecretRefs(credentials, params.tenantId, params.projectId, {
         secret_refs: refsToSave,
-        discord: project.discord,
-        architecture_docs: project.architecture_docs ?? null,
-        is_archived: project.is_archived,
       });
       setProject(updated);
       setSecretRefs(updated.secret_refs ?? {});
@@ -1008,6 +1024,19 @@ export function TenantProjectDetailsPage() {
                           ? <option value={form.jira_project_key} />
                           : null}
                       </datalist>
+                      <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                        <span>
+                          Run board: {project.policy_overrides?.run_board_id ? String(project.policy_overrides.run_board_id) : "not resolved"}
+                        </span>
+                        <button
+                          type="button"
+                          className="font-medium text-foreground underline underline-offset-4 disabled:opacity-50"
+                          onClick={() => void resolveJiraRunBoard()}
+                          disabled={busy}
+                        >
+                          Resolve board
+                        </button>
+                      </div>
                     </div>
                     <div className="space-y-1.5">
                       <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">

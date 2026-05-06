@@ -39,13 +39,15 @@ import {
   unarchiveTenant,
   createProject,
   updateTenant,
-  updateProject,
+  updateProjectArchiveState,
+  updateProjectConfiguration,
   type TenantRecord,
   type TenantUpdatePayload,
   type JiraProjectRecord,
   type ProjectCreatePayload,
+  type ProjectArchiveUpdatePayload,
+  type ProjectConfigurationUpdatePayload,
   type ProjectRecord,
-  type ProjectUpdatePayload
 } from "@/lib/api";
 import { canAccessPlatformAdmin, getTenantArchiveConfirmationRoute, getTenantSettingsRoute } from "@/lib/auth-routing";
 import { formatTimestamp } from "@/lib/datetime";
@@ -518,18 +520,35 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
     }
   }
 
-  async function handleUpdateProject(projectId: string, payload: ProjectUpdatePayload) {
+  async function handleUpdateProjectConfiguration(projectId: string, payload: ProjectConfigurationUpdatePayload) {
     if (!credentials) {
       return;
     }
     setProjectsBusy(true);
     try {
-      await updateProject(credentials, params.tenantId, projectId, payload);
+      await updateProjectConfiguration(credentials, params.tenantId, projectId, payload);
       const refreshed = await listProjects(credentials, params.tenantId);
       setProjects(refreshed);
-      showToast({ title: payload.is_archived ? "Project archived" : "Project updated", description: projectId, tone: "success" });
+      showToast({ title: "Project updated", description: projectId, tone: "success" });
     } catch (error) {
       showToast({ title: "Project update failed", description: (error as Error).message, tone: "error" });
+    } finally {
+      setProjectsBusy(false);
+    }
+  }
+
+  async function handleUpdateProjectArchiveState(projectId: string, payload: ProjectArchiveUpdatePayload) {
+    if (!credentials) {
+      return;
+    }
+    setProjectsBusy(true);
+    try {
+      await updateProjectArchiveState(credentials, params.tenantId, projectId, payload);
+      const refreshed = await listProjects(credentials, params.tenantId);
+      setProjects(refreshed);
+      showToast({ title: payload.is_archived ? "Project archived" : "Project unarchived", description: projectId, tone: "success" });
+    } catch (error) {
+      showToast({ title: "Project archive update failed", description: (error as Error).message, tone: "error" });
     } finally {
       setProjectsBusy(false);
     }
@@ -773,7 +792,8 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
               busy={projectsBusy || repositoriesLoading}
               onRefreshOptions={() => void refreshProjectSources()}
               onCreateProject={handleCreateProject}
-              onUpdateProject={handleUpdateProject}
+              onUpdateProjectConfiguration={handleUpdateProjectConfiguration}
+              onUpdateProjectArchiveState={handleUpdateProjectArchiveState}
             />
           </div>
         </div>
