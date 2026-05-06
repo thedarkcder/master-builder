@@ -1,5 +1,6 @@
 2026-05-05
 
+- Splitting a broad save contract is not complete if the broad route module still owns every section endpoint. Move section settings into their own route and application-service boundary so the code structure matches the contract split.
 - Workspace home is a team velocity dashboard, not an operational workflow-debug dashboard. Lead with throughput trend, waiting pressure, active time, and project flow metrics; keep execution internals and dense status lists in platform-admin troubleshooting surfaces.
 - Do not add intro/hero copy to workspace dashboards. If the page is a dashboard, start with the working chart surface; labels like "Workspace admin", "Workspace dashboard", or explanatory promise text add noise.
 - Dashboard chart colors must come from the product theme. Use primary plus muted neutrals, with warning reserved for waiting/blockage; do not turn workflow-state charts into rainbow categorical palettes.
