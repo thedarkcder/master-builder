@@ -1,5 +1,6 @@
 2026-05-05
 
+- When removing hidden provisioning from tenant create, do not stop at removing the provider call. Also reject client-supplied webhook system fields on create/update, otherwise the API can persist fake `managed_webhook_ids` that make it look like provisioning happened.
 - Splitting settings routes is only half the cleanup if the matching UI form still owns state, validation, section rendering, and submit shaping in one file. Split large forms into a wrapper, state hook, validation contract, and content renderer so each save section remains testable.
 - Splitting a broad save contract is not complete if the broad route module still owns every section endpoint. Move section settings into their own route and application-service boundary so the code structure matches the contract split.
 - Workspace home is a team velocity dashboard, not an operational workflow-debug dashboard. Lead with throughput trend, waiting pressure, active time, and project flow metrics; keep execution internals and dense status lists in platform-admin troubleshooting surfaces.

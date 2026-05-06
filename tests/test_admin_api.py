@@ -422,8 +422,15 @@ class AdminApiTests(AdminApiTestHarness):
     def test_create_tenant_does_not_provision_jira_webhook(self) -> None:
         payload = self._tenant_payload()
         self._insert_jira_connection(connection_id="conn-1")
+        payload["jira"]["managed_webhook_ids"] = [999001]
+        payload["jira"]["webhook_last_provisioned_at"] = "2026-05-06T00:00:00Z"
+        payload["jira"]["webhook_last_error"] = "client supplied"
 
-        with patch("orchestrator.api.admin.integration_dependencies.provision_jira_webhook") as provision_mock:
+        with (
+            patch("orchestrator.api.admin.integration_dependencies.provision_jira_webhook") as dependency_provision_mock,
+            patch("orchestrator.api.admin.route_helpers.provision_jira_webhook") as route_helper_provision_mock,
+            patch("orchestrator.api.admin.jira_webhook_provision.provision_jira_webhook") as core_provision_mock,
+        ):
             response = self.client.post(
                 "/api/admin/tenants",
                 json=payload,
@@ -431,8 +438,12 @@ class AdminApiTests(AdminApiTestHarness):
             )
 
         self.assertEqual(response.status_code, 201, response.text)
-        provision_mock.assert_not_called()
+        dependency_provision_mock.assert_not_called()
+        route_helper_provision_mock.assert_not_called()
+        core_provision_mock.assert_not_called()
         self.assertEqual(response.json()["jira"]["managed_webhook_ids"], [])
+        self.assertIsNone(response.json()["jira"]["webhook_last_provisioned_at"])
+        self.assertIsNone(response.json()["jira"]["webhook_last_error"])
 
     def test_update_tenant_preserves_ready_trigger_mode_when_omitted(self) -> None:
         payload = self._tenant_payload()
@@ -457,6 +468,35 @@ class AdminApiTests(AdminApiTestHarness):
         )
         self.assertEqual(update_response.status_code, 200)
         self.assertEqual(update_response.json()["jira"]["ready_trigger_mode"], "transition_only")
+
+    def test_update_tenant_jira_rejects_client_supplied_webhook_system_state(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        update_response = self.client.patch(
+            "/api/admin/tenants/tenant-a/jira",
+            json={
+                "jira": {
+                    **payload["jira"],
+                    "managed_webhook_ids": [123456],
+                    "webhook_last_provisioned_at": "2026-05-06T00:00:00Z",
+                    "webhook_last_error": "client supplied",
+                },
+            },
+            auth=("admin", "secret"),
+        )
+
+        self.assertEqual(update_response.status_code, 200, update_response.text)
+        self.assertEqual(update_response.json()["jira"]["managed_webhook_ids"], [])
+        self.assertIsNone(update_response.json()["jira"]["webhook_last_provisioned_at"])
+        self.assertIsNone(update_response.json()["jira"]["webhook_last_error"])
 
     def test_update_tenant_drops_live_voice_discord_fields_when_omitted(self) -> None:
         payload = self._tenant_payload()
