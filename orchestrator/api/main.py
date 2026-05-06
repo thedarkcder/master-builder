@@ -36,6 +36,7 @@ from orchestrator.api.admin.workflows.routes import router as admin_workflows_ro
 from orchestrator.api.admin.workflows.operation_stale_recovery_service import recover_stale_workflow_operation_attempts
 from orchestrator.api.admin.workflows.use_cases import restart_workflow_operation as restart_workflow_operation_use_case
 from orchestrator.api.routes.admin_secrets import router as admin_secrets_router
+from orchestrator.api.routes.admin_tenant_settings import router as admin_tenant_settings_router
 from orchestrator.api.routes.admin_tenants import router as admin_tenants_router
 from orchestrator.api.routes.admin_tokens import router as admin_tokens_router
 from orchestrator.api.routes.app_auth import router as app_auth_router
@@ -239,6 +240,7 @@ def create_app() -> FastAPI:
     app.include_router(admin_runs_router)
     app.include_router(admin_workflows_router)
     app.include_router(admin_tenants_router)
+    app.include_router(admin_tenant_settings_router)
     app.include_router(admin_auth_router)
     app.include_router(admin_agent_runtimes_router)
     app.include_router(admin_codex_router)
