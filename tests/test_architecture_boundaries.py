@@ -49,6 +49,7 @@ NON_ROUTE_API_ROUTE_IMPORT_ALLOWLIST = {
         "orchestrator.api.admin.runs.routes",
         "orchestrator.api.admin.workflows.routes",
         "orchestrator.api.routes.admin_secrets",
+        "orchestrator.api.routes.admin_tenant_settings",
         "orchestrator.api.routes.admin_tenants",
         "orchestrator.api.routes.admin_tokens",
         "orchestrator.api.routes.app_auth",
