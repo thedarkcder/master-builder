@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-import type { CodexModelOptionRecord, GitHubRepositoryRecord, TenantCreatePayload, TenantUpdatePayload } from "@/lib/api";
+import type { CodexModelOptionRecord, GitHubRepositoryRecord, TenantCreatePayload } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import {
   DiscordSection,
@@ -15,6 +15,7 @@ import {
 import {
   defaultTenantFormValues,
   formValuesToTextFields,
+  type TenantFormPayload,
   type TenantFormValues,
   toCreatePayload,
   toUpdatePayload
@@ -46,7 +47,7 @@ type TenantFormProps = {
   | {
       mode: "edit";
       initialValues: TenantFormValues;
-      onSubmit: (payload: TenantUpdatePayload) => Promise<void>;
+      onSubmit: (payload: TenantFormPayload) => Promise<void>;
     }
 );
 

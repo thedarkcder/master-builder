@@ -88,15 +88,37 @@ export type TenantCreatePayload = {
   experience?: Record<string, unknown>;
 };
 
-export type TenantUpdatePayload = {
+export type TenantConfigurationUpdatePayload = {
   name: string;
-  is_enabled: boolean;
+};
+
+export type TenantJiraUpdatePayload = {
   jira: JiraConfig;
+};
+
+export type TenantGithubUpdatePayload = {
   github: GithubConfig;
+};
+
+export type TenantReposUpdatePayload = {
   repos: ReposConfig;
+};
+
+export type TenantPolicyUpdatePayload = {
   policy: PolicyConfig;
+};
+
+export type TenantObservabilityUpdatePayload = {
+  observability: PolicyConfig["observability"];
+};
+
+export type TenantDiscordUpdatePayload = {
   discord: DiscordConfig | null;
+};
+
+export type TenantExperienceUpdatePayload = {
   experience?: Record<string, unknown>;
+  setup_state?: Record<string, unknown>;
 };
 
 export type TenantRecord = {
@@ -1957,15 +1979,80 @@ export function createTenant(
   });
 }
 
-export function updateTenant(
+function patchTenantSection<TPayload>(
   credentials: Credentials,
   tenantId: string,
-  payload: TenantUpdatePayload
+  section: string,
+  payload: TPayload
 ): Promise<TenantRecord> {
-  return request<TenantRecord>(credentials, `/api/admin/tenants/${encodeURIComponent(tenantId)}`, {
-    method: "PUT",
+  return request<TenantRecord>(credentials, `/api/admin/tenants/${encodeURIComponent(tenantId)}/${section}`, {
+    method: "PATCH",
     body: JSON.stringify(payload)
   });
+}
+
+export function updateTenantConfiguration(
+  credentials: Credentials,
+  tenantId: string,
+  payload: TenantConfigurationUpdatePayload
+): Promise<TenantRecord> {
+  return patchTenantSection(credentials, tenantId, "configuration", payload);
+}
+
+export function updateTenantJira(
+  credentials: Credentials,
+  tenantId: string,
+  payload: TenantJiraUpdatePayload
+): Promise<TenantRecord> {
+  return patchTenantSection(credentials, tenantId, "jira", payload);
+}
+
+export function updateTenantGithub(
+  credentials: Credentials,
+  tenantId: string,
+  payload: TenantGithubUpdatePayload
+): Promise<TenantRecord> {
+  return patchTenantSection(credentials, tenantId, "github", payload);
+}
+
+export function updateTenantRepos(
+  credentials: Credentials,
+  tenantId: string,
+  payload: TenantReposUpdatePayload
+): Promise<TenantRecord> {
+  return patchTenantSection(credentials, tenantId, "repos", payload);
+}
+
+export function updateTenantPolicy(
+  credentials: Credentials,
+  tenantId: string,
+  payload: TenantPolicyUpdatePayload
+): Promise<TenantRecord> {
+  return patchTenantSection(credentials, tenantId, "policy", payload);
+}
+
+export function updateTenantObservability(
+  credentials: Credentials,
+  tenantId: string,
+  payload: TenantObservabilityUpdatePayload
+): Promise<TenantRecord> {
+  return patchTenantSection(credentials, tenantId, "observability", payload);
+}
+
+export function updateTenantDiscord(
+  credentials: Credentials,
+  tenantId: string,
+  payload: TenantDiscordUpdatePayload
+): Promise<TenantRecord> {
+  return patchTenantSection(credentials, tenantId, "discord", payload);
+}
+
+export function updateTenantExperience(
+  credentials: Credentials,
+  tenantId: string,
+  payload: TenantExperienceUpdatePayload
+): Promise<TenantRecord> {
+  return patchTenantSection(credentials, tenantId, "experience", payload);
 }
 
 export async function deleteTenant(credentials: Credentials, tenantId: string): Promise<void> {

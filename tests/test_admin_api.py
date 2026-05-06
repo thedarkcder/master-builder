@@ -139,17 +139,33 @@ class AdminApiTests(AdminApiTestHarness):
         self.assertEqual(list_response.status_code, 200)
         self.assertEqual(len(list_response.json()), 1)
 
-        payload["name"] = "Tenant A Updated"
-        payload["is_enabled"] = False
-
-        update_response = self.client.put(
-            "/api/admin/tenants/tenant-a",
-            json=payload,
+        update_response = self.client.patch(
+            "/api/admin/tenants/tenant-a/configuration",
+            json={"name": "Tenant A Updated"},
             auth=("admin", "secret"),
         )
         self.assertEqual(update_response.status_code, 200)
         self.assertEqual(update_response.json()["name"], "Tenant A Updated")
-        self.assertFalse(update_response.json()["is_enabled"])
+
+        jira_update_response = self.client.patch(
+            "/api/admin/tenants/tenant-a/jira",
+            json={
+                "jira": {
+                    **payload["jira"],
+                    "ready_statuses": ["Ready for Agent", "Selected for Development"],
+                },
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(jira_update_response.status_code, 200)
+        self.assertEqual(
+            jira_update_response.json()["jira"]["ready_statuses"],
+            ["Ready for Agent", "Selected for Development"],
+        )
+
+        archive_response = self.client.post("/api/admin/tenants/tenant-a/archive", auth=("admin", "secret"))
+        self.assertEqual(archive_response.status_code, 200)
+        self.assertFalse(archive_response.json()["is_enabled"])
 
         class _FakeJiraClient:
             def list_projects(self, *, access_token: str, cloud_id: str):  # noqa: ANN001
@@ -403,49 +419,11 @@ class AdminApiTests(AdminApiTestHarness):
             ],
         )
 
-    def test_create_tenant_auto_provisions_jira_webhook_when_jira_is_configured(self) -> None:
+    def test_create_tenant_does_not_provision_jira_webhook(self) -> None:
         payload = self._tenant_payload()
         self._insert_jira_connection(connection_id="conn-1")
 
-        def _fake_provision_jira_webhook(**kwargs: object) -> SimpleNamespace:
-            tenant = kwargs["tenant"]
-            jira_config = dict(tenant.jira_config)
-            jira_config["managed_webhook_ids"] = [2002]
-            jira_config["webhook_last_provisioned_at"] = "2026-04-10T14:00:00+00:00"
-            jira_config["webhook_last_error"] = None
-            tenant.jira_config = jira_config
-            return SimpleNamespace(
-                ok=True,
-                action="provision",
-                details="Provisioned 1 Jira webhook(s).",
-                webhook_ids=[2002],
-            )
-
-        with patch(
-            "orchestrator.api.routes.admin_tenants.provision_jira_webhook",
-            side_effect=_fake_provision_jira_webhook,
-        ) as provision_mock:
-            response = self.client.post(
-                "/api/admin/tenants",
-                json=payload,
-                auth=("admin", "secret"),
-            )
-
-        self.assertEqual(response.status_code, 201, response.text)
-        self.assertEqual(response.json()["jira"]["managed_webhook_ids"], [2002])
-        self.assertEqual(
-            response.json()["jira"]["webhook_last_provisioned_at"],
-            "2026-04-10T14:00:00+00:00",
-        )
-        provision_mock.assert_called_once()
-        self.assertFalse(provision_mock.call_args.kwargs["replace_existing"])
-
-    def test_create_tenant_skips_jira_webhook_provision_without_project_keys(self) -> None:
-        payload = self._tenant_payload()
-        payload["jira"]["project_keys"] = []
-        self._insert_jira_connection(connection_id="conn-1")
-
-        with patch("orchestrator.api.routes.admin_tenants.provision_jira_webhook") as provision_mock:
+        with patch("orchestrator.api.admin.integration_dependencies.provision_jira_webhook") as provision_mock:
             response = self.client.post(
                 "/api/admin/tenants",
                 json=payload,
@@ -455,63 +433,6 @@ class AdminApiTests(AdminApiTestHarness):
         self.assertEqual(response.status_code, 201, response.text)
         provision_mock.assert_not_called()
         self.assertEqual(response.json()["jira"]["managed_webhook_ids"], [])
-
-    def test_create_tenant_rejects_unknown_jira_connection_before_persisting(self) -> None:
-        payload = self._tenant_payload()
-
-        with patch(
-            "orchestrator.api.routes.admin_tenants.provision_jira_webhook",
-            return_value=SimpleNamespace(
-                ok=False,
-                action="provision",
-                details="Configured Atlassian connection was not found",
-                webhook_ids=[],
-            ),
-        ):
-            response = self.client.post(
-                "/api/admin/tenants",
-                json=payload,
-                auth=("admin", "secret"),
-            )
-
-        self.assertEqual(response.status_code, 400, response.text)
-        self.assertEqual(response.json()["detail"], "Configured Atlassian connection was not found")
-
-        session_factory = create_session_factory(self.database_url)
-        with session_factory() as session:
-            self.assertIsNone(session.get(Tenant, "tenant-a"))
-            self.assertIsNone(session.get(Project, "tenant-a-default"))
-            self.assertIsNone(session.get(TenantRunClaim, "tenant-a"))
-
-    def test_create_tenant_rolls_back_when_jira_webhook_provision_fails(self) -> None:
-        payload = self._tenant_payload()
-        self._insert_jira_connection(connection_id="conn-1")
-
-        with patch(
-            "orchestrator.api.routes.admin_tenants.provision_jira_webhook",
-            return_value=SimpleNamespace(
-                ok=False,
-                action="provision",
-                details="Failed to provision Jira webhook: missing Jira admin permission",
-                webhook_ids=[],
-            ),
-        ) as provision_mock:
-            response = self.client.post(
-                "/api/admin/tenants",
-                json=payload,
-                auth=("admin", "secret"),
-            )
-
-        self.assertEqual(response.status_code, 502, response.text)
-        self.assertIn("missing Jira admin permission", response.json()["detail"])
-        provision_mock.assert_called_once()
-        self.assertFalse(provision_mock.call_args.kwargs["replace_existing"])
-
-        session_factory = create_session_factory(self.database_url)
-        with session_factory() as session:
-            self.assertIsNone(session.get(Tenant, "tenant-a"))
-            self.assertIsNone(session.get(Project, "tenant-a-default"))
-            self.assertIsNone(session.get(TenantRunClaim, "tenant-a"))
 
     def test_update_tenant_preserves_ready_trigger_mode_when_omitted(self) -> None:
         payload = self._tenant_payload()
@@ -526,14 +447,12 @@ class AdminApiTests(AdminApiTestHarness):
         self.assertEqual(create_response.status_code, 201)
         self.assertEqual(create_response.json()["jira"]["ready_trigger_mode"], "transition_only")
 
-        update_payload = self._tenant_payload()
-        update_payload["name"] = "Tenant A Updated"
-        update_payload["is_enabled"] = False
-        update_payload["jira"].pop("ready_trigger_mode", None)
+        jira_payload = dict(self._tenant_payload()["jira"])
+        jira_payload.pop("ready_trigger_mode", None)
 
-        update_response = self.client.put(
-            "/api/admin/tenants/tenant-a",
-            json=update_payload,
+        update_response = self.client.patch(
+            "/api/admin/tenants/tenant-a/jira",
+            json={"jira": jira_payload},
             auth=("admin", "secret"),
         )
         self.assertEqual(update_response.status_code, 200)
@@ -557,15 +476,13 @@ class AdminApiTests(AdminApiTestHarness):
             {"voice-room-1": "text-room-1"},
         )
 
-        update_payload = self._tenant_payload()
-        update_payload["name"] = "Tenant A Updated"
-        update_payload["is_enabled"] = False
-        update_payload["discord"].pop("live_voice_enabled", None)
-        update_payload["discord"].pop("live_voice_room_links", None)
+        discord_payload = dict(self._tenant_payload()["discord"])
+        discord_payload.pop("live_voice_enabled", None)
+        discord_payload.pop("live_voice_room_links", None)
 
-        update_response = self.client.put(
-            "/api/admin/tenants/tenant-a",
-            json=update_payload,
+        update_response = self.client.patch(
+            "/api/admin/tenants/tenant-a/discord",
+            json={"discord": discord_payload},
             auth=("admin", "secret"),
         )
         self.assertEqual(update_response.status_code, 200)
@@ -583,17 +500,16 @@ class AdminApiTests(AdminApiTestHarness):
         )
         self.assertEqual(create_response.status_code, 201)
 
-        update_payload = self._tenant_payload()
-        update_payload["policy"]["observability"] = {
-            "audit_retention_days": 730,
-            "audit_export_enabled": False,
-            "legal_hold_enabled": True,
-            "legal_hold_reason": "Customer compliance hold",
-        }
-
-        update_response = self.client.put(
-            "/api/admin/tenants/tenant-a",
-            json=update_payload,
+        update_response = self.client.patch(
+            "/api/admin/tenants/tenant-a/observability",
+            json={
+                "observability": {
+                    "audit_retention_days": 730,
+                    "audit_export_enabled": False,
+                    "legal_hold_enabled": True,
+                    "legal_hold_reason": "Customer compliance hold",
+                },
+            },
             auth=("admin", "secret"),
         )
         self.assertEqual(update_response.status_code, 200, update_response.text)
@@ -5137,10 +5053,7 @@ class AdminApiTests(AdminApiTestHarness):
 
         with (
             patch("orchestrator.api.admin.integration_dependencies.atlassian_oauth_client", return_value=_FakeClient()),
-            patch(
-                "orchestrator.api.admin.integration_dependencies.provision_jira_webhook",
-                return_value=SimpleNamespace(ok=True),
-            ) as provision_mock,
+            patch("orchestrator.api.admin.integration_dependencies.provision_jira_webhook") as provision_mock,
         ):
             callback_response = self.client.get(
                 "/api/admin/atlassian/connect/callback",
@@ -5153,79 +5066,13 @@ class AdminApiTests(AdminApiTestHarness):
             "/tenant-a/settings/atlassian?atlassian_oauth=success&atlassian_connection_id=",
             callback_response.headers.get("location", ""),
         )
-        self.assertIn("jira_webhook=ok", callback_response.headers.get("location", ""))
-        provision_mock.assert_called_once()
-        self.assertTrue(provision_mock.call_args.kwargs["replace_existing"])
+        self.assertNotIn("jira_webhook=", callback_response.headers.get("location", ""))
+        provision_mock.assert_not_called()
 
         tenant_response = self.client.get("/api/admin/tenants/tenant-a", auth=("admin", "secret"))
         self.assertEqual(tenant_response.status_code, 200)
         self.assertTrue(tenant_response.json()["jira"]["connection_id"])
         self.assertIsInstance(tenant_response.json()["jira"]["managed_webhook_ids"], list)
-
-    def test_jira_connect_edit_callback_reports_webhook_provision_failure_in_redirect(self) -> None:
-        payload = self._tenant_payload()
-        payload["jira"]["connection_id"] = None
-        create_response = self.client.post(
-            "/api/admin/tenants",
-            json=payload,
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(create_response.status_code, 201)
-
-        start_response = self.client.post(
-            "/api/admin/atlassian/connect/start?return_to=edit&tenant_id=tenant-a",
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(start_response.status_code, 200)
-        authorize_url = start_response.json()["authorize_url"]
-        parsed = urlparse(authorize_url)
-        state_token = parse_qs(parsed.query).get("state", [None])[0]
-        self.assertIsNotNone(state_token)
-
-        class _FakeClient:
-            def exchange_code(self, *, code: str):  # noqa: ANN001
-                now = datetime.now(timezone.utc)
-                return type(
-                    "TokenSet",
-                    (),
-                    {
-                        "access_token": "access-token",
-                        "refresh_token": "refresh-token",
-                        "expires_at": now + timedelta(hours=1),
-                        "scopes": ["read:jira-work", "write:jira-work"],
-                    },
-                )()
-
-            def list_accessible_resources(self, *, access_token: str):  # noqa: ANN001
-                return [
-                    type(
-                        "Resource",
-                        (),
-                        {
-                            "cloud_id": "cloud-1",
-                            "site_url": "https://example.atlassian.net",
-                            "name": "Example",
-                        },
-                    )()
-                ]
-
-        with (
-            patch("orchestrator.api.admin.integration_dependencies.atlassian_oauth_client", return_value=_FakeClient()),
-            patch(
-                "orchestrator.api.admin.integration_dependencies.provision_jira_webhook",
-                side_effect=RuntimeError("provision-failed"),
-            ) as provision_mock,
-        ):
-            callback_response = self.client.get(
-                "/api/admin/atlassian/connect/callback",
-                params={"code": "abc123", "state": state_token},
-                follow_redirects=False,
-            )
-
-        self.assertEqual(callback_response.status_code, 302)
-        self.assertIn("jira_webhook=failed", callback_response.headers.get("location", ""))
-        provision_mock.assert_called_once()
-        self.assertTrue(provision_mock.call_args.kwargs["replace_existing"])
 
     def test_provision_tenant_jira_webhooks_success(self) -> None:
         payload = self._tenant_payload()

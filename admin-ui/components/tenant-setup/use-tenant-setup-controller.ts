@@ -15,7 +15,12 @@ import {
   startDiscordInstall,
   startGitHubInstall,
   startAtlassianConnect,
-  updateTenant,
+  updateTenantConfiguration,
+  updateTenantDiscord,
+  updateTenantGithub,
+  updateTenantJira,
+  updateTenantPolicy,
+  updateTenantRepos,
   type GitHubRepositoryRecord,
   type JiraProjectRecord,
   type TenantInviteRecord
@@ -450,7 +455,12 @@ export function useTenantSetupController(stepKey: WizardStepKey) {
     setSaving(true);
     try {
       const payload = toUpdatePayload(values, textFields);
-      const updated = await updateTenant(credentials, tenantId, payload);
+      let updated = await updateTenantConfiguration(credentials, tenantId, { name: payload.name });
+      updated = await updateTenantJira(credentials, tenantId, { jira: payload.jira });
+      updated = await updateTenantGithub(credentials, tenantId, { github: payload.github });
+      updated = await updateTenantRepos(credentials, tenantId, { repos: payload.repos });
+      updated = await updateTenantPolicy(credentials, tenantId, { policy: payload.policy });
+      updated = await updateTenantDiscord(credentials, tenantId, { discord: payload.discord });
       const form = recordToFormValues(updated);
       setValues(form);
       setTextFields(formValuesToTextFields(form));

@@ -271,14 +271,35 @@ class TenantCreate(BaseModel):
     setup_state: dict = Field(default_factory=dict)
 
 
-class TenantUpdate(BaseModel):
+class TenantConfigurationUpdate(BaseModel):
     name: str = Field(min_length=1)
-    is_enabled: bool
+
+
+class TenantJiraUpdate(BaseModel):
     jira: JiraConfig
+
+
+class TenantGithubUpdate(BaseModel):
     github: GithubConfig
+
+
+class TenantReposUpdate(BaseModel):
     repos: ReposConfig
+
+
+class TenantPolicyUpdate(BaseModel):
     policy: PolicyConfig
+
+
+class TenantObservabilityUpdate(BaseModel):
+    observability: ObservabilityPolicyConfig
+
+
+class TenantDiscordUpdate(BaseModel):
     discord: DiscordConfig | None = None
+
+
+class TenantExperienceUpdate(BaseModel):
     experience: dict = Field(default_factory=lambda: {"default_mode": "technical"})
     setup_state: dict = Field(default_factory=dict)
 

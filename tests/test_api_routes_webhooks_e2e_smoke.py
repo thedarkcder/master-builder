@@ -744,25 +744,44 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 expected_statuses=(204,),
             ),
             ("GET", "/api/admin/tenants/{tenant_id}"): RouteScenario(path="/api/admin/tenants/example", auth=admin),
-            ("PUT", "/api/admin/tenants/{tenant_id}"): RouteScenario(
-                path="/api/admin/tenants/example",
+            ("PATCH", "/api/admin/tenants/{tenant_id}/configuration"): RouteScenario(
+                path="/api/admin/tenants/example/configuration",
+                auth=admin,
+                json={"name": "example"},
+            ),
+            ("PATCH", "/api/admin/tenants/{tenant_id}/jira"): RouteScenario(
+                path="/api/admin/tenants/example/jira",
                 auth=admin,
                 json={
-                    "name": "example",
-                    "is_enabled": True,
                     "jira": {
                         "connection_id": "conn-e2e",
                         "project_keys": ["TP"],
                         "ready_statuses": ["To Do"],
                         "ready_jql": 'project = TP AND status = "To Do"',
                     },
-                    "github": {"mode": "github_app", "installation_id": "12345"},
+                },
+            ),
+            ("PATCH", "/api/admin/tenants/{tenant_id}/github"): RouteScenario(
+                path="/api/admin/tenants/example/github",
+                auth=admin,
+                json={"github": {"mode": "github_app", "installation_id": "12345"}},
+            ),
+            ("PATCH", "/api/admin/tenants/{tenant_id}/repos"): RouteScenario(
+                path="/api/admin/tenants/example/repos",
+                auth=admin,
+                json={
                     "repos": {
                         "allowlist": ["https://github.com/example/repo"],
                         "mapping_rules_by_project_key": {"TP": "https://github.com/example/repo"},
                         "mapping_rules_by_component": {},
                         "fallback_repo": None,
                     },
+                },
+            ),
+            ("PATCH", "/api/admin/tenants/{tenant_id}/policy"): RouteScenario(
+                path="/api/admin/tenants/example/policy",
+                auth=admin,
+                json={
                     "policy": {
                         "allow_jira_transitions": False,
                         "allow_pr_creation": True,
@@ -775,8 +794,22 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                         "allowed_commands": ["python -m unittest"],
                         "require_agents_md": False,
                     },
-                    "discord": {"channel_id": "discord-channel-1", "notify_events": ["run_started"]},
                 },
+            ),
+            ("PATCH", "/api/admin/tenants/{tenant_id}/observability"): RouteScenario(
+                path="/api/admin/tenants/example/observability",
+                auth=admin,
+                json={"observability": {"audit_retention_days": 365, "audit_export_enabled": True}},
+            ),
+            ("PATCH", "/api/admin/tenants/{tenant_id}/discord"): RouteScenario(
+                path="/api/admin/tenants/example/discord",
+                auth=admin,
+                json={"discord": {"channel_id": "discord-channel-1", "notify_events": ["run_started"]}},
+            ),
+            ("PATCH", "/api/admin/tenants/{tenant_id}/experience"): RouteScenario(
+                path="/api/admin/tenants/example/experience",
+                auth=admin,
+                json={"experience": {"default_mode": "technical"}, "setup_state": {}},
             ),
             ("POST", "/api/admin/tenants/{tenant_id}/archive"): RouteScenario(
                 path="/api/admin/tenants/example/archive",

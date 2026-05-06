@@ -5,8 +5,7 @@ import type {
   PolicyConfig,
   ReposConfig,
   TenantCreatePayload,
-  TenantRecord,
-  TenantUpdatePayload
+  TenantRecord
 } from "@/lib/api";
 
 export type TenantFormValues = {
@@ -20,6 +19,8 @@ export type TenantFormValues = {
   discordEnabled: boolean;
   discord: DiscordConfig;
 };
+
+export type TenantFormPayload = Omit<TenantCreatePayload, "setup_state">;
 
 export function splitCsv(value: string): string[] {
   return value
@@ -198,7 +199,7 @@ export function toCreatePayload(
 export function toUpdatePayload(
   values: TenantFormValues,
   textFields: TenantFormTextFields
-): TenantUpdatePayload {
+): TenantFormPayload {
   const created = toCreatePayload(values, textFields);
   return {
     name: created.name,
