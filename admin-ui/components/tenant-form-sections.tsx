@@ -76,12 +76,10 @@ function Toggle({
 type IdentitySectionProps = {
   tenantId: string;
   name: string;
-  enabled: boolean;
   onNameChange: (name: string) => void;
-  onEnabledChange: (enabled: boolean) => void;
 };
 
-export function IdentitySection({ tenantId, name, enabled, onNameChange, onEnabledChange }: IdentitySectionProps) {
+export function IdentitySection({ tenantId, name, onNameChange }: IdentitySectionProps) {
   return (
     <SectionFrame title="Identity" description="Tenant identity and activation state. Tenant ID is generated from name.">
       <div className="grid gap-3 md:grid-cols-2">
@@ -93,7 +91,6 @@ export function IdentitySection({ tenantId, name, enabled, onNameChange, onEnabl
           <FieldLabel>Name</FieldLabel>
           <Input value={name} onChange={(event) => onNameChange(event.target.value)} placeholder="Tenant Demo" />
         </div>
-        <Toggle label="Tenant enabled" checked={enabled} onChange={onEnabledChange} />
       </div>
     </SectionFrame>
   );

@@ -7,6 +7,7 @@ import { KeyRound, Link2 } from "lucide-react";
 
 import { useAuth } from "@/components/auth-provider";
 import { ProjectsManager } from "@/components/projects-manager";
+import { TenantDiscordSettings } from "@/components/tenant-discord-settings";
 import { TenantForm } from "@/components/tenant-form";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -46,6 +47,10 @@ import {
   updateProjectArchiveState,
   updateProjectConfiguration,
   type TenantRecord,
+  type TenantConfigurationUpdatePayload,
+  type TenantDiscordUpdatePayload,
+  type TenantGithubUpdatePayload,
+  type TenantPolicyUpdatePayload,
   type JiraProjectRecord,
   type ProjectCreatePayload,
   type ProjectArchiveUpdatePayload,
@@ -54,7 +59,7 @@ import {
 } from "@/lib/api";
 import { canAccessPlatformAdmin, getTenantArchiveConfirmationRoute, getTenantSettingsRoute } from "@/lib/auth-routing";
 import { formatTimestamp } from "@/lib/datetime";
-import { recordToFormValues, type TenantFormPayload } from "@/lib/tenant-form";
+import { recordToFormValues } from "@/lib/tenant-form";
 import { cn } from "@/lib/utils";
 
 type TenantEditSection =
@@ -106,11 +111,6 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
   const [archiveBusy, setArchiveBusy] = useState(false);
   const [archiveConfirmationName, setArchiveConfirmationName] = useState("");
   const [showArchiveConfirm, setShowArchiveConfirm] = useState(false);
-  const [discordEnabled, setDiscordEnabled] = useState(false);
-  const [discordServerId, setDiscordServerId] = useState("");
-  const [discordOnboardingChannelId, setDiscordOnboardingChannelId] = useState("");
-  const [discordInviteExpirySeconds, setDiscordInviteExpirySeconds] = useState("86400");
-  const [discordInviteMaxUses, setDiscordInviteMaxUses] = useState("1");
   const [auditRetentionDays, setAuditRetentionDays] = useState("365");
   const [auditExportEnabled, setAuditExportEnabled] = useState(true);
   const [legalHoldEnabled, setLegalHoldEnabled] = useState(false);
@@ -180,7 +180,7 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
       const payload = await getTenant(credentials, params.tenantId);
       setTenant(payload);
 
-      if (isPlatformAdmin) {
+      if (isPlatformAdmin && section === "config") {
         try {
           const modelCatalog = await listCodexModels(credentials, { profileName: "engineering_execution" });
           setCodexModels(modelCatalog.models);
@@ -200,11 +200,6 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
         setGlobalCodexReasoningEffort("");
       }
 
-      setDiscordEnabled(Boolean(payload.discord));
-      setDiscordServerId(payload.discord?.guild_id ?? "");
-      setDiscordOnboardingChannelId(payload.discord?.onboarding_channel_id ?? "");
-      setDiscordInviteExpirySeconds(String(payload.discord?.onboarding_invite_expires_in_seconds ?? 86400));
-      setDiscordInviteMaxUses(String(payload.discord?.onboarding_invite_max_uses ?? 1));
       setAuditRetentionDays(String(payload.policy.observability?.audit_retention_days ?? 365));
       setAuditExportEnabled(payload.policy.observability?.audit_export_enabled ?? true);
       setLegalHoldEnabled(payload.policy.observability?.legal_hold_enabled ?? false);
@@ -215,8 +210,12 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
         setJiraWebhook(null);
         setNotifications([]);
       }
-      const loadedProjects = await listProjects(credentials, params.tenantId);
-      setProjects(loadedProjects);
+      if (section === "projects") {
+        const loadedProjects = await listProjects(credentials, params.tenantId);
+        setProjects(loadedProjects);
+      } else {
+        setProjects([]);
+      }
     } catch (error) {
       setStatusLine(`Failed to load tenant: ${(error as Error).message}`);
     } finally {
@@ -242,23 +241,49 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
     }
   }, [searchParams]);
 
-  async function handleSave(payload: TenantFormPayload): Promise<void> {
+  async function saveTenantConfiguration(payload: TenantConfigurationUpdatePayload): Promise<void> {
     if (!credentials || !tenant) {
       return;
     }
     setSaving(true);
     try {
-      let updated: TenantRecord;
-      if (section === "github") {
-        updated = await updateTenantGithub(credentials, params.tenantId, { github: payload.github });
-      } else {
-        updated = await updateTenantConfiguration(credentials, params.tenantId, { name: payload.name });
-        updated = await updateTenantPolicy(credentials, params.tenantId, { policy: payload.policy });
-      }
+      const updated = await updateTenantConfiguration(credentials, params.tenantId, payload);
       setTenant(updated);
-      showToast({ title: "Tenant saved", description: updated.tenant_id, tone: "success" });
+      showToast({ title: "Workspace configuration saved", description: updated.tenant_id, tone: "success" });
     } catch (error) {
-      showToast({ title: "Tenant save failed", description: (error as Error).message, tone: "error" });
+      showToast({ title: "Workspace configuration save failed", description: (error as Error).message, tone: "error" });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function saveTenantGithub(payload: TenantGithubUpdatePayload): Promise<void> {
+    if (!credentials || !tenant) {
+      return;
+    }
+    setSaving(true);
+    try {
+      const updated = await updateTenantGithub(credentials, params.tenantId, payload);
+      setTenant(updated);
+      showToast({ title: "GitHub settings saved", description: updated.tenant_id, tone: "success" });
+    } catch (error) {
+      showToast({ title: "GitHub settings save failed", description: (error as Error).message, tone: "error" });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function saveTenantPolicy(payload: TenantPolicyUpdatePayload): Promise<void> {
+    if (!credentials || !tenant) {
+      return;
+    }
+    setSaving(true);
+    try {
+      const updated = await updateTenantPolicy(credentials, params.tenantId, payload);
+      setTenant(updated);
+      showToast({ title: "Tenant policy saved", description: updated.tenant_id, tone: "success" });
+    } catch (error) {
+      showToast({ title: "Tenant policy save failed", description: (error as Error).message, tone: "error" });
     } finally {
       setSaving(false);
     }
@@ -312,30 +337,14 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
     }
   }
 
-  async function saveDiscordSettings() {
+  async function saveDiscordSettings(payload: TenantDiscordUpdatePayload) {
     if (!credentials || !tenant) {
       return;
     }
     setSaving(true);
     try {
-      const updated = await updateTenantDiscord(credentials, tenant.tenant_id, {
-        discord: discordEnabled
-          ? {
-              ...(tenant.discord ?? {}),
-              guild_id: discordServerId.trim() || null,
-              onboarding_channel_id: discordOnboardingChannelId.trim() || null,
-              onboarding_invite_expires_in_seconds: Number(discordInviteExpirySeconds || "0") || null,
-              onboarding_invite_max_uses: Number(discordInviteMaxUses || "0") || null,
-              notify_events: tenant.discord?.notify_events ?? [],
-            }
-          : null,
-      });
+      const updated = await updateTenantDiscord(credentials, tenant.tenant_id, payload);
       setTenant(updated);
-      setDiscordEnabled(Boolean(updated.discord));
-      setDiscordServerId(updated.discord?.guild_id ?? "");
-      setDiscordOnboardingChannelId(updated.discord?.onboarding_channel_id ?? "");
-      setDiscordInviteExpirySeconds(String(updated.discord?.onboarding_invite_expires_in_seconds ?? 86400));
-      setDiscordInviteMaxUses(String(updated.discord?.onboarding_invite_max_uses ?? 1));
       showToast({ title: "Discord settings saved", tone: "success" });
     } catch (error) {
       showToast({ title: "Discord settings save failed", description: (error as Error).message, tone: "error" });
@@ -754,8 +763,10 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
             <TenantForm
               mode="edit"
               initialValues={recordToFormValues(tenant)}
-              onSubmit={handleSave}
+              submitScope="github"
+              onSubmit={saveTenantGithub}
               submitting={saving}
+              submitLabel="Save GitHub settings"
               codexModels={codexModels}
               reasoningEfforts={reasoningEfforts}
               globalCodexModel={globalCodexModel}
@@ -794,105 +805,69 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
       ) : null}
 
       {section === "discord" ? (
-        <div className="overflow-hidden rounded-2xl border bg-background">
-          <div className="px-6 pt-6">
-            <h2 className="text-base font-semibold">Discord Integration</h2>
-          </div>
-          <div className="space-y-4 p-6">
-            <div className="space-y-2 text-sm">
-              <label className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  className="h-4 w-4 rounded border-input"
-                  checked={discordEnabled}
-                  onChange={(event) => setDiscordEnabled(event.target.checked)}
-                />
-                <span>Enable Discord</span>
-              </label>
-              <div className="rounded-xl border bg-background px-4 py-3 text-xs text-muted-foreground">
-                Connected guild: <strong>{tenant.discord?.guild_id ?? "not installed yet"}</strong>
-                <br />
-                Installed at: <strong>{tenant.discord?.installed_at ?? "not installed yet"}</strong>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <Button variant="outline" onClick={() => void connectDiscordInstall("edit")}>
-                  <Link2 className="mr-2 h-4 w-4" />
-                  {tenant.discord?.guild_id ? "Reinstall Discord Bot" : "Install Discord Bot"}
-                </Button>
-              </div>
-              <div className="space-y-1">
-                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Server ID</p>
-                <Input
-                  value={discordServerId}
-                  onChange={(event) => setDiscordServerId(event.target.value)}
-                  placeholder="Discord guild/server ID"
-                  disabled={!discordEnabled}
-                />
-              </div>
-              <div className="space-y-1">
-                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Onboarding Channel ID</p>
-                <Input
-                  value={discordOnboardingChannelId}
-                  onChange={(event) => setDiscordOnboardingChannelId(event.target.value)}
-                  placeholder="Discord channel used for join invites"
-                  disabled={!discordEnabled}
-                />
-              </div>
-              <div className="grid gap-3 md:grid-cols-2">
-                <div className="space-y-1">
-                  <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Invite expiry seconds</p>
-                  <Input
-                    value={discordInviteExpirySeconds}
-                    onChange={(event) => setDiscordInviteExpirySeconds(event.target.value)}
-                    placeholder="86400"
-                    disabled={!discordEnabled}
-                  />
-                </div>
-                <div className="space-y-1">
-                  <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Invite max uses</p>
-                  <Input
-                    value={discordInviteMaxUses}
-                    onChange={(event) => setDiscordInviteMaxUses(event.target.value)}
-                    placeholder="1"
-                    disabled={!discordEnabled}
-                  />
-                </div>
-              </div>
-              <div className="rounded-xl border bg-background px-4 py-3 text-xs text-muted-foreground">
-                Live voice rooms are configured per project on the project Discord page. Onboarding joins use the tenant onboarding channel.
-              </div>
-              <Button onClick={() => void saveDiscordSettings()} disabled={saving}>
-                {saving ? "Saving..." : "Save"}
-              </Button>
-            </div>
-          </div>
-        </div>
+        <TenantDiscordSettings
+          tenant={tenant}
+          saving={saving}
+          onSave={saveDiscordSettings}
+          onInstall={() => void connectDiscordInstall("edit")}
+        />
       ) : null}
 
       {section === "config" ? (
-        <div className="overflow-hidden rounded-2xl border bg-background">
-          <div className="px-6 pt-6">
-            <h2 className="text-base font-semibold">Workspace configuration</h2>
+        <div className="space-y-6">
+          <div className="overflow-hidden rounded-2xl border bg-background">
+            <div className="px-6 pt-6">
+              <h2 className="text-base font-semibold">Workspace configuration</h2>
+            </div>
+            <div className="p-6">
+              <TenantForm
+                mode="edit"
+                initialValues={recordToFormValues(tenant)}
+                submitScope="configuration"
+                onSubmit={saveTenantConfiguration}
+                submitting={saving}
+                submitLabel="Save workspace configuration"
+                codexModels={codexModels}
+                reasoningEfforts={reasoningEfforts}
+                globalCodexModel={globalCodexModel}
+                globalCodexReasoningEffort={globalCodexReasoningEffort}
+                visibleSections={{
+                  identity: true,
+                  jira: false,
+                  github: false,
+                  repository: false,
+                  policy: false,
+                  discord: false
+                }}
+              />
+            </div>
           </div>
-          <div className="p-6">
-            <TenantForm
-              mode="edit"
-              initialValues={recordToFormValues(tenant)}
-              onSubmit={handleSave}
-              submitting={saving}
-              codexModels={codexModels}
-              reasoningEfforts={reasoningEfforts}
-              globalCodexModel={globalCodexModel}
-              globalCodexReasoningEffort={globalCodexReasoningEffort}
-              visibleSections={{
-                identity: true,
-                jira: false,
-                github: false,
-                repository: false,
-                policy: true,
-                discord: false
-              }}
-            />
+          <div className="overflow-hidden rounded-2xl border bg-background">
+            <div className="px-6 pt-6">
+              <h2 className="text-base font-semibold">Tenant policy</h2>
+            </div>
+            <div className="p-6">
+              <TenantForm
+                mode="edit"
+                initialValues={recordToFormValues(tenant)}
+                submitScope="policy"
+                onSubmit={saveTenantPolicy}
+                submitting={saving}
+                submitLabel="Save policy"
+                codexModels={codexModels}
+                reasoningEfforts={reasoningEfforts}
+                globalCodexModel={globalCodexModel}
+                globalCodexReasoningEffort={globalCodexReasoningEffort}
+                visibleSections={{
+                  identity: false,
+                  jira: false,
+                  github: false,
+                  repository: false,
+                  policy: true,
+                  discord: false
+                }}
+              />
+            </div>
           </div>
         </div>
       ) : null}
