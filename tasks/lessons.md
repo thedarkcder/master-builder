@@ -1,5 +1,6 @@
 2026-05-05
 
+- Splitting settings routes is only half the cleanup if the matching UI form still owns state, validation, section rendering, and submit shaping in one file. Split large forms into a wrapper, state hook, validation contract, and content renderer so each save section remains testable.
 - Splitting a broad save contract is not complete if the broad route module still owns every section endpoint. Move section settings into their own route and application-service boundary so the code structure matches the contract split.
 - Workspace home is a team velocity dashboard, not an operational workflow-debug dashboard. Lead with throughput trend, waiting pressure, active time, and project flow metrics; keep execution internals and dense status lists in platform-admin troubleshooting surfaces.
 - Do not add intro/hero copy to workspace dashboards. If the page is a dashboard, start with the working chart surface; labels like "Workspace admin", "Workspace dashboard", or explanatory promise text add noise.
