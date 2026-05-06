@@ -54,12 +54,6 @@ def atlassian_connect_callback(
         session=session,
         settings=get_settings(),
         atlassian_oauth_client_fn=deps.atlassian_oauth_client,
-        auto_provision_jira_webhook_fn=lambda *, session, tenant, settings: deps.provision_jira_webhook(
-            session=session,
-            tenant=tenant,
-            settings=settings,
-            replace_existing=True,
-        ),
     )
     return RedirectResponse(url=redirect_url, status_code=status.HTTP_302_FOUND)
 

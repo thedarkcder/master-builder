@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timedelta, timezone
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from cryptography.fernet import Fernet
@@ -20,7 +19,6 @@ from tests.workflow_test_support import add_human_input_request, add_run_with_wo
 
 class AdminApiTestHarness(SqliteTemplateApiTestCase):
     _secrets_encryption_key: str
-    _provision_jira_webhook_patcher: object
     _start_jira_reconciliation_patcher: object
     client: TestClient
     database_url: str
@@ -85,20 +83,6 @@ class AdminApiTestHarness(SqliteTemplateApiTestCase):
         reset_db_engine_cache()
         reset_agent_observability_for_tests()
 
-        def _stub_provision_jira_webhook(**kwargs: object) -> SimpleNamespace:
-            _ = kwargs
-            return SimpleNamespace(
-                ok=True,
-                action="provision",
-                details="Provisioned 0 Jira webhook(s).",
-                webhook_ids=[],
-            )
-
-        self._provision_jira_webhook_patcher = patch(
-            "orchestrator.api.routes.admin_tenants.provision_jira_webhook",
-            side_effect=_stub_provision_jira_webhook,
-        )
-        self._provision_jira_webhook_patcher.start()
         self._start_jira_reconciliation_patcher = patch(
             "orchestrator.api.admin.route_helpers.start_jira_project_reconciliation"
         )
@@ -108,7 +92,6 @@ class AdminApiTestHarness(SqliteTemplateApiTestCase):
     def tearDown(self) -> None:
         self.client.close()
         self._start_jira_reconciliation_patcher.stop()
-        self._provision_jira_webhook_patcher.stop()
         self._cleanup_test_database()
         os.environ.pop("ORCHESTRATOR_WORKER_CAPABILITIES", None)
 

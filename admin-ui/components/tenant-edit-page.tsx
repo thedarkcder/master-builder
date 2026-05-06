@@ -38,11 +38,14 @@ import {
   testAtlassian,
   unarchiveTenant,
   createProject,
-  updateTenant,
+  updateTenantConfiguration,
+  updateTenantDiscord,
+  updateTenantGithub,
+  updateTenantObservability,
+  updateTenantPolicy,
   updateProjectArchiveState,
   updateProjectConfiguration,
   type TenantRecord,
-  type TenantUpdatePayload,
   type JiraProjectRecord,
   type ProjectCreatePayload,
   type ProjectArchiveUpdatePayload,
@@ -51,7 +54,7 @@ import {
 } from "@/lib/api";
 import { canAccessPlatformAdmin, getTenantArchiveConfirmationRoute, getTenantSettingsRoute } from "@/lib/auth-routing";
 import { formatTimestamp } from "@/lib/datetime";
-import { recordToFormValues } from "@/lib/tenant-form";
+import { recordToFormValues, type TenantFormPayload } from "@/lib/tenant-form";
 import { cn } from "@/lib/utils";
 
 type TenantEditSection =
@@ -239,13 +242,19 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
     }
   }, [searchParams]);
 
-  async function handleSave(payload: TenantUpdatePayload): Promise<void> {
-    if (!credentials) {
+  async function handleSave(payload: TenantFormPayload): Promise<void> {
+    if (!credentials || !tenant) {
       return;
     }
     setSaving(true);
     try {
-      const updated = await updateTenant(credentials, params.tenantId, payload);
+      let updated: TenantRecord;
+      if (section === "github") {
+        updated = await updateTenantGithub(credentials, params.tenantId, { github: payload.github });
+      } else {
+        updated = await updateTenantConfiguration(credentials, params.tenantId, { name: payload.name });
+        updated = await updateTenantPolicy(credentials, params.tenantId, { policy: payload.policy });
+      }
       setTenant(updated);
       showToast({ title: "Tenant saved", description: updated.tenant_id, tone: "success" });
     } catch (error) {
@@ -309,13 +318,7 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
     }
     setSaving(true);
     try {
-      const updated = await updateTenant(credentials, tenant.tenant_id, {
-        name: tenant.name,
-        is_enabled: tenant.is_enabled,
-        jira: tenant.jira,
-        github: tenant.github,
-        repos: tenant.repos,
-        policy: tenant.policy,
+      const updated = await updateTenantDiscord(credentials, tenant.tenant_id, {
         discord: discordEnabled
           ? {
               ...(tenant.discord ?? {}),
@@ -351,22 +354,13 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
     }
     setSaving(true);
     try {
-      const updated = await updateTenant(credentials, tenant.tenant_id, {
-        name: tenant.name,
-        is_enabled: tenant.is_enabled,
-        jira: tenant.jira,
-        github: tenant.github,
-        repos: tenant.repos,
-        policy: {
-          ...tenant.policy,
-          observability: {
-            audit_retention_days: Number(auditRetentionDays || "365") || 365,
-            audit_export_enabled: auditExportEnabled,
-            legal_hold_enabled: legalHoldEnabled,
-            legal_hold_reason: legalHoldEnabled ? legalHoldReason.trim() : null,
-          },
+      const updated = await updateTenantObservability(credentials, tenant.tenant_id, {
+        observability: {
+          audit_retention_days: Number(auditRetentionDays || "365") || 365,
+          audit_export_enabled: auditExportEnabled,
+          legal_hold_enabled: legalHoldEnabled,
+          legal_hold_reason: legalHoldEnabled ? legalHoldReason.trim() : null,
         },
-        discord: tenant.discord,
       });
       setTenant(updated);
       setAuditRetentionDays(String(updated.policy.observability?.audit_retention_days ?? 365));

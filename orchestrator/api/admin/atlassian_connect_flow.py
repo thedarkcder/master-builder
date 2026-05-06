@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-import logging
 from urllib.parse import quote
 from uuid import uuid4
 
@@ -17,8 +16,6 @@ from orchestrator.core.platform.secrets import encrypt_value
 from orchestrator.storage.models import AtlassianOAuthConnection, Tenant
 from orchestrator.storage.tenant_rls import set_platform_system_rls_context
 from orchestrator.tools.atlassian_oauth import AtlassianOAuthError
-
-logger = logging.getLogger(__name__)
 
 
 def build_atlassian_connect_start(
@@ -59,7 +56,6 @@ def handle_atlassian_connect_callback(
     session: Session,
     settings,
     atlassian_oauth_client_fn,
-    auto_provision_jira_webhook_fn=None,
 ) -> str:  # noqa: ANN001
     try:
         state = parse_atlassian_oauth_state_token(
@@ -107,7 +103,6 @@ def handle_atlassian_connect_callback(
     session.add(connection)
     session.flush()
 
-    auto_provision_state = "skipped"
     if state.return_to == "edit" and state.tenant_id:
         tenant = session.get(Tenant, state.tenant_id)
         if tenant is None:
@@ -119,28 +114,10 @@ def handle_atlassian_connect_callback(
 
     session.commit()
 
-    if state.return_to == "edit" and state.tenant_id and auto_provision_jira_webhook_fn is not None:
-        tenant = session.get(Tenant, state.tenant_id)
-        if tenant is not None:
-            try:
-                provision_result = auto_provision_jira_webhook_fn(
-                    session=session,
-                    tenant=tenant,
-                    settings=settings,
-                )
-                auto_provision_state = "ok" if bool(getattr(provision_result, "ok", False)) else "failed"
-            except Exception:
-                auto_provision_state = "failed"
-                logger.exception(
-                    "atlassian_connect_callback_webhook_autoprovision_failed tenant_id=%s",
-                    state.tenant_id,
-                )
-
     if state.return_to == "edit" and state.tenant_id:
-        webhook_query = f"&jira_webhook={quote(auto_provision_state, safe='')}"
         return (
             f"{settings.admin_ui_base_url.rstrip('/')}/{quote(state.tenant_id, safe='')}/settings/atlassian"
-            f"?atlassian_oauth=success&atlassian_connection_id={quote(connection.connection_id, safe='')}{webhook_query}"
+            f"?atlassian_oauth=success&atlassian_connection_id={quote(connection.connection_id, safe='')}"
         )
     return (
         f"{settings.admin_ui_base_url.rstrip('/')}/tenants/new"
