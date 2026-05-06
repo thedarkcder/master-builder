@@ -1,5 +1,7 @@
 2026-05-05
 
+- When backend tenant settings are split into section routes, split the frontend submit contracts too. A single form save that calls multiple section endpoints recreates hidden coupling even when the backend is correctly separated.
+- When splitting tenant settings pages, move section-local form state and payload construction into a section component. Keeping Discord/observability/etc. state in the page shell recreates the same god-component coupling through React state instead of API calls.
 - When removing hidden provisioning from tenant create, do not stop at removing the provider call. Also reject client-supplied webhook system fields on create/update, otherwise the API can persist fake `managed_webhook_ids` that make it look like provisioning happened.
 - Splitting settings routes is only half the cleanup if the matching UI form still owns state, validation, section rendering, and submit shaping in one file. Split large forms into a wrapper, state hook, validation contract, and content renderer so each save section remains testable.
 - Splitting a broad save contract is not complete if the broad route module still owns every section endpoint. Move section settings into their own route and application-service boundary so the code structure matches the contract split.

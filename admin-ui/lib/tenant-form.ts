@@ -4,7 +4,10 @@ import type {
   JiraConfig,
   PolicyConfig,
   ReposConfig,
+  TenantConfigurationUpdatePayload,
   TenantCreatePayload,
+  TenantGithubUpdatePayload,
+  TenantPolicyUpdatePayload,
   TenantRecord
 } from "@/lib/api";
 
@@ -209,5 +212,40 @@ export function toUpdatePayload(
     repos: created.repos,
     policy: created.policy,
     discord: created.discord
+  };
+}
+
+export function toConfigurationUpdatePayload(values: TenantFormValues): TenantConfigurationUpdatePayload {
+  return {
+    name: values.name.trim()
+  };
+}
+
+export function toGithubUpdatePayload(values: TenantFormValues): TenantGithubUpdatePayload {
+  return {
+    github: {
+      ...values.github,
+      webhook_secret_ref: values.github.webhook_secret_ref?.trim() || null,
+      installation_id: values.github.installation_id?.trim() || null
+    }
+  };
+}
+
+export function toPolicyUpdatePayload(
+  values: TenantFormValues,
+  textFields: TenantFormTextFields
+): TenantPolicyUpdatePayload {
+  return {
+    policy: {
+      ...values.policy,
+      allowed_commands: parseMultiLine(textFields.policyAllowedCommandsText),
+      max_runtime_minutes: Number(values.policy.max_runtime_minutes),
+      max_dev_test_review_loops: Number(values.policy.max_dev_test_review_loops),
+      max_pr_auto_remediation_loops: Number(values.policy.max_pr_auto_remediation_loops),
+      max_concurrent_runs: Number(values.policy.max_concurrent_runs),
+      codex_model: values.policy.codex_model?.trim() || null,
+      codex_reasoning_effort:
+        (values.policy.codex_reasoning_effort?.trim() || null) as PolicyConfig["codex_reasoning_effort"]
+    }
   };
 }

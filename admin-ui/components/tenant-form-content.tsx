@@ -71,9 +71,7 @@ export function TenantFormContent({
         <IdentitySection
           tenantId={values.tenantId}
           name={values.name}
-          enabled={values.isEnabled}
           onNameChange={(name) => setValues((prev) => ({ ...prev, name }))}
-          onEnabledChange={(enabled) => setValues((prev) => ({ ...prev, isEnabled: enabled }))}
         />
       ) : null}
 
