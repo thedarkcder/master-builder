@@ -769,12 +769,20 @@ class AdminApiTests(AdminApiTestHarness):
         self.assertEqual(list_projects.status_code, 200)
         self.assertEqual(len(list_projects.json()), 2)
 
-        update_project = self.client.put(
-            f"/api/admin/tenants/tenant-a/projects/{project_id}",
+        update_project = self.client.patch(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/configuration",
             json={
                 "name": "mobile-app-renamed",
                 "github_repository": "https://github.com/example/mobile-app-renamed",
                 "jira_project_key": "MBAPP",
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(update_project.status_code, 200)
+
+        update_policy = self.client.patch(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/policy",
+            json={
                 "policy_overrides": {
                     "allow_code_reviews": False,
                     "allow_pr_remediation": False,
@@ -787,39 +795,55 @@ class AdminApiTests(AdminApiTestHarness):
                     "codex_model": "gpt-5.4-mini",
                     "codex_reasoning_effort": "high",
                 },
-                "environment": {"APP_ENV": "stage"},
-                "secret_refs": {"API_TOKEN": "RUNNER_TOKEN_NEXT"},
-                "is_archived": True,
             },
             auth=("admin", "secret"),
         )
-        self.assertEqual(update_project.status_code, 200)
-        self.assertTrue(update_project.json()["is_archived"])
-        self.assertEqual(update_project.json()["environment"], {"APP_ENV": "stage"})
-        self.assertEqual(
-            update_project.json()["secret_refs"],
-            {"API_TOKEN": "RUNNER_TOKEN_NEXT"},
+        self.assertEqual(update_policy.status_code, 200)
+
+        update_environment = self.client.patch(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/environment",
+            json={"environment": {"APP_ENV": "stage"}},
+            auth=("admin", "secret"),
         )
-        self.assertIsNone(update_project.json()["discord"])
-        self.assertEqual(update_project.json()["policy_overrides"]["codex_model"], "gpt-5.4-mini")
-        self.assertFalse(update_project.json()["policy_overrides"]["allow_code_reviews"])
-        self.assertFalse(update_project.json()["policy_overrides"]["allow_pr_remediation"])
-        self.assertFalse(update_project.json()["policy_overrides"]["allow_manual_pr_fix_requests"])
-        self.assertEqual(update_project.json()["policy_overrides"]["max_pr_auto_remediation_loops"], 3)
-        self.assertFalse(update_project.json()["policy_overrides"]["knowledge_base_enabled"])
-        self.assertEqual(update_project.json()["policy_overrides"]["knowledge_auto_answer_mode"], "safe")
-        self.assertEqual(update_project.json()["policy_overrides"]["allowed_commands"], ["git status"])
-        self.assertEqual(update_project.json()["policy_overrides"]["codex_reasoning_effort"], "high")
-        self.assertEqual(update_project.json()["effective_policy"]["codex_model"], "gpt-5.4-mini")
-        self.assertEqual(update_project.json()["effective_policy"]["codex_reasoning_effort"], "high")
-        self.assertFalse(update_project.json()["effective_policy"]["allow_code_reviews"])
-        self.assertFalse(update_project.json()["effective_policy"]["allow_pr_remediation"])
-        self.assertFalse(update_project.json()["effective_policy"]["allow_manual_pr_fix_requests"])
-        self.assertFalse(update_project.json()["effective_policy"]["allow_auto_merge"])
-        self.assertEqual(update_project.json()["effective_policy"]["max_pr_auto_remediation_loops"], 3)
-        self.assertFalse(update_project.json()["effective_policy"]["knowledge_base_enabled"])
-        self.assertEqual(update_project.json()["effective_policy"]["knowledge_auto_answer_mode"], "safe")
-        self.assertEqual(update_project.json()["effective_policy"]["allowed_commands"], [])
+        self.assertEqual(update_environment.status_code, 200)
+
+        update_secrets = self.client.patch(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/secrets",
+            json={"secret_refs": {"API_TOKEN": "RUNNER_TOKEN_NEXT"}},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(update_secrets.status_code, 200)
+
+        update_archive = self.client.patch(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/archive",
+            json={"is_archived": True},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(update_archive.status_code, 200)
+        body = update_archive.json()
+        self.assertTrue(body["is_archived"])
+        self.assertEqual(body["environment"], {"APP_ENV": "stage"})
+        self.assertEqual(body["secret_refs"], {"API_TOKEN": "RUNNER_TOKEN_NEXT"})
+        self.assertIsNone(body["discord"])
+        self.assertEqual(body["policy_overrides"]["codex_model"], "gpt-5.4-mini")
+        self.assertFalse(body["policy_overrides"]["allow_code_reviews"])
+        self.assertFalse(body["policy_overrides"]["allow_pr_remediation"])
+        self.assertFalse(body["policy_overrides"]["allow_manual_pr_fix_requests"])
+        self.assertEqual(body["policy_overrides"]["max_pr_auto_remediation_loops"], 3)
+        self.assertFalse(body["policy_overrides"]["knowledge_base_enabled"])
+        self.assertEqual(body["policy_overrides"]["knowledge_auto_answer_mode"], "safe")
+        self.assertEqual(body["policy_overrides"]["allowed_commands"], ["git status"])
+        self.assertEqual(body["policy_overrides"]["codex_reasoning_effort"], "high")
+        self.assertEqual(body["effective_policy"]["codex_model"], "gpt-5.4-mini")
+        self.assertEqual(body["effective_policy"]["codex_reasoning_effort"], "high")
+        self.assertFalse(body["effective_policy"]["allow_code_reviews"])
+        self.assertFalse(body["effective_policy"]["allow_pr_remediation"])
+        self.assertFalse(body["effective_policy"]["allow_manual_pr_fix_requests"])
+        self.assertFalse(body["effective_policy"]["allow_auto_merge"])
+        self.assertEqual(body["effective_policy"]["max_pr_auto_remediation_loops"], 3)
+        self.assertFalse(body["effective_policy"]["knowledge_base_enabled"])
+        self.assertEqual(body["effective_policy"]["knowledge_auto_answer_mode"], "safe")
+        self.assertEqual(body["effective_policy"]["allowed_commands"], [])
 
     def test_project_update_migrates_inline_secret_values_to_project_managed_refs(self) -> None:
         payload = self._tenant_payload()
@@ -836,18 +860,13 @@ class AdminApiTests(AdminApiTestHarness):
         default_project = projects_response.json()[0]
         project_id = default_project["project_id"]
 
-        update_project = self.client.put(
-            f"/api/admin/tenants/tenant-a/projects/{project_id}",
+        update_project = self.client.patch(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/secrets",
             json={
-                "name": default_project["name"],
-                "github_repository": default_project["github_repository"],
-                "jira_project_key": default_project["jira_project_key"],
-                "environment": {},
                 "secret_refs": {
                     "SUPABASE_URL": "https://example.supabase.co",
                     "APPLE_TEST_PASSWORD": "Ft6ygA&aYkf%hy",
                 },
-                "is_archived": False,
             },
             auth=("admin", "secret"),
         )
@@ -885,18 +904,13 @@ class AdminApiTests(AdminApiTestHarness):
         self.assertEqual(projects_response.status_code, 200)
         project_id = projects_response.json()[0]["project_id"]
 
-        update_project = self.client.put(
-            f"/api/admin/tenants/tenant-a/projects/{project_id}",
+        update_project = self.client.patch(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/secrets",
             json={
-                "name": projects_response.json()[0]["name"],
-                "github_repository": projects_response.json()[0]["github_repository"],
-                "jira_project_key": projects_response.json()[0]["jira_project_key"],
-                "environment": {},
                 "secret_refs": {
                     "RAILWAY_TOKEN": "platform/RAILWAY_TOKEN",
                     "SUPABASE_SERVICE_ROLE_KEY": "tenant/tenant-a/SUPABASE_SERVICE_ROLE_KEY",
                 },
-                "is_archived": False,
             },
             auth=("admin", "secret"),
         )
@@ -1278,14 +1292,10 @@ class AdminApiTests(AdminApiTestHarness):
             "orchestrator.api.admin.route_helpers.resolve_project_discord_channel_binding",
             return_value={"channel_id": "discord-channel-proj-1", "notify_events": []},
         ) as provision_mock:
-            response = self.client.put(
-                f"/api/admin/tenants/tenant-a/projects/{project_id}",
+            response = self.client.patch(
+                f"/api/admin/tenants/tenant-a/projects/{project_id}/discord",
                 json={
-                    "name": default_project["name"],
-                    "github_repository": default_project["github_repository"],
-                    "jira_project_key": default_project["jira_project_key"],
                     "discord": {"notify_events": []},
-                    "is_archived": False,
                 },
                 auth=("admin", "secret"),
             )
@@ -1334,14 +1344,10 @@ class AdminApiTests(AdminApiTestHarness):
             "orchestrator.api.admin.route_helpers.resolve_project_discord_channel_binding",
             side_effect=lambda **kwargs: dict(kwargs["discord_config"]),
         ):
-            response = self.client.put(
-                f"/api/admin/tenants/tenant-a/projects/{project_id}",
+            response = self.client.patch(
+                f"/api/admin/tenants/tenant-a/projects/{project_id}/discord",
                 json={
-                    "name": default_project["name"],
-                    "github_repository": default_project["github_repository"],
-                    "jira_project_key": default_project["jira_project_key"],
                     "discord": {"notify_events": ["run_failed"]},
-                    "is_archived": False,
                 },
                 auth=("admin", "secret"),
             )
@@ -1378,12 +1384,9 @@ class AdminApiTests(AdminApiTestHarness):
             "orchestrator.api.admin.route_helpers.resolve_project_discord_channel_binding",
             side_effect=lambda **kwargs: dict(kwargs["discord_config"]),
         ):
-            response = self.client.put(
-                f"/api/admin/tenants/tenant-a/projects/{project_id}",
+            response = self.client.patch(
+                f"/api/admin/tenants/tenant-a/projects/{project_id}/discord",
                 json={
-                    "name": default_project["name"],
-                    "github_repository": default_project["github_repository"],
-                    "jira_project_key": default_project["jira_project_key"],
                     "discord": {
                         "notify_events": ["run_failed"],
                         "live_voice_enabled": True,
@@ -1392,7 +1395,6 @@ class AdminApiTests(AdminApiTestHarness):
                             "voice-room-10": "text-room-10",
                         },
                     },
-                    "is_archived": False,
                 },
                 auth=("admin", "secret"),
             )
@@ -1426,18 +1428,14 @@ class AdminApiTests(AdminApiTestHarness):
             "orchestrator.api.admin.route_helpers.resolve_project_discord_channel_binding",
             side_effect=lambda **kwargs: dict(kwargs["discord_config"]),
         ):
-            response = self.client.put(
-                f"/api/admin/tenants/tenant-a/projects/{project_id}",
+            response = self.client.patch(
+                f"/api/admin/tenants/tenant-a/projects/{project_id}/discord",
                 json={
-                    "name": default_project["name"],
-                    "github_repository": default_project["github_repository"],
-                    "jira_project_key": default_project["jira_project_key"],
                     "discord": {
                         "notify_events": ["run_failed"],
                         "live_voice_enabled": False,
                         "live_voice_room_links": {},
                     },
-                    "is_archived": False,
                 },
                 auth=("admin", "secret"),
             )
@@ -4825,15 +4823,9 @@ class AdminApiTests(AdminApiTestHarness):
         self.assertEqual(len(projects), 1)
         project = projects[0]
 
-        archive_response = self.client.put(
-            f"/api/admin/tenants/tenant-a/projects/{project['project_id']}",
-            json={
-                "name": project["name"],
-                "github_repository": project["github_repository"],
-                "jira_project_key": project["jira_project_key"],
-                "policy_overrides": project.get("policy_overrides", {}),
-                "is_archived": True,
-            },
+        archive_response = self.client.patch(
+            f"/api/admin/tenants/tenant-a/projects/{project['project_id']}/archive",
+            json={"is_archived": True},
             auth=("admin", "secret"),
         )
         self.assertEqual(archive_response.status_code, 200)

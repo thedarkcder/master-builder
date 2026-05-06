@@ -19,7 +19,7 @@ import {
   runProjectAutomationNow,
   type ProjectAutomationExecutionRecord,
   updateProjectAutomations,
-  updateProject,
+  updateProjectDiscord,
   type Credentials,
   type DiscordAllowlistRequestRecord,
   type ProjectAutomationRecord,
@@ -508,13 +508,7 @@ export function ProjectNotificationsContent({
         : {};
     setBusy(true);
     try {
-      const updated = await updateProject(credentials, tenantId, projectId, {
-        name: project.name,
-        github_repository: project.github_repository,
-        jira_project_key: project.jira_project_key,
-        policy_overrides: project.policy_overrides,
-        environment: project.environment,
-        secret_refs: project.secret_refs,
+      const updated = await updateProjectDiscord(credentials, tenantId, projectId, {
         discord: discordEnabled
           ? {
               ...(project.discord ?? {}),
@@ -525,7 +519,6 @@ export function ProjectNotificationsContent({
               live_voice_room_links: liveVoiceRoomLinks,
             }
           : null,
-        is_archived: project.is_archived,
       });
       setProject(updated);
       setDiscordEnabled(Boolean(updated.discord));

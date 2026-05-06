@@ -105,6 +105,36 @@ def get_project(*, session, tenant_id: str, project_id: str, admin_project_servi
     return service.get_project(session=session, tenant_id=tenant_id, project_id=project_id)
 
 
-def update_project(*, session, tenant_id: str, project_id: str, payload, admin_project_service_factory):  # noqa: ANN001
+def update_project_configuration(*, session, tenant_id: str, project_id: str, payload, admin_project_service_factory):  # noqa: ANN001
     service = admin_project_service_factory()
-    return service.update_project(session=session, tenant_id=tenant_id, project_id=project_id, payload=payload)
+    return service.update_project_configuration(session=session, tenant_id=tenant_id, project_id=project_id, payload=payload)
+
+
+def update_project_policy(*, session, tenant_id: str, project_id: str, payload, admin_project_service_factory):  # noqa: ANN001
+    service = admin_project_service_factory()
+    return service.update_project_policy(session=session, tenant_id=tenant_id, project_id=project_id, payload=payload)
+
+
+def update_project_environment(*, session, tenant_id: str, project_id: str, payload, admin_project_service_factory):  # noqa: ANN001
+    service = admin_project_service_factory()
+    return service.update_project_environment(session=session, tenant_id=tenant_id, project_id=project_id, payload=payload)
+
+
+def update_project_secret_refs(*, session, tenant_id: str, project_id: str, payload, admin_project_service_factory):  # noqa: ANN001
+    service = admin_project_service_factory()
+    return service.update_project_secret_refs(session=session, tenant_id=tenant_id, project_id=project_id, payload=payload)
+
+
+def update_project_discord(*, session, tenant_id: str, project_id: str, payload, admin_project_service_factory):  # noqa: ANN001
+    service = admin_project_service_factory()
+    return service.update_project_discord(session=session, tenant_id=tenant_id, project_id=project_id, payload=payload)
+
+
+def update_project_archive_state(*, session, tenant_id: str, project_id: str, payload, admin_project_service_factory):  # noqa: ANN001
+    service = admin_project_service_factory()
+    return service.update_project_archive_state(session=session, tenant_id=tenant_id, project_id=project_id, payload=payload)
+
+
+def resolve_project_jira_run_board(*, session, tenant_id: str, project_id: str, admin_project_service_factory):  # noqa: ANN001
+    service = admin_project_service_factory()
+    return service.resolve_project_jira_run_board(session=session, tenant_id=tenant_id, project_id=project_id)

@@ -174,7 +174,9 @@ export type ProjectPolicyOverrides = Partial<
     | "codex_model"
     | "codex_reasoning_effort"
   >
->;
+> & {
+  run_board_id?: number | string | null;
+};
 
 export type CodexModelOptionRecord = {
   id: string;
@@ -354,15 +356,30 @@ export type ProjectCreatePayload = {
   architecture_docs?: ProjectArchitectureDocsConfig | null;
 };
 
-export type ProjectUpdatePayload = {
+export type ProjectConfigurationUpdatePayload = {
   name: string;
   github_repository: string;
   jira_project_key: string;
-  policy_overrides?: ProjectPolicyOverrides;
-  environment?: Record<string, string>;
-  secret_refs?: Record<string, string>;
-  discord?: ProjectDiscordConfig | null;
   architecture_docs?: ProjectArchitectureDocsConfig | null;
+};
+
+export type ProjectPolicyUpdatePayload = {
+  policy_overrides: ProjectPolicyOverrides;
+};
+
+export type ProjectEnvironmentUpdatePayload = {
+  environment: Record<string, string>;
+};
+
+export type ProjectSecretRefsUpdatePayload = {
+  secret_refs: Record<string, string>;
+};
+
+export type ProjectDiscordUpdatePayload = {
+  discord: ProjectDiscordConfig | null;
+};
+
+export type ProjectArchiveUpdatePayload = {
   is_archived: boolean;
 };
 
@@ -2162,19 +2179,86 @@ export function createProject(
   });
 }
 
-export function updateProject(
+function patchProjectSection<TPayload>(
   credentials: Credentials,
   tenantId: string,
   projectId: string,
-  payload: ProjectUpdatePayload
+  section: string,
+  payload: TPayload
 ): Promise<ProjectRecord> {
   return request<ProjectRecord>(
     credentials,
-    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}`,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/${section}`,
     {
-      method: "PUT",
+      method: "PATCH",
       body: JSON.stringify(payload)
     }
+  );
+}
+
+export function updateProjectConfiguration(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  payload: ProjectConfigurationUpdatePayload
+): Promise<ProjectRecord> {
+  return patchProjectSection(credentials, tenantId, projectId, "configuration", payload);
+}
+
+export function updateProjectPolicy(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  payload: ProjectPolicyUpdatePayload
+): Promise<ProjectRecord> {
+  return patchProjectSection(credentials, tenantId, projectId, "policy", payload);
+}
+
+export function updateProjectEnvironment(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  payload: ProjectEnvironmentUpdatePayload
+): Promise<ProjectRecord> {
+  return patchProjectSection(credentials, tenantId, projectId, "environment", payload);
+}
+
+export function updateProjectSecretRefs(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  payload: ProjectSecretRefsUpdatePayload
+): Promise<ProjectRecord> {
+  return patchProjectSection(credentials, tenantId, projectId, "secrets", payload);
+}
+
+export function updateProjectDiscord(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  payload: ProjectDiscordUpdatePayload
+): Promise<ProjectRecord> {
+  return patchProjectSection(credentials, tenantId, projectId, "discord", payload);
+}
+
+export function updateProjectArchiveState(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  payload: ProjectArchiveUpdatePayload
+): Promise<ProjectRecord> {
+  return patchProjectSection(credentials, tenantId, projectId, "archive", payload);
+}
+
+export function resolveProjectJiraRunBoard(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string
+): Promise<ProjectRecord> {
+  return request<ProjectRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/jira/resolve-run-board`,
+    { method: "POST" }
   );
 }
 
