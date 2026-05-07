@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Route } from "@playwright/test";
 
 import {
   APP_BASE_URL,
@@ -19,6 +19,35 @@ import {
   seedAdminSession,
   seedTenantSession,
 } from "./support/admin-ui";
+
+type TenantState = ReturnType<typeof makeTenant>;
+
+function tenantSectionPatchMock(
+  tenantId: string,
+  getTenant: () => TenantState,
+  setTenant: (tenant: TenantState) => void,
+) {
+  return {
+    method: "PATCH" as const,
+    pathname: new RegExp(`^/api/bff/api/admin/tenants/${tenantId}/(configuration|jira|github|repos|policy|discord)$`),
+    handler: async (route: Route, url: URL) => {
+      const payload = JSON.parse(route.request().postData() ?? "{}") as Partial<TenantState>;
+      const section = url.pathname.split("/").at(-1);
+      const current = getTenant();
+      const next = makeTenant({
+        ...current,
+        ...(section === "configuration" ? { name: payload.name ?? current.name } : {}),
+        ...(section === "jira" ? { jira: payload.jira ?? current.jira } : {}),
+        ...(section === "github" ? { github: payload.github ?? current.github } : {}),
+        ...(section === "repos" ? { repos: payload.repos ?? current.repos } : {}),
+        ...(section === "policy" ? { policy: payload.policy ?? current.policy } : {}),
+        ...(section === "discord" ? { discord: payload.discord ?? current.discord } : {}),
+      });
+      setTenant(next);
+      await fulfillJson(route, next);
+    },
+  };
+}
 
 test("registers a tenant admin and redirects into the setup onboarding flow", async ({ page }) => {
   const membership = makeMembership({
@@ -552,37 +581,9 @@ test("lets a platform admin create a workspace through the setup wizard and bloc
         });
       },
     },
-    {
-      method: "PUT",
-      pathname: "/api/bff/api/admin/tenants/beta-workspace",
-      handler: async (route) => {
-        const payload = JSON.parse(route.request().postData() ?? "{}") as {
-          name: string;
-          repos: { github_repository: string | null };
-          discord: {
-            onboarding_channel_id?: string | null;
-            onboarding_invite_expires_in_seconds?: number | null;
-            onboarding_invite_max_uses?: number | null;
-          } | null;
-        };
-        tenantState = makeTenant({
-          ...tenantState,
-          name: payload.name,
-          repos: payload.repos,
-          discord: payload.discord
-            ? {
-                ...tenantState.discord!,
-                onboarding_channel_id: payload.discord.onboarding_channel_id ?? null,
-                onboarding_invite_expires_in_seconds:
-                  payload.discord.onboarding_invite_expires_in_seconds ?? tenantState.discord?.onboarding_invite_expires_in_seconds ?? null,
-                onboarding_invite_max_uses:
-                  payload.discord.onboarding_invite_max_uses ?? tenantState.discord?.onboarding_invite_max_uses ?? null,
-              }
-            : null,
-        });
-        await fulfillJson(route, tenantState);
-      },
-    },
+    tenantSectionPatchMock("beta-workspace", () => tenantState, (next) => {
+      tenantState = next;
+    }),
   ]);
 
   await page.goto("/tenants/new/basics");
@@ -903,13 +904,12 @@ test("lets standard tenant users open Projects without showing project-managemen
 
   await page.goto("/example/dashboard");
 
-  await expect(page.locator('a[href="/example/projects/route-web"]').last()).toBeVisible();
   await expect(page.locator('a[href="/example/projects/route-web/runs"]')).toHaveCount(0);
   await expect(page.getByRole("link", { name: "All projects" })).toHaveCount(0);
   await expect(page.getByRole("link", { name: "Add project" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Add project" })).toHaveCount(0);
 
-  await page.locator('a[href="/example/projects/route-web"]').last().click();
+  await page.goto("/example/projects/route-web");
   await expect(page).toHaveURL(/\/example\/projects\/route-web$/);
   await expect(page.getByRole("heading", { name: "Route Web" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Knowledge" })).toHaveAttribute(
@@ -1210,8 +1210,8 @@ test("redirects platform super admins to the tenant selector after archiving a p
       handler: (route) => fulfillJson(route, []),
     },
     {
-      method: "PUT",
-      pathname: "/api/bff/api/admin/tenants/example/projects/route-web",
+      method: "PATCH",
+      pathname: "/api/bff/api/admin/tenants/example/projects/route-web/archive",
       handler: async (route) => {
         project = makeProject({
           ...project,
@@ -1418,8 +1418,8 @@ test("redirects tenant admins to workspace setup after archiving a project", asy
       handler: (route) => fulfillJson(route, project),
     },
     {
-      method: "PUT",
-      pathname: "/api/bff/api/admin/tenants/example/projects/route-web",
+      method: "PATCH",
+      pathname: "/api/bff/api/admin/tenants/example/projects/route-web/archive",
       handler: async (route) => {
         project = makeProject({
           ...project,
@@ -1695,23 +1695,7 @@ test("resumes the wizard on the Discord step after a successful install callback
       pathname: "/api/bff/api/admin/tenants/example",
       handler: (route) => fulfillJson(route, tenant),
     },
-    {
-      method: "PUT",
-      pathname: "/api/bff/api/admin/tenants/example",
-      handler: async (route) => {
-        const payload = JSON.parse(route.request().postData() ?? "{}") as { discord?: { onboarding_channel_id?: string | null } };
-        await fulfillJson(
-          route,
-          makeTenant({
-            ...tenant,
-            discord: {
-              ...tenant.discord!,
-              onboarding_channel_id: payload.discord?.onboarding_channel_id ?? null,
-            },
-          }),
-        );
-      },
-    },
+    tenantSectionPatchMock("example", () => tenant, () => {}),
   ]);
 
   await page.goto("/tenants/new/discord?tenant_id=example&discord_install=success");

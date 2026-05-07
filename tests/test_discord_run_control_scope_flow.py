@@ -353,18 +353,9 @@ class DiscordRunControlScopeFlowTests(DiscordCommandApiTestHarness):
         )
         self.assertEqual(create_project.status_code, 201)
         project_id = create_project.json()["project_id"]
-        archive_response = self.client.put(
-            f"/api/admin/tenants/{self.tenant_id}/projects/{project_id}",
-            json={
-                "name": "Archived Project",
-                "github_repository": "https://github.com/example/archived",
-                "jira_project_key": "ARC",
-                "policy_overrides": {},
-                "environment": {},
-                "secret_refs": {},
-                "discord": {"channel_id": "discord-archived-project", "notify_events": []},
-                "is_archived": True,
-            },
+        archive_response = self.client.patch(
+            f"/api/admin/tenants/{self.tenant_id}/projects/{project_id}/archive",
+            json={"is_archived": True},
             auth=("admin", "secret"),
         )
         self.assertEqual(archive_response.status_code, 200)
