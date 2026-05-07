@@ -149,6 +149,7 @@ _BUILTIN_PROFILE_MODELS = {
 _STATIC_MODEL_OPTIONS: dict[str, tuple[tuple[str, str, str | None], ...]] = {
     RUNTIME_KIND_OPENAI: (
         ("gpt-5.4", "GPT-5.4", "General-purpose OpenAI model"),
+        ("gpt-5.5", "GPT-5.5", "Latest general-purpose OpenAI model"),
         ("gpt-4.1", "GPT-4.1", "Broad compatibility OpenAI model"),
     ),
     RUNTIME_KIND_CLAUDE: (
