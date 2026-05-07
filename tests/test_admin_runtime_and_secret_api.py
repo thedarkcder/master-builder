@@ -22,8 +22,25 @@ class AdminRuntimeAndSecretApiTests(AdminApiTestHarness):
         self.assertEqual(body["default_model"], "gpt-5.4")
         self.assertEqual(body["default_reasoning_effort"], "medium")
         self.assertEqual(body["runtime_kind"], "codex_cli")
-        self.assertEqual([item["id"] for item in body["models"]], ["gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex"])
+        self.assertEqual(
+            [item["id"] for item in body["models"]],
+            ["gpt-5.4", "gpt-5.5", "gpt-5.4-mini", "gpt-5.3-codex"],
+        )
         self.assertEqual([item["id"] for item in body["reasoning_efforts"]], ["medium", "low", "high"])
+
+    def test_list_openai_models_includes_gpt_5_5_without_changing_default(self) -> None:
+        response = self.client.get(
+            "/api/admin/codex/models?runtime_kind=openai",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["runtime_kind"], "openai")
+        self.assertEqual(body["default_model"], "gpt-5.4")
+        self.assertEqual(
+            [item["id"] for item in body["models"]],
+            ["gpt-5.4", "gpt-5.5", "gpt-4.1"],
+        )
 
     def test_list_codex_models_for_engineering_profile_uses_profile_runtime(self) -> None:
         self.client.post(
