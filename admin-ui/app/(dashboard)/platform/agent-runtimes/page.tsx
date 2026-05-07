@@ -215,7 +215,7 @@ export default function AgentRuntimesPage() {
     try {
       const response = await listAgentRuntimeProfiles(credentials);
       setProfilesResponse(response);
-      setProfilesStatusLine("Loaded runtime profiles.");
+      setProfilesStatusLine("");
     } catch (error) {
       setProfilesStatusLine(`Failed to load runtime profiles: ${(error as Error).message}`);
     } finally {
