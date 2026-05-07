@@ -4,7 +4,8 @@ from dataclasses import dataclass
 from typing import Any
 
 _KNOWN_MODEL_METADATA: dict[str, tuple[str, str | None]] = {
-    "gpt-5.4": ("GPT-5.4", "Latest general Codex-capable model"),
+    "gpt-5.4": ("GPT-5.4", "General Codex-capable model"),
+    "gpt-5.5": ("GPT-5.5", "Latest general Codex-capable model"),
     "gpt-5.4-mini": ("GPT-5.4 Mini", "Lower-latency general Codex-capable model"),
     "gpt-5.3-codex": ("GPT-5.3 Codex", "Primary coding model"),
 }
