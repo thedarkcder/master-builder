@@ -38,6 +38,7 @@ from orchestrator.api.admin.tenant_project_routes_service import (
     get_project as get_project_route_impl,
     get_tenant as get_tenant_route_impl,
     list_projects as list_projects_route_impl,
+    list_project_navigation as list_project_navigation_route_impl,
     list_tenants as list_tenants_route_impl,
     resolve_project_jira_run_board as resolve_project_jira_run_board_route_impl,
     set_tenant_archive_state as set_tenant_archive_state_route_impl,
@@ -85,6 +86,7 @@ from orchestrator.api.schemas import (
     ProjectInstallRequestsRead,
     ProjectInstallsRead,
     ProjectInstallWrite,
+    ProjectNavigationRead,
     ProjectPolicyUpdate,
     ProjectRead,
     ProjectSecretRefsUpdate,
@@ -817,6 +819,20 @@ def list_projects(
         tenant_id=tenant_id,
         admin_project_service_factory=admin_project_service,
     )  # type: ignore[return-value]
+
+
+@router.get("/tenants/{tenant_id}/project-navigation", response_model=list[ProjectNavigationRead])
+def list_project_navigation(
+    tenant_id: str,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> list[ProjectNavigationRead]:
+    require_tenant_membership(principal=principal, tenant_id=tenant_id)
+    return list_project_navigation_route_impl(
+        session=session,
+        tenant_id=tenant_id,
+        admin_project_service_factory=admin_project_service,
+    )
 
 
 @router.post("/tenants/{tenant_id}/projects", response_model=ProjectRead, status_code=status.HTTP_201_CREATED)

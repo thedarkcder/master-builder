@@ -48,6 +48,7 @@ from orchestrator.api.schemas import (
     ProjectDeploymentResourceApplyRequest,
     ProjectDeploymentResourceWrite,
     ProjectDeploymentRestoreRunRead,
+    ProjectNavigationRead,
     TenantDeploymentPlaneRead,
     TenantDeploymentsOverviewAppRead,
     TenantDeploymentsOverviewFailureRead,
@@ -237,6 +238,27 @@ class AdminProjectService:
             select(Project).where(Project.tenant_id == tenant_id).order_by(Project.created_at)
         ).scalars().all()
         return [self._project_to_schema(project, tenant_policy=tenant.policy_config) for project in projects]
+
+    def list_project_navigation(self, *, session, tenant_id: str) -> list[ProjectNavigationRead]:
+        tenant = session.get(Tenant, tenant_id)
+        if tenant is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+
+        rows = session.execute(
+            select(Project.project_id, Project.tenant_id, Project.name, Project.jira_project_key, Project.is_archived)
+            .where(Project.tenant_id == tenant_id)
+            .order_by(Project.name)
+        ).all()
+        return [
+            ProjectNavigationRead(
+                project_id=row.project_id,
+                tenant_id=row.tenant_id,
+                name=row.name,
+                jira_project_key=row.jira_project_key,
+                is_archived=row.is_archived,
+            )
+            for row in rows
+        ]
 
     def get_project(self, *, session, tenant_id: str, project_id: str) -> object:
         project = session.get(Project, project_id)

@@ -30,8 +30,8 @@ import {
   getRun,
   type TenantRecord,
   getTenant,
-  listProjects,
-  type ProjectRecord,
+  listProjectNavigation,
+  type ProjectNavigationRecord,
 } from "@/lib/api";
 import {
   canAccessPlatformAdmin,
@@ -99,7 +99,7 @@ type DashboardNavPanelProps = {
   navItems: NavItem[];
   troubleshootingNavItems: NavItem[];
   showProjectNavigation: boolean;
-  tenantProjects: ProjectRecord[];
+  tenantProjects: ProjectNavigationRecord[];
   pathname: string;
   runContext: RunRouteCtx;
   projectContextId: string | null;
@@ -304,7 +304,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   const { credentials, ready, logout, needsOnboarding, principal, principalReady } = useAuth();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [tenant, setTenant] = useState<TenantRecord | null>(null);
-  const [tenantProjects, setTenantProjects] = useState<ProjectRecord[]>([]);
+  const [tenantProjects, setTenantProjects] = useState<ProjectNavigationRecord[]>([]);
   const tenantMatch = pathname.match(
     /^\/(?!tenants(?:\/|$)|runs(?:\/|$)|platform(?:\/|$)|login(?:\/|$)|register(?:\/|$)|invite(?:\/|$)|get-started(?:\/|$)|forgot-password(?:\/|$)|reset-password(?:\/|$)|api(?:\/|$))([^/]+)\//,
   );
@@ -320,7 +320,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   const projectContextId = projectMatch?.[2] ? decodeURIComponent(projectMatch[2]) : runContext.projectId || null;
   const decodedTenantId = tenantId ? decodeURIComponent(tenantId) : null;
   const tenantBaseRoute = decodedTenantId ? getTenantWorkspaceRoute(decodedTenantId) : null;
-  const showProjectNavigation = Boolean(projectMatch && decodedTenantId && !isWizardRoute);
+  const showProjectNavigation = Boolean(decodedTenantId && !isWizardRoute);
   const isPlatformSuperAdmin = canAccessPlatformAdmin(principal);
   const isTenantTroubleshootingRoute =
     Boolean(tenantBaseRoute) &&
@@ -411,7 +411,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
     }
     let cancelled = false;
     const decodedTenantId = decodeURIComponent(tenantId);
-    void listProjects(credentials, decodedTenantId)
+    void listProjectNavigation(credentials, decodedTenantId)
       .then((projects) => {
         if (cancelled) {
           return;

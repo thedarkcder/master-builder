@@ -292,6 +292,11 @@ export type ProjectRecord = {
   updated_at: string;
 };
 
+export type ProjectNavigationRecord = Pick<
+  ProjectRecord,
+  "project_id" | "tenant_id" | "name" | "jira_project_key" | "is_archived"
+>;
+
 export type ProjectAutomationExecutionRecord = {
   execution_id: string;
   automation_id: string;
@@ -2279,6 +2284,13 @@ export function listGitHubRepositories(
 
 export function listProjects(credentials: Credentials, tenantId: string): Promise<ProjectRecord[]> {
   return request<ProjectRecord[]>(credentials, `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects`);
+}
+
+export function listProjectNavigation(credentials: Credentials, tenantId: string): Promise<ProjectNavigationRecord[]> {
+  return request<ProjectNavigationRecord[]>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/project-navigation`
+  );
 }
 
 export function createProject(

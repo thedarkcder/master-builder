@@ -38,6 +38,7 @@ NON_ROUTE_API_ROUTE_IMPORT_ALLOWLIST = {
         "orchestrator.api.routes.admin_atlassian_oauth",
         "orchestrator.api.routes.admin_atlassian_webhooks",
         "orchestrator.api.routes.admin_codex",
+        "orchestrator.api.routes.admin_deployment_hosts",
         "orchestrator.api.routes.admin_discord_commands",
         "orchestrator.api.routes.admin_discord_allowlist",
         "orchestrator.api.routes.admin_discord_install",
@@ -54,6 +55,7 @@ NON_ROUTE_API_ROUTE_IMPORT_ALLOWLIST = {
         "orchestrator.api.routes.admin_tokens",
         "orchestrator.api.routes.app_auth",
         "orchestrator.api.routes.discord",
+        "orchestrator.api.routes.internal_deployment_hosts",
         "orchestrator.api.routes.runs",
         "orchestrator.api.routes.start_engineering",
         "orchestrator.api.routes.webhook",
@@ -707,6 +709,11 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             [],
             msg=f"Project shell/overview must not fan out Discord allowlist requests; notifications tab owns that fetch: {violations}",
         )
+
+    def test_dashboard_shell_uses_lightweight_project_navigation_read_model(self) -> None:
+        source = (ROOT / "admin-ui" / "components" / "dashboard-shell.tsx").read_text(encoding="utf-8")
+        self.assertIn("listProjectNavigation", source)
+        self.assertNotIn("listProjects", source)
 
     def test_frontend_api_client_coalesces_in_flight_get_requests(self) -> None:
         source = (ROOT / "admin-ui" / "lib" / "api" / "http.ts").read_text(encoding="utf-8")

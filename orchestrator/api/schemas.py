@@ -597,6 +597,14 @@ class ProjectRead(BaseModel):
     updated_at: datetime
 
 
+class ProjectNavigationRead(BaseModel):
+    project_id: str
+    tenant_id: str
+    name: str
+    jira_project_key: str
+    is_archived: bool
+
+
 class ArchitectureDocumentCreate(BaseModel):
     parent_issue_key: str = Field(min_length=1)
     issue_summary: str | None = None
