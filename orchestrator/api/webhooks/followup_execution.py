@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from orchestrator.api.discord.shared.errors import DiscordInteractionWebhookExpiredError
 from orchestrator.api.discord.shared.state import command_matches, parse_command_text
+from orchestrator.core.clarification.questions import ClarificationQuestionSet
 from orchestrator.core.communications import (
     DiscordAskWithThreadAction,
     DiscordInteractionFollowupAction,
@@ -19,8 +20,8 @@ from orchestrator.core.communications import (
     DiscordThreadReplyAction,
 )
 from orchestrator.core.communications.integration_contracts import TransportActionExecutor
-from orchestrator.core.error_observability import emit_hard_error
-from orchestrator.core.observability import reset_log_context, set_log_context
+from orchestrator.core.observability.error import emit_hard_error
+from orchestrator.core.observability.otel import reset_log_context, set_log_context
 from orchestrator.storage.models import Tenant
 from orchestrator.tools.discord_api import DiscordApiError
 
@@ -202,9 +203,9 @@ async def run_discord_command_followup(
                                 followup_request_id = str(data.get("followup_request_id") or "").strip()
                                 question_values = data.get("questions")
                                 questions = (
-                                    [str(value).strip() for value in question_values if str(value).strip()]
+                                    ClarificationQuestionSet.from_values(question_values).questions
                                     if isinstance(question_values, list)
-                                    else []
+                                    else ()
                                 )
                                 if followup_request_id:
                                     try:

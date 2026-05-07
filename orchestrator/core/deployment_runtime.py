@@ -16,8 +16,8 @@ from orchestrator.api.admin.deployment_release_service import (
 from orchestrator.api.schemas import ProjectDeploymentReleaseStatusUpdate, TenantDeploymentPlaneRead
 from orchestrator.core.config import Settings, get_settings
 from orchestrator.core.deployment_status import DEPLOYMENT_RELEASE_ACTIVE_STATUSES
-from orchestrator.core.platform_secret_service import resolve_platform_secret_ref
-from orchestrator.core.secret_manager import normalize_secret_ref, resolve_scoped_secret_ref
+from orchestrator.core.platform.secret_service import resolve_platform_secret_ref
+from orchestrator.core.platform.secret_manager import normalize_secret_ref, resolve_scoped_secret_ref
 from orchestrator.storage.models import Project, ProjectDeploymentRelease, Tenant
 from orchestrator.tools.coolify_api import CoolifyApiClient, CoolifyApiConfig, CoolifyApiError
 

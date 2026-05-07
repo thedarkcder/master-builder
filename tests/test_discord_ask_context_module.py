@@ -15,7 +15,7 @@ from orchestrator.core.config import get_settings
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import Project, Tenant
-from orchestrator.tools.jira_oauth import JiraOAuthError
+from orchestrator.tools.atlassian_oauth import AtlassianOAuthError
 
 
 class DiscordAskContextModuleTests(unittest.TestCase):
@@ -143,7 +143,7 @@ class DiscordAskContextModuleTests(unittest.TestCase):
             fake_client = MagicMock()
             fake_client.search_issues_by_jql.return_value = ["issue-1"]
             oauth = SimpleNamespace(client=fake_client, access_token="token", connection=SimpleNamespace(cloud_id="cloud"))
-            with patch.object(ask_context, "tenant_jira_oauth_context", return_value=oauth):
+            with patch.object(ask_context, "tenant_atlassian_oauth_context", return_value=oauth):
                 issues = ask_context.search_jira_issues_for_tenant(
                     session=session,
                     tenant=tenant,
@@ -152,7 +152,7 @@ class DiscordAskContextModuleTests(unittest.TestCase):
                 )
             self.assertEqual(issues, ["issue-1"])
 
-            with patch.object(ask_context, "tenant_jira_oauth_context", side_effect=JiraOAuthError("upstream")):
+            with patch.object(ask_context, "tenant_atlassian_oauth_context", side_effect=AtlassianOAuthError("upstream")):
                 with self.assertRaises(HTTPException) as err:
                     ask_context.search_jira_issues_for_tenant(
                         session=session,
@@ -186,9 +186,9 @@ class DiscordAskContextModuleTests(unittest.TestCase):
             fake_client = MagicMock()
             fake_client.get_issue_detail.return_value = {"key": "PA-1"}
             with (
-                patch.object(ask_context, "resolve_tenant_jira_connection", return_value=SimpleNamespace(cloud_id="cloud")),
-                patch.object(ask_context, "_refresh_jira_connection_tokens", return_value="token"),
-                patch.object(ask_context, "_jira_oauth_client", return_value=fake_client),
+                patch.object(ask_context, "resolve_tenant_atlassian_connection", return_value=SimpleNamespace(cloud_id="cloud")),
+                patch.object(ask_context, "_refresh_atlassian_connection_tokens", return_value="token"),
+                patch.object(ask_context, "_atlassian_oauth_client", return_value=fake_client),
             ):
                 detail = ask_context.fetch_jira_issue_detail_for_tenant(
                     session=session,
@@ -198,8 +198,8 @@ class DiscordAskContextModuleTests(unittest.TestCase):
             self.assertEqual(detail, {"key": "PA-1"})
 
             with (
-                patch.object(ask_context, "resolve_tenant_jira_connection", return_value=SimpleNamespace(cloud_id="cloud")),
-                patch.object(ask_context, "_refresh_jira_connection_tokens", side_effect=JiraOAuthError("fail")),
+                patch.object(ask_context, "resolve_tenant_atlassian_connection", return_value=SimpleNamespace(cloud_id="cloud")),
+                patch.object(ask_context, "_refresh_atlassian_connection_tokens", side_effect=AtlassianOAuthError("fail")),
             ):
                 with self.assertRaises(HTTPException) as bad_gateway:
                     ask_context.fetch_jira_issue_detail_for_tenant(

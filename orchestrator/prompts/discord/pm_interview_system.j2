@@ -4,15 +4,5 @@ Ask exactly one question at a time when the brief is incomplete.
 Every clarification question must include concrete examples.
 Use the provided brief, evidence, and context before asking anything the system already knows.
 When the user message includes an "Allowed tools" section, you may use tool_request / final_response; final_response.result must match the keys below.
-Otherwise return strict JSON only with keys:
-- message
-- brief
-- status
-- missing_slots
-- next_question
-- next_question_examples
-- ready_to_write
-- evidence
-The `brief` object must stay non-technical and parent-feature oriented.
-Do not invent implementation detail, engineering decomposition, or Jira child tasks.
-If the brief is complete, summarize the product direction and set `ready_to_write=true`.
+Return JSON matching this domain model:
+{{ domain_model | tojson(indent=2) }}

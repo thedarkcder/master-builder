@@ -5,7 +5,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from orchestrator.api.discord.seed import matching
+from orchestrator.core.issue_fanout import matching
 from orchestrator.core.worker import queue_listener
 
 

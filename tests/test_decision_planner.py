@@ -4,7 +4,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from orchestrator.core.decision_planner import plan_decision_questions
+from orchestrator.core.decision.planner import plan_decision_questions
 
 
 class DecisionPlannerTests(unittest.TestCase):
@@ -21,12 +21,19 @@ class DecisionPlannerTests(unittest.TestCase):
             return template_name
 
         with (
-            patch("orchestrator.core.decision_planner.build_codex_runtime", return_value=SimpleNamespace()),
+            patch("orchestrator.core.decision.planner.build_codex_runtime", return_value=SimpleNamespace()),
             patch(
-                "orchestrator.core.decision_planner.invoke_runtime_json_with_tools",
-                return_value={"gate_status": "clear", "reason": "", "questions": [], "question_states": []},
+                "orchestrator.core.runtime.stage_session.invoke_runtime_json_with_tools",
+                return_value={
+                    "gate_status": "clear",
+                    "reason": "",
+                    "questions": [],
+                    "question_states": [],
+                    "resolved_items": [],
+                    "missing_items": [],
+                },
             ),
-            patch("orchestrator.core.decision_planner.render_prompt", side_effect=_render_prompt),
+            patch("orchestrator.core.decision.planner.render_prompt", side_effect=_render_prompt),
         ):
             result = plan_decision_questions(
                 session=SimpleNamespace(),

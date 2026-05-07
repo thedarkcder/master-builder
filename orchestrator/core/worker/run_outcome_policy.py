@@ -1,0 +1,283 @@
+from __future__ import annotations
+
+from orchestrator.core.runs.service import RUN_STATUS_WAITING_FOR_INPUT
+from orchestrator.core.worker.finalization import CompletionTailExecutor, WorkflowFinalizer
+from orchestrator.core.worker.capabilities import worker_label_for_capability
+
+
+class RunOutcomePolicy:
+    def __init__(
+        self,
+        *,
+        session,
+        settings,
+        deps,
+        cleanup_run_workspaces_safe_fn,
+    ) -> None:  # noqa: ANN001
+        self._session = session
+        self._settings = settings
+        self._deps = deps
+        self._cleanup_run_workspaces_safe_fn = cleanup_run_workspaces_safe_fn
+
+    def complete(
+        self,
+        *,
+        prepared,
+        workflow_result,
+        execution_context,
+    ):
+        run = prepared.run
+        project = prepared.project
+        self._session.refresh(run)
+        if (
+            str(run.worker_service_instance_id or "").strip()
+            != str(prepared.worker_service_instance_id or "").strip()
+            or str(getattr(run, "claim_id", "") or "").strip() != prepared.claim_id
+            or run.status not in {self._deps.statuses.running, self._deps.statuses.cancelled}
+        ):
+            self._deps.identity.logger.warning(
+                "worker_run_ownership_lost run_id=%s tenant_id=%s issue_key=%s status=%s current_owner=%s expected_owner=%s",
+                run.run_id,
+                run.tenant_id,
+                run.issue_key,
+                run.status,
+                run.worker_service_instance_id,
+                prepared.worker_service_instance_id,
+            )
+            return run
+        if run.status == self._deps.statuses.cancelled:
+            self._cleanup_run_workspaces_safe_fn(
+                cleanup_run_workspaces_fn=self._deps.identity.cleanup_run_workspaces_fn,
+                logger=self._deps.identity.logger,
+                base_dir=self._settings.project_repo_checkout_base_dir,
+                tenant_id=run.tenant_id,
+                project_id=project.project_id,
+                run_id=run.run_id,
+            )
+            return self._deps.execution.finalize_cancelled_run_fn(
+                self._session,
+                run=run,
+                stage_updates=prepared.notifier.stage_updates,
+                expected_worker_service_instance_id=prepared.worker_service_instance_id,
+                expected_claim_id=prepared.claim_id,
+            )
+        if workflow_result.plan is not None and self._deps.stage_updates.plan_posted_update_fn is not None:
+            prepared.notifier.append(
+                self._deps.stage_updates.plan_posted_update_fn(
+                    tenant_id=run.tenant_id,
+                    issue_key=run.issue_key,
+                    run_id=run.run_id,
+                    jira_url=prepared.jira_issue_url,
+                    run_url=prepared.run_dashboard_url,
+                )
+            )
+            self._deps.identity.emit_agent_event_fn(
+                event_type="PLAN_POSTED",
+                tenant_id=run.tenant_id,
+                project_id=project.project_id,
+                run_id=run.run_id,
+                issue_key=run.issue_key,
+                agent_id=prepared.agent_id,
+            )
+        stale_snapshot_result = self._handle_stale_snapshot(
+            prepared=prepared,
+            workflow_result=workflow_result,
+            execution_context=execution_context,
+        )
+        if stale_snapshot_result is not None:
+            return stale_snapshot_result
+
+        if workflow_result.pr_url and self._deps.stage_updates.pr_opened_update_fn is not None:
+            prepared.notifier.append(
+                self._deps.stage_updates.pr_opened_update_fn(
+                    tenant_id=run.tenant_id,
+                    issue_key=run.issue_key,
+                    run_id=run.run_id,
+                    jira_url=prepared.jira_issue_url,
+                    run_url=prepared.run_dashboard_url,
+                    pr_url=workflow_result.pr_url,
+                )
+            )
+            self._deps.identity.emit_agent_event_fn(
+                event_type="PR_OPENED",
+                tenant_id=run.tenant_id,
+                project_id=project.project_id,
+                run_id=run.run_id,
+                issue_key=run.issue_key,
+                agent_id=prepared.agent_id,
+            )
+        capability_result = self._handle_capability_requeue(
+            prepared=prepared,
+            workflow_result=workflow_result,
+            execution_context=execution_context,
+        )
+        if capability_result is not None:
+            return capability_result
+
+        if workflow_result.outcome == "waiting_for_input":
+            self._session.refresh(run)
+            if str(getattr(run, "status", "") or "").strip().lower() == RUN_STATUS_WAITING_FOR_INPUT:
+                return run
+        if workflow_result.outcome in {"blocked", "failed"} and self._deps.stage_updates.run_failed_update_fn is not None:
+            error_text = (
+                workflow_result.blocker_message
+                or (workflow_result.diagnostics.message if workflow_result.diagnostics is not None else None)
+                or "Workflow did not complete successfully"
+            )
+            prepared.notifier.append(
+                self._deps.stage_updates.run_failed_update_fn(
+                    tenant_id=run.tenant_id,
+                    issue_key=run.issue_key,
+                    run_id=run.run_id,
+                    jira_url=prepared.jira_issue_url,
+                    run_url=prepared.run_dashboard_url,
+                    error=error_text,
+                )
+            )
+        finalization = WorkflowFinalizer(
+            session=self._session,
+            logger=self._deps.identity.logger,
+            finalize_workflow_result_fn=self._deps.execution.finalize_workflow_result_fn,
+            run_status_failed=self._deps.statuses.failed,
+            project_id=project.project_id,
+            agent_id=prepared.agent_id,
+        ).finalize(
+            run=run,
+            workflow_result=workflow_result,
+            stage_updates=prepared.notifier.stage_updates,
+            execution_context=execution_context,
+            expected_worker_service_instance_id=prepared.worker_service_instance_id,
+            expected_claim_id=prepared.claim_id,
+        )
+        self._deps.identity.logger.info(
+            "worker_run_finalized run_id=%s tenant_id=%s issue_key=%s outcome=%s final_status=%s",
+            finalization.run.run_id,
+            finalization.run.tenant_id,
+            finalization.run.issue_key,
+            workflow_result.outcome,
+            finalization.run.status,
+        )
+
+        for event_type in finalization.event_types:
+            self._deps.identity.emit_agent_event_fn(
+                event_type=event_type,
+                tenant_id=finalization.run.tenant_id,
+                project_id=project.project_id,
+                run_id=finalization.run.run_id,
+                issue_key=finalization.run.issue_key,
+                agent_id=prepared.agent_id,
+            )
+
+        CompletionTailExecutor(
+            session=self._session,
+            tenant=prepared.tenant,
+            project=project,
+            settings=self._settings,
+            logger=self._deps.identity.logger,
+            send_jira_message_fn=self._deps.stage_updates.send_jira_message_fn,
+            cleanup_run_workspaces_fn=self._deps.identity.cleanup_run_workspaces_fn,
+            base_dir=self._settings.project_repo_checkout_base_dir,
+            jira_issue_url=prepared.jira_issue_url,
+            agent_id=prepared.agent_id,
+            workspace_key=prepared.worker_workspace_key,
+        ).execute(finalization)
+        return finalization.run
+
+    def _handle_stale_snapshot(self, *, prepared, workflow_result, execution_context):
+        if not (
+            workflow_result.outcome == "success"
+            and prepared.workflow_request.start_point_ref
+            and prepared.workflow_request.start_point_sha
+        ):
+            return None
+        freshness = self._deps.execution.check_run_snapshot_freshness_fn(
+            base_dir=self._settings.project_repo_checkout_base_dir,
+            tenant_id=prepared.tenant.tenant_id,
+            project=prepared.project,
+            start_point_ref=prepared.workflow_request.start_point_ref,
+            start_point_sha=prepared.workflow_request.start_point_sha,
+        )
+        if not freshness.stale:
+            return None
+        error_text = freshness.message or "Branch snapshot stale; requeueing from latest snapshot."
+        self._deps.identity.logger.info(
+            "worker_requeue_stale_snapshot run_id=%s tenant_id=%s issue_key=%s error=%s",
+            prepared.run.run_id,
+            prepared.run.tenant_id,
+            prepared.run.issue_key,
+            error_text,
+        )
+        if self._deps.stage_updates.run_requeued_stale_snapshot_update_fn is not None:
+            prepared.notifier.append(
+                self._deps.stage_updates.run_requeued_stale_snapshot_update_fn(
+                    tenant_id=prepared.run.tenant_id,
+                    issue_key=prepared.run.issue_key,
+                    run_id=prepared.run.run_id,
+                    jira_url=prepared.jira_issue_url,
+                    run_url=prepared.run_dashboard_url,
+                    error=error_text,
+                )
+            )
+        self._cleanup_run_workspaces_safe_fn(
+            cleanup_run_workspaces_fn=self._deps.identity.cleanup_run_workspaces_fn,
+            logger=self._deps.identity.logger,
+            base_dir=self._settings.project_repo_checkout_base_dir,
+            tenant_id=prepared.run.tenant_id,
+            project_id=prepared.project.project_id,
+            run_id=prepared.run.run_id,
+        )
+        return self._deps.execution.requeue_workflow_result_for_stale_snapshot_fn(
+            self._session,
+            run=prepared.run,
+            workflow_result=workflow_result,
+            stage_updates=prepared.notifier.stage_updates,
+            error=error_text,
+            execution_context=execution_context,
+            expected_worker_service_instance_id=prepared.worker_service_instance_id,
+            expected_claim_id=prepared.claim_id,
+        )
+
+    def _handle_capability_requeue(self, *, prepared, workflow_result, execution_context):
+        if workflow_result.outcome != "requeue" or workflow_result.requeue_target is None:
+            return None
+        required_worker_label = worker_label_for_capability(workflow_result.requeue_target)
+        error_text = workflow_result.requeue_reason or "Execution capability mismatch"
+        self._deps.identity.logger.info(
+            "worker_requeue_capability run_id=%s tenant_id=%s issue_key=%s required_worker_label=%s error=%s",
+            prepared.run.run_id,
+            prepared.run.tenant_id,
+            prepared.run.issue_key,
+            required_worker_label,
+            error_text,
+        )
+        if self._deps.stage_updates.run_requeued_capability_update_fn is not None:
+            prepared.notifier.append(
+                self._deps.stage_updates.run_requeued_capability_update_fn(
+                    tenant_id=prepared.run.tenant_id,
+                    issue_key=prepared.run.issue_key,
+                    run_id=prepared.run.run_id,
+                    jira_url=prepared.jira_issue_url,
+                    run_url=prepared.run_dashboard_url,
+                    required_worker_label=required_worker_label,
+                    error=error_text,
+                )
+            )
+        self._cleanup_run_workspaces_safe_fn(
+            cleanup_run_workspaces_fn=self._deps.identity.cleanup_run_workspaces_fn,
+            logger=self._deps.identity.logger,
+            base_dir=self._settings.project_repo_checkout_base_dir,
+            tenant_id=prepared.run.tenant_id,
+            project_id=prepared.project.project_id,
+            run_id=prepared.run.run_id,
+        )
+        return self._deps.execution.requeue_workflow_result_for_capability_fn(
+            self._session,
+            run=prepared.run,
+            workflow_result=workflow_result,
+            stage_updates=prepared.notifier.stage_updates,
+            required_worker_capability=workflow_result.requeue_target.value,
+            required_worker_label=required_worker_label,
+            execution_context=execution_context,
+            expected_worker_service_instance_id=prepared.worker_service_instance_id,
+            expected_claim_id=prepared.claim_id,
+        )

@@ -9,6 +9,7 @@ import { DiscordLogo } from "@/components/icons/discord-logo";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useToast } from "@/components/ui/toast-provider";
 import { canAccessTenantWorkspace } from "@/lib/auth-routing";
 import {
   changeTenantUserPassword,
@@ -25,6 +26,7 @@ import {
 export function TenantProfilePage({ section = "profile" }: { section?: "profile" | "security" }) {
   const params = useParams<{ tenantId: string }>();
   const { credentials, principal, ready, refreshPrincipal } = useAuth();
+  const { showToast } = useToast();
   const tenantId = decodeURIComponent(params.tenantId);
   const isTenantUser = principal?.principal_type === "tenant_user";
   const isPlatformSuperAdmin = principal?.principal_type === "platform_super_admin";
@@ -119,9 +121,9 @@ export function TenantProfilePage({ section = "profile" }: { section?: "profile"
         });
       }
       await refreshPrincipal();
-      setStatusLine("Profile updated.");
+      showToast({ title: "Profile updated", tone: "success" });
     } catch (error) {
-      setStatusLine(`Unable to update profile: ${(error as Error).message}`);
+      showToast({ title: "Profile update failed", description: (error as Error).message, tone: "error" });
     } finally {
       setSaving(false);
     }
@@ -139,9 +141,9 @@ export function TenantProfilePage({ section = "profile" }: { section?: "profile"
       });
       setCurrentPassword("");
       setNextPassword("");
-      setStatusLine("Password updated.");
+      showToast({ title: "Password updated", tone: "success" });
     } catch (error) {
-      setStatusLine(`Unable to update password: ${(error as Error).message}`);
+      showToast({ title: "Password update failed", description: (error as Error).message, tone: "error" });
     } finally {
       setPasswordBusy(false);
     }
@@ -166,9 +168,9 @@ export function TenantProfilePage({ section = "profile" }: { section?: "profile"
     try {
       const invite = await createTenantDiscordInvite(credentials, tenantId);
       await navigator.clipboard.writeText(invite.invite_url);
-      setStatusLine("Discord invite generated and copied to clipboard.");
+      showToast({ title: "Discord invite copied", description: "Invite URL copied to clipboard.", tone: "success" });
     } catch (error) {
-      setStatusLine(`Unable to generate Discord invite: ${(error as Error).message}`);
+      showToast({ title: "Discord invite failed", description: (error as Error).message, tone: "error" });
     }
   }
 

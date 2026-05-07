@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from orchestrator.api.transport_runtime import build_discord_transport_executor
 from orchestrator.api.webhooks.followup_service import DiscordWebhookFollowupService
-from orchestrator.core.platform_secret_service import resolve_platform_secret_ref
+from orchestrator.core.platform.secret_service import resolve_platform_secret_ref
 from orchestrator.storage.models import Tenant
 
 

@@ -1,4 +1,5 @@
 # GCP Package (Phase 3, HA)
+
 ## Objective
 Deliver a single-region HA GCP deployment.
 
@@ -6,7 +7,7 @@ Deliver a single-region HA GCP deployment.
 - Cloud Run services for `api` and `admin-ui`.
 - Cloud Run worker pools for long-running workers.
 - Cloud SQL PostgreSQL with regional HA.
-- Memorystore Redis HA tier.
+- Approved ClickHouse deployment for product logs and audit queries.
 - Secret Manager for runtime secrets.
 - VPC egress configuration for private service connectivity.
 
@@ -24,4 +25,4 @@ Deliver a single-region HA GCP deployment.
 ## Acceptance Criteria
 - All required services are deployed and healthy.
 - Rolling revision deployments preserve availability.
-- Database and Redis failover scenarios are validated in staging.
+- Database and ClickHouse failover scenarios are validated in staging.

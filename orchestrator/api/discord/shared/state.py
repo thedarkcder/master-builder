@@ -12,7 +12,8 @@ from orchestrator.api.discord.shared.state_repository import (
     save_project_allowlist_requests,
     tenant_allowed_channel_ids,
 )
-from orchestrator.core.followup_context_service import (
+from orchestrator.core.clarification.questions import ClarificationQuestionSet
+from orchestrator.core.pm.followup_context_service import (
     FOLLOWUP_CONTEXT_SEED_FOLLOWUP,
     close_followup_contexts,
     upsert_followup_context,
@@ -374,12 +375,12 @@ def store_seed_followup_context(
     project_id: str,
     project_key: str,
     issue_keys: list[str],
-    questions: list[str],
+    questions: list[object],
     prompt_markdown: str,
 ) -> str:
     normalized_channel_ids = [value.strip() for value in channel_ids if value and value.strip()]
     normalized_issue_keys = [value.strip().upper() for value in issue_keys if value and value.strip()]
-    normalized_questions = [value.strip() for value in questions if value and value.strip()]
+    normalized_questions = ClarificationQuestionSet.from_values(questions).to_payload()
     normalized_request_id = (request_id or "").strip() or uuid4().hex
 
     metadata = {

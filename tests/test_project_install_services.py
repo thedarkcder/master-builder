@@ -10,14 +10,14 @@ from unittest.mock import patch
 from cryptography.fernet import Fernet
 from sqlalchemy import select
 
-from orchestrator.core.binding_resolution_service import check_project_bindings
+from orchestrator.core.platform.binding_resolution_service import check_project_bindings
 from orchestrator.core.config import get_settings
-from orchestrator.core.install_request_service import (
+from orchestrator.core.platform.install_request_service import (
     INSTALL_REQUEST_KIND_PROJECT_MISSING,
     create_install_request,
     ProjectInstallRequestWrite,
 )
-from orchestrator.core.trusted_install_executor import run_install
+from orchestrator.core.platform.trusted_install_executor import run_install
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import Project, RunHumanInputRequest, Tenant, WorkflowExecution
@@ -86,7 +86,7 @@ class TestProjectInstallServices:
             session.commit()
             settings = get_settings()
 
-            with patch("orchestrator.core.run_human_input_service._dispatch_human_input_request"):
+            with patch("orchestrator.core.runs.human_input_service._dispatch_human_input_request"):
                 request = create_install_request(
                     session=session,
                     settings=settings,
@@ -120,7 +120,7 @@ class TestProjectInstallServices:
             environment={"SUPABASE_URL": "https://example.supabase.co"},
             secret_refs={"SUPABASE_ANON_KEY": "tenant/tenant-a/SUPABASE_ANON_KEY"},
         )
-        with patch("orchestrator.core.binding_resolution_service.resolve_scoped_secret_ref", return_value=None):
+        with patch("orchestrator.core.platform.binding_resolution_service.resolve_scoped_secret_ref", return_value=None):
             statuses = check_project_bindings(
                 session=object(),  # type: ignore[arg-type]
                 project=project,  # type: ignore[arg-type]
@@ -151,11 +151,11 @@ class TestProjectInstallServices:
 
             with (
                 patch(
-                    "orchestrator.core.trusted_install_executor.resolve_project_binding_values",
+                    "orchestrator.core.platform.trusted_install_executor.resolve_project_binding_values",
                     return_value={"MATCH_PASSWORD": "super-secret-value"},
                 ),
                 patch(
-                    "orchestrator.core.trusted_install_executor.subprocess.run",
+                    "orchestrator.core.platform.trusted_install_executor.subprocess.run",
                     return_value=SimpleNamespace(
                         returncode=0,
                         stdout="MATCH_PASSWORD=super-secret-value\nfinished",

@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 from urllib.error import HTTPError
 
-from orchestrator.core.email_delivery import (
+from orchestrator.core.platform.email_delivery import (
     EmailDeliveryError,
     EmailMessagePayload,
     ResendEmailDeliveryProvider,
@@ -47,7 +47,7 @@ class ResendEmailDeliveryTests(unittest.TestCase):
         mock_cm = MagicMock()
         mock_cm.__enter__.return_value.read.return_value = b'{"id":"em_abc123"}'
         mock_cm.__exit__.return_value = None
-        with patch("orchestrator.core.email_delivery.urlopen", return_value=mock_cm) as mock_urlopen:
+        with patch("orchestrator.core.platform.email_delivery.urlopen", return_value=mock_cm) as mock_urlopen:
             ResendEmailDeliveryProvider(settings=settings).send(payload)
         self.assertTrue(mock_urlopen.called)
         req = mock_urlopen.call_args[0][0]
@@ -75,7 +75,7 @@ class ResendEmailDeliveryTests(unittest.TestCase):
         )
         body = BytesIO(b'{"message":"from domain not verified"}')
         err = HTTPError("https://api.resend.com/emails", 403, "Forbidden", {}, body)
-        with patch("orchestrator.core.email_delivery.urlopen", side_effect=err):
+        with patch("orchestrator.core.platform.email_delivery.urlopen", side_effect=err):
             with self.assertRaises(EmailDeliveryError) as ctx:
                 ResendEmailDeliveryProvider(settings=settings).send(
                     EmailMessagePayload(to_email="a@b.com", subject="s", text_body="t"),
@@ -135,7 +135,7 @@ class DeliverEmailIntegrationTests(unittest.TestCase):
         mock_cm = MagicMock()
         mock_cm.__enter__.return_value.read.return_value = b'{"id":"em_z"}'
         mock_cm.__exit__.return_value = None
-        with patch("orchestrator.core.email_delivery.urlopen", return_value=mock_cm):
+        with patch("orchestrator.core.platform.email_delivery.urlopen", return_value=mock_cm):
             deliver_email(
                 EmailMessagePayload(to_email="a@b.com", subject="s", text_body="t"),
                 settings=settings,

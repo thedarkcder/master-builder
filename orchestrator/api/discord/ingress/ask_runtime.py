@@ -16,12 +16,12 @@ from orchestrator.api.discord.ask.query_service import collect_ask_context as _c
 from orchestrator.api.discord.ingress import ask_history_runtime, github_context
 from orchestrator.api.discord.shared.channel_scope_repository import SqlAlchemyDiscordChannelScopeRepository
 from orchestrator.api.discord.shared.scope_service import normalize_scope_channel_id
-from orchestrator.core.codex_agents import answer_board_question_with_runtime
-from orchestrator.core.codex_runtime import CodexRuntimeError, build_codex_runtime
-from orchestrator.core.codex_working_dir import resolve_codex_working_dir
+from orchestrator.core.runtime.agents import answer_board_question_with_runtime
+from orchestrator.core.runtime.runtime import CodexRuntimeError, build_codex_runtime
+from orchestrator.core.runtime.working_dir import resolve_codex_working_dir
 from orchestrator.core.config import get_settings
-from orchestrator.core.platform_secret_service import resolve_platform_secret_ref
-from orchestrator.core.tenant_secret_service import resolve_scoped_secret_ref
+from orchestrator.core.platform.secret_service import resolve_platform_secret_ref
+from orchestrator.core.platform.tenant_secret_service import resolve_scoped_secret_ref
 from orchestrator.tools.github_app import github_client_from_tenant_config
 from orchestrator.tools.project_repo_checkout import collect_local_repo_context
 

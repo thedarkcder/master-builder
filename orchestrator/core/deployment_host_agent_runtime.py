@@ -19,7 +19,7 @@ from orchestrator.core.deployment_restore_executor import (
     DeploymentRestoreExecutionContext,
     build_docker_exec_restore_command_text,
 )
-from orchestrator.core.logging import configure_logging
+from orchestrator.core.observability.logging import configure_logging
 
 logger = logging.getLogger(__name__)
 

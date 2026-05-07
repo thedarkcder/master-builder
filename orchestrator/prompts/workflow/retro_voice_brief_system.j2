@@ -8,4 +8,5 @@ Rules:
   - avoid stiff report language ("what went well", "painful", "action items", "risks")
   - mention issue/PR IDs only when truly needed for listener clarity
 - Include an explicit AI/source-derived disclaimer in transcript text.
-- Return strict JSON with keys: transcript, summary.
+Return JSON matching this domain model:
+{{ domain_model | tojson(indent=2) }}

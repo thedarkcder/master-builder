@@ -25,9 +25,11 @@ PR URL: {{ pr_url }}
 Resolved prerequisites: {{ resolved_prerequisites_json }}
 Unresolved prerequisites: {{ unresolved_prerequisites_json }}
 Answered transient human inputs for this run: {{ human_inputs_json }}
-Allowed tools for this stage: {{ allowed_tools_json }}
+Allowed governed tools for this stage: {{ governed_tools_json }}
+Native Codex tools available directly in this runtime: {{ native_tools_json }}
 
 Structured tool bridge:
+- Use native Codex tools directly when they are available in this runtime. Do not emit tool_request for native Codex tools.
 - To call an allowed governed tool, return JSON only:
   {"type":"tool_request","tool_name":"<allowed tool>","tool_args":{...},"reason":"<optional short reason>"}
 - When review is complete, return JSON only:
@@ -46,11 +48,7 @@ Required actions:
 6b. Use `github.push_branch` for remote branch publication and `github.open_pr` for PR creation or update. Do not use raw `git push` or other ad hoc remote publication commands.
 6c. If PR creation required by policy is `true` and `pr_url` is missing, you must attempt `github.push_branch` then `github.open_pr` in this review attempt before returning blocked or failed.
 7. When previous review feedback is present, treat it as the active review context for this resumed review pass.
-8. If you return outcome="blocked" or outcome="waiting_for_input", make `feedback` and any non-null `blocker_message` operator-friendly: keep the failure concise, then add a short `Troubleshooting:` section with 1-3 concrete fix actions supported by the observed evidence.
+8. If you return outcome="blocked" or outcome="waiting_for_input", make `feedback` and any non-null `blocker_message` operator-friendly: keep the failure concise, then add a short `Troubleshooting:` section with 1-3 concrete operator actions supported by the observed evidence.
 
-Output contract:
-- outcome: "continue" | "waiting_for_input" | "blocked" | "failed".
-- summary: array of review findings/outcome notes.
-- feedback: blocking feedback string or null. For blocked or failed outcomes, include a short `Troubleshooting:` section with concrete operator actions.
-- pr_url: PR URL string or null.
-- blocker_message: null unless outcome is blocked or waiting_for_input. When non-null, include a short `Troubleshooting:` section with concrete operator actions.
+Return JSON matching this domain model:
+{{ domain_model | tojson(indent=2) }}

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from orchestrator.core.release_train import (
+from orchestrator.core.projects.release_train import (
     apply_release_label,
     next_release_version_from_tags,
     normalize_release_version,

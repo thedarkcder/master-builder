@@ -1,90 +1,57 @@
 from __future__ import annotations
 
 from datetime import datetime
-from pathlib import PurePosixPath
-import re
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_serializer, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_serializer, model_validator
 
-from orchestrator.core.agent_execution_profiles import (
+from orchestrator.api.deployment_schemas import (  # noqa: F401
+    DeploymentHostBootstrapRead,
+    DeploymentHostCommandClaimRead,
+    DeploymentHostCommandRead,
+    DeploymentHostCommandResultWrite,
+    DeploymentHostCommandStartWrite,
+    DeploymentHostCreate,
+    DeploymentHostHeartbeatWrite,
+    DeploymentHostRead,
+    DeploymentHostRegistrationRead,
+    DeploymentHostRegistrationRequest,
+    ProjectAppAnalysisRunRead,
+    ProjectAppAnalysisRunStart,
+    ProjectAppCreate,
+    ProjectAppRead,
+    ProjectAppUpdate,
+    ProjectDeploymentBackupApplyRequest,
+    ProjectDeploymentBackupExecutionListRead,
+    ProjectDeploymentBackupExecutionRead,
+    ProjectDeploymentBackupPolicyWrite,
+    ProjectDeploymentBackupRestoreRequest,
+    ProjectDeploymentBackupTriggerRequest,
+    ProjectDeploymentConfigRead,
+    ProjectDeploymentConfigWrite,
+    ProjectDeploymentDomainApplyRequest,
+    ProjectDeploymentDomainWrite,
+    ProjectDeploymentOperationItemRead,
+    ProjectDeploymentOperationRead,
+    ProjectDeploymentReleaseCreate,
+    ProjectDeploymentReleaseRead,
+    ProjectDeploymentReleaseStatusUpdate,
+    ProjectDeploymentResourceApplyRequest,
+    ProjectDeploymentResourceWrite,
+    ProjectDeploymentRestoreRunRead,
+    TenantDeploymentPlaneRead,
+    TenantDeploymentPlaneWrite,
+    TenantDeploymentsOverviewAppRead,
+    TenantDeploymentsOverviewFailureRead,
+    TenantDeploymentsOverviewRead,
+    TenantDeploymentsOverviewSummaryRead,
+)
+from orchestrator.core.runtime.agent_execution_profiles import (
     normalize_execution_profile_routing,
     normalize_execution_profiles,
 )
-from orchestrator.core.codex_models import normalize_codex_model, normalize_codex_reasoning_effort
+from orchestrator.core.runtime.models import normalize_codex_model, normalize_codex_reasoning_effort
 from orchestrator.core.guardrails import enforce_safe_command
-
-
-def _normalize_optional_string(value: object) -> str | None:
-    normalized = str(value or "").strip()
-    return normalized or None
-
-
-def _normalize_required_string(value: object) -> str:
-    normalized = str(value or "").strip()
-    if not normalized:
-        raise ValueError("value is required")
-    return normalized
-
-
-def _normalize_lower_string(value: object) -> str:
-    normalized = _normalize_required_string(value)
-    return normalized.lower()
-
-
-def _normalize_string_map(raw: object) -> dict[str, str]:
-    if not isinstance(raw, dict):
-        return {}
-    normalized: dict[str, str] = {}
-    for key, value in raw.items():
-        normalized_key = _normalize_required_string(key)
-        normalized_value = _normalize_required_string(value)
-        normalized[normalized_key] = normalized_value
-    return normalized
-
-
-def _normalize_unique_lower_key_list(raw: object) -> list[str]:
-    if not isinstance(raw, list):
-        return []
-    normalized: list[str] = []
-    seen: set[str] = set()
-    for value in raw:
-        normalized_value = _normalize_lower_string(value)
-        if normalized_value in seen:
-            continue
-        seen.add(normalized_value)
-        normalized.append(normalized_value)
-    return normalized
-
-
-def _normalize_repo_relative_path(value: object) -> str:
-    normalized = str(value or "").strip().replace("\\", "/")
-    if not normalized:
-        raise ValueError("source_path is required")
-    if normalized.startswith("./"):
-        normalized = normalized[2:]
-    if normalized == ".":
-        return "."
-    path = PurePosixPath(normalized)
-    if path.is_absolute():
-        raise ValueError("source_path must be repo-relative")
-    if any(part == ".." for part in path.parts):
-        raise ValueError("source_path must not traverse outside the repository")
-    compacted = str(path).strip("/")
-    if not compacted:
-        return "."
-    return compacted
-
-
-_SLUG_NORMALIZATION_PATTERN = re.compile(r"[^a-z0-9]+")
-
-
-def _normalize_app_slug(value: object) -> str:
-    normalized = _normalize_required_string(value).lower()
-    normalized = _SLUG_NORMALIZATION_PATTERN.sub("-", normalized).strip("-")
-    if not normalized:
-        raise ValueError("slug is required")
-    return normalized
 
 
 class JiraConfig(BaseModel):
@@ -119,6 +86,26 @@ class ReposConfig(BaseModel):
     mapping_rules_by_component: dict[str, str] = Field(default_factory=dict)
 
 
+class ObservabilityPolicyConfig(BaseModel):
+    audit_retention_days: int = Field(default=365, ge=1, le=3650)
+    audit_export_enabled: bool = True
+    legal_hold_enabled: bool = False
+    legal_hold_reason: str | None = Field(default=None, max_length=500)
+
+    @field_validator("legal_hold_reason")
+    @classmethod
+    def normalize_legal_hold_reason(cls, value: str | None) -> str | None:
+        return str(value or "").strip() or None
+
+    @model_validator(mode="after")
+    def validate_legal_hold(self) -> "ObservabilityPolicyConfig":
+        if self.legal_hold_enabled and not self.legal_hold_reason:
+            raise ValueError("legal_hold_reason is required when legal_hold_enabled is true")
+        if not self.legal_hold_enabled:
+            self.legal_hold_reason = None
+        return self
+
+
 class PolicyConfig(BaseModel):
     allow_jira_transitions: bool = False
     allow_pr_creation: bool = True
@@ -138,6 +125,7 @@ class PolicyConfig(BaseModel):
     codex_reasoning_effort: str | None = Field(default=None, pattern="^(low|medium|high)$")
     execution_profiles: dict[str, dict[str, object]] = Field(default_factory=dict)
     execution_profile_routing: dict[str, str] = Field(default_factory=dict)
+    observability: ObservabilityPolicyConfig = Field(default_factory=ObservabilityPolicyConfig)
 
     @field_validator("allowed_commands")
     @classmethod
@@ -283,6 +271,35 @@ class ProjectDiscordConfig(BaseModel):
         return serialized
 
 
+class ProjectArchitectureDocsConfig(BaseModel):
+    provider: Literal["internal", "confluence"]
+    space_key: str | None = None
+    parent_page_id: str | None = None
+
+    @field_validator("space_key", "parent_page_id")
+    @classmethod
+    def normalize_optional_text(cls, value: str | None) -> str | None:
+        normalized = str(value or "").strip()
+        return normalized or None
+
+
+class ConfluenceSpaceRead(BaseModel):
+    space_id: str
+    key: str
+    name: str
+
+
+class ConfluenceSpaceCatalogRead(BaseModel):
+    items: list[ConfluenceSpaceRead]
+    create_space_url: str
+
+
+class ConfluencePageRead(BaseModel):
+    page_id: str
+    title: str
+    webui_url: str
+
+
 class TenantCreate(BaseModel):
     name: str = Field(min_length=1)
     is_enabled: bool = True
@@ -295,14 +312,35 @@ class TenantCreate(BaseModel):
     setup_state: dict = Field(default_factory=dict)
 
 
-class TenantUpdate(BaseModel):
+class TenantConfigurationUpdate(BaseModel):
     name: str = Field(min_length=1)
-    is_enabled: bool
+
+
+class TenantJiraUpdate(BaseModel):
     jira: JiraConfig
+
+
+class TenantGithubUpdate(BaseModel):
     github: GithubConfig
+
+
+class TenantReposUpdate(BaseModel):
     repos: ReposConfig
+
+
+class TenantPolicyUpdate(BaseModel):
     policy: PolicyConfig
+
+
+class TenantObservabilityUpdate(BaseModel):
+    observability: ObservabilityPolicyConfig
+
+
+class TenantDiscordUpdate(BaseModel):
     discord: DiscordConfig | None = None
+
+
+class TenantExperienceUpdate(BaseModel):
     experience: dict = Field(default_factory=lambda: {"default_mode": "technical"})
     setup_state: dict = Field(default_factory=dict)
 
@@ -509,20 +547,37 @@ class ProjectCreate(BaseModel):
     github_repository: str = Field(min_length=1)
     jira_project_key: str = Field(min_length=1)
     policy_overrides: dict = Field(default_factory=dict)
+    architecture_docs: ProjectArchitectureDocsConfig | None = None
     environment: dict[str, str] = Field(default_factory=dict)
     secret_refs: dict[str, str] = Field(default_factory=dict)
     discord: ProjectDiscordConfig | None = None
 
 
-class ProjectUpdate(BaseModel):
+class ProjectConfigurationUpdate(BaseModel):
     name: str = Field(min_length=1)
     github_repository: str = Field(min_length=1)
     jira_project_key: str = Field(min_length=1)
+    architecture_docs: ProjectArchitectureDocsConfig | None = None
+
+
+class ProjectPolicyUpdate(BaseModel):
     policy_overrides: dict = Field(default_factory=dict)
+
+
+class ProjectEnvironmentUpdate(BaseModel):
     environment: dict[str, str] = Field(default_factory=dict)
+
+
+class ProjectSecretRefsUpdate(BaseModel):
     secret_refs: dict[str, str] = Field(default_factory=dict)
+
+
+class ProjectDiscordUpdate(BaseModel):
     discord: ProjectDiscordConfig | None = None
-    is_archived: bool = False
+
+
+class ProjectArchiveUpdate(BaseModel):
+    is_archived: bool
 
 
 class ProjectRead(BaseModel):
@@ -532,6 +587,7 @@ class ProjectRead(BaseModel):
     github_repository: str
     jira_project_key: str
     policy_overrides: dict = Field(default_factory=dict)
+    architecture_docs: ProjectArchitectureDocsConfig | None = None
     environment: dict[str, str] = Field(default_factory=dict)
     secret_refs: dict[str, str] = Field(default_factory=dict)
     discord: ProjectDiscordConfig | None = None
@@ -539,6 +595,47 @@ class ProjectRead(BaseModel):
     is_archived: bool
     created_at: datetime
     updated_at: datetime
+
+
+class ArchitectureDocumentCreate(BaseModel):
+    parent_issue_key: str = Field(min_length=1)
+    issue_summary: str | None = None
+    title: str | None = None
+    canonical_url: str | None = None
+    provider_ref: str | None = None
+
+
+class ArchitectureDocumentUpdate(BaseModel):
+    title: str = Field(min_length=1)
+    status: Literal["draft", "ready", "superseded"]
+    content_markdown: str | None = None
+    canonical_url: str | None = None
+    provider_ref: str | None = None
+
+
+class ArchitectureDocumentRead(BaseModel):
+    document_id: str
+    tenant_id: str
+    project_id: str
+    parent_issue_key: str
+    provider: Literal["internal", "confluence"]
+    title: str
+    status: Literal["draft", "ready", "superseded"]
+    is_active: bool
+    canonical_url: str
+    provider_ref: str | None = None
+    knowledge_asset_id: str | None = None
+    content_markdown: str | None = None
+    metadata: dict = Field(default_factory=dict)
+    created_by: str | None = None
+    updated_by: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ArchitectureDocumentPageRead(BaseModel):
+    items: list[ArchitectureDocumentRead] = Field(default_factory=list)
+    total: int
 
 
 class ProjectInstallWrite(BaseModel):
@@ -590,733 +687,6 @@ class ProjectInstallRequestsRead(BaseModel):
 
 class ProjectInstallRequestUpdate(BaseModel):
     status: str = Field(min_length=1)
-
-
-class ProjectAppCreate(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    name: str = Field(min_length=1, max_length=255)
-    slug: str = Field(min_length=1, max_length=255)
-    source_path: str = Field(default=".")
-    detection_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
-    detected_runtime: str | None = None
-    detected_language: str | None = None
-    analysis_source: str | None = None
-    build_strategy: Literal["dockerfile", "docker_compose", "nixpacks"] | None = None
-    exposed_port: int | None = Field(default=None, ge=1, le=65535)
-    healthcheck: str | None = None
-    start_command: str | None = None
-    env_schema_json: dict[str, object] = Field(default_factory=dict)
-    secret_schema_json: dict[str, object] = Field(default_factory=dict)
-    deployment_config: ProjectDeploymentConfigWrite = Field(default_factory=lambda: ProjectDeploymentConfigWrite())
-
-    @field_validator("slug")
-    @classmethod
-    def normalize_slug(cls, value: object) -> str:
-        return _normalize_app_slug(value)
-
-    @field_validator("source_path")
-    @classmethod
-    def normalize_source_path(cls, value: object) -> str:
-        return _normalize_repo_relative_path(value)
-
-    @field_validator("detected_runtime", "detected_language", "analysis_source", "build_strategy", "healthcheck", "start_command")
-    @classmethod
-    def normalize_optional_strings(cls, value: object) -> str | None:
-        return _normalize_optional_string(value)
-
-
-class ProjectAppUpdate(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    name: str | None = Field(default=None, min_length=1, max_length=255)
-    slug: str | None = Field(default=None, min_length=1, max_length=255)
-    source_path: str | None = None
-    detection_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
-    detected_runtime: str | None = None
-    detected_language: str | None = None
-    analysis_source: str | None = None
-    build_strategy: Literal["dockerfile", "docker_compose", "nixpacks"] | None = None
-    exposed_port: int | None = Field(default=None, ge=1, le=65535)
-    healthcheck: str | None = None
-    start_command: str | None = None
-    env_schema_json: dict[str, object] | None = None
-    secret_schema_json: dict[str, object] | None = None
-    deployment_config: ProjectDeploymentConfigWrite | None = None
-
-    @field_validator("slug")
-    @classmethod
-    def normalize_slug(cls, value: object) -> str | None:
-        if value is None:
-            return None
-        return _normalize_app_slug(value)
-
-    @field_validator("source_path")
-    @classmethod
-    def normalize_source_path(cls, value: object) -> str | None:
-        if value is None:
-            return None
-        return _normalize_repo_relative_path(value)
-
-    @field_validator("detected_runtime", "detected_language", "analysis_source", "build_strategy", "healthcheck", "start_command")
-    @classmethod
-    def normalize_optional_strings(cls, value: object) -> str | None:
-        return _normalize_optional_string(value)
-
-
-class ProjectAppRead(BaseModel):
-    app_id: str
-    tenant_id: str
-    project_id: str
-    name: str
-    slug: str
-    source_path: str
-    detection_confidence: float | None = None
-    detected_runtime: str | None = None
-    detected_language: str | None = None
-    analysis_source: str | None = None
-    build_strategy: Literal["dockerfile", "docker_compose", "nixpacks"] | None = None
-    exposed_port: int | None = None
-    healthcheck: str | None = None
-    start_command: str | None = None
-    env_schema_json: dict[str, object] = Field(default_factory=dict)
-    secret_schema_json: dict[str, object] = Field(default_factory=dict)
-    deployment_config: ProjectDeploymentConfigRead = Field(default_factory=lambda: ProjectDeploymentConfigRead())
-    status: Literal["draft", "needs_pr_merge", "ready", "deploying", "live", "failed"]
-    created_at: datetime
-    updated_at: datetime
-
-
-class ProjectAppAnalysisRunStart(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    planner_version: str | None = None
-
-    @field_validator("planner_version")
-    @classmethod
-    def normalize_optional_strings(cls, value: object) -> str | None:
-        return _normalize_optional_string(value)
-
-
-class ProjectAppAnalysisRunRead(BaseModel):
-    run_id: str
-    tenant_id: str
-    project_id: str
-    status: Literal["queued", "running", "completed", "failed"]
-    planner_version: str | None = None
-    request_payload: dict[str, object] = Field(default_factory=dict)
-    result_payload: dict[str, object] = Field(default_factory=dict)
-    error: str | None = None
-    created_at: datetime
-    started_at: datetime | None = None
-    completed_at: datetime | None = None
-    updated_at: datetime
-
-
-class TenantDeploymentsOverviewSummaryRead(BaseModel):
-    total_apps: int = 0
-    draft_count: int = 0
-    needs_pr_merge_count: int = 0
-    ready_count: int = 0
-    deploying_count: int = 0
-    live_count: int = 0
-    failed_count: int = 0
-
-
-class TenantDeploymentsOverviewFailureRead(BaseModel):
-    tenant_id: str
-    tenant_name: str | None = None
-    project_id: str
-    project_name: str
-    app_id: str
-    app_name: str
-    slug: str
-    source_path: str | None = None
-    status: str
-    last_error: str | None = None
-    last_release_id: str | None = None
-    updated_at: datetime
-
-
-class TenantDeploymentsOverviewAppRead(BaseModel):
-    tenant_id: str
-    tenant_name: str | None = None
-    project_id: str
-    project_name: str
-    app_id: str
-    app_name: str
-    slug: str
-    source_path: str | None = None
-    status: str
-    detection_confidence: float | None = None
-    detected_runtime: str | None = None
-    detected_language: str | None = None
-    build_strategy: str | None = None
-    last_release_status: str | None = None
-    last_error: str | None = None
-    updated_at: datetime
-
-
-class TenantDeploymentsOverviewRead(BaseModel):
-    summary: TenantDeploymentsOverviewSummaryRead = Field(default_factory=TenantDeploymentsOverviewSummaryRead)
-    latest_failures: list[TenantDeploymentsOverviewFailureRead] = Field(default_factory=list)
-    apps: list[TenantDeploymentsOverviewAppRead] = Field(default_factory=list)
-    generated_at: datetime | None = None
-
-
-class TenantDeploymentPlaneWrite(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    provider: Literal["internal_coolify"] = "internal_coolify"
-    infrastructure_provider: Literal["aws", "hetzner"] | None = None
-    region: str | None = None
-    base_domain: str | None = None
-    platform_subdomain: str | None = None
-    api_base_url: str | None = None
-    coolify_project_uuid: str | None = None
-    coolify_environment_name: str | None = None
-    coolify_server_uuid: str | None = None
-    coolify_destination_uuid: str | None = None
-    managed_host_id: str | None = None
-    secret_refs: dict[str, str] = Field(default_factory=dict)
-    state: Literal["unconfigured", "provisioning", "active", "degraded", "paused", "failed"] = "unconfigured"
-    last_error: str | None = None
-
-    @field_validator(
-        "region",
-        "base_domain",
-        "platform_subdomain",
-        "api_base_url",
-        "coolify_project_uuid",
-        "coolify_environment_name",
-        "coolify_server_uuid",
-        "coolify_destination_uuid",
-        "managed_host_id",
-        "last_error",
-    )
-    @classmethod
-    def normalize_optional_strings(cls, value: object) -> str | None:
-        return _normalize_optional_string(value)
-
-    @field_validator("secret_refs")
-    @classmethod
-    def normalize_secret_refs(cls, value: object) -> dict[str, str]:
-        return _normalize_string_map(value)
-
-
-class TenantDeploymentPlaneRead(TenantDeploymentPlaneWrite):
-    pass
-
-
-class DeploymentHostCreate(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    label: str
-    provider: Literal["internal_coolify"] = "internal_coolify"
-    infrastructure_provider: Literal["aws", "hetzner"] | None = None
-    region: str | None = None
-    capabilities: list[str] = Field(default_factory=list)
-
-    @field_validator("label")
-    @classmethod
-    def normalize_label(cls, value: object) -> str:
-        return _normalize_required_string(value)
-
-    @field_validator("infrastructure_provider", "region")
-    @classmethod
-    def normalize_optional_host_strings(cls, value: object) -> str | None:
-        return _normalize_optional_string(value)
-
-    @field_validator("capabilities")
-    @classmethod
-    def normalize_capabilities(cls, value: object) -> list[str]:
-        normalized: list[str] = []
-        if not isinstance(value, list):
-            return normalized
-        for item in value:
-            capability = _normalize_lower_string(item)
-            if capability and capability not in normalized:
-                normalized.append(capability)
-        return normalized
-
-
-class DeploymentHostRead(BaseModel):
-    host_id: str
-    label: str
-    provider: str
-    infrastructure_provider: str | None = None
-    region: str | None = None
-    capabilities: list[str] = Field(default_factory=list)
-    agent_version: str | None = None
-    metadata: dict[str, object] = Field(default_factory=dict)
-    state: Literal["provisioning", "active", "degraded", "offline", "retired"]
-    registered_at: datetime | None = None
-    last_seen_at: datetime | None = None
-    created_at: datetime
-    updated_at: datetime
-
-
-class DeploymentHostBootstrapRead(BaseModel):
-    host: DeploymentHostRead
-    bootstrap_token: str
-
-
-class DeploymentHostRegistrationRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    bootstrap_token: str
-    agent_version: str | None = None
-    advertised_capabilities: list[str] = Field(default_factory=list)
-
-    @field_validator("bootstrap_token", "agent_version")
-    @classmethod
-    def normalize_required_registration_strings(cls, value: object, info: ValidationInfo) -> str | None:
-        normalized = _normalize_optional_string(value)
-        if info.field_name == "bootstrap_token":
-            if normalized is None:
-                raise ValueError("bootstrap_token is required")
-            return normalized
-        return normalized
-
-    @field_validator("advertised_capabilities")
-    @classmethod
-    def normalize_advertised_capabilities(cls, value: object) -> list[str]:
-        return DeploymentHostCreate.normalize_capabilities(value)
-
-
-class DeploymentHostRegistrationRead(BaseModel):
-    host: DeploymentHostRead
-    access_token: str
-
-
-class DeploymentHostHeartbeatWrite(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    agent_version: str | None = None
-    advertised_capabilities: list[str] = Field(default_factory=list)
-    state: Literal["active", "degraded"] = "active"
-
-    @field_validator("agent_version")
-    @classmethod
-    def normalize_agent_version(cls, value: object) -> str | None:
-        return _normalize_optional_string(value)
-
-    @field_validator("advertised_capabilities")
-    @classmethod
-    def normalize_advertised_capabilities(cls, value: object) -> list[str]:
-        return DeploymentHostCreate.normalize_capabilities(value)
-
-
-class DeploymentHostCommandRead(BaseModel):
-    command_id: str
-    host_id: str
-    tenant_id: str | None = None
-    project_id: str | None = None
-    app_id: str | None = None
-    restore_run_id: str | None = None
-    kind: str
-    status: Literal["queued", "claimed", "running", "succeeded", "failed", "expired", "canceled"]
-    claim_id: str | None = None
-    payload: dict[str, object] = Field(default_factory=dict)
-    result: dict[str, object] = Field(default_factory=dict)
-    last_error: str | None = None
-    available_at: datetime
-    claimed_at: datetime | None = None
-    started_at: datetime | None = None
-    completed_at: datetime | None = None
-    created_at: datetime
-    updated_at: datetime
-
-
-class DeploymentHostCommandClaimRead(BaseModel):
-    command: DeploymentHostCommandRead | None = None
-
-
-class DeploymentHostCommandStartWrite(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    claim_id: str
-
-    @field_validator("claim_id")
-    @classmethod
-    def normalize_claim_id(cls, value: object) -> str:
-        return _normalize_required_string(value)
-
-
-class DeploymentHostCommandResultWrite(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    claim_id: str
-    status: Literal["succeeded", "failed"]
-    result: dict[str, object] = Field(default_factory=dict)
-    last_error: str | None = None
-
-    @field_validator("claim_id", "last_error")
-    @classmethod
-    def normalize_command_result_strings(cls, value: object, info: ValidationInfo) -> str | None:
-        normalized = _normalize_optional_string(value)
-        if info.field_name == "claim_id":
-            if normalized is None:
-                raise ValueError("claim_id is required")
-            return normalized
-        return normalized
-
-
-class ProjectDeploymentDomainWrite(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    key: str
-    host: str
-    path: str | None = None
-    is_primary: bool = False
-    tls_enabled: bool = True
-    config: dict[str, object] = Field(default_factory=dict)
-
-    @field_validator("host")
-    @classmethod
-    def normalize_host(cls, value: object) -> str:
-        normalized = _normalize_required_string(value).lower()
-        return normalized
-
-    @field_validator("key")
-    @classmethod
-    def normalize_key(cls, value: object) -> str:
-        return _normalize_lower_string(value)
-
-    @field_validator("path")
-    @classmethod
-    def normalize_path(cls, value: object) -> str | None:
-        normalized = _normalize_optional_string(value)
-        if normalized is None:
-            return None
-        if not normalized.startswith("/"):
-            raise ValueError("path must start with /")
-        return normalized
-
-    @model_serializer(mode="plain")
-    def serialize_sparse(self) -> dict[str, object]:
-        serialized = {
-            "key": self.key,
-            "host": self.host,
-        }
-        if self.path is not None:
-            serialized["path"] = self.path
-        if self.is_primary:
-            serialized["is_primary"] = self.is_primary
-        if self.tls_enabled is not True:
-            serialized["tls_enabled"] = self.tls_enabled
-        if self.config:
-            serialized["config"] = self.config
-        return serialized
-
-
-class ProjectDeploymentResourceWrite(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    key: str
-    kind: str
-    name: str | None = None
-    config: dict[str, object] = Field(default_factory=dict)
-
-    @field_validator("key")
-    @classmethod
-    def normalize_key(cls, value: object) -> str:
-        return _normalize_lower_string(value)
-
-    @field_validator("kind")
-    @classmethod
-    def normalize_kind(cls, value: object) -> str:
-        return _normalize_lower_string(value)
-
-    @field_validator("name")
-    @classmethod
-    def normalize_name(cls, value: object) -> str | None:
-        return _normalize_optional_string(value)
-
-    @model_serializer(mode="plain")
-    def serialize_sparse(self) -> dict[str, object]:
-        serialized = {
-            "key": self.key,
-            "kind": self.kind,
-        }
-        if self.name is not None:
-            serialized["name"] = self.name
-        if self.config:
-            serialized["config"] = self.config
-        return serialized
-
-
-class ProjectDeploymentBackupPolicyWrite(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    key: str
-    resource_key: str
-    enabled: bool = True
-    schedule: str | None = None
-    retention_days: int | None = Field(default=None, ge=1)
-    config: dict[str, object] = Field(default_factory=dict)
-
-    @field_validator("key", "resource_key")
-    @classmethod
-    def normalize_keys(cls, value: object) -> str:
-        return _normalize_lower_string(value)
-
-    @field_validator("schedule")
-    @classmethod
-    def normalize_schedule(cls, value: object) -> str | None:
-        return _normalize_optional_string(value)
-
-    @model_serializer(mode="plain")
-    def serialize_sparse(self) -> dict[str, object]:
-        serialized = {
-            "key": self.key,
-            "resource_key": self.resource_key,
-        }
-        if self.enabled is not True:
-            serialized["enabled"] = self.enabled
-        if self.schedule is not None:
-            serialized["schedule"] = self.schedule
-        if self.retention_days is not None:
-            serialized["retention_days"] = self.retention_days
-        if self.config:
-            serialized["config"] = self.config
-        return serialized
-
-
-class ProjectDeploymentConfigWrite(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    enabled: bool = True
-    environment_name: str | None = None
-    source_strategy: Literal["dockerfile", "docker_compose"] | None = None
-    domains: list[ProjectDeploymentDomainWrite] = Field(default_factory=list)
-    resources: list[ProjectDeploymentResourceWrite] = Field(default_factory=list)
-    backup_policies: list[ProjectDeploymentBackupPolicyWrite] = Field(default_factory=list)
-
-    @field_validator("environment_name")
-    @classmethod
-    def normalize_environment_name(cls, value: object) -> str | None:
-        return _normalize_optional_string(value)
-
-    @field_validator("source_strategy")
-    @classmethod
-    def normalize_source_strategy(cls, value: object) -> str | None:
-        normalized = _normalize_optional_string(value)
-        if normalized is None:
-            return None
-        lowered = normalized.lower()
-        if lowered not in {"dockerfile", "docker_compose"}:
-            raise ValueError("source_strategy must be dockerfile or docker_compose")
-        return lowered
-
-    @model_validator(mode="after")
-    def validate_relationships(self) -> "ProjectDeploymentConfigWrite":
-        domain_keys: set[str] = set()
-        hosts: set[str] = set()
-        for domain in self.domains:
-            if domain.key in domain_keys:
-                raise ValueError(f"Duplicate deployment domain key: {domain.key}")
-            domain_keys.add(domain.key)
-            normalized_host = domain.host.lower()
-            if normalized_host in hosts:
-                raise ValueError(f"Duplicate deployment domain host: {domain.host}")
-            hosts.add(normalized_host)
-
-        resource_keys: set[str] = set()
-        for resource in self.resources:
-            if resource.key in resource_keys:
-                raise ValueError(f"Duplicate deployment resource key: {resource.key}")
-            resource_keys.add(resource.key)
-
-        backup_keys: set[str] = set()
-        for backup_policy in self.backup_policies:
-            if backup_policy.key in backup_keys:
-                raise ValueError(f"Duplicate deployment backup policy key: {backup_policy.key}")
-            backup_keys.add(backup_policy.key)
-            if backup_policy.resource_key not in resource_keys:
-                raise ValueError(
-                    f"Backup policy '{backup_policy.key}' references unknown resource '{backup_policy.resource_key}'"
-                )
-        return self
-
-
-class ProjectDeploymentConfigRead(ProjectDeploymentConfigWrite):
-    pass
-
-
-class ProjectDeploymentReleaseCreate(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    app_id: str | None = None
-    git_ref: str | None = None
-    commit_sha: str | None = None
-    reason: str | None = None
-
-    @field_validator("app_id", "git_ref", "commit_sha", "reason")
-    @classmethod
-    def normalize_optional_strings(cls, value: object) -> str | None:
-        return _normalize_optional_string(value)
-
-
-class ProjectDeploymentReleaseRead(BaseModel):
-    release_id: str
-    tenant_id: str
-    project_id: str
-    app_id: str | None = None
-    provider: str
-    status: str
-    environment_name: str | None = None
-    source_strategy: str | None = None
-    git_ref: str | None = None
-    commit_sha: str | None = None
-    requested_by_user_id: str | None = None
-    deployment_snapshot: dict[str, object] = Field(default_factory=dict)
-    provider_context: dict[str, object] = Field(default_factory=dict)
-    last_error: str | None = None
-    requested_at: datetime
-    started_at: datetime | None = None
-    completed_at: datetime | None = None
-    created_at: datetime
-    updated_at: datetime
-
-
-class ProjectDeploymentReleaseStatusUpdate(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    status: Literal["queued", "provisioning", "deploying", "live", "failed", "rolled_back"]
-    last_error: str | None = None
-    deployment_uuid: str | None = None
-
-    @field_validator("last_error", "deployment_uuid")
-    @classmethod
-    def normalize_optional_strings(cls, value: object) -> str | None:
-        return _normalize_optional_string(value)
-
-
-class ProjectDeploymentResourceApplyRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    resource_keys: list[str] = Field(default_factory=list)
-
-    @field_validator("resource_keys")
-    @classmethod
-    def normalize_resource_keys(cls, value: object) -> list[str]:
-        return _normalize_unique_lower_key_list(value)
-
-
-class ProjectDeploymentDomainApplyRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    domain_keys: list[str] = Field(default_factory=list)
-
-    @field_validator("domain_keys")
-    @classmethod
-    def normalize_domain_keys(cls, value: object) -> list[str]:
-        return _normalize_unique_lower_key_list(value)
-
-
-class ProjectDeploymentBackupApplyRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    backup_keys: list[str] = Field(default_factory=list)
-
-    @field_validator("backup_keys")
-    @classmethod
-    def normalize_backup_keys(cls, value: object) -> list[str]:
-        return _normalize_unique_lower_key_list(value)
-
-
-class ProjectDeploymentBackupTriggerRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    backup_keys: list[str] = Field(default_factory=list)
-
-    @field_validator("backup_keys")
-    @classmethod
-    def normalize_backup_keys(cls, value: object) -> list[str]:
-        return _normalize_unique_lower_key_list(value)
-
-
-class ProjectDeploymentBackupRestoreRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    backup_key: str
-    resource_key: str
-    execution_uuid: str
-    confirmation_value: str
-    backup_uuid: str | None = None
-
-    @field_validator("backup_key", "resource_key", "execution_uuid", "confirmation_value", "backup_uuid")
-    @classmethod
-    def normalize_optional_strings(cls, value: object) -> str | None:
-        return _normalize_optional_string(value)
-
-
-class ProjectDeploymentBackupExecutionRead(BaseModel):
-    execution_uuid: str
-    status: str | None = None
-    created_at: datetime | None = None
-    started_at: datetime | None = None
-    completed_at: datetime | None = None
-    artifact_path: str | None = None
-    file_name: str | None = None
-    details: dict[str, object] = Field(default_factory=dict)
-
-
-class ProjectDeploymentBackupExecutionListRead(BaseModel):
-    backup_key: str
-    resource_key: str
-    backup_uuid: str | None = None
-    database_uuid: str | None = None
-    executions: list[ProjectDeploymentBackupExecutionRead] = Field(default_factory=list)
-
-
-class ProjectDeploymentRestoreRunRead(BaseModel):
-    restore_run_id: str
-    tenant_id: str
-    project_id: str
-    app_id: str
-    host_id: str | None = None
-    command_id: str | None = None
-    backup_policy_key: str
-    resource_key: str
-    backup_uuid: str | None = None
-    execution_uuid: str
-    database_type: Literal["postgres", "mysql", "mariadb"]
-    database_uuid: str
-    restore_mode: Literal["replace"]
-    requested_by_user_id: str | None = None
-    confirmation_value: str
-    execution_payload: dict[str, object] = Field(default_factory=dict)
-    status: Literal["queued", "running", "succeeded", "failed"]
-    last_error: str | None = None
-    created_at: datetime
-    started_at: datetime | None = None
-    completed_at: datetime | None = None
-    updated_at: datetime
-
-
-class ProjectDeploymentOperationItemRead(BaseModel):
-    key: str
-    kind: str | None = None
-    status: Literal["applied", "skipped", "unsupported", "failed"]
-    provider_uuid: str | None = None
-    message: str | None = None
-    details: dict[str, object] = Field(default_factory=dict)
-
-
-class ProjectDeploymentOperationRead(BaseModel):
-    operation: Literal["apply_resources", "apply_domains", "apply_backups", "trigger_backups", "restore_backups"]
-    tenant_id: str
-    project_id: str
-    provider: str
-    application_uuid: str | None = None
-    items: list[ProjectDeploymentOperationItemRead] = Field(default_factory=list)
-    applied_count: int = 0
-    skipped_count: int = 0
-    unsupported_count: int = 0
-    failed_count: int = 0
-    executed_at: datetime
 
 
 class ProjectAutomationWrite(BaseModel):
@@ -1626,7 +996,7 @@ class DiscordInstallStart(BaseModel):
     expires_at: datetime
 
 
-class JiraConnectStart(BaseModel):
+class AtlassianConnectStart(BaseModel):
     authorize_url: str
     expires_at: datetime
 
@@ -1811,28 +1181,378 @@ class RunRead(BaseModel):
     finished_at: datetime | None
 
 
+class WorkflowOperationAttemptRead(BaseModel):
+    attempt_id: str
+    attempt_number: int
+    status: str
+    error_category: str | None = None
+    error_message: str | None = None
+    status_detail: str | None = None
+    retryable: bool = False
+    next_retry_at: datetime | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    work_units: list["WorkflowOperationWorkUnitRead"] = Field(default_factory=list)
+
+
+class WorkflowOperationWorkUnitAttemptRead(BaseModel):
+    work_unit_attempt_id: str
+    attempt_number: int
+    operation_attempt_id: str
+    status: str
+    error_category: str | None = None
+    error_message: str | None = None
+    next_retry_at: datetime | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+
+class WorkflowOperationWorkUnitRead(BaseModel):
+    work_unit_id: str
+    unit_key: str
+    unit_kind: str
+    idempotency_key: str
+    input_fingerprint: str
+    status: str
+    error_category: str | None = None
+    error_message: str | None = None
+    completed_at: datetime | None = None
+    attempts: list[WorkflowOperationWorkUnitAttemptRead] = Field(default_factory=list)
+
+
+class WorkflowObservabilityEventRead(BaseModel):
+    event_id: str
+    event_sequence: int | None = None
+    source: Literal["audit", "telemetry"]
+    level: str
+    event_kind: str
+    message: str
+    source_component: str | None = None
+    run_id: str | None = None
+    operation_id: str | None = None
+    attempt_id: str | None = None
+    agent_id: str | None = None
+    invocation_id: str | None = None
+    stage: str | None = None
+    attempt: int | None = None
+    stream: str | None = None
+    payload: dict[str, object] = Field(default_factory=dict)
+    recorded_at: datetime
+
+
+class WorkflowTranscriptEntryRead(BaseModel):
+    entry_id: str
+    recorded_at: datetime
+    level: str
+    title: str
+    message: str
+    source_component: str | None = None
+    payload: dict[str, object] = Field(default_factory=dict)
+
+
+class WorkflowTranscriptSectionRead(BaseModel):
+    kind: Literal["summary", "runtime", "prompts", "tool_calls", "external_requests", "external_responses", "outcome"]
+    label: str
+    entries: list[WorkflowTranscriptEntryRead] = Field(default_factory=list)
+
+
+class WorkflowStepAttemptTranscriptRead(BaseModel):
+    attempt_id: str
+    attempt_number: int
+    status: str
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    duration_ms: int | None = None
+    error_category: str | None = None
+    failure_message: str | None = None
+    status_detail: str | None = None
+    recommended_next_action: str | None = None
+    sections: list[WorkflowTranscriptSectionRead] = Field(default_factory=list)
+
+
+class WorkflowStepTranscriptRead(BaseModel):
+    execution_id: str
+    operation_id: str
+    operation_label: str
+    current_status: str
+    source: Literal["audit", "telemetry"]
+    attempts: list[WorkflowStepAttemptTranscriptRead] = Field(default_factory=list)
+
+
+class AuditEventExportRequest(BaseModel):
+    tenant_id: str
+    project_id: str | None = None
+    execution_id: str | None = None
+    operation_id: str | None = None
+    run_id: str | None = None
+    issue_key: str | None = None
+    recorded_after: datetime | None = None
+    recorded_before: datetime | None = None
+
+
+class WorkflowOperationRead(BaseModel):
+    operation_id: str
+    run_id: str | None = None
+    operation_type: str
+    status: str
+    label: str | None = None
+    description: str | None = None
+    required: bool = True
+    kind: str = "business"
+    after: list[str] = Field(default_factory=list)
+    supports: list[str] = Field(default_factory=list)
+    definition_only: bool = False
+    target_system: str | None = None
+    target_ref: str | None = None
+    summary: str | None = None
+    can_retry: bool = False
+    retry_unavailable_reason: str | None = None
+    can_restart: bool = False
+    restart_unavailable_reason: str | None = None
+    attempts: list[WorkflowOperationAttemptRead] = Field(default_factory=list)
+    events: list[WorkflowObservabilityEventRead] = Field(default_factory=list)
+
+
+class WorkflowRetryPolicyRead(BaseModel):
+    manual_retry_enabled: bool = True
+    max_attempts: int = Field(default=1, ge=1)
+    initial_interval_seconds: int = Field(default=0, ge=0)
+    max_interval_seconds: int = Field(default=0, ge=0)
+    backoff_coefficient: float = Field(default=1.0, ge=1.0)
+
+
+class WorkflowTypeOperationRead(BaseModel):
+    operation_type: str
+    label: str
+    description: str | None = None
+    completion_required: bool = True
+    kind: str = "business"
+    after: list[str] = Field(default_factory=list)
+    supports: list[str] = Field(default_factory=list)
+    required: bool = True
+    retryable: bool = False
+    graph_index: int = 0
+    status: str | None = None
+
+
+class WorkflowTypeLifecycleStateRead(BaseModel):
+    key: str
+    label: str
+    terminal: bool = False
+    waits_for_input: bool = False
+
+
+class WorkflowTypeLifecycleTransitionRead(BaseModel):
+    from_state: str = Field(alias="from")
+    to_state: str
+    label: str
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class WorkflowTypeLifecycleRead(BaseModel):
+    state_path_kind: str = "operation"
+    execution_modes: list[str] = Field(default_factory=list)
+    conditional_paths: list[str] = Field(default_factory=list)
+    states: list[WorkflowTypeLifecycleStateRead] = Field(default_factory=list)
+    transitions: list[WorkflowTypeLifecycleTransitionRead] = Field(default_factory=list)
+
+
+class WorkflowTypeRead(BaseModel):
+    key: str
+    label: str
+    description: str | None = None
+    orchestration_backend: Literal["legacy", "temporal", "database"]
+    retry_policy: WorkflowRetryPolicyRead = Field(default_factory=WorkflowRetryPolicyRead)
+    capabilities: dict[str, object] = Field(default_factory=dict)
+    lifecycle: WorkflowTypeLifecycleRead = Field(default_factory=WorkflowTypeLifecycleRead)
+    operations: list[WorkflowTypeOperationRead] = Field(default_factory=list)
+
+
+class WorkflowExecutionPreviewRead(BaseModel):
+    execution_id: str
+    workflow_id: str
+    source_system: str
+    source_ref: str
+    display_name: str | None = None
+    status: str
+    waiting_on: str | None = None
+    next_step: str | None = None
+    failure_reason: str | None = None
+    created_at: datetime
+    finished_at: datetime | None = None
+
+
+class WorkflowBoardRunSummaryRead(BaseModel):
+    run_id: str
+    workflow_id: str
+    issue_key: str
+    issue_summary: str | None = None
+    status: str
+    created_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+
+class WorkflowBoardItemRead(BaseModel):
+    execution_id: str
+    workflow_id: str
+    workflow_type_key: str
+    tenant_id: str
+    project_id: str | None
+    source_system: str
+    source_ref: str
+    display_name: str | None = None
+    dedupe_scope: str
+    status: str
+    failure_reason: str | None = None
+    pending_input_request_id: str | None = None
+    run_count: int = 0
+    active_run_count: int = 0
+    failed_run_count: int = 0
+    latest_run: WorkflowBoardRunSummaryRead | None = None
+    runs: list[WorkflowBoardRunSummaryRead] = Field(default_factory=list)
+    links: list[WorkflowLinkRead] = Field(default_factory=list)
+    latest_activity_at: datetime
+    created_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    updated_at: datetime
+
+
+class WorkflowTypeSummaryRead(BaseModel):
+    key: str
+    label: str
+    description: str | None = None
+    operation_count: int = 0
+    execution_count: int = 0
+    latest_execution_at: datetime | None = None
+
+
+class WorkflowTypeDetailRead(BaseModel):
+    key: str
+    label: str
+    description: str | None = None
+    orchestration_backend: Literal["legacy", "temporal", "database"]
+    retry_policy: WorkflowRetryPolicyRead = Field(default_factory=WorkflowRetryPolicyRead)
+    capabilities: dict[str, object] = Field(default_factory=dict)
+    lifecycle: WorkflowTypeLifecycleRead = Field(default_factory=WorkflowTypeLifecycleRead)
+    operations: list[WorkflowTypeOperationRead] = Field(default_factory=list)
+    execution_count: int = 0
+    latest_execution_at: datetime | None = None
+    recent_executions: list[WorkflowExecutionPreviewRead] = Field(default_factory=list)
+
+
+class WorkflowStatePathEntryRead(BaseModel):
+    key: str
+    label: str
+    status: str
+    recorded_at: datetime | None = None
+    detail: str | None = None
+
+
+class WorkflowLinkRead(BaseModel):
+    kind: str
+    label: str
+    ref: str | None = None
+    url: str | None = None
+    status: str | None = None
+
+
 class WorkflowRead(BaseModel):
+    execution_id: str
     workflow_id: str
     tenant_id: str
     project_id: str | None
-    issue_key: str
-    issue_summary: str | None = None
+    source_system: str
+    source_ref: str
+    display_name: str | None = None
     repo_url: str | None = None
     branch: str | None = None
     pr_url: str | None = None
+    orchestration_backend: Literal["legacy", "temporal", "database"]
     dedupe_scope: str
     status: str
+    workflow_type: WorkflowTypeRead
+    current_state: str
+    waiting_on: str | None = None
+    next_step: str | None = None
     active_run_id: str | None = None
     latest_checkpoint_id: str | None = None
     source_workflow_id: str | None = None
     source_run_id: str | None = None
-    blocked_reason: str | None = None
+    failure_reason: str | None = None
     pending_input_request_id: str | None = None
     latest_checkpoint_kind: str | None = None
+    state_path: list[WorkflowStatePathEntryRead] = Field(default_factory=list)
+    completed_steps: list[str] = Field(default_factory=list)
+    failed_steps: list[str] = Field(default_factory=list)
+    pending_steps: list[str] = Field(default_factory=list)
+    retrying_steps: list[str] = Field(default_factory=list)
+    conditional_branches_taken: list[str] = Field(default_factory=list)
+    conditional_branches_available: list[str] = Field(default_factory=list)
+    can_resume: bool = False
+    resume_unavailable_reason: str | None = None
+    links: list[WorkflowLinkRead] = Field(default_factory=list)
+    operations: list[WorkflowOperationRead] = Field(default_factory=list)
     runs: list[RunRead] = Field(default_factory=list)
     created_at: datetime
     started_at: datetime | None
     finished_at: datetime | None
+
+
+class WorkflowOperationRetryRead(BaseModel):
+    workflow: WorkflowRead
+    started_attempt: WorkflowOperationAttemptRead | None = None
+
+
+class WorkflowExecutionStartRequest(BaseModel):
+    workflow_type_key: str
+    tenant_id: str
+    project_id: str | None = None
+    input: dict[str, object] = Field(default_factory=dict)
+
+
+class WorkflowExecutionStartRead(BaseModel):
+    execution_id: str
+    workflow_id: str
+    workflow_type_key: str
+    status: str
+    started_attempt_id: str | None = None
+
+
+class StartWorkIssueRead(BaseModel):
+    issue_key: str
+    run_id: str | None = None
+    status: str
+    reason: str | None = None
+
+
+class WorkflowStartWorkRead(BaseModel):
+    workflow: WorkflowRead
+    queued: list[StartWorkIssueRead] = Field(default_factory=list)
+    skipped: list[StartWorkIssueRead] = Field(default_factory=list)
+    promoted_issue_keys: list[str] = Field(default_factory=list)
+    started_attempt: WorkflowOperationAttemptRead | None = None
+
+
+class WorkflowStartWorkRequest(BaseModel):
+    action_token: str | None = None
+
+
+class StartEngineeringPreviewRead(BaseModel):
+    tenant_id: str
+    project_id: str
+    execution_id: str
+    issue_key: str
+    display_name: str | None = None
+    workflow_status: str
+    can_start: bool
+    unavailable_reason: str | None = None
+
+
+class WorkflowOperationRestartRequest(BaseModel):
+    restart_reason: str = Field(default="Restarted stale running workflow operation attempt.")
 
 
 class WorkflowAttemptCreateRequest(BaseModel):
@@ -1859,7 +1579,9 @@ class RunEventRead(BaseModel):
     recorded_at: datetime
 
 
-class RunLogEventRead(BaseModel):
+class LoggingPaneEventRead(BaseModel):
+    event_id: str
+    event_sequence: int | None = None
     run_id: str | None = None
     issue_key: str | None = None
     project_id: str | None = None
@@ -1921,6 +1643,32 @@ class AlertEvaluationRead(BaseModel):
     evaluated_at: datetime
     cooldown_seconds: int
     alerts: list[AlertRead] = Field(default_factory=list)
+
+
+class AdminNotificationRead(BaseModel):
+    notification_id: str
+    tenant_id: str | None = None
+    project_id: str | None = None
+    scope_type: str
+    scope_id: str | None = None
+    source: str
+    kind: str
+    severity: str
+    title: str
+    detail: str
+    action_label: str | None = None
+    action_path: str | None = None
+    fingerprint: str
+    status: str
+    context: dict[str, object] = Field(default_factory=dict)
+    first_emitted_at: datetime
+    last_emitted_at: datetime
+    acknowledged_at: datetime | None = None
+    resolved_at: datetime | None = None
+
+
+class AdminNotificationListRead(BaseModel):
+    notifications: list[AdminNotificationRead] = Field(default_factory=list)
 
 
 class TenantIntegrationHealthRead(BaseModel):
@@ -2019,6 +1767,7 @@ class PlatformServiceStatusRead(BaseModel):
     summary: str
     updated_at: datetime | None = None
     capabilities: list[str] = Field(default_factory=list)
+    runtime_dependencies: dict[str, dict[str, object]] = Field(default_factory=dict)
     instances: list[PlatformServiceInstanceRead] = Field(default_factory=list)
 
 
@@ -2032,11 +1781,11 @@ class WebhookQueueJobRead(BaseModel):
     tenant_id: str | None = None
     project_id: str | None = None
     subject_key: str
+    related_run_id: str | None = None
     dedupe_key: str | None = None
     request_id: str
     event_type: str | None = None
     status: str
-    owner_id: str | None = None
     lease_expires_at: datetime | None = None
     available_at: datetime
     attempt_count: int

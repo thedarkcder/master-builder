@@ -19,7 +19,7 @@ type FormState = {
   llamaCtxSize: string;
   adminPassword: string;
   githubState: string;
-  jiraState: string;
+  atlassianState: string;
   encKey: string;
   nextAuthSecret: string;
   emailFrom: string;
@@ -44,7 +44,7 @@ const defaults: FormState = {
   llamaCtxSize: "8192",
   adminPassword: "",
   githubState: "",
-  jiraState: "",
+  atlassianState: "",
   encKey: "",
   nextAuthSecret: "",
   emailFrom: "no-reply@example.com",
@@ -57,7 +57,7 @@ const requiredKeys: (keyof FormState)[] = [
   "sshKey",
   "adminPassword",
   "githubState",
-  "jiraState",
+  "atlassianState",
   "encKey",
   "nextAuthSecret",
   "emailFrom",
@@ -94,7 +94,7 @@ export function HetznerSetupForm() {
       `export LLAMA_CPP_CTX_SIZE=${quote(state.llamaCtxSize)}`,
       `export ORCHESTRATOR_ADMIN_PASSWORD=${quote(state.adminPassword)}`,
       `export ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET=${quote(state.githubState)}`,
-      `export ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET=${quote(state.jiraState)}`,
+      `export ORCHESTRATOR_ATLASSIAN_OAUTH_STATE_SECRET=${quote(state.atlassianState)}`,
       `export ORCHESTRATOR_SECRETS_ENCRYPTION_KEY=${quote(state.encKey)}`,
       `export NEXTAUTH_SECRET=${quote(state.nextAuthSecret)}`,
       `export ORCHESTRATOR_EMAIL_FROM_ADDRESS=${quote(state.emailFrom)}`,
@@ -120,7 +120,7 @@ export function HetznerSetupForm() {
       `  - export LLAMA_CPP_CTX_SIZE=${quote(state.llamaCtxSize)}`,
       `  - export ORCHESTRATOR_ADMIN_PASSWORD=${quote(state.adminPassword)}`,
       `  - export ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET=${quote(state.githubState)}`,
-      `  - export ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET=${quote(state.jiraState)}`,
+      `  - export ORCHESTRATOR_ATLASSIAN_OAUTH_STATE_SECRET=${quote(state.atlassianState)}`,
       `  - export ORCHESTRATOR_SECRETS_ENCRYPTION_KEY=${quote(state.encKey)}`,
       `  - export NEXTAUTH_SECRET=${quote(state.nextAuthSecret)}`,
       `  - export ORCHESTRATOR_EMAIL_FROM_ADDRESS=${quote(state.emailFrom)}`,
@@ -178,7 +178,7 @@ export function HetznerSetupForm() {
           {input("llamaCtxSize", "LLAMA_CPP_CTX_SIZE")}
           {input("adminPassword", "ORCHESTRATOR_ADMIN_PASSWORD", "password")}
           {input("githubState", "ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET", "password")}
-          {input("jiraState", "ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET", "password")}
+          {input("atlassianState", "ORCHESTRATOR_ATLASSIAN_OAUTH_STATE_SECRET", "password")}
           {input("encKey", "ORCHESTRATOR_SECRETS_ENCRYPTION_KEY", "password")}
           {input("nextAuthSecret", "NEXTAUTH_SECRET", "password")}
           {input("emailFrom", "ORCHESTRATOR_EMAIL_FROM_ADDRESS")}

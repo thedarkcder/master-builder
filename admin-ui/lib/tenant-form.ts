@@ -4,9 +4,11 @@ import type {
   JiraConfig,
   PolicyConfig,
   ReposConfig,
+  TenantConfigurationUpdatePayload,
   TenantCreatePayload,
-  TenantRecord,
-  TenantUpdatePayload
+  TenantGithubUpdatePayload,
+  TenantPolicyUpdatePayload,
+  TenantRecord
 } from "@/lib/api";
 
 export type TenantFormValues = {
@@ -20,6 +22,8 @@ export type TenantFormValues = {
   discordEnabled: boolean;
   discord: DiscordConfig;
 };
+
+export type TenantFormPayload = Omit<TenantCreatePayload, "setup_state">;
 
 export function splitCsv(value: string): string[] {
   return value
@@ -79,7 +83,13 @@ export function defaultTenantFormValues(): TenantFormValues {
       knowledge_base_enabled: true,
       knowledge_auto_answer_mode: "aggressive",
       codex_model: null,
-      codex_reasoning_effort: null
+      codex_reasoning_effort: null,
+      observability: {
+        audit_retention_days: 365,
+        audit_export_enabled: true,
+        legal_hold_enabled: false,
+        legal_hold_reason: null
+      }
     },
     discordEnabled: false,
     discord: {
@@ -107,7 +117,15 @@ export function recordToFormValues(record: TenantRecord): TenantFormValues {
     jira: record.jira,
     github: record.github,
     repos: record.repos,
-    policy: record.policy,
+    policy: {
+      ...record.policy,
+      observability: {
+        audit_retention_days: record.policy.observability?.audit_retention_days ?? 365,
+        audit_export_enabled: record.policy.observability?.audit_export_enabled ?? true,
+        legal_hold_enabled: record.policy.observability?.legal_hold_enabled ?? false,
+        legal_hold_reason: record.policy.observability?.legal_hold_reason ?? null,
+      },
+    },
     discordEnabled: Boolean(record.discord),
     discord: normalizedDiscord
   };
@@ -184,7 +202,7 @@ export function toCreatePayload(
 export function toUpdatePayload(
   values: TenantFormValues,
   textFields: TenantFormTextFields
-): TenantUpdatePayload {
+): TenantFormPayload {
   const created = toCreatePayload(values, textFields);
   return {
     name: created.name,
@@ -194,5 +212,40 @@ export function toUpdatePayload(
     repos: created.repos,
     policy: created.policy,
     discord: created.discord
+  };
+}
+
+export function toConfigurationUpdatePayload(values: TenantFormValues): TenantConfigurationUpdatePayload {
+  return {
+    name: values.name.trim()
+  };
+}
+
+export function toGithubUpdatePayload(values: TenantFormValues): TenantGithubUpdatePayload {
+  return {
+    github: {
+      ...values.github,
+      webhook_secret_ref: values.github.webhook_secret_ref?.trim() || null,
+      installation_id: values.github.installation_id?.trim() || null
+    }
+  };
+}
+
+export function toPolicyUpdatePayload(
+  values: TenantFormValues,
+  textFields: TenantFormTextFields
+): TenantPolicyUpdatePayload {
+  return {
+    policy: {
+      ...values.policy,
+      allowed_commands: parseMultiLine(textFields.policyAllowedCommandsText),
+      max_runtime_minutes: Number(values.policy.max_runtime_minutes),
+      max_dev_test_review_loops: Number(values.policy.max_dev_test_review_loops),
+      max_pr_auto_remediation_loops: Number(values.policy.max_pr_auto_remediation_loops),
+      max_concurrent_runs: Number(values.policy.max_concurrent_runs),
+      codex_model: values.policy.codex_model?.trim() || null,
+      codex_reasoning_effort:
+        (values.policy.codex_reasoning_effort?.trim() || null) as PolicyConfig["codex_reasoning_effort"]
+    }
   };
 }

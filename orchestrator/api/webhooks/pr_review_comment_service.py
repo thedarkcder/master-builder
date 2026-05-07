@@ -13,8 +13,8 @@ from orchestrator.api.webhooks.pr_review_publication_state import (
     mark_review_publication_failed,
     mark_review_publication_published,
 )
-from orchestrator.core.pr_review_findings import PrReviewFindingsResult, ReviewFinding
-from orchestrator.core.reviewer import ReviewerSignal
+from orchestrator.core.review.pr_review_findings import PrReviewFindingsResult, ReviewFinding
+from orchestrator.core.review.reviewer import ReviewerSignal
 from orchestrator.tools.github_app import (
     GitHubAppClient,
     PullRequestInlineCommentDraft,

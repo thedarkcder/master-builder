@@ -8,8 +8,8 @@ from orchestrator.core.communications import (
     TransportAction,
 )
 from orchestrator.core.github.transport_executor import GitHubTransportExecutor
-from orchestrator.core.platform_secret_service import resolve_platform_secret_ref
-from orchestrator.core.tenant_secret_service import resolve_scoped_secret_ref
+from orchestrator.core.platform.secret_service import resolve_platform_secret_ref
+from orchestrator.core.platform.tenant_secret_service import resolve_scoped_secret_ref
 from orchestrator.core.workflow.execution_snapshot import load_github_pr_remediation_context_from_plan
 from orchestrator.tools.github_app import github_client_from_tenant_config
 from orchestrator.tools.repo_allowlist import normalize_repo_identifier

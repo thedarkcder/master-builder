@@ -6,7 +6,7 @@ import {
   makeTenant,
   seedAdminSession,
 } from "./support/admin-ui";
-import type { DeploymentHostRecord, TenantDeploymentPlaneRecord } from "../../lib/api";
+import type { DeploymentHostRecord, TenantDeploymentPlaneRecord } from "../../lib/api/deployments";
 
 test.setTimeout(60000);
 

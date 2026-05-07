@@ -20,9 +20,11 @@ Resolved prerequisites: {{ resolved_prerequisites_json }}
 Unresolved prerequisites: {{ unresolved_prerequisites_json }}
 PM outcome: {{ pm_outcome }}
 Answered transient human inputs for this run: {{ human_inputs_json }}
-Allowed tools for this stage: {{ allowed_tools_json }}
+Allowed governed tools for this stage: {{ governed_tools_json }}
+Native Codex tools available directly in this runtime: {{ native_tools_json }}
 
 Structured tool bridge:
+- Use native Codex tools directly when they are available in this runtime. Do not emit tool_request for native Codex tools.
 - To call an allowed governed tool, return JSON only:
   {"type":"tool_request","tool_name":"<allowed tool>","tool_args":{...},"reason":"<optional short reason>"}
 - When implementation is complete, return JSON only:
@@ -44,10 +46,7 @@ Required actions:
 8c. If PR creation required by policy is `true` and `pr_url` is currently missing, you must attempt `github.push_branch` then `github.open_pr` in this attempt before returning blocked or failed.
 9. If a one-time transient human input can unblock work, request it with `run.request_human_input` before returning outcome="waiting_for_input".
 10. If PR creation required by policy is `true`, do not treat implementation as complete until a PR exists and `pr_url` is set.
-11. If you return blocked or waiting_for_input, make `blocker_message` operator-friendly: keep the error concise, then add a short `Troubleshooting:` section with 1-3 concrete fix actions supported by the evidence you observed.
+11. If you return blocked or waiting_for_input, make `blocker_message` operator-friendly: keep the error concise, then add a short `Troubleshooting:` section with 1-3 concrete operator actions supported by the evidence you observed.
 
-Output contract:
-- outcome: "continue" | "waiting_for_input" | "blocked" | "failed".
-- change_summary: array of implemented changes (or concrete blocker facts).
-- pr_url: PR URL string or null.
-- blocker_message: null unless outcome is blocked or waiting_for_input. When non-null, include a short `Troubleshooting:` section with concrete operator actions.
+Return JSON matching this domain model:
+{{ domain_model | tojson(indent=2) }}

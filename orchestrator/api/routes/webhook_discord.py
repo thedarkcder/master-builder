@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from orchestrator.api.dependencies import get_session
 from orchestrator.api.transport_runtime import execute_http_ingress_result, http_json_response_action
 from orchestrator.api.schemas import DiscordCommandRequest
-from orchestrator.core.followup_context_service import (
+from orchestrator.core.pm.followup_context_service import (
     resolve_discord_command_subject_key as _resolve_discord_command_subject_key,
 )
 from orchestrator.api.webhooks.payload_utils import (
@@ -19,8 +19,8 @@ from orchestrator.api.webhooks.payload_utils import (
 )
 from orchestrator.core.communications import IngressResult, TransportEnvelope
 from orchestrator.core.config import get_settings
-from orchestrator.core.tenant_secret_service import resolve_scoped_secret_ref
-from orchestrator.core.webhook_job_queue import (
+from orchestrator.core.platform.tenant_secret_service import resolve_scoped_secret_ref
+from orchestrator.core.webhooks.job_queue import (
     WEBHOOK_TRANSPORT_DISCORD_COMMAND,
     WebhookJobEnqueueRequest,
     enqueue_webhook_job,

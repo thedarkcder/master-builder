@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 from collections.abc import Sequence
 from datetime import datetime, timezone
@@ -8,21 +9,22 @@ from typing import Any
 
 from sqlalchemy import func, select
 
-from orchestrator.core.agent_tools import execute_agent_tool, print_tool_event
+from orchestrator.core.runtime.tools import execute_agent_tool, print_tool_event
 from orchestrator.core.config import get_settings
 from orchestrator.core.deployment_host_agent_runtime import run_deployment_host_agent
 from orchestrator.core.discord.gateway_runtime import run_discord_gateway
 from orchestrator.core.discord.live_voice_gateway_runtime import run_discord_live_voice
-from orchestrator.core.knowledge_prewarm import prewarm_knowledge_dependencies
-from orchestrator.core.knowledge_jira_sync_runtime import run_knowledge_jira_sync
-from orchestrator.core.project_automation_runtime import run_project_automation_runtime
-from orchestrator.core.runs import (
+from orchestrator.core.jira_project_reconciliation.scheduler import run_jira_project_reconciliation_runtime
+from orchestrator.core.knowledge.prewarm import prewarm_knowledge_dependencies
+from orchestrator.core.knowledge.jira_sync_runtime import run_knowledge_jira_sync
+from orchestrator.core.projects.automation_runtime import run_project_automation_runtime
+from orchestrator.core.runs.service import (
     enqueue_run,
     resolve_enqueue_precheck_outcome,
     resolve_precheck_outcome_for_enqueue,
 )
 from orchestrator.core.voice.prewarm import prewarm_voice_dependencies
-from orchestrator.core.workflow.execution_snapshot_migration import migrate_execution_snapshots
+from orchestrator.temporal.worker import run_temporal_worker
 from orchestrator.storage.database_support import ensure_postgres_database_url
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.migrations import run_migrations
@@ -46,32 +48,17 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("worker", help="Run background run worker loop")
     subparsers.add_parser("worker-runs", help="Run background issue-execution worker loop")
     subparsers.add_parser("worker-webhooks", help="Run background webhook worker loop")
-    subparsers.add_parser("worker-deployments", help="Run background deployment reconciliation worker loop")
     subparsers.add_parser("worker-child-runs", help="Run one child issue-execution job")
     subparsers.add_parser("worker-child-webhooks", help="Run one child webhook job")
-    subparsers.add_parser("worker-child-deployments", help="Run one child deployment reconciliation job")
     subparsers.add_parser("deployment-host-agent", help="Run the managed deployment host agent")
+    subparsers.add_parser("temporal-worker", help="Run Temporal workflow worker loop")
     subparsers.add_parser("discord-gateway", help="Run Discord gateway leader loop")
     subparsers.add_parser("discord-live-voice", help="Run Discord live voice leader loop")
     subparsers.add_parser("knowledge-jira-sync", help="Run Jira knowledge sync leader loop")
+    subparsers.add_parser("jira-project-reconciliation", help="Run Jira project reconciliation leader loop")
     subparsers.add_parser("project-automation", help="Run project automation scheduler leader loop")
     subparsers.add_parser("knowledge-prewarm", help="Prewarm knowledge embedding dependencies")
     subparsers.add_parser("migrate", help="Apply DB migrations")
-    snapshot_migrate_parser = subparsers.add_parser(
-        "migrate-execution-snapshots",
-        help="Normalize run/checkpoint execution snapshots to canonical payload shape",
-    )
-    snapshot_migrate_parser.add_argument(
-        "--apply",
-        action="store_true",
-        help="Persist converted payloads (default is dry-run)",
-    )
-    snapshot_migrate_parser.add_argument(
-        "--limit",
-        type=int,
-        default=None,
-        help="Optional per-table row limit for migration scan",
-    )
     subparsers.add_parser("voice-prewarm", help="Prewarm voice model dependencies")
 
     run_parser = subparsers.add_parser("run", help="Queue a manual run for a tenant issue")
@@ -286,37 +273,6 @@ def _handle_knowledge_prewarm() -> int:
     return 0
 
 
-def _handle_execution_snapshot_migration(*, apply: bool, limit: int | None) -> int:
-    settings = get_settings()
-    ensure_postgres_database_url(
-        database_url=settings.database_url,
-        context="CLI runtime",
-        allow_sqlite_for_tests=bool(getattr(settings, "allow_sqlite_for_tests", False)),
-    )
-    session_factory = create_session_factory()
-    with session_factory() as session:
-        report = migrate_execution_snapshots(
-            session=session,
-            apply=apply,
-            limit=limit,
-        )
-    invalid_total = report.invalid_runs + report.invalid_checkpoints
-    payload = {
-        "ok": invalid_total == 0,
-        "apply": apply,
-        "scanned_runs": report.scanned_runs,
-        "converted_runs": report.converted_runs,
-        "invalid_runs": report.invalid_runs,
-        "scanned_checkpoints": report.scanned_checkpoints,
-        "converted_checkpoints": report.converted_checkpoints,
-        "invalid_checkpoints": report.invalid_checkpoints,
-        "invalid_run_ids": list(report.invalid_run_ids),
-        "invalid_checkpoint_ids": list(report.invalid_checkpoint_ids),
-    }
-    print(json.dumps(payload))
-    return 0 if invalid_total == 0 else 1
-
-
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -333,21 +289,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         worker_main(mode="webhooks")
         return 0
 
-    if args.command == "worker-deployments":
-        worker_main(mode="deployments")
-        return 0
-
     if args.command == "worker-child-runs":
         return int(run_worker_child_once(mode="runs"))
 
     if args.command == "worker-child-webhooks":
         return int(run_worker_child_once(mode="webhooks"))
 
-    if args.command == "worker-child-deployments":
-        return int(run_worker_child_once(mode="deployments"))
-
     if args.command == "deployment-host-agent":
         run_deployment_host_agent()
+        return 0
+
+    if args.command == "temporal-worker":
+        asyncio.run(run_temporal_worker())
         return 0
 
     if args.command == "discord-gateway":
@@ -362,6 +315,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         run_knowledge_jira_sync()
         return 0
 
+    if args.command == "jira-project-reconciliation":
+        run_jira_project_reconciliation_runtime()
+        return 0
+
     if args.command == "project-automation":
         run_project_automation_runtime()
         return 0
@@ -372,12 +329,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "migrate":
         run_migrations()
         return 0
-
-    if args.command == "migrate-execution-snapshots":
-        return _handle_execution_snapshot_migration(
-            apply=bool(args.apply),
-            limit=args.limit,
-        )
 
     if args.command == "voice-prewarm":
         return _handle_voice_prewarm()

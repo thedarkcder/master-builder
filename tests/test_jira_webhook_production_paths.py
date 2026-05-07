@@ -9,11 +9,12 @@ import pytest
 from sqlalchemy import select
 
 from orchestrator.core.config import get_settings
-from orchestrator.core.decision_gate import DecisionGateResult
-from orchestrator.core.decision_types import DecisionEngineResult, IngressDecision, resolve_execution_gate_state
-from orchestrator.core.followup_context_service import upsert_followup_context
+from orchestrator.core.decision.gate import DecisionGateResult
+from orchestrator.core.decision.state_machine import resolve_execution_gate_state
+from orchestrator.core.decision.types import DecisionEngineResult, IngressDecision
+from orchestrator.core.pm.followup_context_service import upsert_followup_context
 from orchestrator.core.gtd import GoodToDoValidationResult
-from orchestrator.core.pre_run_check import PreRunCheckResult
+from orchestrator.core.precheck.pre_run_check import PreRunCheckResult
 from orchestrator.core.worker.webhook_job_service import process_next_webhook_job
 from orchestrator.storage.models import DecisionCase, DecisionCycle, DecisionEvidence, FollowupContext, Run, Tenant
 from tests.production_path_support import (
@@ -129,7 +130,7 @@ class JiraWebhookProductionPathTests(ProductionPathApiTestCase):
         )
 
         with (
-            patch("orchestrator.core.worker.webhook_job_service.tenant_jira_oauth_context", return_value=fake_oauth),
+            patch("orchestrator.core.worker.webhook_job_service.tenant_atlassian_oauth_context", return_value=fake_oauth),
             patch(
                 "orchestrator.api.webhooks.jira_admission_flow.evaluate_precheck_decision_with_labels",
                 return_value=self._ready_decision_result(issue_labels=["ready_for_agent"]),
@@ -231,7 +232,7 @@ class JiraWebhookProductionPathTests(ProductionPathApiTestCase):
             ]
         }
         with (
-            patch("orchestrator.core.decision_reply_service.build_codex_runtime", return_value=runtime),
+            patch("orchestrator.core.decision.reply_service.build_codex_runtime", return_value=runtime),
             patch("orchestrator.api.webhooks.jira_webhook_comment_flow.post_jira_comment", return_value=(True, None)),
         ):
             response = self.client.post(

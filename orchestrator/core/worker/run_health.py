@@ -11,10 +11,11 @@ from uuid import uuid4
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
-from orchestrator.core.agent_observability import record_agent_lifecycle_event
+from orchestrator.core.observability.agent_observability import record_agent_lifecycle_event
 from orchestrator.core.config import Settings, get_settings
-from orchestrator.core.run_logs import record_run_log_event
-from orchestrator.core.runs import RUN_STATUS_DISPATCHING, RUN_STATUS_FAILED, RUN_STATUS_RUNNING
+from orchestrator.core.observability.logging_pane import emit_logging_pane_event
+from orchestrator.core.workflow.execution_lifecycle import apply_execution_failure
+from orchestrator.core.runs.service import RUN_STATUS_DISPATCHING, RUN_STATUS_FAILED, RUN_STATUS_RUNNING
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import Run, WorkflowExecution
 
@@ -65,7 +66,7 @@ def touch_run_heartbeat(
         update(Run)
         .where(
             Run.run_id == run_id,
-            Run.status.in_((RUN_STATUS_DISPATCHING, RUN_STATUS_RUNNING)),
+            Run.status == RUN_STATUS_RUNNING,
             Run.worker_service_instance_id == normalized_owner,
             Run.claim_id == normalized_claim_id,
         )
@@ -140,12 +141,12 @@ def recover_stale_running_runs(
             continue
         workflow = session.get(WorkflowExecution, row.workflow_id)
         if workflow is not None and workflow.status in {"queued", RUN_STATUS_RUNNING}:
-            workflow.status = RUN_STATUS_FAILED
-            workflow.last_error = message
-            workflow.finished_at = recovered_at
-            workflow.updated_at = recovered_at
-            workflow.blocked_reason = None
-        record_run_log_event(
+            apply_execution_failure(
+                workflow=workflow,
+                message=message,
+                now=recovered_at,
+            )
+        emit_logging_pane_event(
             session=session,
             tenant_id=row.tenant_id,
             project_id=row.project_id,

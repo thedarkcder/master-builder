@@ -32,7 +32,11 @@ fi
 
 DOCKER_SERVICES=(
   postgres
-  redis
+  mailpit
+  clickhouse
+  temporal
+  tempo
+  otel-collector
   api
   run-worker
   webhook-worker
@@ -42,7 +46,19 @@ DOCKER_SERVICES=(
   knowledge-sync
   discord-gateway
   discord-live-voice
+  temporal-worker
   tailscale
+)
+
+DOCKER_APP_SERVICES=(
+  api
+  run-worker
+  webhook-worker
+  project-automation
+  knowledge-sync
+  discord-gateway
+  discord-live-voice
+  temporal-worker
 )
 
 current_service_container_id() {
@@ -78,6 +94,11 @@ cleanup_dead_project_containers() {
     [[ -z "$container_id" ]] && continue
     docker rm -f "$container_id" >/dev/null 2>&1 || true
   done <<< "$dead_ids"
+}
+
+stop_existing_app_services_before_migration() {
+  echo "Stopping app services before migrations..."
+  docker compose stop "${DOCKER_APP_SERVICES[@]}"
 }
 
 wait_for_docker_services_ready() {
@@ -119,7 +140,7 @@ wait_for_docker_services_ready() {
         return 1
       fi
 
-      if [[ "$service_name" == "postgres" || "$service_name" == "redis" || "$service_name" == "api" ]]; then
+      if [[ "$service_name" == "postgres" || "$service_name" == "clickhouse" || "$service_name" == "api" ]]; then
         if [[ "$health_status" != "healthy" ]]; then
           all_ready="false"
         fi
@@ -150,6 +171,11 @@ wait_for_docker_services_ready() {
 run_compose_up() {
   local output_file
   output_file="$(mktemp)"
+  if ! docker compose up --build --force-recreate --exit-code-from migrate migrate; then
+    rm -f "$output_file"
+    return 1
+  fi
+
   if docker compose up --build -d --remove-orphans "${DOCKER_SERVICES[@]}" 2>&1 | tee "$output_file"; then
     rm -f "$output_file"
     return 0
@@ -261,6 +287,8 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 cleanup_dead_project_containers
+restart_existing_local_worker_if_owned
+stop_existing_app_services_before_migration
 
 run_compose_up
 
@@ -285,7 +313,14 @@ fi
 
 export ORCHESTRATOR_DATABASE_URL="${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@127.0.0.1:4402/orchestrator}"
 export POSTGRES_URL="${POSTGRES_URL:-${ORCHESTRATOR_DATABASE_URL}}"
-export ORCHESTRATOR_REDIS_URL="${ORCHESTRATOR_REDIS_URL:-redis://127.0.0.1:46379/0}"
+export ORCHESTRATOR_CLICKHOUSE_HTTP_URL="${ORCHESTRATOR_CLICKHOUSE_HTTP_URL:-http://127.0.0.1:8123}"
+export ORCHESTRATOR_CLICKHOUSE_DATABASE="${ORCHESTRATOR_CLICKHOUSE_DATABASE:-master_builder}"
+export ORCHESTRATOR_CLICKHOUSE_USERNAME="${ORCHESTRATOR_CLICKHOUSE_USERNAME:-master_builder}"
+export ORCHESTRATOR_CLICKHOUSE_PASSWORD="${ORCHESTRATOR_CLICKHOUSE_PASSWORD:-master_builder}"
+export ORCHESTRATOR_OTEL_ENABLED="${ORCHESTRATOR_OTEL_ENABLED:-true}"
+export ORCHESTRATOR_OTEL_SERVICE_NAMESPACE="${ORCHESTRATOR_OTEL_SERVICE_NAMESPACE:-master-builder}"
+export ORCHESTRATOR_OTEL_EXPORTER_OTLP_ENDPOINT="${ORCHESTRATOR_OTEL_EXPORTER_OTLP_ENDPOINT:-http://127.0.0.1:4318}"
+export ORCHESTRATOR_OTEL_TRACES_SAMPLE_RATIO="${ORCHESTRATOR_OTEL_TRACES_SAMPLE_RATIO:-1.0}"
 export ORCHESTRATOR_WORKER_CAPABILITIES="${ORCHESTRATOR_WORKER_CAPABILITIES:-macos}"
 export ORCHESTRATOR_AGENT_ID="${ORCHESTRATOR_AGENT_ID:-worker-macos-local}"
 export ORCHESTRATOR_CODEX_SANDBOX_MODE="${ORCHESTRATOR_CODEX_SANDBOX_MODE:-danger-full-access}"
@@ -311,5 +346,4 @@ echo "Local worker capability: ${ORCHESTRATOR_WORKER_CAPABILITIES}"
 echo "Local Codex sandbox: ${ORCHESTRATOR_CODEX_SANDBOX_MODE}"
 echo "Shared repo checkout dir: ${ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR}"
 echo "Starting local run worker..."
-restart_existing_local_worker_if_owned
 "${VENV_DIR}/bin/python" -m orchestrator worker-runs

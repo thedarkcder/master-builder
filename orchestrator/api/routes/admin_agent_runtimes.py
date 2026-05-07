@@ -15,8 +15,8 @@ from orchestrator.api.schemas import (
     AgentRuntimeRoutingRead,
     AgentRuntimeRoutingUpdate,
 )
-from orchestrator.core.agent_tools import TOOL_ALLOWLIST, list_implemented_tools
-from orchestrator.core.agent_execution_profiles import (
+from orchestrator.core.runtime.tools import TOOL_ALLOWLIST, list_implemented_tools
+from orchestrator.core.runtime.agent_execution_profiles import (
     AgentExecutionProfile,
     build_agent_execution_profile,
     collect_models_for_runtime_kind,
@@ -35,7 +35,7 @@ from orchestrator.core.agent_execution_profiles import (
     runtime_kind_supports_reasoning_effort,
 )
 from orchestrator.core.config import get_settings
-from orchestrator.core.platform_settings_service import (
+from orchestrator.core.platform.settings_service import (
     SETTING_KEY_AGENT_RUNTIME_PROFILES,
     SETTING_KEY_AGENT_RUNTIME_ROUTING,
     platform_settings_service,
@@ -57,11 +57,9 @@ def _default_profiles() -> dict[str, dict]:
     settings = get_settings()
     return default_execution_profiles(
         default_codex_cli_command=settings.codex_cli_command,
-        default_codex_model=settings.codex_model,
         default_codex_reasoning_effort=settings.codex_reasoning_effort,
         default_codex_supported_models=settings.codex_supported_models,
         default_chat_cli_command=settings.chat_cli_command,
-        default_chat_model=settings.chat_model,
         default_chat_reasoning_effort=settings.chat_reasoning_effort,
         default_claude_cli_command=getattr(settings, "claude_cli_command", ""),
     )
@@ -471,21 +469,26 @@ def list_agent_runtime_models(
     normalized_profile_name = str(profile_name or "").strip() or None
     if normalized_profile_name is not None and normalized_profile_name not in merged:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Execution profile not found")
-    resolved_runtime_kind = (
-        build_agent_execution_profile(profile_name=normalized_profile_name, profiles=merged).runtime_kind
+    resolved_profile = (
+        build_agent_execution_profile(profile_name=normalized_profile_name, profiles=merged)
         if normalized_profile_name
-        else str(runtime_kind or "codex_cli").strip().lower()
+        else None
     )
-    resolved_default_model = (
-        build_agent_execution_profile(profile_name=normalized_profile_name, profiles=merged).model
-        if normalized_profile_name
-        else settings.codex_model
+    resolved_runtime_kind = (
+        resolved_profile.runtime_kind
+        if resolved_profile is not None
+        else str(runtime_kind or "codex_cli").strip().lower()
     )
     options = collect_models_for_runtime_kind(
         runtime_kind=resolved_runtime_kind,
-        default_model=resolved_default_model,
+        default_model=resolved_profile.model if resolved_profile is not None else None,
         codex_supported_models=settings.codex_supported_models,
         profiles=merged,
+    )
+    resolved_default_model = (
+        resolved_profile.model
+        if resolved_profile is not None
+        else (options[0].model_id if options else "")
     )
     reasoning_efforts = []
     if runtime_kind_supports_reasoning_effort(resolved_runtime_kind):

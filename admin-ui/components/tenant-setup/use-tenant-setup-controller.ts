@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
 import { useAuth } from "@/components/auth-provider";
+import { useToast } from "@/components/ui/toast-provider";
 import {
   createTenant,
   createTenantInvite,
@@ -13,8 +14,13 @@ import {
   listJiraProjects,
   startDiscordInstall,
   startGitHubInstall,
-  startJiraConnect,
-  updateTenant,
+  startAtlassianConnect,
+  updateTenantConfiguration,
+  updateTenantDiscord,
+  updateTenantGithub,
+  updateTenantJira,
+  updateTenantPolicy,
+  updateTenantRepos,
   type GitHubRepositoryRecord,
   type JiraProjectRecord,
   type TenantInviteRecord
@@ -54,6 +60,7 @@ function statusTone(statusLine: string): StatusTone {
 
 export function useTenantSetupController(stepKey: WizardStepKey) {
   const { credentials } = useAuth();
+  const { showToast } = useToast();
   const searchParams = useSearchParams();
   const router = useRouter();
 
@@ -105,7 +112,7 @@ export function useTenantSetupController(stepKey: WizardStepKey) {
     }
     if (stepKey === "jira") {
       if (!values.jira.connection_id?.trim()) {
-        return "Connect Jira before continuing.";
+        return "Connect Atlassian before continuing.";
       }
       if (!textFields.projectKeysText.trim()) {
         return "Select at least one Jira project key before continuing.";
@@ -207,13 +214,13 @@ export function useTenantSetupController(stepKey: WizardStepKey) {
   }, [credentials, searchParams]);
 
   useEffect(() => {
-    const connectionId = searchParams.get("jira_connection_id");
+    const connectionId = searchParams.get("atlassian_connection_id");
     if (!connectionId) {
       return;
     }
     setValues((prev) => ({ ...prev, jira: { ...prev.jira, connection_id: connectionId } }));
-    if (searchParams.get("jira_oauth") === "success") {
-      void loadJiraProjectsForConnectionId(connectionId, { statusPrefix: "Jira OAuth connected." });
+    if (searchParams.get("atlassian_oauth") === "success") {
+      void loadJiraProjectsForConnectionId(connectionId, { statusPrefix: "Atlassian connected." });
     }
   }, [credentials, searchParams]);
 
@@ -241,22 +248,22 @@ export function useTenantSetupController(stepKey: WizardStepKey) {
       setStatusLine("");
       return created.tenant_id;
     } catch (error) {
-      setStatusLine(`Create failed: ${(error as Error).message}`);
+      showToast({ title: "Tenant create failed", description: (error as Error).message, tone: "error" });
       return null;
     } finally {
       setSaving(false);
     }
   }
 
-  async function startJiraOAuth() {
+  async function startAtlassianOAuth() {
     if (!credentials) {
       return;
     }
     try {
-      const result = await startJiraConnect(credentials, { returnTo: "wizard" });
+      const result = await startAtlassianConnect(credentials, { returnTo: "wizard" });
       window.location.href = result.authorize_url;
     } catch (error) {
-      setStatusLine(`Unable to start Jira OAuth: ${(error as Error).message}`);
+      setStatusLine(`Unable to start Atlassian: ${(error as Error).message}`);
     }
   }
 
@@ -448,14 +455,19 @@ export function useTenantSetupController(stepKey: WizardStepKey) {
     setSaving(true);
     try {
       const payload = toUpdatePayload(values, textFields);
-      const updated = await updateTenant(credentials, tenantId, payload);
+      let updated = await updateTenantConfiguration(credentials, tenantId, { name: payload.name });
+      updated = await updateTenantJira(credentials, tenantId, { jira: payload.jira });
+      updated = await updateTenantGithub(credentials, tenantId, { github: payload.github });
+      updated = await updateTenantRepos(credentials, tenantId, { repos: payload.repos });
+      updated = await updateTenantPolicy(credentials, tenantId, { policy: payload.policy });
+      updated = await updateTenantDiscord(credentials, tenantId, { discord: payload.discord });
       const form = recordToFormValues(updated);
       setValues(form);
       setTextFields(formValuesToTextFields(form));
       setStatusLine("");
       return true;
     } catch (error) {
-      setStatusLine(`Save failed: ${(error as Error).message}`);
+      showToast({ title: "Tenant setup save failed", description: (error as Error).message, tone: "error" });
       return false;
     } finally {
       setSaving(false);
@@ -546,7 +558,7 @@ export function useTenantSetupController(stepKey: WizardStepKey) {
     selectedProjectKeys,
     nextStep,
     previousStep,
-    startJiraOAuth,
+    startAtlassianOAuth,
     loadJiraProjectsForConnection,
     toggleJiraProject,
     startGitHubInstallFlow,

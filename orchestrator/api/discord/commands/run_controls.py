@@ -9,37 +9,36 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestrator.api.schemas import DiscordCommandRequest, DiscordCommandResponse
-from orchestrator.core.runtime_invocation import AgentInvocationContext
-from orchestrator.core.codex_runtime import CodexRuntimeError
+from orchestrator.core.runtime.invocation import AgentInvocationContext
+from orchestrator.core.runtime.runtime import CodexRuntimeError
 from orchestrator.core.communications.command_pipeline import CommandScope
-from orchestrator.core.communications.enqueue_reason_contract import (
-    format_enqueue_conflict_detail,
+from orchestrator.core.communications.enqueue_conflict_presentation import (
+    present_discord_enqueue_conflict,
 )
 from orchestrator.core.communications.decision_clarification_presentation import (
     build_decision_clarification_presentation,
+    build_runtime_precheck_message,
     load_cycle_question_feedback,
-    render_decision_gate_feedback_message,
-    render_decision_gate_remaining_questions_message,
+    present_discord_decision_clarification,
 )
 from orchestrator.core.communications.execution_admission_format import (
-    format_discord_admission_conflict_detail,
+    present_discord_admission_conflict,
 )
-from orchestrator.core.decision_engine import DecisionEventInput, DecisionSource
-from orchestrator.core.decision_clarification_port import DecisionClarificationPort
-from orchestrator.core.decision_state_machine import resolve_execution_admission
-from orchestrator.core.decision_state_machine import (
+from orchestrator.core.decision.engine import DecisionEventInput, DecisionSource
+from orchestrator.core.decision.clarification_port import DecisionClarificationPort
+from orchestrator.core.decision.state_machine import resolve_execution_admission
+from orchestrator.core.decision.state_machine import (
     ExecutionAdmissionReason,
     build_execution_admission_block,
 )
-from orchestrator.core.followup_context_service import (
+from orchestrator.core.pm.followup_context_service import (
     FOLLOWUP_CONTEXT_DECISION_GATE,
     close_followup_contexts,
 )
-from orchestrator.core.pre_run_check import evaluate_pre_run_check
-from orchestrator.core.precheck_decision import build_precheck_message
-from orchestrator.core.project_policy import resolve_effective_policy
-from orchestrator.core.run_gate_service import enqueue_issue_run_with_precheck
-from orchestrator.core.runs import cancel_run
+from orchestrator.core.precheck.pre_run_check import evaluate_pre_run_check
+from orchestrator.core.projects.policy import resolve_effective_policy
+from orchestrator.core.runs.gate_service import enqueue_issue_run_with_precheck
+from orchestrator.core.runs.service import cancel_run
 from orchestrator.storage.models import Run, Tenant
 
 logger = logging.getLogger(__name__)
@@ -76,7 +75,7 @@ def _queue_run_from_issue_context(
     issue_labels: list[str] | None,
     decision_clarification_port: DecisionClarificationPort,
     settings_factory: Callable[[], Any],
-    tenant_jira_oauth_context: Callable[..., Any],
+    tenant_atlassian_oauth_context: Callable[..., Any],
     conflict_prefix: str,
     success_message: str,
 ) -> DiscordCommandResponse:
@@ -95,16 +94,17 @@ def _queue_run_from_issue_context(
             issue_labels=issue_labels,
         ),
         settings=settings,
-        tenant_jira_oauth_context_fn=tenant_jira_oauth_context,
+        tenant_atlassian_oauth_context_fn=tenant_atlassian_oauth_context,
         evaluate_pre_run_check_fn=evaluate_pre_run_check,
         oauth_context=None,
         publish_jira_comment_fn=None,
     )
     admission = resolve_execution_admission(decision_result=decision_result)
     if admission.blocked:
+        conflict = present_discord_admission_conflict(admission=admission)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=format_discord_admission_conflict_detail(admission=admission),
+            detail=conflict.detail,
         )
     enqueue_result = enqueue_issue_run_with_precheck(
         session,
@@ -123,13 +123,14 @@ def _queue_run_from_issue_context(
         ).get("max_concurrent_runs"),
     )
     if not enqueue_result.enqueued:
+        conflict = present_discord_enqueue_conflict(
+            prefix=conflict_prefix,
+            reason=enqueue_result.reason,
+            enqueue_run_obj=enqueue_result.run,
+        )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=format_enqueue_conflict_detail(
-                prefix=conflict_prefix,
-                enqueue_reason=str(enqueue_result.reason),
-                enqueue_run_obj=enqueue_result.run,
-            ),
+            detail=conflict.detail,
         )
     return DiscordCommandResponse(
         ok=True,
@@ -155,7 +156,7 @@ def dispatch_run_control_command(
     fetch_issue_detail: Callable[..., Any],
     settings_factory: Callable[[], Any],
     build_codex_runtime: Callable[..., Any],
-    tenant_jira_oauth_context: Callable[..., Any],
+    tenant_atlassian_oauth_context: Callable[..., Any],
     ensure_issue_is_executable: Callable[..., Any],
     resolve_codex_working_dir: Callable[..., str],
 ) -> DiscordCommandResponse | None:
@@ -204,7 +205,7 @@ def dispatch_run_control_command(
             issue_labels=issue_labels,
             decision_clarification_port=decision_clarification_port,
             settings_factory=settings_factory,
-            tenant_jira_oauth_context=tenant_jira_oauth_context,
+            tenant_atlassian_oauth_context=tenant_atlassian_oauth_context,
             conflict_prefix="Run could not be queued",
             success_message="Queued run {run_id} for {issue_key}",
         )
@@ -298,7 +299,7 @@ def dispatch_run_control_command(
             issue_labels=issue_labels,
             decision_clarification_port=decision_clarification_port,
             settings_factory=settings_factory,
-            tenant_jira_oauth_context=tenant_jira_oauth_context,
+            tenant_atlassian_oauth_context=tenant_atlassian_oauth_context,
             conflict_prefix="Retry could not be queued",
             success_message="Queued retry run {run_id} for {issue_key}",
         )
@@ -345,13 +346,13 @@ def dispatch_run_control_command(
         issue_description: str | None = None
         codex_working_dir: str | None = None
         try:
-            oauth = tenant_jira_oauth_context(session=session, tenant=tenant, settings=settings)
+            oauth = tenant_atlassian_oauth_context(session=session, tenant=tenant, settings=settings)
             oauth_client = _oauth_context_value(oauth, "client")
             oauth_connection = _oauth_context_value(oauth, "connection")
             oauth_access_token = _oauth_context_value(oauth, "access_token")
             cloud_id = getattr(oauth_connection, "cloud_id", None)
             if oauth_client is None or oauth_access_token is None or not str(cloud_id or "").strip():
-                raise RuntimeError("Tenant Jira OAuth context is incomplete")
+                raise RuntimeError("Tenant Atlassian context is incomplete")
             issue_detail = oauth_client.get_issue_detail(
                 access_token=oauth_access_token,
                 cloud_id=str(cloud_id),
@@ -424,7 +425,7 @@ def dispatch_run_control_command(
                     issue_description=issue_description,
                     issue_labels=issue_labels,
                 ),
-                tenant_jira_oauth_context_fn=tenant_jira_oauth_context,
+                tenant_atlassian_oauth_context_fn=tenant_atlassian_oauth_context,
                 evaluate_pre_run_check_fn=evaluate_pre_run_check,
                 oauth_context=oauth,
                 publish_jira_comment_fn=_publish_jira_comment,
@@ -462,25 +463,10 @@ def dispatch_run_control_command(
             ),
         )
         if clarification_presentation.recheck_required:
-            if (
-                clarification_presentation.requires_decision_gate_feedback
-                and clarification_presentation.question_feedback
-            ):
-                message = render_decision_gate_feedback_message(
-                    issue_key=issue_key,
-                    reason=clarification_presentation.decision_gate_reason or "clarification required",
-                    question_feedback=clarification_presentation.question_feedback,
-                )
-                generated_questions = list(clarification_presentation.questions)
-            elif clarification_presentation.requires_decision_gate_feedback:
-                message = render_decision_gate_remaining_questions_message(
-                    issue_key=issue_key,
-                    reason=clarification_presentation.decision_gate_reason or "clarification required",
-                    questions=clarification_presentation.decision_gate_questions,
-                )
-                generated_questions = list(clarification_presentation.questions)
-            else:
-                message, generated_questions = build_precheck_message(
+            clarification_response = present_discord_decision_clarification(
+                issue_key=issue_key,
+                presentation=clarification_presentation,
+                precheck_message_builder=lambda: build_runtime_precheck_message(
                     runtime=runtime,
                     invocation_context=AgentInvocationContext(
                         channel="discord",
@@ -492,27 +478,22 @@ def dispatch_run_control_command(
                         issue_key=issue_key,
                     ),
                     issue_key=issue_key,
-                    classification=clarification_presentation.mode.value,
+                    classification=clarification_presentation.mode,
                     decision_gate_reason=clarification_presentation.decision_gate_reason or "",
                     decision_gate_questions=list(clarification_presentation.decision_gate_questions),
                     gtd_missing_criteria=list(clarification_presentation.gtd_missing_criteria),
                     gtd_questions=list(clarification_presentation.gtd_questions),
                     missing_slots=list(clarification_presentation.missing_slots),
-                )
+                ),
+            )
             return DiscordCommandResponse(
                 ok=True,
                 command=command_name,
-                message=message,
+                message=clarification_response.message,
                 data={
                     "issue_key": issue_key,
                     "recheck_required": True,
-                    "classification": clarification_presentation.mode.value,
-                    "decision_gate_reason": clarification_presentation.decision_gate_reason,
-                    "gtd_missing_criteria": list(clarification_presentation.gtd_missing_criteria),
-                    "questions": generated_questions or list(clarification_presentation.questions),
-                    "question_feedback": list(clarification_presentation.question_feedback),
-                    "missing_slots": list(clarification_presentation.missing_slots),
-                    "auto_resolved_slots": list(clarification_presentation.auto_resolved_slots),
+                    **clarification_response.response_fields,
                     "knowledge_mode": None,
                 },
             )
@@ -551,7 +532,7 @@ def dispatch_run_control_command(
             issue_labels=effective_issue_labels or None,
             decision_clarification_port=decision_clarification_port,
             settings_factory=settings_factory,
-            tenant_jira_oauth_context=tenant_jira_oauth_context,
+            tenant_atlassian_oauth_context=tenant_atlassian_oauth_context,
             conflict_prefix="Retry could not be queued" if has_retryable_run else "Run could not be queued",
             success_message=(
                 "Queued retry run {run_id} for {issue_key}"

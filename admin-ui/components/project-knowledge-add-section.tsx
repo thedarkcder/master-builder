@@ -3,6 +3,7 @@
 import { useCallback, useRef, useState, type ChangeEvent } from "react";
 
 import { Button } from "@/components/ui/button";
+import { useToast } from "@/components/ui/toast-provider";
 
 import { createProjectKnowledgeAsset, type Credentials } from "@/lib/api";
 
@@ -39,6 +40,7 @@ export function ProjectKnowledgeAddSection({
   tenantId,
   projectId,
 }: ProjectKnowledgeAddSectionProps) {
+  const { showToast } = useToast();
   const [uploadingFiles, setUploadingFiles] = useState(false);
   const [statusLine, setStatusLine] = useState("");
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -78,13 +80,14 @@ export function ProjectKnowledgeAddSection({
           failed += 1;
         }
       }
-      setStatusLine(
-        failed === 0
-          ? `Uploaded ${uploaded} file${uploaded === 1 ? "" : "s"}.`
-          : `Uploaded ${uploaded} file${uploaded === 1 ? "" : "s"}, failed ${failed}.`,
-      );
+      setStatusLine("");
+      showToast({
+        title: failed === 0 ? "Files uploaded" : "Upload completed with failures",
+        description: failed === 0 ? `${uploaded} file${uploaded === 1 ? "" : "s"}.` : `${uploaded} uploaded, ${failed} failed.`,
+        tone: failed === 0 ? "success" : "error",
+      });
     } catch (error) {
-      setStatusLine(`Unable to upload files: ${(error as Error).message}`);
+      showToast({ title: "Upload failed", description: (error as Error).message, tone: "error" });
     } finally {
       setUploadingFiles(false);
     }

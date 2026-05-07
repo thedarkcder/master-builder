@@ -82,6 +82,26 @@ def normalize_string_map(raw: dict[str, str] | None) -> dict[str, str]:
     return normalized
 
 
+def normalize_project_architecture_docs_config(raw: dict | None) -> dict:
+    if not isinstance(raw, dict):
+        return {}
+
+    provider = str(raw.get("provider") or "").strip().lower()
+    if provider not in {"internal", "confluence"}:
+        return {}
+
+    normalized: dict[str, object] = {"provider": provider}
+    space_key = str(raw.get("space_key") or "").strip()
+    parent_page_id = str(raw.get("parent_page_id") or "").strip()
+    if provider == "confluence" and not space_key:
+        raise ValueError("Confluence-backed architecture documents require a space key")
+    if space_key:
+        normalized["space_key"] = space_key
+    if parent_page_id:
+        normalized["parent_page_id"] = parent_page_id
+    return normalized
+
+
 def _normalize_channel_id_list(value: object) -> list[str]:
     if not isinstance(value, list):
         return []

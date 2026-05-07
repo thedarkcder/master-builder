@@ -3,12 +3,15 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, usePathname, useRouter } from "next/navigation";
-import { AlertCircle, ArrowLeft, Brain, ChevronRight, FileCode, MessageSquare, Terminal, Wrench } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 
 import { useAuth } from "@/components/auth-provider";
+import { ActivityTimelinePanel, type ChatTimelineEntry } from "@/components/runs/activity-timeline-panel";
+import { RawAgentLogsPanel } from "@/components/runs/raw-agent-logs-panel";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { useToast } from "@/components/ui/toast-provider";
 import { TokenStackedBarChart } from "@/components/charts";
 import {
   cancelRun,
@@ -18,16 +21,16 @@ import {
   getTokenTimeline,
   listRunEvents,
   listRunLogs,
-  streamRunEvents,
   type RunEventRecord,
-  type RunLogEventRecord,
+  type RuntimeLogEventRecord,
   type RunRecord,
   type WorkflowRecord,
   type WorkflowAttemptCreatePayload,
   type TokenTimelineRecord
 } from "@/lib/api";
-import { formatTimestamp } from "@/lib/datetime";
+import { formatTimeAgo, formatTimestamp } from "@/lib/datetime";
 import { buildRunDetailPath, resolveRunRouteContext } from "@/lib/dashboard-paths";
+import { useRunEventStream } from "@/hooks/use-run-event-stream";
 
 type InvocationTelemetry = {
   event_kind: string;
@@ -106,22 +109,6 @@ type WorkflowDiagnosticsHistoryEntry = {
   event: string;
 };
 
-type ChatTimelineEntry = {
-  key: string;
-  recordedAt: string;
-  stage: string;
-  attempt: number | null;
-  speaker: string;
-  text: string;
-  kind: "message" | "reasoning" | "status" | "error" | "command" | "file_edit" | "tool_call";
-  meta?: {
-    command?: string;
-    exitCode?: number;
-    output?: string;
-    filePath?: string;
-    language?: string;
-  };
-};
 type RunPanelTab = "overview" | "agents" | "diagnostics" | "cost";
 type AgentStage = "pm" | "dev" | "test" | "review";
 const CHAT_PAGE_SIZE = 40;
@@ -150,22 +137,6 @@ function toStringList(value: unknown): string[] {
   }
   return value.map((item) => String(item ?? "").trim()).filter((item) => item.length > 0);
 }
-
-function isAbortLikeError(error: unknown): boolean {
-  const message = (error as Error)?.message?.toLowerCase() ?? "";
-  return message.includes("aborted");
-}
-
-function statusFromLifecycleEvent(eventType: string): RunRecord["status"] | null {
-  if (eventType === "TASK_COMPLETED") {
-    return "succeeded";
-  }
-  if (eventType === "RUN_FAILED" || eventType === "TASK_FAILED") {
-    return "failed";
-  }
-  return null;
-}
-
 
 function parseTelemetryPayload(message: string): InvocationTelemetry | null {
   try {
@@ -324,7 +295,10 @@ function normalizeInlineText(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
 
-function logEntryIdentity(entry: RunLogEventRecord): string {
+function logEntryIdentity(entry: RuntimeLogEventRecord): string {
+  if (entry.event_id) {
+    return entry.event_id;
+  }
   return [
     entry.recorded_at,
     entry.stage,
@@ -335,9 +309,9 @@ function logEntryIdentity(entry: RunLogEventRecord): string {
   ].join("::");
 }
 
-function dedupeRunLogs(entries: RunLogEventRecord[]): RunLogEventRecord[] {
+function dedupeRunLogs(entries: RuntimeLogEventRecord[]): RuntimeLogEventRecord[] {
   const seen = new Set<string>();
-  const ordered: RunLogEventRecord[] = [];
+  const ordered: RuntimeLogEventRecord[] = [];
   for (const entry of entries) {
     const key = logEntryIdentity(entry);
     if (seen.has(key)) {
@@ -370,7 +344,7 @@ function tryParseToolRequest(text: string): ParsedChatEntry | null {
   return null;
 }
 
-function parseRunLogChatText(entry: RunLogEventRecord): ParsedChatEntry | null {
+function parseRunLogChatText(entry: RuntimeLogEventRecord): ParsedChatEntry | null {
   const raw = String(entry.message ?? "");
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -497,133 +471,17 @@ function parseRunLogChatText(entry: RunLogEventRecord): ParsedChatEntry | null {
   return null;
 }
 
-function relativeTime(iso: string): string {
-  const ms = Date.now() - new Date(iso).getTime();
-  if (ms < 0) return "just now";
-  const sec = Math.floor(ms / 1000);
-  if (sec < 60) return `${sec}s ago`;
-  const min = Math.floor(sec / 60);
-  if (min < 60) return `${min}m ago`;
-  const hr = Math.floor(min / 60);
-  if (hr < 24) return `${hr}h ago`;
-  const d = Math.floor(hr / 24);
-  return `${d}d ago`;
-}
-
-const MAX_OUTPUT_PREVIEW = 600;
-
-const TIMELINE_ICON: Record<ChatTimelineEntry["kind"], { icon: React.ReactNode; color: string }> = {
-  message:   { icon: <MessageSquare className="h-3.5 w-3.5" />, color: "text-blue-500" },
-  reasoning: { icon: <Brain className="h-3.5 w-3.5" />,          color: "text-violet-500" },
-  status:    { icon: <ChevronRight className="h-3.5 w-3.5" />,   color: "text-muted-foreground" },
-  error:     { icon: <AlertCircle className="h-3.5 w-3.5" />,    color: "text-red-500" },
-  command:   { icon: <Terminal className="h-3.5 w-3.5" />,       color: "text-amber-500" },
-  file_edit: { icon: <FileCode className="h-3.5 w-3.5" />,      color: "text-emerald-500" },
-  tool_call: { icon: <Wrench className="h-3.5 w-3.5" />,        color: "text-orange-500" },
-};
-
-function TimelineRow({
-  entry,
-  stageDisplayLabelFn,
-  isLast,
-}: {
-  entry: ChatTimelineEntry;
-  stageDisplayLabelFn: (stage: string) => string;
-  isLast: boolean;
-}) {
-  const { icon, color } = TIMELINE_ICON[entry.kind] ?? TIMELINE_ICON.message;
-  const stageLbl = stageDisplayLabelFn(entry.stage);
-  const ts = relativeTime(entry.recordedAt);
-  const fullTs = formatTimestamp(entry.recordedAt);
-  const attempt = entry.attempt !== null ? ` #${entry.attempt}` : "";
-
-  return (
-    <li className="group relative flex gap-3 pb-4 last:pb-0">
-      {/* vertical connector line */}
-      {!isLast && (
-        <div className="absolute left-[13px] top-6 bottom-0 w-px bg-border" />
-      )}
-
-      {/* dot / icon */}
-      <div className={`relative z-10 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border bg-background ${color}`}>
-        {icon}
-      </div>
-
-      {/* content */}
-      <div className="min-w-0 flex-1 pt-0.5">
-        {/* header */}
-        <div className="flex items-baseline gap-1.5 text-xs">
-          <span className="font-medium text-foreground">
-            {entry.kind === "status" ? entry.text : entry.kind === "command" ? "Ran command" : entry.kind === "file_edit" ? "Edited file" : entry.kind === "tool_call" ? `Called ${entry.text}` : entry.kind === "reasoning" ? "Thinking" : entry.kind === "error" ? "Error" : stageLbl}
-          </span>
-          <span className="text-[10px] text-muted-foreground">{stageLbl}{attempt}</span>
-          <span className="ml-auto shrink-0 text-[10px] text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" title={fullTs}>{ts}</span>
-        </div>
-
-        {/* body per kind */}
-        {entry.kind === "status" ? null : entry.kind === "reasoning" ? (
-          <details className="mt-1 text-xs text-muted-foreground">
-            <summary className="cursor-pointer select-none hover:text-foreground">Show reasoning</summary>
-            <p className="mt-1.5 whitespace-pre-wrap italic leading-relaxed">{entry.text}</p>
-          </details>
-        ) : entry.kind === "command" ? (
-          <div className="mt-1">
-            <div className="inline-flex items-center gap-1.5 rounded-md bg-zinc-950 px-2.5 py-1 text-[11px] text-zinc-200">
-              <code>{entry.meta?.command ?? entry.text}</code>
-              {entry.meta?.exitCode != null && (
-                <span className={`ml-1 rounded px-1 py-px text-[9px] font-medium ${entry.meta.exitCode === 0 ? "bg-emerald-900/50 text-emerald-300" : "bg-red-900/50 text-red-300"}`}>
-                  {entry.meta.exitCode}
-                </span>
-              )}
-            </div>
-            {entry.meta?.output ? (
-              <details className="mt-1.5 text-xs text-muted-foreground">
-                <summary className="cursor-pointer select-none hover:text-foreground">Output</summary>
-                <pre className="mt-1 max-h-40 overflow-auto rounded-md bg-muted/50 px-2.5 py-2 text-[10px] leading-relaxed">
-                  {entry.meta.output.slice(0, MAX_OUTPUT_PREVIEW)}{entry.meta.output.length > MAX_OUTPUT_PREVIEW ? "\n…" : ""}
-                </pre>
-              </details>
-            ) : null}
-          </div>
-        ) : entry.kind === "file_edit" ? (
-          <div className="mt-1">
-            <code className="text-xs font-medium">{entry.meta?.filePath || "file"}</code>
-            {entry.text && <span className="ml-1.5 text-xs text-muted-foreground">{entry.text}</span>}
-            {entry.meta?.output ? (
-              <details className="mt-1.5 text-xs text-muted-foreground">
-                <summary className="cursor-pointer select-none hover:text-foreground">Diff</summary>
-                <pre className="mt-1 max-h-40 overflow-auto rounded-md bg-muted/50 px-2.5 py-2 text-[10px] leading-relaxed">
-                  {entry.meta.output.slice(0, MAX_OUTPUT_PREVIEW)}{entry.meta.output.length > MAX_OUTPUT_PREVIEW ? "\n…" : ""}
-                </pre>
-              </details>
-            ) : null}
-          </div>
-        ) : entry.kind === "tool_call" ? (
-          <div className="mt-1 text-xs">
-            {entry.meta?.output ? (
-              <span className="text-muted-foreground">{entry.meta.output.slice(0, 160)}{entry.meta.output.length > 160 ? "…" : ""}</span>
-            ) : null}
-          </div>
-        ) : entry.kind === "error" ? (
-          <p className="mt-1 whitespace-pre-wrap text-xs leading-relaxed text-destructive">{entry.text}</p>
-        ) : (
-          <p className="mt-1 whitespace-pre-wrap text-xs leading-relaxed">{entry.text}</p>
-        )}
-      </div>
-    </li>
-  );
-}
-
 export default function RunDetailPage() {
   const params = useParams<{ runId: string }>();
   const pathname = usePathname();
   const router = useRouter();
   const { credentials, ready } = useAuth();
+  const { showToast } = useToast();
   const routeContext = useMemo(() => resolveRunRouteContext(pathname), [pathname]);
   const [run, setRun] = useState<RunRecord | null>(null);
   const [workflow, setWorkflow] = useState<WorkflowRecord | null>(null);
   const [events, setEvents] = useState<RunEventRecord[]>([]);
-  const [logs, setLogs] = useState<RunLogEventRecord[]>([]);
+  const [logs, setLogs] = useState<RuntimeLogEventRecord[]>([]);
   const [busy, setBusy] = useState(false);
   const [rerunBusy, setRerunBusy] = useState(false);
   const [forceRerunBusy, setForceRerunBusy] = useState(false);
@@ -705,61 +563,54 @@ export default function RunDetailPage() {
     }
   }, [ready, credentials, loadRun]);
 
-  useEffect(() => {
-    if (!run || !credentials) {
-      return;
-    }
-    if (run.status !== "queued" && run.status !== "running") {
-      return;
-    }
-    const controller = new AbortController();
-    void streamRunEvents(
-      credentials,
-      params.runId,
-      (event) => {
-        if ((event as { event_kind?: string }).event_kind === "run_log" || "message" in event) {
-          const logEvent = event as RunLogEventRecord;
-          setLogs((prev) => {
-            const nextKey = logEntryIdentity(logEvent);
-            if (prev.some((entry) => logEntryIdentity(entry) === nextKey)) {
-              return prev;
-            }
-            const next = [...prev, logEvent];
-            return dedupeRunLogs(next).slice(-800);
-          });
-        } else {
-          const lifecycleEvent = event as RunEventRecord;
-          setEvents((prev) => {
-            if (
-              prev.some(
-                (entry) =>
-                  entry.event_type === lifecycleEvent.event_type &&
-                  entry.recorded_at === lifecycleEvent.recorded_at &&
-                  entry.agent_id === lifecycleEvent.agent_id
-              )
-            ) {
-              return prev;
-            }
-            const next = [...prev, lifecycleEvent];
-            return next.slice(-200);
-          });
-          const nextStatus = statusFromLifecycleEvent(lifecycleEvent.event_type);
-          if (nextStatus) {
-            setRun((prev) => (prev ? { ...prev, status: nextStatus } : prev));
-          }
-        }
-      },
-      controller.signal
-    ).catch((error) => {
-      if (controller.signal.aborted || isAbortLikeError(error)) {
-        return;
+  const runStatus = run?.status ?? null;
+  const runId = run?.run_id ?? null;
+
+  const handleStreamLogEvent = useCallback((logEvent: RuntimeLogEventRecord) => {
+    setLogs((prev) => {
+      const nextKey = logEntryIdentity(logEvent);
+      if (prev.some((entry) => logEntryIdentity(entry) === nextKey)) {
+        return prev;
       }
-      setStatusLine(`Run event stream closed: ${(error as Error).message}`);
+      const next = [...prev, logEvent];
+      return dedupeRunLogs(next).slice(-800);
     });
-    return () => {
-      controller.abort();
-    };
-  }, [run, credentials, params.runId, loadRun]);
+  }, []);
+
+  const handleStreamLifecycleEvent = useCallback((lifecycleEvent: RunEventRecord) => {
+    setEvents((prev) => {
+      if (
+        prev.some(
+          (entry) =>
+            entry.event_type === lifecycleEvent.event_type &&
+            entry.recorded_at === lifecycleEvent.recorded_at &&
+            entry.agent_id === lifecycleEvent.agent_id,
+        )
+      ) {
+        return prev;
+      }
+      const next = [...prev, lifecycleEvent];
+      return next.slice(-200);
+    });
+  }, []);
+
+  const handleStreamStatusChange = useCallback((nextStatus: RunRecord["status"]) => {
+    setRun((prev) => (prev && prev.status !== nextStatus ? { ...prev, status: nextStatus } : prev));
+  }, []);
+
+  const handleStreamError = useCallback((message: string) => {
+    setStatusLine(`Run event stream closed: ${message}`);
+  }, []);
+
+  useRunEventStream({
+    credentials,
+    runId,
+    runStatus,
+    onLogEvent: handleStreamLogEvent,
+    onLifecycleEvent: handleStreamLifecycleEvent,
+    onStatusChange: handleStreamStatusChange,
+    onError: handleStreamError,
+  });
 
   async function handleForceRerun() {
     if (!credentials || !run) {
@@ -771,7 +622,7 @@ export default function RunDetailPage() {
       const nextRun = await createWorkflowAttempt(credentials, cancelled.workflow_id, {
         mode: "fresh"
       });
-      setStatusLine(`Force-cancelled ${cancelled.run_id} and queued fresh run ${nextRun.run_id}.`);
+      showToast({ title: "Fresh run queued", description: `Cancelled ${cancelled.run_id}; queued ${nextRun.run_id}.`, tone: "success" });
       router.push(
         buildRunDetailPath({
           tenantId: run.tenant_id,
@@ -780,7 +631,7 @@ export default function RunDetailPage() {
         })
       );
     } catch (error) {
-      setStatusLine(`Failed to force rerun: ${(error as Error).message}`);
+      showToast({ title: "Force rerun failed", description: (error as Error).message, tone: "error" });
     } finally {
       setForceRerunBusy(false);
     }
@@ -795,7 +646,8 @@ export default function RunDetailPage() {
     try {
       const olderLogs = await listRunLogs(credentials, params.runId, {
         limit: 200,
-        beforeRecordedAt: oldest.recorded_at
+        beforeRecordedAt: oldest.recorded_at,
+        beforeEventId: oldest.event_id
       });
       setLogs((prev) => {
         return dedupeRunLogs([...prev, ...olderLogs]);
@@ -1099,7 +951,7 @@ export default function RunDetailPage() {
     setRerunBusy(true);
     try {
       const nextRun = await createWorkflowAttempt(credentials, run.workflow_id, payload);
-      setStatusLine(`Queued ${label.toLowerCase()} as run ${nextRun.run_id} for ${nextRun.issue_key}.`);
+      showToast({ title: `${label} queued`, description: `Run ${nextRun.run_id} for ${nextRun.issue_key}.`, tone: "success" });
       router.push(
         buildRunDetailPath({
           tenantId: run.tenant_id,
@@ -1108,7 +960,7 @@ export default function RunDetailPage() {
         })
       );
     } catch (error) {
-      setStatusLine(`Failed to rerun: ${(error as Error).message}`);
+      showToast({ title: "Rerun failed", description: (error as Error).message, tone: "error" });
     } finally {
       setRerunBusy(false);
     }
@@ -1997,41 +1849,22 @@ export default function RunDetailPage() {
                 </div>
               ) : null}
 
-              {/* Chat timeline */}
-              <div className="flex flex-col overflow-hidden rounded-2xl border bg-background">
-                <div className="sticky top-0 z-10 flex items-center justify-between border-b bg-background px-5 py-3">
-                  <h2 className="text-sm font-semibold">Activity Timeline</h2>
-                  <div className="flex items-center gap-2">
-                    <span className="text-[10px] text-muted-foreground">{chatTimelineEntries.length} messages</span>
-                    {hasOlderChatMessages ? (
-                      <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => { setChatVisibleCount((c) => Math.min(c + CHAT_PAGE_SIZE, chatTimelineEntries.length)); setChatAutoScroll(false); }}>
-                        Load older
-                      </Button>
-                    ) : null}
-                    {!chatAutoScroll ? (
-                      <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => { setChatVisibleCount(CHAT_PAGE_SIZE); setChatAutoScroll(true); }}>
-                        Latest
-                      </Button>
-                    ) : null}
-                  </div>
-                </div>
-                <div className="flex-1 px-5 py-4">
-                  {chatTimelineEntries.length === 0 ? (
-                    <p className="py-8 text-center text-sm text-muted-foreground">No messages captured yet.</p>
-                  ) : (
-                    <ul ref={chatListRef} className="max-h-[560px] overflow-y-auto pr-1 text-xs">
-                      {visibleChatTimelineEntries.map((entry, idx) => (
-                        <TimelineRow
-                          key={entry.key}
-                          entry={entry}
-                          stageDisplayLabelFn={stageDisplayLabel}
-                          isLast={idx === visibleChatTimelineEntries.length - 1}
-                        />
-                      ))}
-                    </ul>
-                  )}
-                </div>
-              </div>
+              <ActivityTimelinePanel
+                entries={chatTimelineEntries}
+                visibleEntries={visibleChatTimelineEntries}
+                hasOlderMessages={hasOlderChatMessages}
+                autoScroll={chatAutoScroll}
+                listRef={chatListRef}
+                stageDisplayLabel={stageDisplayLabel}
+                onLoadOlder={() => {
+                  setChatVisibleCount((count) => Math.min(count + CHAT_PAGE_SIZE, chatTimelineEntries.length));
+                  setChatAutoScroll(false);
+                }}
+                onShowLatest={() => {
+                  setChatVisibleCount(CHAT_PAGE_SIZE);
+                  setChatAutoScroll(true);
+                }}
+              />
             </div>
           ) : null}
 
@@ -2089,7 +1922,7 @@ export default function RunDetailPage() {
                         {events.map((event, idx) => (
                           <li key={`${event.agent_id}-${event.recorded_at}-${idx}`} className="rounded-lg border bg-background p-2.5">
                             <p><span className="font-medium">{event.event_type}</span> by {event.agent_id}</p>
-                            <p className="text-muted-foreground">{formatTimestamp(event.recorded_at)}</p>
+                            <p className="text-muted-foreground" title={formatTimestamp(event.recorded_at)}>{formatTimeAgo(event.recorded_at)}</p>
                           </li>
                         ))}
                       </ul>
@@ -2097,44 +1930,20 @@ export default function RunDetailPage() {
                   </div>
                 </div>
 
-                {/* Raw logs */}
-                <div className="px-5 py-5">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <h2 className="text-sm font-semibold">Raw Agent Logs</h2>
-                    <div className="flex items-center gap-1.5 text-xs">
-                      <Button variant="outline" size="sm" className="h-7" onClick={() => void handleLoadOlderLogs()} disabled={loadingOlderLogs || !hasMoreLogs || logs.length === 0}>
-                        {loadingOlderLogs ? "Loading..." : hasMoreLogs ? "Load older" : "All loaded"}
-                      </Button>
-                      {[
-                        { label: "Agent", value: logAgentFilter, onChange: setLogAgentFilter, options: [["all", "All agents"], ["pm", "pm"], ["dev", "dev"], ["tester", "tester"], ["review", "review"]] },
-                        { label: "Stage", value: logStageFilter, onChange: setLogStageFilter, options: [["all", "All stages"], ["pm", "pm"], ["dev", "dev"], ["test", "test"], ["review", "review"], ["orchestrated_run", "orchestrated_run"]] },
-                        { label: "Stream", value: logStreamFilter, onChange: setLogStreamFilter, options: [["all", "All"], ["stdout", "stdout"], ["stderr", "stderr"]] }
-                      ].map((filter) => (
-                        <select key={filter.label} className="h-7 rounded border border-input bg-background px-2 text-xs" value={filter.value} onChange={(e) => filter.onChange(e.target.value)}>
-                          {filter.options.map(([val, lbl]) => <option key={val} value={val}>{lbl}</option>)}
-                        </select>
-                      ))}
-                    </div>
-                  </div>
-                  <div className="mt-3">
-                    {logs.length === 0 ? (
-                      <p className="text-xs text-muted-foreground">No logs captured yet.</p>
-                    ) : filteredLogs.length === 0 ? (
-                      <p className="text-xs text-muted-foreground">No log lines match current filters.</p>
-                    ) : (
-                      <ul className="max-h-[320px] space-y-2 overflow-y-auto pr-1 text-xs">
-                        {filteredLogs.map((entry, idx) => (
-                          <li key={`${entry.recorded_at}-${idx}`} className="rounded-lg border bg-background p-2.5" style={{ borderLeft: `2px solid ${stageColor(entry.stage)}` }}>
-                            <p className="mb-0.5 text-muted-foreground">
-                              <span className="font-medium text-foreground">{entry.agent_id}</span> · {entry.stage}{entry.attempt !== null ? ` #${entry.attempt}` : ""} [{entry.stream}] · {formatTimestamp(entry.recorded_at)}
-                            </p>
-                            <p className="whitespace-pre-wrap">{entry.message}</p>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
-                </div>
+                <RawAgentLogsPanel
+                  logs={logs}
+                  filteredLogs={filteredLogs}
+                  agentFilter={logAgentFilter}
+                  stageFilter={logStageFilter}
+                  streamFilter={logStreamFilter}
+                  loadingOlderLogs={loadingOlderLogs}
+                  hasMoreLogs={hasMoreLogs}
+                  stageColor={stageColor}
+                  onAgentFilterChange={setLogAgentFilter}
+                  onStageFilterChange={setLogStageFilter}
+                  onStreamFilterChange={setLogStreamFilter}
+                  onLoadOlderLogs={() => void handleLoadOlderLogs()}
+                />
 
                 {/* Plan JSON */}
                 <div className="px-5 py-5">

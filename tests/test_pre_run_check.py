@@ -1,7 +1,7 @@
-from orchestrator.core.pre_run_check import evaluate_pre_run_check
-from orchestrator.core.decision_gate import DecisionGateResult
+from orchestrator.core.precheck.pre_run_check import evaluate_pre_run_check
+from orchestrator.core.decision.gate import DecisionGateResult
 from orchestrator.core.gtd import GoodToDoValidationResult
-from orchestrator.core.precheck_policy import PrecheckPolicyResult
+from orchestrator.core.precheck.policy import PrecheckPolicyResult
 from unittest.mock import patch
 
 
@@ -14,9 +14,9 @@ def _policy_result(*, decision_gate: DecisionGateResult, gtd: GoodToDoValidation
 
 def test_pre_run_check_ready_for_agent_when_label_present_and_gate_clear() -> None:
     with (
-        patch("orchestrator.core.pre_run_check.infer_required_worker_capability", return_value="linux"),
+        patch("orchestrator.core.precheck.pre_run_check.infer_required_worker_capability", return_value="linux"),
         patch(
-            "orchestrator.core.pre_run_check.evaluate_precheck_policy",
+            "orchestrator.core.precheck.pre_run_check.evaluate_precheck_policy",
             return_value=_policy_result(
                 decision_gate=DecisionGateResult(
                     triggered=False,
@@ -50,9 +50,9 @@ def test_pre_run_check_ready_for_agent_when_label_present_and_gate_clear() -> No
 
 def test_pre_run_check_missing_ready_label_when_gate_clear() -> None:
     with (
-        patch("orchestrator.core.pre_run_check.infer_required_worker_capability", return_value="linux"),
+        patch("orchestrator.core.precheck.pre_run_check.infer_required_worker_capability", return_value="linux"),
         patch(
-            "orchestrator.core.pre_run_check.evaluate_precheck_policy",
+            "orchestrator.core.precheck.pre_run_check.evaluate_precheck_policy",
             return_value=_policy_result(
                 decision_gate=DecisionGateResult(
                     triggered=False,
@@ -84,9 +84,9 @@ def test_pre_run_check_missing_ready_label_when_gate_clear() -> None:
 
 def test_pre_run_check_decision_gate_required_takes_priority() -> None:
     with (
-        patch("orchestrator.core.pre_run_check.infer_required_worker_capability", return_value="linux"),
+        patch("orchestrator.core.precheck.pre_run_check.infer_required_worker_capability", return_value="linux"),
         patch(
-            "orchestrator.core.pre_run_check.evaluate_precheck_policy",
+            "orchestrator.core.precheck.pre_run_check.evaluate_precheck_policy",
             return_value=_policy_result(
                 decision_gate=DecisionGateResult(
                     triggered=True,
@@ -116,9 +116,9 @@ def test_pre_run_check_decision_gate_required_takes_priority() -> None:
 
 def test_pre_run_check_infers_macos_worker_requirement() -> None:
     with (
-        patch("orchestrator.core.pre_run_check.infer_required_worker_capability", return_value="macos"),
+        patch("orchestrator.core.precheck.pre_run_check.infer_required_worker_capability", return_value="macos"),
         patch(
-            "orchestrator.core.pre_run_check.evaluate_precheck_policy",
+            "orchestrator.core.precheck.pre_run_check.evaluate_precheck_policy",
             return_value=_policy_result(
                 decision_gate=DecisionGateResult(
                     triggered=False,
@@ -149,9 +149,9 @@ def test_pre_run_check_infers_macos_worker_requirement() -> None:
 
 def test_pre_run_check_requires_gtd_before_ready_for_agent() -> None:
     with (
-        patch("orchestrator.core.pre_run_check.infer_required_worker_capability", return_value="linux"),
+        patch("orchestrator.core.precheck.pre_run_check.infer_required_worker_capability", return_value="linux"),
         patch(
-            "orchestrator.core.pre_run_check.evaluate_precheck_policy",
+            "orchestrator.core.precheck.pre_run_check.evaluate_precheck_policy",
             return_value=_policy_result(
                 decision_gate=DecisionGateResult(
                     triggered=False,
@@ -181,8 +181,8 @@ def test_pre_run_check_requires_gtd_before_ready_for_agent() -> None:
 
 def test_pre_run_check_passes_recorded_answers_to_policy() -> None:
     with (
-        patch("orchestrator.core.pre_run_check.infer_required_worker_capability", return_value="linux"),
-        patch("orchestrator.core.pre_run_check.evaluate_precheck_policy") as policy_mock,
+        patch("orchestrator.core.precheck.pre_run_check.infer_required_worker_capability", return_value="linux"),
+        patch("orchestrator.core.precheck.pre_run_check.evaluate_precheck_policy") as policy_mock,
     ):
         policy_mock.return_value = _policy_result(
             decision_gate=DecisionGateResult(
@@ -226,9 +226,9 @@ def test_pre_run_check_passes_recorded_answers_to_policy() -> None:
 
 def test_pre_run_check_does_not_hardcode_pm_parent_execution_block() -> None:
     with (
-        patch("orchestrator.core.pre_run_check.infer_required_worker_capability", return_value="linux"),
+        patch("orchestrator.core.precheck.pre_run_check.infer_required_worker_capability", return_value="linux"),
         patch(
-            "orchestrator.core.pre_run_check.evaluate_precheck_policy",
+            "orchestrator.core.precheck.pre_run_check.evaluate_precheck_policy",
             return_value=_policy_result(
                 decision_gate=DecisionGateResult(
                     triggered=False,
@@ -257,9 +257,9 @@ def test_pre_run_check_does_not_hardcode_pm_parent_execution_block() -> None:
 
 def test_pre_run_check_does_not_hardcode_sync_stale_execution_block() -> None:
     with (
-        patch("orchestrator.core.pre_run_check.infer_required_worker_capability", return_value="linux"),
+        patch("orchestrator.core.precheck.pre_run_check.infer_required_worker_capability", return_value="linux"),
         patch(
-            "orchestrator.core.pre_run_check.evaluate_precheck_policy",
+            "orchestrator.core.precheck.pre_run_check.evaluate_precheck_policy",
             return_value=_policy_result(
                 decision_gate=DecisionGateResult(
                     triggered=False,
@@ -287,7 +287,7 @@ def test_pre_run_check_does_not_hardcode_sync_stale_execution_block() -> None:
 
 
 def test_pre_run_check_requires_fix_for_invalid_worker_label() -> None:
-    with patch("orchestrator.core.pre_run_check.evaluate_precheck_policy") as policy_mock:
+    with patch("orchestrator.core.precheck.pre_run_check.evaluate_precheck_policy") as policy_mock:
         policy_mock.return_value = _policy_result(
             decision_gate=DecisionGateResult(
                 triggered=False,
@@ -318,7 +318,7 @@ def test_pre_run_check_requires_fix_for_invalid_worker_label() -> None:
 
 
 def test_pre_run_check_requires_fix_for_conflicting_worker_labels() -> None:
-    with patch("orchestrator.core.pre_run_check.evaluate_precheck_policy") as policy_mock:
+    with patch("orchestrator.core.precheck.pre_run_check.evaluate_precheck_policy") as policy_mock:
         policy_mock.return_value = _policy_result(
             decision_gate=DecisionGateResult(
                 triggered=False,

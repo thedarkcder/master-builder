@@ -20,9 +20,9 @@ from orchestrator.api.webhooks.pr_review_comment_service import (
     upsert_manual_fix_review_thread_reply,
     upsert_sticky_review_comment,
 )
-from orchestrator.core.pr_review_findings import PrReviewFindingsResult, ReviewFinding
-from orchestrator.core.reviewer import ReviewerSignal
-from orchestrator.core.pr_ready import PrReadinessResult
+from orchestrator.core.review.pr_review_findings import PrReviewFindingsResult, ReviewFinding
+from orchestrator.core.review.reviewer import ReviewerSignal
+from orchestrator.core.review.pr_ready import PrReadinessResult
 from orchestrator.storage.models import Base, PrReviewPublication, Project, Tenant
 
 

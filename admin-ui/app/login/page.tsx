@@ -7,6 +7,7 @@ import { Zap } from "lucide-react";
 
 import { useAuth } from "@/components/auth-provider";
 import { getDefaultAuthenticatedRoute } from "@/lib/auth-routing";
+import { clearLogoutRedirectBarrier, hasLogoutRedirectBarrier } from "@/lib/auth-redirect-barrier";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { readLastWorkspaceTenantIdFromBrowser } from "@/lib/workspace-preference";
@@ -50,7 +51,16 @@ function LoginPageInner() {
   }
 
   useEffect(() => {
+    if (ready && !credentials) {
+      clearLogoutRedirectBarrier();
+    }
+  }, [credentials, ready]);
+
+  useEffect(() => {
     if (ready && credentials && principal) {
+      if (hasLogoutRedirectBarrier()) {
+        return;
+      }
       const preferredTenantId = readLastWorkspaceTenantIdFromBrowser();
       router.replace(
         needsOnboarding
@@ -69,6 +79,8 @@ function LoginPageInner() {
   }, [searchParams]);
 
   const resetSucceeded = searchParams.get("reset") === "success";
+  const nextPath = searchParams.get("next");
+  const safeNextPath = nextPath && nextPath.startsWith("/") && !nextPath.startsWith("//") ? nextPath : null;
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -77,7 +89,8 @@ function LoginPageInner() {
     try {
       await login({
         identifier: identifier.trim(),
-        password
+        password,
+        redirectTo: safeNextPath,
       });
     } catch (error) {
       const message = normalizeAuthErrorMessage(error instanceof Error ? error.message : "Invalid credentials");

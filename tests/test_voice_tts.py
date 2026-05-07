@@ -184,7 +184,7 @@ class VoiceTtsTests(unittest.TestCase):
         self.assertEqual((first_text, first_copy), ("first", True))
         self.assertEqual((second_text, second_copy), ("second", True))
 
-    def test_ensure_voice_reply_provider_ready_prewarms_predefined_voices(self) -> None:
+    def test_ensure_voice_reply_provider_ready_prewarms_persona_default_voices_and_configured_voice(self) -> None:
         settings = Settings(
             voice_tts_provider="pocket_tts",
             pocket_tts_voice="jean",
@@ -199,7 +199,7 @@ class VoiceTtsTests(unittest.TestCase):
             patch("orchestrator.core.voice.tts._load_pocket_tts_runtime", return_value=runtime),
             patch(
                 "orchestrator.core.voice.tts.list_predefined_pocket_tts_voices",
-                return_value=("alba", "jean"),
+                side_effect=AssertionError("predefined catalog should not be used for default prewarm"),
             ),
             patch(
                 "orchestrator.core.voice.tts._resolve_pocket_tts_audio_prompt_source",
@@ -208,11 +208,65 @@ class VoiceTtsTests(unittest.TestCase):
         ):
             warmed_voice_ids = ensure_voice_reply_provider_ready(settings=settings)
 
-        self.assertEqual(warmed_voice_ids, ["alba", "jean"])
+        self.assertEqual(warmed_voice_ids, ["marius", "javert", "eponine", "cosette", "fantine", "jean"])
         self.assertEqual(_FakeTTSModel.load_calls, 1)
-        self.assertEqual(len(_FakeTTSModel.model.loaded_voices), 2)
-        self.assertTrue(str(_FakeTTSModel.model.loaded_voices[0]).endswith("/alba.safetensors"))
-        self.assertTrue(str(_FakeTTSModel.model.loaded_voices[1]).endswith("/jean.safetensors"))
+        self.assertEqual(len(_FakeTTSModel.model.loaded_voices), 6)
+        self.assertTrue(str(_FakeTTSModel.model.loaded_voices[0]).endswith("/marius.safetensors"))
+        self.assertTrue(str(_FakeTTSModel.model.loaded_voices[-1]).endswith("/jean.safetensors"))
+
+    def test_ensure_voice_reply_provider_ready_uses_configured_voice_without_predefined_catalog(self) -> None:
+        settings = Settings(
+            voice_tts_provider="pocket_tts",
+            pocket_tts_voice="alba",
+        )
+        runtime = {
+            "TTSModel": _FakeTTSModel,
+            "numpy": np,
+            "signal": __import__("scipy.signal", fromlist=["resample"]),
+        }
+
+        with (
+            patch("orchestrator.core.voice.tts._load_pocket_tts_runtime", return_value=runtime),
+            patch(
+                "orchestrator.core.voice.tts.list_predefined_pocket_tts_voices",
+                side_effect=AssertionError("predefined catalog should not be required when a configured voice exists"),
+            ),
+            patch(
+                "orchestrator.core.voice.tts._resolve_pocket_tts_audio_prompt_source",
+                side_effect=lambda voice, **_: Path(f"/tmp/{voice}.safetensors"),
+            ),
+        ):
+            warmed_voice_ids = ensure_voice_reply_provider_ready(settings=settings)
+
+        self.assertEqual(warmed_voice_ids, ["marius", "javert", "eponine", "cosette", "fantine", "alba"])
+        self.assertEqual(_FakeTTSModel.load_calls, 1)
+        self.assertEqual(len(_FakeTTSModel.model.loaded_voices), 6)
+        self.assertTrue(str(_FakeTTSModel.model.loaded_voices[-1]).endswith("/alba.safetensors"))
+
+    def test_ensure_voice_reply_provider_ready_uses_voice_room_persona_defaults_without_predefined_catalog(self) -> None:
+        settings = Settings(voice_tts_provider="pocket_tts")
+        runtime = {
+            "TTSModel": _FakeTTSModel,
+            "numpy": np,
+            "signal": __import__("scipy.signal", fromlist=["resample"]),
+        }
+
+        with (
+            patch("orchestrator.core.voice.tts._load_pocket_tts_runtime", return_value=runtime),
+            patch(
+                "orchestrator.core.voice.tts.list_predefined_pocket_tts_voices",
+                side_effect=AssertionError("predefined catalog should not be used for default prewarm"),
+            ),
+            patch(
+                "orchestrator.core.voice.tts._resolve_pocket_tts_audio_prompt_source",
+                side_effect=lambda voice, **_: Path(f"/tmp/{voice}.safetensors"),
+            ),
+        ):
+            warmed_voice_ids = ensure_voice_reply_provider_ready(settings=settings)
+
+        self.assertEqual(warmed_voice_ids, ["marius", "javert", "eponine", "cosette", "fantine"])
+        self.assertEqual(_FakeTTSModel.load_calls, 1)
+        self.assertEqual(len(_FakeTTSModel.model.loaded_voices), 5)
 
     def test_predefined_voice_uses_cached_hf_asset_before_network(self) -> None:
         huggingface_hub = type("Hub", (), {})()

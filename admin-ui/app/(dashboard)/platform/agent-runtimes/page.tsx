@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Bot, Plus, RefreshCw, RotateCcw, Save, Trash2 } from "lucide-react";
 
 import { useAuth } from "@/components/auth-provider";
@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { useToast } from "@/components/ui/toast-provider";
 import {
   createAgentRuntimeProfile,
   deleteAgentRuntimeProfile,
@@ -157,8 +158,20 @@ function draftToWritePayload(draft: ProfileDraft): AgentExecutionProfileWritePay
   };
 }
 
+function emptyModelCatalog(runtimeKind: string): CodexModelCatalogRecord {
+  return {
+    default_model: "",
+    default_reasoning_effort: "medium",
+    runtime_kind: runtimeKind,
+    profile_name: null,
+    models: [],
+    reasoning_efforts: [],
+  };
+}
+
 export default function AgentRuntimesPage() {
   const { credentials, principal, principalReady, ready } = useAuth();
+  const { showToast } = useToast();
   const [activeTab, setActiveTab] = useState<RuntimeTab>("routing");
   const [routing, setRouting] = useState<AgentRuntimeRoutingRecord | null>(null);
   const [profilesResponse, setProfilesResponse] = useState<AgentExecutionProfilesRecord | null>(null);
@@ -177,6 +190,7 @@ export default function AgentRuntimesPage() {
   const [editingProfileName, setEditingProfileName] = useState<string | null>(null);
   const [draft, setDraft] = useState<ProfileDraft>(() => buildDraft());
   const [modelCatalog, setModelCatalog] = useState<CodexModelCatalogRecord | null>(null);
+  const modelCatalogRequestRef = useRef(0);
 
   const refreshRouting = useCallback(async (): Promise<void> => {
     if (!credentials) return;
@@ -187,7 +201,7 @@ export default function AgentRuntimesPage() {
       setRoleRouting(response.role_routing);
       setNameRouting(response.name_routing);
       setSelectorRouting(response.selector_routing);
-      setRoutingStatusLine("Loaded platform agent runtime routing.");
+      setRoutingStatusLine("");
     } catch (error) {
       setRoutingStatusLine(`Failed to load agent runtimes: ${(error as Error).message}`);
     } finally {
@@ -244,15 +258,20 @@ export default function AgentRuntimesPage() {
     (currentTransportNeedsApiKey && !String(draft.api_key_secret_ref || "").trim());
 
   const loadModelCatalog = useCallback(
-    async (nextRuntimeKind: string, profileName: string | null) => {
+    async (nextRuntimeKind: string) => {
       if (!credentials) return;
+      const requestId = modelCatalogRequestRef.current + 1;
+      modelCatalogRequestRef.current = requestId;
+      setModelCatalog(emptyModelCatalog(nextRuntimeKind));
       try {
         const catalog = await listCodexModels(credentials, {
           runtimeKind: nextRuntimeKind,
-          profileName: profileName?.trim() ? profileName.trim() : null,
         });
+        if (modelCatalogRequestRef.current !== requestId) return;
         setModelCatalog(catalog);
       } catch (error) {
+        if (modelCatalogRequestRef.current !== requestId) return;
+        setModelCatalog(emptyModelCatalog(nextRuntimeKind));
         setProfilesStatusLine(`Failed to load models: ${(error as Error).message}`);
       }
     },
@@ -272,10 +291,10 @@ export default function AgentRuntimesPage() {
       setRoleRouting(response.role_routing);
       setNameRouting(response.name_routing);
       setSelectorRouting(response.selector_routing);
-      setRoutingStatusLine("Saved platform agent runtime routing.");
+      showToast({ title: "Runtime routing saved", tone: "success" });
       await refreshProfiles();
     } catch (error) {
-      setRoutingStatusLine(`Save failed: ${(error as Error).message}`);
+      showToast({ title: "Runtime routing save failed", description: (error as Error).message, tone: "error" });
     } finally {
       setSavingRouting(false);
     }
@@ -291,10 +310,10 @@ export default function AgentRuntimesPage() {
       setRoleRouting(response.role_routing);
       setNameRouting(response.name_routing);
       setSelectorRouting(response.selector_routing);
-      setRoutingStatusLine("Reset platform agent runtime routing to inherited defaults.");
+      showToast({ title: "Runtime routing reset", description: "Overrides reset to inherited defaults.", tone: "success" });
       await refreshProfiles();
     } catch (error) {
-      setRoutingStatusLine(`Reset failed: ${(error as Error).message}`);
+      showToast({ title: "Runtime routing reset failed", description: (error as Error).message, tone: "error" });
     } finally {
       setSavingRouting(false);
     }
@@ -310,7 +329,7 @@ export default function AgentRuntimesPage() {
     try {
       if (editingProfileName) {
         const updated = await updateAgentRuntimeProfile(credentials, editingProfileName, draftToWritePayload(draft));
-        setProfilesStatusLine(`Saved profile ${updated.profile_name}.`);
+        showToast({ title: "Runtime profile saved", description: updated.profile_name, tone: "success" });
       } else {
         const payload: AgentExecutionProfileCreatePayload = {
           profile_name: draft.profile_name.trim(),
@@ -318,11 +337,11 @@ export default function AgentRuntimesPage() {
         };
         const created = await createAgentRuntimeProfile(credentials, payload);
         setEditingProfileName(created.profile_name);
-        setProfilesStatusLine(`Created profile ${created.profile_name}.`);
+        showToast({ title: "Runtime profile created", description: created.profile_name, tone: "success" });
       }
       await refreshAll();
     } catch (error) {
-      setProfilesStatusLine(`Save failed: ${(error as Error).message}`);
+      showToast({ title: "Runtime profile save failed", description: (error as Error).message, tone: "error" });
     } finally {
       setSavingProfile(false);
     }
@@ -335,10 +354,10 @@ export default function AgentRuntimesPage() {
     try {
       const resetProfileRecord = await resetAgentRuntimeProfile(credentials, editingProfileName);
       setDraft(buildDraft(resetProfileRecord));
-      setProfilesStatusLine(`Reset profile ${resetProfileRecord.profile_name}.`);
+      showToast({ title: "Runtime profile reset", description: resetProfileRecord.profile_name, tone: "success" });
       await refreshAll();
     } catch (error) {
-      setProfilesStatusLine(`Reset failed: ${(error as Error).message}`);
+      showToast({ title: "Runtime profile reset failed", description: (error as Error).message, tone: "error" });
     } finally {
       setSavingProfile(false);
     }
@@ -352,10 +371,10 @@ export default function AgentRuntimesPage() {
       await deleteAgentRuntimeProfile(credentials, editingProfileName);
       setEditingProfileName(null);
       setDraft(buildDraft());
-      setProfilesStatusLine(`Deleted profile ${editingProfileName}.`);
+      showToast({ title: "Runtime profile deleted", description: editingProfileName, tone: "success" });
       await refreshAll();
     } catch (error) {
-      setProfilesStatusLine(`Delete failed: ${(error as Error).message}`);
+      showToast({ title: "Runtime profile delete failed", description: (error as Error).message, tone: "error" });
     } finally {
       setSavingProfile(false);
     }
@@ -377,8 +396,8 @@ export default function AgentRuntimesPage() {
 
   useEffect(() => {
     if (!credentials) return;
-    void loadModelCatalog(runtimeKind, editingProfileName);
-  }, [credentials, runtimeKind, editingProfileName, loadModelCatalog]);
+    void loadModelCatalog(runtimeKind);
+  }, [credentials, runtimeKind, loadModelCatalog]);
 
   if (!principalReady) {
     return <main className="p-8 text-sm text-muted-foreground">Loading agent runtimes...</main>;
@@ -686,6 +705,7 @@ export default function AgentRuntimesPage() {
                   onChange={(event) =>
                     setDraft((current) => ({
                       ...applyRuntimeTransportDefaults(current, event.target.value),
+                      model: null,
                       reasoning_effort: null,
                     }))
                   }

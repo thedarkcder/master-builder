@@ -43,7 +43,7 @@ import {
   type ProjectDeploymentDomainRecord,
   type ProjectDeploymentResourceRecord,
   type ProjectAppDeploymentConfigUpdatePayload,
-} from "@/lib/api";
+} from "@/lib/api/deployments";
 import { cn } from "@/lib/utils";
 import { ArrowRight, Layers3, Plus, RefreshCw, Rocket, Save, Search, Server, ShieldCheck } from "lucide-react";
 

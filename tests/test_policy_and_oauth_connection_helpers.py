@@ -6,9 +6,9 @@ from unittest.mock import MagicMock, patch
 
 from fastapi import HTTPException
 
-from orchestrator.api.jira_oauth.connection_service import resolve_tenant_jira_connection, tenant_jira_oauth_context
-from orchestrator.core.agent_runtime_resolver import resolve_agent_execution_profile
-from orchestrator.core import project_policy
+from orchestrator.api.atlassian_oauth.connection_service import resolve_tenant_atlassian_connection, tenant_atlassian_oauth_context
+from orchestrator.core.runtime.agent_runtime_resolver import resolve_agent_execution_profile
+from orchestrator.core.projects import policy as project_policy
 from orchestrator.core.communications import integration_contracts
 
 
@@ -28,7 +28,7 @@ class ProjectPolicyHelpersTests(unittest.TestCase):
                 "max_concurrent_runs": "bad",
                 "allowed_commands": [" run ", "", "  ", "retry"],
                 "require_agents_md": True,
-                "codex_model": " gpt-5.3-codex-spark ",
+                "codex_model": " gpt-5.4-mini ",
                 "codex_reasoning_effort": " high ",
                 "ignored": "x",
             }
@@ -45,7 +45,7 @@ class ProjectPolicyHelpersTests(unittest.TestCase):
         self.assertNotIn("max_concurrent_runs", normalized)
         self.assertEqual(normalized["allowed_commands"], ["run", "retry"])
         self.assertEqual(normalized["require_agents_md"], True)
-        self.assertEqual(normalized["codex_model"], "gpt-5.3-codex-spark")
+        self.assertEqual(normalized["codex_model"], "gpt-5.4-mini")
         self.assertEqual(normalized["codex_reasoning_effort"], "high")
 
     def test_normalize_project_policy_overrides_includes_execution_profiles(self) -> None:
@@ -98,7 +98,7 @@ class ProjectPolicyHelpersTests(unittest.TestCase):
                 "max_concurrent_runs": 3,
                 "allowed_commands": ["retry", "cancel"],
                 "require_agents_md": True,
-                "codex_model": "gpt-5.3-codex-spark",
+                "codex_model": "gpt-5.4-mini",
                 "codex_reasoning_effort": "high",
             },
             default_codex_model="gpt-5.4",
@@ -114,7 +114,7 @@ class ProjectPolicyHelpersTests(unittest.TestCase):
         self.assertEqual(effective["max_concurrent_runs"], 3)
         self.assertEqual(effective["allowed_commands"], ["retry"])
         self.assertEqual(effective["require_agents_md"], True)
-        self.assertEqual(effective["codex_model"], "gpt-5.3-codex-spark")
+        self.assertEqual(effective["codex_model"], "gpt-5.4-mini")
         self.assertEqual(effective["codex_reasoning_effort"], "high")
 
     def test_resolve_agent_execution_profile_prefers_selector_specific_profile(self) -> None:
@@ -170,7 +170,7 @@ class ProjectPolicyHelpersTests(unittest.TestCase):
                     "engineering_execution": {
                         "runtime_kind": "codex_cli",
                         "cli_command": "codex-alt",
-                        "model": "gpt-5.3-codex-spark",
+                        "model": "gpt-5.4-mini",
                         "reasoning_effort": "low",
                         "tool_bridge_allowed": True,
                     }
@@ -181,7 +181,7 @@ class ProjectPolicyHelpersTests(unittest.TestCase):
         )
         self.assertEqual(profile.profile_name, "engineering_execution")
         self.assertEqual(profile.cli_command, "codex-alt")
-        self.assertEqual(profile.model, "gpt-5.3-codex-spark")
+        self.assertEqual(profile.model, "gpt-5.4-mini")
         self.assertEqual(profile.reasoning_effort, "low")
 
     def test_resolve_agent_execution_profile_prefers_platform_named_agent_routing(self) -> None:
@@ -189,7 +189,7 @@ class ProjectPolicyHelpersTests(unittest.TestCase):
             codex_cli_command="codex",
             codex_model="gpt-5.4",
             codex_reasoning_effort="medium",
-            codex_supported_models="gpt-5.4,gpt-5.3-codex,gpt-5.3-codex-spark",
+            codex_supported_models="gpt-5.4,gpt-5.4-mini,gpt-5.3-codex",
             chat_cli_command="chat-cli",
             chat_model="gpt-5.4",
             chat_reasoning_effort="medium",
@@ -217,7 +217,7 @@ class ProjectPolicyHelpersTests(unittest.TestCase):
             codex_cli_command="codex",
             codex_model="gpt-5.4",
             codex_reasoning_effort="medium",
-            codex_supported_models="gpt-5.4,gpt-5.3-codex,gpt-5.3-codex-spark",
+            codex_supported_models="gpt-5.4,gpt-5.4-mini,gpt-5.3-codex",
             chat_cli_command="chat-cli",
             chat_model="gpt-5.4",
             chat_reasoning_effort="medium",
@@ -242,20 +242,20 @@ class ProjectPolicyHelpersTests(unittest.TestCase):
 
 
 class JiraConnectionServiceTests(unittest.TestCase):
-    def test_resolve_tenant_jira_connection_validation(self) -> None:
+    def test_resolve_tenant_atlassian_connection_validation(self) -> None:
         session = MagicMock()
         tenant = SimpleNamespace(jira_config={})
         with self.assertRaises(HTTPException) as missing_ctx:
-            resolve_tenant_jira_connection(session=session, tenant=tenant)
+            resolve_tenant_atlassian_connection(session=session, tenant=tenant)
         self.assertEqual(missing_ctx.exception.status_code, 400)
 
         tenant = SimpleNamespace(jira_config={"connection_id": "conn-1"})
         session.get.return_value = None
         with self.assertRaises(HTTPException) as not_found_ctx:
-            resolve_tenant_jira_connection(session=session, tenant=tenant)
+            resolve_tenant_atlassian_connection(session=session, tenant=tenant)
         self.assertEqual(not_found_ctx.exception.status_code, 400)
 
-    def test_tenant_jira_oauth_context(self) -> None:
+    def test_tenant_atlassian_oauth_context(self) -> None:
         session = MagicMock()
         tenant = SimpleNamespace(jira_config={"connection_id": "conn-1"})
         connection = SimpleNamespace(connection_id="conn-1")
@@ -263,10 +263,10 @@ class JiraConnectionServiceTests(unittest.TestCase):
         settings = SimpleNamespace()
 
         with (
-            patch("orchestrator.api.jira_oauth.connection_service.refresh_jira_connection_tokens", return_value="tok"),
-            patch("orchestrator.api.jira_oauth.connection_service.jira_oauth_client", return_value="client"),
+            patch("orchestrator.api.atlassian_oauth.connection_service.refresh_atlassian_connection_tokens", return_value="tok"),
+            patch("orchestrator.api.atlassian_oauth.connection_service.atlassian_oauth_client", return_value="client"),
         ):
-            context = tenant_jira_oauth_context(session=session, tenant=tenant, settings=settings)
+            context = tenant_atlassian_oauth_context(session=session, tenant=tenant, settings=settings)
 
         self.assertEqual(context.connection, connection)
         self.assertEqual(context.access_token, "tok")

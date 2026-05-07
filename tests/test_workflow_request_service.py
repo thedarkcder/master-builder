@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 import unittest
 
-from orchestrator.core.worker_capability_normalization import WorkerCapability
+from orchestrator.core.worker.capability_normalization import WorkerCapability
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.core.workflow.runner import PmPlan, WorkflowStageCheckpoint
 from orchestrator.core.worker.workflow_request_service import build_workflow_request_for_run
@@ -67,6 +67,19 @@ class WorkflowRequestServiceTests(unittest.TestCase):
         )
         return tenant, run, effective_policy, settings
 
+    @staticmethod
+    def _prepared_repo(checkout_dir: Path) -> SimpleNamespace:
+        return SimpleNamespace(
+            prepared_repo=SimpleNamespace(
+                repo_dir=checkout_dir,
+                execution_branch="run/tp-1/run-1",
+                start_point_ref="origin/main",
+                start_point_sha="abc123",
+                workspace_key="worker-a",
+            ),
+            actions_taken=(),
+        )
+
     def test_build_workflow_request_requires_project_context(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             tenant, run, effective_policy, settings = self._base_inputs(tmp_dir)
@@ -102,19 +115,9 @@ class WorkflowRequestServiceTests(unittest.TestCase):
                 / "repo"
             )
             checkout_dir.mkdir(parents=True, exist_ok=True)
-            with (
-                patch(
-                    "orchestrator.core.worker.workflow_request_service.ensure_run_worktree",
-                    return_value=(checkout_dir, "run/tp-1/run-1"),
-                ),
-                patch(
-                    "orchestrator.core.worker.workflow_request_service.read_run_worktree_metadata",
-                    return_value={"start_point_ref": "origin/main", "start_point_sha": "abc123"},
-                ),
-                patch(
-                    "orchestrator.core.worker.workflow_request_service.validate_run_worktree",
-                    return_value=None,
-                ),
+            with patch(
+                "orchestrator.core.worker.workflow_request_service.prepare_execution_repo_for_run",
+                return_value=self._prepared_repo(checkout_dir),
             ):
                 with self.assertRaisesRegex(ValueError, "Invalid worker capability token\\(s\\)"):
                     build_workflow_request_for_run(
@@ -137,10 +140,10 @@ class WorkflowRequestServiceTests(unittest.TestCase):
                 environment={},
             )
             with patch(
-                "orchestrator.core.worker.workflow_request_service.ensure_run_worktree",
+                "orchestrator.core.worker.workflow_request_service.prepare_execution_repo_for_run",
                 side_effect=ValueError("checkout is missing"),
             ):
-                with self.assertRaisesRegex(ValueError, "checkout is missing"):
+                with self.assertRaisesRegex(ValueError, "Run repo setup failed"):
                     build_workflow_request_for_run(
                         session=self._session_with_no_human_inputs(),
                         tenant=tenant,
@@ -161,10 +164,10 @@ class WorkflowRequestServiceTests(unittest.TestCase):
                 environment={},
             )
             with patch(
-                "orchestrator.core.worker.workflow_request_service.ensure_run_worktree",
+                "orchestrator.core.worker.workflow_request_service.prepare_execution_repo_for_run",
                 side_effect=NotADirectoryError("repo/.git/info"),
             ):
-                with self.assertRaisesRegex(ValueError, "Run worktree bootstrap failed"):
+                with self.assertRaisesRegex(ValueError, "Run repo setup failed"):
                     build_workflow_request_for_run(
                         session=self._session_with_no_human_inputs(),
                         tenant=tenant,
@@ -195,19 +198,9 @@ class WorkflowRequestServiceTests(unittest.TestCase):
                 / "repo"
             )
             checkout_dir.mkdir(parents=True, exist_ok=True)
-            with (
-                patch(
-                    "orchestrator.core.worker.workflow_request_service.ensure_run_worktree",
-                    return_value=(checkout_dir, "run/tp-1/run-1"),
-                ),
-                patch(
-                    "orchestrator.core.worker.workflow_request_service.read_run_worktree_metadata",
-                    return_value={"start_point_ref": "origin/main", "start_point_sha": "abc123"},
-                ),
-                patch(
-                    "orchestrator.core.worker.workflow_request_service.validate_run_worktree",
-                    return_value=None,
-                ),
+            with patch(
+                "orchestrator.core.worker.workflow_request_service.prepare_execution_repo_for_run",
+                return_value=self._prepared_repo(checkout_dir),
             ):
                 request = build_workflow_request_for_run(
                     session=self._session_with_no_human_inputs(),
@@ -288,16 +281,8 @@ class WorkflowRequestServiceTests(unittest.TestCase):
                     return_value=fake_client,
                 ),
                 patch(
-                    "orchestrator.core.worker.workflow_request_service.ensure_run_worktree",
-                    return_value=(checkout_dir, "run/tp-1/run-1"),
-                ),
-                patch(
-                    "orchestrator.core.worker.workflow_request_service.read_run_worktree_metadata",
-                    return_value={"start_point_ref": "origin/main", "start_point_sha": "abc123"},
-                ),
-                patch(
-                    "orchestrator.core.worker.workflow_request_service.validate_run_worktree",
-                    return_value=None,
+                    "orchestrator.core.worker.workflow_request_service.prepare_execution_repo_for_run",
+                    return_value=self._prepared_repo(checkout_dir),
                 ),
             ):
                 request = build_workflow_request_for_run(
@@ -338,16 +323,8 @@ class WorkflowRequestServiceTests(unittest.TestCase):
             checkout_dir.mkdir(parents=True, exist_ok=True)
             with (
                 patch(
-                    "orchestrator.core.worker.workflow_request_service.ensure_run_worktree",
-                    return_value=(checkout_dir, "run/tp-1/run-1"),
-                ),
-                patch(
-                    "orchestrator.core.worker.workflow_request_service.read_run_worktree_metadata",
-                    return_value={"start_point_ref": "origin/main", "start_point_sha": "abc123"},
-                ),
-                patch(
-                    "orchestrator.core.worker.workflow_request_service.validate_run_worktree",
-                    return_value=None,
+                    "orchestrator.core.worker.workflow_request_service.prepare_execution_repo_for_run",
+                    return_value=self._prepared_repo(checkout_dir),
                 ),
                 patch(
                     "orchestrator.core.worker.workflow_request_service._entry_checkpoint",
@@ -404,16 +381,8 @@ class WorkflowRequestServiceTests(unittest.TestCase):
             checkout_dir.mkdir(parents=True, exist_ok=True)
             with (
                 patch(
-                    "orchestrator.core.worker.workflow_request_service.ensure_run_worktree",
-                    return_value=(checkout_dir, "run/tp-1/run-1"),
-                ),
-                patch(
-                    "orchestrator.core.worker.workflow_request_service.read_run_worktree_metadata",
-                    return_value={"start_point_ref": "origin/main", "start_point_sha": "abc123"},
-                ),
-                patch(
-                    "orchestrator.core.worker.workflow_request_service.validate_run_worktree",
-                    return_value=None,
+                    "orchestrator.core.worker.workflow_request_service.prepare_execution_repo_for_run",
+                    return_value=self._prepared_repo(checkout_dir),
                 ),
                 patch(
                     "orchestrator.core.worker.workflow_request_service._entry_checkpoint",
@@ -443,7 +412,7 @@ class WorkflowRequestServiceTests(unittest.TestCase):
                 ["restore auth flow"],
             )
 
-    def test_build_workflow_request_drops_unsupported_resume_checkpoint_payload(self) -> None:
+    def test_build_workflow_request_rejects_unsupported_resume_checkpoint_payload(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             tenant, run, effective_policy, settings = self._base_inputs(tmp_dir)
             run.entry_mode = "resume"
@@ -469,16 +438,8 @@ class WorkflowRequestServiceTests(unittest.TestCase):
             checkout_dir.mkdir(parents=True, exist_ok=True)
             with (
                 patch(
-                    "orchestrator.core.worker.workflow_request_service.ensure_run_worktree",
-                    return_value=(checkout_dir, "run/tp-1/run-1"),
-                ),
-                patch(
-                    "orchestrator.core.worker.workflow_request_service.read_run_worktree_metadata",
-                    return_value={"start_point_ref": "origin/main", "start_point_sha": "abc123"},
-                ),
-                patch(
-                    "orchestrator.core.worker.workflow_request_service.validate_run_worktree",
-                    return_value=None,
+                    "orchestrator.core.worker.workflow_request_service.prepare_execution_repo_for_run",
+                    return_value=self._prepared_repo(checkout_dir),
                 ),
                 patch(
                     "orchestrator.core.worker.workflow_request_service._entry_checkpoint",
@@ -490,19 +451,18 @@ class WorkflowRequestServiceTests(unittest.TestCase):
                     ),
                 ),
             ):
-                request = build_workflow_request_for_run(
-                    session=self._session_with_no_human_inputs(),
-                    tenant=tenant,
-                    run=run,
-                    project=project,
-                    effective_policy=effective_policy,
-                    settings=settings,
-                )
-
-            self.assertEqual(request.entry_mode, "resume")
-            self.assertEqual(request.entry_stage, "dev")
-            self.assertEqual(request.checkpoint_id, "checkpoint-1")
-            self.assertIsNone(request.checkpoint_payload)
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "Unsupported execution snapshot version/shape",
+                ):
+                    build_workflow_request_for_run(
+                        session=self._session_with_no_human_inputs(),
+                        tenant=tenant,
+                        run=run,
+                        project=project,
+                        effective_policy=effective_policy,
+                        settings=settings,
+                    )
 
     def test_build_workflow_request_prefers_remediation_trigger_branch_and_base(self) -> None:
         with TemporaryDirectory() as tmp_dir:
@@ -536,16 +496,8 @@ class WorkflowRequestServiceTests(unittest.TestCase):
             checkout_dir.mkdir(parents=True, exist_ok=True)
             with (
                 patch(
-                    "orchestrator.core.worker.workflow_request_service.ensure_run_worktree",
-                    return_value=(checkout_dir, "run/tp-1/run-1"),
-                ),
-                patch(
-                    "orchestrator.core.worker.workflow_request_service.read_run_worktree_metadata",
-                    return_value={"start_point_ref": "origin/main", "start_point_sha": "abc123"},
-                ),
-                patch(
-                    "orchestrator.core.worker.workflow_request_service.validate_run_worktree",
-                    return_value=None,
+                    "orchestrator.core.worker.workflow_request_service.prepare_execution_repo_for_run",
+                    return_value=self._prepared_repo(checkout_dir),
                 ),
                 patch(
                     "orchestrator.core.worker.workflow_request_service._resolve_branch_from_open_pull_requests",
@@ -593,16 +545,8 @@ class WorkflowRequestServiceTests(unittest.TestCase):
             checkout_dir.mkdir(parents=True, exist_ok=True)
             with (
                 patch(
-                    "orchestrator.core.worker.workflow_request_service.ensure_run_worktree",
-                    return_value=(checkout_dir, "run/tp-1/run-1"),
-                ),
-                patch(
-                    "orchestrator.core.worker.workflow_request_service.read_run_worktree_metadata",
-                    return_value={"start_point_ref": "origin/main", "start_point_sha": "abc123"},
-                ),
-                patch(
-                    "orchestrator.core.worker.workflow_request_service.validate_run_worktree",
-                    return_value=None,
+                    "orchestrator.core.worker.workflow_request_service.prepare_execution_repo_for_run",
+                    return_value=self._prepared_repo(checkout_dir),
                 ),
                 patch(
                     "orchestrator.core.worker.workflow_request_service.answered_human_inputs_for_attempt",

@@ -7,6 +7,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from orchestrator.api.schemas import DiscordCommandRequest, DiscordCommandResponse
+from orchestrator.core.clarification.questions import ClarificationQuestionSet
 from orchestrator.storage.models import Tenant
 
 
@@ -22,7 +23,7 @@ def dispatch_issues_command(
     codex_working_dir: str,
     normalized_user_id: str,
     defer_seed_issues: bool,
-    seed_parent_issues_with_codex: Callable[..., Any],
+    seed_parent_issues_with_runtime: Callable[..., Any],
     find_seed_followup_context: Callable[..., Any],
     store_seed_followup_context: Callable[..., Any],
     clear_seed_followup_context: Callable[..., Any],
@@ -51,7 +52,7 @@ def dispatch_issues_command(
                 message="PM batch seeding started. I will reply in this thread with parent issue links when done.",
                 data={"deferred": True, "prompt_markdown": prompt_markdown},
             )
-        message, data = seed_parent_issues_with_codex(
+        message, data = seed_parent_issues_with_runtime(
             session=session,
             tenant=tenant,
             prompt_markdown=prompt_markdown,
@@ -73,7 +74,7 @@ def dispatch_issues_command(
                 project_id=scoped_project_id or "",
                 project_key=str(data.get("project_key") or ""),
                 issue_keys=[str(value) for value in data.get("all_parent_issue_keys", []) if str(value).strip()],
-                questions=[str(value) for value in data.get("questions", []) if str(value).strip()],
+                questions=list(data.get("questions", []) or []),
                 prompt_markdown=str(data.get("prompt_markdown") or prompt_markdown),
             )
             data["followup_request_id"] = request_id
@@ -135,11 +136,11 @@ def dispatch_issues_command(
                 detail="Only the original requester can submit this PM batch follow-up",
             )
         original_prompt = str(context.get("prompt_markdown") or "").strip()
-        context_questions = [
-            str(value).strip() for value in context.get("questions", []) if str(value).strip()
-        ]
+        context_questions = ClarificationQuestionSet.from_values(
+            context.get("questions", []) if isinstance(context.get("questions"), list) else ()
+        )
         question_block = (
-            "\n".join(f"- {value}" for value in context_questions)
+            "\n".join(context_questions.render_lines(include_reasons=True))
             if context_questions
             else "- No explicit questions were captured."
         )
@@ -154,7 +155,7 @@ def dispatch_issues_command(
         forced_issue_keys = [
             str(value).strip().upper() for value in context.get("issue_keys", []) if str(value).strip()
         ]
-        message, data = seed_parent_issues_with_codex(
+        message, data = seed_parent_issues_with_runtime(
             session=session,
             tenant=tenant,
             prompt_markdown=followup_prompt,
@@ -181,7 +182,7 @@ def dispatch_issues_command(
                 project_id=str(context.get("project_id") or "").strip() or scoped_project_id or "",
                 project_key=str(data.get("project_key") or context.get("project_key") or ""),
                 issue_keys=[str(value) for value in data.get("all_parent_issue_keys", []) if str(value).strip()],
-                questions=[str(value) for value in data.get("questions", []) if str(value).strip()],
+                questions=list(data.get("questions", []) or []),
                 prompt_markdown=str(data.get("prompt_markdown") or followup_prompt),
             )
             data["followup_request_id"] = request_id

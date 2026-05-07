@@ -6,7 +6,6 @@ from statistics import mean
 from fastapi import HTTPException, status
 from sqlalchemy import select
 
-from orchestrator.api.admin.token_usage_backfill import materialize_token_usage_for_scope
 from orchestrator.api.schemas import (
     TokenTimelineRead,
     TokenTimelineTotalsRead,
@@ -134,22 +133,6 @@ def get_run_token_timeline(
         include_retries=include_retries,
         model=model,
     )
-    if not rows:
-        materialize_token_usage_for_scope(
-            session=session,
-            tenant_id=tenant_id,
-            project_id=str(run.project_id or "").strip(),
-            run_ids=[run_id],
-        )
-        rows = _load_rows(
-            session=session,
-            run_id=run_id,
-            stage=stage,
-            attempt=attempt,
-            include_retries=include_retries,
-            model=model,
-        )
-
     turn_records: list[TokenTimelineTurnRead] = []
     total_input_tokens = 0
     total_cached_input_tokens = 0

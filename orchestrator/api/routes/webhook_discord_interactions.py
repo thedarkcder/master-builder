@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from orchestrator.api.dependencies import get_session
@@ -25,10 +25,10 @@ from orchestrator.core.communications import (
     TransportEnvelope,
 )
 from orchestrator.core.config import get_settings
-from orchestrator.core.followup_context_service import (
+from orchestrator.core.pm.followup_context_service import (
     resolve_discord_interaction_subject_scope as _resolve_interaction_subject_scope,
 )
-from orchestrator.core.webhook_job_queue import (
+from orchestrator.core.webhooks.job_queue import (
     WEBHOOK_TRANSPORT_DISCORD_INTERACTION,
     WebhookJobEnqueueRequest,
     enqueue_webhook_job,
@@ -93,6 +93,8 @@ async def ingest_discord_interaction(
                 logger=logger,
             ).find_tenant_for_discord_channel,
         )
+        if not tenant_id:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unable to resolve interaction tenant")
         enqueue_result = enqueue_webhook_job(
             session,
             request=WebhookJobEnqueueRequest(

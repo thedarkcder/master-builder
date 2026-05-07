@@ -3,21 +3,19 @@ from __future__ import annotations
 import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
-from types import SimpleNamespace
 
 from cryptography.fernet import Fernet
 
 from orchestrator.core.config import get_settings
-from orchestrator.core.secrets import encrypt_value
+from orchestrator.core.platform.secrets import encrypt_value
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
-from orchestrator.storage.models import DeploymentHostCommand, JiraOAuthConnection, ProjectDeploymentRestoreRun
+from orchestrator.storage.models import AtlassianOAuthConnection, DeploymentHostCommand, ProjectDeploymentRestoreRun
 from orchestrator.worker import _has_available_webhook_job_once
 from tests.test_support.db_harness import SqliteTemplateApiTestCase
 
 
 class DeploymentHostApiTests(SqliteTemplateApiTestCase):
     _secrets_encryption_key: str
-    _provision_jira_webhook_patcher: object
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -71,18 +69,7 @@ class DeploymentHostApiTests(SqliteTemplateApiTestCase):
         get_settings.cache_clear()
         reset_db_engine_cache()
 
-        def _stub_provision_jira_webhook(**kwargs: object) -> SimpleNamespace:
-            _ = kwargs
-            return SimpleNamespace(ok=True, action="provision", details="Provisioned 0 Jira webhook(s).", webhook_ids=[])
-
-        self._provision_jira_webhook_patcher = patch(
-            "orchestrator.api.routes.admin_tenants.provision_jira_webhook",
-            side_effect=_stub_provision_jira_webhook,
-        )
-        self._provision_jira_webhook_patcher.start()
-
     def tearDown(self) -> None:
-        self._provision_jira_webhook_patcher.stop()
         self._cleanup_test_database()
         get_settings.cache_clear()
         reset_db_engine_cache()
@@ -140,7 +127,7 @@ class DeploymentHostApiTests(SqliteTemplateApiTestCase):
         now = datetime.now(timezone.utc)
         with session_factory() as session:
             session.add(
-                JiraOAuthConnection(
+                AtlassianOAuthConnection(
                     connection_id=connection_id,
                     account_id="account-1",
                     account_email="test@example.com",
@@ -162,16 +149,6 @@ class DeploymentHostApiTests(SqliteTemplateApiTestCase):
             )
             session.commit()
 
-    def _default_app_id(self, tenant_id: str, project_id: str) -> str:
-        response = self.client.get(
-            f"/api/admin/tenants/{tenant_id}/projects/{project_id}/apps",
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(response.status_code, 200, response.text)
-        apps = response.json()
-        self.assertGreaterEqual(len(apps), 1)
-        return str(apps[0]["app_id"])
-
     def _create_project_with_database_backup(self) -> tuple[str, str]:
         create_project = self.client.post(
             "/api/admin/tenants/tenant-a/projects",
@@ -184,7 +161,21 @@ class DeploymentHostApiTests(SqliteTemplateApiTestCase):
         )
         self.assertEqual(create_project.status_code, 201, create_project.text)
         project_id = create_project.json()["project_id"]
-        app_id = self._default_app_id("tenant-a", project_id)
+        create_app = self.client.post(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps",
+            json={
+                "name": "restore-app",
+                "slug": "restore-app",
+                "source_path": ".",
+                "detected_runtime": "python",
+                "detected_language": "python",
+                "analysis_source": "test_fixture",
+                "build_strategy": "dockerfile",
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_app.status_code, 201, create_app.text)
+        app_id = create_app.json()["app_id"]
         deployment_config_response = self.client.put(
             f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-config",
             json={
@@ -300,7 +291,7 @@ class DeploymentHostApiTests(SqliteTemplateApiTestCase):
                     "backup_key": "db-daily",
                     "resource_key": "db",
                     "execution_uuid": "execution-uuid-1",
-                    "confirmation_value": "default",
+                    "confirmation_value": "restore-app",
                 },
                 auth=("admin", "secret"),
             )
@@ -418,7 +409,7 @@ class DeploymentHostApiTests(SqliteTemplateApiTestCase):
                     "backup_key": "db-daily",
                     "resource_key": "db",
                     "execution_uuid": "execution-uuid-1",
-                    "confirmation_value": "default",
+                    "confirmation_value": "restore-app",
                 },
                 auth=("admin", "secret"),
             )
@@ -606,7 +597,7 @@ class DeploymentHostApiTests(SqliteTemplateApiTestCase):
                     "backup_key": "db-daily",
                     "resource_key": "db",
                     "execution_uuid": "execution-uuid-1",
-                    "confirmation_value": "default",
+                    "confirmation_value": "restore-app",
                 },
                 auth=("admin", "secret"),
             )
@@ -731,7 +722,7 @@ class DeploymentHostApiTests(SqliteTemplateApiTestCase):
                     "backup_key": "db-daily",
                     "resource_key": "db",
                     "execution_uuid": "execution-uuid-1",
-                    "confirmation_value": "default",
+                    "confirmation_value": "restore-app",
                 },
                 auth=("admin", "secret"),
             )
@@ -813,7 +804,7 @@ class DeploymentHostApiTests(SqliteTemplateApiTestCase):
                 "backup_key": "db-daily",
                 "resource_key": "db",
                 "execution_uuid": "execution-uuid-1",
-                "confirmation_value": "default",
+                "confirmation_value": "restore-app",
             },
             auth=("admin", "secret"),
         )
@@ -899,7 +890,7 @@ class DeploymentHostApiTests(SqliteTemplateApiTestCase):
                     "backup_key": "db-daily",
                     "resource_key": "db",
                     "execution_uuid": "execution-uuid-1",
-                    "confirmation_value": "default",
+                    "confirmation_value": "restore-app",
                 },
                 auth=("admin", "secret"),
             )
@@ -973,7 +964,7 @@ class DeploymentHostApiTests(SqliteTemplateApiTestCase):
                 "backup_key": "db-daily",
                 "resource_key": "db",
                 "execution_uuid": "execution-uuid-1",
-                "confirmation_value": "default",
+                "confirmation_value": "restore-app",
             },
             auth=("admin", "secret"),
         )

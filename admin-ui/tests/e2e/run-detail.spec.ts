@@ -59,8 +59,45 @@ test("renders checkpoint-backed failed-after-dev runs with separate execution an
   await expect(page.getByRole("heading", { name: "Failure Reason" })).toBeVisible();
   await expect(page.getByText(/heartbeat timeout/i)).toBeVisible();
 
-  await page.getByRole("button", { name: "Agents" }).click();
-  await expect(page.getByText("PR created and code pushed.", { exact: true })).toBeVisible({ timeout: 15000 });
+  await expect
+    .poll(
+      async () => {
+        await page.getByRole("button", { name: "Agents" }).click().catch(() => undefined);
+        return page.getByText("PR created and code pushed.", { exact: true }).count();
+      },
+      { timeout: 15000 },
+    )
+    .toBeGreaterThan(0);
+});
+
+test("keeps one run event stream while active run logs arrive", async ({ page }) => {
+  const run = makeRun({
+    status: "running",
+  });
+  const streamLogs = makeStageInvocationLogs({
+    runId: run.run_id,
+    stage: "dev",
+    invocationId: "dev-live-stream",
+    command: "stage.dev",
+    startedAt: "2026-03-27T17:00:00Z",
+  });
+  let streamRequests = 0;
+
+  await seedAdminSession(page);
+  await mockRunDetailApis(page, {
+    run,
+    logs: [],
+    streamEvents: streamLogs,
+    onRunEventStreamRequest: () => {
+      streamRequests += 1;
+    },
+  });
+
+  await page.goto(`/runs/${run.run_id}/agents`);
+
+  await expect(page.getByText("Loading run details...")).toHaveCount(0, { timeout: 15000 });
+  await expect.poll(() => streamRequests, { timeout: 15000 }).toBe(1);
+  expect(streamRequests).toBe(1);
 });
 
 test("marks a finished stage without a checkpoint as interrupted on terminal runs", async ({ page }) => {
@@ -165,10 +202,14 @@ test("offers execution resume when review state exists and posts the workflow at
   await page.getByTestId("run-rerun-trigger").click();
   await expect(page.getByTestId("rerun-option-fresh")).toBeVisible();
   await expect(page.getByTestId("rerun-option-execution")).toBeVisible();
+  const resumeNavigation = page.waitForURL(/8e8957f2-79f8-4dc8-8deb-786b2c93828d$/, {
+    timeout: 30000,
+    waitUntil: "domcontentloaded",
+  });
   await page.getByTestId("rerun-option-execution").click();
+  await resumeNavigation;
 
-  expect(rerunPayload).toEqual({ mode: "resume", checkpoint_kind: "execution" });
-  await expect(page).toHaveURL(/8e8957f2-79f8-4dc8-8deb-786b2c93828d$/, { timeout: 15000 });
+  await expect.poll(() => rerunPayload).toEqual({ mode: "resume", checkpoint_kind: "execution" });
 });
 
 test("offers start from the start as a fresh rerun with no checkpoint payload", async ({ page }) => {
@@ -198,10 +239,14 @@ test("offers start from the start as a fresh rerun with no checkpoint payload", 
   await expect(page.getByText("Loading run details...")).toHaveCount(0, { timeout: 15000 });
   await page.getByTestId("run-rerun-trigger").click();
   await expect(page.getByTestId("rerun-option-fresh")).toBeVisible();
+  const freshNavigation = page.waitForURL(/8e8957f2-79f8-4dc8-8deb-786b2c93828d$/, {
+    timeout: 30000,
+    waitUntil: "domcontentloaded",
+  });
   await page.getByTestId("rerun-option-fresh").click();
+  await freshNavigation;
 
-  expect(rerunPayload).toEqual({ mode: "fresh" });
-  await expect(page).toHaveURL(/8e8957f2-79f8-4dc8-8deb-786b2c93828d$/, { timeout: 15000 });
+  await expect.poll(() => rerunPayload).toEqual({ mode: "fresh" });
 });
 
 test("force rerun cancels the active run and starts fresh with no checkpoint payload", async ({ page }) => {
@@ -235,9 +280,13 @@ test("force rerun cancels the active run and starts fresh with no checkpoint pay
 
   await expect(page.getByText("Loading run details...")).toHaveCount(0, { timeout: 15000 });
   await expect(page.getByRole("button", { name: "Force Rerun" })).toBeVisible();
+  const forceNavigation = page.waitForURL(/8e8957f2-79f8-4dc8-8deb-786b2c93828d$/, {
+    timeout: 30000,
+    waitUntil: "domcontentloaded",
+  });
   await page.getByRole("button", { name: "Force Rerun" }).click();
+  await forceNavigation;
 
   expect(cancelCalled).toBe(true);
-  expect(rerunPayload).toEqual({ mode: "fresh" });
-  await expect(page).toHaveURL(/8e8957f2-79f8-4dc8-8deb-786b2c93828d$/, { timeout: 15000 });
+  await expect.poll(() => rerunPayload).toEqual({ mode: "fresh" });
 });

@@ -9,11 +9,12 @@ import { useAuth } from "@/components/auth-provider";
 import { DEFAULT_API_BASE_URL } from "@/lib/auth-constants";
 import { formatTimestamp } from "@/lib/datetime";
 import { Button } from "@/components/ui/button";
+import { useToast } from "@/components/ui/toast-provider";
 import {
   getJiraWebhookDiagnostics,
   getTenant,
   testGithub,
-  testJira,
+  testAtlassian,
   type JiraWebhookDiagnosticsRecord,
   type TenantRecord
 } from "@/lib/api";
@@ -32,6 +33,7 @@ type HealthStatus = {
 
 export default function TenantWebhooksPage() {
   const { credentials } = useAuth();
+  const { showToast } = useToast();
   const params = useParams<{ tenantId: string }>();
   const tenantId = params.tenantId;
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
@@ -84,7 +86,7 @@ export default function TenantWebhooksPage() {
         await Promise.allSettled([
           getTenant(credentials, tenantId),
           getJiraWebhookDiagnostics(credentials, tenantId),
-          testJira(credentials, tenantId),
+          testAtlassian(credentials, tenantId),
           testGithub(credentials, tenantId)
         ]);
       if (tenantResult.status === "fulfilled") setTenant(tenantResult.value);
@@ -118,10 +120,9 @@ export default function TenantWebhooksPage() {
     try {
       await navigator.clipboard.writeText(url);
       setCopiedKey(key);
-      setStatusLine(`Copied: ${url}`);
-      window.setTimeout(() => setCopiedKey((c) => (c === key ? null : c)), 1200);
+      showToast({ title: "Webhook URL copied", description: url, tone: "success" });
     } catch (error) {
-      setStatusLine(`Copy failed: ${(error as Error).message}`);
+      showToast({ title: "Webhook URL copy failed", description: (error as Error).message, tone: "error" });
     }
   }
 
@@ -159,7 +160,7 @@ export default function TenantWebhooksPage() {
             {loading ? "Refreshing" : "Refresh"}
           </Button>
           <Button variant="outline" size="sm" asChild>
-            <Link href={`/${encodeURIComponent(tenantId)}/settings/integrations`}>
+            <Link href={`/${encodeURIComponent(tenantId)}/settings/config`}>
               <ArrowLeft className="mr-1.5 h-3.5 w-3.5" />
               Settings
             </Link>

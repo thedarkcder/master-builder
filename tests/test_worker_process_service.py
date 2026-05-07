@@ -7,6 +7,8 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 from unittest.mock import patch
 
+from orchestrator.core.worker.queue_selector import ClaimedRun
+from orchestrator.core.worker.queue_selector import QueueClaimResult
 from orchestrator.core.worker.process_service import process_next_queued_run
 from orchestrator.core.worker.finalization import _emit_detailed_jira_feedback
 from orchestrator.core.worker.finalization import _emit_orchestrated_trace_logs
@@ -31,6 +33,50 @@ class _FakeHeartbeatController:
 
     def stop(self) -> None:
         self.stopped = True
+
+
+def _stage_update_mock(stage: str, *, discord_message: str = "", jira_message: str = "") -> MagicMock:
+    return MagicMock(
+        return_value={
+            "stage": stage,
+            "discord_message": discord_message,
+            "jira_message": jira_message,
+        }
+    )
+
+
+def _claim_result(
+    *,
+    run,
+    tenant,
+    project=None,
+    effective_policy: dict | None = None,
+    owner: str = "node-a:1234",
+    claim_id: str = "claim-1",
+) -> QueueClaimResult:
+    if not getattr(run, "claim_id", None):
+        run.claim_id = claim_id
+    if not getattr(run, "worker_service_instance_id", None):
+        run.worker_service_instance_id = owner
+    return QueueClaimResult(
+        claimed_run=ClaimedRun(
+            run=run,
+            tenant=tenant,
+            project=project,
+            effective_policy=dict(effective_policy or {}),
+            run_id=run.run_id,
+            claim_id=str(run.claim_id or "").strip(),
+            worker_service_instance_id=str(run.worker_service_instance_id or "").strip(),
+            status=str(getattr(run, "status", "") or "").strip(),
+        )
+    )
+
+
+def _promote_claimed_run(_session, *, run, expected_worker_service_instance_id, expected_claim_id):  # noqa: ANN001
+    run.status = "running"
+    run.worker_service_instance_id = expected_worker_service_instance_id
+    run.claim_id = expected_claim_id
+    return run
 
 
 class WorkerProcessServiceTests(unittest.TestCase):
@@ -70,12 +116,11 @@ class WorkerProcessServiceTests(unittest.TestCase):
                 admin_ui_base_url="http://localhost:4100",
                 worker_run_heartbeat_interval_seconds=30,
             ),
-            claim_next_queued_run_fn=lambda *_args, **_kwargs: SimpleNamespace(
+            claim_next_queued_run_fn=lambda *_args, **_kwargs: _claim_result(
                 run=run,
                 tenant=tenant,
                 project=project,
                 effective_policy={"allow_jira_transitions": True},
-                terminal_run=None,
             ),
             send_discord_message_fn=MagicMock(return_value=SimpleNamespace(sent=True, reason=None)),
             send_jira_message_fn=MagicMock(),
@@ -84,6 +129,8 @@ class WorkerProcessServiceTests(unittest.TestCase):
             block_archived_project_fn=MagicMock(),
             ensure_project_repository_checkout_fn=MagicMock(),
             fail_project_repository_checkout_fn=MagicMock(),
+            fail_project_repository_setup_fn=MagicMock(),
+            requeue_run_for_repo_setup_fn=MagicMock(),
             cleanup_run_workspaces_fn=MagicMock(),
             build_run_heartbeat_controller_fn=lambda **_: _FakeHeartbeatController(),
             promote_run_to_running_fn=MagicMock(return_value=None),
@@ -101,14 +148,12 @@ class WorkerProcessServiceTests(unittest.TestCase):
             ),
             fail_guardrail_violation_fn=fail_guardrail_violation_fn,
             tenant_jira_issue_url_fn=MagicMock(return_value="https://jira.example/browse/GP-122"),
-            lock_acquired_update_fn=MagicMock(
-                return_value={"stage": "lock_acquired", "discord_message": None, "jira_message": None}
-            ),
-            plan_posted_update_fn=MagicMock(),
-            pr_opened_update_fn=MagicMock(),
-            run_failed_update_fn=MagicMock(),
-            run_requeued_capability_update_fn=MagicMock(),
-            run_requeued_stale_snapshot_update_fn=MagicMock(),
+            lock_acquired_update_fn=_stage_update_mock("lock_acquired"),
+            plan_posted_update_fn=_stage_update_mock("plan_posted"),
+            pr_opened_update_fn=_stage_update_mock("pr_opened"),
+            run_failed_update_fn=_stage_update_mock("run_failed"),
+            run_requeued_capability_update_fn=_stage_update_mock("run_requeued_capability_mismatch"),
+            run_requeued_stale_snapshot_update_fn=_stage_update_mock("run_requeued_stale_snapshot"),
             finalize_cancelled_run_fn=MagicMock(),
             finalize_workflow_result_fn=MagicMock(),
             persist_stage_checkpoint_fn=MagicMock(),
@@ -131,6 +176,8 @@ class WorkerProcessServiceTests(unittest.TestCase):
             session,
             run=run,
             error="Claimed run could not transition from dispatching to running",
+            expected_worker_service_instance_id="node-a:1234",
+            expected_claim_id="claim-1",
         )
 
     def test_process_next_queued_run_promotes_before_setup_validation(self) -> None:
@@ -169,9 +216,6 @@ class WorkerProcessServiceTests(unittest.TestCase):
             order.append("resolve_project")
             return project
 
-        def _ensure_checkout(**_kwargs):  # noqa: ANN001
-            order.append("checkout")
-
         result = process_next_queued_run(
             session=session,
             runner=SimpleNamespace(
@@ -194,20 +238,21 @@ class WorkerProcessServiceTests(unittest.TestCase):
                 admin_ui_base_url="http://localhost:4100",
                 worker_run_heartbeat_interval_seconds=30,
             ),
-            claim_next_queued_run_fn=lambda *_args, **_kwargs: SimpleNamespace(
+            claim_next_queued_run_fn=lambda *_args, **_kwargs: _claim_result(
                 run=run,
                 tenant=tenant,
                 project=None,
                 effective_policy={"allow_jira_transitions": False},
-                terminal_run=None,
             ),
             send_discord_message_fn=MagicMock(return_value=SimpleNamespace(sent=True, reason=None)),
             send_jira_message_fn=MagicMock(),
             resolve_project_for_run_fn=_resolve_project,
             fail_missing_project_mapping_fn=MagicMock(),
             block_archived_project_fn=MagicMock(),
-            ensure_project_repository_checkout_fn=_ensure_checkout,
+            ensure_project_repository_checkout_fn=MagicMock(),
             fail_project_repository_checkout_fn=MagicMock(),
+            fail_project_repository_setup_fn=MagicMock(),
+            requeue_run_for_repo_setup_fn=MagicMock(),
             cleanup_run_workspaces_fn=MagicMock(),
             build_run_heartbeat_controller_fn=lambda **_: _FakeHeartbeatController(),
             promote_run_to_running_fn=_promote,
@@ -228,14 +273,12 @@ class WorkerProcessServiceTests(unittest.TestCase):
             ),
             fail_guardrail_violation_fn=MagicMock(),
             tenant_jira_issue_url_fn=MagicMock(return_value="https://jira.example/browse/GP-122"),
-            lock_acquired_update_fn=MagicMock(
-                return_value={"stage": "lock_acquired", "discord_message": None, "jira_message": None}
-            ),
-            plan_posted_update_fn=MagicMock(),
-            pr_opened_update_fn=MagicMock(),
-            run_failed_update_fn=MagicMock(),
-            run_requeued_capability_update_fn=MagicMock(),
-            run_requeued_stale_snapshot_update_fn=MagicMock(),
+            lock_acquired_update_fn=_stage_update_mock("lock_acquired"),
+            plan_posted_update_fn=_stage_update_mock("plan_posted"),
+            pr_opened_update_fn=_stage_update_mock("pr_opened"),
+            run_failed_update_fn=_stage_update_mock("run_failed"),
+            run_requeued_capability_update_fn=_stage_update_mock("run_requeued_capability_mismatch"),
+            run_requeued_stale_snapshot_update_fn=_stage_update_mock("run_requeued_stale_snapshot"),
             finalize_cancelled_run_fn=MagicMock(),
             finalize_workflow_result_fn=MagicMock(
                 return_value=SimpleNamespace(
@@ -263,7 +306,196 @@ class WorkerProcessServiceTests(unittest.TestCase):
         )
 
         self.assertEqual(result.status, "succeeded")
-        self.assertEqual(order[:4], ["promote", "resolve_project", "checkout", "build_request"])
+        self.assertEqual(order[:3], ["promote", "resolve_project", "build_request"])
+
+    def test_process_next_queued_run_fails_when_promotion_returns_non_running_owned_run(self) -> None:
+        now = datetime.now(timezone.utc)
+        run = SimpleNamespace(
+            run_id="run-1",
+            tenant_id="tenant-1",
+            issue_key="GP-122",
+            project_id="project-1",
+            status="dispatching",
+            created_at=now - timedelta(seconds=15),
+            started_at=None,
+            last_heartbeat_at=None,
+            worker_service_instance_id="node-a:1234",
+            claim_id="claim-1",
+            plan=None,
+            last_error=None,
+            finished_at=None,
+            pr_url=None,
+        )
+        tenant = SimpleNamespace(tenant_id="tenant-1", policy_config={})
+        project = SimpleNamespace(project_id="project-1", policy_overrides={}, is_archived=False)
+        session = MagicMock()
+        fail_guardrail_violation_fn = MagicMock(
+            return_value=SimpleNamespace(run_id="run-1", status="failed", last_error="failed")
+        )
+        runner = MagicMock()
+
+        def _promote(_session, *, run, expected_worker_service_instance_id, expected_claim_id):  # noqa: ANN001
+            self.assertEqual(expected_worker_service_instance_id, "node-a:1234")
+            self.assertEqual(expected_claim_id, "claim-1")
+            return run
+
+        result = process_next_queued_run(
+            session=session,
+            runner=runner,
+            logger=MagicMock(),
+            settings_fn=lambda: SimpleNamespace(
+                worker_capabilities="linux",
+                worker_workspace_key="worker-a",
+                project_repo_checkout_base_dir="/tmp/workdirs",
+                admin_ui_base_url="http://localhost:4100",
+                worker_run_heartbeat_interval_seconds=30,
+            ),
+            claim_next_queued_run_fn=lambda *_args, **_kwargs: _claim_result(
+                run=run,
+                tenant=tenant,
+                project=project,
+                effective_policy={"allow_jira_transitions": True},
+            ),
+            send_discord_message_fn=MagicMock(return_value=SimpleNamespace(sent=True, reason=None)),
+            send_jira_message_fn=MagicMock(),
+            resolve_project_for_run_fn=MagicMock(return_value=project),
+            fail_missing_project_mapping_fn=MagicMock(),
+            block_archived_project_fn=MagicMock(),
+            ensure_project_repository_checkout_fn=MagicMock(),
+            fail_project_repository_checkout_fn=MagicMock(),
+            fail_project_repository_setup_fn=MagicMock(),
+            requeue_run_for_repo_setup_fn=MagicMock(),
+            cleanup_run_workspaces_fn=MagicMock(),
+            build_run_heartbeat_controller_fn=lambda **_: _FakeHeartbeatController(),
+            promote_run_to_running_fn=_promote,
+            bind_run_project_fn=MagicMock(return_value=run),
+            workflow_request_for_run_fn=MagicMock(),
+            fail_guardrail_violation_fn=fail_guardrail_violation_fn,
+            tenant_jira_issue_url_fn=MagicMock(return_value="https://jira.example/browse/GP-122"),
+            lock_acquired_update_fn=_stage_update_mock("lock_acquired"),
+            plan_posted_update_fn=_stage_update_mock("plan_posted"),
+            pr_opened_update_fn=_stage_update_mock("pr_opened"),
+            run_failed_update_fn=_stage_update_mock("run_failed"),
+            run_requeued_capability_update_fn=_stage_update_mock("run_requeued_capability_mismatch"),
+            run_requeued_stale_snapshot_update_fn=_stage_update_mock("run_requeued_stale_snapshot"),
+            finalize_cancelled_run_fn=MagicMock(),
+            finalize_workflow_result_fn=MagicMock(),
+            persist_stage_checkpoint_fn=MagicMock(),
+            requeue_workflow_result_for_capability_fn=MagicMock(),
+            requeue_workflow_result_for_stale_snapshot_fn=MagicMock(),
+            check_run_snapshot_freshness_fn=MagicMock(),
+            transition_issue_status_fn=MagicMock(),
+            emit_agent_event_fn=MagicMock(),
+            resolve_agent_id_fn=lambda: "worker-linux-local",
+            resolve_worker_service_instance_id_fn=lambda: "node-a:1234",
+            run_status_queued="queued",
+            run_status_running="running",
+            run_status_failed="failed",
+            run_status_blocked="blocked",
+            run_status_cancelled="cancelled",
+        )
+
+        self.assertEqual(result.status, "failed")
+        fail_guardrail_violation_fn.assert_called_once_with(
+            session,
+            run=run,
+            error="Claimed run could not transition from dispatching to running",
+            expected_worker_service_instance_id="node-a:1234",
+            expected_claim_id="claim-1",
+        )
+        runner.run.assert_not_called()
+
+    def test_process_next_queued_run_returns_ownership_lost_when_promotion_loses_claim(self) -> None:
+        now = datetime.now(timezone.utc)
+        run = SimpleNamespace(
+            run_id="run-1",
+            tenant_id="tenant-1",
+            issue_key="GP-122",
+            project_id="project-1",
+            status="dispatching",
+            created_at=now - timedelta(seconds=15),
+            started_at=None,
+            last_heartbeat_at=None,
+            worker_service_instance_id="node-a:1234",
+            claim_id="claim-1",
+            plan=None,
+            last_error=None,
+            finished_at=None,
+            pr_url=None,
+        )
+        tenant = SimpleNamespace(tenant_id="tenant-1", policy_config={})
+        project = SimpleNamespace(project_id="project-1", policy_overrides={}, is_archived=False)
+        session = MagicMock()
+        ownership_lost_run = SimpleNamespace(
+            **{
+                **run.__dict__,
+                "status": "dispatching",
+                "worker_service_instance_id": "node-b:9999",
+                "claim_id": "claim-2",
+            }
+        )
+        runner = MagicMock()
+        heartbeat = _FakeHeartbeatController()
+
+        result = process_next_queued_run(
+            session=session,
+            runner=runner,
+            logger=MagicMock(),
+            settings_fn=lambda: SimpleNamespace(
+                worker_capabilities="linux",
+                worker_workspace_key="worker-a",
+                project_repo_checkout_base_dir="/tmp/workdirs",
+                admin_ui_base_url="http://localhost:4100",
+                worker_run_heartbeat_interval_seconds=30,
+            ),
+            claim_next_queued_run_fn=lambda *_args, **_kwargs: _claim_result(
+                run=run,
+                tenant=tenant,
+                project=project,
+                effective_policy={"allow_jira_transitions": True},
+            ),
+            send_discord_message_fn=MagicMock(return_value=SimpleNamespace(sent=True, reason=None)),
+            send_jira_message_fn=MagicMock(),
+            resolve_project_for_run_fn=MagicMock(return_value=project),
+            fail_missing_project_mapping_fn=MagicMock(),
+            block_archived_project_fn=MagicMock(),
+            ensure_project_repository_checkout_fn=MagicMock(),
+            fail_project_repository_checkout_fn=MagicMock(),
+            fail_project_repository_setup_fn=MagicMock(),
+            requeue_run_for_repo_setup_fn=MagicMock(),
+            cleanup_run_workspaces_fn=MagicMock(),
+            build_run_heartbeat_controller_fn=lambda **_: heartbeat,
+            promote_run_to_running_fn=MagicMock(return_value=ownership_lost_run),
+            bind_run_project_fn=MagicMock(return_value=run),
+            workflow_request_for_run_fn=MagicMock(),
+            fail_guardrail_violation_fn=MagicMock(),
+            tenant_jira_issue_url_fn=MagicMock(return_value="https://jira.example/browse/GP-122"),
+            lock_acquired_update_fn=_stage_update_mock("lock_acquired"),
+            plan_posted_update_fn=_stage_update_mock("plan_posted"),
+            pr_opened_update_fn=_stage_update_mock("pr_opened"),
+            run_failed_update_fn=_stage_update_mock("run_failed"),
+            run_requeued_capability_update_fn=_stage_update_mock("run_requeued_capability_mismatch"),
+            run_requeued_stale_snapshot_update_fn=_stage_update_mock("run_requeued_stale_snapshot"),
+            finalize_cancelled_run_fn=MagicMock(),
+            finalize_workflow_result_fn=MagicMock(),
+            persist_stage_checkpoint_fn=MagicMock(),
+            requeue_workflow_result_for_capability_fn=MagicMock(),
+            requeue_workflow_result_for_stale_snapshot_fn=MagicMock(),
+            check_run_snapshot_freshness_fn=MagicMock(),
+            transition_issue_status_fn=MagicMock(),
+            emit_agent_event_fn=MagicMock(),
+            resolve_agent_id_fn=lambda: "worker-linux-local",
+            resolve_worker_service_instance_id_fn=lambda: "node-a:1234",
+            run_status_queued="queued",
+            run_status_running="running",
+            run_status_failed="failed",
+            run_status_blocked="blocked",
+            run_status_cancelled="cancelled",
+        )
+
+        self.assertIs(result, ownership_lost_run)
+        self.assertFalse(heartbeat.started)
+        runner.run.assert_not_called()
 
     def test_process_next_queued_run_emits_started_side_effects_after_running_promotion(self) -> None:
         now = datetime.now(timezone.utc)
@@ -321,7 +553,7 @@ class WorkerProcessServiceTests(unittest.TestCase):
             )
         )
 
-        with patch("orchestrator.core.worker.process_service.record_run_log_event") as record_run_log_event_mock:
+        with patch("orchestrator.core.worker.run_dispatch_workflow.emit_logging_pane_event") as emit_logging_pane_event_mock:
             result = process_next_queued_run(
                 session=session,
                 runner=SimpleNamespace(
@@ -344,12 +576,11 @@ class WorkerProcessServiceTests(unittest.TestCase):
                     admin_ui_base_url="http://localhost:4100",
                     worker_run_heartbeat_interval_seconds=30,
                 ),
-                claim_next_queued_run_fn=lambda *_args, **_kwargs: SimpleNamespace(
+                claim_next_queued_run_fn=lambda *_args, **_kwargs: _claim_result(
                     run=run,
                     tenant=tenant,
                     project=project,
                     effective_policy={"allow_jira_transitions": True},
-                    terminal_run=None,
                 ),
                 send_discord_message_fn=MagicMock(return_value=SimpleNamespace(sent=True, reason=None)),
                 send_jira_message_fn=MagicMock(),
@@ -358,6 +589,8 @@ class WorkerProcessServiceTests(unittest.TestCase):
                 block_archived_project_fn=MagicMock(),
                 ensure_project_repository_checkout_fn=MagicMock(),
                 fail_project_repository_checkout_fn=MagicMock(),
+                fail_project_repository_setup_fn=MagicMock(),
+                requeue_run_for_repo_setup_fn=MagicMock(),
                 cleanup_run_workspaces_fn=MagicMock(),
                 build_run_heartbeat_controller_fn=lambda **_: heartbeat,
                 promote_run_to_running_fn=_promote,
@@ -375,28 +608,12 @@ class WorkerProcessServiceTests(unittest.TestCase):
                 ),
                 fail_guardrail_violation_fn=MagicMock(),
                 tenant_jira_issue_url_fn=MagicMock(return_value="https://jira.example/browse/GP-122"),
-                lock_acquired_update_fn=MagicMock(
-                    return_value={"stage": "lock_acquired", "discord_message": None, "jira_message": None}
-                ),
-                plan_posted_update_fn=MagicMock(
-                    return_value={"stage": "plan_posted", "discord_message": None, "jira_message": None}
-                ),
-                pr_opened_update_fn=MagicMock(
-                    return_value={"stage": "pr_opened", "discord_message": None, "jira_message": None}
-                ),
-                run_failed_update_fn=MagicMock(
-                    return_value={"stage": "run_failed", "discord_message": None, "jira_message": None}
-                ),
-                run_requeued_capability_update_fn=MagicMock(
-                    return_value={"stage": "run_requeued_capability", "discord_message": None, "jira_message": None}
-                ),
-                run_requeued_stale_snapshot_update_fn=MagicMock(
-                    return_value={
-                        "stage": "run_requeued_stale_snapshot",
-                        "discord_message": None,
-                        "jira_message": None,
-                    }
-                ),
+                lock_acquired_update_fn=_stage_update_mock("lock_acquired"),
+                plan_posted_update_fn=_stage_update_mock("plan_posted"),
+                pr_opened_update_fn=_stage_update_mock("pr_opened"),
+                run_failed_update_fn=_stage_update_mock("run_failed"),
+                run_requeued_capability_update_fn=_stage_update_mock("run_requeued_capability_mismatch"),
+                run_requeued_stale_snapshot_update_fn=_stage_update_mock("run_requeued_stale_snapshot"),
                 finalize_cancelled_run_fn=MagicMock(),
                 finalize_workflow_result_fn=finalize_workflow_result_fn,
                 persist_stage_checkpoint_fn=MagicMock(),
@@ -419,7 +636,7 @@ class WorkerProcessServiceTests(unittest.TestCase):
         self.assertTrue(heartbeat.started)
         queue_wait_calls = [
             call
-            for call in record_run_log_event_mock.call_args_list
+            for call in emit_logging_pane_event_mock.call_args_list
             if call.kwargs.get("command") == "workflow.queue_wait"
         ]
         self.assertEqual(len(queue_wait_calls), 1)
@@ -447,18 +664,21 @@ class WorkerProcessServiceTests(unittest.TestCase):
                 block_archived_project_fn=MagicMock(),
                 ensure_project_repository_checkout_fn=MagicMock(),
                 fail_project_repository_checkout_fn=MagicMock(),
+                fail_project_repository_setup_fn=MagicMock(),
+                requeue_run_for_repo_setup_fn=MagicMock(),
                 cleanup_run_workspaces_fn=MagicMock(),
                 build_run_heartbeat_controller_fn=lambda **_: _FakeHeartbeatController(),
+                promote_run_to_running_fn=_promote_claimed_run,
                 bind_run_project_fn=MagicMock(),
                 workflow_request_for_run_fn=MagicMock(),
                 fail_guardrail_violation_fn=MagicMock(),
                 tenant_jira_issue_url_fn=MagicMock(),
-                lock_acquired_update_fn=MagicMock(),
-                plan_posted_update_fn=MagicMock(),
-                pr_opened_update_fn=MagicMock(),
-                run_failed_update_fn=MagicMock(),
-                run_requeued_capability_update_fn=MagicMock(),
-                run_requeued_stale_snapshot_update_fn=MagicMock(),
+                lock_acquired_update_fn=_stage_update_mock("lock_acquired"),
+                plan_posted_update_fn=_stage_update_mock("plan_posted"),
+                pr_opened_update_fn=_stage_update_mock("pr_opened"),
+                run_failed_update_fn=_stage_update_mock("run_failed"),
+                run_requeued_capability_update_fn=_stage_update_mock("run_requeued_capability_mismatch"),
+                run_requeued_stale_snapshot_update_fn=_stage_update_mock("run_requeued_stale_snapshot"),
                 finalize_cancelled_run_fn=MagicMock(),
                 finalize_workflow_result_fn=MagicMock(),
                 persist_stage_checkpoint_fn=MagicMock(),
@@ -523,7 +743,7 @@ class WorkerProcessServiceTests(unittest.TestCase):
     def test_emit_orchestrated_trace_logs_persists_stage_rows(self) -> None:
         recorded_rows: list[dict[str, object]] = []
 
-        def _record_run_log_event(**kwargs: object) -> None:
+        def _emit_logging_pane_event(**kwargs: object) -> None:
             recorded_rows.append(dict(kwargs))
 
         workflow_result = WorkflowResult(
@@ -540,7 +760,7 @@ class WorkerProcessServiceTests(unittest.TestCase):
             orchestration_workstream_trace=[],
         )
 
-        with patch("orchestrator.core.worker.finalization.record_run_log_event", side_effect=_record_run_log_event):
+        with patch("orchestrator.core.worker.finalization.emit_logging_pane_event", side_effect=_emit_logging_pane_event):
             _emit_orchestrated_trace_logs(
                 session=MagicMock(),
                 run=SimpleNamespace(
@@ -595,10 +815,10 @@ class WorkerProcessServiceTests(unittest.TestCase):
         failures: list[dict[str, str]] = []
         recorded_rows: list[dict[str, object]] = []
 
-        def _record_run_log_event(**kwargs: object) -> None:
+        def _emit_logging_pane_event(**kwargs: object) -> None:
             recorded_rows.append(dict(kwargs))
 
-        with patch("orchestrator.core.worker.finalization.record_run_log_event", side_effect=_record_run_log_event):
+        with patch("orchestrator.core.worker.finalization.emit_logging_pane_event", side_effect=_emit_logging_pane_event):
             _run_completion_step(
                 session=session,
                 run=SimpleNamespace(
@@ -628,11 +848,7 @@ class WorkerProcessServiceTests(unittest.TestCase):
     def test_process_next_queued_run_uses_claimed_run_from_claim_service(self) -> None:
         run = SimpleNamespace(run_id="run-1", tenant_id="tenant-1", issue_key="GP-122", project_id="project-1")
         tenant = SimpleNamespace(tenant_id="tenant-1")
-        selection = SimpleNamespace(
-            run=run,
-            tenant=tenant,
-            terminal_run=None,
-        )
+        selection = _claim_result(run=run, tenant=tenant)
         claim_next_queued_run_fn = MagicMock(return_value=selection)
         failed_run = SimpleNamespace(run_id="failed-run")
         fail_missing_project_mapping_fn = MagicMock(return_value=failed_run)
@@ -655,18 +871,21 @@ class WorkerProcessServiceTests(unittest.TestCase):
             block_archived_project_fn=MagicMock(),
             ensure_project_repository_checkout_fn=MagicMock(),
             fail_project_repository_checkout_fn=MagicMock(),
+            fail_project_repository_setup_fn=MagicMock(),
+            requeue_run_for_repo_setup_fn=MagicMock(),
             cleanup_run_workspaces_fn=MagicMock(),
             build_run_heartbeat_controller_fn=lambda **_: _FakeHeartbeatController(),
+            promote_run_to_running_fn=_promote_claimed_run,
             bind_run_project_fn=MagicMock(),
             workflow_request_for_run_fn=MagicMock(),
             fail_guardrail_violation_fn=MagicMock(),
             tenant_jira_issue_url_fn=MagicMock(),
-            lock_acquired_update_fn=MagicMock(),
-            plan_posted_update_fn=MagicMock(),
-            pr_opened_update_fn=MagicMock(),
-            run_failed_update_fn=MagicMock(),
-            run_requeued_capability_update_fn=MagicMock(),
-            run_requeued_stale_snapshot_update_fn=MagicMock(),
+            lock_acquired_update_fn=_stage_update_mock("lock_acquired"),
+            plan_posted_update_fn=_stage_update_mock("plan_posted"),
+            pr_opened_update_fn=_stage_update_mock("pr_opened"),
+            run_failed_update_fn=_stage_update_mock("run_failed"),
+            run_requeued_capability_update_fn=_stage_update_mock("run_requeued_capability_mismatch"),
+            run_requeued_stale_snapshot_update_fn=_stage_update_mock("run_requeued_stale_snapshot"),
             finalize_cancelled_run_fn=MagicMock(),
             finalize_workflow_result_fn=MagicMock(),
             persist_stage_checkpoint_fn=MagicMock(),
@@ -690,7 +909,7 @@ class WorkerProcessServiceTests(unittest.TestCase):
         claim_kwargs = claim_next_queued_run_fn.call_args.kwargs
         self.assertEqual(claim_kwargs["worker_service_instance_id"], "node-a:1234")
 
-    def test_process_next_queued_run_returns_run_when_ownership_is_lost(self) -> None:
+    def test_process_next_queued_run_uses_claim_owner_for_execution(self) -> None:
         now = datetime.now(timezone.utc)
         run = SimpleNamespace(
             run_id="run-1",
@@ -713,6 +932,14 @@ class WorkerProcessServiceTests(unittest.TestCase):
             _ = target
 
         session.refresh.side_effect = _refresh
+        finalized_run = SimpleNamespace(**{**run.__dict__, "status": "succeeded", "last_error": None})
+
+        def _promote(_session, *, run, expected_worker_service_instance_id, expected_claim_id):  # noqa: ANN001
+            self.assertEqual(expected_worker_service_instance_id, "node-b:9999")
+            self.assertEqual(expected_claim_id, "claim-1")
+            run.status = "running"
+            run.claim_id = expected_claim_id
+            return run
 
         result = process_next_queued_run(
             session=session,
@@ -737,10 +964,10 @@ class WorkerProcessServiceTests(unittest.TestCase):
                 worker_run_heartbeat_interval_seconds=30,
                 tenant_id="tenant-1",
             ),
-            claim_next_queued_run_fn=lambda *_args, **_kwargs: SimpleNamespace(
+            claim_next_queued_run_fn=lambda *_args, **_kwargs: _claim_result(
                 run=run,
                 tenant=tenant,
-                terminal_run=None,
+                project=project,
             ),
             send_discord_message_fn=MagicMock(return_value=SimpleNamespace(sent=True, reason=None)),
             send_jira_message_fn=MagicMock(),
@@ -749,26 +976,23 @@ class WorkerProcessServiceTests(unittest.TestCase):
             block_archived_project_fn=MagicMock(),
             ensure_project_repository_checkout_fn=MagicMock(),
             fail_project_repository_checkout_fn=MagicMock(),
+            fail_project_repository_setup_fn=MagicMock(),
+            requeue_run_for_repo_setup_fn=MagicMock(),
             cleanup_run_workspaces_fn=MagicMock(),
             build_run_heartbeat_controller_fn=lambda **_: heartbeat,
+            promote_run_to_running_fn=_promote,
             bind_run_project_fn=MagicMock(),
             workflow_request_for_run_fn=MagicMock(return_value=SimpleNamespace(start_point_ref=None, start_point_sha=None)),
             fail_guardrail_violation_fn=MagicMock(),
             tenant_jira_issue_url_fn=MagicMock(return_value="https://jira.test/GP-122"),
-            lock_acquired_update_fn=MagicMock(
-                return_value={
-                    "stage": "lock_acquired",
-                    "discord_message": "locked",
-                    "jira_message": "locked",
-                }
-            ),
-            plan_posted_update_fn=MagicMock(),
-            pr_opened_update_fn=MagicMock(),
-            run_failed_update_fn=MagicMock(),
-            run_requeued_capability_update_fn=MagicMock(),
-            run_requeued_stale_snapshot_update_fn=MagicMock(),
+            lock_acquired_update_fn=_stage_update_mock("lock_acquired", discord_message="locked", jira_message="locked"),
+            plan_posted_update_fn=_stage_update_mock("plan_posted"),
+            pr_opened_update_fn=_stage_update_mock("pr_opened"),
+            run_failed_update_fn=_stage_update_mock("run_failed"),
+            run_requeued_capability_update_fn=_stage_update_mock("run_requeued_capability_mismatch"),
+            run_requeued_stale_snapshot_update_fn=_stage_update_mock("run_requeued_stale_snapshot"),
             finalize_cancelled_run_fn=MagicMock(),
-            finalize_workflow_result_fn=MagicMock(),
+            finalize_workflow_result_fn=MagicMock(return_value=finalized_run),
             persist_stage_checkpoint_fn=MagicMock(),
             requeue_workflow_result_for_capability_fn=MagicMock(),
             requeue_workflow_result_for_stale_snapshot_fn=MagicMock(),
@@ -784,7 +1008,7 @@ class WorkerProcessServiceTests(unittest.TestCase):
             run_status_cancelled="cancelled",
         )
 
-        self.assertIs(result, run)
+        self.assertIs(result, finalized_run)
         self.assertTrue(heartbeat.started)
         self.assertTrue(heartbeat.stopped)
 
@@ -849,10 +1073,10 @@ class WorkerProcessServiceTests(unittest.TestCase):
                     worker_run_heartbeat_interval_seconds=30,
                     tenant_id="tenant-1",
                 ),
-                claim_next_queued_run_fn=lambda *_args, **_kwargs: SimpleNamespace(
+                claim_next_queued_run_fn=lambda *_args, **_kwargs: _claim_result(
                     run=run,
                     tenant=tenant,
-                    terminal_run=None,
+                    project=project,
                 ),
                 send_discord_message_fn=MagicMock(return_value=SimpleNamespace(sent=True, reason=None)),
                 send_jira_message_fn=MagicMock(),
@@ -861,18 +1085,21 @@ class WorkerProcessServiceTests(unittest.TestCase):
                 block_archived_project_fn=MagicMock(),
                 ensure_project_repository_checkout_fn=MagicMock(),
                 fail_project_repository_checkout_fn=MagicMock(),
+                fail_project_repository_setup_fn=MagicMock(),
+                requeue_run_for_repo_setup_fn=MagicMock(),
                 cleanup_run_workspaces_fn=MagicMock(),
                 build_run_heartbeat_controller_fn=lambda **_: heartbeat,
+                promote_run_to_running_fn=_promote_claimed_run,
                 bind_run_project_fn=MagicMock(),
                 workflow_request_for_run_fn=MagicMock(return_value=SimpleNamespace(start_point_ref=None, start_point_sha=None)),
                 fail_guardrail_violation_fn=MagicMock(),
                 tenant_jira_issue_url_fn=MagicMock(return_value="https://jira.test/GP-122"),
-                lock_acquired_update_fn=MagicMock(return_value={"stage": "lock_acquired", "discord_message": "locked", "jira_message": ""}),
-                plan_posted_update_fn=MagicMock(),
-                pr_opened_update_fn=MagicMock(),
-                run_failed_update_fn=MagicMock(),
-                run_requeued_capability_update_fn=MagicMock(),
-                run_requeued_stale_snapshot_update_fn=MagicMock(),
+                lock_acquired_update_fn=_stage_update_mock("lock_acquired", discord_message="locked"),
+                plan_posted_update_fn=_stage_update_mock("plan_posted"),
+                pr_opened_update_fn=_stage_update_mock("pr_opened"),
+                run_failed_update_fn=_stage_update_mock("run_failed"),
+                run_requeued_capability_update_fn=_stage_update_mock("run_requeued_capability_mismatch"),
+                run_requeued_stale_snapshot_update_fn=_stage_update_mock("run_requeued_stale_snapshot"),
                 finalize_cancelled_run_fn=MagicMock(),
                 finalize_workflow_result_fn=finalize_run,
                 persist_stage_checkpoint_fn=MagicMock(),
@@ -946,10 +1173,10 @@ class WorkerProcessServiceTests(unittest.TestCase):
                 worker_run_heartbeat_interval_seconds=30,
                 tenant_id="tenant-1",
             ),
-            claim_next_queued_run_fn=lambda *_args, **_kwargs: SimpleNamespace(
+            claim_next_queued_run_fn=lambda *_args, **_kwargs: _claim_result(
                 run=run,
                 tenant=tenant,
-                terminal_run=None,
+                project=project,
             ),
             send_discord_message_fn=MagicMock(return_value=SimpleNamespace(sent=True, reason=None)),
             send_jira_message_fn=MagicMock(),
@@ -958,18 +1185,21 @@ class WorkerProcessServiceTests(unittest.TestCase):
             block_archived_project_fn=MagicMock(),
             ensure_project_repository_checkout_fn=MagicMock(),
             fail_project_repository_checkout_fn=MagicMock(),
+            fail_project_repository_setup_fn=MagicMock(),
+            requeue_run_for_repo_setup_fn=MagicMock(),
             cleanup_run_workspaces_fn=MagicMock(),
             build_run_heartbeat_controller_fn=lambda **_: heartbeat,
+            promote_run_to_running_fn=_promote_claimed_run,
             bind_run_project_fn=MagicMock(),
             workflow_request_for_run_fn=MagicMock(return_value=SimpleNamespace(start_point_ref=None, start_point_sha=None)),
             fail_guardrail_violation_fn=MagicMock(),
             tenant_jira_issue_url_fn=MagicMock(return_value="https://jira.test/GP-122"),
-            lock_acquired_update_fn=MagicMock(return_value={"stage": "lock_acquired", "discord_message": "locked", "jira_message": ""}),
-            plan_posted_update_fn=MagicMock(),
-            pr_opened_update_fn=MagicMock(),
-            run_failed_update_fn=MagicMock(),
-            run_requeued_capability_update_fn=MagicMock(),
-            run_requeued_stale_snapshot_update_fn=MagicMock(),
+            lock_acquired_update_fn=_stage_update_mock("lock_acquired", discord_message="locked"),
+            plan_posted_update_fn=_stage_update_mock("plan_posted"),
+            pr_opened_update_fn=_stage_update_mock("pr_opened"),
+            run_failed_update_fn=_stage_update_mock("run_failed"),
+            run_requeued_capability_update_fn=_stage_update_mock("run_requeued_capability_mismatch"),
+            run_requeued_stale_snapshot_update_fn=_stage_update_mock("run_requeued_stale_snapshot"),
             finalize_cancelled_run_fn=MagicMock(),
             finalize_workflow_result_fn=_finalize,
             persist_stage_checkpoint_fn=MagicMock(),
@@ -1051,10 +1281,10 @@ class WorkerProcessServiceTests(unittest.TestCase):
                 worker_run_heartbeat_interval_seconds=30,
                 tenant_id="tenant-1",
             ),
-            claim_next_queued_run_fn=lambda *_args, **_kwargs: SimpleNamespace(
+            claim_next_queued_run_fn=lambda *_args, **_kwargs: _claim_result(
                 run=run,
                 tenant=tenant,
-                terminal_run=None,
+                project=project,
             ),
             send_discord_message_fn=MagicMock(return_value=SimpleNamespace(sent=True, reason=None)),
             send_jira_message_fn=send_jira_message,
@@ -1063,18 +1293,21 @@ class WorkerProcessServiceTests(unittest.TestCase):
             block_archived_project_fn=MagicMock(),
             ensure_project_repository_checkout_fn=MagicMock(),
             fail_project_repository_checkout_fn=MagicMock(),
+            fail_project_repository_setup_fn=MagicMock(),
+            requeue_run_for_repo_setup_fn=MagicMock(),
             cleanup_run_workspaces_fn=cleanup,
             build_run_heartbeat_controller_fn=lambda **_: heartbeat,
+            promote_run_to_running_fn=_promote_claimed_run,
             bind_run_project_fn=MagicMock(),
             workflow_request_for_run_fn=MagicMock(return_value=SimpleNamespace(start_point_ref=None, start_point_sha=None)),
             fail_guardrail_violation_fn=MagicMock(),
             tenant_jira_issue_url_fn=MagicMock(return_value="https://jira.test/GP-125"),
-            lock_acquired_update_fn=MagicMock(return_value={"stage": "lock_acquired", "discord_message": "locked", "jira_message": ""}),
-            plan_posted_update_fn=MagicMock(),
-            pr_opened_update_fn=MagicMock(),
+            lock_acquired_update_fn=_stage_update_mock("lock_acquired", discord_message="locked"),
+            plan_posted_update_fn=_stage_update_mock("plan_posted"),
+            pr_opened_update_fn=_stage_update_mock("pr_opened"),
             run_failed_update_fn=run_failed_update,
-            run_requeued_capability_update_fn=MagicMock(),
-            run_requeued_stale_snapshot_update_fn=MagicMock(),
+            run_requeued_capability_update_fn=_stage_update_mock("run_requeued_capability_mismatch"),
+            run_requeued_stale_snapshot_update_fn=_stage_update_mock("run_requeued_stale_snapshot"),
             finalize_cancelled_run_fn=MagicMock(),
             finalize_workflow_result_fn=finalize_run,
             persist_stage_checkpoint_fn=MagicMock(),
@@ -1189,10 +1422,10 @@ class WorkerProcessServiceTests(unittest.TestCase):
                 worker_run_heartbeat_interval_seconds=30,
                 tenant_id="tenant-1",
             ),
-            claim_next_queued_run_fn=lambda *_args, **_kwargs: SimpleNamespace(
+            claim_next_queued_run_fn=lambda *_args, **_kwargs: _claim_result(
                 run=run,
                 tenant=tenant,
-                terminal_run=None,
+                project=project,
             ),
             send_discord_message_fn=MagicMock(return_value=SimpleNamespace(sent=True, reason=None)),
             send_jira_message_fn=MagicMock(),
@@ -1201,8 +1434,11 @@ class WorkerProcessServiceTests(unittest.TestCase):
             block_archived_project_fn=MagicMock(),
             ensure_project_repository_checkout_fn=MagicMock(),
             fail_project_repository_checkout_fn=MagicMock(),
+            fail_project_repository_setup_fn=MagicMock(),
+            requeue_run_for_repo_setup_fn=MagicMock(),
             cleanup_run_workspaces_fn=MagicMock(),
             build_run_heartbeat_controller_fn=lambda **_: heartbeat,
+            promote_run_to_running_fn=_promote_claimed_run,
             bind_run_project_fn=MagicMock(),
             workflow_request_for_run_fn=MagicMock(
                 return_value=SimpleNamespace(
@@ -1217,12 +1453,12 @@ class WorkerProcessServiceTests(unittest.TestCase):
             ),
             fail_guardrail_violation_fn=MagicMock(),
             tenant_jira_issue_url_fn=MagicMock(return_value="https://jira.test/GP-122"),
-            lock_acquired_update_fn=MagicMock(return_value={"stage": "lock_acquired", "discord_message": "locked", "jira_message": ""}),
-            plan_posted_update_fn=MagicMock(),
-            pr_opened_update_fn=MagicMock(),
-            run_failed_update_fn=MagicMock(),
-            run_requeued_capability_update_fn=MagicMock(),
-            run_requeued_stale_snapshot_update_fn=MagicMock(),
+            lock_acquired_update_fn=_stage_update_mock("lock_acquired", discord_message="locked"),
+            plan_posted_update_fn=_stage_update_mock("plan_posted"),
+            pr_opened_update_fn=_stage_update_mock("pr_opened"),
+            run_failed_update_fn=_stage_update_mock("run_failed"),
+            run_requeued_capability_update_fn=_stage_update_mock("run_requeued_capability_mismatch"),
+            run_requeued_stale_snapshot_update_fn=_stage_update_mock("run_requeued_stale_snapshot"),
             finalize_cancelled_run_fn=MagicMock(),
             finalize_workflow_result_fn=_finalize,
             persist_stage_checkpoint_fn=_persist_stage_checkpoint,
@@ -1281,10 +1517,10 @@ class WorkerProcessServiceTests(unittest.TestCase):
             if kwargs.get("stage") == "review_summary":
                 raise RuntimeError("jira is unavailable")
 
-        def _record_run_log_event(**kwargs: object) -> None:
+        def _emit_logging_pane_event(**kwargs: object) -> None:
             recorded_rows.append(dict(kwargs))
 
-        with patch("orchestrator.core.worker.finalization.record_run_log_event", side_effect=_record_run_log_event):
+        with patch("orchestrator.core.worker.finalization.emit_logging_pane_event", side_effect=_emit_logging_pane_event):
             result = process_next_queued_run(
                 session=session,
                 runner=SimpleNamespace(
@@ -1309,10 +1545,10 @@ class WorkerProcessServiceTests(unittest.TestCase):
                     worker_run_heartbeat_interval_seconds=30,
                     tenant_id="tenant-1",
                 ),
-                claim_next_queued_run_fn=lambda *_args, **_kwargs: SimpleNamespace(
+                claim_next_queued_run_fn=lambda *_args, **_kwargs: _claim_result(
                     run=run,
                     tenant=tenant,
-                    terminal_run=None,
+                    project=project,
                 ),
                 send_discord_message_fn=MagicMock(return_value=SimpleNamespace(sent=True, reason=None)),
                 send_jira_message_fn=_send_jira_message,
@@ -1321,18 +1557,21 @@ class WorkerProcessServiceTests(unittest.TestCase):
                 block_archived_project_fn=MagicMock(),
                 ensure_project_repository_checkout_fn=MagicMock(),
                 fail_project_repository_checkout_fn=MagicMock(),
+                fail_project_repository_setup_fn=MagicMock(),
+                requeue_run_for_repo_setup_fn=MagicMock(),
                 cleanup_run_workspaces_fn=cleanup,
                 build_run_heartbeat_controller_fn=lambda **_: heartbeat,
+                promote_run_to_running_fn=_promote_claimed_run,
                 bind_run_project_fn=MagicMock(),
                 workflow_request_for_run_fn=MagicMock(return_value=SimpleNamespace(start_point_ref=None, start_point_sha=None)),
                 fail_guardrail_violation_fn=MagicMock(),
                 tenant_jira_issue_url_fn=MagicMock(return_value="https://jira.test/GP-122"),
-                lock_acquired_update_fn=MagicMock(return_value={"stage": "lock_acquired", "discord_message": "locked", "jira_message": ""}),
-                plan_posted_update_fn=MagicMock(),
-                pr_opened_update_fn=MagicMock(),
-                run_failed_update_fn=MagicMock(),
-                run_requeued_capability_update_fn=MagicMock(),
-                run_requeued_stale_snapshot_update_fn=MagicMock(),
+                lock_acquired_update_fn=_stage_update_mock("lock_acquired", discord_message="locked"),
+                plan_posted_update_fn=_stage_update_mock("plan_posted"),
+                pr_opened_update_fn=_stage_update_mock("pr_opened"),
+                run_failed_update_fn=_stage_update_mock("run_failed"),
+                run_requeued_capability_update_fn=_stage_update_mock("run_requeued_capability_mismatch"),
+                run_requeued_stale_snapshot_update_fn=_stage_update_mock("run_requeued_stale_snapshot"),
                 finalize_cancelled_run_fn=MagicMock(),
                 finalize_workflow_result_fn=finalize_run,
                 persist_stage_checkpoint_fn=MagicMock(),
@@ -1401,11 +1640,11 @@ class WorkerProcessServiceTests(unittest.TestCase):
         finalize_run = MagicMock(return_value=finalized_run)
         recorded_rows: list[dict[str, object]] = []
 
-        def _record_run_log_event(**kwargs: object) -> None:
+        def _emit_logging_pane_event(**kwargs: object) -> None:
             recorded_rows.append(dict(kwargs))
 
         with (
-            patch("orchestrator.core.worker.finalization.record_run_log_event", side_effect=_record_run_log_event),
+            patch("orchestrator.core.worker.finalization.emit_logging_pane_event", side_effect=_emit_logging_pane_event),
             patch(
                 "orchestrator.core.worker.finalization.publish_manual_pr_remediation_completion",
                 side_effect=RuntimeError("github publish failed"),
@@ -1434,10 +1673,10 @@ class WorkerProcessServiceTests(unittest.TestCase):
                     worker_run_heartbeat_interval_seconds=30,
                     tenant_id="tenant-1",
                 ),
-                claim_next_queued_run_fn=lambda *_args, **_kwargs: SimpleNamespace(
+                claim_next_queued_run_fn=lambda *_args, **_kwargs: _claim_result(
                     run=run,
                     tenant=tenant,
-                    terminal_run=None,
+                    project=project,
                 ),
                 send_discord_message_fn=MagicMock(return_value=SimpleNamespace(sent=True, reason=None)),
                 send_jira_message_fn=MagicMock(),
@@ -1446,18 +1685,21 @@ class WorkerProcessServiceTests(unittest.TestCase):
                 block_archived_project_fn=MagicMock(),
                 ensure_project_repository_checkout_fn=MagicMock(),
                 fail_project_repository_checkout_fn=MagicMock(),
+                fail_project_repository_setup_fn=MagicMock(),
+                requeue_run_for_repo_setup_fn=MagicMock(),
                 cleanup_run_workspaces_fn=MagicMock(),
                 build_run_heartbeat_controller_fn=lambda **_: heartbeat,
+                promote_run_to_running_fn=_promote_claimed_run,
                 bind_run_project_fn=MagicMock(),
                 workflow_request_for_run_fn=MagicMock(return_value=SimpleNamespace(start_point_ref=None, start_point_sha=None)),
                 fail_guardrail_violation_fn=MagicMock(),
                 tenant_jira_issue_url_fn=MagicMock(return_value="https://jira.test/GP-122"),
-                lock_acquired_update_fn=MagicMock(return_value={"stage": "lock_acquired", "discord_message": "locked", "jira_message": ""}),
-                plan_posted_update_fn=MagicMock(),
-                pr_opened_update_fn=MagicMock(),
-                run_failed_update_fn=MagicMock(),
-                run_requeued_capability_update_fn=MagicMock(),
-                run_requeued_stale_snapshot_update_fn=MagicMock(),
+                lock_acquired_update_fn=_stage_update_mock("lock_acquired", discord_message="locked"),
+                plan_posted_update_fn=_stage_update_mock("plan_posted"),
+                pr_opened_update_fn=_stage_update_mock("pr_opened"),
+                run_failed_update_fn=_stage_update_mock("run_failed"),
+                run_requeued_capability_update_fn=_stage_update_mock("run_requeued_capability_mismatch"),
+                run_requeued_stale_snapshot_update_fn=_stage_update_mock("run_requeued_stale_snapshot"),
                 finalize_cancelled_run_fn=MagicMock(),
                 finalize_workflow_result_fn=finalize_run,
                 persist_stage_checkpoint_fn=MagicMock(),

@@ -1,0 +1,12 @@
+title = "Master Builder gitleaks config"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Ignore the deterministic migration test key literal present in historical PR commits."
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''^tests/test_migrations\.py$''']
+regexTarget = "line"
+regexes = ['''encryption_key\s*=\s*"MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="''']
