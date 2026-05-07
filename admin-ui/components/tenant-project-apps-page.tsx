@@ -100,7 +100,7 @@ type ReleaseDraft = {
   reason: string;
 };
 
-type LaunchStepKey = "discover" | "review" | "configure" | "deploy";
+type LaunchStepKey = "create" | "choose" | "launch";
 
 type OperationKey = "resources" | "domains" | "backups" | "backupNow";
 
@@ -133,10 +133,9 @@ const APP_SECTIONS: { id: AppSection; label: string; description: string }[] = [
 ];
 
 const LAUNCH_STEPS: { key: LaunchStepKey; label: string; description: string }[] = [
-  { key: "discover", label: "Create app", description: "Inspect the repo and find deployable app candidates." },
-  { key: "review", label: "Choose app", description: "Pick the app MB should launch for this project." },
-  { key: "configure", label: "Launch settings", description: "Confirm the deployment settings needed to go live." },
-  { key: "deploy", label: "Go live", description: "Start the managed deployment and track the release." },
+  { key: "create", label: "Create app", description: "MB scans the repo and prepares deployable app candidates." },
+  { key: "choose", label: "Choose app", description: "Confirm the app MB should launch." },
+  { key: "launch", label: "Launch", description: "MB configures deployment and starts the first release." },
 ];
 
 function emptyDeploymentForm(): DeploymentFormState {
@@ -1215,45 +1214,72 @@ export function TenantProjectAppsPage({
     }
   }
 
+  function recommendedLaunchForm(app: ProjectAppRecord): DeploymentFormState {
+    const supportedBuildStrategy =
+      app.build_strategy === "dockerfile" || app.build_strategy === "docker_compose" || app.build_strategy === "nixpacks"
+        ? app.build_strategy
+        : "dockerfile";
+    return {
+      ...deploymentForm,
+      enabled: true,
+      environment_name: deploymentForm.environment_name.trim() || "production",
+      source_strategy: "dockerfile",
+      build_strategy: deploymentForm.build_strategy || supportedBuildStrategy,
+      exposed_port: deploymentForm.exposed_port || (app.exposed_port ? String(app.exposed_port) : ""),
+      start_command: deploymentForm.start_command || app.start_command || "",
+    };
+  }
+
+  async function launchWithRecommendedSettings() {
+    if (!credentials || !selectedApp) {
+      return;
+    }
+    if (selectedApp.status === "needs_pr_merge") {
+      setSurfaceStatusLine("Deployment files must be merged before MB can launch this app.");
+      return;
+    }
+    const recommendedForm = recommendedLaunchForm(selectedApp);
+    const validationError = validateDeploymentForm(recommendedForm);
+    if (validationError) {
+      setSurfaceStatusLine(validationError);
+      return;
+    }
+    setDeploying(true);
+    setSurfaceStatusLine("Configuring deployment and queuing the first release...");
+    try {
+      const updated = await updateProjectAppDeploymentConfig(
+        credentials,
+        tenantId,
+        projectId,
+        selectedApp.app_id,
+        buildDeploymentPayload(recommendedForm),
+      );
+      setDeploymentForm(toDeploymentForm(updated));
+      const created = await createProjectAppRelease(credentials, tenantId, projectId, selectedApp.app_id, {
+        git_ref: null,
+        commit_sha: null,
+        reason: "Guided launch",
+      });
+      setSelectedAppReleases((current) => [created, ...current.filter((release) => release.release_id !== created.release_id)]);
+      await refreshAll({ silent: true });
+      await loadSelectedAppSurface(selectedApp.app_id);
+      setSurfaceStatusLine(`Queued release ${created.release_id}. MB will expose a temporary app URL when the deployment host reports it.`);
+    } catch (error) {
+      setSurfaceStatusLine(`Launch failed: ${(error as Error).message}`);
+    } finally {
+      setDeploying(false);
+    }
+  }
+
   const latestAnalysisNeedsMerge = String(selectedApp?.status ?? "").trim().toLowerCase() === "needs_pr_merge";
   const selectedAppStatus = String(selectedApp?.status ?? "").trim().toLowerCase();
   const launchStepIndex = !selectedApp
     ? apps.length === 0 ? 0 : 1
     : selectedAppStatus === "live"
-      ? 3
-      : deploymentForm.environment_name.trim()
-        ? 3
-        : 2;
-  const launchConfigIsReady = Boolean(
-    selectedApp &&
-    deploymentForm.enabled &&
-    deploymentForm.environment_name.trim() &&
-    deploymentForm.source_strategy === "dockerfile",
-  );
+      ? 2
+      : 2;
   const latestRelease = appReleases[0] ?? null;
-  const launchCanDeploy = launchConfigIsReady && !deploying && !savingConfig && !loadingSurface && selectedAppStatus !== "needs_pr_merge";
-
-  function useRecommendedLaunchSettings() {
-    if (!selectedApp) {
-      return;
-    }
-    const supportedBuildStrategy =
-      selectedApp.build_strategy === "dockerfile" ||
-      selectedApp.build_strategy === "docker_compose" ||
-      selectedApp.build_strategy === "nixpacks"
-        ? selectedApp.build_strategy
-        : "dockerfile";
-    setDeploymentForm((current) => ({
-      ...current,
-      enabled: true,
-      environment_name: current.environment_name.trim() || "production",
-      source_strategy: "dockerfile",
-      build_strategy: current.build_strategy || supportedBuildStrategy,
-      exposed_port: current.exposed_port || (selectedApp.exposed_port ? String(selectedApp.exposed_port) : ""),
-      start_command: current.start_command || selectedApp.start_command || "",
-    }));
-    setSurfaceStatusLine("Recommended launch settings prepared. Review and save before going live.");
-  }
+  const launchCanDeploy = Boolean(selectedApp) && !deploying && !savingConfig && !loadingSurface && selectedAppStatus !== "needs_pr_merge";
 
   return (
     <div className="space-y-6">
@@ -1263,7 +1289,7 @@ export function TenantProjectAppsPage({
             <div className="max-w-3xl">
               <CardTitle className="text-xl">Launch an app</CardTitle>
               <CardDescription className="mt-2 text-sm">
-                Create a deployable app from this project, confirm the launch settings, and start a managed release.
+                MB creates the app, configures deployment in the background, and starts a managed release with a temporary URL when available.
               </CardDescription>
             </div>
             <Button variant="outline" size="sm" onClick={() => setShowAdvancedTools((current) => !current)}>
@@ -1271,9 +1297,9 @@ export function TenantProjectAppsPage({
             </Button>
           </div>
 
-          <div className="grid gap-3 md:grid-cols-4">
+          <div className="grid gap-3 md:grid-cols-3">
             {LAUNCH_STEPS.map((step, index) => {
-              const isComplete = index < launchStepIndex || (step.key === "deploy" && selectedAppStatus === "live");
+              const isComplete = index < launchStepIndex || (step.key === "launch" && selectedAppStatus === "live");
               const isCurrent = index === launchStepIndex && !isComplete;
               return (
                 <div
@@ -1361,9 +1387,9 @@ export function TenantProjectAppsPage({
               <Card>
                 <CardHeader className="flex flex-row items-start justify-between gap-4 space-y-0">
                   <div>
-                    <CardTitle className="text-base">{selectedApp ? `Launch ${selectedApp.name}` : "Launch settings"}</CardTitle>
+                    <CardTitle className="text-base">{selectedApp ? `Launch ${selectedApp.name}` : "Launch"}</CardTitle>
                     <CardDescription>
-                      Confirm the essentials. Databases, custom domains, backups, and restore controls live under Advanced tools.
+                      MB will choose the deployment defaults from repo analysis. Advanced users can inspect or override the technical controls separately.
                     </CardDescription>
                   </div>
                   {selectedApp ? <Badge variant={appStatusVariant(selectedApp.status)}>{selectedApp.status}</Badge> : null}
@@ -1377,38 +1403,18 @@ export function TenantProjectAppsPage({
                     </div>
                   ) : (
                     <>
-                      <div className="grid gap-3 md:grid-cols-2">
-                        <div className="space-y-1.5">
-                          <label htmlFor="guided-environment-name" className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                            Environment
-                          </label>
-                          <Input
-                            id="guided-environment-name"
-                            value={deploymentForm.environment_name}
-                            onChange={(event) => setDeploymentForm((current) => ({ ...current, environment_name: event.target.value }))}
-                            placeholder="production"
-                          />
-                        </div>
-                        <div className="space-y-1.5">
-                          <label htmlFor="guided-exposed-port" className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                            Public port
-                          </label>
-                          <Input
-                            id="guided-exposed-port"
-                            value={deploymentForm.exposed_port}
-                            onChange={(event) => setDeploymentForm((current) => ({ ...current, exposed_port: event.target.value }))}
-                            placeholder={selectedApp.exposed_port ? String(selectedApp.exposed_port) : "3000"}
-                          />
-                        </div>
-                      </div>
-                      <div className="grid gap-3 md:grid-cols-2">
+                      <div className="grid gap-3 md:grid-cols-3">
                         <div className="rounded-xl border bg-muted/20 px-4 py-3">
                           <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Runtime</p>
                           <p className="mt-1 text-sm font-medium">{selectedApp.detected_runtime ?? "Unknown"}</p>
                         </div>
                         <div className="rounded-xl border bg-muted/20 px-4 py-3">
                           <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Build</p>
-                          <p className="mt-1 text-sm font-medium">{buildStrategyLabel(deploymentForm.build_strategy || selectedApp.build_strategy)}</p>
+                          <p className="mt-1 text-sm font-medium">{buildStrategyLabel(selectedApp.build_strategy)}</p>
+                        </div>
+                        <div className="rounded-xl border bg-muted/20 px-4 py-3">
+                          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Public access</p>
+                          <p className="mt-1 text-sm font-medium">{selectedApp.exposed_port ? `Temporary URL on port ${selectedApp.exposed_port}` : "Temporary URL if web app"}</p>
                         </div>
                       </div>
                       {latestRelease ? (
@@ -1417,21 +1423,17 @@ export function TenantProjectAppsPage({
                         </div>
                       ) : null}
                       <div className="flex flex-wrap gap-2">
-                        <Button variant="outline" onClick={useRecommendedLaunchSettings} disabled={savingConfig || deploying || loadingSurface}>
-                          Use recommended settings
-                        </Button>
-                        <Button variant="outline" onClick={() => void saveDeploymentConfig()} disabled={savingConfig || deploying || loadingSurface}>
-                          <Save className="mr-2 h-4 w-4" />
-                          {savingConfig ? "Saving…" : "Save launch settings"}
-                        </Button>
-                        <Button onClick={() => void createRelease("Guided launch")} disabled={!launchCanDeploy}>
+                        <Button onClick={() => void launchWithRecommendedSettings()} disabled={!launchCanDeploy}>
                           <Rocket className="mr-2 h-4 w-4" />
-                          {deploying ? "Launching…" : "Launch live app"}
+                          {deploying ? "Launching…" : "Launch app"}
+                        </Button>
+                        <Button variant="outline" onClick={() => setShowAdvancedTools(true)} disabled={deploying || loadingSurface}>
+                          Advanced setup
                         </Button>
                       </div>
-                      {!launchConfigIsReady ? (
-                        <p className="text-sm text-muted-foreground">Save an environment and Dockerfile launch settings before deployment can start.</p>
-                      ) : null}
+                      <p className="text-sm text-muted-foreground">
+                        This saves production deployment settings and queues the first release. No port, domain, backup, or build strategy knowledge is required for the normal path.
+                      </p>
                     </>
                   )}
                 </CardContent>
