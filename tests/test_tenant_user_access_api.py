@@ -42,7 +42,7 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
             "ORCHESTRATOR_DISCORD_INSTALL_STATE_SECRET": "discord-install-state-secret",
             "ORCHESTRATOR_DISCORD_CHANNEL_CATEGORY_ID": "text-category-1",
             "ORCHESTRATOR_SECRETS_ENCRYPTION_KEY": cls._secrets_encryption_key,
-            "ORCHESTRATOR_CODEX_SUPPORTED_MODELS": "gpt-5.4,gpt-5.4-mini,gpt-5.3-codex",
+            "ORCHESTRATOR_CODEX_SUPPORTED_MODELS": "gpt-5.4,gpt-5.5,gpt-5.4-mini,gpt-5.3-codex",
         }
 
     @classmethod
