@@ -99,10 +99,13 @@ FROM python-common-base AS app-runtime-base
 COPY README.md ./
 COPY .codex ./.codex
 COPY orchestrator ./orchestrator
+COPY scripts/bootstrap_deployment_host_agent.py ./scripts/bootstrap_deployment_host_agent.py
 COPY alembic.ini ./alembic.ini
 
 RUN --mount=type=cache,target=/root/.cache/pip \
     "${VIRTUAL_ENV}/bin/pip" install --no-deps --no-build-isolation .
+
+RUN "${VIRTUAL_ENV}/bin/python" -m compileall -q -j 0 /app/orchestrator
 
 RUN mkdir -p /app/data
 

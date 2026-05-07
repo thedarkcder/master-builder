@@ -389,3 +389,4 @@
 - 2026-05-07: When adding a new FastAPI route module to the composition root, update the architecture boundary expectation in the same commit. A passing API smoke test is not enough if the route-import gate enforces explicit composition ownership.
 - 2026-05-07: When removing a broad settings route, update backend tests to use the new narrow endpoint instead of restoring the broad contract for test convenience. Old route expectations are compatibility pressure and should fail until the test is corrected.
 - 2026-05-07: For PR/CI fixes, do not push after only the immediate failing test when the CI job runs a broader suite. Run the matching CI suite locally first, then commit and push only after that suite passes.
+- 2026-05-07: When creating a stash as branch/worktree preservation, explicitly state whether it is recovery-only or intended to be reapplied, then close the loop by either applying scoped changes or recommending the stash be dropped after verification.

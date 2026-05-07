@@ -153,6 +153,7 @@ services:
       ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR: /var/lib/master-builder/workdirs
       ORCHESTRATOR_WORKER_CAPABILITIES: ${ORCHESTRATOR_WORKER_CAPABILITIES:-linux}
       ORCHESTRATOR_API_WORKERS: ${ORCHESTRATOR_API_WORKERS:-4}
+      ORCHESTRATOR_UVICORN_WORKER_HEALTHCHECK_TIMEOUT_SECONDS: ${ORCHESTRATOR_UVICORN_WORKER_HEALTHCHECK_TIMEOUT_SECONDS:-180}
     ports:
       - "${MASTER_BUILDER_API_PORT:-4000}:4000"
     depends_on:
@@ -177,7 +178,7 @@ services:
         mkdir -p /root/.codex
         cp -a /app/.codex/. /root/.codex/
         if [ -f /app/AGENTS.md ]; then cp /app/AGENTS.md /root/AGENTS.md; fi
-        uvicorn orchestrator.api.main:app --host 0.0.0.0 --port 4000 --workers "${ORCHESTRATOR_API_WORKERS:-4}"
+        uvicorn orchestrator.api.main:app --host 0.0.0.0 --port 4000 --workers "${ORCHESTRATOR_API_WORKERS:-4}" --timeout-worker-healthcheck "${ORCHESTRATOR_UVICORN_WORKER_HEALTHCHECK_TIMEOUT_SECONDS:-180}"
     volumes:
       - codex-home:/root/.codex
       - workdirs-data:/var/lib/master-builder/workdirs
