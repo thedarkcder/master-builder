@@ -100,6 +100,8 @@ type ReleaseDraft = {
   reason: string;
 };
 
+type LaunchStepKey = "discover" | "review" | "configure" | "deploy";
+
 type OperationKey = "resources" | "domains" | "backups" | "backupNow";
 
 type OperationFeedback = {
@@ -128,6 +130,13 @@ const APP_SECTIONS: { id: AppSection; label: string; description: string }[] = [
   { id: "domains", label: "Domains / TLS", description: "Managed hostnames and certificates." },
   { id: "backups", label: "Backups", description: "Schedules, retention, backup, restore." },
   { id: "releases", label: "Releases", description: "Create deploys and inspect history." },
+];
+
+const LAUNCH_STEPS: { key: LaunchStepKey; label: string; description: string }[] = [
+  { key: "discover", label: "Create app", description: "Inspect the repo and find deployable app candidates." },
+  { key: "review", label: "Choose app", description: "Pick the app MB should launch for this project." },
+  { key: "configure", label: "Launch settings", description: "Confirm the deployment settings needed to go live." },
+  { key: "deploy", label: "Go live", description: "Start the managed deployment and track the release." },
 ];
 
 function emptyDeploymentForm(): DeploymentFormState {
@@ -674,6 +683,7 @@ export function TenantProjectAppsPage({
   const [restoreStatusLine, setRestoreStatusLine] = useState("");
   const [busy, setBusy] = useState(false);
   const [loadingSurface, setLoadingSurface] = useState(false);
+  const [showAdvancedTools, setShowAdvancedTools] = useState(false);
   const [statusLine, setStatusLine] = useState("");
   const [analysisStatusLine, setAnalysisStatusLine] = useState("");
   const [surfaceStatusLine, setSurfaceStatusLine] = useState("");
@@ -1169,7 +1179,7 @@ export function TenantProjectAppsPage({
     }
   }
 
-  async function createRelease() {
+  async function createRelease(reasonOverride?: string) {
     if (!credentials || !selectedApp) {
       return;
     }
@@ -1190,14 +1200,14 @@ export function TenantProjectAppsPage({
       const payload: ProjectDeploymentReleaseCreatePayload = {
         git_ref: trimToNull(releaseDraft.git_ref),
         commit_sha: trimToNull(releaseDraft.commit_sha),
-        reason: trimToNull(releaseDraft.reason),
+        reason: trimToNull(reasonOverride ?? releaseDraft.reason),
       };
       const created = await createProjectAppRelease(credentials, tenantId, projectId, selectedApp.app_id, payload);
       setSelectedAppReleases((current) => [created, ...current.filter((release) => release.release_id !== created.release_id)]);
       setReleaseDraft(emptyReleaseDraft());
-      setSurfaceStatusLine(`Queued release ${created.release_id}.`);
       await refreshAll({ silent: true });
       await loadSelectedAppSurface(selectedApp.app_id);
+      setSurfaceStatusLine(`Queued release ${created.release_id}.`);
     } catch (error) {
       setSurfaceStatusLine(`Release failed: ${(error as Error).message}`);
     } finally {
@@ -1206,10 +1216,234 @@ export function TenantProjectAppsPage({
   }
 
   const latestAnalysisNeedsMerge = String(selectedApp?.status ?? "").trim().toLowerCase() === "needs_pr_merge";
+  const selectedAppStatus = String(selectedApp?.status ?? "").trim().toLowerCase();
+  const launchStepIndex = !selectedApp
+    ? apps.length === 0 ? 0 : 1
+    : selectedAppStatus === "live"
+      ? 3
+      : deploymentForm.environment_name.trim()
+        ? 3
+        : 2;
+  const launchConfigIsReady = Boolean(
+    selectedApp &&
+    deploymentForm.enabled &&
+    deploymentForm.environment_name.trim() &&
+    deploymentForm.source_strategy === "dockerfile",
+  );
+  const latestRelease = appReleases[0] ?? null;
+  const launchCanDeploy = launchConfigIsReady && !deploying && !savingConfig && !loadingSurface && selectedAppStatus !== "needs_pr_merge";
+
+  function useRecommendedLaunchSettings() {
+    if (!selectedApp) {
+      return;
+    }
+    const supportedBuildStrategy =
+      selectedApp.build_strategy === "dockerfile" ||
+      selectedApp.build_strategy === "docker_compose" ||
+      selectedApp.build_strategy === "nixpacks"
+        ? selectedApp.build_strategy
+        : "dockerfile";
+    setDeploymentForm((current) => ({
+      ...current,
+      enabled: true,
+      environment_name: current.environment_name.trim() || "production",
+      source_strategy: "dockerfile",
+      build_strategy: current.build_strategy || supportedBuildStrategy,
+      exposed_port: current.exposed_port || (selectedApp.exposed_port ? String(selectedApp.exposed_port) : ""),
+      start_command: current.start_command || selectedApp.start_command || "",
+    }));
+    setSurfaceStatusLine("Recommended launch settings prepared. Review and save before going live.");
+  }
 
   return (
     <div className="space-y-6">
+      <Card className="overflow-hidden border-primary/20 bg-gradient-to-br from-background via-background to-primary/5">
+        <CardHeader className="space-y-4">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="max-w-3xl">
+              <CardTitle className="text-xl">Launch an app</CardTitle>
+              <CardDescription className="mt-2 text-sm">
+                Create a deployable app from this project, confirm the launch settings, and start a managed release.
+              </CardDescription>
+            </div>
+            <Button variant="outline" size="sm" onClick={() => setShowAdvancedTools((current) => !current)}>
+              {showAdvancedTools ? "Hide advanced tools" : "Advanced tools"}
+            </Button>
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-4">
+            {LAUNCH_STEPS.map((step, index) => {
+              const isComplete = index < launchStepIndex || (step.key === "deploy" && selectedAppStatus === "live");
+              const isCurrent = index === launchStepIndex && !isComplete;
+              return (
+                <div
+                  key={step.key}
+                  className={cn(
+                    "rounded-2xl border px-4 py-3",
+                    isComplete
+                      ? "border-primary/30 bg-primary/10"
+                      : isCurrent
+                        ? "border-primary bg-background shadow-sm"
+                        : "border-border bg-background/60",
+                  )}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-sm font-semibold">{step.label}</p>
+                    <span className="text-xs text-muted-foreground">{index + 1}</span>
+                  </div>
+                  <p className="mt-1 text-xs text-muted-foreground">{step.description}</p>
+                </div>
+              );
+            })}
+          </div>
+        </CardHeader>
+
+        <CardContent className="space-y-5">
+          {apps.length === 0 ? (
+            <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_360px]">
+              <div className="rounded-2xl border bg-background p-5">
+                <p className="text-sm font-semibold">No app has been created for this project yet.</p>
+                <p className="mt-2 text-sm text-muted-foreground">
+                  Start here. MB will inspect the connected repository, identify deployable apps, and create launch candidates for you to review.
+                </p>
+                <Button className="mt-5" onClick={() => void analyzeRepo()} disabled={analysisBusy || busy}>
+                  <Rocket className="mr-2 h-4 w-4" />
+                  {analysisBusy ? "Creating app…" : "Create app"}
+                </Button>
+              </div>
+              <div className="rounded-2xl border bg-background p-5">
+                <p className="text-sm font-semibold">What MB will do</p>
+                <div className="mt-3 space-y-3 text-sm text-muted-foreground">
+                  <p>1. Read the repository structure.</p>
+                  <p>2. Detect runtime, build strategy, health check, ports, and required configuration.</p>
+                  <p>3. Prepare a launch candidate that can be configured and deployed from this page.</p>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="grid gap-5 xl:grid-cols-[minmax(300px,420px)_minmax(0,1fr)]">
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-base">Choose the app to launch</CardTitle>
+                  <CardDescription>Select the app candidate MB should deploy.</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-2">
+                  {apps.map((app) => {
+                    const isSelected = app.app_id === selectedAppId;
+                    return (
+                      <button
+                        key={app.app_id}
+                        type="button"
+                        onClick={() => setSelectedAppId(app.app_id)}
+                        className={cn(
+                          "w-full rounded-2xl border px-4 py-3 text-left transition-colors",
+                          isSelected ? "border-primary bg-primary/5" : "border-border bg-background hover:bg-muted/40",
+                        )}
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <p className="text-sm font-semibold">{app.name}</p>
+                            <p className="mt-1 text-xs text-muted-foreground">{app.source_path}</p>
+                          </div>
+                          <Badge variant={appStatusVariant(app.status)}>{app.status}</Badge>
+                        </div>
+                        <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted-foreground">
+                          <span>{app.detected_runtime ?? "Unknown runtime"}</span>
+                          <span>{buildStrategyLabel(app.build_strategy)}</span>
+                          <span>{formatConfidence(app.detection_confidence)}</span>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader className="flex flex-row items-start justify-between gap-4 space-y-0">
+                  <div>
+                    <CardTitle className="text-base">{selectedApp ? `Launch ${selectedApp.name}` : "Launch settings"}</CardTitle>
+                    <CardDescription>
+                      Confirm the essentials. Databases, custom domains, backups, and restore controls live under Advanced tools.
+                    </CardDescription>
+                  </div>
+                  {selectedApp ? <Badge variant={appStatusVariant(selectedApp.status)}>{selectedApp.status}</Badge> : null}
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {!selectedApp ? (
+                    <p className="rounded-xl border border-dashed px-4 py-6 text-sm text-muted-foreground">Choose an app candidate to continue.</p>
+                  ) : selectedApp.status === "needs_pr_merge" ? (
+                    <div className="rounded-xl border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-warning">
+                      Deployment files have been prepared but must be merged before launch. Open Advanced tools to inspect the artifact PR details.
+                    </div>
+                  ) : (
+                    <>
+                      <div className="grid gap-3 md:grid-cols-2">
+                        <div className="space-y-1.5">
+                          <label htmlFor="guided-environment-name" className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                            Environment
+                          </label>
+                          <Input
+                            id="guided-environment-name"
+                            value={deploymentForm.environment_name}
+                            onChange={(event) => setDeploymentForm((current) => ({ ...current, environment_name: event.target.value }))}
+                            placeholder="production"
+                          />
+                        </div>
+                        <div className="space-y-1.5">
+                          <label htmlFor="guided-exposed-port" className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                            Public port
+                          </label>
+                          <Input
+                            id="guided-exposed-port"
+                            value={deploymentForm.exposed_port}
+                            onChange={(event) => setDeploymentForm((current) => ({ ...current, exposed_port: event.target.value }))}
+                            placeholder={selectedApp.exposed_port ? String(selectedApp.exposed_port) : "3000"}
+                          />
+                        </div>
+                      </div>
+                      <div className="grid gap-3 md:grid-cols-2">
+                        <div className="rounded-xl border bg-muted/20 px-4 py-3">
+                          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Runtime</p>
+                          <p className="mt-1 text-sm font-medium">{selectedApp.detected_runtime ?? "Unknown"}</p>
+                        </div>
+                        <div className="rounded-xl border bg-muted/20 px-4 py-3">
+                          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Build</p>
+                          <p className="mt-1 text-sm font-medium">{buildStrategyLabel(deploymentForm.build_strategy || selectedApp.build_strategy)}</p>
+                        </div>
+                      </div>
+                      {latestRelease ? (
+                        <div className={cn("rounded-xl border px-4 py-3 text-sm", statusLineVariant(latestRelease.status))}>
+                          Latest release is {latestRelease.status}. {latestRelease.git_ref || latestRelease.commit_sha || latestRelease.release_id}
+                        </div>
+                      ) : null}
+                      <div className="flex flex-wrap gap-2">
+                        <Button variant="outline" onClick={useRecommendedLaunchSettings} disabled={savingConfig || deploying || loadingSurface}>
+                          Use recommended settings
+                        </Button>
+                        <Button variant="outline" onClick={() => void saveDeploymentConfig()} disabled={savingConfig || deploying || loadingSurface}>
+                          <Save className="mr-2 h-4 w-4" />
+                          {savingConfig ? "Saving…" : "Save launch settings"}
+                        </Button>
+                        <Button onClick={() => void createRelease("Guided launch")} disabled={!launchCanDeploy}>
+                          <Rocket className="mr-2 h-4 w-4" />
+                          {deploying ? "Launching…" : "Launch live app"}
+                        </Button>
+                      </div>
+                      {!launchConfigIsReady ? (
+                        <p className="text-sm text-muted-foreground">Save an environment and Dockerfile launch settings before deployment can start.</p>
+                      ) : null}
+                    </>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
       <div className="flex flex-wrap items-center justify-end gap-2">
+        {showAdvancedTools ? (
+          <>
         <Button variant="outline" size="sm" onClick={() => void refreshAll()} disabled={busy || loadingSurface}>
           <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${busy ? "animate-spin" : ""}`} />
           Refresh
@@ -1218,6 +1452,8 @@ export function TenantProjectAppsPage({
           <Search className="mr-1.5 h-3.5 w-3.5" />
           {analysisBusy ? "Analyzing…" : "Analyze Repo"}
         </Button>
+          </>
+        ) : null}
       </div>
 
       {statusLine ? <div className="rounded-xl border bg-muted/30 px-4 py-3 text-sm text-muted-foreground">{statusLine}</div> : null}
@@ -1228,6 +1464,8 @@ export function TenantProjectAppsPage({
         <div className="rounded-xl border bg-muted/30 px-4 py-3 text-sm text-muted-foreground">{surfaceStatusLine}</div>
       ) : null}
 
+      {showAdvancedTools ? (
+        <>
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
         {[
           { label: "Apps", value: appSummary.total, note: "Discovered candidates" },
@@ -2138,6 +2376,8 @@ export function TenantProjectAppsPage({
           </CardContent>
         </Card>
       )}
+        </>
+      ) : null}
     </div>
   );
 }

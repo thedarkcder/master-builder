@@ -134,6 +134,7 @@ test("gates managed restore until an execution is selected and queues an async r
   });
 
   await page.goto("/route25/projects/route25-default/apps", { waitUntil: "domcontentloaded" });
+  await page.getByRole("button", { name: "Advanced tools" }).click();
   await page.getByRole("button", { name: "Backups" }).click();
 
   const restoreButton = page.getByRole("button", { name: "Run restore" });
